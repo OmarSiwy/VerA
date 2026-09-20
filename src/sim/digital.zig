@@ -12,11 +12,26 @@ pub const Error = error{DigitalFailed} || std.mem.Allocator.Error || std.Io.Writ
 pub const Options = struct {
     file_name: []const u8 = "<digital>",
     include_dirs: []const []const u8 = &.{},
+    /// Only IEEE 1364-2005 §17.2.9's `$readmemb`/`$readmemh` reach the
+    /// filesystem while a process is running, so this is optional: a caller
+    /// with no `Io` gets a diagnostic from those two tasks and an unchanged
+    /// engine everywhere else. The unit tests are that caller.
+    io: ?std.Io = null,
 };
 
 // Each dispatch consumes all fields of one pending write. NBA snapshots own
 // their planes in the run arena, never point into mutable variable storage.
-const Pending = union(enum) { run_process: u32, write: struct { target: u32, value: Int.Literal } };
+const Pending = union(enum) {
+    run_process: u32,
+    write: struct { target: u32, value: Int.Literal },
+    /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
+    /// not when the call executed — the whole point of the task is that it
+    /// reports the settled value.
+    strobe: struct { args: []const Ast.ExprId, show: Show },
+    /// §17.1.3 "something changed this timestep, ask the standing monitor".
+    /// One per timestep, coalesced by `monitor_pending`.
+    monitor_tick,
+};
 const Type = struct { width: u32, signed: bool };
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
 const Instruction = union(enum(u4)) {
@@ -136,8 +151,197 @@ fn undriven(kind: Ast.NetKind) Int.Bit {
 }
 const Cast = enum(u1) { make_signed, make_unsigned };
 const casts = std.StaticStringMap(Cast).initComptime(.{ .{ "$signed", .make_signed }, .{ "$unsigned", .make_unsigned } });
-const Task = enum(u1) { display, finish };
-const tasks = std.StaticStringMap(Task).initComptime(.{ .{ "$display", .display }, .{ "$finish", .finish } });
+
+/// §9.14 Table 9-11's integral system functions, and the two of IEEE 1364
+/// §17.7 that read the clock. Separate from `casts` because these take their
+/// own arguments and have their own return widths; separate from `tasks`
+/// because they are EXPRESSIONS.
+const SysFn = enum {
+    /// §17.7.1, 64 bits: "the time unit of the module that invoked it".
+    time,
+    /// §17.7.1's 32-bit half, "the low order 32 bits of the current
+    /// simulation time".
+    stime,
+    /// §9.14 Table 9-11 / IEEE 1364 §17.11: ceiling of log base 2.
+    clog2,
+
+    /// Does this read the simulation clock? Such a call is not a constant
+    /// expression however constant its arguments are, which a replication
+    /// count and a case label both depend on.
+    fn reads_clock(self: SysFn) bool {
+        return self != .clog2;
+    }
+};
+const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
+    .{ "$time", .time },
+    .{ "$stime", .stime },
+    .{ "$clog2", .clog2 },
+});
+
+/// IEEE 1364-2005 §17.2.9's memory-file lexer: white space and §2.4 comments
+/// separate tokens, and a token is either an `@`-address or one data word.
+const MemTokens = struct {
+    text: []const u8,
+    at: usize = 0,
+
+    fn next(self: *MemTokens) ?[]const u8 {
+        while (self.at < self.text.len) {
+            const c = self.text[self.at];
+            if (c == ' ' or c == '\t' or c == '\r' or c == '\n') {
+                self.at += 1;
+                continue;
+            }
+            if (c == '/' and self.at + 1 < self.text.len) {
+                if (self.text[self.at + 1] == '/') {
+                    self.at = std.mem.indexOfScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
+                    continue;
+                }
+                if (self.text[self.at + 1] == '*') {
+                    self.at = if (std.mem.indexOfPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
+                    continue;
+                }
+            }
+            const start = self.at;
+            while (self.at < self.text.len) : (self.at += 1) {
+                const d = self.text[self.at];
+                if (d == ' ' or d == '\t' or d == '\r' or d == '\n') break;
+                // A comment may abut a word: `/* ... */ d4` is one word, and so
+                // is `d4// trailing`.
+                if (d == '/' and self.at + 1 < self.text.len and
+                    (self.text[self.at + 1] == '/' or self.text[self.at + 1] == '*')) break;
+            }
+            if (self.at > start) return self.text[start..self.at];
+        }
+        return null;
+    }
+};
+
+/// One data word, right-justified into the memory's declared width. §17.2.9
+/// says the digits may be `x` or `z` for either task, and an unknown DIGIT is
+/// unknown in every bit it covers — which is why this shares `Radix.perDigit`
+/// with the printer rather than parsing a number and losing the states.
+fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !Int.Literal {
+    const per = radix.perDigit();
+    const value = try filled(a, width, false, .zero);
+    var bit: u32 = 0;
+    var i = token.len;
+    while (i != 0 and bit < width) {
+        i -= 1;
+        const c = std.ascii.toLower(token[i]);
+        // §2.6's readability separator is legal in a data word too.
+        if (c == '_') continue;
+        const fill: ?Int.Bit = switch (c) {
+            'x', '?' => .x,
+            'z' => .z,
+            else => null,
+        };
+        const digit: u32 = if (fill != null) 0 else switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            else => return error.BadDigit,
+        };
+        if (digit >= @intFromEnum(radix)) return error.BadDigit;
+        var k: u32 = 0;
+        while (k < per and bit < width) : ({
+            k += 1;
+            bit += 1;
+        }) setBit(value, bit, fill orelse @enumFromInt(@as(u2, @intCast((digit >> @intCast(k)) & 1))));
+    }
+    return value;
+}
+
+/// §17.7.2 `$realtime` — the only REAL-valued expression the digital engine
+/// has, and it exists only in a display argument. There are no real variables
+/// to put it in yet (that is M04's work), so it is recognised where it can be
+/// printed and nowhere else.
+const realtime_name = "$realtime";
+/// §9.4.3 Table 9-22's four conversions. The value is the base, so a digit is
+/// `@ctz(base)` bits wide for the three power-of-two members and decimal is the
+/// one that is not a bit group.
+const Radix = enum(u8) {
+    binary = 2,
+    octal = 8,
+    decimal = 10,
+    hex = 16,
+
+    /// Bits consumed per printed digit; meaningless for `.decimal`, which reads
+    /// the whole operand at once.
+    fn perDigit(self: Radix) u32 {
+        return switch (self) {
+            .binary => 1,
+            .octal => 3,
+            .hex => 4,
+            .decimal => unreachable,
+        };
+    }
+};
+
+/// §9.4.1 Table 9-1's display family, which is one task with two axes: the
+/// radix an argument with NO format specification is printed in, and whether
+/// the call ends with a newline. "The $write task provides the same
+/// capabilities as $display, but with no newline."
+const Show = struct { radix: Radix, newline: bool };
+
+/// The four display families of §9.4.1 Table 9-1 differ in WHEN they run, not
+/// in what they print — every one of them formats through `display`.
+///
+///   show    now, in the active region
+///   strobe  at the end of the timestep (IEEE 1364-2005 §17.1.2: "display
+///           simulation data at a selected time ... at the end of the current
+///           timestep"), which is the `.monitor` scheduler region
+///   monitor the same end-of-timestep print, but standing: it re-runs whenever
+///           a value changes until another $monitor replaces it (§17.1.3)
+const Task = union(enum) {
+    show: Show,
+    strobe: Show,
+    monitor: Show,
+    /// $monitoron / $monitoroff. "$monitoron ... produces a display
+    /// immediately", so the flag's own transition is observable.
+    monitor_enable: bool,
+    /// §17.3, the `%t` format state.
+    timeformat,
+    /// §9.5 Table 9-2 / IEEE 1364 §17.2.9. The radix is the whole difference
+    /// between `$readmemb` and `$readmemh`.
+    readmem: Radix,
+    finish,
+};
+fn showAs(radix: Radix, newline: bool) Show {
+    return .{ .radix = radix, .newline = newline };
+}
+const tasks = std.StaticStringMap(Task).initComptime(.{
+    .{ "$display", Task{ .show = showAs(.decimal, true) } },
+    .{ "$displayb", Task{ .show = showAs(.binary, true) } },
+    .{ "$displayo", Task{ .show = showAs(.octal, true) } },
+    .{ "$displayh", Task{ .show = showAs(.hex, true) } },
+    .{ "$write", Task{ .show = showAs(.decimal, false) } },
+    .{ "$writeb", Task{ .show = showAs(.binary, false) } },
+    .{ "$writeo", Task{ .show = showAs(.octal, false) } },
+    .{ "$writeh", Task{ .show = showAs(.hex, false) } },
+    .{ "$strobe", Task{ .strobe = showAs(.decimal, true) } },
+    .{ "$strobeb", Task{ .strobe = showAs(.binary, true) } },
+    .{ "$strobeo", Task{ .strobe = showAs(.octal, true) } },
+    .{ "$strobeh", Task{ .strobe = showAs(.hex, true) } },
+    .{ "$monitor", Task{ .monitor = showAs(.decimal, true) } },
+    .{ "$monitorb", Task{ .monitor = showAs(.binary, true) } },
+    .{ "$monitoro", Task{ .monitor = showAs(.octal, true) } },
+    .{ "$monitorh", Task{ .monitor = showAs(.hex, true) } },
+    .{ "$monitoron", Task{ .monitor_enable = true } },
+    .{ "$monitoroff", Task{ .monitor_enable = false } },
+    .{ "$timeformat", .timeformat },
+    .{ "$readmemb", Task{ .readmem = .binary } },
+    .{ "$readmemh", Task{ .readmem = .hex } },
+    .{ "$finish", .finish },
+});
+
+/// §17.3 `$timeformat(units_number, precision, suffix, min_width)`, with the
+/// clause's own defaults: the units are the simulation's precision, nothing
+/// after the decimal point, no suffix, and a 20-column field.
+const TimeFormat = struct {
+    units: i32 = 0,
+    precision: u32 = 0,
+    suffix: []const u8 = "",
+    width: u32 = 20,
+};
 const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
@@ -163,7 +367,26 @@ const Run = struct {
     pending: std.ArrayList(Pending) = .empty,
     waiters: std.ArrayList(Waiter) = .empty,
     scheduler: Scheduler,
+    /// The source's own path, so §17.2.9's memory file resolves beside the
+    /// module that names it.
+    file_name: []const u8 = "",
+    io: ?std.Io = null,
     scale: ?Time.Scale = null,
+    /// The module's TIME UNIT as a power of ten of a second, which `Scale`
+    /// deliberately does not keep — it stores ratios, and `%t` needs the
+    /// absolute magnitude to reach §17.3's `units_number`.
+    unit_exp: i32 = 0,
+    time_format: TimeFormat = .{},
+    /// §17.1.3 the one standing monitor. A second `$monitor` replaces it;
+    /// there is no stack.
+    monitor: ?struct { args: []const Ast.ExprId, show: Show } = null,
+    monitor_on: bool = true,
+    /// One `.monitor` event per timestep however many values moved.
+    monitor_pending: bool = false,
+    /// What the monitor last printed. §17.1.3 fires "whenever any argument
+    /// changes", and comparing the rendered line is how that is decided —
+    /// see `monitorTick`.
+    monitor_last: ?[]const u8 = null,
 
     fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         const start = self.starts[@min(tok, self.starts.len - 1)];
@@ -255,6 +478,14 @@ const Run = struct {
             .binary, .multi_concat => self.constantExpression(ex.lhs(e)) and self.constantExpression(ex.rhs(e)),
             .ternary => self.constantExpression(ex.lhs(e)) and self.constantExpression(ex.rhs(e)) and self.constantExpression(ex.ternaryElse(e)),
             .sys_call, .concat => blk: {
+                // §17.7: a call that reads the clock is never constant, however
+                // constant its (absent) arguments are. Without this `$time`
+                // would be accepted as a replication count.
+                if (ex.tag(e) == .sys_call) {
+                    if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
+                        if (f.reads_clock()) break :blk false;
+                    }
+                }
                 for (ex.args(e)) |arg| if (!self.constantExpression(arg)) break :blk false;
                 break :blk true;
             },
@@ -336,7 +567,29 @@ const Run = struct {
                 break :blk common(yes, no);
             },
             .sys_call => blk: {
-                const cast = casts.get(self.file.str(ex.strOf(e))) orelse return self.exprFail(e, "this digital expression form is not implemented");
+                const name = self.file.str(ex.strOf(e));
+                if (sys_fns.get(name)) |f| {
+                    const args = ex.args(e);
+                    switch (f) {
+                        // §17.7.1 gives `$time` the 64-bit `time` type and
+                        // `$stime` its low 32 bits. Both unsigned: simulation
+                        // time has no negative half.
+                        .time, .stime => {
+                            if (args.len != 0) return self.exprFail(e, "$time and $stime take no arguments");
+                            if (self.scale == null) return self.exprFail(e, "the time queries require an explicit valid timescale before the module");
+                            break :blk .{ .width = if (f == .time) 64 else 32, .signed = false };
+                        },
+                        // §17.11's result is an `integer`, which §3.2 makes a
+                        // 32-bit SIGNED type — so `$clog2(x) - 1` at x = 0 is
+                        // -1 and not 4294967295.
+                        .clog2 => {
+                            if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
+                            _ = try self.inferValue(args[0], depth + 1);
+                            break :blk .{ .width = 32, .signed = true };
+                        },
+                    }
+                }
+                const cast = casts.get(name) orelse return self.exprFail(e, "this digital expression form is not implemented");
                 const args = ex.args(e);
                 if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                 const operand = try self.inferValue(args[0], depth + 1);
@@ -530,7 +783,34 @@ const Run = struct {
                 };
             },
             .sys_call => {
-                const cast = casts.get(self.file.str(ex.strOf(e))).?;
+                const name = self.file.str(ex.strOf(e));
+                if (sys_fns.get(name)) |f| {
+                    const natural = self.typeOf(e);
+                    const raw: u64 = switch (f) {
+                        .time, .stime => blk: {
+                            const units = self.scale.?.unitsAt(self.scheduler.now);
+                            break :blk if (f == .stime) units & 0xffff_ffff else units;
+                        },
+                        .clog2 => blk: {
+                            const n = try self.eval(a, ex.args(e)[0], 0);
+                            // §17.11: "the ceiling of the log base 2", with
+                            // $clog2(0) and $clog2(1) both 0. An unknown
+                            // operand has no log; 1364 leaves it undefined and
+                            // zero is the value every other unknown-input
+                            // reduction here answers with.
+                            if (n.hasUnknown() or n.width > 64) break :blk 0;
+                            const x = n.values()[0];
+                            if (x <= 1) break :blk 0;
+                            break :blk 64 - @clz(x - 1);
+                        },
+                    };
+                    const planes = try a.alloc(u64, 2);
+                    planes[0] = if (natural.width >= 64) raw else raw & ((@as(u64, 1) << @intCast(natural.width)) - 1);
+                    planes[1] = 0;
+                    const value: Int.Literal = .{ .width = natural.width, .signed = natural.signed, .sized = true, .planes = planes };
+                    return normalize(a, value, ty);
+                }
+                const cast = casts.get(name).?;
                 var value = try self.eval(a, ex.args(e)[0], 0);
                 value.signed = cast == .make_signed;
                 return normalize(a, value, ty);
@@ -665,8 +945,16 @@ const Run = struct {
                     return self.compileStmt(s.body, depth + 1);
                 }
                 if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
-                try self.checkExpr(s.event);
-                if (self.typeOf(s.event).width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
+                // §9.7.1 a delay is a "delay_value", and A.8.3 makes that
+                // `unsigned_number | real_number | ...` — so `#0.5` is as
+                // ordinary as `#1`. It is rounded to the module's PRECISION
+                // rather than truncated to its unit, which `Scale.realDelay`
+                // already does, and which is the only thing that makes a
+                // sub-unit delay mean anything.
+                if (self.file.exprs.tag(s.event) != .real_literal) {
+                    try self.checkExpr(s.event);
+                    if (self.typeOf(s.event).width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
+                }
                 _ = try self.append(.{ .statement = id });
                 try self.compileStmt(s.body, depth + 1);
             },
@@ -674,7 +962,41 @@ const Run = struct {
                 const name = self.file.str(s.name);
                 const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
                 switch (task) {
-                    .display => try self.display(s.args, null),
+                    // All three format the same surface, so all three are
+                    // validated by the same dry run.
+                    .show, .strobe, .monitor => |sh| try self.display(s.args, null, sh),
+                    .monitor_enable => if (s.args.len != 0)
+                        return self.fail(tok, "$monitoron and $monitoroff take no arguments", .{}),
+                    .timeformat => {
+                        // §17.3's four arguments are simulator SETTINGS, read
+                        // once when the task runs; a source that computed them
+                        // from a net would be asking the format to track a
+                        // value, which the clause does not define.
+                        const ex = &self.file.exprs;
+                        if (s.args.len != 4) return self.fail(tok, "$timeformat takes exactly four arguments", .{});
+                        for (s.args[0..2]) |a| if (a == .none or !self.constantExpression(a))
+                            return self.exprFail(a, "$timeformat's units and precision must be constant");
+                        if (s.args[2] == .none or ex.tag(s.args[2]) != .str_literal)
+                            return self.exprFail(s.args[2], "$timeformat's suffix must be a string literal");
+                        if (s.args[3] == .none or !self.constantExpression(s.args[3]))
+                            return self.exprFail(s.args[3], "$timeformat's minimum width must be constant");
+                        for (s.args[0..2]) |a| try self.checkExpr(a);
+                        try self.checkExpr(s.args[3]);
+                    },
+                    .readmem => {
+                        const ex = &self.file.exprs;
+                        if (s.args.len != 2 and s.args.len != 4)
+                            return self.fail(tok, "$readmemb/$readmemh take (file, memory) or (file, memory, start, finish)", .{});
+                        if (s.args[0] == .none or ex.tag(s.args[0]) != .str_literal)
+                            return self.exprFail(s.args[0], "the memory file name must be a string literal");
+                        if (s.args[1] == .none or ex.tag(s.args[1]) != .ident or !self.arrays.contains(try self.slot(s.args[1])))
+                            return self.exprFail(s.args[1], "$readmemb/$readmemh load an unpacked array");
+                        for (s.args[2..]) |a| {
+                            if (a == .none or !self.constantExpression(a))
+                                return self.exprFail(a, "the $readmem address bounds must be constant");
+                            try self.checkExpr(a);
+                        }
+                    },
                     .finish => {
                         if (s.args.len > 1) return self.fail(tok, "$finish accepts zero or one argument", .{});
                         if (s.args.len == 1) {
@@ -690,13 +1012,29 @@ const Run = struct {
         }
     }
     // null allocator validates the complete format/expression surface without
-    // producing output. %b is width-exact, including separate X and Z states.
-    fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator) Error!void {
+    // producing output. Every conversion is width-exact per IEEE 1364-2005
+    // §17.1.1.3, including separate X and Z states (§17.1.1.4).
+    fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show) Error!void {
         const ex = &self.file.exprs;
         var arg: usize = 0;
         while (arg < args.len) : (arg += 1) {
             const e = args[arg];
-            if (e == .none or ex.tag(e) != .str_literal) return self.fail(0, "$display requires literal formats; only %b and %% are implemented", .{});
+            // §9.4.1: "Any null argument produces a single space character in
+            // the display. (A null argument is characterized by two adjacent
+            // commas (,,) in the argument list.)"
+            if (e == .none) {
+                if (allocator != null) try self.out.writeByte(' ');
+                continue;
+            }
+            // Only a STRING is a format. §9.4.3's last sentence before Table
+            // 9-23: "Any expression argument with no corresponding format
+            // specification is displayed using the default decimal format" —
+            // default for THIS task, so $displayh's bare argument is hex.
+            if (ex.tag(e) != .str_literal) {
+                try self.checkExpr(e);
+                if (allocator) |a| try self.emitValue(try self.eval(a, e, 0), show.radix, null);
+                continue;
+            }
             const format = self.file.str(ex.strOf(e));
             var i: usize = 0;
             while (i < format.len) : (i += 1) {
@@ -710,27 +1048,291 @@ const Run = struct {
                     if (allocator != null) try self.out.writeByte('%');
                     continue;
                 }
-                if (format[i] != 'b') return self.exprFail(e, "only %b and %% display conversions are implemented");
+                // §17.1.1.2's optional field width. `%0d` is the one every
+                // source writes and means "minimum width"; a non-zero width is
+                // an explicit column count. Absent means §17.1.1.3's automatic
+                // sizing, which is `null` here and computed from the operand.
+                var width: ?u32 = null;
+                while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1) {
+                    const d = format[i] - '0';
+                    width = (width orelse 0) *| 10 +| d;
+                }
+                if (i == format.len) return self.exprFail(e, "unterminated display format");
+                const radix: ?Radix = switch (format[i]) {
+                    'b', 'B' => .binary,
+                    'o', 'O' => .octal,
+                    'h', 'H' => .hex,
+                    'd', 'D' => .decimal,
+                    // §9.4.3 Table 9-22's real conversions. All three print the
+                    // same here: Zig's shortest round-tripping form is what %g
+                    // asks for, and the suite's reals are exact halves and
+                    // integers where %e and %f would agree with it anyway.
+                    'e', 'E', 'f', 'F', 'g', 'G' => null,
+                    // §17.3 `%t` is not a radix at all — it reads the
+                    // $timeformat state and formats a TIME, whose operand is
+                    // in the module's own time unit.
+                    't', 'T' => {
+                        arg += 1;
+                        if (arg == args.len) return self.exprFail(e, "missing display argument");
+                        try self.checkExpr(args[arg]);
+                        if (allocator) |a| try self.emitTime(try self.eval(a, args[arg], 0));
+                        continue;
+                    },
+                    else => return self.exprFail(
+                        e,
+                        "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g and %%) are implemented",
+                    ),
+                };
                 arg += 1;
                 if (arg == args.len) return self.exprFail(e, "missing display argument");
-                try self.checkExpr(args[arg]);
-                if (allocator) |a| {
-                    const v = try self.eval(a, args[arg], 0);
-                    var bit = v.width;
-                    while (bit != 0) {
-                        bit -= 1;
-                        try self.out.writeByte(switch (v.bit(bit)) {
-                            .zero => '0',
-                            .one => '1',
-                            .x => 'x',
-                            .z => 'z',
-                        });
+                if (radix) |r| {
+                    try self.checkExpr(args[arg]);
+                    if (allocator) |a| try self.emitValue(try self.eval(a, args[arg], 0), r, width);
+                } else {
+                    const real = try self.evalReal(args[arg]);
+                    if (allocator != null) {
+                        var buf: [64]u8 = undefined;
+                        const text = std.fmt.bufPrint(&buf, "{d}", .{real}) catch unreachable;
+                        if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
+                        try self.out.writeAll(text);
                     }
                 }
             }
         }
-        if (allocator != null) try self.out.writeByte('\n');
+        if (allocator != null and show.newline) try self.out.writeByte('\n');
     }
+
+    /// The real half of the display surface, which is `$realtime` and nothing
+    /// else today. It is validated and evaluated by the same call because there
+    /// is no state to read: the answer is the clock.
+    ///
+    /// ponytail: one name, no real variables and no real arithmetic. §17.7.2 is
+    /// the only real a source can name until M04 gives the engine `real` and
+    /// `wreal`; when it does, this is the seam that grows an evaluator.
+    fn evalReal(self: *Run, e: Ast.ExprId) Error!f64 {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .sys_call or !std.mem.eql(u8, self.file.str(ex.strOf(e)), realtime_name))
+            return self.exprFail(e, "a real display conversion takes a real expression, and `$realtime` is the only one implemented");
+        if (ex.args(e).len != 0) return self.exprFail(e, "$realtime takes no arguments");
+        const scale = self.scale orelse return self.exprFail(e, "the time queries require an explicit valid timescale before the module");
+        return scale.realAt(self.scheduler.now);
+    }
+
+    /// IEEE 1364-2005 §17.2.9 `$readmemb` / `$readmemh`.
+    ///
+    /// The clause's four rules, and all four are observable:
+    ///   - the file holds white space, comments and numbers in the task's radix;
+    ///   - with no address arguments the load starts at the memory's LEFT
+    ///     declared index and runs toward the right one;
+    ///   - `@<hex>` relocates the load point, and loading continues from there;
+    ///   - an address the file never reaches is LEFT ALONE. The task loads; it
+    ///     does not clear, so an unwritten word keeps the X it started at.
+    ///
+    /// With a start and a finish the load runs from one toward the other, which
+    /// is DOWNWARD when start > finish — the direction is the argument order
+    /// and not the declaration's.
+    fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, radix: Radix) Error!void {
+        const ex = &self.file.exprs;
+        const base = try self.slot(args[1]);
+        const arr = self.arrays.get(base).?;
+        const name = self.file.str(ex.strOf(args[0]));
+        const text = self.readSideFile(a, name) catch
+            return self.exprFail(args[0], "the memory file cannot be read");
+
+        // §17.2.9: with no bounds the walk is the DECLARED range, left index
+        // first. `Array.low`/`.high` are sorted, so the left index is `low`
+        // for `[0:7]` and the runner has no `[7:0]` memory to distinguish yet.
+        var at: i64 = arr.low;
+        var last: i64 = arr.high;
+        if (args.len == 4) {
+            at = (try self.eval(a, args[2], 0)).asInt() orelse arr.low;
+            last = (try self.eval(a, args[3], 0)).asInt() orelse arr.high;
+        }
+        const down = last < at;
+
+        var it = MemTokens{ .text = text };
+        while (it.next()) |token| {
+            if (token[0] == '@') {
+                at = std.fmt.parseInt(i64, token[1..], 16) catch
+                    return self.exprFail(args[0], "the memory file has a malformed `@` address");
+                continue;
+            }
+            // Outside the declared range the word has nowhere to go. Not an
+            // error: a file longer than the memory is the clause's own
+            // "more data than the range" case.
+            if (at >= arr.low and at <= arr.high) {
+                const dest = self.values[base + @as(u32, @intCast(at - arr.low))];
+                const value = memWord(a, token, radix, dest.width) catch
+                    return self.exprFail(args[0], "the memory file has a malformed data word");
+                try self.store(base + @as(u32, @intCast(at - arr.low)), value.planes);
+            }
+            if (down) {
+                if (at <= last) break;
+                at -= 1;
+            } else {
+                if (at >= last) break;
+                at += 1;
+            }
+        }
+    }
+
+    /// The data file sits beside the source that names it, which is what makes
+    /// a fixture self-contained. The working directory is tried second, so a
+    /// path written relative to where the simulator was launched still works.
+    fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 {
+        const io = self.io orelse return error.NoIo;
+        const limit: usize = 1 << 22;
+        const cwd = std.Io.Dir.cwd();
+        if (std.fs.path.dirname(self.file_name)) |dir| {
+            const joined = try std.fs.path.join(a, &.{ dir, name });
+            if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |_| {}
+        }
+        return cwd.readFileAlloc(io, name, a, .limited(limit));
+    }
+
+    /// §17.3 `%t`. The operand is a time in the INVOKING MODULE'S TIME UNIT —
+    /// which is what `$time` returns and what a literal `1` in that position
+    /// means — and `$timeformat`'s `units_number` says which power of ten of a
+    /// second to report it in. So the printed number is
+    ///
+    ///     value · 10^(unit_exp − units_number)
+    ///
+    /// and nothing here needs the precision: scaling a unit count by a ratio of
+    /// decades is exact in the only direction that matters.
+    fn emitTime(self: *Run, v: Int.Literal) Error!void {
+        const f = self.time_format;
+        const raw: f64 = if (v.hasUnknown())
+            0
+        else if (v.signed)
+            @floatFromInt(v.asInt() orelse 0)
+        else
+            @floatFromInt(v.values()[0]);
+        const scaled = raw * std.math.pow(f64, 10, @floatFromInt(self.unit_exp - f.units));
+        var buf: [128]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        w.print("{d:.[1]}", .{ scaled, f.precision }) catch unreachable;
+        w.writeAll(f.suffix) catch unreachable;
+        const text = w.buffered();
+        if (text.len < f.width) try self.out.splatByteAll(' ', f.width - text.len);
+        try self.out.writeAll(text);
+    }
+
+    /// One operand, in one radix, sized by IEEE 1364-2005 §17.1.1.3 unless the
+    /// format gave an explicit width.
+    ///
+    /// The three power-of-two radices are a GROUP walk and decimal is not, and
+    /// that is the whole split: a hex digit is four bits of this operand and
+    /// says nothing about the other bits, so a group that is entirely unknown
+    /// prints as unknown while its neighbours print normally. A decimal
+    /// rendering has no such locality — one unknown bit makes the whole number
+    /// unknown — which is why §17.1.1.4 gives it its own rule.
+    fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
+        var buf: [1024]u8 = undefined;
+        const text = if (radix == .decimal)
+            try self.decimalText(&buf, v)
+        else
+            groupText(&buf, v, radix);
+        // §17.1.1.3's automatic size. Right-justified with LEADING SPACES, not
+        // zeros: `%d` of an 8-bit 7 is "  7" and not "007". A group radix is
+        // already exactly its own width, so padding only ever shows up under
+        // decimal or an explicit format width.
+        const field = width orelse autoWidth(v, radix);
+        if (text.len < field) try self.out.splatByteAll(' ', field - text.len);
+        try self.out.writeAll(text);
+    }
+
+    /// §17.1.1.3: "a radix conversion is sized to the operand's declared width,
+    /// and the default decimal field is sized to the largest value the operand
+    /// can hold". For a signed operand the largest PRINTED value is the
+    /// negative one, because of its sign: a 32-bit `integer` is 11 columns
+    /// ("-2147483648"), not 10.
+    fn autoWidth(v: Int.Literal, radix: Radix) u32 {
+        if (radix != .decimal) {
+            const per = radix.perDigit();
+            return (v.width + per - 1) / per;
+        }
+        // The count of decimal digits in 2^n - 1 (unsigned) or 2^(n-1)
+        // (signed magnitude, plus one column for the sign).
+        const bits: u32 = if (v.signed and v.width != 0) v.width - 1 else v.width;
+        var digits: u32 = 1;
+        var limit: u128 = 9;
+        // 2^bits - 1 > limit, written so that bits = 128 does not overflow.
+        while (bits < 127 and (@as(u128, 1) << @intCast(@min(bits, 126))) - 1 > limit) : (digits += 1) {
+            if (limit > std.math.maxInt(u128) / 10) break;
+            limit = limit * 10 + 9;
+        }
+        return digits + @intFromBool(v.signed);
+    }
+
+    /// A power-of-two radix, most significant group first. Bits past the
+    /// operand's width are absent, not zero: they contribute nothing to the
+    /// digit's value AND nothing to its unknown-ness, which is what makes an
+    /// all-x 8-bit operand print "xxx" in octal rather than "Xxx" — the top
+    /// group holds two x bits and no third bit at all.
+    fn groupText(buf: []u8, v: Int.Literal, radix: Radix) []const u8 {
+        const per = radix.perDigit();
+        const digits = (v.width + per - 1) / per;
+        var out: usize = 0;
+        var d = digits;
+        while (d != 0) {
+            d -= 1;
+            var value: u32 = 0;
+            var xs: u32 = 0;
+            var zs: u32 = 0;
+            var present: u32 = 0;
+            var k: u32 = 0;
+            while (k < per) : (k += 1) {
+                const index = d * per + k;
+                if (index >= v.width) continue;
+                present += 1;
+                switch (v.bit(index)) {
+                    .zero => {},
+                    .one => value |= @as(u32, 1) << @intCast(k),
+                    .x => xs += 1,
+                    .z => zs += 1,
+                }
+            }
+            // §17.1.1.4: all unknown prints lowercase, partly unknown prints
+            // uppercase — the case is the whole signal that the digit's known
+            // bits were thrown away.
+            buf[out] = if (xs == present) 'x' //
+            else if (zs == present) 'z' //
+            else if (xs != 0) 'X' //
+            else if (zs != 0) 'Z' //
+            else "0123456789abcdef"[value];
+            out += 1;
+        }
+        return buf[0..out];
+    }
+
+    /// Decimal, where one unknown bit poisons the whole number (§17.1.1.4).
+    ///
+    /// ponytail: 64 bits. A wider `%d` needs a bignum divide, and nothing in
+    /// the LRM's own examples or this suite prints one; the refusal is explicit
+    /// rather than a silent truncation.
+    fn decimalText(self: *Run, buf: []u8, v: Int.Literal) Error![]const u8 {
+        if (v.hasUnknown()) {
+            var xs: u32 = 0;
+            var zs: u32 = 0;
+            for (0..v.width) |i| switch (v.bit(@intCast(i))) {
+                .x => xs += 1,
+                .z => zs += 1,
+                else => {},
+            };
+            buf[0] = if (xs == v.width) 'x' //
+            else if (zs == v.width) 'z' //
+            else if (xs != 0) 'X' //
+            else 'Z';
+            return buf[0..1];
+        }
+        if (v.width > 64) return self.fail(0, "decimal display of an operand wider than 64 bits is not implemented", .{});
+        const raw = v.values()[0];
+        if (v.signed) return std.fmt.bufPrint(buf, "{d}", .{v.asInt().?}) catch unreachable;
+        // Not `asInt`: it bit-casts, so an unsigned 64-bit operand at or above
+        // 2^63 would print negative. $time is exactly that operand.
+        return std.fmt.bufPrint(buf, "{d}", .{raw}) catch unreachable;
+    }
+
     /// The one write path for both the active and NBA regions, so §5.10.1
     /// resumption cannot be bypassed by whichever region a source used.
     fn store(self: *Run, target: u32, planes: []const u64) Error!void {
@@ -738,6 +1340,14 @@ const Run = struct {
         const before = dest.bit(0);
         const changed = !std.mem.eql(u64, dest.planes, planes);
         @memcpy(dest.planes, planes);
+        // §17.1.3: a standing monitor reports at the end of a timestep in which
+        // something moved. One event however many values moved — the monitor
+        // prints its whole argument list, so a second tick could only reprint
+        // the same line.
+        if (changed and self.monitor != null and self.monitor_on and !self.monitor_pending) {
+            self.monitor_pending = true;
+            try self.enqueueMonitor(.monitor_tick);
+        }
         if (!changed or self.waiters.items.len == 0) return;
         const after = dest.bit(0);
         // ponytail: linear scan. The list holds only currently-suspended
@@ -865,6 +1475,45 @@ const Run = struct {
         const watched = if (edge == .any) e else ex.lhs(e);
         try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc });
     }
+    /// The `.monitor` region at the CURRENT time — §17.1.2/§17.1.3's "end of
+    /// the timestep", which the scheduler already orders after active,
+    /// inactive and NBA.
+    fn enqueueMonitor(self: *Run, item: Pending) Error!void {
+        if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
+        const payload: u32 = @intCast(self.pending.items.len);
+        try self.pending.append(self.arena, item);
+        _ = self.scheduler.schedule(.monitor, payload) catch |e|
+            return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
+    }
+
+    /// Render the standing monitor and print it if §17.1.3's "any argument
+    /// changed" holds.
+    ///
+    /// ponytail: the test is on the RENDERED LINE, not on a sensitivity list
+    /// over the argument expressions. Two consequences, both benign: a value
+    /// that changes and changes back within one timestep correctly prints
+    /// nothing, and a change to something the monitor does not name costs one
+    /// wasted render. Build the sensitivity list if a design ever monitors a
+    /// handful of signals out of thousands.
+    fn monitorPrint(self: *Run, a: std.mem.Allocator, force: bool) Error!void {
+        const m = self.monitor orelse return;
+        if (!self.monitor_on and !force) return;
+        var buffer = std.Io.Writer.Allocating.init(a);
+        const saved = self.out;
+        self.out = &buffer.writer;
+        self.display(m.args, a, m.show) catch |e| {
+            self.out = saved;
+            return e;
+        };
+        self.out = saved;
+        const text = buffer.written();
+        if (!force) {
+            if (self.monitor_last) |last| if (std.mem.eql(u8, last, text)) return;
+        }
+        self.monitor_last = try self.arena.dupe(u8, text);
+        try self.out.writeAll(text);
+    }
+
     fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!void {
         if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
         const payload: u32 = @intCast(self.pending.items.len);
@@ -973,6 +1622,15 @@ const Run = struct {
                     }
                 },
                 .event_control => |s| {
+                    // §9.7.1 `#0.5`: rounded to the module's precision, not
+                    // truncated to its unit. `compileStmt` let this through
+                    // without a type, so it never reaches `eval`.
+                    if (self.file.exprs.tag(s.event) == .real_literal) {
+                        const delay = self.scale.?.realDelay(self.file.exprs.realValue(s.event)) catch |e|
+                            return self.fail(self.file.stmtTok(id), "digital delay cannot be represented: {t}", .{e});
+                        try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
+                        return;
+                    }
                     const value = try self.eval(scratch, s.event, 0);
                     const delay: u64 = if (value.hasUnknown()) 0 else blk: {
                         if (value.width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
@@ -982,8 +1640,40 @@ const Run = struct {
                     try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
                     return;
                 },
-                .sys_task => |s| {
-                    if (tasks.get(self.file.str(s.name)).? == .display) try self.display(s.args, scratch) else {
+                .sys_task => |s| switch (tasks.get(self.file.str(s.name)).?) {
+                    .show => |sh| try self.display(s.args, scratch, sh),
+                    // §17.1.2: the arguments are NOT captured, the call is.
+                    // What it reports is the value at the end of the timestep,
+                    // so evaluation waits for the `.monitor` region.
+                    .strobe => |sh| try self.enqueueMonitor(.{ .strobe = .{ .args = s.args, .show = sh } }),
+                    .monitor => |sh| {
+                        self.monitor = .{ .args = s.args, .show = sh };
+                        self.monitor_last = null;
+                        try self.monitorPrint(scratch, true);
+                    },
+                    .monitor_enable => |on| {
+                        const was = self.monitor_on;
+                        self.monitor_on = on;
+                        // "$monitoron ... produces a display immediately", so
+                        // the re-enable itself is an event. Turning it off is
+                        // silent, and turning on what was already on is not a
+                        // transition.
+                        if (on and !was) try self.monitorPrint(scratch, true);
+                    },
+                    .timeformat => {
+                        const ex = &self.file.exprs;
+                        const units = try self.eval(scratch, s.args[0], 0);
+                        const precision = try self.eval(scratch, s.args[1], 0);
+                        const width = try self.eval(scratch, s.args[3], 0);
+                        self.time_format = .{
+                            .units = std.math.lossyCast(i32, units.asInt() orelse 0),
+                            .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
+                            .suffix = self.file.str(ex.strOf(s.args[2])),
+                            .width = std.math.lossyCast(u32, width.asInt() orelse 0),
+                        };
+                    },
+                    .readmem => |radix| try self.readMemory(scratch, s.args, radix),
+                    .finish => {
                         const verbose = s.args.len == 0 or self.file.exprs.intValue(s.args[0]) != 0;
                         if (verbose) {
                             const start_byte = self.starts[self.file.stmtTok(id)];
@@ -992,7 +1682,7 @@ const Run = struct {
                         }
                         self.scheduler.finish();
                         return;
-                    }
+                    },
                 },
                 else => unreachable,
             }
@@ -1017,7 +1707,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         error.ParseError => error.DigitalFailed,
     };
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena) };
+    var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io };
     if (file.modules.len != 1 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires exactly one ordinary module", .{});
     const m = file.modules[0];
     if (m.is_connect or m.ports.len != 0 or m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.instances.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.events.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
@@ -1033,6 +1723,11 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         const unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
         const precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
         r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
+        r.unit_exp = @intFromEnum(unit);
+        // §17.3: "the default ... is the smallest time precision argument of
+        // all the `timescale compiler directives in the source description".
+        // One module here, so that is this one's precision.
+        r.time_format.units = @intFromEnum(precision);
     }
     // Variables, then array elements, then nets — one slot space, so one
     // `store` publishes all three and wakes the same event waiters.
@@ -1122,6 +1817,11 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         switch (r.pending.items[event.payload]) {
             .run_process => |start| try r.execute(&scratch, start),
             .write => |w| try r.store(w.target, w.value.planes),
+            .strobe => |s| try r.display(s.args, scratch.allocator(), s.show),
+            .monitor_tick => {
+                r.monitor_pending = false;
+                try r.monitorPrint(scratch.allocator(), false);
+            },
         }
     }
 }
@@ -1408,10 +2108,14 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"%b\",'hx); endmodule", "unsized four-state");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
-    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$clog2(1); end endmodule", "expression form");
+    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
     try expectRejected("module m; initial $finish(2); endmodule", "only $finish");
-    try expectRejected("module m; initial $display(\"%d\",1); endmodule", "only %b");
+    // The conversions that ARE implemented are §9.4.3 Table 9-22's; `%s` and
+    // `%c` are not, and the refusal names the table rather than one letter.
+    try expectRejected("module m; initial $display(\"%s\",1); endmodule", "Table 9-22");
+    // §17.7: a real conversion needs a real, and `$realtime` is the only one.
+    try expectRejected("`timescale 1ns/1ns\nmodule m; reg a; initial $display(\"%g\",a); endmodule", "only one implemented");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");
 }
 
@@ -1443,8 +2147,53 @@ test "timescale provenance rejects absent malformed or later directives" {
     try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "coarser than the time unit");
     try expectRejected("`timescale 1ns/1ps\nmodule m; initial #1 ; endmodule\n`timescale 1ms/1us\n", "after module start");
     try expectRejected("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 ; endmodule", "resetall");
-    try expectRejected("`timescale 1ns/1ns\nmodule m; initial #1.5 ; endmodule", "digital expression");
     try expectRejected("`timescale 1ns/1ns\nmodule m; initial #(128'd1) ; endmodule", "wider than 64");
+    // §17.7: a clock query has no unit to report in without a timescale.
+    try expectRejected("module m; initial $display(\"%0d\", $time); endmodule", "explicit valid timescale");
+}
+
+test "§9.7.1 a real delay rounds to the precision instead of truncating to the unit" {
+    // `#0.5` under 10ns/100ps is 50 precision units — half a time unit, not
+    // zero. A runner that truncated would print `0 0`, and one that ignored
+    // the fraction would print `0 0` too; only rounding gives 1.
+    try expectRun(
+        \\`timescale 10ns/100ps
+        \\module m; initial begin #0.5 $display("%0d %g", $time, $realtime); end endmodule
+        \\
+    , "1 0.5\n");
+}
+
+test "§9.4.3 the radix conversions size themselves from the operand" {
+    // IEEE 1364-2005 §17.1.1.3: a radix field is the operand's declared width
+    // in that radix, and the default decimal field holds the largest value the
+    // operand can take — 255 for `reg [7:0]`, so three columns of leading
+    // SPACE and not zero. `%0d` is the escape from it.
+    try expectRun(
+        \\module m; reg [7:0] v; initial begin
+        \\  v = 8'd7;
+        \\  $display("[%d][%0d][%h][%o][%b]", v, v, v, v, v);
+        \\end endmodule
+        \\
+    , "[  7][7][07][007][00000111]\n");
+    // §17.1.1.4: a group that is ENTIRELY unknown prints lowercase, a group
+    // that is partly unknown prints uppercase. The `X` is the whole signal
+    // that known bits were discarded.
+    try expectRun(
+        \\module m; reg [7:0] v; initial begin
+        \\  v = 8'b1010_xxxx; $display("[%b][%h][%o]", v, v, v);
+        \\  v = 8'bzzzz_0011; $display("[%h][%o]", v, v);
+        \\end endmodule
+        \\
+    , "[1010xxxx][ax][2Xx]\n[z3][zZ3]\n");
+    // §9.4.1: a null argument is one space, $write has no newline, and an
+    // argument with no format specification takes the TASK's default radix.
+    try expectRun(
+        \\module m; reg [7:0] v; initial begin
+        \\  v = 8'hA5;
+        \\  $write("w"); $displayh(v); $display("[", , "]"); $display("bare=", v);
+        \\end endmodule
+        \\
+    , "wa5\n[ ]\nbare=165\n");
 }
 
 test "unknown delay is zero and finish discards pending later processes" {
@@ -1476,8 +2225,8 @@ test "finish verbosity reports exact local precision ticks and mapped source" {
 }
 
 test "nested unsupported forms fail preflight even in unselected conditional arms" {
-    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=1'b1 ? 1'b0 : $clog2(1); end endmodule", "expression form");
-    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=1'b0 && $clog2(1); end endmodule", "expression form");
+    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=1'b1 ? 1'b0 : $bogus(1); end endmodule", "expression form");
+    try expectRejected("module m; reg a; initial begin $display(\"before\"); a=1'b0 && $bogus(1); end endmodule", "expression form");
 }
 
 test "deep left-associated source expression fails before output" {
@@ -1507,8 +2256,8 @@ test "nested expressions preserve NBA snapshot and evaluate delay at suspension"
 }
 
 test "control flow validates unselected bodies and every case label" {
-    try expectRejected("module m; initial begin $display(\"before\"); if(0) $write(\"BAD\"); end endmodule", "system task");
-    try expectRejected("module m; initial begin $display(\"before\"); case(1) 1:; $clog2(2):; endcase end endmodule", "expression form");
+    try expectRejected("module m; initial begin $display(\"before\"); if(0) $bogustask(\"BAD\"); end endmodule", "system task");
+    try expectRejected("module m; initial begin $display(\"before\"); case(1) 1:; $bogus(2):; endcase end endmodule", "expression form");
     try expectRejected("module m; initial begin $display(\"before\"); while(0) @(a); end endmodule", "undeclared digital variable");
     try expectRejected("module m; initial case(1) default:; default:; endcase endmodule", "multiple default");
     try expectRejected("module m; initial case(1) endcase endmodule", "at least one item");
@@ -1534,7 +2283,7 @@ test "concatenation validates zero replication structure and constant counts" {
     try expectRejected("module m; initial $display(\"%b\",{0{1'b1}}); endmodule", "immediately enclosing concatenation");
     try expectRejected("module m; initial $display(\"%b\",{{{0{1'b1}}},1'b1}); endmodule", "positive-width operand");
     try expectRejected("module m; initial $display(\"%b\",{}); endmodule", "positive-width operand");
-    try expectRejected("module m; initial $display(\"%b\",{{0{$clog2(1)}},1'b1}); endmodule", "expression form");
+    try expectRejected("module m; initial $display(\"%b\",{{0{$bogus(1)}},1'b1}); endmodule", "expression form");
     try expectRejected("module m; integer n; initial begin $display(\"before\"); $display(\"%b\",{n{1'b1}}); end endmodule", "constant expression");
     try expectRejected("module m; initial $display(\"%b\",{-1{1'b1}}); endmodule", "cannot be negative");
     try expectRejected("module m; initial $display(\"%b\",{1'bx{1'b1}}); endmodule", "cannot contain X or Z");
