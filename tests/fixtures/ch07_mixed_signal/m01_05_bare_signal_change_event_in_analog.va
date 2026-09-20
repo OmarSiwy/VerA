@@ -52,7 +52,7 @@
 //   86 |     #10 d = 1'b1;
 //      |     ^
 //
-// `src/frontend/parser.zig:2324` gates `#` on `self.digital`, which `src/cli.zig`
+// `lib/frontend/parser.zig:2324` gates `#` on `self.digital`, which `src/main.zig`
 // sets only for a `.v` input, so the stimulus dies before the event does.
 //
 // Strip the delays and the SECOND failure is the one this fixture is about,

@@ -51,12 +51,12 @@
 //
 // WHAT THIS FIXTURE DOES NOT PIN. The degree of a NON-negative $discontinuity
 // is not observable from a .va file: VerA lowers it to `inst.discontinuity_order`
-// and neither `src/backend/tb.zig` nor ARPice reads that field back, so
+// and neither `lib/backend/tb.zig` nor ARPice reads that field back, so
 // `$discontinuity(2.0)` and `$discontinuity(0)` are indistinguishable here. The
 // assertion above pins that 2.0 is ACCEPTED and is not a veto, which is as far
 // as the source language can see.
 //
-// STATUS: THIS ONE PASSES TODAY. `Const.asInt` (`src/ir/lower.zig:800`) applies
+// STATUS: THIS ONE PASSES TODAY. `Const.asInt` (`lib/ir/lower.zig:800`) applies
 // §4.2.1.1 with `@intFromFloat(@round(r))` and the -1 arm of `lowerKernelCtl`
 // then takes over, so the conversion is already right for a finite, in-range
 // real. It is written down because nothing in tests/fixtures/ says so — every

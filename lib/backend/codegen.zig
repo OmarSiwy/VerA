@@ -8294,20 +8294,20 @@ const timer_txt =
 /// VERBATIM from `str_kernels.zig` for the same reason `filt_txt` is: the rows
 /// codegen's tests scan are byte-for-byte the ones the device scans. Only
 /// devices that actually call `$sformat`/`$swrite`/`$sscanf` carry them.
-const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (src/backend/str_kernels.zig) ----\n\n" ++
+const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (lib/backend/str_kernels.zig) ----\n\n" ++
     @embedFile("str_kernels.zig");
 
 /// §9.13 the probabilistic distribution kernels, emitted VERBATIM from
 /// `rng_kernels.zig` on the same terms as `str_txt`: the stream codegen's tests
 /// exercise is byte-for-byte the stream the device draws from. Only devices that
 /// call one of Table 9-10's 17 names carry it.
-const rng_txt = "// ---- §9.13 probabilistic distribution kernels (src/backend/rng_kernels.zig) ----\n\n" ++
+const rng_txt = "// ---- §9.13 probabilistic distribution kernels (lib/backend/rng_kernels.zig) ----\n\n" ++
     @embedFile("rng_kernels.zig");
 
 /// §9.21 the table-model interpolator, emitted VERBATIM from
 /// `table_kernels.zig` on the same terms. Only devices that call
 /// `$table_model` carry it.
-const table_txt = "// ---- §9.21 table model kernels (src/backend/table_kernels.zig) ----\n\n" ++
+const table_txt = "// ---- §9.21 table model kernels (lib/backend/table_kernels.zig) ----\n\n" ++
     @embedFile("table_kernels.zig");
 
 /// §9.5 the file-descriptor table and its operations, emitted VERBATIM from
@@ -8316,14 +8316,14 @@ const table_txt = "// ---- §9.21 table model kernels (src/backend/table_kernels
 /// willing to run side effects. A device compiled for a solver has no `display`
 /// decl to sequence them in, so it has no table, so §9.5.1's "a zero is returned
 /// for the mcd or fd" is its truthful answer to `$fopen`.
-const file_txt = "// ---- §9.5 file descriptor I/O kernels (src/backend/file_kernels.zig) ----\n\n" ++
+const file_txt = "// ---- §9.5 file descriptor I/O kernels (lib/backend/file_kernels.zig) ----\n\n" ++
     @embedFile("file_kernels.zig");
 
 /// §4.5.15 the SPICE limiters, emitted VERBATIM from `limit_kernels.zig` on the
 /// same terms. Carried only by a device with an honoured `$limit` call — no unit
 /// body can reach them, because `$limit` renders as the identity of its probe
 /// there (`cg_limit.zig`'s header says why).
-const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (src/backend/limit_kernels.zig) ----\n\n" ++
+const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limit_kernels.zig) ----\n\n" ++
     @embedFile("limit_kernels.zig");
 
 /// §4.5.11/§4.5.12 the filter kernels, emitted VERBATIM from `filter_kernels.zig`

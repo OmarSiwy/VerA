@@ -35,7 +35,7 @@ so no fixture is spent on it, except where noted:
 | §4.3.1 result typing: `min(5,2)/4 == 0` (integer) vs `min(5.0,2)/4 == 0.5`; `abs(-7)/2 == 3` vs `abs(-7.0)/2 == 3.5` | correct |
 | §4.3.1 `pow(-2.0, 3.0) == -8.0` (the "if x < 0, all integer y" arm) | correct |
 | §4.3.2 domain BOUNDARIES: `atan2(0,0)==0`, `asin(1)`, `acos(-1)`, `acosh(1)==0`, `sqrt(0)`, `hypot(3,4)==5`, `ln1p(-0.5)` | all correct to the last bit |
-| runtime multidimensional read/write with independently varying subscripts, including a DESCENDING dimension (`real m[0:2][3:1]`) | correct — `assignRuntimeIndex` + `$idx` in `src/ir/lower.zig` |
+| runtime multidimensional read/write with independently varying subscripts, including a DESCENDING dimension (`real m[0:2][3:1]`) | correct — `assignRuntimeIndex` + `$idx` in `lib/ir/lower.zig` |
 | negative declared bounds (`real a[-2:2]`) with a runtime negative index | correct |
 | §4.2.1.1 in a SUBSCRIPT, constant and runtime paths agreeing: `a[1.5]`, `a[x]` with `x=1.5`, and `a[x]` with `x=-1.5` all round away from zero | correct — and this is the "constant-folding agreement with runtime" item, already sound |
 | constant-fold vs runtime agreement generally: `0.1+0.2` folded == computed (`0.30000000000000004`); `sin(0.7)` folded == runtime, bit for bit; `2147483647 + 1` wraps to `-2147483648` in BOTH paths | correct |
@@ -51,7 +51,7 @@ whose shared converter the two crash fixtures 91/92 attack).
 
 ## The defects, confirmed by running the compiler
 
-1. **Partial slices do not exist.** `checkSubscriptCount` (`src/ir/lower.zig`)
+1. **Partial slices do not exist.** `checkSubscriptCount` (`lib/ir/lower.zig`)
    requires one subscript per declared dimension; its own header names
    `flag_array[3]` as the case it is refusing. → E0356. Fixtures 01, 02.
 2. **An `output`/`inout` actual cannot be a dynamically indexed element.** The
@@ -66,14 +66,14 @@ whose shared converter the two crash fixtures 91/92 attack).
    disagree by construction; writes past the folded bound are silently dropped
    and the read aborts the device. Fixture 03.
 4. **An out-of-range runtime read aborts.** `emitIdx`
-   (`src/backend/codegen.zig:4837`) closes its switch with
+   (`lib/backend/codegen.zig:4837`) closes its switch with
    `else => @panic("VerA: out-of-range array read is not implemented")`.
    Documented as a gap in that function's header. Fixture 05.
 5. **A runtime out-of-domain transcendental argument is a quiet NaN.** §4.3.2
    says "shall report an error"; VerA reports nothing and the run exits 0.
    Fixture 08.
 6. **`Const.asInt` crashes the compiler on a non-finite or out-of-i64 real.**
-   `src/ir/lower.zig:800`, `.real => |r| @intFromFloat(@round(r))`, no range
+   `lib/ir/lower.zig:800`, `.real => |r| @intFromFloat(@round(r))`, no range
    test. Reachable from at least two source constructs — a `$discontinuity`
    degree and an array subscript — both of which abort with
    `panic: integer part of floating point value out of bounds`, exit 134.
@@ -154,10 +154,10 @@ and the replacement of the panic's live thread id with `…`.
 ##### 90_discontinuity_string_degree_rejected.va   exit 0, device emitted   (should refuse)
 ##### 91_discontinuity_degree_out_of_range_rejected.va   exit 134
   thread … panic: integer part of floating point value out of bounds
-  src/ir/lower.zig:804:26 in asInt  <- src/ir/lower.zig:6769 in lowerKernelCtl
+  lib/ir/lower.zig:804:26 in asInt  <- lib/ir/lower.zig:6769 in lowerKernelCtl
 ##### 92_nonfinite_array_subscript_rejected.va           exit 134
   thread … panic: integer part of floating point value out of bounds
-  src/ir/lower.zig:804:26 in asInt  <- src/ir/lower.zig:7050 in lowerIndex
+  lib/ir/lower.zig:804:26 in asInt  <- lib/ir/lower.zig:7050 in lowerIndex
 ```
 
 Reading it: 01/02/04 exit 1 with a diagnostic (the honest missing-feature
@@ -179,7 +179,7 @@ transcript's fidelity was not.
 ## Deliberately NOT covered
 
 - **The non-negative `$discontinuity` degree's VALUE.** Unobservable from a
-  `.va`: VerA lowers it to `inst.discontinuity_order`, `src/backend/tb.zig`
+  `.va`: VerA lowers it to `inst.discontinuity_order`, `lib/backend/tb.zig`
   never prints that field and ARPice never reads it
   (`src/analysis/solvers/converger.zig:294` mentions it in a comment only). 07
   pins that a real degree is accepted and is not a veto, which is as far as the
@@ -245,7 +245,7 @@ transcript's fidelity was not.
    index is not a constant expression" — a diagnostic this very row provokes on
    purpose in fixture 04, and exactly the wrong verdict for `a[1.0/0.0]`, which
    *is* a constant expression and merely has no integer. It is now
-   `//! reject E0310`, naming the code `src/ir/lower.zig:4137` already emits for
+   `//! reject E0310`, naming the code `lib/ir/lower.zig:4137` already emits for
    a constant subscript outside the declared range. If the project mints a new
    code for "this constant has no integer value", move the directive to that
    code rather than widening it back to a substring.
@@ -291,7 +291,7 @@ against a wrong fix is coverage, and it is recorded rather than quietly kept.
 
 Nothing. Every fixture compiles-or-fails against today's `zig build` with no new
 infrastructure. Fixture 03 needs the `//! param` directive, which
-`src/backend/tb.zig:228` already parses.
+`lib/backend/tb.zig:228` already parses.
 
 ## Build / run
 
@@ -335,3 +335,80 @@ one-liners to each directory's `COVERAGE.md`, and they are picked up by:
 ```sh
 zig build torture -- --strict
 ```
+
+## Added later: the 2023 half of §9.11 (`a01_09`, `a01_10`)
+
+These two were authored after the row was assembled, for a function pair the row
+never named. They belong to the same row and the same defect class as `01`–`08`,
+and they belong to the **approved-but-unimplemented** tree: the compiler refuses
+a legal call site, so both FAIL TODAY.
+
+The suite had been pinning §9.11 from the wrong edition:
+
+> Verilog AMS HDL extends the conversion functions defined in IEEE Std 1364
+> Verilog so that $bitstoreal and $realtobits,$rtoi and $itor can be used in the
+> analog context.
+
+Four names. Table 9-8, under §9.2, gives all six of the conversion family their
+two columns, and exactly two of the six analog cells are "No":
+
+| | digital | analog |
+|---|---|---|
+| `$bitstoreal` | Yes | Yes |
+| `$itor` | Yes | **Yes** |
+| `$signed` | Yes | No |
+| `$realtobits` | Yes | Yes |
+| `$rtoi` | Yes | **Yes** |
+| `$unsigned` | Yes | No |
+
+The two "No" rows are pinned, from the refusing side, by
+`tests/fixtures/ch09_system_tasks/134_signed_analog_rejected.va` and
+`135_unsigned_analog_rejected.va`. Nothing pinned either "Yes" row, because the
+two fixtures that used to stand there —
+`ch09_system_tasks/061_rtoi_analog_rejected.va` and
+`062_itor_analog_rejected.va` — asserted the pre-2023 reading in which only
+`$bitstoreal` and `$realtobits` crossed the boundary. Both have been withdrawn;
+these two replace them, positive side up.
+
+Annex G, Table G.7, records the change as Mantis item 7920 — "Add support for
+`$roi()` and `$itor()` in the analog context", clause column "9-8, 9.11". `$roi`
+is the change table's own typo for `$rtoi`; §9.11 is normative and spells it
+right.
+
+| fixture | pins | wants | derivation |
+|---|---|---|---|
+| `a01_09_rtoi_truncates_toward_zero.va` | §9.11 + 1364 §17.8: `$rtoi` truncates toward zero, which is **not** §4.2.1.1's round-to-nearest | `1`, `-1`, `1`, `-1`, `3`, `0` | `V(p,n)` is the double nearest 1.7, `0x3FFB333333333333` = 1.6999999999999999555910790149937383830547332763671875. Truncate: `1`; negate (exact) and truncate: `-1` where floor and §4.2.1.1 both say `-2`. `$rtoi(1.5)=1` and `$rtoi(-1.5)=-1` are §4.2.1.1's own worked examples with the answers that clause does not give. `$rtoi(3.0)=3` kills `floor(x+0.5)`. `$rtoi(1.0 - 2.0e-16)` is the inexact-representation case: the exact difference is not a double and rounds to `0x3FEFFFFFFFFFFFFE` = 1 − 2⁻⁵², two ulps under 1.0, so a rounding or epsilon-based implementation answers 1 and truncation answers 0 |
+| `a01_10_itor_widens_an_integer.va` | §9.11 + §3.2: the widening is exact over `integer`'s whole range, and the **return type is real** (§4.2.1.3) | `3.0`, `-7.0`, `16777217.0`, `1.5`, `5.0` | `k = 4 + (V(p,n) > 0.0) = 5` with `V(p,n) = 0.5`. `16777217` is 2²⁴+1, inside §3.2's `-2³¹..2³¹-1` and inside binary64's exact range while being outside binary32's — a float-backed `real` fails this line and no other. `$itor(3) / 2` is `1.5` if the result is real and `1` if it is integer, and §4.2.1.3's own `b = 1 / 2;` ("the above is integer division and the result is 0") is the case it must not be |
+
+Both use `check.vh`, so every want is a literal a human typed and the transcript
+carries its own verdict.
+
+### Observed today
+
+```
+FAIL tests/fixtures/ch04_expressions/a01_09_rtoi_truncates_toward_zero.va: did not compile: CompileFailed
+error[E0806]: system task is not supported in the analog context: `$rtoi`
+  = note: LRM 9.2
+FAIL tests/fixtures/ch04_expressions/a01_10_itor_widens_an_integer.va: did not compile: CompileFailed
+error[E0806]: system task is not supported in the analog context: `$itor`
+  = note: LRM 9.2
+```
+
+Twelve E0806s across 09's six assertions and ten across 10's five: `check.vh`'s
+GOT and WANT are expanded twice, so each assertion reports twice. The failure is
+correct in kind and wrong in content — it applies Table 9-8's analog **No**
+column to a row that reads **Yes**, citing the §9.2 heading that owns the table
+rather than anything about `$rtoi`.
+
+Two notes for whoever closes this:
+
+- the E0806 explain text (`vera --explain E0806`) names the same wrong set
+  ("Table 9-8 — `$itor`, `$rtoi`, `$signed` and `$unsigned`") and quotes the
+  pre-2023 §9.11 sentence. The explain text is the compiler's own statement of
+  the rule, so it has to move with the code, not after it.
+- `tests/fixtures/ch09_system_tasks/134_signed_analog_rejected.va` is a
+  **correct** fixture resting on a **stale** quotation: its header still says
+  "only `$bitstoreal` and `$realtobits` are carried into the analog context" and
+  its body quotes §9.11 without the second pair. `$signed` is still analog-No,
+  so the verdict is right; the citation is not. That file was left alone
+  deliberately — only its prose is wrong.

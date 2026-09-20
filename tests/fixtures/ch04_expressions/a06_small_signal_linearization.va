@@ -36,7 +36,7 @@
 // an implementation uses is therefore implementation-defined in the last digits:
 // Annex D.2's default fall-through is `P_K`/`P_Q` = NIST1998, giving
 // k/q = 8.617342301212761e-5, while VerA hard-codes CODATA2018's
-// 8.617333262145179e-5 at src/backend/codegen.zig:5519. The two differ by
+// 8.617333262145179e-5 at lib/backend/codegen.zig:5519. The two differ by
 // 1.05e-6 relative, which the diode exponential amplifies by V/$vt ≈ 23.2 to
 // 2.4e-5 in `id`.
 //

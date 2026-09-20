@@ -70,7 +70,7 @@
 // satisfied and Table 7-1's `integer` row is what carries the value back.
 //
 // WHAT FAILS TODAY. `error[E0205]: unsupported module item: found `always``.
-// `src/frontend/parser.zig:1265` refuses `always` outside a digital run and
+// `lib/frontend/parser.zig:1265` refuses `always` outside a digital run and
 // outside a connect module, so the digital half of §5.10.4 has no
 // implementation. The analog half — declaring the event and triggering it from
 // an analog event statement — already works

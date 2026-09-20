@@ -12,20 +12,20 @@ correcting in opposite directions, so read this before the fixtures.
 
 **More is implemented than "a parsed placeholder primitive."** Table E.1 ships
 as real module declarations in a prelude (`Preprocessor.spice_primitives`,
-`src/frontend/preprocessor.zig:2586`), with working equations for `resistor`,
+`lib/frontend/preprocessor.zig:2586`), with working equations for `resistor`,
 `capacitor`, `inductor`, `iexp`, `ipulse`, `ipwl`, `isine`, `vexp`, `vpulse`,
 `vpwl`, `vsine`, `vccs`, `vcvs`; interface-only (Behavior column empty in the
 LRM) for `tline`, `diode`, `bjt`, `mosfet`, `jfet`, `mesfet`. E.3.1's `ccvs`,
 `cccs` and mutual inductor are deliberately absent. E.3.2's access-function
 substitution is implemented (`Flatten.primitiveAccess`,
-`src/ir/elaborate.zig:1803`) and E.3.3's ordering plus E.2.1's case-insensitive
-fallback live in `Flatten.findModule` (`src/ir/elaborate.zig:1748`). Forty-three
+`lib/ir/elaborate.zig:1803`) and E.3.3's ordering plus E.2.1's case-insensitive
+fallback live in `Flatten.findModule` (`lib/ir/elaborate.zig:1748`). Forty-three
 fixtures in `tests/fixtures/annex_e_spice/` are green. Port disciplines
 (E.3.2.1/E.3.2.2) are covered there with digits — `primitive_discipline.va`,
 `primitive_port_discipline.va`, `primitive_mixed_discipline_override.va` — so
 this row adds nothing there.
 
-**Less is implemented at the netlist boundary.** `src/frontend/spice_cards.zig`
+**Less is implemented at the netlist boundary.** `lib/frontend/spice_cards.zig`
 reads `.MODEL` and `.SUBCKT` *headers only*:
 
 - a `.MODEL` card becomes `module <name>(<primitive's ports>); inout …;
@@ -42,7 +42,7 @@ reads `.MODEL` and `.SUBCKT` *headers only*:
 - Table E.1's `dc`, `mag`, `phase` are declared on every independent-source row
   and enter **no** equation (*"declared, in Table E.1's order, and unused"*).
 - `$mfactor` is carried through elaboration (`Unit.mfactor`,
-  `src/ir/elaborate.zig:382`) but does **not** scale a child instance's
+  `lib/ir/elaborate.zig:382`) but does **not** scale a child instance's
   contributions. Measured, not inferred: `runit #(.$mfactor(4)) x1(c,b);` over a
   1 kΩ Table E.1 resistor at 1 V reports `I(x1.p,x1.n) got=0.001 want=0.004` and
   `res[c] = 1.000000e-3`.
@@ -133,7 +133,7 @@ Ratio: 10 positive to 1 reject.
 
 **They cannot be run as-is today — the `//! spice` channel is not reachable from
 the CLI.** `Preprocessor.Options.spice_netlist` is set in exactly one place,
-`tests/torture.zig:166` and `:307`; `src/cli.zig` has no `--spice` flag, so
+`tests/torture.zig:166` and `:307`; `src/main.zig` has no `--spice` flag, so
 `vera --run` silently ignores every `//! spice` line and **nine** of these eleven
 fixtures die with `E0904: instance names no module` (it was eight before the
 review; fixture 10 gained a netlist control).

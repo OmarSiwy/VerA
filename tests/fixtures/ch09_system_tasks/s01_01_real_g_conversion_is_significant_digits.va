@@ -58,7 +58,7 @@
 // which is C's %e and which VerA already reproduces for an explicit `%e` — see
 // tests/fixtures/ch09_system_tasks/171_display_c_format_flags.va.
 //
-// WHY THE FOUR THAT REMAIN STILL HAVE TEETH. `src/backend/cg_display.zig`
+// WHY THE FOUR THAT REMAIN STILL HAVE TEETH. `lib/backend/cg_display.zig`
 // renders a real through Zig's shortest-round-trip formatting, so `%g` of 1e8
 // prints `100000000` — nine characters where Table 9-23 demands the shorter of
 // the two renderings, five. All four rows fail today and each names a distinct

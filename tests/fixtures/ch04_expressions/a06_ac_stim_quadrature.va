@@ -33,7 +33,7 @@
 // dropping the phase gives (2.0, 0.0), truncating gives (1.0, 0.0), and the
 // clause requires (1.0, 1.7320508075688772). All three are distinguishable.
 //
-// TODAY. `src/backend/codegen.zig` lowers `ac_stim` to `mag * @cos(phase)` and
+// TODAY. `lib/backend/codegen.zig` lowers `ac_stim` to `mag * @cos(phase)` and
 // says so in its own comment: "the residual is REAL, so a matching analysis
 // contributes the phasor's real part, mag·cos(phase). The quadrature component
 // is dropped … Upgrade path is an `ac_gens` export beside `noise_gens`, carrying

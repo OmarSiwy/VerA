@@ -7,7 +7,7 @@
 // headers why that is the weak half — 58, quoted exactly: "WHAT A PULL IS IN
 // THE ANALOG KERNEL, since §19.10 describes a logic level and a drive
 // STRENGTH, and this engine has neither." So those three fixtures approximate
-// the pull as a potential source at 1 V or 0 V, and `src/ir/lower.zig`
+// the pull as a potential source at 1 V or 0 V, and `lib/ir/lower.zig`
 // (`applyUnconnectedDrive`) records the same approximation as its stated
 // ceiling.
 //

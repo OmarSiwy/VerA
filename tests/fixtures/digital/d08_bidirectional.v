@@ -15,7 +15,7 @@
 //
 // §8.5.3.5 "Switch (transistor) processing" states the requirement this fixture
 // tests, and is the clause VerA's parser currently cites while modelling
-// nothing (src/frontend/parser.zig `parsePassSwitch`, W0250):
+// nothing (lib/frontend/parser.zig `parsePassSwitch`, W0250):
 //
 //     "The event-driven simulation algorithm described in 11 of IEEE Std
 //      1364-2005 Verilog HDL depends on unidirectional signal flow and can

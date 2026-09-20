@@ -10,18 +10,21 @@ normative sentences and on the table itself. All four rows have fixtures in this
 
 Annex B is one rule wearing three sentences: a keyword is a *spelling*, reserved
 everywhere the grammar wants an identifier. It states no behaviour, so nothing here can
-be proved by running a module — twenty-four of the twenty-seven fixtures are `//! reject`
+be proved by running a module — twenty-three of the twenty-six fixtures are `//! reject`
 fixtures and the three that compile exist to hold down the permissive side of the escape
-and case rules. Table B.1 has **217 spellings**, counted from the HTML; 207 of them carry
-a `//! reject` arm in this folder and the other ten are censused in
-`annex_c_analog_subset/` (below). Every fixture cites `//! lrm B`.
+and case rules. Table B.1 has **215 spellings**, counted from the corrected HTML; 206 of
+them carry a `//! reject` arm in this folder and the other nine are censused in
+`annex_c_analog_subset/` (below). Every fixture cites `//! lrm B`. The count was 217 and
+207 while this file was keyed on an HTML transcription that had been contaminated with
+Verilog-AMS 2.4 text; two of those spellings, `assert` and `net_resolution`, are not in
+the 2023 table, and the fixtures that pinned them are recorded in the ledger below.
 
 | Claim | Rule | Fixtures in this directory |
 |---|---|---|
-| Sentence 1 | "Keywords are predefined nonescaped identifiers that define Verilog-AMS language constructs." | The *reserved* half is the whole census, 24 files. The *nonescaped* half is sentence 2's row. **"Define language constructs" has no fixture here and should not**: that each keyword does its job is the chapter folders' business, and this folder never calls one |
+| Sentence 1 | "Keywords are predefined nonescaped identifiers that define Verilog-AMS language constructs." | The *reserved* half is the whole census, 23 files. The *nonescaped* half is sentence 2's row. **"Define language constructs" has no fixture here and should not**: that each keyword does its job is the chapter folders' business, and this folder never calls one |
 | Sentence 2 | "An escaped identifier shall not be treated as a keyword." Two-sided: the escaped spelling *may* be an identifier, and it *shall not* act as the keyword | Permissive side: `01_escaped_keyword.va` (`\if ` as a real variable, read back as `total` per §2.8.1, `CHECKX` 6.0) and `21_escaped_keyword_port.va` (`\sin ` as a port, `//! bias V(sin) = 0.75, V(n) = 0.25`, `CHECKX` 0.5 — a compiler that resolved it to the sine function never gets a branch probe). Prohibitive side: `12_escaped_keyword_is_not_the_keyword.va`, `\analog begin ... end` → `//! reject E0205` |
 | Sentence 3 | "Verilog-AMS reserves the keywords listed in Table B.1." | `03_reserved_module_rejected.va` (declaration-name position, `module module;`), `04_reserved_if_rejected.va` (variable-name position). Plus §2.8.2's "all keywords are defined in lowercase only", both sides: `02_keyword_case.va` (`Analog` and `ANALOG` are two distinct variables) and `15_uppercase_keyword_rejected.va` (`ANALOG begin ... end` → `//! reject E0205`) |
-| Table B.1 | The 217 spellings themselves | The census: `05`–`11`, `13`, `14`, `16`–`20`, `22`–`25`. 207 arms here, 10 in `annex_c_analog_subset/`. Broken down below |
+| Table B.1 | The 215 spellings themselves | The census: `05`–`11`, `14`, `16`–`20`, `22`–`25`. 206 arms here, 9 in `annex_c_analog_subset/`. Broken down below |
 
 ## The census, and what a `//! reject` arm actually proves
 
@@ -41,7 +44,6 @@ passing on whichever token the parser tripped over first.
 | `09_specify_keywords.va` | A.7.1 specify blocks | 7 |
 | `10_task_control_keywords.va` | A.2.7 / A.6 task, process, procedural control | 12 |
 | `11_macromodule_keyword.va` | `macromodule` alone | 1 |
-| `13_assert_reserved.va` | `assert` alone | 1 |
 | `14_include_reserved.va` | `include` alone, bare rather than post-backtick | 1 |
 | `16_reserved_math_functions.va` | §4.3.1 / §4.3.2 math | 15 |
 | `17_reserved_analog_operators.va` | §4.5 operators, §5.10 events, §4.4/§4.6 noise and analysis | 26 |
@@ -78,34 +80,40 @@ Two mechanical notes a reader will otherwise trip on:
   onto the token, and 19 additionally raises E0201 on the trailing stray `;` its
   deliberately-last `real endmodule;` leaves behind. The name arms still match; the
   fixtures do not pin the extra codes.
-- `05`'s header spells the C.16 word `resolvedto`. Table B.1 and
-  `annex_c_analog_subset/16_unused_ams_words_rejected.va` both spell it `resolveto`. The
-  fixture tests nothing with that name, so this is a comment typo, not a coverage hole.
+- `05`'s header used to spell the C.16 word `resolvedto`. Every corrected source — Table
+  B.1, C.16's own list and `annex_c_analog_subset/16_unused_ams_words_rejected.va` —
+  spells it `resolveto`, and the header has been corrected against them. The fixture
+  tests nothing with that name, so it was a comment typo, not a coverage hole.
 
-## Where the other ten spellings are
+## Where the other nine spellings are
 
 Set difference between Table B.1 and the `//! reject` arms in this folder is exactly the
-ten words Annex C.16 marks "not used by Verilog-A": `connect`, `connectmodule`,
-`connectrules`, `driver_update`, `endconnectrules`, `merged`, `net_resolution`,
-`resolveto`, `split`, `wreal`. They are censused where that clause lives —
-`annex_c_analog_subset/16_unused_ams_words_rejected.va` (seven),
+nine words Annex C.16 marks "not used by Verilog-A": `connect`, `connectmodule`,
+`connectrules`, `driver_update`, `endconnectrules`, `merged`, `resolveto`, `split`,
+`wreal`. They are censused where that clause lives —
+`annex_c_analog_subset/16_unused_ams_words_rejected.va` (seven) and
 `.../30_connect_reserved.va` and `.../31_connectrules_reserved.va` (the two `16` cannot
-prove without shadowing), and `.../20_net_resolution_reserved.va`. All four cite
-`//! lrm B`, so every Table B.1 spelling is pinned somewhere in the suite.
+prove without shadowing). All three cite `//! lrm B`, so every Table B.1 spelling is
+pinned somewhere in the suite. A tenth word used to close this list, `net_resolution`,
+and it is no longer a spelling in either list: the 2023 edition removed it from Annex B
+and C.16 together (Annex G item 5027), which is why its Annex B arm and its Annex C
+fixture were both deleted rather than repaired.
 
 ## The xfail ledger
 
-EMPTY — grep finds no `//! xfail` in this directory, and all 217 spellings of Table B.1
+EMPTY — grep finds no `//! xfail` in this directory, and all 215 spellings of Table B.1
 are reserved. The two rows this section held are kept because they name the shape of the
 defect, which is the one an implementation re-introduces by adding a keyword to the
-grammar and forgetting the lexer table:
+grammar and forgetting the lexer table — and the first of them is now also the record of
+what happens when the table the census was keyed on is the wrong edition:
 
 | Fixture | Spelling | What was wrong |
 |---|---|---|
-| `13_assert_reserved.va` | `assert` | Was absent from `reserved_keywords` in `src/frontend/token.zig`, so it lexed as an ordinary identifier and `real assert;` compiled clean. The spelling Verilog-AMS 2.4 reserves and never spends — no statement, no system function, no Annex A production — which is exactly why an implementation forgets it. Reservedness is the only thing about `assert` that *can* be tested, and it is pinned now (`//! reject E0208`, plus the substring `assert`) |
-| (`annex_c_analog_subset/20_net_resolution_reserved.va`) | `net_resolution` | Same defect, same table, different folder: VerA reserved the other nine C.16 words and not this one. Green now, same code. Listed here because the Annex B ledger would be incomplete without it |
+| `13_assert_reserved.va` | `assert` | **REMOVED, and the claim is WITHDRAWN rather than re-homed: `assert` is not in the 2023 Table B.1.** The fixture was authored from an HTML transcription contaminated with Verilog-AMS 2.4 text. In the published table the run reads `asinh`, then `assign`, with nothing between (physical p.400), so `real assert;` is a legal declaration under the 2023 standard and the fixture's `//! reject E0208` demanded a diagnostic the standard does not support. The defect the row described was real against the contaminated table — VerA did not reserve the spelling then — but reservedness was only ever the test because 2.4 reserved a word it never spent; 2023 stopped reserving it. The spelling is still in `reserved_keywords` (`lib/frontend/token.zig`), which this removal does not touch: under the 2023 table that is an over-reservation refusing a legal identifier, a deviation in the compiler rather than a claim of the suite |
+| (`annex_c_analog_subset/20_net_resolution_reserved.va`) | `net_resolution` | Same transcription error, same outcome, different folder: the word is in neither the 2023 Table B.1 nor the 2023 C.16 — Annex G item 5027 removed it from both — so its fixture was deleted with the claim withdrawn, and `net_resolution` is not a spelling this folder has to census. Listed here because this ledger would otherwise read as if the word were still a requirement |
 
-All 27 fixtures in this folder are green (`zig build torture -- annex_b_keywords`: 27/27).
+All 26 fixtures in this folder are green (27/27 under `zig build torture -- annex_b_keywords`
+when the folder still held `13`, whose removal touches no other file).
 A green census row is worth what it costs — near zero for `endmodule`,
 rather more for `abstol`, `access`, `units`, `from`, `exclude` and `inf`, which read
 perfectly well as ordinary identifiers and which an implementation is tempted to look up
@@ -134,20 +142,20 @@ Every one of these is a real gap, not a cross-reference:
   census files' diagnostic *counts* are unpinned — a compiler that emitted one diagnostic
   for a 24-declaration file and named every spelling in it would pass `08`.
 - **Nothing here proves a keyword works.** By design, and worth writing down: this folder
-  proves 206 of its 207 spellings are unavailable as identifiers and proves nothing about
-  whether any of them is implemented. `absdelta`, `ac_stim`, `noise_table_log`, the four
+  proves 206 of Table B.1's 215 spellings are unavailable as identifiers and proves nothing
+  about whether any of them is implemented. `absdelta`, `ac_stim`, `noise_table_log`, the four
   `laplace_*` and the four `zi_*` are reserved here and their *semantics* live or die in
   ch04/ch05.
 
 ## Fixture-name audit
 
-Twenty-seven files, all mapped above:
+Twenty-six files, all mapped above:
 `01_escaped_keyword.va`, `02_keyword_case.va`, `03_reserved_module_rejected.va`,
 `04_reserved_if_rejected.va`, `05_config_library_keywords.va`, `06_udp_keywords.va`,
 `07_gate_primitive_keywords.va`, `07b_switch_primitive_keywords.va`,
 `07c_pass_logic_primitive_keywords.va`, `08_net_strength_keywords.va`,
 `09_specify_keywords.va`, `10_task_control_keywords.va`, `11_macromodule_keyword.va`,
-`12_escaped_keyword_is_not_the_keyword.va`, `13_assert_reserved.va`,
+`12_escaped_keyword_is_not_the_keyword.va`,
 `14_include_reserved.va`, `15_uppercase_keyword_rejected.va`,
 `16_reserved_math_functions.va`, `17_reserved_analog_operators.va`,
 `18_reserved_discipline_nature.va`, `19_reserved_core_keywords.va`,
@@ -156,5 +164,5 @@ Twenty-seven files, all mapped above:
 `25_reserved_or.va`.
 
 Analysis split: three fixtures compile and assert — `01` and `02` at the default
-operating point, `21` under `//! bias`, one `CHECKX` each. The other twenty-four never
+operating point, `21` under `//! bias`, one `CHECKX` each. The other twenty-three never
 reach a solve.

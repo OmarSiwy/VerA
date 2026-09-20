@@ -76,7 +76,7 @@
 // has to start somewhere and the argument list is what it is asked to display.
 //
 // TWO REASONS THIS FAILS TODAY, both real and both named so neither is mistaken
-// for the other. (1) `Lower.isDisplayTask` (src/ir/lower.zig:6146) lists
+// for the other. (1) `Lower.isDisplayTask` (lib/ir/lower.zig:6146) lists
 // `$monitor` beside `$display` and `cg_display.emitDisplayTask` gives it the
 // same unconditional inline print — the §9.4.1 mechanism is not implemented
 // anywhere in src/. (2) VerA drops display and file tasks that sit under an

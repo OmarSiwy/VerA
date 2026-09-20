@@ -137,7 +137,7 @@ all six are closed:
    `case` is still E0205 at module scope with no `generate` above it, which is what the rest
    of the suite pins.
 3. **The module header parser.** Closed. `13`, `41` and `42` were three arms of A.1.3 that
-   `src/frontend/parser.zig` did not have, each dying at the same point in the header with a
+   `lib/frontend/parser.zig` did not have, each dying at the same point in the header with a
    different token, and one header rewrite retired all three — as this list predicted.
 4. **Missing expression forms.** Closed. `25` (`{n{…}}`) and `39` (`branch id[range]`) were
    two independent parser gaps that happened to produce the same E0207 shape, and were
@@ -151,7 +151,7 @@ all six are closed:
    the fixture assigns to a variable instead of contributing; no fixture demands the
    contribution path resolve it.
 6. **The testbench does not solve.** Closed. `21` alone, and it was never a frontend bug:
-   `src/backend/tb.zig` used to write `//! bias` values directly into `x[]`, so no
+   `lib/backend/tb.zig` used to write `//! bias` values directly into `x[]`, so no
    indirect contribution's constraint was ever enforced. It runs Newton-Raphson on the
    device residual now, and `//! solve` frees the unknowns the fixture does not pin — which
    is the only way `21` could go green without deleting what it asserts. This was the one
@@ -221,7 +221,7 @@ not mistaken for coverage. `38_analog_function_integer_string.va` uses the strin
 *function type*, which A.2.6 does grant explicitly.
 
 **The `//! bias` caveat, and where it stops.** A `//! bias` line still pins the unknown it
-names: `src/backend/tb.zig` loads it and, absent `//! solve`, leaves it there, so a `CHECK`
+names: `lib/backend/tb.zig` loads it and, absent `//! solve`, leaves it there, so a `CHECK`
 that reads a biased node reads the bias it declared and not a solved operating point. That
 is fine for the thirty run fixtures here, which only probe their own biased ports. It is no
 longer a ceiling on the directory: `//! solve` frees the rest of the vector to Newton-Raphson

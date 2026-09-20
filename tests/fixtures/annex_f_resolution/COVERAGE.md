@@ -78,11 +78,11 @@ An empty cell above is a real gap, and these are the gaps:
   own precedence and are green now (both `//! reject E0337` — the directive is applied,
   and *resetting* it leaves the net with no discipline); neither reaches resolution,
   which is what this bullet is about.
-- **F.2.1 step 4.b / §7.7.2.1 matching:** exact-match precedence, subset fallback and first-match warnings (W0950) are now implemented and checked in `src/ir/elaborate.zig` tests.
+- **F.2.1 step 4.b / §7.7.2.1 matching:** exact-match precedence, subset fallback and first-match warnings (W0950) are now implemented and checked in `lib/ir/elaborate.zig` tests.
 
 - **F.2.1 step 4.b bullet 4, the legal half.** Unknown-and-legal (unknown discipline
   with no mixed-port connection) has no fixture; the error half does, and the legal
-  half is pinned by a unit test in `src/ir/elaborate.zig` (the net keeps its first
+  half is pinned by a unit test in `lib/ir/elaborate.zig` (the net keeps its first
   arrival and the design elaborates).
 - **F.2.1 / F.2.2 final step, converter selection and insertion (7.7, 7.8).**
   `connectmodule` declarations and `connectrules` blocks are accepted and validated

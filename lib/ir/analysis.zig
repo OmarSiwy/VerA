@@ -191,7 +191,7 @@ pub fn build(
 /// a different need: `proof.zig` runs at root.zig's stage 5, BEFORE codegen
 /// builds its own `Analysis` at stage 6, so it cannot share one — and a prover
 /// has no use for "how would this Value be spelled in the emitted struct".
-/// MEASURED with `zig build bench`, `contrib n=4096` lint phase, min of 25,
+/// MEASURED with `zig build benchmark`, `contrib n=4096` lint phase, min of 25,
 /// **in DEBUG** (the run predates the bench printing its mode, and `zig build
 /// bench` with no `-Doptimize` is Debug; ReleaseFast is ~12× smaller — the same
 /// point is 8.80 ms there): 111.7 ms before the share, 117.1 ms if proof calls

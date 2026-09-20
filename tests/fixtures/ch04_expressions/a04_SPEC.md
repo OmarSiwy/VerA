@@ -67,7 +67,7 @@ regression floor):**
 **Not implemented (the deliverable):**
 
 1. **`transition()`'s `td` argument is dropped.** `Gen.transitionTimes`
-   (`src/backend/codegen.zig:6077`) reads `args[2]` and `args[3]` only; argument
+   (`lib/backend/codegen.zig:6077`) reads `args[2]` and `args[3]` only; argument
    1 is never consulted in either the eval arm or the `zTransStep` update arm.
    Every `transition(x, td, …)` behaves as `td = 0`.
 2. **The transition ramp is armed at the previous accepted timepoint**, not at
@@ -78,7 +78,7 @@ regression floor):**
    rise/fall time.** §4.5.8's four paragraphs pick the *original* origin or
    destination for the new slope; `zTransStep` picks neither.
 4. **`absdelay`'s `maxdelay` argument is dropped.** `Gen.emitOperator`'s
-   `.absdelay` arm (`src/backend/codegen.zig:5980`) passes `argF64(args, 1)` and
+   `.absdelay` arm (`lib/backend/codegen.zig:5980`) passes `argF64(args, 1)` and
    never looks at argument 2 — no clamp, no "td can vary" mode.
 5. **Dynamic control arguments are refused outright.** `argF64`/`f64Const` fold
    literals and `model.<p>` arithmetic only, so a node probe as `absdelay`'s `td`
@@ -87,13 +87,13 @@ regression floor):**
    programs (fixtures 03, 04, 07) and makes the §4.5.4 assert-release rule
    unobservable in any spelling.
 6. **The `absdelay` history ring silently shortens the delay.** `hist_len` is a
-   fixed 512 (`src/backend/codegen.zig:7759`) and `zHistAt` ends with
+   fixed 512 (`lib/backend/codegen.zig:7759`) and `zHistAt` ends with
    `return vs[head]` — "Query older than the whole ring: clamp to the OLDEST
    sample." A delay spanning more than 512 accepted steps is answered as a
    512-step delay with no diagnostic. This is the plan's "silently forgetting
    history is not a valid implementation-defined limit" bullet, as a number.
 7. **Z-filter output is one sample period late.** The eval arm is
-   `zZiHold(…, inst.<n>__out)` (`src/backend/codegen.zig:5958`) and `<n>__out` is
+   `zZiHold(…, inst.<n>__out)` (`lib/backend/codegen.zig:5958`) and `<n>__out` is
    written in `updateState`, which runs *after* the timepoint is evaluated. At
    `t = k·T` the operator reports `y[k−1]`.
 8. **An analog operator in the right operand of a short-circuit `||` is fed a
@@ -104,7 +104,7 @@ regression floor):**
    outside the `||`. §4.5.15 requires every analog operator to be evaluated
    every iteration. Fixture 12 is this defect, 3 of its 12 checks failing.
 9. **No revert hook exists for §4.5 operator state.** `Gen.emitsStateCtl`
-   (`src/backend/codegen.zig:2495`) is `fsmStateCtl() or pathLatches() or
+   (`lib/backend/codegen.zig:2495`) is `fsmStateCtl() or pathLatches() or
    uses_newton_iter or limit_slots.len != 0` — analog-operator history is not in
    the list. Confirmed empirically: `vera --emit-zig` on `a04_rollback_ops.va`
    emits **zero** `pub fn stateCtl`. Even were the hook emitted, `emitStateCtl`'s

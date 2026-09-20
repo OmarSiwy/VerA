@@ -72,7 +72,7 @@ What is actually there, checked by grep and by running `vera --run
    charge tape carries `q[p] = 1e-9` with the correct derivative); the probe read
    is compiled from the resistive half only.
 4. **A port-flow probe drops the reactive term** for the same reason, plus a
-   second, named limitation: `src/backend/tb.zig`'s `solve` carries a `ponytail:`
+   second, named limitation: `lib/backend/tb.zig`'s `solve` carries a `ponytail:`
    note reading *"the RESISTIVE residual only … Fold q in when a fixture needs a
    transient solve"*. Fixture 06 is that fixture.
 5. **§5.6.8.1 is implemented as a merge.** A parent's `V(drv.x, drv.y) <+ 1.2`

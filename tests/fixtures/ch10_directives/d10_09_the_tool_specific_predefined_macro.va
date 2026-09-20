@@ -18,7 +18,7 @@
 // whole extent of the non-portability, and it is smaller than leaving a "shall"
 // untested.
 //
-// GROUND TRUTH TODAY: `src/frontend/preprocessor.zig`'s `predefined_macros`
+// GROUND TRUTH TODAY: `lib/frontend/preprocessor.zig`'s `predefined_macros`
 // array has exactly two entries, `__VAMS_ENABLE__` and
 // `__VAMS_COMPACT_MODELING__`. There is no third, so the clause is unmet and
 // this fixture fails.

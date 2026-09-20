@@ -60,7 +60,7 @@
 //
 //   (`above` and `below` are Verilog-AMS keywords, hence `past_top`/`past_bot`.)
 //
-// WHY IT FAILS TODAY. `src/backend/codegen.zig` `emitIdx` lowers a runtime read
+// WHY IT FAILS TODAY. `lib/backend/codegen.zig` `emitIdx` lowers a runtime read
 // to a `switch` over the scalarized cells and closes it with
 //
 //   else => @panic("VerA: out-of-range array read is not implemented")

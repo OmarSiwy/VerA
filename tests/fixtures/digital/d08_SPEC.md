@@ -12,7 +12,7 @@ Verified by reading the source, not the plan or the COVERAGE files.
 
 | what | where | state |
 |---|---|---|
-| `and nand or nor xor xnor buf not bufif0/1 notif0/1 nmos pmos cmos rnmos rpmos rcmos rtranif0/1 tranif0/1 pullup pulldown pull0 pull1 weak0 weak1 strong0/1 highz0/1 supply0/1 primitive table endtable endprimitive` | `src/frontend/token.zig:755-800` (`reserved_keywords`) | lexed as `.kw_reserved`, no tag, no production → **E0205** at the first module item |
+| `and nand or nor xor xnor buf not bufif0/1 notif0/1 nmos pmos cmos rnmos rpmos rcmos rtranif0/1 tranif0/1 pullup pulldown pull0 pull1 weak0 weak1 strong0/1 highz0/1 supply0/1 primitive table endtable endprimitive` | `lib/frontend/token.zig:755-800` (`reserved_keywords`) | lexed as `.kw_reserved`, no tag, no production → **E0205** at the first module item |
 | `tran`, `rtran` | `token.zig:194-200` (`kw_tran`, `kw_rtran`), `parser.zig:1010`, `parser.zig:1229` `parsePassSwitch` | **the one exception.** A `pass_switch_instance` parses, both terminals are checked to be net references, and then `W0250` says out loud that the connection carries nothing. The comment on the function is explicit: "ACCEPTED AND NOT MODELLED". In digital mode (`--run`) the same function fails immediately with `E1100 switch primitives are not implemented by digital execution`. Nothing is recorded in the AST. |
 | UDPs | nowhere | `primitive` is not even in `reserved_keywords`' rejection path at module scope; it hits **E0201** `construct is not in the supported subset: \`primitive\`` |
 | strength lattice, strength reduction, charge storage, bidirectional solver, UDP table evaluator | nowhere | `src/sim/digital.zig:99-104` states the ceiling itself: "every driver here is at the SAME strength, so §7.10's eight drive strengths and §7.11's strength resolution are not implemented". `docs/digital-source-execution.md` repeats it and lists "primitives" under open conformance work. |
@@ -147,7 +147,7 @@ Two rejects, both on invalid UDP tables, both citing A.5.3 verbatim:
     reaches only `sequential_entry`. The primitive has no `output reg` and no
     current-state column, so there is no history for an edge to compare against.
 
-**Neither reject names a diagnostic code, on purpose.** `src/diag_code.zig` has
+**Neither reject names a diagnostic code, on purpose.** `lib/diag_code.zig` has
 no code for a UDP table alphabet or table shape violation, and a fixtures-only
 row may not mint one in `src/`. The patterns above are message substrings, which
 `tests/torture.zig:235-243` matches against a diagnostic's message, its caret

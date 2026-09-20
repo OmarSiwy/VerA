@@ -30,7 +30,7 @@ Read from the offline text in `/home/omare/Documents/Projects/Zig/VerA/docs/`
 
 ### `disable`: parsed, diagnosed, never lowered
 
-`src/ir/lower.zig` `lowerDisable`:
+`lib/ir/lower.zig` `lowerDisable`:
 
 ```zig
 fn lowerDisable(self: *Lower, tok: u32) Oom!void {
@@ -43,7 +43,7 @@ fn lowerDisable(self: *Lower, tok: u32) Oom!void {
 }
 ```
 
-Both arms are errors. `E0402`'s own text (`src/diag_code.zig`) is "`disable` is
+Both arms are errors. `E0402`'s own text (`lib/diag_code.zig`) is "`disable` is
 not implemented … The event form of `disable` parses but has no lowering".
 So the row's first bullet is **0% implemented**, and the two existing fixtures
 (`tests/fixtures/annex_c_analog_subset/27_disable_rejected.va`,
@@ -53,7 +53,7 @@ coverage of any kind. Fixtures 01-03 are the whole positive side.
 
 ### Held state: implemented at module scope, by bare name
 
-`src/ir/lower.zig`:
+`lib/ir/lower.zig`:
 
 * `markHeldVars` / `scanHeld` walk each `analog` block, and for every assignment
   target *inside* an `@(...)` body put the **bare source name** into

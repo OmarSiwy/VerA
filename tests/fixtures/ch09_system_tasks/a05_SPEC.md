@@ -14,18 +14,18 @@ on the gap; they must not be counted as coverage of it.
 
 Read, not taken from the plan:
 
-* `src/backend/table_kernels.zig` (192 lines) implements exactly two schemes —
+* `lib/backend/table_kernels.zig` (192 lines) implements exactly two schemes —
   linear (`1`) and closest-point (`D`) — plus `C`/`L` extrapolation. Its own
   header says so: "Unsupported spline and fatal-extrapolation modes reject in
   IR."
-* `src/ir/lower.zig:8683` `parseTableCtl` rejects `2`, `3` and `I` at `:8721`
+* `lib/ir/lower.zig:8683` `parseTableCtl` rejects `2`, `3` and `I` at `:8721`
   with E0815 ("VerA implements Table 9-30's `1` and `D`"), and rejects `E` at
   `:8733` with E0815 ("`E` is not an extrapolation method VerA implements").
   Both are COMPILE-time refusals of legal models. (The plan and the review
   MANIFEST both give `:8660` for this; that line is inside the file-column
   check, and the two rejections are at `:8721`/`:8733` at `45b505d`. Opened and
   counted, not copied.)
-* `src/ir/lower.zig:8625` reads a file data source during lowering
+* `lib/ir/lower.zig:8625` reads a file data source during lowering
   (`readTableFile`), so a file named by a site that never executes is still a
   compile error ("cannot read the `$table_model` data source"). (`:8624` in the
   MANIFEST is the doc comment above the function.)
@@ -126,7 +126,7 @@ Data file: `a05_two_dependents.tbl` (used by 07 and 08) — it must travel with 
 ## Running these
 
 Per file, today. `//! bias`, `//! sweep`, `//! param`, `//! time` and the rest
-are parsed by `src/backend/tb.zig:216-294` (`bias` at `:228`, `sweep` at `:230`)
+are parsed by `lib/backend/tb.zig:216-294` (`bias` at `:228`, `sweep` at `:230`)
 and honoured by the generated
 testbench, so 13's two sweep points and 08's and 11's biases really do appear in
 the transcript below. Only `//! exit` is unchecked outside `zig build torture`
@@ -277,7 +277,7 @@ re-run or re-opened rather than taken on trust.
    thirteen files are not read as thirteen failing ones.
 
 7. **Reproduction defect — this document said the CLI ignores `//! bias` and
-   `//! sweep`.** It does not. `src/backend/tb.zig:228` and `:230` parse `bias`,
+   `//! sweep`.** It does not. `lib/backend/tb.zig:228` and `:230` parse `bias`,
    `sweep`, `wave` and `psweep`, and the emitted testbench honours them; 13's
    transcript above shows two sweep points. Only `//! exit` is unchecked outside
    `zig build torture` (`tests/torture.zig:361`, the sole consumer of
@@ -286,14 +286,14 @@ re-run or re-opened rather than taken on trust.
 
 8. **Source line numbers in "Ground truth" were wrong and are now opened.**
    This document (and the review MANIFEST it inherited them from) cited
-   `src/ir/lower.zig:8660` for `parseTableCtl`'s E0815 rejections and `:8624`
+   `lib/ir/lower.zig:8660` for `parseTableCtl`'s E0815 rejections and `:8624`
    for `readTableFile`. At `45b505d` the function starts at `:8683`, the
    interpolation-character rejection is at `:8721`, the extrapolation-character
    rejection at `:8733`, the dependent-column arithmetic at `:8748`, and
-   `readTableFile` at `:8625`. Corrected. `src/backend/tb.zig` (`bias` `:228`,
+   `readTableFile` at `:8625`. Corrected. `lib/backend/tb.zig` (`bias` `:228`,
    `sweep` `:230`), `tests/torture.zig:361` (`d.expected_exit`, its sole
    consumer), `build.zig:428` (`fixture_root`) and
-   `src/backend/table_kernels.zig` (192 lines) were opened and are right as
+   `lib/backend/table_kernels.zig` (192 lines) were opened and are right as
    written.
 
 Re-verification pass (all of the below re-run at `45b505d` + this directory,

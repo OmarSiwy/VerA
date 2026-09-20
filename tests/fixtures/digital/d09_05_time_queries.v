@@ -1,7 +1,7 @@
 // §9.10 Table 9-7 gives $time, $stime and $realtime "Supported in digital
 // context: Yes / Supported in analog context: No" — the whole row is digital,
-// which is why nothing in src/backend can stand in for it, and why
-// src/ir/lower.zig:6846 lists all three in `isDigitalOnlySysFunc` as names to
+// which is why nothing in lib/backend can stand in for it, and why
+// lib/ir/lower.zig:6846 lists all three in `isDigitalOnlySysFunc` as names to
 // REFUSE in an analog block. A refusal list is not an implementation. §9.10's
 // body confirms Verilog-AMS adds only $abstime here and otherwise inherits
 // IEEE Std 1364 Verilog unchanged. The inherited clause is §17.7, "Simulation

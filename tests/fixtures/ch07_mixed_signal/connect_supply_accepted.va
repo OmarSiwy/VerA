@@ -20,7 +20,7 @@
 // the connectmodule side, and its `$root`-prefixed probe is the piece of
 // §7.8.6 that IS asserted somewhere. Here the override is parsed and never
 // applied (no insertion, no consumer — ConnectInsertion in
-// src/frontend/ast.zig), and `$root.supply.vdd` is text inside a string, not
+// lib/frontend/ast.zig), and `$root.supply.vdd` is text inside a string, not
 // a resolved path.
 //
 // The want is the bias read back, exact in binary, so `CHECKX` is the honest

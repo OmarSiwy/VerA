@@ -74,8 +74,8 @@
 // which is the case the clause forbids.
 //
 // WHY IT FAILS TODAY. codegen emits `pub const u_nodeset = [n_u]?f64{ 2.75,
-// null }` for this module (src/backend/codegen.zig `emitNodesets`), and nothing
-// reads it: src/backend/tb.zig opens every operating point with
+// null }` for this module (lib/backend/codegen.zig `emitNodesets`), and nothing
+// reads it: lib/backend/tb.zig opens every operating point with
 // `var x: [n_u]f64 = @splat(0.0);` and the host has no reference to the symbol
 // at all. Observed today: `x[p] = 1.000000e0`.
 //

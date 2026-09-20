@@ -40,7 +40,7 @@
 // is why the monitor is buried one level down.
 //
 // WHY BOTH FAIL TODAY, in opposite directions. `Lower.lowerSimprobe`
-// (src/ir/lower.zig) concatenates `inst_name`, `Elaborate.sep` and `param_name`
+// (lib/ir/lower.zig) concatenates `inst_name`, `Elaborate.sep` and `param_name`
 // and looks the result up in the flattened parameter table, whose keys are paths
 // from the top. So claim 1 looks up `u_a.gain` while the elaborated key is
 // `u_mid.u_a.gain` and misses, returning -1.0 where 3.0 is required; and claim 2

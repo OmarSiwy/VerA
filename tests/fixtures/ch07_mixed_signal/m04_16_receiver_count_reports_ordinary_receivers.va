@@ -1,0 +1,227 @@
+// §9.22.2, in full:
+//
+//   "$receiver_count returns an integer representing the number of receivers
+//    associated with the signal in question. The syntax is shown in Syntax 9-18.
+//
+//      receiver_count_function ::=
+//          $receiver_count ( signal_name )
+//
+//    The receivers are arbitrarily numbered from 0 to N-1, where N is the total
+//    number of ordinary receivers being contributed by the signal value. For
+//    example, if this function returns a value 5 then the signal has five
+//    receivers numbered from 0 to 4."
+//
+// and §9.22 paragraph 2, which is what makes the call site legal:
+//
+//   "A signal can have any number of drivers; for each driver the current
+//    status, value, and strength can be accessed."
+//
+// with paragraph 3 supplying the boundary:
+//
+//   "The driver access functions described here only access drivers found in
+//    ordinary modules and not to those found in connect modules. Driver access
+//    functions can only be called from connect modules."
+//
+// WHY THIS IS NOT A COPY OF 10_driver_count_excludes_connectmodule.va. Table
+// 9-19 gives the five driver/receiver access functions of §9.22 their two
+// columns inside a connect module:
+//
+//   $driver_count        digital Yes   analog No
+//   $driver_state        digital Yes   analog No
+//   $driver_strength     digital Yes   analog No
+//   @(driver_update)     digital Yes   analog No
+//   $receiver_count      digital Yes   analog Yes
+//
+// $receiver_count is the ONLY one of the five whose analog cell is Yes. It is
+// also the only one this suite has never called: 10 pins $driver_count's
+// counting rule, 11 and 15 pin $driver_state / $driver_next_state, 12 pins
+// @(driver_update), 13 and 14 pin §9.22.6's receiver VALUE — and not one of
+// them names $receiver_count. Annex G item 7793 lists it as a 2023 addition in
+// its own right ("Support $receiver_count() function", clause column 9.22.2),
+// which is how a function that was always in Syntax 9-18 turns out to have been
+// absent from the suite.
+//
+// THE DESIGN IS 10's, TURNED ROUND. 10 has two ordinary drivers and one
+// ordinary receiver. This file has one ordinary driver and two ordinary
+// receivers, and asserts BOTH counts:
+//
+//   $receiver_count(d) == 2
+//   $driver_count(d)   == 1
+//
+// Two different numbers, from one signal, in one call site. An implementation
+// that aliased one to the other — the cheapest way to add the second function —
+// fails on the pair whichever way the alias runs, and neither assertion alone
+// would catch it. That is the reason both are here rather than the receiver
+// count on its own.
+//
+// HAND DERIVATION
+//   `net` in m04_rc_top is `electrical` and carries ddiscrete ports, so it is a
+//   MIXED signal under §7.8.4 and the connect rule inserts ONE m04_rc_c2e
+//   between `net` and the three ddiscrete ports.
+//
+//   Receivers of the digital segment, by §9.22.2's "ordinary receivers":
+//     lo1.i  -> a connection of the signal to an INPUT port   -> receiver 1
+//     lo2.i  -> the same, second instance                     -> receiver 2
+//     hi.o   -> an OUTPUT port; a driver, not a receiver      -> not counted
+//     ld.a   -> `electrical`, not a digital receiver at all   -> not counted
+//     the connect module's own `d` port                       -> EXCLUDED by
+//                                                                §9.22 para 3
+//   so $receiver_count(d) == 2.
+//
+//   Drivers of the same segment:
+//     hi.o            -> a connection to an output port       -> driver 1
+//     the connect module's `assign d = out;`                  -> EXCLUDED by
+//                                                                §9.22 para 3
+//   so $driver_count(d) == 1.
+//
+//   `hi` assigns `o` inside its `initial` block as well as connecting the port.
+//   That is still ONE driver: §9.22 paragraph 4 defines a driver as "a process
+//   which assigns a value to the signal, OR a connection of the signal to an
+//   output port of a module instance" — the two disjuncts name the same
+//   contribution, not two. The assertion fails for any implementation that
+//   counts port connections and assignments separately.
+//
+//   Both counts are properties of ELABORATION, so both are the same at t=1 and
+//   at t=40, after the driver has been at 1'b1 for the whole window. The second
+//   sample exists to pin that: an implementation that recomputed either count
+//   from "ports that have assigned something recently" would drift between the
+//   two lines.
+//
+// WHY NOTHING HERE DEPENDS ON THE SOLVER. Every number is fixed by the
+// elaborated topology. The 1 kohm load, the analog solve, and the threshold at
+// which the digital value crosses are all irrelevant — the counts are read, not
+// computed — so the fixture cannot be turned green or red by a tolerance.
+//
+// THE WIDTH OF THE `got=` COLUMNS. §9.22.2 says $receiver_count "returns an
+// integer", and §3.2 gives an integer the range -2**31 .. 2**31-1, i.e. 32
+// bits. `%b` is the only integer conversion `--run`'s engine implements; §9.4.3
+// Table 9-22 gives %b no width modifier, and IEEE Std 1364 — reached through
+// §1.1 — makes the printed field width of %b the SIZE OF THE EXPRESSION, not
+// the number of significant digits. So each `got=` column is exactly 32 binary
+// digits, zero-padded on the left:
+//
+//   decimal 1 -> 00000000000000000000000000000001
+//   decimal 2 -> 00000000000000000000000000000010
+//
+// The `ok=` column is the fixture's own assertion. It is the result of an `==`,
+// which IEEE Std 1364 self-determines at ONE bit, so it prints as the single
+// digit `1` — and it, not the `got=` column, is what a wrong count fails on.
+//
+// WHY THERE IS NO `//! timescale` LINE, when 10-15 all carry one. There is no
+// `timescale` directive in `vera`'s fixture vocabulary — lib/backend/tb.zig:203
+// takes param, bias, sweep, wave, psweep, temp, time, solve, analysis, exit,
+// reject, noise, spice, lrm, xfail and print, and anything else is
+// `error.UnknownDirective`. The line is inert in two senses: it sets a timescale
+// nothing reads, and it aborts the directive parse before the compile the row is
+// actually measuring, so every fixture that carries it is reported as
+//
+//   FAIL ...: `//!` directive: UnknownDirective
+//
+// rather than as the module-item diagnostic its SPEC.md lists. The MANIFEST
+// records the same defect in ten `.v` files ("an invented mechanism written to
+// look like a checked one"); this file does not repeat it. `timescale` in the
+// SOURCE — a `` `timescale `` compiler directive, §10.2 — is a separate thing
+// from a `//!` tag, and no fixture in this row needs one.
+//
+// DELIBERATELY NOT COVERED: $receiver_count's ANALOG cell. Table 9-19 is the
+// only place in the LRM where a driver access function is granted the analog
+// context, and this file reads the count from a digital `initial` block, where
+// the same table's digital cell already says Yes. A second call site inside
+// `analog begin ... end` would have to emit from inside the solve, once per
+// solver iteration, so its transcript is not a fixed number of lines and cannot
+// be held in a `.expected.txt`. Pin the analog cell in a fixture that reads the
+// value rather than prints it, or in one that counts emissions; do not write a
+// $display into an analog block and expect a stable golden.
+//
+// STATUS, AND WHAT IT FAILS ON TODAY. Two unsupported module items inside the
+// connect module, in this order:
+//
+//   error[E0205]: unsupported module item: found `assign`   (LRM annex A.1.4)
+//   error[E0209]: expected an expression: found `#`         (LRM annex A.8.3)
+//
+// the same blockers 10-15 hit, listed under "Prerequisites" in this row's
+// SPEC.md. NEITHER IS ABOUT $receiver_count, and that is worth being explicit
+// about: the name is already in the compiler's table and is already classified
+// as a driver access function. In an ORDINARY module VerA answers
+//
+//   error[E0818]: driver access function outside a connect module:
+//                 `$receiver_count` can only be called from a connect module
+//
+// citing §9.22 — i.e. it knows exactly what the function is and only lacks the
+// connectmodule module items that would let this file reach it. This fixture
+// therefore becomes checkable the moment `assign` and `#` parse inside a
+// connectmodule, and not before; until then it is a wrong-reason failure of the
+// same kind as 20 and 21, and it says so here rather than in a review.
+
+//! lrm 9.22
+//! lrm 9.22.2
+//! lrm G.1
+//! lrm 7.8.4
+`include "disciplines.vams"
+
+connectrules m04_rc_rules;
+  connect m04_rc_c2e merged input ddiscrete, output electrical;
+endconnectrules
+
+// §9.22.6's connect module, reduced to the two counts this file is about.
+connectmodule m04_rc_c2e(d, a);
+  input d;
+  output a;
+  ddiscrete d;
+  electrical a;
+
+  reg out;
+  // §9.22.5: "the digital port will be used to read the driver values as well
+  // as to set the receiver value". This IS a driver of `d`, and it is the one
+  // §9.22 paragraph 3 says neither count may see.
+  assign d = out;
+
+  initial begin
+    out = 1'b0;
+    #1;
+    $display("receiver_count_counts_the_ordinary_receivers got=%b ok=%b",
+             $receiver_count(d), $receiver_count(d) == 2);
+    $display("driver_count_is_a_different_number got=%b ok=%b",
+             $driver_count(d), $driver_count(d) == 1);
+    #39;
+    $display("receiver_count_is_elaboration_time_not_activity got=%b ok=%b",
+             $receiver_count(d), $receiver_count(d) == 2);
+    $finish(0);
+  end
+
+  analog V(a) <+ 0.0;
+endmodule
+
+// One ordinary driver. The port connection is the driver (§9.22 paragraph 4);
+// the assignment is here only so the value is not x, and it does not add one.
+module m04_rc_drv(o);
+  output o;
+  ddiscrete o;
+  reg o;
+  initial begin
+    o = 1'b1;
+  end
+endmodule
+
+// Two ordinary receivers.
+module m04_rc_ear(i);
+  input i;
+  ddiscrete i;
+endmodule
+
+module m04_rc_load(a);
+  inout a;
+  electrical a;
+  electrical g;
+  ground g;
+  analog I(a, g) <+ V(a, g) / 1.0e3;
+endmodule
+
+module m04_rc_top;
+  electrical net;
+
+  m04_rc_drv  hi(.o(net));
+  m04_rc_ear  lo1(.i(net));
+  m04_rc_ear  lo2(.i(net));
+  m04_rc_load ld(.a(net));
+endmodule

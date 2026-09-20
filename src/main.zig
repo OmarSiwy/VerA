@@ -1,7 +1,11 @@
-//! `vera` — the command-line driver.
+//! `vera` — the command-line driver, and the one place `lib/` and `src/` meet.
 //!
-//! The engine is a library; this is the thin shell that makes its diagnostics
-//! reachable from a terminal. It exists because the diagnostics themselves
+//! The compiler is a library — `lib/`, taken here as the `vera` module — and
+//! this is the thin shell that makes its diagnostics reachable from a terminal.
+//! `--run FILE.v` is the other half: `src/sim`, which shares the library's
+//! frontend and diagnostic vocabulary and none of its pipeline.
+//!
+//! It exists because the diagnostics themselves
 //! advertise it: every rendered message ends with "run `vera --explain
 //! EXXXX`", and `--allow=`/`--deny=` are the documented way to tune the
 //! finiteness warning (W0650).

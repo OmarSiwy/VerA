@@ -25,7 +25,7 @@
 // 1.0/14.0 = 0.07142857142857142 — not exact in binary, hence CHECKR.
 //
 // $mfactor's own automatic current scaling (§6.3.6 rule 1) is deliberately NOT
-// asserted here: VerA's position, written at src/backend/codegen.zig:2552, is that
+// asserted here: VerA's position, written at lib/backend/codegen.zig:2552, is that
 // the host scales the whole stamp, so it is not a device-visible number. What is
 // device-visible is the value $mfactor returns, and that is what this pins.
 //

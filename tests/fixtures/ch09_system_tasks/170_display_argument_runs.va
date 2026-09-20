@@ -28,7 +28,7 @@
 //
 // The integer default is minimal-width decimal — a documented deviation from
 // 1364-2005 §17.1.1.2's auto-sized field (20 columns for VerA's 64-bit
-// integers); see src/backend/cg_display.zig `buildArgs`.
+// integers); see lib/backend/cg_display.zig `buildArgs`.
 //
 //! print none
 //! lrm 9.4.1

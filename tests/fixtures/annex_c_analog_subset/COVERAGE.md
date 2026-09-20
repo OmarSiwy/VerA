@@ -35,7 +35,7 @@ its filename. Sections with no fixture in this directory say so.
 | C.13 Using VPI routines | Clause 11 applies to both | none, and no fixture anywhere cites C.13 |
 | C.14 VPI routine definitions | Clause 12 applies to both | none, and no fixture anywhere cites C.14 |
 | C.15 Analog language subset | self-reference: this annex is the AMS/Verilog-A diff, Annex A is the BNF | none, and no fixture cites C.15. The section states no testable rule of its own |
-| C.16 List of keywords | ten keywords unused by Verilog-A; all AMS keywords are reserved words | `16_unused_ams_words_rejected.va` (`connectmodule`, `driver_update`, `endconnectrules`, `merged`, `resolveto`, `split`, `wreal` — seven separate arms), `20_net_resolution_reserved.va`, `30_connect_reserved.va`, `31_connectrules_reserved.va`. Nine of the ten words are proven; the tenth is not testable — see below |
+| C.16 List of keywords | **nine** keywords unused by Verilog-A; all AMS keywords are reserved words | `16_unused_ams_words_rejected.va` (`connectmodule`, `driver_update`, `endconnectrules`, `merged`, `resolveto`, `split`, `wreal` — seven separate arms), `30_connect_reserved.va`, `31_connectrules_reserved.va`. All nine words are proven. **`20_net_resolution_reserved.va` is REMOVED and its claim is WITHDRAWN, not moved** — the word is not in the corrected C.16 at all; see the ledger and the structural note below |
 | C.17 Standard definitions | Annex D applies, except a discipline with `domain discrete`, which shall be *silently ignored* | none here. `ch07_mixed_signal/discrete_discipline.va` is the only fixture that cites C.17 |
 | C.18 SPICE compatibility | Annex E applies to both | none, and no fixture cites C.18 |
 | C.19 Changes from previous versions | Annex G describes them | none, and no fixture cites C.19 |
@@ -66,9 +66,9 @@ prove them.
 
 ## The fixture xfail ledger
 
-EMPTY — grep finds no `//! xfail` in this directory: 31 files, 22 with a `//! reject`
+EMPTY — grep finds no `//! xfail` in this directory: 30 files, 21 with a `//! reject`
 arm, 9 that run and assert. This is a fixture inventory, not an empty full-AMS
-implementation backlog. The five historical fixture changes below include diagnostic
+implementation backlog. The six historical fixture changes below include diagnostic
 changes that do not implement the rejected constructs:
 
 | Fixture | Rule stated | Historical fixture change |
@@ -76,7 +76,7 @@ changes that do not implement the rejected constructs:
 | `11_casex_rejected.va` | C.7 bullet 2 — `casex` is not supported | The gap was real and was mis-described: `casex` never reached E0416 because `parseStmt` had no arm for the token at all, so the file died in parser recovery on E0209. E0416 now fires and the fixture pins it by code; legal AMS `casex` execution remains open |
 | `12_casez_rejected.va` | C.7 bullet 2 — `casez` is not supported | E0416 now fires; legal AMS `casez` execution remains open |
 | `18_no_discipline_rejected.va` | C.4 bullet 3 / §3.8 — every Verilog-A module shall have a discipline | Green: a net with no discipline referenced from behavioral code is E0337 (§3.6.2.4), which is a rule of Verilog-AMS too and needs no subset gate. The fixture asserts nothing on purpose — with no nature there is no `V` to probe, so the only conforming outcome is a diagnostic |
-| `20_net_resolution_reserved.va` | C.16 + Annex B — `net_resolution` is a reserved word | Green: the spelling is in `reserved_keywords` (`src/frontend/token.zig`) with the other nine, so `real net_resolution;` is E0208 |
+| `20_net_resolution_reserved.va` | C.16 + Annex B — `net_resolution` is a reserved word | **The fixture was wrong, not the compiler, and the fixture is gone.** It was authored from an HTML transcription of Annex B and C.16 that had been contaminated with Verilog-AMS 2.4 text. The 2023 edition removed the word from both lists — Annex G item 5027, verbatim "Removed unused keyword net_resolution \| B.1, C.16" — and the corrected Table B.1 (physical p.400) and C.16 both lack it. "This word is reserved" is therefore false for 2023 and there was never a rule behind the E0208 arm, so the file was deleted rather than repaired: a WITHDRAWN CLAIM, not a moved gap. The other nine C.16 words are still censused by `16`/`30`/`31`. The spelling is still in VerA's `reserved_keywords` (`lib/frontend/token.zig`), which this removal does not touch — under the 2023 table that is now an over-reservation refusing a legal identifier, a deviation in the compiler rather than a claim of the suite |
 | `09_default_discipline_rejected.va` | C.4 bullet 3 — `` `default_discipline `` is not supported | **The fixture was wrong, not the compiler.** VerA targets Verilog-AMS, where §10.2 makes the directive legal; demanding the diagnostic made the file passable only by a subset-only tool. Rewritten as `09_default_discipline_accepted.va`, which asserts the directive's own effect |
 
 `19_named_event_in_subset.va` was the one entry here pointing the other way — a construct
@@ -91,22 +91,27 @@ back if one is ever added — as a second fixture, not as an inversion of the fi
 
 ## Structural notes
 
-**Why C.16 is four files and not one.** A `//! reject` substring is matched against every
+**Why C.16 is three files and not one.** A `//! reject` substring is matched against every
 diagnostic the file produces (`tests/torture.zig`, `failureContains`), so a keyword that
 is a *prefix* of another keyword in the same file has a non-load-bearing arm: `connect`
 is a substring of `connectmodule`, `connectrules` and `endconnectrules`, and
 `connectrules` is a substring of `endconnectrules`. Those two get files of their own
 (`30`, `31`) where nothing longer is spelled, and their modules are named
 `annex_c_reserved_spelling_30/31` rather than after the keyword so a diagnostic quoting
-the module name cannot satisfy the arm either. `net_resolution` is split out for a
-different reason: it was the last of the ten to be reserved, and while it was open,
-folding it in would have turned a seven-keyword proof into a known gap. It is green now
-and the split is kept — a single file per gap is what made the gap visible.
+the module name cannot satisfy the arm either. A fourth file stood here for a tenth word
+of the 2.4 list, `net_resolution`, and was deleted when the annex was corrected; the
+ledger above records why. The nine words that remain are all the C.16 list has.
 
-**The tenth C.16 word is untestable as written.** The C.16 list spells it `resolvedto`.
-Annex B Table B.1 — the normative reserved-word list — spells it `resolveto`. Since
-`resolvedto` appears nowhere in Annex B it is not a reserved word and cannot be tested as
-one; `16_unused_ams_words_rejected.va` pins the Annex B spelling.
+**The tenth C.16 word is gone, and the misspelling it was named for is gone with it.**
+The list this folder used to count had ten entries; the corrected C.16 has nine. The
+missing one is `net_resolution`, removed by the 2023 edition (Annex G item 5027, verbatim
+"Removed unused keyword net_resolution \| B.1, C.16") — which is why its fixture was
+deleted rather than repaired. The other change is a spelling. These notes used to say
+C.16 spells the ninth word `resolvedto` while the normative Table B.1 spells it
+`resolveto`, making the C.16 spelling unpinnable; both corrected sources spell it
+`resolveto` — C.16's own list and Table B.1 (physical p.400) — so
+`16_unused_ams_words_rejected.va` pins `resolveto`, the spelling both clauses use, and
+`resolvedto` appears nowhere in the 2023 text.
 
 **Reserving a spelling is not refusing a construct, and that cuts the other way now.**
 `16`/`30`/`31` reject `connectmodule`, `connect`, `connectrules` and the rest as

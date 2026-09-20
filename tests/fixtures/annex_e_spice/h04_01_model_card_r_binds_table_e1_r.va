@@ -41,7 +41,7 @@
 // model-derived module fails to compile at the first, and one that declares it
 // but leaves the card's value behind fails the second with got=1.0.
 //
-// WHAT VerA DOES TODAY. `src/frontend/spice_cards.zig` synthesizes
+// WHAT VerA DOES TODAY. `lib/frontend/spice_cards.zig` synthesizes
 // `module rmod(p, n); inout p, n; electrical p, n; resistor prim(p, n);
 // endmodule` — no parameter list at all, and a comment at the site saying the
 // card's parameters "are NOT passed". So `r1.r` does not resolve and the branch

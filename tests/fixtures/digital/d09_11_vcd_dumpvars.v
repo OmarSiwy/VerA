@@ -2,7 +2,7 @@
 // 18.1-18.2 row, and the row docs/CLAUSE-AUDIT.md:357 already records as "There
 // is no VCD code, no VCD fixture, and no VCD rejection fixture". The only
 // occurrence of the string $dumpvars anywhere in the tree is an unrelated
-// doc-comment example at src/frontend/preprocessor.zig:289. Verilog-AMS does
+// doc-comment example at lib/frontend/preprocessor.zig:289. Verilog-AMS does
 // not extend these tasks, so the inherited definition governs in full.
 //
 // The tasks used here:

@@ -11,6 +11,7 @@
 //!   tests/torture.zig    plugs in VerA — compile, build a testbench, RUN it
 //!   tests/external.zig   plugs in any compiler that takes a .va path and
 //!                        exits nonzero when it refuses one (OpenVAF, …)
+//!   tests/bench.zig      the one binary that owns `main` and drives all three
 //!
 //! WHAT A RUNNER SUPPLIES is one function: given a fixture, did the compiler do
 //! what the fixture says it must? That boundary is where the two sides genuinely
@@ -33,12 +34,13 @@
 //! machine-readable side channel — a second output format is a second thing to
 //! keep true, and the text already is one.
 //!
-//!   zig build torture                     # VerA, every fixture
-//!   zig build conformance                 # OpenVAF, every fixture
-//!   zig build torture -- ch04             # only paths matching `ch04`
-//!   zig build torture -- --strict         # unasserted and xfail FAIL
-//!   zig build torture -- --coverage       # LRM clauses cited, one-sided and uncited
-//!   zig build torture -- -j1              # one at a time, streaming; for debugging
+//!   zig build benchmark                          # VerA, every fixture, timed
+//!   zig build benchmark -- --against-openvaf     # the head-to-head
+//!   zig build benchmark -- ch04                  # only paths matching `ch04`
+//!   zig build benchmark -- --strict              # unasserted and xfail FAIL
+//!   zig build benchmark -- --coverage            # LRM clauses cited and uncited
+//!   zig build benchmark -- -j1                   # one at a time; for debugging
+//!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
 
 const std = @import("std");
 const vera = @import("vera");
@@ -58,6 +60,12 @@ pub const Fixture = struct {
     stem: []const u8,
     /// `tests/fixtures/ch04_expressions`
     dir: []const u8,
+    /// The suite root this fixture was collected from — `tests/fixtures`, or
+    /// `tests/pending` under `--fixture-root=`. A runner needs it as a second
+    /// include dir (`check.vh` lives at the root, not beside the fixture) and
+    /// as the scratch namespace, and taking it from the fixture rather than
+    /// from `suite_options` is what lets one binary walk either tree.
+    root: []const u8,
     /// `ch04_expressions_01_arithmetic` — the scratch directory name.
     ///
     /// NOT the stem: three stems (`analog_event`, `discrete_discipline`,
@@ -125,11 +133,65 @@ pub const Compiler = struct {
         d: vera.tb.Directives,
         w: *Io.Writer,
     ) anyerror!Result,
-    /// Offered every command-line argument before the harness looks at it;
-    /// return true to consume one. For the knobs that are genuinely about the
-    /// compiler and not about the suite (`--fixture-opt=`, `--cc=`).
-    arg: ?*const fn (ctx: *anyopaque, a: []const u8) bool = null,
 };
+
+/// Every knob the SUITE has, parsed once by `tests/bench.zig` and handed to
+/// everything that needs one.
+///
+/// It is a value and not a per-runner argument callback because there is one
+/// run of the suite now and up to three compilers inside it: the VerA plug, the
+/// same plug reduced to accept/reject, and the foreign compiler. A filter or a
+/// `--fixture-root` that reached one of them and not the others would be a
+/// head-to-head over two different fixture sets.
+pub const Config = struct {
+    /// `tests/pending` is the approved-but-unimplemented tree: the same rules,
+    /// fixtures VerA does not meet yet, and a nonzero exit is its expected
+    /// state. A run-time path and not a second options module, because one
+    /// binary would otherwise need a second copy of itself to walk a second
+    /// directory.
+    root: []const u8 = options.fixture_root,
+    /// A plain substring over the whole path.
+    filter: ?[]const u8 = null,
+    strict: bool = false,
+    coverage: bool = false,
+    /// One thread per core, because a fixture is a whole compilation and that
+    /// is where the runtime goes. `-j1` is the escape hatch: it prints as it
+    /// goes, which is the only way to see WHICH fixture a run is stuck on.
+    jobs: usize = 0,
+    /// `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
+    /// binaries the runner spawns a `zig build-exe` for. Two different
+    /// programs, so two different defaults — and Debug is right for the
+    /// fixtures, see the fixture-opt note in tests/torture.zig.
+    ///
+    /// Debug LITERALLY and not through a build option: `-Dfixture-optimize`
+    /// could not pass an enum (`addOption` emits its own copy of the type,
+    /// which is then a different type from `std.builtin.OptimizeMode` here), so
+    /// it went across as the tag name and came back through `stringToEnum`
+    /// with an `.?` on the end. Three moving parts for a default nobody moved.
+    fixture_opt: std.builtin.OptimizeMode = .Debug,
+
+    pub fn init() Config {
+        return .{ .jobs = std.Thread.getCpuCount() catch 1 };
+    }
+};
+
+/// Consume one argument if it is the suite's; false leaves it to the caller.
+/// The unrecognised word is the filter, and that decision stays with
+/// `tests/bench.zig` so a typo'd flag of ITS own is not silently a filter.
+pub fn takeArg(cfg: *Config, a: []const u8) bool {
+    if (std.mem.eql(u8, a, "--strict")) cfg.strict = true //
+    else if (std.mem.eql(u8, a, "--coverage")) cfg.coverage = true //
+    else if (std.mem.startsWith(u8, a, "--fixture-root=")) cfg.root = a["--fixture-root=".len..] //
+    else if (std.mem.startsWith(u8, a, "--fixture-opt=")) {
+        const name = a["--fixture-opt=".len..];
+        cfg.fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
+            std.debug.print("suite: not an optimize mode: {s}\n", .{name});
+            std.process.exit(2);
+        };
+    } else if (numeric(a, "-j") orelse numeric(a, "--jobs=")) |n| cfg.jobs = @max(n, 1) //
+    else return false;
+    return true;
+}
 
 pub const Verdict = enum {
     /// Behaved as the fixture said it would.
@@ -148,14 +210,14 @@ pub const Verdict = enum {
     /// the requirement never bound it, with Annex E's SPICE-netlist family
     /// (E.1.1: "if a simulator is also able to read SPICE netlists") as the whole
     /// of that set. Those three fixtures pass now: VerA reads `.MODEL` and
-    /// `.SUBCKT` cards (src/frontend/spice_cards.zig), which made the antecedent
+    /// `.SUBCKT` cards (lib/frontend/spice_cards.zig), which made the antecedent
     /// true instead of arguing about whom it bound. Nothing else in the suite was
     /// ever in that category, so an xfail here means one thing: a real
     /// requirement this compiler does not meet yet.
     xfail,
 };
 
-const Counts = struct {
+pub const Counts = struct {
     passed: usize = 0,
     failed: usize = 0,
     unasserted: usize = 0,
@@ -234,8 +296,17 @@ fn numeric(a: []const u8, prefix: []const u8) ?usize {
     return std.fmt.parseInt(usize, a[prefix.len..], 10) catch null;
 }
 
-/// A runner's whole `main`: hand over the process and the compiler.
-pub fn run(init: std.process.Init, compiler: Compiler) !u8 {
+/// The judged pass: every fixture, this compiler, the report on stderr.
+///
+/// `tally` receives the counts the summary prints, because the head-to-head
+/// table wants them as a row and re-deriving them would be a second place for
+/// "how many passed" to be computed.
+pub fn run(
+    init: std.process.Init,
+    compiler: Compiler,
+    cfg: Config,
+    tally: ?*Counts,
+) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
@@ -243,41 +314,26 @@ pub fn run(init: std.process.Init, compiler: Compiler) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var strict = false;
-    var coverage = false;
-    var filter: ?[]const u8 = null;
-    // One thread per core, because a fixture is a whole compilation and that is
-    // where the runtime goes. `-j1` is the escape hatch, below.
-    var jobs: usize = std.Thread.getCpuCount() catch 1;
-    var args = init.minimal.args.iterate();
-    _ = args.skip();
-    while (args.next()) |a| {
-        if (compiler.arg) |take| if (take(compiler.ctx, a)) continue;
-        if (std.mem.eql(u8, a, "--strict")) strict = true //
-        else if (std.mem.eql(u8, a, "--coverage")) coverage = true //
-        else if (numeric(a, "-j") orelse numeric(a, "--jobs=")) |n| jobs = @max(n, 1) //
-        else filter = a;
-    }
-
     var stderr_buf: [4096]u8 = undefined;
     var stderr = Io.File.stderr().writer(io, &stderr_buf);
     const w = &stderr.interface;
 
-    const fixtures = try collect(arena, io, options.fixture_root, filter);
+    const fixtures = try collect(arena, io, cfg.root, cfg.filter);
     if (fixtures.len == 0) {
-        try w.print("{s}: no fixtures under {s}\n", .{ compiler.name, options.fixture_root });
+        try w.print("{s}: no fixtures under {s}\n", .{ compiler.name, cfg.root });
         try w.flush();
         return 1;
     }
 
-    if (coverage) {
+    if (cfg.coverage) {
         const ok = try reportCoverage(arena, io, options.docs_root, fixtures, w);
         try w.flush();
         return if (ok) 0 else 1;
     }
 
+    const strict = cfg.strict;
     var counts: Counts = .{};
-    if (jobs <= 1) {
+    if (cfg.jobs <= 1) {
         // The sequential path, kept working on purpose: it prints as it goes,
         // which is the only way to see WHICH fixture a run is stuck on.
         for (fixtures) |f| {
@@ -296,7 +352,7 @@ pub fn run(init: std.process.Init, compiler: Compiler) !u8 {
         };
         var group: Io.Group = .init;
         var hands: usize = 0;
-        while (hands < jobs) : (hands += 1) {
+        while (hands < cfg.jobs) : (hands += 1) {
             // A narrower pool than asked for is fine — the queue does not care
             // how many hands take from it. None at all is not, so this thread
             // does the work itself.
@@ -317,6 +373,7 @@ pub fn run(init: std.process.Init, compiler: Compiler) !u8 {
 
     try summarize(compiler, counts, fixtures.len, w);
     try w.flush();
+    if (tally) |t| t.* = counts;
     return if (counts.failed == 0 and
         !(strict and (counts.unasserted != 0 or counts.xfail != 0))) 0 else 1;
 }
@@ -509,11 +566,10 @@ fn reportCoverage(
         "\n{d} of {d} LRM clauses cited, by {d} of {d} fixtures\n" ++
             "  {d} tested both ways · {d} accepted only · {d} refused only · {d} uncited\n",
         .{
-            n - uncited.items.len,      n,
-            citing,                     fixtures.len,
-            n - uncited.items.len - pos_only.items.len - neg_only.items.len,
-            pos_only.items.len,         neg_only.items.len,
-            uncited.items.len,
+            n - uncited.items.len,                                           n,
+            citing,                                                          fixtures.len,
+            n - uncited.items.len - pos_only.items.len - neg_only.items.len, pos_only.items.len,
+            neg_only.items.len,                                              uncited.items.len,
         },
     );
     if (unresolved != 0) try w.print("{d} cite(s) resolve to no clause\n", .{unresolved});
@@ -608,8 +664,14 @@ fn clausePrefix(basename: []const u8) ?[]const u8 {
         // Uppercased, so the slice cannot be into `basename`. The set is small
         // and fixed, so it is a table rather than an allocation.
         return switch (letter) {
-            'A' => "A", 'B' => "B", 'C' => "C", 'D' => "D",
-            'E' => "E", 'F' => "F", 'G' => "G", 'H' => "H",
+            'A' => "A",
+            'B' => "B",
+            'C' => "C",
+            'D' => "D",
+            'E' => "E",
+            'F' => "F",
+            'G' => "G",
+            'H' => "H",
             else => unreachable,
         };
     }
@@ -771,7 +833,7 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 
 /// Sorted so the run is deterministic (`Dir.walk` order is explicitly undefined)
 /// and a failing run is reproducible and diffable. `filter` is a plain substring
-/// over the whole path: `zig build torture -- ch04` runs one group.
+/// over the whole path: `zig build benchmark -- ch04` runs one group.
 pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]const u8) ![]const Fixture {
     var dir = Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return &.{},
@@ -796,6 +858,7 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
             .path = path,
             .stem = base[0 .. base.len - ".va".len],
             .dir = std.fs.path.dirname(path) orelse ".",
+            .root = root,
             .slug = slug,
         });
     }
@@ -816,7 +879,12 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
 /// The runner answers `met` / `unmet`; everything that turns that into a verdict
 /// is here, so `//! xfail` cannot mean one thing for VerA and another for the
 /// compiler it is being compared against.
-fn judge(
+///
+/// `pub` because the head-to-head table in `tests/bench.zig` needs a verdict
+/// PER FIXTURE for two compilers rather than a tally for one, and reaching for
+/// this rather than writing a second comparison is the whole point of the file:
+/// the two columns are the same function, called twice.
+pub fn judge(
     gpa: std.mem.Allocator,
     io: Io,
     arena: std.mem.Allocator,

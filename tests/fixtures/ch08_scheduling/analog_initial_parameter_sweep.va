@@ -20,7 +20,7 @@
 // — so a body guarded on `initial_step` runs once, at the first point, and
 // never again.
 //
-// THE GAP THIS FIXTURE OPENED. `src/ir/lower.zig` used to lower an `analog
+// THE GAP THIS FIXTURE OPENED. `lib/ir/lower.zig` used to lower an `analog
 // initial` block as its body guarded on a synthetic `initial_step`, so `seeded`
 // was computed from `gain` as it stood at the first sweep point and then frozen.
 // `//! psweep` below changes `gain` at every sub-task, and `gain` IS referenced

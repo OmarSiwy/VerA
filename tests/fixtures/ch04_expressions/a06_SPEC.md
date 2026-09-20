@@ -201,7 +201,7 @@ Positive unless marked.
 ## Infrastructure these need (fixtures 4, 6–11)
 
 One backward-compatible extension to `//! noise`, plus one new directive. Both
-mirror the existing block in `src/backend/tb.zig:583-638`, which already prints
+mirror the existing block in `lib/backend/tb.zig:583-638`, which already prints
 one `got=/want= ok=` line per exported row; nothing else in the harness changes
 and `countVerdicts` reads the new lines like any other.
 

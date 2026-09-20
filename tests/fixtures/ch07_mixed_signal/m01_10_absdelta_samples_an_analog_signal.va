@@ -71,7 +71,7 @@
 //
 // WHAT FAILS TODAY, in the order the compiler reaches it — re-captured after
 // review, which found the two reversed here. FIRST `error[E0205]: unsupported
-// module item: found `always``, on line 95: `src/frontend/parser.zig:1265`
+// module item: found `always``, on line 95: `lib/frontend/parser.zig:1265`
 // refuses `always` outside a digital run, so the only call site §5.10.3.4
 // permits is not a legal module item at all. BEHIND it sits `error[E0513]:
 // absdelta() is not implemented`, VerA's own diagnostic title. The existing

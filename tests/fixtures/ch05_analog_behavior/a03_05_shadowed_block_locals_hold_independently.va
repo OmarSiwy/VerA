@@ -10,7 +10,7 @@
 // 06): the local and the module variable coexist.
 //
 // This is the case VerA's implementation is structurally unable to get right.
-// `markHeldVars` (src/ir/lower.zig) collects event-assigned targets into a
+// `markHeldVars` (lib/ir/lower.zig) collects event-assigned targets into a
 // `StringHashMap` of BARE NAMES, and `declareVarDecl` then grants a persistent
 // slot to any MODULE-scope declaration whose name is in that set. So the name
 // `n` is what is tracked, the scope is not, and the two block-locals that

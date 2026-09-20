@@ -34,7 +34,7 @@ regions in §10.1's sense:
   instance terminal (`52`) and a behavioral probe (`53`);
 - §19.1 `` `celldefine `` tags the modules between the pair, readable as
   `Mir.is_cell`. No fixture, because the tag changes no value a model can print;
-  the check is a unit test in `src/root.zig`, and its comment says why;
+  the check is a unit test in `lib/root.zig`, and its comment says why;
 - §19.10 `` `unconnected_drive `` drives an unconnected `input` port, which
   `58`/`59`/`60` pin at three different numbers from one module.
 

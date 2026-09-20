@@ -30,7 +30,7 @@
 //     tool that has never heard of `unconnected_drive prints. It could not
 //     fail for its own subject's reason;
 //   - VerA already hard-codes the definition-site reading, with a comment, at
-//     src/ir/elaborate.zig:663-667. Asserting it here transcribes the
+//     lib/ir/elaborate.zig:663-667. Asserting it here transcribes the
 //     implementation rather than the standard.
 //
 // It comes back the day IEEE Std 1364 clause 19 lands in docs/, in the converse

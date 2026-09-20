@@ -1,7 +1,7 @@
 // Four-state operands under the Table 9-22 radix conversions (§9.4.3), which
 // is the half of the 17.1 row the ANALOG printer cannot express at all: a
 // Verilog-A operand is a real or an integer and has no x/z state, so
-// src/backend/cg_display.zig formats through Zig's `{x}`/`{b}` on a u64 bit
+// lib/backend/cg_display.zig formats through Zig's `{x}`/`{b}` on a u64 bit
 // pattern. A digital `reg` has four states and the radix conversions have to
 // collapse whole GROUPS of bits.
 //

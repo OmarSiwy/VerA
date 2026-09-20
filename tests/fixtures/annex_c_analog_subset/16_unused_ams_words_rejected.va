@@ -12,7 +12,7 @@
 // parser report each spelling separately, and one `//! reject` line per spelling
 // proves each one individually.
 //
-// TWO of the ten C.16 words are not here, because a `//! reject` substring is
+// TWO of the nine C.16 words are not here, because a `//! reject` substring is
 // matched against EVERY diagnostic of the file (tests/torture.zig
 // failureContains) and these two are prefixes of their neighbours:
 //
@@ -26,15 +26,20 @@
 // 31_connectrules_reserved.va, where nothing else can satisfy them. The seven
 // left here are pairwise non-containing, so each arm is load-bearing.
 //
-// Spelling: Table B.1 spells it `resolveto`, and Table B.1 is the normative
-// reserved-word list. The C.16 list — in this LRM as well as in the 2.4.0 PDF —
-// spells the same keyword `resolvedto`; that spelling appears nowhere in Annex
-// B, so it is not a reserved word and cannot be tested as one.
+// Spelling: both lists spell the seventh word `resolveto` — C.16's own list and
+// Table B.1 (physical p.400) — so `//! reject resolveto` is load-bearing. An
+// earlier version of this header, keyed on an HTML transcription contaminated
+// with Verilog-AMS 2.4 text, claimed C.16 spelled it `resolvedto` and that the
+// C.16 spelling was therefore unpinnable. That spelling appears nowhere in the
+// 2023 text and the claim is withdrawn.
 //
-// The tenth C.16 word, `net_resolution`, is NOT here either: VerA does not
-// reserve it, so it would need `//! xfail` on the whole file and turn a
-// multi-keyword proof into a known gap. It has its own fixture,
-// 20_net_resolution_reserved.va.
+// A tenth word used to be listed here, `net_resolution`, supported by a tenth
+// fixture, 20_net_resolution_reserved.va. The 2023 edition removed the word
+// from Annex B and C.16 together (Annex G item 5027, "Removed unused keyword
+// net_resolution | B.1, C.16"), so the fixture demanded a diagnostic no rule
+// backs and was deleted: a withdrawn claim, not a moved gap. The nine words
+// that remain are the seven declared below plus `connect` (30) and
+// `connectrules` (31).
 //! lrm B
 //! lrm C.16
 //! reject E0208

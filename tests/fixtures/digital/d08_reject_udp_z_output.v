@@ -37,7 +37,7 @@
 // every other column, and the whole primitive around it, is well formed.
 //
 // No `E0xxx` is written, and that is deliberate rather than lazy:
-// `src/diag_code.zig` has no code for a UDP table alphabet violation today, and
+// `lib/diag_code.zig` has no code for a UDP table alphabet violation today, and
 // a fixtures-only row may not mint one in `src/`. Prose is the weaker of the
 // two forms the runner accepts — it pins wording, where a code pins the rule
 // (torture.zig:248-252). Whoever implements UDPs should allocate the code for

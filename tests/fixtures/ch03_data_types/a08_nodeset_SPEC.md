@@ -57,16 +57,16 @@ in the LRM, recorded here rather than resolved.
 
 An earlier revision of this file wrote "(annex A.8.3)" as though the grammar
 were the authority for the refusal. It is not: `A.8.3` is the static `.lrm` tag
-that `src/diag_code.zig:1198` attaches to **every** E0209 "expected an
+that `lib/diag_code.zig:1198` attaches to **every** E0209 "expected an
 expression", generic to the code and not chosen for this construct.
-`src/frontend/parser.zig:4264` already carries a comment quoting §3.6.3.2's
+`lib/frontend/parser.zig:4264` already carries a comment quoting §3.6.3.2's
 null-element sentence next to the code that refuses it.
 
 ## The defect, confirmed independently
 
 ### (a) What VerA emits
 
-`src/backend/codegen.zig:1743` `emitNodesets` writes one module-level constant:
+`lib/backend/codegen.zig:1743` `emitNodesets` writes one module-level constant:
 
 ```zig
 pub const u_nodeset = [n_u]?f64{ 2.75, null };
@@ -78,7 +78,7 @@ unknown that is not a declared net and for the LRM's null bus element.
 Semantics per the emitted doc comment: *"the initial guess the source states for
 each unknown's potential. A HINT to the solver — not an initial condition and
 not a clamp."* Emitted only when the module declares at least one nodeset
-(`src/ir/lower.zig:316`, `lower.nodesets`); absent otherwise. Reproduced:
+(`lib/ir/lower.zig:316`, `lower.nodesets`); absent otherwise. Reproduced:
 
 ```
 $ ./zig-out/bin/vera --emit-zig --contract tools/contract.zig -I tests/fixtures \
@@ -114,7 +114,7 @@ $ grep -rn u_nodeset /home/omare/Documents/Projects/Zig/ARPice/src \
 ```
 
 VerA's own analog testbench does not read it either —
-`src/backend/tb.zig:688` opens every operating point with
+`lib/backend/tb.zig:688` opens every operating point with
 
 ```zig
 var x: [n_u]f64 = @splat(0.0);
@@ -188,7 +188,7 @@ no third fixture; see below.
    which has no null alternative either — so the grammar cannot settle the
    question in either direction, and the authority is §3.6.3.2's normative
    sentence plus its own printed example. The `A.8.3` string turned out to be
-   the generic `.lrm` tag `src/diag_code.zig:1198` hangs on every E0209, not a
+   the generic `.lrm` tag `lib/diag_code.zig:1198` hangs on every E0209, not a
    citation anyone chose. Both the fixture header and the section above now say
    this, and the fixture's `//! lrm` cites only 3.6.3.2.
 3. **Fixture 01's second assertion deleted.** `CHECK(V(p,g) − 2.75, 0.25, 1e-9)`

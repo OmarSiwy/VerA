@@ -1,7 +1,7 @@
 // §9.6: "Verilog AMS HDL does not extend the timescale tasks defined in IEEE
 // Std 1364 Verilog", and Table 9-3 lists exactly two of them — $printtimescale
 // and $timeformat — both "Supported in digital context: Yes / Supported in
-// analog context: No". src/ir/lower.zig:6826 carries both names in
+// analog context: No". lib/ir/lower.zig:6826 carries both names in
 // `isDigitalOnlySysFunc`, i.e. VerA today knows only that they are ILLEGAL in
 // an analog block. The inherited clause is §17.3, "Timescale system tasks" —
 // this header said §17.7 until the review, and §17.7 is *Simulation time system

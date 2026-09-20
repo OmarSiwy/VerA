@@ -51,7 +51,7 @@
 //   77 |     #10 clk = 1'b1;
 //      |     ^
 //
-// `src/frontend/parser.zig:2324` gates `#` on `self.digital`. The E0205 on
+// `lib/frontend/parser.zig:2324` gates `#` on `self.digital`. The E0205 on
 // `always` (`parser.zig:1265`) is real and is this fixture's second blocker, but
 // it is not what the compiler reaches first.
 //

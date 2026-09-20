@@ -23,7 +23,7 @@
 // admits is the closing `)`. A parser that has consumed `#( 1 , 2 , 3` and
 // then finds `,` is missing a `)`, and that is what it must say. VerA already
 // has exactly that diagnostic — E0210, title "expected ')'", emitted at
-// `src/frontend/parser.zig:1911` — so no new code has to be invented to state
+// `lib/frontend/parser.zig:1911` — so no new code has to be invented to state
 // the rule, and pinning it discriminates against both ways of getting this
 // wrong: silently taking three of the four (no diagnostic at all), and the
 // incidental E0209 "expected an expression: found `#`" that today's parser

@@ -5,13 +5,15 @@ Source: `docs/annex-g-changes.html`, read section by section.
 HTML section-ID audit: `sG-1` `sG-2` `sG-2-1` `sG-2-2` `sG-2-3` `sG-2-4`. Six sections,
 and Annex G is **informative**.
 
-Twenty-three fixtures live in this folder. Twenty-two cite an Annex G clause; one
+Twenty-two fixtures live in this folder. Twenty-one cite an Annex G clause; one
 (`23_transition_fall_time_binding.va`) cites only §4.5.8 and is counted at the bottom,
-not in the table. **Measured by grep, none of the twenty-three carries a `//! xfail`
+not in the table. **Measured by grep, none of the twenty-two carries a `//! xfail`
 line today** — this folder is fully green. The ledger below is kept as the history of
 what was open and why, but its rows are the ones earlier waves closed without
 re-stating them here; only `08`'s removal was verified against the compiler by the
-wave that removed it. The aggregate re-census owns the rest.
+wave that removed it, and `08` itself has since been deleted outright — that is a
+withdrawal of the claim it carried, not a discharge of it, and the `G.7` 7793 row below
+records why. The aggregate re-census owns the rest.
 
 What makes an informative annex testable at all is one sentence in §G.1's own preamble:
 *"The syntax and semantics of this document supersede any syntax, semantics, or
@@ -23,7 +25,7 @@ the row alone is not normative.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
-| `sG-1` | §G.1, seven revision tables, 238 data rows (G.1: 29, G.2: 33, G.3: 27, G.4: 42, G.5: 20, G.6: 53, G.7: 34). Informative history plus the supersession sentence above | 16 fixtures, covering 21 of the 238 rows. Broken out row by row in the next table. Tables G.3, G.5 and G.6 have no fixture at all |
+| `sG-1` | §G.1, seven revision tables, 238 data rows (G.1: 29, G.2: 33, G.3: 27, G.4: 42, G.5: 20, G.6: 53, G.7: 34). Informative history plus the supersession sentence above | 15 fixtures, covering 20 of the 238 rows. Broken out row by row in the next table. Tables G.3, G.5 and G.6 have no fixture at all |
 | `sG-2` | "The following statements are not supported in the current version of Verilog-AMS HDL; they are only noted for backward compatibility." | No fixture cites `G.2` bare, and none should — this is a one-sentence frame with no construct of its own, and a bare `G.2` cite would be indistinguishable from a cite of Table G.2. Its four subclauses carry all the content and all four have fixtures |
 | `sG-2-1` | Forever: "This statement is no longer supported." Still a reserved word (B.1), so it is not reachable as an identifier either | `04_obsolete_forever.va` (`G.2.1`, `5.9`) — `//! reject E0209` "expected an expression", plus the fragment `forever`. Green. The header records that VerA also emits E0205 on the stray `end` during resynchronisation and deliberately does not pin it |
 | `sG-2-2` | NULL: no longer a statement; case, conditionals and the event statement do allow null statements *as defined by the syntax*. Four claims — three survivors and one prohibition | All four have a fixture and all four are green. Conditional arm: `05_null_statement_scope.va`, which pins *binding* (the `else` after `if (c) ;` still belongs to that `if`) rather than mere acceptance. Case arm: `14_null_case_arm.va`, A.6.7's `analog_case_item`, arms carrying distinct values so a swallowed `;` shows up as the next arm's body. Event body: `15_null_event_body.va`, A.6.5, run in dc against a `("tran")` event list so the event does *not* fire and the mis-parse is observable. Prohibition: `09_null_statement_unconditional_rejected.va` — green, `//! reject DiagnosticsReported` |
@@ -32,9 +34,10 @@ the row alone is not normative.
 
 ## `sG-1` row by row
 
-Twenty-one rows of 238. Everything not listed here is untested in this folder; §G.1
+Twenty rows of 238. Everything not listed here is untested in this folder; §G.1
 mostly points at normative rules that live in the chapter folders, and this table
-only claims the rows a fixture in *this* folder actually exercises.
+only claims the rows a fixture in *this* folder actually exercises. (One row left this
+table with `08_new_receiver_count.va`, below.)
 
 | Table | Row / item | Fixture | State |
 |---|---|---|---|
@@ -55,14 +58,14 @@ only claims the rows a fixture in *this* folder actually exercises.
 | G.2 | item 13, `@(final_step)` without arguments should not have parenthesis | `20_final_step_empty_parens_rejected.va` — A.6.5 makes the analysis list non-empty and the whole parenthesised group optional, so `final_step()` has no derivation | green, `DiagnosticsReported` |
 | G.4 | item 2, apostrophe before opening `{` in a list of values | `11_brace_array_initialiser_rejected.va` — header refuses to copy the annex's stale "3.4.2" and cites §3.4, §3.4.4 and §4.2.14 instead | green, `DiagnosticsReported` |
 | G.7 | 7780, math functions `expm1()` and `ln1p()` | `02_2023_math_additions.va` — the `$`-prefixed spellings the item added, wants taken from CPython's libm. `$ln1p(-0.5)` is the discriminator: finite, where a forgotten "1 +" gives NaN | green |
-| G.7 | 7793, `$receiver_count()` | `08_new_receiver_count.va` | green. What it pins is the CALL SITE, not the count: §9.22 paragraph 3 confines the family to connect modules, and this call is in an ordinary module, so it is refused at lowering (E0818) — the site decides, not the count. It asserts no value, because the count is a netlist property and the paragraph defers the function's very existence to the simulator |
+| G.7 | 7793, `$receiver_count()` | **WITHDRAWN — `08_new_receiver_count.va` is deleted, and no fixture here claims this row.** The fixture was authored from an HTML transcription of chapter 9 that had been contaminated with Verilog-AMS 2.4 text, and the whole of its argument rested on a sentence the corrected chapter does not contain: "Non-normative: $receiver_count is not a subclause of 9.22 in Verilog-AMS 2.4". The 2023 document makes the function a normative subclause with its own syntax box — §9.22.2 (printed p.262, physical p.275) "`$receiver_count` returns an integer representing the number of receivers associated with the signal in question. The syntax is shown in Syntax 9-18", `receiver_count_function ::= $receiver_count ( signal_name )` — so the item is a real addition with a real owner, and the call-site argument the fixture fell back on belongs to `ch09_system_tasks/`'s §9.22 rows rather than here. What is left is a hole in VerA and not in the LRM — the function is not implemented — and that is pinned by the M04 driver/receiver row, which owns §9.22 (`tests/fixtures/ch07_mixed_signal/m04_SPEC.md`). The G.7 *item* is still a change worth a fixture; this folder simply no longer has one |
 | G.7 | 7795, alternative Verilog style `$min()`, `$max()`, `$abs()` | `03_system_math_style.va` — selection by comparison, never by magnitude, so `$max(-2.0, -3.0)` is -2.0 and the classic magnitude bug returns -3.0. Every want is a dyadic rational, so `CHECKX` | green |
 | G.7 | 7922, contribution to a port declared `input` is now a warning, not an error | `22_input_port_contribution_honoured.va` | green, and the only digit in this folder that comes out of a SOLVE — see the ledger |
 
-Fixture-name audit, 23 files, all mapped above or below:
+Fixture-name audit, 22 files, all mapped above or below:
 `01_abstime_replaced_realtime.va`, `02_2023_math_additions.va`, `03_system_math_style.va`,
 `04_obsolete_forever.va`, `05_null_statement_scope.va`, `06_obsolete_generate.va`,
-`07_obsolete_default_function_type.va`, `08_new_receiver_count.va`,
+`07_obsolete_default_function_type.va`,
 `09_null_statement_unconditional_rejected.va`, `10_limexp_v1_spelling_rejected.va`,
 `11_brace_array_initialiser_rejected.va`, `12_default_nodetype_rejected.va`,
 `13_realtime_analog_context_rejected.va`, `14_null_case_arm.va`, `15_null_event_body.va`,
@@ -73,10 +76,13 @@ Fixture-name audit, 23 files, all mapped above or below:
 
 ## The xfail ledger
 
-Empty, measured: 23 files, 14 with a `//! reject` arm, 9 that run and assert, 0 `//! xfail`.
-Seven rows stood here; `08_new_receiver_count.va` was the last removed, when §9.22's
+Empty, measured: 22 files, 13 with a `//! reject` arm, 9 that run and assert, 0 `//! xfail`.
+Seven rows stood here; `08_new_receiver_count.va` was the last removed from it, when §9.22's
 call-site rule landed as E0818 — the reason it carried ("VerA lowers every §9.22
 driver-access query to the constant 0") named a `codegen.zig` constant that is now deleted.
+That fixture has since been deleted as well, 2.4-contaminated text being the whole of its
+argument (see the `G.7` 7793 row above), so `08` is no longer a ledger entry here — it is a
+withdrawal, and the code it pinned is not a conformance requirement.
 The rows below are retained for the rules they record, and **all six are green**: each pins
 `DiagnosticsReported`, so each went green the moment its rule got a diagnostic of any code,
 which is exactly what the paragraph after the table said the phase label was for. Reasons
@@ -87,11 +93,14 @@ Six of the seven named no diagnostic code, and that was deliberate in every
 case: VerA emits *nothing* today, so there is no stable code to pin, and a guessed code
 leaves the marker stuck at XFAIL on the day the gap closes under a different one.
 `DiagnosticsReported` is the honest trigger — each of these modules has exactly one
-defect, so any diagnostic at all means someone diagnosed it. Three headers go further
+defect, so any diagnostic at all means someone diagnosed it. Two headers go further
 and name the code that would be *wrong*: a CAPABILITY CLASS fires on the name in any
-context, which is not the rule in question in either `08` or `10`. `08` is the proof —
-the rule it wanted was about the CONTEXT, and E0818 says "can only be called from a
-connect module", which stays true and stays correctly placed the day VerA has one. VerA had one such
+context, which is not the rule in question in `10`. Deleted `08` used to be the third
+and the proof of that argument — the rule it wanted was about the CONTEXT, and E0818
+says "can only be called from a connect module", which stays true and stays correctly
+placed the day VerA has one. It is the reason the argument is kept here even though the
+fixture is not: when `08` went, it took the claim with it and left the shape behind,
+which is the same shape `10` still carries. VerA had one such
 code, E0801 "unsupported system function"; it is retired, because every name on its
 list (§9.13's draws, §9.21 `$table_model`, §9.16 `$simprobe`) turned out to be
 implementable after all — which is itself the argument against pinning one.
@@ -107,7 +116,7 @@ implementable after all — which is itself the argument against pinning one.
 
 ## What this annex needs that no fixture supplies
 
-An empty cell above is a real gap. 217 of 238 rows have no fixture *in this folder*,
+An empty cell above is a real gap. 218 of 238 rows have no fixture *in this folder*,
 and most of them should not — a row reading "clarified the description of `$limit()`"
 points at §9.17.3, and §9.17.3 belongs to `ch09_system_tasks/`. The list below is
 scoped accordingly: it is the subset where the change is a *retirement* or a
@@ -170,8 +179,8 @@ holding all seven tables; there is no §G.2 through §G.7. So a fixture pinning 
 Table G.2 has nothing to cite but `G.1` — and a bare `//! lrm G.2` would be read as
 §G.2 *Obsolete functionality*, an entirely different section. Four fixtures follow that
 reasoning (`11`, `16`, `19`, `20` all cite `G.1` for content in Tables G.2 and G.4);
-four others cite `G.7` directly (`02`, `03`, `08`, `22`), which is a table number and
-not a subclause number. `validSection` in `src/backend/tb.zig` checks the *shape* of a
+three others cite `G.7` directly (`02`, `03`, `22`), which is a table number and
+not a subclause number. A fourth, deleted `08`, cited it the same way. `validSection` in `lib/backend/tb.zig` checks the *shape* of a
 cite, not its existence in the HTML, so both pass. Neither is wrong so much as they are
 two conventions, and the second one is only unambiguous because Table G.7's number
 happens not to collide with a section.
@@ -195,6 +204,6 @@ rule, one place it is stated.
 Analysis split: two fixtures are `//! analysis tran` (`21`, `23`, both on
 `time 0, 1n, 3n` with `wave V(in) = 1, 0, 0`), one is `//! time 1e-6` (`01`), one is an
 explicit `//! analysis dc` (`15`, because the null event body is only observable when
-the event does not fire). The other nineteen are the default operating point, and
-fourteen of those are `//! reject` fixtures that never reach a solve at all — leaving
+the event does not fire). The other eighteen are the default operating point, and
+thirteen of those are `//! reject` fixtures that never reach a solve at all — leaving
 five that actually run and check a number: `02`, `03`, `05`, `14` and `22`.

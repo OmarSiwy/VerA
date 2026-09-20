@@ -11,7 +11,7 @@
 // default, which is why the operand is scaled and offset.
 //
 // The 1 ns itself is deliberately NOT pinned. VerA's preprocessor accepts
-// `default_transition and discards it (src/frontend/preprocessor.zig marks it
+// `default_transition and discards it (lib/frontend/preprocessor.zig marks it
 // `.ignored`), so nothing in this file can depend on the number; and with the
 // directive absent §10.3 leaves the transition time to the simulator, so there
 // would be no LRM digit to write either.

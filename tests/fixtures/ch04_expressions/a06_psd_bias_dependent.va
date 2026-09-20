@@ -21,7 +21,7 @@
 // §9.15 — not §9.10, which an earlier draft of this fixture cited wrongly — is
 // the clause that defines $vt, as "the thermal voltage (kT/q) at the given
 // temperature". It supplies no number, so k/q is implementation-defined in its
-// last digits. VerA hard-codes CODATA2018 (src/backend/codegen.zig:5519):
+// last digits. VerA hard-codes CODATA2018 (lib/backend/codegen.zig:5519):
 //
 //   $vt = 8.617333262145179e-5 · 300.0 = 0.025851999786435535 V
 //   id  = 1e-14 · (exp(0.6 / 0.025851999786435535) − 1)
@@ -74,7 +74,7 @@
 // precisely the trap the $vt `CHECKEQ` below exists to avoid. The digits
 // written are one defensible evaluation of 2q|I| and kf|I|^af; the band, not
 // the digits, is the claim. The directive is unimplemented today —
-// `validNoiseEntry` at src/backend/tb.zig:341 rejects
+// `validNoiseEntry` at lib/backend/tb.zig:341 rejects
 // `name=`/`white=`/`flicker=`/`ef=`/`rtol=` alike — so this fixture fails at
 // `//!` directive: BadSyntax, which is the gap it holds open.
 //

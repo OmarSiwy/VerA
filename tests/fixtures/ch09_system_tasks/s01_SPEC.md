@@ -65,7 +65,7 @@ bullet is **done**, contrary to the row text); the §9.5.1 mcd/fd bit encodings;
 **Not implemented.** Each is a fixture below.
 
 1. `%g` does not choose the shorter of the two renderings —
-   `src/backend/cg_display.zig` renders a real through Zig's shortest-round-trip
+   `lib/backend/cg_display.zig` renders a real through Zig's shortest-round-trip
    formatting, so `%g` of `1e8` prints `100000000` where Table 9-23's "whichever
    format results in the shorter printed output" demands `1e+08`, five
    characters against nine. `%g` of `1e-5` prints `0.00001` for the same reason.
@@ -85,7 +85,7 @@ bullet is **done**, contrary to the row text); the §9.5.1 mcd/fd bit encodings;
    Table 2-1 scale symbol. Table 9-23 defines it as the one conversion
    Verilog-AMS adds to C, so this is a missing feature and not a deviation.
 5. `$monitor`/`$fmonitor` have **no change detection**: `Lower.isDisplayTask`
-   (`src/ir/lower.zig:6146`) lists `$monitor` beside `$display`, and
+   (`lib/ir/lower.zig:6146`) lists `$monitor` beside `$display`, and
    `cg_display.emitDisplayTask` gives them the same unconditional print. The
    §9.4.1 mechanism sentence — "if the variable or an expression in the argument
    list changes value compared with the last accepted step" — is not implemented
@@ -234,7 +234,7 @@ claimed as a defect.
   `tests/pending/D09/02_display_unknown_radix.v`, derived there from the same
   inherited §17.1.1.2 sentence. Not duplicated. In the *analog* context the
   question does not arise: a Verilog-A operand is a real or an integer, and a
-  four-state literal is refused by `E0130` at `src/ir/lower.zig:1171` — correctly,
+  four-state literal is refused by `E0130` at `lib/ir/lower.zig:1171` — correctly,
   since §9.2 Table 9-1 does not make four-state values an analog-context concept.
 * **`$debug` / `$fdebug` per solver iteration** (§9.4.1 "it displays its
   arguments for each iteration of the analog solver", §9.5.9 "if `$fdebug` is
@@ -308,4 +308,4 @@ mistaken for a rewrite of the surrounding behaviour.
 Once the row is implemented, moving these into
 `tests/fixtures/ch09_system_tasks/` and running `zig build torture -- --strict`
 is the whole of the wiring; the `//!` directives used here (`lrm`, `time`,
-`wave`, `solve`, `print none`) are all ones `src/backend/tb.zig` already parses.
+`wave`, `solve`, `print none`) are all ones `lib/backend/tb.zig` already parses.

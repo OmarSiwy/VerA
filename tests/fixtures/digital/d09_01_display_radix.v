@@ -20,7 +20,7 @@
 // The rule: a radix conversion is sized to the operand's declared width, and
 // the default decimal field is sized to the largest value the operand can hold.
 // VerA's ANALOG printer deliberately deviates on the decimal width
-// (src/backend/cg_display.zig:128 "a bare INTEGER prints minimal-width"); that
+// (lib/backend/cg_display.zig:128 "a bare INTEGER prints minimal-width"); that
 // deviation is justified there by the analog integer being 64 bits wide, and it
 // does NOT carry over here — a digital `reg [7:0]` has a declared width of 8,
 // so the 1364 sizing is both meaningful and cheap. This file pins the digital

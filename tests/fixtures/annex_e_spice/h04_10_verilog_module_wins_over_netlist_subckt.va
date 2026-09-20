@@ -69,10 +69,10 @@
 // resistor row with no tc1/tc2 has factor (1 + tc1*T + tc2*T^2) = 1 exactly, so
 // `4K` = 4000 ohm gives I = 1.0/4000 = 2.5e-4 A. 1e-14 relative is ~45 ulp.
 //
-// WHAT VerA DOES TODAY. `Flatten.findModule` (`src/ir/elaborate.zig`) walks
+// WHAT VerA DOES TODAY. `Flatten.findModule` (`lib/ir/elaborate.zig`) walks
 // `userModules()` first, then the shipped primitives, then the netlist range, so
 // the ordering half of E.3.3 is implemented and the 0.5 check reads green. The
-// control does not: `src/frontend/spice_cards.zig` gives `.SUBCKT` an empty
+// control does not: `lib/frontend/spice_cards.zig` gives `.SUBCKT` an empty
 // body, so `rNet` is an open circuit and `I(x2.a, x2.b)` is 0. The file is red
 // today for a stated reason, which is what it was missing. The mandated WARNING
 // is still NOT asserted here — `//! reject` is for diagnostics that stop a

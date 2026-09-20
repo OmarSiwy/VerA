@@ -45,7 +45,7 @@
 // id shared by two rows, each row scaled by its own coefficient — and §4.6.4
 // gives an active noise function no deterministic scalar value a `CHECK` could
 // read back. The fixture fails today at `//!` directive: BadSyntax
-// (`validNoiseEntry`, src/backend/tb.zig:341); once the directive lands it
+// (`validNoiseEntry`, lib/backend/tb.zig:341); once the directive lands it
 // fails again on `white=4e-18` against the 1e-18 both rows actually export.
 //
 // An earlier draft padded that out with three `CHECK`s that cannot go red on

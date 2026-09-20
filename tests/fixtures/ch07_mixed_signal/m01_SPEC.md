@@ -74,8 +74,8 @@ fixture body and in its `//! lrm` line.
 Established by running the compiler on probe files, not from `COVERAGE.md`.
 
 **VerA has two disjoint dialects, chosen by FILE EXTENSION.**
-`src/cli.zig:332` sets `Parser.digital = true` only for a `.v` input, and
-`src/frontend/parser.zig` gates on that flag in at least five places:
+`src/main.zig:332` sets `Parser.digital = true` only for a `.v` input, and
+`lib/frontend/parser.zig` gates on that flag in at least five places:
 
 | gate | line | consequence for a `.va` file |
 |---|---|---|

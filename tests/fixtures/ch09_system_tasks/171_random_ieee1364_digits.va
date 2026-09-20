@@ -21,7 +21,7 @@
 //
 // then compiled with `zig cc` and RUN, and the printed values pasted below
 // verbatim (%.17g for the real; the full URLs are in the header of
-// src/backend/rng_kernels.zig, whose unit test pins the same run). Every
+// lib/backend/rng_kernels.zig, whose unit test pins the same run). Every
 // operation on the $random and $rdist_uniform paths is IEEE-754 mul/add/div —
 // no libm — so the want column is exact to the last bit and `CHECKX`/`CHECKI`
 // are the right macros, not a tolerance.

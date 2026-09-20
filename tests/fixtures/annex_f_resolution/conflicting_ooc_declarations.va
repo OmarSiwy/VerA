@@ -27,7 +27,7 @@
 // the generic `DiagnosticsReported`: VerA already fails this source in the PARSER
 // on the dotted name, so a generic pattern would match that unrelated diagnostic
 // and XPASS today. E0902 is the code RESERVED for the step-3 conflict (class 9,
-// hierarchy and elaboration, src/diag_code.zig; E0901 is the last one
+// hierarchy and elaboration, lib/diag_code.zig; E0901 is the last one
 // implemented), shared with conflicting_declarations.va — the two halves of one
 // sentence are one rule.
 //

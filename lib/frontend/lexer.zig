@@ -7,7 +7,7 @@
 //!
 //! THE BYTE SCANS IN THIS FILE STAY SCALAR, and this is the number that makes
 //! that right rather than the "files are small (KBs)" it used to say. Every loop
-//! here advances over ONE TOKEN, not over the file. MEASURED (`zig build bench
+//! here advances over ONE TOKEN, not over the file. MEASURED (`zig build benchmark
 //! -Doptimize=ReleaseFast -- fixtures`, `pp` row): a compilation's preprocessed
 //! text averages 11,960 bytes over the 1164 fixtures, and 11,512 of those are
 //! the annex D/E prelude, whose tokens `tokenizeSeeded` copies in from
@@ -459,7 +459,7 @@ pub fn isBasedDigit(c: u8, radix: u8) bool {
 /// `200u` becomes the text `200e-6`, which `parseFloat` rounds once, to
 /// 2.0000000000000000e-4. Multiplying instead — `200.0 * 1e-6` — rounds twice
 /// and lands on 1.9999999999999998e-4, a different double for the same
-/// spelling. `src/backend/tb.zig` did exactly that for two years, so a `//!
+/// spelling. `lib/backend/tb.zig` did exactly that for two years, so a `//!
 /// time 200u` line and a `200u` written in the model were not equal, and a
 /// fixture guarding an assertion with `$abstime < 200u` never reached its last
 /// timepoint: the check passed vacuously at every point, including the one it
@@ -836,7 +836,7 @@ test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.
     // It matters because it is observable: 2376 of the 9990 two-significant-
     // digit scaled literals differ between the two spellings by 1 ulp, and the
     // difference reaches emitted device text — see the `transition(V(p,n), 0,
-    // 2.2n)` case in src/backend/codegen.zig, which pins `0.0000000022`.
+    // 2.2n)` case in lib/backend/codegen.zig, which pins `0.0000000022`.
     // Parser and lexer used to disagree here, each with its own decoder.
     try testing.expectEqual(@as(f64, 2.2e-9), try parseReal("2.2n"));
     // Both operands must be runtime `f64`s: Zig folds a comptime_float product

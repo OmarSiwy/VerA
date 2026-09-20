@@ -7,7 +7,7 @@
 // structure applicable to Verilog-A with one stated exception (real value
 // ports), and that exception is not this. C.16's list of keywords Verilog-A
 // does not use -- connect, connectmodule, connectrules, driver_update,
-// endconnectrules, merged, net_resolution, resolvedto, split, wreal -- does not
+// endconnectrules, merged, resolveto, split, wreal -- does not
 // contain `tran` either, though absence from a negative list is only
 // corroboration; A.4.1 is the clause that admits the construct.
 //

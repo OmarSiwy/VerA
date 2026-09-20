@@ -1484,45 +1484,39 @@ pub fn buildExe(
     var dir = try cwd.openDir(io, opts.work_dir, .{});
     defer dir.close(io);
 
-    const dev_rel = try std.fmt.allocPrint(gpa, "{s}.device.zig", .{opts.name});
-    defer gpa.free(dev_rel);
-    const run_rel = try std.fmt.allocPrint(gpa, "{s}.tb.zig", .{opts.name});
-    defer gpa.free(run_rel);
-    try dir.writeFile(io, .{ .sub_path = dev_rel, .data = device_zig });
-    try dir.writeFile(io, .{ .sub_path = run_rel, .data = runner_zig });
+    // One arena for the command line. Every element of it is a `-M`, a `-O` or
+    // a path join whose lifetime is this call, so a matching `defer free` per
+    // string buys nothing over freeing the lot at once.
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const dev_path = try std.fs.path.join(gpa, &.{ opts.work_dir, dev_rel });
-    defer gpa.free(dev_path);
-    const run_path = try std.fs.path.join(gpa, &.{ opts.work_dir, run_rel });
-    defer gpa.free(run_path);
     const bin = if (opts.out_path) |p|
         try gpa.dupe(u8, p)
     else
         try std.fs.path.join(gpa, &.{ opts.work_dir, opts.name });
     errdefer gpa.free(bin);
 
-    // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
-    const emit = try std.fmt.allocPrint(gpa, "-femit-bin={s}", .{bin});
-    defer gpa.free(emit);
-    const m_root = try std.fmt.allocPrint(gpa, "-Mroot={s}", .{run_path});
-    defer gpa.free(m_root);
-    const m_dev = try std.fmt.allocPrint(gpa, "-Mdevice={s}", .{dev_path});
-    defer gpa.free(m_dev);
-    const m_contract = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{opts.contract});
-    defer gpa.free(m_contract);
-    const opt = try std.fmt.allocPrint(gpa, "-O{t}", .{opts.optimize});
-    defer gpa.free(opt);
+    const m_root = try bind(arena, io, dir, opts, "tb", "root", runner_zig);
+    const m_dev = try bind(arena, io, dir, opts, "device", "device", device_zig);
 
-    const argv = [_][]const u8{
-        opts.zig_exe, "build-exe",   emit,
-        opt,          "--cache-dir", ".zig-cache",
-        "--dep",      "device",      "--dep",
-        "contract",   m_root,        "--dep",
-        "contract",   m_dev,         m_contract,
-    };
+    // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{
+        opts.zig_exe,
+        "build-exe",
+        try std.fmt.allocPrint(arena, "-femit-bin={s}", .{bin}),
+        try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
+        "--cache-dir",
+        ".zig-cache",
+    });
+    try argv.appendSlice(arena, &.{ "--dep", "device" });
+    try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
+    try argv.appendSlice(arena, &.{ "--dep", "contract", m_dev });
+    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
 
     var child = try std.process.spawn(io, .{
-        .argv = &argv,
+        .argv = argv.items,
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .pipe,
@@ -1547,6 +1541,24 @@ pub fn buildExe(
     }
     text.deinit(gpa);
     return .{ .ok = bin };
+}
+
+/// Write one module's source into the work directory and return the `-M` that
+/// binds it. The file is `<name>.<suffix>.zig` so two hosts sharing a work root
+/// cannot overwrite each other's device.
+fn bind(
+    arena: Allocator,
+    io: Io,
+    dir: Io.Dir,
+    opts: BuildOptions,
+    suffix: []const u8,
+    binding: []const u8,
+    text: []const u8,
+) ![]const u8 {
+    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ opts.name, suffix });
+    try dir.writeFile(io, .{ .sub_path = file, .data = text });
+    const path = try std.fs.path.join(arena, &.{ opts.work_dir, file });
+    return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, path });
 }
 
 // ---------------------------------------------------------------------------

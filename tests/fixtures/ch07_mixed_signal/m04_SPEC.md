@@ -19,16 +19,16 @@ Grepped, then confirmed against the built binary at
 | `real r;` inside a `--run` module | `E1100 only uninitialized scalar/packed reg and integer declarations are implemented` |
 | `$display("%g", …)` under `--run` | `E1100 only %b and %% display conversions are implemented` |
 
-`src/frontend/token.zig:760-763` puts `wreal` in the `kw_reserved` list beside
-`net_resolution`; `src/frontend/lexer.zig:726` is the unit test that pins it as
-reserved. `src/ir/lower.zig:2428` states it outright: *"VerA has no
+`lib/frontend/token.zig:760-763` puts `wreal` in the `kw_reserved` list beside
+`net_resolution`; `lib/frontend/lexer.zig:726` is the unit test that pins it as
+reserved. `lib/ir/lower.zig:2428` states it outright: *"VerA has no
 `real`/`wreal` net declarations at all (E0205)"*. `src/sim/digital.zig` carries
 a four-state `Int` and nothing else — there is no real-valued net, no real
 variable and no real formatting in the digital execution engine, so the whole
 wreal half is new machinery and not a parser gap.
 
 `wreal` does appear in two places that are **not** the data type and must not be
-mistaken for it: `src/frontend/preprocessor.zig:142-148` and `:1948` implement
+mistaken for it: `lib/frontend/preprocessor.zig:142-148` and `:1948` implement
 `` `default_discipline ``'s qualifier list (§10.2), where `wreal` is one of the
 qualifier *names*; and `src/sim/digital.zig:1066` mentions "wreal-initialized
 nets" in a refusal that is really about net initializers in general.
@@ -55,24 +55,24 @@ look like a regression otherwise.
 
 So the state is:
 
-- `driver_update` is a real token (`src/frontend/token.zig:253`), a real AST node
-  (`src/frontend/ast.zig:209-214`), and is parsed **only** inside a connect
-  module (`src/frontend/parser.zig:2556-2565`). It is cloned by elaboration
-  (`src/ir/elaborate.zig:2024-2028`) and refused by lowering with `E0701`
-  (`src/ir/lower.zig:7012-7015`) — which is unreachable in practice, because
+- `driver_update` is a real token (`lib/frontend/token.zig:253`), a real AST node
+  (`lib/frontend/ast.zig:209-214`), and is parsed **only** inside a connect
+  module (`lib/frontend/parser.zig:2556-2565`). It is cloned by elaboration
+  (`lib/ir/elaborate.zig:2024-2028`) and refused by lowering with `E0701`
+  (`lib/ir/lower.zig:7012-7015`) — which is unreachable in practice, because
   `elaborate.pickTop` never picks a connect module and nothing lowers its body.
 - `$driver_count`, `$receiver_count`, `$driver_state`, `$driver_strength`,
   `$driver_delay`, `$driver_next_state`, `$driver_next_strength`,
   `$driver_type` are a name list in `isConnectModuleOnlySysFunc`
-  (`src/ir/lower.zig:6889-6893`) whose only effect is `E0818` at every call site
-  lowering reaches. `src/backend/codegen.zig:5628-5640` records that codegen
+  (`lib/ir/lower.zig:6889-6893`) whose only effect is `E0818` at every call site
+  lowering reaches. `lib/backend/codegen.zig:5628-5640` records that codegen
   used to answer them with the constant 0 and deliberately no longer does.
 - `connectrules` / `connect` statements parse
   (`tests/fixtures/ch07_mixed_signal/connectrules_accepted.va`) but insert
   nothing.
 
 **The functions are therefore implemented as a refusal, not as a feature.** The
-comment at `src/ir/lower.zig:6874-6880` says as much: "a driver call written
+comment at `lib/ir/lower.zig:6874-6880` says as much: "a driver call written
 inside a connect module is therefore accepted and never reached, which is the
 right answer to the wrong half of the clause." Existing fixtures 31, 107, 109
 and 111 in `ch09_system_tasks` all pin the refusing side; `38_driver_update_connectmodule.va`
@@ -82,7 +82,7 @@ are that design.
 
 ### Already implemented, pinned here anyway
 
-`$realtobits` / `$bitstoreal` are real code in `src/backend/codegen.zig` (`@bitCast`
+`$realtobits` / `$bitstoreal` are real code in `lib/backend/codegen.zig` (`@bitCast`
 on the f64, i.e. the exact IEEE-754 pattern, not an approximation) for the
 **analog** context, which is what §9.11 extends. Nothing pins the §3.7 use — the
 sanctioned wreal-to-64-bit-wire bridge in the *digital* context — and
@@ -258,7 +258,7 @@ To adopt them, move the pairs into `tests/digital/` and add an
 `expectRun`/`expectRejected` cases in `src/sim/digital.zig`'s test block.
 
 The `//! lrm` tags are written in the `tests/fixtures/**/*.va` vocabulary
-(`tests/harness.zig`, `src/backend/tb.zig`) so that any fixture which later
+(`tests/harness.zig`, `lib/backend/tb.zig`) so that any fixture which later
 turns out to be expressible as a single analog device can be moved under
 `tests/fixtures/` unchanged. None of them is today: `--run` is the runner for
 all fourteen.
@@ -353,3 +353,93 @@ patterns in 04 and 06 were re-derived (`0.1` = `0x3FB999999999999A`,
 running `zig-out/bin/vera --run` on all fourteen files after the edits: the
 diagnostics are unchanged, including fixture 14, whose new `#1;` inside the
 connect module still lands on `E0209 expected an expression: found #`.
+
+## Added later: `$receiver_count` (`m04_16`)
+
+Fixture **16** was written after the row was assembled, for a function the row
+does not name at all. It belongs to the approved-but-unimplemented tree.
+
+§9.22.2 and its Syntax 9-18 — `$receiver_count(signal_name)` — which Table 9-19
+places in the driver-access family with `Yes Yes`, the only member of the five
+so marked:
+
+| | digital | analog |
+|---|---|---|
+| `$driver_count` | Yes | No |
+| `$driver_state` | Yes | No |
+| `$driver_strength` | Yes | No |
+| `@(driver_update)` | Yes | No |
+| `$receiver_count` | Yes | **Yes** |
+
+Annex G item 7793 records it as a 2023 addition ("Support `$receiver_count()`
+function", clause column 9.22.2) — which is how a function that has its own
+syntax box turns out to have been absent from the row: 10–15 between them cover
+`$driver_count`, `$driver_state`, `$driver_next_state`, `@(driver_update)` and
+§9.22.6's receiver value, and not one calls `$receiver_count`.
+
+`tests/fixtures/annex_g_change_history/08_new_receiver_count.va` asserted the
+opposite of this file and has been withdrawn with it.
+
+`m04_16_receiver_count_reports_ordinary_receivers.va`, paired with a
+`.expected.txt` as every `--run` fixture in this row is.
+
+Topology is 10's turned round: 10 has two ordinary drivers and one ordinary
+receiver; this has one ordinary driver and two. `net` is `electrical` carrying
+`ddiscrete` ports, so §7.8.4 makes it mixed and the connect rule inserts one
+`m04_rc_c2e` between it and the digital ports.
+
+| want | derivation |
+|---|---|
+| `$receiver_count(d) == 2` | receivers of the digital segment that are *ordinary* (§9.22.2): `lo1.i` and `lo2.i`, two connections to INPUT ports. `hi.o` is an output and so a driver; `ld.a` is `electrical` and not a digital receiver; the connect module's own `d` is excluded by §9.22 ¶3 ("only access drivers found in ordinary modules and not to those found in connect modules") |
+| `$driver_count(d) == 1` | `hi.o`, one connection to an output port. The connect module's own `assign d = out;` is the driver ¶3 forbids either count to see. §9.22 ¶4 defines a driver as "a process which assigns a value to the signal, **or** a connection of the signal to an output port" — `hi` does both for the same contribution, and that is one driver, not two |
+
+Two different numbers from one signal at one call site, so an implementation
+that aliased the two functions fails on the pair whichever way the alias runs;
+neither assertion alone would catch it.
+
+Both counts are elaboration-time properties, so both are sampled twice — at
+t=1 and t=40, after the driver has held `1'b1` for the whole window. That
+second sample is what fails an implementation that recomputes a count from
+recent activity.
+
+`got=` columns are 32 zero-padded binary digits: §9.22.2 says the function
+"returns an integer", §3.2 makes that -2³¹..2³¹-1, and `%b`'s field width is
+the size of the expression (IEEE 1364, reached via §1.1) — so decimal 2 is
+`00000000000000000000000000000010`. The assertion is the `ok=` column, an `==`
+self-determined at one bit.
+
+No `//! timescale` line, unlike 10–15. `lib/backend/tb.zig:203` has no
+`timescale` directive in its vocabulary, so the line aborts the directive parse
+with `error.UnknownDirective` before the compile the row is measuring ever
+starts. The header says so at length; it is the one place this fixture
+deliberately diverges from 10's text.
+
+Deliberately not covered: `$receiver_count`'s *analog* cell. Reading it from
+inside `analog begin ... end` emits once per solver iteration, so the transcript
+has no fixed length and cannot be held in a `.expected.txt`. Pin that cell with
+a fixture that reads the value instead of printing it.
+
+### Observed today
+
+```
+FAIL tests/fixtures/ch07_mixed_signal/m04_16_receiver_count_reports_ordinary_receivers.va: did not compile: CompileFailed
+error[E0205]: unsupported module item: found `assign`
+  = note: LRM annex A.1.4
+error[E0209]: expected an expression: found `#`
+  = note: LRM annex A.8.3
+```
+
+The same two blockers the Prerequisites table above lists for 10–15, and
+neither is about `$receiver_count`: the name is already in the compiler's table
+and already classified. In an ordinary module VerA answers
+
+```
+error[E0818]: driver access function outside a connect module:
+              `$receiver_count` can only be called from a connect module
+  = note: LRM 9.22
+```
+
+i.e. it knows what the function is and only lacks the connectmodule module
+items that would let this file reach it. So this is a wrong-reason failure of
+the same kind as 20 and 21, and it becomes checkable the moment `assign` and `#`
+parse inside a `connectmodule` — not before.
