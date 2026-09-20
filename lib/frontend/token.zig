@@ -133,6 +133,11 @@ pub const Tag = enum(u8) {
     kw_assign,
     kw_begin,
     kw_end,
+    // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`. It gets
+    // a tag for the same reason `assign` did: the digital executor runs it.
+    // Outside a digital run it is still refused — A.6.4 offers no analog
+    // statement production for it, so `parseStmt` reports it as before.
+    kw_wait,
     kw_generate, // §6.9
     kw_endgenerate,
     kw_defparam, // §6.3.1 parameter_override (A.1.4)
@@ -789,7 +794,10 @@ const reserved_keywords = [_][]const u8{
     "rpmos",              "rtranif0",      "rtranif1",
     "showcancelled",      "small",         "specify",      "specparam",
     "strong0",            "strong1",       "table",        "task",
-    "tranif0",            "tranif1",       "wait",
+    // `wait` left this list when A.6.5's `wait_statement` got a tag
+    // (`kw_wait`) — §10.6 membership is keyed by spelling, so it is still
+    // reserved everywhere it was, through `kw_1364_1995`.
+    "tranif0",            "tranif1",
     "weak0",              "weak1",         "xnor",         "xor",
     // configuration / library (IEEE 1364 clause 13)
     "cell",               "config",        "design",       "endconfig",
