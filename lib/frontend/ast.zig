@@ -527,6 +527,41 @@ pub const VarDecl = struct {
 /// §7.9 default resolution.
 pub const NetKind = enum(u8) { wire, tri, tri0, tri1, triand, trior, trireg, wand, wor, uwire, supply0, supply1 };
 
+/// A.2.2.2 `strength0`/`strength1`/`charge_strength`, as ONE enum because
+/// §1.1's IEEE Std 1364 clause 7 orders all eight on a single scale and the
+/// resolution that reads them only ever compares levels:
+///
+///   supply(7) > strong(6) > pull(5) > large(4) > weak(3) > medium(2)
+///             > small(1) > highz(0)
+///
+/// The numeric values ARE that order, so `@intFromEnum` comparison is the
+/// clause's "stronger than". The 0-side/1-side split A.2.2.2 spells into two
+/// productions is a property of the KEYWORD, not of the level, so it lives in
+/// the parser (which has to reject `(strong0, pull0)`) and not here.
+pub const Strength = enum(u8) { highz = 0, small = 1, medium = 2, weak = 3, large = 4, pull = 5, strong = 6, supply = 7 };
+
+/// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value [ , delay_value ] ] )`.
+/// One value means all three; two mean rise and fall with the turn-off delay
+/// taken as the minimum of them (IEEE 1364-2005 §7.14); three are given. On a
+/// `trireg` the third value is not a turn-off delay at all but A.2.1.3's charge
+/// decay time, which is why the third field is spelled for both readings.
+/// `.none` throughout is "no delay", which is what every construct meant
+/// before delays were parsed.
+pub const Delay3 = struct {
+    rise: ExprId = .none,
+    fall: ExprId = .none,
+    /// Turn-off (to z) on a driver, charge decay on a `trireg`.
+    off: ExprId = .none,
+
+    /// The two-value form leaves `off` `.none`: §7.14 derives it as the smaller
+    /// of rise and fall, and that is a value, not a syntax node. A `trireg`
+    /// reads the same `.none` as "no charge decay", which is the reading that
+    /// keeps `trireg c;` holding forever.
+    pub fn any(self: Delay3) bool {
+        return self.rise != .none;
+    }
+};
+
 /// Net declaration. LRM §3.6.3 (A.2.1.3 net_declaration). One per declared
 /// name. In the Verilog-A subset (annex C) the only forms that matter are
 /// `<discipline> a, b;` and `ground <discipline> g;`.
@@ -541,6 +576,13 @@ pub const NetDecl = struct {
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
+    /// A.2.1.3 `charge_strength` — `trireg` only, and `medium` is IEEE
+    /// 1364-2005 §3.8's default for a `trireg` that names none.
+    charge: Strength = .medium,
+    /// A.2.1.3 `[ delay3 ]`. On a `trireg` the third value is the charge decay
+    /// time; on every other net type it is the turn-off delay of the net's own
+    /// transition.
+    delay: Delay3 = .{},
     /// A.2.4 net_decl_assignment; `.none` when the declaration has no `=`.
     /// §3.6.3.2 makes this a NODESET value — "the initializer shall be a
     /// constant_expression and will be used as a nodeset value for the
@@ -654,6 +696,13 @@ pub const DiscreteBlock = struct {
 pub const ContAssign = struct {
     target: ExprId,
     value: ExprId,
+    /// A.6.1 `[ drive_strength ]`. IEEE 1364-2005 §7.9 makes the default
+    /// `(strong1, strong0)`, so an assignment that names no strength resolves
+    /// exactly as it did before strengths existed.
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
+    /// A.6.1 `[ delay3 ]` — the driver's own delay, §6.1.3 inertial.
+    delay: Delay3 = .{},
     main_tok: u32 = 0,
 };
 

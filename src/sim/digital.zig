@@ -80,10 +80,91 @@ const Array = struct { count: u32, low: i64, high: i64 };
 // §7.9 one net: its resolution function, its storage, and the drivers whose
 // wired-logic combination IS its value. `resolved` is the scratch the fold
 // writes before publishing through `store`; it is sized once, at setup.
-const Net = struct { kind: Ast.NetKind, slot: u32, resolved: Int.Literal, drivers: []const u32 = &.{} };
+const Net = struct {
+    kind: Ast.NetKind,
+    slot: u32,
+    resolved: Int.Literal,
+    drivers: []const u32 = &.{},
+    /// A.2.1.3 `charge_strength`, the level the stored charge of a `trireg` in
+    /// the capacitive state asserts. `medium` is §3.8's default and is ignored
+    /// outright by every other net type.
+    charge: Ast.Strength = .medium,
+};
 // §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
-// of them — and re-evaluates whenever one of its operands changes.
-const Driver = struct { net: u32, value: Ast.ExprId, sensitivity: []const u32, current: Int.Literal };
+// of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
+// are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
+// the value it currently holds.
+const Driver = struct {
+    net: u32,
+    value: Ast.ExprId,
+    sensitivity: []const u32,
+    current: Int.Literal,
+    s0: Ast.Strength = .strong,
+    s1: Ast.Strength = .strong,
+};
+
+/// IEEE 1364-2005 clause 7's strength pair: what ONE contributor asserts on the
+/// 0 side and on the 1 side of a net. A four-state value is not enough to
+/// resolve a net, because "0 and 1 disagree" has a different answer depending on
+/// which driver is stronger; the pair is what the clause's tables are written
+/// over, and collapsing back to four states is the LAST step, not the first.
+const Pair = struct {
+    s0: Ast.Strength = .highz,
+    s1: Ast.Strength = .highz,
+
+    /// What a driver holding `b` at `(s0, s1)` asserts. An `x` asserts BOTH
+    /// sides — that is what makes it an ambiguous range rather than a value —
+    /// and a `z` asserts neither, which is why an undriven net reads z.
+    fn of(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Pair {
+        return switch (b) {
+            .one => .{ .s1 = s1 },
+            .zero => .{ .s0 = s0 },
+            .x => .{ .s0 = s0, .s1 = s1 },
+            .z => .{},
+        };
+    }
+    fn stronger(a: Ast.Strength, b: Ast.Strength) Ast.Strength {
+        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+    }
+    fn max(a: Pair, b: Pair) Pair {
+        return .{ .s0 = stronger(a.s0, b.s0), .s1 = stronger(a.s1, b.s1) };
+    }
+    fn none(self: Pair) bool {
+        return self.s0 == .highz and self.s1 == .highz;
+    }
+    /// The one place the pair becomes a printable value again.
+    fn collapse(self: Pair) Int.Bit {
+        const a = @intFromEnum(self.s0);
+        const b = @intFromEnum(self.s1);
+        if (a == b) return if (a == 0) .z else .x;
+        return if (b > a) .one else .zero;
+    }
+};
+
+/// §3.7/§7.9: what the net TYPE itself contributes, at the level clause 7 gives
+/// it. This is the same information `undriven` returns as a value, at the
+/// strength that lets a driver argue with it: a `weak1` driver cannot move a
+/// `tri0` because pull(5) beats weak(3), and nothing an `assign` can write
+/// beats a supply net's supply(7).
+fn netPull(kind: Ast.NetKind) Pair {
+    return switch (kind) {
+        .supply0 => .{ .s0 = .supply },
+        .supply1 => .{ .s1 = .supply },
+        .tri0 => .{ .s0 = .pull },
+        .tri1 => .{ .s1 = .pull },
+        else => .{},
+    };
+}
+
+/// §7.9 Tables 7-4/7-6/7-7 are VALUE tables: a wired-logic net combines what
+/// its drivers say, and a strength decides only whether a driver says anything
+/// (a 0 driven through `highz0` is a z, and z is the tables' identity).
+fn wiredLogic(kind: Ast.NetKind) bool {
+    return switch (kind) {
+        .wand, .triand, .wor, .trior => true,
+        else => false,
+    };
+}
 
 /// A four-state value of `width` bits, every bit `fill`. This is the one place
 /// declared state gets its starting value: X for a variable, Z for an undriven
@@ -115,18 +196,19 @@ fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
 /// bit into a net's accumulated bit. `z` is the identity of all three tables,
 /// which is exactly why an undriven net reads z.
 ///
-/// ponytail: every driver here is at the SAME strength, so §7.10's eight drive
-/// strengths and §7.11's strength resolution are not implemented — two drivers
-/// that disagree conflict to x whether or not one of them would have won. The
-/// declared strength of `supply0`/`supply1`/`tri0`/`tri1` is the only part of
-/// that model which survives, and it survives as the special cases in
-/// `resolve`, not as a strength. The upgrade path is to carry a (strength0,
-/// strength1) pair per driver bit instead of one `Int.Bit`, fold by taking the
-/// maximum of each component across a net's drivers, and collapse to four
-/// states only on read: strength1 above strength0 is 1, the reverse is 0,
-/// equal and nonzero is x, both zero is z. That also needs A.2.2.3's
-/// `strong0`/`weak1`/`pull0`/`highz1`/... as lexer tags and A.6.1's
-/// `drive_strength` in `parseModuleItem`.
+/// Only the wired-logic net types reach this now: `wire`/`tri`/`tri0`/`tri1`/
+/// `trireg` and the supply nets resolve through `Pair`, which is clause 7's
+/// strength model, and the `else` arm below survives for the one thing the
+/// value tables still do there — deciding what a fold with no contribution at
+/// all reads as.
+///
+/// ponytail: the wired-logic result carries no strength onward. §7.10 gives
+/// the combination a strength of its own (the stronger of the two on the
+/// winning side), which nothing can observe here because a wired-logic net is
+/// never itself a driver of another net and `%v` does not exist. When gate
+/// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Pair`
+/// fold with the table applied to the collapsed values and the strength taken
+/// alongside.
 fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
     if (acc == .z) return b;
     if (b == .z) return acc;
@@ -1383,17 +1465,31 @@ const Run = struct {
         // ponytail: one bit at a time. The tables are 4x4 over two planes, so a
         // plane-parallel fold is possible; do it when a wide bus resolves often
         // enough to show up, not before.
+        const tables = wiredLogic(n.kind);
         for (0..n.resolved.width) |i| {
             const at: u32 = @intCast(i);
-            // §7.9: a supply net drives at supply strength, which no continuous
-            // assignment can reach, so its own drivers never win.
-            var bit = undriven(n.kind);
-            if (n.kind != .supply0 and n.kind != .supply1) {
-                bit = .z;
-                for (n.drivers) |d| bit = wired(n.kind, bit, self.drivers[d].current.bit(at));
-                // §7.9/§7.10: where no driver supplied a value, the net type
-                // does — and a `trireg` supplies the charge it last held.
-                if (bit == .z) bit = if (n.kind == .trireg) current.bit(at) else undriven(n.kind);
+            var bit: Int.Bit = .z;
+            if (tables) {
+                // Each driver collapses on its own first, so that a strength
+                // that suppresses a value (`highz0` holding 0) drops out of the
+                // fold entirely instead of voting as a 0.
+                for (n.drivers) |d| {
+                    const dr = self.drivers[d];
+                    bit = wired(n.kind, bit, Pair.of(dr.current.bit(at), dr.s0, dr.s1).collapse());
+                }
+                if (bit == .z) bit = undriven(n.kind);
+            } else {
+                var acc: Pair = .{};
+                for (n.drivers) |d| {
+                    const dr = self.drivers[d];
+                    acc = acc.max(Pair.of(dr.current.bit(at), dr.s0, dr.s1));
+                }
+                // §7.9/§7.10: a `trireg` with no driver asserting anything is in
+                // the capacitive state, and what it asserts there is the charge
+                // it last held, at its charge strength. Checked before the net
+                // type's own pull so that a driven trireg never sees it.
+                if (n.kind == .trireg and acc.none()) acc = Pair.of(current.bit(at), n.charge, n.charge);
+                bit = acc.max(netPull(n.kind)).collapse();
             }
             setBit(n.resolved, at, bit);
         }
@@ -1759,13 +1855,17 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     for (m.nets, 0..) |n, i| {
         if (n.discipline != .none or n.is_ground or n.init != .none)
             return r.fail(n.main_tok, "disciplined, ground and wreal-initialized nets are not implemented by digital execution", .{});
+        // A.2.2.3 now PARSES on a net declaration, so it has to be refused
+        // here: a delay that is read and then dropped is a wrong answer, and a
+        // wrong answer is worse than the syntax error it replaced.
+        if (n.delay.any()) return r.fail(n.main_tok, "a net delay is not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
         const at: u32 = @intCast(values.items.len);
         try r.bind(n.name, at, n.main_tok);
         // §3.7: a net with no driver is Z, not X — except where the net type
         // itself supplies a value. That is the whole net/variable difference.
         try values.append(arena, try filled(arena, width, false, undriven(n.kind)));
-        r.nets[i] = .{ .kind = n.kind, .slot = at, .resolved = try filled(arena, width, false, .z) };
+        r.nets[i] = .{ .kind = n.kind, .slot = at, .resolved = try filled(arena, width, false, .z), .charge = n.charge };
     }
     r.values = values.items;
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
@@ -1783,6 +1883,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     for (m.assigns, 0..) |a, i| {
         const target = try r.scalarSlot(a.target);
         if (target < r.net_base) return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        if (a.delay.any()) return r.fail(a.main_tok, "a continuous assignment delay is not implemented by digital execution", .{});
         try r.checkExpr(a.value);
         var watched: std.ArrayList(u32) = .empty;
         try r.sensitivity(a.value, &watched);
@@ -1791,6 +1892,8 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             .value = a.value,
             .sensitivity = watched.items,
             .current = try filled(arena, r.values[target].width, false, .z),
+            .s0 = a.strength0,
+            .s1 = a.strength1,
         };
         try grouped[target - r.net_base].append(arena, @intCast(i));
         try r.enqueue(.{ .run_process = try r.append(.{ .continuous = @intCast(i) }) }, null, false);
@@ -2024,6 +2127,91 @@ test "IEEE1364-2005 section 7.9 wired logic resolves all drivers of one net" {
     );
 }
 
+// IEEE 1364-2005 clause 7 via §1.1, annex A.2.2.2 and A.6.1. The boundary the
+// suite's d03 fixtures own is the resolution ITSELF; what a unit test is for is
+// the three places the pair model changes an answer the value-only resolver had
+// a different one for, so that a regression is named here rather than in a
+// transcript diff.
+test "a drive strength decides which of two disagreeing drivers the net shows" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a, b;
+        \\wire w;
+        \\tri0 t;
+        \\assign (strong1, strong0) w = a, t = a;
+        \\assign (weak1, weak0) w = b;
+        \\initial begin
+        \\  a = 1; b = 0; #1 $display("6v3 %b %b", w, t);
+        \\  a = 0; b = 1; #1 $display("3v6 %b %b", w, t);
+        \\  a = 1'bx;     #1 $display("ambiguous %b %b", w, t);
+        \\  a = 1'bz;     #1 $display("removed %b %b", w, t);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+    // `t` is a tri0: its own pull(5) loses to strong(6) on both polarities and
+    // to the strong x on neither side, so the ambiguous line is x there too —
+    // and the weak driver of `w` never moves it.
+        \\6v3 1 1
+        \\3v6 0 0
+        \\ambiguous x x
+        \\removed 1 0
+        \\
+    );
+}
+
+test "a highz half suppresses that polarity outright, wired logic included" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a, b;
+        \\wire w;
+        \\wand wa;
+        \\assign (strong1, highz0) w = a, wa = a;
+        \\assign (weak1, weak0) w = b, wa = b;
+        \\initial begin
+        \\  a = 0; b = 1; #1 $display("open_drain %b %b", w, wa);
+        \\  a = 0; b = 0; #1 $display("weak_zero %b %b", w, wa);
+        \\  a = 0; b = 1'bz; #1 $display("nothing_left %b %b", w, wa);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+    // The `highz0` driver holding 0 asserts nothing at all, so it is invisible
+    // to the plain wire AND is the wand table's identity rather than a 0 vote.
+        \\open_drain 1 1
+        \\weak_zero 0 0
+        \\nothing_left z z
+        \\
+    );
+}
+
+test "a supply net outranks every strength an assign can write but its own" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a;
+        \\supply1 vdd;
+        \\supply1 v2;
+        \\assign (strong1, strong0) vdd = a;
+        \\assign (supply1, supply0) v2 = a;
+        \\initial begin
+        \\  a = 0; #1 $display("zero %b %b", vdd, v2);
+        \\  a = 1; #1 $display("one %b %b", vdd, v2);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+    // A supply-strength driver does not LOSE to the net, it TIES with it, and a
+    // tie on two nonzero sides is x. That is the line a resolver which simply
+    // ignores a supply net's drivers gets wrong.
+        \\zero 1 x
+        \\one 1 1
+        \\
+    );
+}
+
 test "the pull supply and capacitive net types supply what no driver did" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -2126,6 +2314,17 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
+    // A.2.2.2: every alternative pairs ONE 0-side spec with ONE 1-side spec,
+    // and `charge_strength` is a different production that A.2.1.3 grants only
+    // to `trireg`. A parser that read "any parenthesised strength after any net
+    // type" would accept both of these.
+    try expectRejected("module m; wire w; reg a; assign (strong0, pull0) w = a; endmodule", "pairs one 0-side with one 1-side");
+    try expectRejected("module m; wire (small) w; reg a; assign w = a; endmodule", "charge strength is only legal on a trireg");
+    // A.2.2.3 parses on both, and neither is executed yet — see the refusals in
+    // `run`. These two are what keeps a parsed-and-dropped delay from silently
+    // producing a zero-delay answer.
+    try expectRejected("`timescale 1ns/1ns\nmodule m; wire #3 w; reg a; assign w = a; endmodule", "net delay is not implemented");
+    try expectRejected("`timescale 1ns/1ns\nmodule m; wire w; reg a; assign #3 w = a; endmodule", "assignment delay is not implemented");
     // §3.9 an array has no value of its own, and a select is not an element.
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");

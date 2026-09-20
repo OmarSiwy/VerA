@@ -935,7 +935,7 @@ pub const Parser = struct {
             .kw_ground => {
                 self.pos += 1;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, .wire, true);
+                try self.parseNetNames(b, disc, .wire, true, .medium);
             },
             // §6.5.2 non-ANSI port declarations
             .kw_input, .kw_output, .kw_inout => try self.parsePortDecl(b),
@@ -955,8 +955,12 @@ pub const Parser = struct {
             => {
                 const kind = netKind(self.peek());
                 self.pos += 1;
+                // A.2.1.3: `charge_strength` sits right after the net type, and
+                // only `trireg`'s alternatives have one. §3.8's default for a
+                // `trireg` that names none is `medium`.
+                const charge: Ast.Strength = if (self.peek() == .lparen) try self.parseChargeStrength(kind) else .medium;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, kind, false);
+                try self.parseNetNames(b, disc, kind, false, charge);
             },
             // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
             // list_of_net_assignments ;`. Only the digital executor has nets
@@ -965,12 +969,18 @@ pub const Parser = struct {
             .kw_assign => {
                 if (!self.digital) return self.unsupportedItem();
                 self.pos += 1;
+                // A.8.5 `net_lvalue` begins with an identifier or a `{`, never a
+                // `(`, so the parenthesis is unambiguously A.2.2.2's.
+                var s0: Ast.Strength = .strong;
+                var s1: Ast.Strength = .strong;
+                if (self.peek() == .lparen) try self.parseDriveStrength(&s0, &s1);
+                const delay: Ast.Delay3 = if (self.peek() == .hash) try self.parseDelay3() else .{};
                 while (true) {
                     const tok = self.pos;
                     const target = try self.parseExpr();
                     _ = try self.expect(.assign_eq);
                     const value = try self.parseExpr();
-                    try b.assigns.append(self.arena, .{ .target = target, .value = value, .main_tok = tok });
+                    try b.assigns.append(self.arena, .{ .target = target, .value = value, .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
                     if (!self.eat(.comma)) break;
                 }
                 _ = try self.expect(.semicolon);
@@ -1056,7 +1066,7 @@ pub const Parser = struct {
                 }
                 const disc = try self.internTok(self.pos);
                 self.pos += 1;
-                try self.parseNetNames(b, disc, .wire, false);
+                try self.parseNetNames(b, disc, .wire, false, .medium);
             },
             else => return self.unsupportedItem(),
         }
@@ -1692,8 +1702,122 @@ pub const Parser = struct {
         };
     }
 
-    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool) Error!void {
+    /// A.2.2.2, one keyword: its IEEE 1364-2005 clause 7 level and which of the
+    /// production's two sides it may occupy. `strength0 ::= supply0 | strong0 |
+    /// pull0 | weak0` and its `highz0` partner are the 0 side; the `1` spellings
+    /// are the 1 side. `small`/`medium`/`large` are a `charge_strength`, a
+    /// DIFFERENT production that appears only in A.2.1.3's `trireg`
+    /// alternatives, so they are listed here to be recognised and refused — a
+    /// parser that accepted any parenthesised strength after any net type would
+    /// make `wire (small) w;` legal, and A.2.2.1 has no such derivation.
+    const StrengthWord = struct { level: Ast.Strength, side: u8 };
+    const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
+        .{ "supply0", StrengthWord{ .level = .supply, .side = 0 } },
+        .{ "strong0", StrengthWord{ .level = .strong, .side = 0 } },
+        .{ "pull0", StrengthWord{ .level = .pull, .side = 0 } },
+        .{ "weak0", StrengthWord{ .level = .weak, .side = 0 } },
+        .{ "highz0", StrengthWord{ .level = .highz, .side = 0 } },
+        .{ "supply1", StrengthWord{ .level = .supply, .side = 1 } },
+        .{ "strong1", StrengthWord{ .level = .strong, .side = 1 } },
+        .{ "pull1", StrengthWord{ .level = .pull, .side = 1 } },
+        .{ "weak1", StrengthWord{ .level = .weak, .side = 1 } },
+        .{ "highz1", StrengthWord{ .level = .highz, .side = 1 } },
+        // side 2: a charge strength, which belongs to neither.
+        .{ "small", StrengthWord{ .level = .small, .side = 2 } },
+        .{ "medium", StrengthWord{ .level = .medium, .side = 2 } },
+        .{ "large", StrengthWord{ .level = .large, .side = 2 } },
+    });
+
+    /// The eight drive strengths lex as `.kw_reserved` except `supply0`/
+    /// `supply1`, which are also A.2.2.1 net types and so carry their own tags.
+    /// Both paths end at the spelling, which is what A.2.2.2 is written in.
+    fn strengthWord(self: *const Parser, i: u32) ?StrengthWord {
+        return switch (self.tags[i]) {
+            .kw_reserved, .kw_supply0, .kw_supply1 => strength_words.get(self.tokenText(i)),
+            else => null,
+        };
+    }
+
+    /// A.2.2.2 `drive_strength`, whose six alternatives all say the same thing:
+    /// one 0-side spec and one 1-side spec, in either order. The caller has seen
+    /// the `(` and decided it cannot begin anything else.
+    fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) Error!void {
+        _ = try self.expect(.lparen);
+        const first_tok = self.pos;
+        const a = self.strengthWord(self.pos) orelse return self.failAt(self.pos, .E0207, "found {s}, which is not a drive strength", .{self.found(self.pos)});
+        self.pos += 1;
+        _ = try self.expect(.comma);
+        const b = self.strengthWord(self.pos) orelse return self.failAt(self.pos, .E0207, "found {s}, which is not a drive strength", .{self.found(self.pos)});
+        self.pos += 1;
+        _ = try self.expect(.rparen);
+        // `(strong0, pull0)` is derivable from no alternative of A.2.2.2, and
+        // is exactly what an implementation that lexed two strength keywords
+        // and took a maximum would wave through.
+        if (a.side == b.side or a.side == 2 or b.side == 2)
+            return self.failAt(first_tok, .E0207, "a drive strength pairs one 0-side with one 1-side strength", .{});
+        s0.* = if (a.side == 0) a.level else b.level;
+        s1.* = if (a.side == 1) a.level else b.level;
+    }
+
+    /// A.2.1.3 gives `trireg` alternatives of its own, and they are the only
+    /// ones carrying `charge_strength ::= ( small ) | ( medium ) | ( large )`.
+    /// A `drive_strength` on a net DECLARATION is a separate alternative that
+    /// nothing in this tree writes, so a parenthesis after any other net type
+    /// is refused here rather than read as the other production — which is the
+    /// cheap wrong parser that would make `wire (small) w;` legal.
+    fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength {
+        _ = try self.expect(.lparen);
+        const tok = self.pos;
+        const w = self.strengthWord(self.pos) orelse return self.failAt(tok, .E0207, "found {s}, which is not a charge strength", .{self.found(tok)});
+        self.pos += 1;
+        _ = try self.expect(.rparen);
+        if (kind != .trireg or w.side != 2)
+            return self.failAt(tok, .E0207, "a charge strength is only legal on a trireg", .{});
+        return w.level;
+    }
+
+    /// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value
+    /// [ , delay_value ] ] )`. The cursor is on the `#`.
+    ///
+    /// One value is all three transitions (IEEE 1364-2005 §7.14). Two leave
+    /// `off` unset, because the clause derives it as the SMALLER of the two and
+    /// that is arithmetic on the evaluated values, not a syntax node.
+    fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
+        _ = try self.expect(.hash);
+        if (!self.eat(.lparen)) {
+            const v = try self.parseDelayValue();
+            return .{ .rise = v, .fall = v, .off = v };
+        }
+        var out: Ast.Delay3 = .{};
+        out.rise = try self.parseDelayValue();
+        out.fall = out.rise;
+        out.off = out.rise;
+        if (self.eat(.comma)) {
+            out.fall = try self.parseDelayValue();
+            out.off = if (self.eat(.comma)) try self.parseDelayValue() else .none;
+            // A.2.2.3 stops at three. A fourth is `delay4`, which belongs to
+            // A.7.x path declarations and to no net or driver.
+            if (self.peek() == .comma)
+                return self.failAt(self.pos, .E0207, "a delay3 takes at most three values", .{});
+        }
+        _ = try self.expect(.rparen);
+        return out;
+    }
+
+    /// A.2.2.3 `delay_value`. `mintypmax_expression` is not admitted: A.2.2.3
+    /// spells it `mintypmax_expression` only inside `delay_control`, and the
+    /// `:`-separated form has no selector in this compiler to choose from.
+    fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
+        return self.parseExpr();
+    }
+
+    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, charge: Ast.Strength) Error!void {
         const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
+        // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
+        // belongs to the NET, not to the declaration's optional assignment:
+        // `wire #3 y = ~a;` delays y's own transition.
+        const delay: Ast.Delay3 = if (self.peek() == .hash) try self.parseDelay3() else .{};
+        if (delay.any() and !self.digital) return self.failAt(self.pos, .E0207, "a net delay has no meaning outside a digital design element", .{});
         while (true) {
             const tok = self.pos;
             // Annex F.2.1 step 3 / §3.10 order 1: an OUT-OF-CONTEXT declaration,
@@ -1753,6 +1877,8 @@ pub const Parser = struct {
                     .discipline = disc,
                     .is_ground = is_ground,
                     .range = range,
+                    .charge = charge,
+                    .delay = delay,
                     .init = nodeset,
                     .main_tok = tok,
                 });
