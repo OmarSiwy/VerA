@@ -517,6 +517,13 @@ noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
 noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
+/// A.6.5 `disable` targets — the enclosing named blocks, innermost last.
+named_blocks: std.ArrayList(NamedBlockCtx) = .empty,
+/// §5.3.2 "All identifiers declared within a named sequential block can be
+/// accessed outside the scope in which they are declared." The qualified
+/// `<label>.<local>` spellings `publishBlockLocals` bound, which is what tells
+/// them apart from §6.7.1's forbidden cross-instance variable read (E0910).
+block_locals: std.StringHashMapUnmanaged(void) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
 ret: ?RetCtx = null,
 /// §4.7.2/§6.8 the local `parameter` declarations of the function currently
@@ -811,6 +818,11 @@ const ArrayInfo = struct {
     ty: Ty,
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
+/// A.6.5 `disable hierarchical_block_identifier` target: §5.3's "the control
+/// shall pass out of the block", i.e. that block's own exit. One entry per
+/// ENCLOSING named block, so an inner and an outer block of the same nesting
+/// are two different targets chosen by the name and by nothing else.
+const NamedBlockCtx = struct { name: []const u8, exit: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// `wrote` is §5.6.1.3's retention FLAG beside the value: 0.0 in the entry
 /// block, 1.0 after every `<+` on this (access, branch), back to 0.0 when the
@@ -959,6 +971,8 @@ pub fn deinit(self: *Lower) void {
     self.param_index.deinit(gpa);
     self.arrays.deinit(gpa);
     self.loops.deinit(gpa);
+    self.named_blocks.deinit(gpa);
+    self.block_locals.deinit(gpa);
     self.inlining.deinit(gpa);
     self.displays.deinit(gpa);
     self.deferred_displays.deinit(gpa);
@@ -3848,7 +3862,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
         .repeat_stmt => |s| try self.lowerRepeat(s.count, s.body), // §5.9
         .event_control => |s| try self.lowerEventControl(s.event, s.body), // §5.10
         .event_trigger => |s| try self.lowerEventTrigger(tok, self.file.str(s.name)), // §5.10.4
-        .disable => try self.lowerDisable(tok),
+        .disable => |s| try self.lowerDisable(tok, self.file.str(s.name)),
         .sys_task => |s| try self.lowerSysTask(tok, self.file.str(s.name), s.args),
         .jump => |j| try self.lowerJump(tok, j.kind, j.value),
     }
@@ -3875,13 +3889,35 @@ fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
 /// an analog block can legally contain. There is no clause-5 section for
 /// `disable` (5.11 is `jump_statement`: return/break/continue), so annex A is
 /// the citation.
-fn lowerDisable(self: *Lower, tok: u32) Oom!void {
+fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0401);
         b.help("only `@(<event>) disable <block>;` is legal", .{});
         return b.emit();
     }
-    return self.err(tok, .E0402, "", .{});
+    // A.6.5's operand is a block (or task) identifier and nothing else, so a
+    // name that reaches no enclosing block label has no derivation. Searched
+    // INNERMOST-first: §6.7 makes a block label a scope name, and the nearest
+    // one is the one in scope.
+    var i = self.named_blocks.items.len;
+    while (i > 0) {
+        i -= 1;
+        const nb = self.named_blocks.items[i];
+        if (!std.mem.eql(u8, nb.name, name)) continue;
+        // §5.3: "the control shall pass out of the block after the last
+        // statement is executed" — a disable passes out of it EARLY, which is
+        // the same destination, so the statements AFTER the block still run.
+        try self.gotoBlock(nb.exit);
+        return self.startUnreachable();
+    }
+    // ponytail: hierarchical spellings (`disable top.dut.seg`) are not resolved
+    // — elaboration flattens a label into the instance path, so an enclosing
+    // block's flat name is what `name` already is. Walk the instance tree here
+    // when a fixture disables a block it does not lexically enclose.
+    var b = self.errWith(tok, .E0402);
+    b.msg("`{s}` names no named block in scope", .{name});
+    b.help("`disable` takes the label of an enclosing named block", .{});
+    return b.emit();
 }
 
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
@@ -3891,8 +3927,58 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
     try self.checkOneItemPerScope(b.vars);
     for (b.vars) |*v| try self.declareVarDecl(v, .local);
+    if (b.name != .none) try self.publishBlockLocals(self.file.str(b.name), b);
+    // §6.7 a labelled block is a scope, and A.6.5 lets `disable` name it. The
+    // exit block is where control lands both ways — falling off the end and
+    // being disabled — so the join is the same one either way.
+    const exit: ?Mir.Block = if (b.name == .none) null else blk: {
+        const e = try self.mir.addBlock(self.arena);
+        try self.named_blocks.append(self.arena, .{ .name = self.file.str(b.name), .exit = e });
+        break :blk e;
+    };
     // ponytail: the only statement-list caller keeps its source-order loop here.
     for (b.body) |s| try self.lowerStmt(s);
+    if (exit) |e| {
+        _ = self.named_blocks.pop();
+        try self.gotoBlock(e);
+        try self.builder.sealBlock(e);
+        self.cur = e;
+    }
+}
+
+/// §5.3.2: "All identifiers declared within a named sequential block can be
+/// accessed outside the scope in which they are declared." The block's scope is
+/// popped by `closeScope`, so the outside spelling needs a SECOND binding that
+/// is not shadow-logged — under `<label>.<local>`, which is the path
+/// `flatName` already builds for `myscope.localVar`.
+///
+/// The assign direction stays closed: "Named block variables cannot be assigned
+/// outside the scope of the block in which they are declared", which `lowerAssign`
+/// refuses as E0316 because a `.hier_ident` is never an lvalue.
+///
+/// ponytail: last declaration wins when the same label runs twice (a §6.6.1
+/// unrolled `for` body). Nothing can name one iteration's copy apart from
+/// another, so there is nothing for an ordinal to disambiguate yet.
+fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!void {
+    for (b.vars) |v| {
+        const local = self.file.str(v.name);
+        // Arrays are scalarized into `name[i]` entries, which have no scalar
+        // slot under the bare name; §5.3.2's example is a scalar and no fixture
+        // names an element hierarchically.
+        const slot = self.vars.get(local) orelse continue;
+        const q = try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ label, Elaborate.sep, local });
+        try self.vars.put(self.arena, q, slot);
+        try self.block_locals.put(self.arena, q, {});
+    }
+    // "Parameters declared within a named block have local scope" — local to
+    // ASSIGNMENT, which §6.3 override already cannot reach; the read is the
+    // same "all identifiers" sentence. They live in `consts`, so E0910 (a
+    // variable read) never sees them.
+    for (b.params) |p| {
+        const c = self.consts.get(self.file.str(p.name)) orelse continue;
+        const q = try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ label, Elaborate.sep, self.file.str(p.name) });
+        try self.consts.put(self.arena, q, c);
+    }
 }
 
 /// §5.7 procedural assignment. The target is an lvalue expression so array
@@ -7137,15 +7223,20 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // because the resolution succeeds — a flattened child's variable is
             // an ordinary variable of the flat design under its path name, so
             // nothing else would stop the read.
-            if (self.vars.contains(name)) {
+            // …EXCEPT a §5.3.2 named-block local, which the LRM spells out the
+            // other way: "All identifiers declared within a named sequential
+            // block can be accessed outside the scope in which they are
+            // declared." §6.7.1 is about reaching into another INSTANCE;
+            // `publishBlockLocals` bound only labels of this analog block.
+            if (self.vars.contains(name) and !self.block_locals.contains(name)) {
                 var vb = self.errWith(self.file.exprs.mainTok(e), .E0910);
                 vb.msg("`{s}`", .{name});
                 vb.note("§6.7.1 permits a hierarchical parameter, branch probe or analog function; a variable is the one entry on that list it forbids", .{});
                 try vb.emit();
                 return poison;
             }
-            if (self.param_index.contains(name) or
-                self.consts.contains(name) or self.node_voltages.contains(name))
+            if (self.param_index.contains(name) or self.consts.contains(name) or
+                self.node_voltages.contains(name) or self.block_locals.contains(name))
                 return self.lookupName(e, name);
             var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
             b.msg("`{s}` names nothing in the elaborated design", .{name});
