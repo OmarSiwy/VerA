@@ -2677,6 +2677,10 @@ pub const Gen = struct {
         /// §4.6.4.1/.2/.3 the source's label, empty when unnamed. See
         /// `Lower.NoiseSrc.name` for why it never merges rows.
         name: []const u8 = "",
+        /// §4.6.4.6 the factor this branch applies to the generator, rv-resolved
+        /// like `pwr`. `.f_zero` means the source never reached a contributed
+        /// value, which cannot happen through `planNoise` and is read as 1.
+        coeff: Mir.Value,
     };
 
     /// Flatten every contribution's generator set into `noise_rows`, in the
@@ -2731,6 +2735,7 @@ pub const Gen = struct {
                     .exp = self.an.rv(s.exp),
                     .table = table,
                     .name = s.name,
+                    .coeff = if (s.coeff == .f_zero) .f_one else self.an.rv(s.coeff),
                 });
             }
         }
@@ -2960,10 +2965,13 @@ pub const Gen = struct {
         //
         // The EXPONENT is exempt: a constant renders inline, because it is only
         // ever read on a row whose power is non-zero — i.e. one that executed.
+        // §4.6.4.6's coefficient joins them on the exponent's terms: a constant
+        // factor renders inline, and one that depends on the bias
+        // (`I(a,b) <+ V(a,b)*white_noise(p)`) is a core live-out like the power.
         for (self.noise_rows) |nr| {
-            for ([_]Mir.Value{ nr.pwr, nr.exp }, 0..) |v, k| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }, 0..) |v, k| {
                 if (v == .f_zero) continue;
-                if (k == 1 and self.psdConst(v) != null) continue;
+                if (k != 0 and self.psdConst(v) != null) continue;
                 try jobs.append(self.arena, .{
                     // Never written: like `$limit`/`$retained`, this job exists
                     // only to put its target in the core.
@@ -6905,7 +6913,7 @@ pub const Gen = struct {
         const at_inst = self.out.items.len;
         try self.w("inst: *const Instance) [noise_gens.len]contract.PsdTerm {{\n", .{});
         const uses_core = for (self.noise_rows) |nr| {
-            if (self.coreIdx(nr.pwr) != null or self.coreIdx(nr.exp) != null) break true;
+            if (self.coreIdx(nr.pwr) != null or self.coreIdx(nr.exp) != null or self.coreIdx(nr.coeff) != null) break true;
         } else false;
         if (uses_core) {
             try self.w("    var xr: [n_u]R = undefined;\n", .{});
@@ -6918,14 +6926,20 @@ pub const Gen = struct {
         }
         try self.w("    return .{{\n", .{});
         for (self.noise_rows) |nr| {
+            // §4.6.4.6's per-use factor. It rides beside the PSD rather than
+            // being folded into it: a §4.6.4.3 table row's spectrum is comptime
+            // data that cannot absorb a bias-dependent factor, and the cross
+            // term between two rows sharing a source needs the two coefficients
+            // separately — their PRODUCT, sign and all, is the cross-spectrum.
+            const coeff = try self.psdRef(nr.coeff, true);
             switch (nr.kind) {
                 // §4.6.4.3/.4 the table IS the spectrum: anything here would be
                 // added to it, so the parametric part of a table row is zero.
-                .table, .table_log => try self.w("        .{{ .white = 0 }}, // noise_tables[{d}]\n", .{nr.table.?}),
-                .flicker => try self.w("        .{{ .white = 0, .flicker = {s}, .ef = {s} }},\n", .{
-                    try self.psdRef(nr.pwr, false), try self.psdRef(nr.exp, true),
+                .table, .table_log => try self.w("        .{{ .white = 0, .coeff = {s} }}, // noise_tables[{d}]\n", .{ coeff, nr.table.? }),
+                .flicker => try self.w("        .{{ .white = 0, .flicker = {s}, .ef = {s}, .coeff = {s} }},\n", .{
+                    try self.psdRef(nr.pwr, false), try self.psdRef(nr.exp, true), coeff,
                 }),
-                .thermal => try self.w("        .{{ .white = {s} }},\n", .{try self.psdRef(nr.pwr, false)}),
+                .thermal => try self.w("        .{{ .white = {s}, .coeff = {s} }},\n", .{ try self.psdRef(nr.pwr, false), coeff }),
             }
         }
         try self.w("    }};\n}}\n\n", .{});
@@ -9410,11 +9424,63 @@ test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own inter
     );
     // The parametric half of a table row is ZERO, or a host that adds
     // `white + flicker/f^ef` to the table's answer would double-count.
+    // §4.6.4.6's coefficient is 1 on both: each table is contributed with no
+    // factor, so the row scales its own spectrum by exactly one.
     const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
     try std.testing.expectEqual(
         @as(usize, 2),
-        std.mem.count(u8, src[at..], ".{ .white = 0 }, // noise_tables["),
+        std.mem.count(u8, src[at..], ".{ .white = 0, .coeff = 1 }, // noise_tables["),
     );
+}
+
+test "codegen: §4.6.4.6 each use of a shared generator exports its own coefficient" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module shared(a, b, c, d);
+        \\  inout a, b, c, d;
+        \\  electrical a, b, c, d;
+        \\  parameter real pwr = 1e-18;
+        \\  real nz;
+        \\  analog begin
+        \\    nz = white_noise(pwr, "shared");
+        \\    V(a, b) <+ 2.0 * nz;
+        \\    V(d, c) <+ 3.0 * nz;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // ONE generator — both rows carry `.source = 0` — with TWO coefficients.
+    // Without them both rows report the raw 1e-18 and a host computes this
+    // module's output noise 4x and 9x low.
+    const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = 2") != null);
+    // §1.3.1.2: `V(d,c)` drives the same branch as `V(c,d)` with the sign
+    // flipped, and the SIGN is what separates correlation from
+    // anti-correlation — so it has to survive into the export.
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = -3") != null);
+}
+
+test "codegen: §4.6.4.6 a generator no single factor describes keeps coefficient 1" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module sq(a, b);
+        \\  inout a, b;
+        \\  electrical a, b;
+        \\  real nz;
+        \\  analog begin
+        \\    nz = white_noise(1e-18);
+        \\    I(a, b) <+ nz * nz;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // A generator squared is not a linear source, so there is no coefficient
+    // to report and the row falls back to the 1 it carried before the field
+    // existed rather than inventing one.
+    const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = 1") != null);
 }
 
 test "codegen: §4.6.4.6 one tabulated source on two branches is one table" {

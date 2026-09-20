@@ -662,9 +662,9 @@ const sim_state_fields = [_]SimStateField{
 /// shared source) and `161_partially_correlated_noise.va` (Example 2, shared +
 /// unshared).
 ///
-/// Still not expressible: the per-use scaling coefficient (`c1*n` vs `c2*n`) —
-/// a `coeff` lands with the `noisePsd` hook, which is the first thing that
-/// could evaluate it.
+/// The per-use scaling coefficient (`c1*n` vs `c2*n`) landed where this note
+/// said it would: `PsdTerm.coeff`, because it can depend on the bias and only
+/// the `noisePsd` hook is evaluated at one.
 ///
 /// §4.6.4.3/.4 `noise_table`/`noise_table_log` are the `table` kind, and their
 /// PSD is `noise_tables[table.?]` rather than anything `noisePsd` can return —
@@ -777,12 +777,42 @@ pub fn noiseTableAt(t: NoiseTable, f: f64) f64 {
 ///
 /// and a host that simply ADDS the two is right for both, because each shape
 /// is zero where the other one speaks.
+///
+/// `coeff` MULTIPLIES whichever of those two shapes this row has, and it is not
+/// optional arithmetic — see its own doc.
 pub const PsdTerm = struct {
     white: f64,
     flicker: f64 = 0,
     ef: f64 = 1,
     corr_with: ?u8 = null,
     corr: f64 = 0,
+    /// §4.6.4.6 the factor the CONTRIBUTION applies to this generator: the `c1`
+    /// of `V(a,b) <+ c1*n`. The density the branch actually carries is
+    ///
+    ///     S_k(f) = coeff² · (white + flicker/f^ef)          parametric rows
+    ///     S_k(f) = coeff² · noiseTableAt(noise_tables[…], f) table rows
+    ///
+    /// **A host that ignores this field is low by c² on any scaled source**,
+    /// silently — which is what VerA did before the field existed, because
+    /// there was nowhere to put the factor.
+    ///
+    /// Here and not folded into `white`, for two reasons that each rule it out
+    /// on their own. A §4.6.4.3 table row's spectrum is COMPTIME data and
+    /// cannot absorb a factor that may depend on the bias — and it may:
+    /// `I(a,b) <+ V(a,b)*white_noise(p)` is a legal modulated source, which is
+    /// why this lives on the per-bias `PsdTerm` and not on `NoiseGen`. And the
+    /// §4.6.4.6 cross term between two rows sharing a `source` is
+    ///
+    ///     S_ij(f) = coeff_i · coeff_j · (the shared generator's own spectrum)
+    ///
+    /// whose SIGN is the whole difference between correlation and
+    /// anti-correlation. A squared density cannot carry it, so the field is
+    /// signed and only the host squares it.
+    ///
+    /// 1.0 for the overwhelmingly common `I(a,b) <+ white_noise(pwr)`, and 1.0
+    /// for a use VerA could not reduce to a single factor — a generator
+    /// squared, or inside a call — where no coefficient exists to report.
+    coeff: f64 = 1,
 };
 
 /// Operating-point output variable metadata. Mirrors `noise_gens`: an optional

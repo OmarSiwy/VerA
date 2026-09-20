@@ -32,10 +32,17 @@
 // is still 4e-18 and 9e-18 — the assertion is about the spectrum, not about
 // which field carries the factor.
 //
-// Today both rows export white = 1e-18: `tools/contract.zig`'s own NoiseGen
-// comment says so ("Still not expressible: the per-use scaling coefficient
-// (c1*n vs c2*n)"). So the output noise of this module is a factor of 4 (and 9)
-// low, silently.
+// VerA does the second: `noisePsd(...)[k].white` is the raw pwr and
+// `.coeff` is the branch's own factor, so the effective density is
+// `coeff²·white`. It carries the factor beside the power rather than inside it
+// because a §4.6.4.3 table row's spectrum is comptime data that cannot absorb
+// a bias-dependent factor, and because the cross term needs the two
+// coefficients separately — their product, SIGN included, is the
+// cross-spectrum, and no squared density can say "anti-correlated".
+//
+// Both rows exported white = 1e-18 and nothing else until the coefficient
+// landed, which made this module's output noise a factor of 4 (and 9) low,
+// silently.
 //
 // Contributed as POTENTIAL sources, exactly as the clause writes them, so the
 // units are V²/Hz and the rows are potential rows.
@@ -44,9 +51,10 @@
 // else. §4.6.4.6 is a statement about what a host must be handed — one source
 // id shared by two rows, each row scaled by its own coefficient — and §4.6.4
 // gives an active noise function no deterministic scalar value a `CHECK` could
-// read back. The fixture fails today at `//!` directive: BadSyntax
-// (`validNoiseEntry`, lib/backend/tb.zig:341); once the directive lands it
-// fails again on `white=4e-18` against the 1e-18 both rows actually export.
+// read back. The `white=` the runner grades is the EFFECTIVE density
+// `coeff²·white`, which is what makes this row a statement about the spectrum
+// and not about which exported field an implementation chose to put the factor
+// in.
 //
 // An earlier draft padded that out with three `CHECK`s that cannot go red on
 // any compiler: `c1*c1*pwr` against 4e-18, `c2*c2*pwr` against 9e-18, and
@@ -76,7 +84,6 @@
 //
 //! lrm 4.6.4.6
 //! lrm 4.5.6
-//! xfail the per-use coefficient does not reach the export: both rows report white = pwr = 1e-18 instead of c1²·pwr and c2²·pwr, so a host computes this module's output noise 4x (and 9x) low. tools/contract.zig:665 names the fix — a `coeff` on PsdTerm, evaluated by noisePsd because it may depend on the bias, with S_k(f) = coeff²·(white + flicker/f^ef) and the §4.6.4.6 cross term coeff_i·coeff_j·pwr. Delete this line and rewrite the two want values when it lands.
 //! noise thermal(a,b)#0 name=shared white=4e-18
 //! noise thermal(c,d)#0 name=shared white=9e-18
 //! analysis noise
