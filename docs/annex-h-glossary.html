@@ -66,7 +66,7 @@ dd { margin-left: 2.5rem; }
 <dd>The conditional and iterative statements controlling the behavior of a module. These statements evaluate arbitrary variables (counters, flags, and tokens) to control the operation of different sections of a behavioral description.</dd>
 
 <dt>child module</dt>
-<dd>A module instantiated inside another, &ldquo;parent&rdquo; module. A complete definition of the child module needs to be defined somewhere. A child module is also known as <em>submodule</em> or <em>instantiated module</em>.</dd>
+<dd>A module instantiated inside another, &ldquo;parent&rdquo; module. A complete definition of the child module needs to be defined somewhere. A child module is also known as <em>instantiated module</em>.</dd>
 </dl>
 
 <h2 id="glossary-f">F</h2>
@@ -107,14 +107,11 @@ dd { margin-left: 2.5rem; }
 
 <h2 id="glossary-n">N</h2>
 <dl>
-<dt>nesting level</dt>
-<dd>One block within a behavioral description, delimited by a pair of matching keywords such as <code>begin</code>-<code>end</code> or <code>discipline</code>-<code>enddiscipline</code>.</dd>
+<dt>net declaration</dt>
+<dd>The statement in a module definition identifying the names of the nets associated with the module ports or local to the module. A net declaration also identifies the discipline of the net, which in turn identifies the access functions.</dd>
 
 <dt>node</dt>
 <dd>A connection point in the system, with access functions for potential and/or flow through an underlying discipline.</dd>
-
-<dt>node declaration</dt>
-<dd>The statement in a module definition identifying the names of the nets associated with the module ports or local to the module. A net declaration also identifies the discipline of the net, which in turn identifies the access functions.</dd>
 
 <dt>NR method</dt>
 <dd>Newton-Raphson method. A generalized method for solving systems of nonlinear algebraic equations by breaking them into a series of many small linear operations ideally suited for computer processing.</dd>
@@ -123,7 +120,7 @@ dd { margin-left: 2.5rem; }
 <h2 id="glossary-p">P</h2>
 <dl>
 <dt>parameter</dt>
-<dd>A constant for characterizing the behavior of an instance of a module. Parameters are defined in the first section of a module, the module interface declarations, and can be specified each time a module is called in a netlist instance statement.</dd>
+<dd>A constant for characterizing the behavior of an instance of a module. Parameters are defined via a parameter declaration statement in the module definition, and can be specified each time a module is called in a netlist instance statement.</dd>
 
 <dt>parameter declaration</dt>
 <dd>The statement in a module definition which defines the parameters of that module.</dd>
@@ -147,16 +144,13 @@ dd { margin-left: 2.5rem; }
 <dd>A convention for determining whether the value of a node, the flow through a branch, the value across a branch, or the flow in or out of a terminal, is positive or negative.</dd>
 
 <dt>reference node</dt>
-<dd>The global node (which equals zero (<code>0</code>)) against whose potentials all node values are measured. Nets declared as <code>ground</code> shall be bound to the reference node.</dd>
-
-<dt>run time binding</dt>
-<dd>The conditional introduction and removal of value and flow sources during a simulation. A value source can replace a flow source and vice-versa. Binding a source to a specific node or branch prevents it from going into an unknown state.</dd>
+<dd>A globalanalog node (which equals zero (<code>0</code>)) against whose potentials all node values are measured. Nets declared as <code>ground</code> shall be bound to the reference node.</dd>
 </dl>
 
 <h2 id="glossary-s">S</h2>
 <dl>
 <dt>scope</dt>
-<dd>The current nesting level of a block statement, which includes all lines of code within one set of braces in a module definition.</dd>
+<dd>The current level of a block statement, which includes all lines of code within one set of braces in a module definition.</dd>
 
 <dt>structural definitions</dt>
 <dd>Instantiating modules inside other modules through the use of module definitions and declarations to create a hierarchical structure in the module&rsquo;s behavioral description.</dd>
@@ -171,10 +165,10 @@ dd { margin-left: 2.5rem; }
 <h2 id="glossary-v">V</h2>
 <dl>
 <dt>Verilog-A</dt>
-<dd>A subset of Verilog-AMS detailing the analog version of IEEE Std 1364-2005 Verilog HDL (see <a href="annex-c-veriloga.html">Annex C</a>). This is a language for the behavioral description of continuous-time systems, which uses a syntax similar to the IEEE Std 1364-2005 Verilog HDL specification.</dd>
+<dd>A subset of Verilog-AMS detailing the analog version of IEEE Std 1364 Verilog (see <a href="annex-c-veriloga.html">Annex C</a>). This is a language for the behavioral description of continuous-time systems, which uses a syntax similar to the IEEE Std 1364 Verilog specification.</dd>
 
 <dt>Verilog-AMS</dt>
-<dd>Mixed-signal version of IEEE Std 1364-2005 Verilog HDL. A language for the behavioral description of continuous-time and discrete-time systems based on the IEEE Std 1364-2005 Verilog HDL specification.</dd>
+<dd>Mixed-signal version of IEEE Std 1364 Verilog. A language for the behavioral description of continuous-time and discrete-time systems based on the IEEE Std 1364 Verilog specification.</dd>
 </dl>
 
 </body></html>

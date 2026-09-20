@@ -61,7 +61,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>With the exception of certain keywords required for Verilog-AMS HDL, Clause 2 shall be applicable to both Verilog-A and Verilog-AMS HDL. All Verilog-AMS HDL keywords shall be supported by Verilog-A as reserved words, but IEEE Std 1364 Verilog and Verilog-AMS HDL specific keywords are not used in Verilog-A. The following Verilog-AMS HDL keywords are not required to be supported for a fully compliant Verilog-A subset:</p>
 
-<p>From 2.6, Numbers: support for <code>x</code> and <code>z</code> values is limited in the <code>analog</code> block to the mixed signal context, as defined in 7.3.2. In the same paragraph, the use of the question mark character as an alternative for z is also limited to the mixed signal context.</p>
+<p>From 2.6, Numbers: support for <code>X</code> and <code>Z</code> values is limited in the <code>analog</code> block to the mixed signal context, as defined in 7.3.2. In the same paragraph, the use of the question mark character as an alternative for z is also limited to the mixed signal context.</p>
 
 <p>From 2.8.2, Keywords: certain keywords are not applicable in Verilog-A, as defined in Annex C.16.</p>
 
@@ -102,6 +102,8 @@ nav a:hover { text-decoration: underline; }
 
 <p>Clause 7 only applies to Verilog-AMS HDL.</p>
 
+<div class="note"><strong>Source fidelity:</strong> the source prints <code>Clause&nbsp;7only</code> (missing space); the space is supplied here.</div>
+
 <h2 id="sC-10">C.10 Scheduling semantics</h2>
 
 <p>The analog simulation cycle is applicable to both Verilog-AMS HDL and Verilog-A. The mixed-signal simulation cycle from 8.2 is only applicable to Verilog-AMS HDL.</p>
@@ -130,16 +132,17 @@ nav a:hover { text-decoration: underline; }
 
 <p>The keywords in Annex B are the complete set of Verilog-AMS HDL keywords, including those from IEEE Std 1364 Verilog. The following keywords as defined in this LRM are not used by Verilog-A:</p>
 
-<pre><code>connect
-connectmodule
-connectrules
-driver_update
-endconnectrules
-merged
-net_resolution
-resolvedto
-split
-wreal</code></pre>
+<ul>
+<li><code>connect</code></li>
+<li><code>connectmodule</code></li>
+<li><code>connectrules</code></li>
+<li><code>driver_update</code></li>
+<li><code>endconnectrules</code></li>
+<li><code>merged</code></li>
+<li><code>resolveto</code></li>
+<li><code>split</code></li>
+<li><code>wreal</code></li>
+</ul>
 
 <div class="note">NOTE&mdash;All keywords of Verilog-AMS HDL are reserved words for Verilog-A.</div>
 

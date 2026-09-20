@@ -147,10 +147,10 @@ nav a:hover { text-decoration: underline; }
 <table>
 <tr><th>Function name</th><th>Supported in digital context</th><th>Supported in analog context</th></tr>
 <tr><td><code>$bitstoreal</code></td><td>Yes</td><td>Yes</td></tr>
-<tr><td><code>$itor</code></td><td>Yes</td><td>No</td></tr>
+<tr><td><code>$itor</code></td><td>Yes</td><td>Yes</td></tr>
 <tr><td><code>$signed</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$realtobits</code></td><td>Yes</td><td>Yes</td></tr>
-<tr><td><code>$rtoi</code></td><td>Yes</td><td>No</td></tr>
+<tr><td><code>$rtoi</code></td><td>Yes</td><td>Yes</td></tr>
 <tr><td><code>$unsigned</code></td><td>Yes</td><td>No</td></tr>
 </table>
 
@@ -268,13 +268,14 @@ nav a:hover { text-decoration: underline; }
 <tr><td><code>$table_model</code></td><td>Yes</td><td>Yes</td></tr>
 </table>
 
-<h3>Table 9-19 &mdash; Connectmodule driver access system functions and operator</h3>
+<h3>Table 9-19 &mdash; Connectmodule driver and receiver access system functions and operator</h3>
 <table>
 <tr><th>Function/operator name</th><th>Supported in digital context of connectmodule</th><th>Supported in analog context of connectmodule</th></tr>
 <tr><td><code>$driver_count</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$driver_state</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$driver_strength</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>@(driver_update)</code></td><td>Yes</td><td>No</td></tr>
+<tr><td><code>$receiver_count</code></td><td>Yes</td><td>Yes</td></tr>
 </table>
 
 <h3>Table 9-20 &mdash; Supplementary Connectmodule Driver Access System Functions</h3>
@@ -369,7 +370,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>The formatting specification <code>%l</code> (or <code>%L</code>) is defined for displaying the library information of the specific module. This information shall be displayed as "<i>library.cell</i>" corresponding to the library name from which the current module instance was extracted and the cell name of the current module instance. See Clause 13 of IEEE Std 1364 Verilog for information on libraries and configuring designs.</p>
 
-<p>Any expression argument with no corresponding format specification is displayed using the default decimal format in <code>$strobe</code>.</p>
+<p>Any expression argument which has no corresponding format specification is displayed using the default decimal format in <code>$strobe</code>.</p>
 
 <p>The format specifications in Table 9-23 are used for real numbers and have the full formatting capabilities available in the C language. For example, the format specification <code>%10.3g</code> sets a minimum field width of 10 with three (3) fractional digits.</p>
 
@@ -389,7 +390,7 @@ nav a:hover { text-decoration: underline; }
 <p>The <code>%s</code> format specifier is used to print ASCII codes as characters. For each <code>%s</code> specification which appears in a string, a corresponding argument shall follow the string in the argument list. The associated argument is interpreted as a sequence of 8-bit hexadecimal ASCII codes, with each 8 bits representing a single character. If the argument is a variable, its value shall be right-justified so the right-most bit of the value is the least-significant bit of the last character in the string. No termination character or value is required at the end of a string and leading zeros (<code>0</code>) are never printed.</p>
 
 <h3 id="s9.4.6">9.4.6 Behavior of the Display Tasks in the Analog Block During Iterative Solving</h3>
-<p>All display tasks, except <code>$debug</code>, shall not display output unless an iteration has been accepted.</p>
+<p>All the display tasks, except <code>$debug</code>, shall not display output unless an iteration has been accepted.</p>
 
 <h3 id="s9.4.7">9.4.7 Extensions to the Display Tasks in the Digital Context</h3>
 <p>For <code>$strobe</code>, <code>$display</code>, <code>$write</code>, and <code>$monitor</code>: the <code>%r</code> (or <code>%R</code>) format specifier may be used on real expressions in the digital context.</p>
@@ -457,7 +458,7 @@ file_close_task ::=
 <h4 id="s9.5.1.1">9.5.1.1 Opening and Closing Files During Multiple Analyses</h4>
 <p>Verilog AMS HDL supports multiple analyses during the same simulation process (see <a href="ch8-scheduling.html">Clause 8</a>).</p>
 
-<p>If a file is opened in a write mode in the first analysis and reopened in that write mode in a following analysis, content written from the following analyses shall be appended to content written during previous analyses.</p>
+<p>If a file is opened in a write mode in the first analysis and reopened in that write mode in following analysis, then content written from the following analyses shall be appended to the content written during the previous analyses.</p>
 
 <h4 id="s9.5.1.2">9.5.1.2 Sharing of File Descriptors Between the Analog and Digital Contexts</h4>
 <p>The file I/O system functions and tasks in both the analog and digital contexts can use file descriptors opened in either context, if the file descriptors are opened for writing or appending.</p>
@@ -466,12 +467,13 @@ file_close_task ::=
 
 <p>The syntax for <code>$fdisplay</code>, <code>$fwrite</code>, <code>$fmonitor</code>, <code>$fstrobe</code> and <code>$fdebug</code> system tasks is shown in <em>Syntax 9-3</em>.</p>
 
-<pre class="syntax"><!-- sic, PDF erratum: the LRM prints "file_open_function" here -->file_open_function ::=
+<pre class="syntax">file_open_function ::=
     file_output_task_name ( fd [, list_of_arguments] ) ;
 
 file_output_task_name ::=
     $fdisplay | $fwrite | $fstrobe | $fmonitor | $fdebug</pre>
 <p><em>Syntax 9-3&mdash;Syntax for file output system tasks</em></p>
+<div class="note"><strong>Source fidelity:</strong> the LRM names the first production <code>file_open_function</code> although it describes the file output tasks; this appears to be a typographical error in the published document and is reproduced here as printed.</div>
 
 <p>Each of the formatted display tasks &mdash; <code>$display</code>, <code>$write</code>, <code>$monitor</code>, and <code>$strobe</code> &mdash; has a counterpart that writes to specific files as opposed to the standard output. These counterpart tasks &mdash; <code>$fdisplay</code>, <code>$fwrite</code>, <code>$fmonitor</code>, <code>$fstrobe</code>, and <code>$fdebug</code> &mdash; accept the same type of arguments as the tasks upon which they are based, with one exception: The first argument shall be either a multichannel descriptor or a file descriptor, which indicates where to direct the file output. Multichannel descriptors are described in detail in <a href="#s9.5.1">9.5.1</a>. A multichannel descriptor is either a variable or the result of an expression that takes the form of a 32-bit unsigned integer value.</p>
 
@@ -587,7 +589,7 @@ code = $rewind( fd );</code></pre>
 <pre><code>$fflush( mcd );
 $fflush( fd );
 $fflush( );</code></pre>
-<p>Writes any buffered output to the file(s) specified by <code>mcd</code>, to the file specified by <code>fd</code>, or if invoked with no arguments, to all open files.</p>
+<p>Writes any buffered output to the file(s) specified by <code>mcd</code>, to the file specified by <code>fd</code>, or if <code>$fflush</code> is invoked with no arguments, to all open files.</p>
 
 <h3 id="s9.5.7">9.5.7 I/O Error Status</h3>
 <p>Should any error be detected by one of the file I/O routines, an error code is returned. Often this is sufficient for normal operation (i.e., if the opening of an optional configuration file fails, the application typically would simply continue using default values). However, sometimes it is useful to obtain more information about the error for correct application operation. In this case, the <code>$ferror</code> function can be used:</p>
@@ -599,7 +601,7 @@ errno = $ferror( fd, str );</code></pre>
 <p>For example:</p>
 <pre><code>integer code;
 code = $feof( fd );</code></pre>
-<p>Returns a nonzero value when EOF has previously been detected reading <code>fd</code>; returns zero otherwise.</p>
+<p>Returns a nonzero value when EOF has previously been detected reading the input file <code>fd</code>. It returns zero otherwise.</p>
 
 <h3 id="s9.5.9">9.5.9 Behavior of the File I/O Tasks in the Analog Block During Iterative Solving</h3>
 
@@ -676,6 +678,7 @@ severity_task ::= $error | $warning | $info
 
 finish_number ::= 0 | 1 | 2</pre>
 <p><em>Syntax 9-7&mdash;Assertion severity tasks</em></p>
+<div class="note"><strong>Source fidelity:</strong> the LRM prints the <code>nonfatal_message_task</code> production with unbalanced brackets: <code>severity_task [ ( [ message_argument { , message_argument] } ] ) ] ;</code>. The balanced form <code>severity_task [ ( [ message_argument { , message_argument } ] ) ] ;</code> is given above as an editorial correction.</div>
 
 <p>The behavior of assert severity tasks is as follows:</p>
 <ul>
@@ -721,7 +724,7 @@ finish_number ::= 0 | 1 | 2</pre>
 
 <!-- 9.11 Conversion -->
 <h2 id="s9.11">9.11 Conversion System Functions</h2>
-<p>Verilog AMS HDL extends the conversion functions defined in IEEE Std 1364-2005 Verilog HDL so that <code>$bitstoreal</code> and <code>$realtobits</code> can be used in the analog context.</p>
+<p>Verilog AMS HDL extends the conversion functions defined in IEEE Std 1364 Verilog so that <code>$bitstoreal</code> and <code>$realtobits</code>,<code>$rtoi</code> and <code>$itor</code> can be used in the analog context.</p>
 
 
 <!-- 9.12 Command Line Input -->
@@ -828,6 +831,7 @@ type_string ::=
 <p>This code also describe the algorithm of the IEEE Std 1364 Verilog probabilistic functions extensions in Verilog-AMS HDL as indicated in Table 9-26.</p>
 
 <h4>Table 9-26 &mdash; Verilog AMS to C function cross-listing</h4>
+<div class="note"><strong>Source fidelity:</strong> the LRM prints this caption as &ldquo;Verilog AMS to C function cross-listingss-listing&rdquo;; the duplicated &ldquo;ss-listing&rdquo; is a typographical error, corrected above.</div>
 <table>
 <tr><th>Verilog AMS Function</th><th>C function in IEEE Std 1364 Verilog (subclause 17.9.3)</th></tr>
 <tr><td><code>$rdist_uniform</code></td><td><code>uniform</code></td></tr>
@@ -1064,15 +1068,11 @@ endmodule</code></pre>
 
 <p>The <code>$limit()</code> function is a special-purpose system function whose purpose, like that of the <code>limexp()</code> function of <a href="ch4-expressions.html#s4-5-13">4.5.13</a>, is to improve convergence of the analog solver. While <code>limexp()</code> is specifically intended for the exponential function, <code>$limit()</code> may be used for the exponential as well as other nonlinear functions and provides a method to recommend a specific approach for improving the convergence. Syntax 9-12 shows the methods of using the <code>$limit()</code> function.</p>
 
-<p>Other nonlinearities besides the exponential are present in semiconductor device compact models. The <code>$limit()</code> function provides a method to indicate these nonlinearities to the simulator and, if necessary, recommend a function to use to limit the change of its output from iteration to iteration.</p>
-
 <pre class="syntax">limit_call ::=
     $limit ( access_function_reference )
   | $limit ( access_function_reference , string , arg_list )
   | $limit ( access_function_reference , analog_function_identifier , arg_list )</pre>
 <p><em>Syntax 9-12&mdash;Syntax for $limit()</em></p>
-
-<p>When the simulator has converged, the return value of the <code>$limit()</code> function is the value of the access function reference, within appropriate tolerances. For some analysis types or solution methods, such as damped Newton-Raphson, the return value of the <code>$limit()</code> function may depend on the value of the access function and internal state of the function.</p>
 
 <p>As with <code>limexp()</code>, the <code>$limit()</code> function has internal state containing information about the argument on previous iterations. It returns a real value that is derived from its first argument (the access function reference, such as a branch voltage), but it internally limits the change of the output from iteration to iteration in order to improve convergence. On any iteration where the output value is not the same as the value of the access function (within appropriate tolerances), the simulator is prevented from terminating the iteration. In all cases, the simulator is responsible for determining if limiting should be applied and what the return value is on a given iteration. In particular, the simulator may simply choose to have <code>$limit()</code> return the value of its first argument, if it has other methods for ensuring convergence.</p>
 
@@ -1178,7 +1178,7 @@ endmodule</code></pre>
 
 <p>For example, when a module makes a call to <code>$mfactor</code>, the simulator computes the product of the multiplicity factor specified for the instance (or 1.0, if no override was specified) times the value for the parent module that instantiated the module, times the parent's parent's value, and so on, until the top level is reached.</p>
 
-<div class="note"><code>$angle</code> is specified and returned in degrees, but trigonometric functions (see <a href="ch4-expressions.html#s4-3-2">4.3.2</a>) operate in radians.</div>
+<div class="note">Note that <code>$angle</code> is specified and returned in degrees, but the trigonometric functions of <a href="ch4-expressions.html#s4-3-2">4.3.2</a> operate in radians.</div>
 
 <p>Example ($mfactor):</p>
 <pre><code>module test_module(p, n);
@@ -1258,7 +1258,7 @@ endmodule</code></pre>
   | $port_connected ( port_scalar_expression )</pre>
 <p><em>Syntax 9-14&mdash;Syntax for the hierarchy detection functions</em></p>
 
-<p>The return values of these functions are constant during a simulation; the value is fixed during elaboration. They can be used in genvar expressions controlling conditional or looping behavior of analog operators (see <a href="ch4-expressions.html#s4-5">4.5</a>).</p>
+<p>Note that the return values of these functions shall be constant during a simulation; the value is fixed during elaboration. As such, these functions can be used in genvar expressions controlling conditional or looping behavior of the analog operators of <a href="ch4-expressions.html#s4-5">4.5</a>.</p>
 
 <p>The <code>$param_given()</code> function can be used to determine whether a parameter value was obtained from the default value in its declaration statement or if that value was overridden. The <code>$param_given()</code> function takes a single argument, which must be a parameter identifier. The return value shall be one (1) if the parameter was overridden, either by a <code>defparam</code> statement or by a module instance parameter value assignment, and zero (0) otherwise.</p>
 
@@ -1325,7 +1325,7 @@ endmodule</code></pre>
 
 <p>The <code>hierarchical_reference_string</code> shall be a constant string value (string literal or string parameter) containing a hierarchical reference to a continuous node. It shall be an error for the <code>hierarchical_reference_string</code> to reference a node that is used as an <code>analog_net_reference</code> in another <code>$analog_node_alias</code> or <code>$analog_port_alias()</code> system function call. The <code>hierarchical_reference_string</code> shall follow the resolution rules for hierarchical references as described in <a href="ch6-hierarchy.html#s6.7">6.7</a>.</p>
 
-<p>It shall be an error for the <code>$analog_node_alias()</code> and <code>$analog_port_alias()</code> system functions to be used outside the <code>analog initial</code> block. Along with their enclosing <code>analog initial</code> block scopes, both system functions shall be re-evaluated each sweep point of a dc sweep as needed (see <a href="ch5-analog.html#s5-2-1">5.2.1</a> and <a href="ch8-scheduling.html#s8-2">8.2</a> for details).</p>
+<p>It shall be an error for the <code>$analog_node_alias()</code> and <code>$analog_port_alias()</code> system functions to be used outside the <code>analog initial</code> block. Along with their enclosing <code>analog initial</code> block scopes, both system functions shall be re-evaluated each sweep point of a dc sweep as needed (see <a href="ch5-analog.html#s5.2.1">5.2.1</a> and <a href="ch8-scheduling.html#s8-2">8.2</a> for details).</p>
 
 <p>The <code>$analog_node_alias()</code> and <code>$analog_port_alias()</code> system functions shall not be used inside conditional (<code>if</code>, <code>case</code>, or <code>?:</code>) statements unless the conditional expression controlling the statement consists of terms which can not change during the course of a simulation.</p>
 
@@ -1333,7 +1333,7 @@ endmodule</code></pre>
 
 <p>If the return value is zero (0), then the node referenced by the <code>analog_net_reference</code> shall be treated as a normal continuous node declared in the module containing the system function call. As such, the user is encouraged to check the return value from the system function call and to take necessary steps to avoid runtime topology issues like a singular matrix.</p>
 
-<p>In addition, a node that is aliased to a valid hierarchical port reference via the <code>$analog_port_alias()</code> function shall be allowed as an input to the port access function (see <a href="ch5-analog.html#s5-4-3">5.4.3</a>) and shall measure the flow through the port of the instance referred to by the hierarchical reference.</p>
+<p>In addition, a node that is aliased to a valid hierarchical port reference via the <code>$analog_port_alias()</code> function shall be allowed as an input to the port access function (see <a href="ch5-analog.html#s5.4.3">5.4.3</a>) and shall measure the flow through the port of the instance referred to by the hierarchical reference.</p>
 
 <p>If a particular node is involved in multiple calls to either system function, then the last evaluated call shall take precedence.</p>
 
@@ -1618,23 +1618,25 @@ endmodule</code></pre>
 <p><em>Syntax 9-17&mdash;Syntax for $driver_count</em></p>
 <p>The drivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary drivers contributing to the signal value. For example, if this function returns a value 5 then the signal has five drivers numbered from 0 to 4.</p>
 
-<div class="note">Non-normative: <code>$receiver_count</code> is not a subclause of 9.22 in Verilog-AMS 2.4. Where a simulator provides it, <code>$receiver_count</code> returns an integer representing the number of receivers associated with the signal in question.
+<h3 id="s9.22.2">9.22.2 $receiver_count</h3>
+<p><code>$receiver_count</code> returns an integer representing the number of receivers associated with the signal in question. The syntax is shown in Syntax 9-18.</p>
 <pre class="syntax">receiver_count_function ::=
     $receiver_count ( signal_name )</pre>
-The receivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary receivers being contributed by the signal value. For example, if this function returns a value 5 then the signal has five receivers numbered from 0 to 4.</div>
+<p><em>Syntax 9-18&mdash;Syntax for $receiver_count</em></p>
+<p>The receivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary receivers being contributed by the signal value. For example, if this function returns a value 5 then the signal has five receivers numbered from 0 to 4.</p>
 
-<h3 id="s9.22.2">9.22.2 $driver_state</h3>
-<p><code>driver_state</code> returns the current value contribution of a specific driver to the state of the signal. The syntax is shown in Syntax 9-18.</p>
+<h3 id="s9.22.3">9.22.3 $driver_state</h3>
+<p><code>driver_state</code> returns the current value contribution of a specific driver to the state of the signal. The syntax is shown in Syntax 9-19.</p>
 <pre class="syntax">driver_state_function ::=
     $driver_state ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-18&mdash;Syntax for $driver_state</em></p>
+<p><em>Syntax 9-19&mdash;Syntax for $driver_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The state value is returned as 0, 1, x, or z.</p>
 
-<h3 id="s9.22.3">9.22.3 $driver_strength</h3>
-<p><code>driver_strength</code> returns the current strength contribution of a specific driver to the strength of the signal. The syntax is shown in Syntax 9-19.</p>
+<h3 id="s9.22.4">9.22.4 $driver_strength</h3>
+<p><code>driver_strength</code> returns the current strength contribution of a specific driver to the strength of the signal. The syntax is shown in Syntax 9-20.</p>
 <pre class="syntax">driver_strength_function ::=
     $driver_strength ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-19&mdash;Syntax for $driver_strength</em></p>
+<p><em>Syntax 9-20&mdash;Syntax for $driver_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The strength value is returned as two strengths, bits 5-3 for strength0 and bits 2-0 for strength1 (see IEEE Std 1364-2005 Verilog HDL, subclauses 7.10 and 7.11).</p>
 
 <p>If the value returned is 0 or 1, strength0 returns the high-end of the strength range and strength1 returns the low-end of the strength range. Otherwise, the strengths of both strength0 and strength1 is defined as shown in Figure 9-3 below.</p>
@@ -1647,24 +1649,24 @@ The receivers are arbitrarily numbered from 0 to N-1, where N is the total numbe
 <tr><td>B3</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>B0</td></tr>
 </table>
 <h4>Figure 9-3: Strength value mapping</h4>
-<h3 id="s9.22.4">9.22.4 driver_update</h3>
+<h3 id="s9.22.5">9.22.5 driver_update</h3>
 <p>The status of drivers for a given signal can be monitored with the event detection keyword <code>driver_update</code>. It can be used in conjunction with the event detection operator <code>@</code> to detect updates to any of the drivers of the signal.</p>
 <pre><code>always @(driver_update clock)
     statement;</code></pre>
 <p>causes the <code>statement</code> to execute any time a driver of the signal <code>clock</code> is updated. Here, an update is defined as the addition of a new pending value to the driver. This is true whether or not there is a change in the resolved value of the signal.</p>
 
-<h3 id="s9.22.5">9.22.5 Receiver Net Resolution</h3>
+<h3 id="s9.22.6">9.22.6 Receiver net resolution</h3>
 <p>As a result of driver receiver segregation, the drivers and receivers are separated so that any analog connected to a mixed net has the opportunity to influence the value driving the digital receivers. Since a single digital port is used in the connect module, the user must specify the value that the receivers will see. By not specifying the receiver value directly in the connect module driver, receiver segregation will be ignored, which is the default case. This assignment of the receiver value is done via the <code>assign</code> statement in which the digital port will be used to read the driver values as well as to set the receiver value.</p>
 <ol>
 <li>The default is equivalent of <code>assign d_receivers = d_drivers;</code><br>
 Where the value passed to the receivers through driver receiver segregation is the value being driven without delay or any impact from analog connections to the net. This is essentially bypassing driver receiver segregation.</li>
 <li>Anything else is done explicitly, such as:
-<pre><code>reg out; // value of out determined in CM, see example in 9.22.6
+<pre><code>reg out; // value of out determined in CM, see example in 9.22.7
 assign d = out;</code></pre>
 In this case, the digital port of the connect module will drive the receivers with a value determined in the connect module. This value may potentially be different from the value of the drivers of the connect module digital port.</li>
 </ol>
 
-<h3 id="s9.22.6">9.22.6 Connect Module Example Using Driver Access Functions</h3>
+<h3 id="s9.22.7">9.22.7 Connect module example using driver access functions</h3>
 
 <p>Using the example shown in Figure 9-4, a connect module can be created using driver access functions to accurately model the effects of multiple drivers on an interface.</p>
 
@@ -1740,31 +1742,31 @@ endmodule</code></pre>
 <div class="note">NOTE&mdash;Because the scheduled digital events can be scheduled with an insufficient delay or canceled before they mature, be careful when using these functions.</div>
 
 <h3 id="s9.23.1">9.23.1 $driver_delay</h3>
-<p><code>$driver_delay</code> returns the delay, from current simulation time, after which the pending state or strength becomes active. If there is no pending value on a signal, it returns the value minus one (-1.0). The syntax is shown in Syntax 9-20.</p>
+<p><code>$driver_delay</code> returns the delay, from current simulation time, after which the pending state or strength becomes active. If there is no pending value on a signal, it returns the value minus one (-1.0). The syntax is shown in Syntax 9-21.</p>
 <pre class="syntax">driver_delay_function ::=
     $driver_delay ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-20&mdash;Syntax for $driver_delay</em></p>
+<p><em>Syntax 9-21&mdash;Syntax for $driver_delay</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The returned delay value is a real number, which is defined by the <code>`timescale</code> for that module where the call has been made. The fractional part arises from the possibility of a driver being updated by an A2D event off the digital timeticks.</p>
 
 <h3 id="s9.23.2">9.23.2 $driver_next_state</h3>
-<p><code>$driver_next_state</code> returns the pending state of the driver, if there is one. If there is no pending state, it returns the current state. The syntax is shown in Syntax 9-21.</p>
+<p><code>$driver_next_state</code> returns the pending state of the driver, if there is one. If there is no pending state, it returns the current state. The syntax is shown in Syntax 9-22.</p>
 <pre class="syntax">driver_next_state_function ::=
     $driver_next_state ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-21&mdash;Syntax for $driver_next_state</em></p>
+<p><em>Syntax 9-22&mdash;Syntax for $driver_next_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending state value is returned as <code>1'b0</code>, <code>1'b1</code>, <code>1'bx</code>, or <code>1'bz</code>.</p>
 
 <h3 id="s9.23.3">9.23.3 $driver_next_strength</h3>
-<p><code>$driver_next_strength</code> returns the strength associated with the pending state of the driver, if there is one. If there is no pending state, it returns the current strength. The syntax is shown in Syntax 9-22.</p>
+<p><code>$driver_next_strength</code> returns the strength associated with the pending state of the driver, if there is one. If there is no pending state, it returns the current strength. The syntax is shown in Syntax 9-23.</p>
 <pre class="syntax">driver_next_strength_function ::=
     $driver_next_strength ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-22&mdash;Syntax for $driver_next_strength</em></p>
+<p><em>Syntax 9-23&mdash;Syntax for $driver_next_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending strength value is returned as an integer between <code>0</code> and <code>7</code>.</p>
 
 <h3 id="s9.23.4">9.23.4 $driver_type</h3>
-<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>'DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-23.</p>
+<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>'DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-24.</p>
 <pre class="syntax">driver_type_function ::=
     $driver_type ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-23&mdash;Syntax for $driver_type</em></p>
+<p><em>Syntax 9-24&mdash;Syntax for $driver_type</em></p>
 
 <p>Digital primitives (like nand and nor gates) should always provide data about their scheduled output changes; i.e., a gate with a 5ns delay should provide 5ns of look-ahead. Behavioral code with blocking assigns cannot provide look-ahead, but non-blocking assigns with delays can. However, since the capability is implementation- and configuration-dependent, this function is provided so that the connect module can adapt for a particular instance.</p>
 

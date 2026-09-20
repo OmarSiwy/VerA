@@ -88,11 +88,11 @@ itr = vpi_iterate(vpiNet,mod);
 while (net = vpi_scan(itr) )
    vpi_printf("\t%s\n", vpi_get_str(vpiFullName, net) );</code></pre>
 <p>As the above examples illustrate, the routine naming convention is a <em>vpi</em> prefix with &lsquo;_&rsquo; word delimiters (with the exception of callback-related defined values, which use the <em>cb</em> prefix). Macro-defined types and properties have the <em>vpi</em> prefix and they use capitalization for word delimiters.</p>
-<p>The routines for traversing Verilog-AMS HDL structures and accessing objects are described in IEEE Std 1364-2005 Verilog HDL, section 22.</p>
+<p>The routines for traversing Verilog-AMS HDL structures and accessing objects are described in IEEE Std 1364 Verilog, section 22.</p>
 
 <h3 id="s11-3-2">11.3.2 Delays and values</h3>
 <p>Properties are of type integer, boolean, real or string. Delay and logic value properties, however, are more complex and require specialized routines and associated structures. The routines <strong><code>vpi_get_delays()</code></strong> and <strong><code>vpi_put_delays()</code></strong> use structure pointers, where the structure contains the pertinent information about delays. Similarly, simulation values are also handled with the routines <strong><code>vpi_get_value()</code></strong> and <strong><code>vpi_put_value()</code></strong>, along with an associated set of structures. For analog tasks and functions, <strong><code>vpi_handle_multi()</code></strong> and <strong><code>vpi_put_value()</code></strong> support declaration and assignment of derivatives for the task arguments and function return values.</p>
-<p>The routines and C structures for handling delays, derivatives, and logic values are presented in IEEE Std 1364-2005 Verilog HDL, section 22.</p>
+<p>The routines and C structures for handling delays, derivatives, and logic values are presented in IEEE Std 1364 Verilog, section 22.</p>
 
 <h2 id="s11-4">11.4 List of VPI routines by functional category</h2>
 <p>The VPI routines can be divided into groups based on primary functionality.</p>
