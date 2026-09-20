@@ -187,21 +187,17 @@ fn emitCard(
         // primitive, so whatever Table E.1's Behavior column gives that row is
         // what the model gives too — an empty column (bjt, mosfet, diode, ...)
         // simply gives nothing, which E.2 already says is implementation
-        // dependent. The card's `BF=80 IS=1E-18` parameters are NOT passed: Table
-        // E.1 declares none of them, and E.1.2's fourth axis of incompatibility
-        // is that "the mathematical description of the built-in primitives can
-        // differ", so there is no equation here for them to enter.
-        // ponytail: model parameters are read and dropped; binding them needs
-        // per-type parameter equations the annex does not write down.
+        // dependent.
+        const params = try modelParams(arena, row.prim, &it);
         try out.print(arena,
             \\module {s}({s});
             \\   inout {s};
             \\   electrical {s};
-            \\   {s} prim({s});
+            \\{s}   {s} #({s}) prim({s});
             \\endmodule
             \\
             \\
-        , .{ decl, row.ports, row.ports, row.ports, row.prim, row.ports });
+        , .{ decl, row.ports, row.ports, row.ports, params.decls, row.prim, params.args, row.ports });
     } else {
         // `.SUBCKT name p1 p2 ... [params: k=v]` — ports up to the first thing
         // that is not a node name. NUMERIC nodes are the SPICE default (`1`,
@@ -235,6 +231,157 @@ fn emitCard(
     }
     try seen.append(arena, name);
     return true;
+}
+
+/// The `parameter` declarations a model-derived module carries, and the argument
+/// list that forwards them to the primitive it wraps.
+const ModelParams = struct {
+    /// One `   parameter ...;\n` line per parameter of the primitive.
+    decls: []const u8,
+    /// `.r(r), .tc1(tc1), ...` — §6.3.3 by name, so Table E.1's order is not
+    /// load-bearing here.
+    args: []const u8,
+};
+
+/// E.2.2.1: "The ports and parameters of the bjt are determined by the bjt
+/// primitive itself and not by the model statement for the bjt." That fixes
+/// which parameters EXIST — the primitive's, all of them — and says nothing
+/// about discarding the VALUES the card assigns to them; E.1's "huge legacy of
+/// SPICE netlists" is the reason not to, since a card-derived resistor that
+/// ignored `R=2000` would be 1 ohm where the netlist said two thousand.
+///
+/// So the model-derived module re-declares the primitive's own parameter list —
+/// LIFTED OUT OF THE PRELUDE that declares it rather than re-tabulated here, so
+/// the `from` ranges and the defaults cannot drift from the row they transcribe
+/// — with the default replaced by the card's value wherever the card names one,
+/// and forwards the lot by name. Re-declaring rather than forwarding the card's
+/// literals directly is what makes §6.7.1's `r1.r` resolve and §6.3.3's
+/// `rmod #(.r(2500))` override, which are the same sentence's other two
+/// consequences.
+///
+/// A card parameter Table E.1 does not declare (`BF=80`, `RSH=50`) is dropped in
+/// silence: E.2 makes "all aspects of SPICE primitives implementation
+/// dependent", E.4.2 makes model-card support "implementation specific", and
+/// E.1.2's remedy for a name mismatch is a user-written wrapper module, not a
+/// diagnostic. Refusing the card would make VerA read FEWER of the netlists
+/// E.1 exists for.
+fn modelParams(
+    arena: Allocator,
+    prim: []const u8,
+    it: *std.mem.TokenIterator(u8, .any),
+) Allocator.Error!ModelParams {
+    // The card's `k=v` tail. ponytail: `k = v` with spaces around the `=` is not
+    // a shape SPICE writes; split on the token if a dialect turns up that does.
+    var keys: std.ArrayList([]const u8) = .empty;
+    var vals: std.ArrayList(f64) = .empty;
+    while (it.next()) |t| {
+        const at = std.mem.indexOfScalar(u8, t, '=') orelse continue;
+        if (at == 0 or at + 1 == t.len) continue;
+        const v = spiceNumber(t[at + 1 ..]) orelse continue;
+        try keys.append(arena, t[0..at]);
+        try vals.append(arena, v);
+    }
+
+    var decls: std.ArrayList(u8) = .empty;
+    var args: std.ArrayList(u8) = .empty;
+    var lines = std.mem.splitScalar(u8, primitiveBody(prim), '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t");
+        if (!std.mem.startsWith(u8, line, "parameter ")) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const head = std.mem.trimEnd(u8, line[0..eq], " \t");
+        // The declared name is the last token before the `=`, minus any §3.4.4
+        // array range: `parameter real wave[0:nwave-1] = ...` declares `wave`.
+        var name = head[(std.mem.lastIndexOfAny(u8, head, " \t") orelse 0) + 1 ..];
+        if (std.mem.indexOfScalar(u8, name, '[')) |b| name = name[0..b];
+        if (name.len == 0) continue;
+
+        if (args.items.len != 0) try args.appendSlice(arena, ", ");
+        try args.print(arena, ".{s}({s})", .{ name, name });
+
+        const bound = for (keys.items, vals.items) |k, v| {
+            if (std.mem.eql(u8, k, name)) break v;
+        } else null;
+        if (bound) |v| {
+            // Everything from the `from` range on is kept: §3.4.2's range is part
+            // of the declaration, not of the default it replaces.
+            const rest = line[eq + 1 ..];
+            const tail = if (std.mem.indexOf(u8, rest, " from ")) |f| rest[f..] else ";";
+            try decls.print(arena, "   {s} = {d}{s}\n", .{ head, v, tail });
+        } else {
+            try decls.print(arena, "   {s}\n", .{line});
+        }
+    }
+    return .{ .decls = decls.items, .args = args.items };
+}
+
+/// The body of `Preprocessor.spice_primitives`'s module for `prim`, between its
+/// header and its `endmodule`. Empty if there is no such row — `model_types`
+/// only names rows that exist, and a test below pins that.
+fn primitiveBody(prim: []const u8) []const u8 {
+    const prelude = @import("preprocessor.zig").spice_primitives;
+    var buf: [64]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, "\nmodule {s}(", .{prim}) catch return "";
+    const at = std.mem.indexOf(u8, prelude, header) orelse return "";
+    const rest = prelude[at + header.len ..];
+    const end = std.mem.indexOf(u8, rest, "\nendmodule") orelse return "";
+    return rest[0..end];
+}
+
+/// SPICE's own scaled notation, which Annex E prints throughout its netlists —
+/// `R1 B1 GND 10K`, `C1 VCC OUT 1P`, `TF=0.3NS`, `IEE E GND 1MA`. E.2.2.3
+/// translates the first of those as `resistor #(.r(10k)) R1 (b1, gnd);`, and
+/// §2.6.2 Table 2-1 makes `10k` ten thousand — so the two spellings are the
+/// annex's own statement that `10K` is 10000.
+///
+/// The scale letter is followed by UNIT letters that carry no value (`PF`, `UH`,
+/// `NS`, `MA`), so anything after the matched suffix is ignored rather than
+/// rejected. Returns null when the token does not start with a number at all.
+fn spiceNumber(t: []const u8) ?f64 {
+    var i: usize = 0;
+    if (i < t.len and (t[i] == '+' or t[i] == '-')) i += 1;
+    const digits = i;
+    while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
+    if (i < t.len and t[i] == '.') {
+        i += 1;
+        while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
+    }
+    if (i == digits or (i == digits + 1 and t[digits] == '.')) return null;
+    // An exponent only if it is complete: `1E-18` is a number, the `E` of a bare
+    // `1EXP` is the start of unit noise.
+    if (i < t.len and t[i] == 'e') {
+        var j = i + 1;
+        if (j < t.len and (t[j] == '+' or t[j] == '-')) j += 1;
+        if (j < t.len and std.ascii.isDigit(t[j])) {
+            while (j < t.len and std.ascii.isDigit(t[j])) j += 1;
+            i = j;
+        }
+    }
+    const mant = std.fmt.parseFloat(f64, t[0..i]) catch return null;
+    return mant * spiceScale(t[i..]);
+}
+
+/// Berkeley SPICE's ten scale factors. `meg` and `mil` are tested before `m`
+/// because they share its first letter and mean 1e6 and 25.4e-6, not 1e-3 with
+/// unit noise — the one place SPICE and §2.6.2 Table 2-1 disagree outright (a
+/// Verilog `M` is mega, a SPICE `M` is milli), which is why a card's number is
+/// converted to plain decimal here rather than handed on with its suffix.
+/// `a` (atto) is NOT one of them: SPICE has no atto and `1A` is one ampere.
+fn spiceScale(rest: []const u8) f64 {
+    const scales = [_]struct { suffix: []const u8, mul: f64 }{
+        .{ .suffix = "meg", .mul = 1e6 },
+        .{ .suffix = "mil", .mul = 25.4e-6 },
+        .{ .suffix = "t", .mul = 1e12 },
+        .{ .suffix = "g", .mul = 1e9 },
+        .{ .suffix = "k", .mul = 1e3 },
+        .{ .suffix = "m", .mul = 1e-3 },
+        .{ .suffix = "u", .mul = 1e-6 },
+        .{ .suffix = "n", .mul = 1e-9 },
+        .{ .suffix = "p", .mul = 1e-12 },
+        .{ .suffix = "f", .mul = 1e-15 },
+    };
+    for (scales) |s| if (std.mem.startsWith(u8, rest, s.suffix)) return s.mul;
+    return 1.0;
 }
 
 /// Is `t` usable BARE as a Verilog-AMS identifier (§2.7) after lowering? `$` is
@@ -318,15 +465,65 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
         \\.TRAN 1N 100N $ skipped, not diagnosed
     );
     try std.testing.expectEqual(@as(u32, 2), s.modules);
-    // E.2.2.1: ports from the bjt primitive, in Table E.1's order.
+    // E.2.2.1: ports AND parameters from the bjt primitive, in Table E.1's
+    // order, and the card's own names are not among them — Table E.1's bjt row
+    // declares `area` and nothing else, so `BF`, `IS`, `CJE` have no parameter
+    // to land on and are dropped in silence (E.4.2: "support of SPICE model
+    // cards is implementation specific").
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module vertnpn(c, b, e, s);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "bjt prim(c, b, e, s);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real area = 1.0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "bjt #(.area(area)) prim(c, b, e, s);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
     // E.2.2.2: ports from the card, lowered, parentheses dropped, no body.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module ecposc(out, gnd);") != null);
-    // The card's model parameters are not passed, and the device cards inside the
-    // subcircuit contribute nothing.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "vcc") == null);
+}
+
+test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.MODEL RMOD R R=10K TC1=1E-3
+        \\.MODEL CM C C=1P IC=2.5
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.modules);
+    // §2.6.2 Table 2-1 by way of E.2.2.3's `resistor #(.r(10k))`: `10K` is 10000.
+    // §3.4.2's `from` range survives the substitution — it belongs to the
+    // declaration, not to the default it replaces.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real r = 10000 from (0:inf);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real tc1 = 0.001;") != null);
+    // A parameter the card does not name keeps the primitive's own default.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real tc2 = 0.0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(r), .tc1(tc1), .tc2(tc2)) prim(p, n);") != null);
+    // Not a resistor special case, and `ic` is an initial condition rather than
+    // a coefficient.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real c = 0.000000000001 from (0:inf);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real ic = 2.5;") != null);
+}
+
+test "SPICE's scaled notation, including the three suffixes §2.6.2 does not share" {
+    // The annex prints `10K`, `3PF`, `1UH`, `0.3NS`, `1MA`, `1E-18` in its own
+    // netlists; a reader that cannot turn those into numbers cannot read
+    // E.2.2.2. `MEG`/`MIL` are the SPICE-only ones, and `M` is milli here where
+    // §2.6.2 Table 2-1 makes it mega — which is why a card's number is
+    // converted rather than handed on with its suffix.
+    try std.testing.expectEqual(@as(?f64, 10000), spiceNumber("10k"));
+    try std.testing.expectEqual(@as(?f64, 3e-12), spiceNumber("3pf"));
+    try std.testing.expectEqual(@as(?f64, 1e-6), spiceNumber("1uh"));
+    try std.testing.expectEqual(@as(?f64, 0.3e-9), spiceNumber("0.3ns"));
+    try std.testing.expectEqual(@as(?f64, 1e-3), spiceNumber("1ma"));
+    try std.testing.expectEqual(@as(?f64, 1e6), spiceNumber("1meg"));
+    try std.testing.expectEqual(@as(?f64, 25.4e-6), spiceNumber("1mil"));
+    try std.testing.expectEqual(@as(?f64, 1e-18), spiceNumber("1e-18"));
+    try std.testing.expectEqual(@as(?f64, -2.5), spiceNumber("-2.5"));
+    // SPICE has no atto, so a bare `1A` is one ampere and the letter is noise.
+    try std.testing.expectEqual(@as(?f64, 1.0), spiceNumber("1a"));
+    // Not a number at all.
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("rmod"));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber(""));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("."));
 }
 
 test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
