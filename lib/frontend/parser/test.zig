@@ -1490,7 +1490,7 @@ fn parseNested(arena: std.mem.Allocator, prefix: []const u8, open: []const u8, m
     _ = try p.parseSourceFile();
     try std.testing.expectEqual(@as(usize, 0), bag.count());
     try std.testing.expectEqual(@as(u32, 0), p.depth);
-    try std.testing.expectEqual(@as(u32, 0), p.frames);
+    try std.testing.expectEqual(@as(u32, 0), p.seg.frames);
     return p.deepest;
 }
 

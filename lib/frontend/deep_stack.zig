@@ -137,6 +137,32 @@ pub fn run(depth_hint: usize, comptime func: anytype, args: anytype) Result(@Typ
     return out;
 }
 
+/// A segmented recursion's bookkeeping (the parser's grammar functions, the
+/// preprocessor's `include and macro nesting): native levels open, and their
+/// count when the current stack segment began. Each caller keeps its own
+/// level counts for the caller's stack and for a segment.
+pub const Segments = struct {
+    frames: u32 = 0,
+    base: u32 = 0,
+
+    /// Whether the current segment is full: `caller_cap` levels while no
+    /// segment has begun (the caller's own stack), `segment_cap` on one. The
+    /// next level then runs through `segment`.
+    pub fn due(s: Segments, caller_cap: u32, segment_cap: u32) bool {
+        const cap = if (s.base == 0) caller_cap else segment_cap;
+        return s.frames - s.base >= cap;
+    }
+
+    /// Runs `func(args)` as a new segment that begins at the current level,
+    /// on a `run` stack for `levels`.
+    pub fn segment(s: *Segments, levels: usize, comptime func: anytype, args: anytype) Result(@TypeOf(func)) {
+        const saved = s.base;
+        s.base = s.frames;
+        defer s.base = saved;
+        return run(levels, func, args);
+    }
+};
+
 // Guarded walks: a depth the design decides at run time (the digital
 // engine's expression and statement trees, its instance hierarchy, a
 // recursive task or function), which no parse measured beforehand. The walk

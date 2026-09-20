@@ -612,8 +612,7 @@ pub const Pp = struct {
     macro_hash: u64 = 0,
     /// Open `nested` levels, and their count when the current stack
     /// segment began.
-    frames: u32 = 0,
-    seg_base: u32 = 0,
+    seg: deep_stack.Segments = .{},
     /// IEEE 1364 §19.7 `line remap for §10.7 `__LINE__`; `line_to` is null when
     /// the current file is numbered naturally. `line_from` is the physical
     /// 1-based line after the directive and `line_to` the number §19.7 gives
@@ -676,17 +675,13 @@ pub const Pp = struct {
     /// nesting: on a fresh `deep_stack` segment when this one is full. A
     /// segment that cannot be reserved is E0119 at `span`.
     pub fn nested(pp: *Pp, span: diag.Span, comptime f: anytype, args: anytype) Error!void {
-        const cap: u32 = if (pp.seg_base == 0) caller_levels else segment_levels;
-        if (pp.frames - pp.seg_base < cap) {
-            pp.frames += 1;
-            defer pp.frames -= 1;
+        if (!pp.seg.due(caller_levels, segment_levels)) {
+            pp.seg.frames += 1;
+            defer pp.seg.frames -= 1;
             return @call(.auto, f, args);
         }
-        const saved = pp.seg_base;
-        pp.seg_base = pp.frames;
-        defer pp.seg_base = saved;
-        return deep_stack.run(segment_levels, f, args) catch |e| switch (e) {
-            error.DeepStackUnavailable => pp.fail(span, .E0119, "{d} levels deep", .{pp.frames}),
+        return pp.seg.segment(segment_levels, f, args) catch |e| switch (e) {
+            error.DeepStackUnavailable => pp.fail(span, .E0119, "{d} levels deep", .{pp.seg.frames}),
             else => |other| other,
         };
     }

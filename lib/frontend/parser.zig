@@ -52,8 +52,7 @@ pub const Parser = struct {
     deepest: u32 = 0,
     /// Native recursion levels open (`enter`), and their count when the
     /// current stack segment began (`segment`).
-    frames: u32 = 0,
-    seg_base: u32 = 0,
+    seg: deep_stack.Segments = .{},
     file: Ast.SourceFile = .empty,
     /// Shared collector. The cap, the dedupe and the rendering all live there.
     bag: *diag.Bag,
@@ -694,20 +693,19 @@ pub const Parser = struct {
     /// pairs it with `defer self.leave()`, and first asks `segmentDue`.
     pub fn enter(self: *Parser) void {
         self.nest();
-        self.frames += 1;
+        self.seg.frames += 1;
     }
 
     pub fn leave(self: *Parser) void {
         self.depth -= 1;
-        self.frames -= 1;
+        self.seg.frames -= 1;
     }
 
     /// Whether the current stack segment is full (`caller_levels` frames on
     /// the caller's stack, `segment_levels` on a segment), so the next
     /// recursion must run through `segment`.
     pub fn segmentDue(self: *const Parser) bool {
-        const cap: u32 = if (self.seg_base == 0) caller_levels else segment_levels;
-        return self.frames - self.seg_base >= cap;
+        return self.seg.due(caller_levels, segment_levels);
     }
 
     /// Calls the grammar function `f(args)` as one more native level: on a
@@ -715,8 +713,8 @@ pub const Parser = struct {
     /// `enter` site (the right-associative `?:` arm).
     pub fn descend(self: *Parser, comptime f: anytype, args: anytype) @typeInfo(@TypeOf(f)).@"fn".return_type.? {
         if (self.segmentDue()) return self.segment(f, args);
-        self.frames += 1;
-        defer self.frames -= 1;
+        self.seg.frames += 1;
+        defer self.seg.frames -= 1;
         return @call(.auto, f, args);
     }
 
@@ -733,10 +731,7 @@ pub const Parser = struct {
     /// `segment_levels` levels (`deep_stack.run`). A segment that cannot be
     /// reserved is E0241, naming the depth reached.
     pub fn segment(self: *Parser, comptime f: anytype, args: anytype) @typeInfo(@TypeOf(f)).@"fn".return_type.? {
-        const saved = self.seg_base;
-        self.seg_base = self.frames;
-        defer self.seg_base = saved;
-        return deep_stack.run(segment_hint, f, args) catch |e| switch (e) {
+        return self.seg.segment(segment_hint, f, args) catch |e| switch (e) {
             error.DeepStackUnavailable => self.failAt(self.pos, .E0241, "{d} levels deep", .{self.depth}),
             else => |other| other,
         };
