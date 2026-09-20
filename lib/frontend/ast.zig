@@ -1017,7 +1017,20 @@ pub const Stmt = union(enum) {
     /// §5.7 procedural assignment (A.6.2 analog_variable_assignment). `target`
     /// is an lvalue *expression* (`.ident` or `.index`) so array element
     /// assignment (§3.2.2) is representable.
-    assign: struct { target: ExprId, value: ExprId, nonblocking: bool = false },
+    ///
+    /// `timing` is A.6.2's optional `delay_or_event_control` between the `=`
+    /// and the expression — the INTRA-assignment form, which §8.5.3.3 gives a
+    /// different meaning from the statement prefix `#5 b = a;`: the right-hand
+    /// side is sampled when the statement is reached and only the write waits.
+    /// `timing_is_delay` picks `delay_control` over `event_control`, exactly as
+    /// `event_control.is_delay` does for the prefix form.
+    assign: struct {
+        target: ExprId,
+        value: ExprId,
+        nonblocking: bool = false,
+        timing: ExprId = .none,
+        timing_is_delay: bool = false,
+    },
     /// §5.6 contribution `V(a,b) <+ expr;` — `lhs` is a `.branch_access` or
     /// `.port_access` node (A.8.5 branch_lvalue).
     contribute: struct { lhs: ExprId, rhs: ExprId },

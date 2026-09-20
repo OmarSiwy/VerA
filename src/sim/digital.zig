@@ -103,6 +103,15 @@ const Instruction = union(enum(u4)) {
     // STATIC, so it is resolved to slots once at compile time; a resumption is
     // then the same `.any` waiter an explicit `@(a or b)` installs.
     wait_slots: []const u32,
+    // §8.5.3.3 the two halves of A.6.2's intra-assignment timing control.
+    // `sample` evaluates the right-hand side with the values current when the
+    // statement is REACHED and parks it in `cell`, then applies the timing;
+    // `deposit` resolves the target and writes the parked value when the
+    // process resumes ("the values at the time the process resumes are used to
+    // determine the target(s)"). A nonblocking one emits no `deposit`: it
+    // schedules the write from `sample` and does not suspend.
+    sample: struct { statement: Ast.StmtId, cell: u32 },
+    deposit: struct { statement: Ast.StmtId, cell: u32 },
     // A.6.5 `-> named_event`. §5.10: events "have no time duration" and "do not
     // hold any data", so this publishes NOTHING — it only resumes whoever is
     // waiting on the slot right now. A trigger nobody is waiting for is gone.
@@ -560,6 +569,11 @@ const Run = struct {
     case_targets: std.ArrayList(u32) = .empty,
     // One counter per lexical repeat is sufficient without recursive processes.
     repeats: std.ArrayList(u64) = .empty,
+    // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
+    // control. One cell per SITE is enough for the same reason `repeats` is:
+    // the process that reached it is suspended there, so it cannot reach it
+    // again before the `deposit` consumes the value.
+    holds: std.ArrayList(Int.Literal) = .empty,
     pending: std.ArrayList(Pending) = .empty,
     waiters: std.ArrayList(Waiter) = .empty,
     scheduler: Scheduler,
@@ -645,6 +659,13 @@ const Run = struct {
     }
     /// A reference to ONE whole value. §3.9's unpacked array has no value of
     /// its own — only its elements do — so a bare array name is refused here.
+    /// The slot an lvalue's WIDTH comes from: an array element reference is as
+    /// wide as element zero, so a parked value can be sized before §8.5.3.3
+    /// resolves which element it lands in.
+    fn baseSlot(self: *Run, e: Ast.ExprId) Error!u32 {
+        const ex = &self.file.exprs;
+        return if (ex.tag(e) == .index) self.slot(ex.lhs(e)) else self.scalarSlot(e);
+    }
     fn scalarSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const at = try self.slot(e);
         if (self.arrays.contains(at)) return self.exprFail(e, "an unpacked array reference requires an element index");
@@ -1165,7 +1186,27 @@ const Run = struct {
             .assign => |s| {
                 try self.checkTarget(s.target);
                 try self.checkExpr(s.value);
-                _ = try self.append(.{ .statement = id });
+                if (s.timing == .none) {
+                    _ = try self.append(.{ .statement = id });
+                    return;
+                }
+                // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
+                if (s.timing_is_delay) try self.checkDelay(s.timing, tok) else {
+                    // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
+                    // does not suspend, so the parked value would have to be
+                    // held by the WAITER rather than by a per-site cell; give
+                    // `Waiter` a payload when something needs it.
+                    if (s.nonblocking) return self.fail(tok, "an event control inside a nonblocking assignment is not implemented", .{});
+                    try self.checkEvent(s.timing);
+                }
+                if (self.holds.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many intra-assignment timing controls", .{});
+                const cell: u32 = @intCast(self.holds.items.len);
+                try self.holds.append(self.arena, try filled(self.arena, 1, false, .x));
+                _ = try self.append(.{ .sample = .{ .statement = id, .cell = cell } });
+                // §8.5.3.4: a nonblocking one does not suspend the process — it
+                // schedules the update and falls through — so it has no
+                // resumption point and needs no `deposit`.
+                if (!s.nonblocking) _ = try self.append(.{ .deposit = .{ .statement = id, .cell = cell } });
             },
             // A.6.5 `event_trigger`. The slot is resolved here, not at run
             // time, so a trigger cannot fail in the middle of a dispatch.
@@ -1196,17 +1237,7 @@ const Run = struct {
                     _ = try self.append(.{ .wait_event = s.event });
                     return self.compileStmt(s.body, depth + 1);
                 }
-                if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
-                // §9.7.1 a delay is a "delay_value", and A.8.3 makes that
-                // `unsigned_number | real_number | ...` — so `#0.5` is as
-                // ordinary as `#1`. It is rounded to the module's PRECISION
-                // rather than truncated to its unit, which `Scale.realDelay`
-                // already does, and which is the only thing that makes a
-                // sub-unit delay mean anything.
-                if (self.file.exprs.tag(s.event) != .real_literal) {
-                    try self.checkExpr(s.event);
-                    if (self.typeOf(s.event).width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
-                }
+                try self.checkDelay(s.event, tok);
                 _ = try self.append(.{ .statement = id });
                 try self.compileStmt(s.body, depth + 1);
             },
@@ -1835,6 +1866,32 @@ const Run = struct {
         if (self.net_of.contains(try self.scalarSlot(e)))
             return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     }
+    /// §9.7.1 a delay is a "delay_value", and A.8.3 makes that
+    /// `unsigned_number | real_number | ...` — so `#0.5` is as ordinary as
+    /// `#1`. A real literal is left untyped here and rounded to the module's
+    /// PRECISION at run time (`Scale.realDelay`) rather than truncated to its
+    /// unit, which is the only thing that makes a sub-unit delay mean anything.
+    fn checkDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!void {
+        if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
+        if (self.file.exprs.tag(e) == .real_literal) return;
+        try self.checkExpr(e);
+        if (self.typeOf(e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
+    }
+    /// The run-time counterpart of `checkDelay`, in the module's precision.
+    fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Error!u64 {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) == .real_literal) {
+            return self.scale.?.realDelay(ex.realValue(e)) catch |err|
+                return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
+        }
+        const value = try self.eval(scratch, e, 0);
+        // §9.7.1 leaves an x/z delay undefined; zero is the reading that keeps
+        // the process running rather than losing it.
+        if (value.hasUnknown()) return 0;
+        if (value.width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
+        return (if (value.signed) self.scale.?.signedDelay(value.asInt().?) else self.scale.?.unsignedDelay(value.values()[0])) catch |err|
+            return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
+    }
     /// Event terms resolve to watched slots at compile time, so a resumption
     /// never has to fail in the middle of a dispatch.
     fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
@@ -1951,6 +2008,51 @@ const Run = struct {
                     for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1 });
                     return;
                 },
+                // §8.5.3.3 "computes the right-hand side value using the
+                // current values, then causes the executing process to be
+                // suspended". Both halves of that sentence are here.
+                .sample => |s| {
+                    const a = self.file.stmt(s.statement).assign;
+                    const tok = self.file.stmtTok(s.statement);
+                    // The parked value is the target's width, and the target
+                    // may be an array element, so the width comes from the
+                    // lvalue's base slot rather than from `address` — which
+                    // §8.5.3.3 says is not resolved until the process resumes.
+                    const width = self.values[try self.baseSlot(a.target)].width;
+                    const rhs = try self.eval(scratch, a.value, width);
+                    // The arena, not scratch: the value has to outlive this
+                    // dispatch, which is the whole point of parking it.
+                    self.holds.items[s.cell] = try normalize(self.arena, rhs, .{ .width = width, .signed = rhs.signed });
+                    if (a.nonblocking) {
+                        // §8.5.3.4 the process does not suspend; the write is
+                        // one more NBA update, delayed if the control was one.
+                        if (try self.address(scratch, a.target)) |target|
+                            try self.enqueue(
+                                .{ .write = .{ .target = target, .value = self.holds.items[s.cell] } },
+                                if (a.timing_is_delay) try self.delayOf(scratch, a.timing, tok) else null,
+                                true,
+                            );
+                        pc += 1;
+                        continue;
+                    }
+                    if (a.timing_is_delay)
+                        try self.enqueue(.{ .run_process = pc + 1 }, try self.delayOf(scratch, a.timing, tok), false)
+                    else
+                        try self.suspendOn(a.timing, pc + 1);
+                    return;
+                },
+                // §8.5.3.3 "the values at the time the process resumes are used
+                // to determine the target(s)" — so the address is resolved now,
+                // even though the value was fixed before the suspension.
+                .deposit => |s| {
+                    const a = self.file.stmt(s.statement).assign;
+                    // §3.9: an out-of-range or X/Z index names no element, so
+                    // the write is discarded rather than landing somewhere.
+                    if (try self.address(scratch, a.target)) |target|
+                        try self.store(target, self.holds.items[s.cell].planes);
+                    pc += 1;
+                    continue;
+                },
                 // §5.10 an event has "no time duration": the resumed processes
                 // are scheduled in the active region of this same timestep, and
                 // execution of the triggering process continues meanwhile.
@@ -2047,22 +2149,7 @@ const Run = struct {
                     }
                 },
                 .event_control => |s| {
-                    // §9.7.1 `#0.5`: rounded to the module's precision, not
-                    // truncated to its unit. `compileStmt` let this through
-                    // without a type, so it never reaches `eval`.
-                    if (self.file.exprs.tag(s.event) == .real_literal) {
-                        const delay = self.scale.?.realDelay(self.file.exprs.realValue(s.event)) catch |e|
-                            return self.fail(self.file.stmtTok(id), "digital delay cannot be represented: {t}", .{e});
-                        try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
-                        return;
-                    }
-                    const value = try self.eval(scratch, s.event, 0);
-                    const delay: u64 = if (value.hasUnknown()) 0 else blk: {
-                        if (value.width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
-                        break :blk (if (value.signed) self.scale.?.signedDelay(value.asInt().?) else self.scale.?.unsignedDelay(value.values()[0])) catch |e|
-                            return self.fail(self.file.stmtTok(id), "digital delay cannot be represented: {t}", .{e});
-                    };
-                    try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
+                    try self.enqueue(.{ .run_process = pc + 1 }, try self.delayOf(scratch, s.event, self.file.stmtTok(id)), false);
                     return;
                 },
                 .sys_task => |s| switch (tasks.get(self.file.str(s.name)).?) {
