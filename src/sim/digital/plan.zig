@@ -12,8 +12,26 @@ const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
-/// What a store to a slot must wake, decided per slot here (`Plan.reach`).
-pub const Reach = @import("../rt/root.zig").Reach;
+/// What can observe a change of a slot, decided per slot here (`Plan.reach`):
+/// a store's `wake` in `rt.State` does only these.
+pub const Reach = packed struct(u8) {
+    /// Continuous drivers the fan-out queues (§6.1).
+    fan: bool = false,
+    /// Combinational nodes (`Design.comb`).
+    comb: bool = false,
+    /// Triggered processes (`Design.watchers`).
+    watch: bool = false,
+    /// A process suspended at an event control (`State.watch`).
+    terms: bool = false,
+    /// The §17.1.3 monitor.
+    mon: bool = false,
+    /// A §18 dump.
+    dump: bool = false,
+    _: u2 = 0,
+
+    /// Everything: the reach of a store `plan` could not narrow.
+    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
+};
 
 /// `vera --schedule=`: same-time events in the interpreter's FIFO order
 /// (`fifo`), or combinational processes levelized into topological nodes
