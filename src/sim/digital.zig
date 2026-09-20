@@ -190,6 +190,75 @@ const Net = struct {
     capacitive: bool = false,
     charge_gen: Inertial = .{},
 };
+/// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
+/// the type and the input terminals in source order.
+const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId };
+/// §7.8.5: "a gate transmits a logic value, not a connection" — every primitive
+/// but the MOS switches reads a z input as x. This is the one place the gate
+/// tables part company with the expression operators.
+fn gateIn(b: Int.Bit) Int.Bit {
+    return if (b == .z) .x else b;
+}
+/// §7.8.5's tables for A.3.4's twelve computing gate types, one output bit.
+///
+/// The n-input arms are written as controlling-value rules rather than as 4x4
+/// tables because that is what the tables ARE: `and(0, x)` is 0 because the 0
+/// controls, while `xor(0, x)` is x because xor has no controlling value. An
+/// implementation that folds "unknown in, unknown out" uniformly gets the and
+/// and or rows wrong and nothing else.
+fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
+    const invert = struct {
+        fn f(b: Int.Bit) Int.Bit {
+            return switch (b) {
+                .zero => .one,
+                .one => .zero,
+                // ~x is x and ~z is x: the complement of "unknown" is unknown.
+                else => .x,
+            };
+        }
+    }.f;
+    switch (kind) {
+        .g_and, .g_nand, .g_or, .g_nor => {
+            // The value that decides the output on its own, and the output it
+            // decides — `and` is controlled by 0 and produces 0.
+            const control: Int.Bit = if (kind == .g_and or kind == .g_nand) .zero else .one;
+            var unknown = false;
+            for (ins) |raw| {
+                const b = gateIn(raw);
+                if (b == control) return if (kind == .g_and or kind == .g_or) control else invert(control);
+                if (b == .x) unknown = true;
+            }
+            if (unknown) return .x;
+            const quiet = invert(control);
+            return if (kind == .g_and or kind == .g_or) quiet else control;
+        },
+        .g_xor, .g_xnor => {
+            var ones: u32 = 0;
+            for (ins) |raw| {
+                const b = gateIn(raw);
+                if (b == .x) return .x;
+                if (b == .one) ones += 1;
+            }
+            const parity: Int.Bit = if (ones % 2 == 1) .one else .zero;
+            return if (kind == .g_xor) parity else invert(parity);
+        },
+        .g_buf => return gateIn(ins[0]),
+        .g_not => return invert(ins[0]),
+        // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
+        // regimes: the OFF enable gives z whatever the data is; the ON enable
+        // gives the gate function of the data; an x/z enable means the gate may
+        // or may not be conducting, which IEEE 1364 writes as L (0-or-z) or H
+        // (1-or-z). Neither is a member of {0,1,x,z} — L is not 0, because it
+        // might be z — so the only sound four-state projection is x.
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
+            const on: Int.Bit = if (kind == .g_bufif1 or kind == .g_notif1) .one else .zero;
+            const enable = ins[1];
+            if (enable == .x or enable == .z) return .x;
+            if (enable != on) return .z;
+            return if (kind == .g_bufif0 or kind == .g_bufif1) gateIn(ins[0]) else invert(ins[0]);
+        },
+    }
+}
 // §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
 // of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
 // are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
@@ -203,6 +272,10 @@ const Driver = struct {
     /// Set instead of `value` (which is then `.none`) for a port connection
     /// that cannot collapse — see `Bridge`.
     bridge: ?Bridge = null,
+    /// Set instead of `value` for an A.3.1 gate instance. A gate is a driver
+    /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
+    /// which no operator does.
+    gate: ?Gate = null,
     sensitivity: []const u32,
     current: Int.Literal,
     s0: Ast.Strength = .strong,
@@ -1861,6 +1934,17 @@ const Run = struct {
             else => unreachable, // compileStmt admitted only the forms above
         }
     }
+    /// What a gate driver contributes: §7.8.5's one output bit.
+    fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate) Error!Int.Literal {
+        // One scratch list per evaluation, which `execute` resets each
+        // instruction — the point is to keep `gateBit` a pure function of the
+        // input bits, where §7.8.5's tables can be read straight off.
+        var bits: std.ArrayList(Int.Bit) = .empty;
+        for (g.ins) |in| try bits.append(scratch, (try self.eval(scratch, in, 1)).bit(0));
+        const out = try filled(scratch, 1, false, .z);
+        setBit(out, 0, gateBit(g.kind, bits.items));
+        return out;
+    }
     /// What a `Bridge` driver contributes: its window, z everywhere else.
     fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
         const out = try filled(scratch, width, false, .z);
@@ -2100,7 +2184,11 @@ const Run = struct {
                     // PARENT of the net it feeds, so it is the driver's scope
                     // and not the dispatch's that resolves its names.
                     self.scope = d.scope;
-                    const value = if (d.bridge) |b| try self.window(scratch, b, d.current.width) else blk: {
+                    const value = if (d.bridge) |b|
+                        try self.window(scratch, b, d.current.width)
+                    else if (d.gate) |g|
+                        try self.gateValue(scratch, g)
+                    else blk: {
                         const rhs = try self.eval(scratch, d.value, d.current.width);
                         break :blk try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
                     };
@@ -2243,6 +2331,7 @@ const Wire = struct {
     scope: u32,
     value: Ast.ExprId = .none,
     bridge: ?Bridge = null,
+    gate: ?Gate = null,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -2409,6 +2498,24 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
         try e.wires.append(arena, .{ .net = net, .scope = scope, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
+    // §7.1 a gate instance is one more driver of its output net, so it joins
+    // the same list an `assign` does and resolves against them.
+    for (m.gates) |g| {
+        const target = try r.scalarSlot(g.out);
+        const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
+        // §7.8.5's tables are one bit wide. A vector terminal would be A.3.1's
+        // `net_lvalue`, whose per-bit expansion nothing here asks for.
+        if (e.nets.items[net].resolved.width != 1) return r.fail(g.main_tok, "only scalar gate terminals are implemented", .{});
+        try e.wires.append(arena, .{
+            .net = net,
+            .scope = scope,
+            .gate = .{ .kind = g.kind, .ins = g.ins },
+            .s0 = g.strength0,
+            .s1 = g.strength1,
+            .delay = g.delay,
+            .tok = g.main_tok,
+        });
+    }
     for (m.instances) |inst| {
         if (inst.range != null or inst.params.len != 0)
             return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
@@ -2548,6 +2655,14 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         var watched: std.ArrayList(u32) = .empty;
         if (a.bridge) |b| {
             try watched.append(arena, b.src);
+        } else if (a.gate) |g| {
+            // §7.8.5 a gate re-evaluates on any input change, exactly as a
+            // continuous assignment does on any operand change.
+            for (g.ins) |in| {
+                try r.checkExpr(in);
+                if (r.typeOf(in).width != 1) return r.exprFail(in, "only scalar gate terminals are implemented");
+                try r.sensitivity(in, &watched);
+            }
         } else {
             try r.checkExpr(a.value);
             try r.sensitivity(a.value, &watched);
@@ -2557,6 +2672,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             .value = a.value,
             .scope = a.scope,
             .bridge = a.bridge,
+            .gate = a.gate,
             .sensitivity = watched.items,
             .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,

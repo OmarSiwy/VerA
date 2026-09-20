@@ -720,6 +720,29 @@ pub const ContAssign = struct {
     main_tok: u32 = 0,
 };
 
+/// A.3.4's gate types that compute a logic value. §7.8.5's tables define all
+/// twelve; `n_input`, `n_output` and `enable` gates differ only in what their
+/// terminal list means, which `GateInst` records in its SHAPE.
+pub const GateKind = enum { g_and, g_nand, g_or, g_nor, g_xor, g_xnor, g_buf, g_not, g_bufif0, g_bufif1, g_notif0, g_notif1 };
+
+/// A.3.1 one `gate_instance`. `out` is the output terminal (§7.8.5.1's `out`,
+/// or one of `out1..outN` for a `buf`/`not` with several — each of those
+/// becomes its own `GateInst` over the same input, since each is a separate
+/// driver). `ins` is the rest in source order: the inputs of an n-input gate,
+/// `(data, enable)` for an enable gate, the single input of `buf`/`not`.
+///
+/// A gate IS a driver of `out` (§7.1), which is why it carries the same
+/// `drive_strength` and `delay` a `ContAssign` does.
+pub const GateInst = struct {
+    kind: GateKind,
+    out: ExprId,
+    ins: []const ExprId,
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
+    delay: Delay3 = .{},
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -820,6 +843,10 @@ pub const ModuleDecl = struct {
     /// net_assignment, because each is a separate DRIVER of its net
     /// (IEEE 1364-2005 §6.1).
     assigns: []const ContAssign = &.{},
+    /// A.3.1 gate instantiations in source order. Separate from `assigns`
+    /// because §7.8.5's value tables are not the expression operators: a gate
+    /// input is a logic VALUE, so z on one reads as x.
+    gates: []const GateInst = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value

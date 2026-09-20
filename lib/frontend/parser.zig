@@ -407,6 +407,7 @@ pub const Parser = struct {
             .analog = b.analog.items,
             .discrete = b.discrete.items,
             .assigns = b.assigns.items,
+            .gates = b.gates.items,
             // §2.9 — every attr_spec seen since the last module. Attributes
             // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
             // collected by `parseSource` and belong to this module too, which is
@@ -683,6 +684,7 @@ pub const Parser = struct {
         analog: std.ArrayList(Ast.AnalogBlock) = .empty,
         discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
         assigns: std.ArrayList(Ast.ContAssign) = .empty, // A.6.1
+        gates: std.ArrayList(Ast.GateInst) = .empty, // A.3.1
         /// §6.6.1/§6.6.2 every named generate block of the module, with the
         /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
         /// is a declaration of a scope nothing downstream can reach yet
@@ -1018,6 +1020,12 @@ pub const Parser = struct {
             // A.4.1 `gate_instantiation ::= … | pass_switchtype
             // pass_switch_instance { , pass_switch_instance } ;`
             .kw_tran, .kw_rtran => try self.parsePassSwitch(),
+            // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
+            // compute a logic value.
+            .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => {
+                if (!self.digital) return self.unsupportedItem();
+                try self.parseGates(b);
+            },
             // A.6.2 `initial_construct` / `always_construct` — §7.2.2's discrete
             // context.
             .kw_initial, .kw_always => try self.parseDiscrete(b),
@@ -1236,6 +1244,86 @@ pub const Parser = struct {
     // ponytail: nothing is recorded, because nothing consumes it. The upgrade
     // path is the same one §7.6 insertion needs — a digital half in `Flatten` —
     // and until that exists an AST field would only be dead weight.
+    /// A.3.1 `gate_instantiation` for A.3.4's computing gate types:
+    ///
+    ///     n_input_gatetype  [drive_strength] [delay2] n_input_gate_instance …
+    ///     n_output_gatetype [drive_strength] [delay2] n_output_gate_instance …
+    ///     enable_gatetype   [drive_strength] [delay3] enable_gate_instance …
+    ///
+    /// The strength and the delay belong to the STATEMENT, so every instance in
+    /// the list shares them. `delay2` is a `delay3` with no turn-off value, and
+    /// `parseDelay3` already returns `.none` for an omitted one, so the three
+    /// arms need no separate delay parser — an n-input gate never turns off, so
+    /// a third value would be rejected by §7.14 rather than by the grammar.
+    fn parseGates(self: *Parser, b: *Body) Error!void {
+        const kind: Ast.GateKind = switch (self.peek()) {
+            .kw_and => .g_and,
+            .kw_nand => .g_nand,
+            .kw_or => .g_or,
+            .kw_nor => .g_nor,
+            .kw_xor => .g_xor,
+            .kw_xnor => .g_xnor,
+            .kw_buf => .g_buf,
+            .kw_not => .g_not,
+            .kw_bufif0 => .g_bufif0,
+            .kw_bufif1 => .g_bufif1,
+            .kw_notif0 => .g_notif0,
+            .kw_notif1 => .g_notif1,
+            else => unreachable, // the caller dispatched on exactly these
+        };
+        self.pos += 1;
+        // Unlike `assign`, a `(` here is ambiguous: A.3.1 makes the instance
+        // NAME optional, so `and (w, a, b);` opens a terminal list with the
+        // same token A.2.2.2's drive strength opens. The word inside settles
+        // it — A.2.2.2's alternatives all begin with a strength keyword, and no
+        // terminal can, since those spellings are reserved words.
+        var s0: Ast.Strength = .strong;
+        var s1: Ast.Strength = .strong;
+        if (self.peek() == .lparen and self.strengthWord(self.pos + 1) != null) try self.parseDriveStrength(&s0, &s1);
+        const delay: Ast.Delay3 = if (self.peek() == .hash) try self.parseDelay3() else .{};
+        while (true) {
+            const tok = self.pos;
+            // A.3.1 makes `name_of_gate_instance` optional; `(` after the name
+            // tells the two apart, as in `parsePassSwitch`.
+            if (self.identLike(self.pos)) self.pos += 1;
+            _ = try self.expect(.lparen);
+            var terms: std.ArrayList(Ast.ExprId) = .empty;
+            while (true) {
+                try terms.append(self.arena, try self.parseExpr());
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.rparen);
+            switch (kind) {
+                // A.3.1 `( output_terminal { , output_terminal } ,
+                // input_terminal )` — buf/not are the only gates whose list
+                // runs the other way: everything up to the LAST terminal is an
+                // output, and each is a separate driver of its own net.
+                .g_buf, .g_not => {
+                    if (terms.items.len < 2) return self.failAt(tok, .E0209, "a buf/not gate needs at least one output and one input", .{});
+                    const input = terms.items[terms.items.len - 1];
+                    for (terms.items[0 .. terms.items.len - 1]) |out|
+                        try b.gates.append(self.arena, .{ .kind = kind, .out = out, .ins = input_only: {
+                            const one = try self.arena.alloc(Ast.ExprId, 1);
+                            one[0] = input;
+                            break :input_only one;
+                        }, .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                },
+                // A.3.1 `( output_terminal , input_terminal , enable_terminal )`
+                .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
+                    if (terms.items.len != 3) return self.failAt(tok, .E0209, "an enable gate takes an output, a data input and an enable", .{});
+                    try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                },
+                // A.3.1 `( output_terminal , input_terminal { , input_terminal } )`
+                else => {
+                    if (terms.items.len < 3) return self.failAt(tok, .E0209, "an n-input gate takes an output and at least two inputs", .{});
+                    try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                },
+            }
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
+    }
+
     fn parsePassSwitch(self: *Parser) Error!void {
         if (self.digital) return self.failAt(self.pos, .E1100, "switch primitives are not implemented by digital execution", .{});
         const main_tok = self.pos;
