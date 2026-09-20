@@ -654,6 +654,56 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
     return o.b[0..width];
 }
 
+// ---- §9.4.1 the $monitor mechanism ----------------------------------------
+
+/// §9.4.1, the sentence that separates `$monitor` from `$strobe`:
+///
+///   "When a $monitor task is invoked with one or more arguments, the simulator
+///    sets up a mechanism whereby for each accepted step, IF THE VARIABLE OR AN
+///    EXPRESSION IN THE ARGUMENT LIST CHANGES VALUE compared with the last
+///    accepted step ... the entire argument list is displayed at the end of the
+///    time step as if reported by the $strobe task. If two or more arguments
+///    change value at the same time, ONLY ONE DISPLAY IS PRODUCED."
+///
+/// §9.5.2 carries it verbatim to `$fmonitor`: "the $fstrobe and $fmonitor
+/// system tasks work just like their counterparts ... except that they write to
+/// files using the file descriptor".
+///
+/// WHY THE RENDERED LINE IS THE COMPARISON and not a sensitivity list over the
+/// arguments. "Only one display is produced that shows the new values" makes
+/// the obligation a property of the RECORD, not of any one argument, and the
+/// record is the only thing that exists once the format run has consumed the
+/// operands — an argument may be an expression with no storage of its own, and
+/// two different values may render identically (a `%d` of 2.0 and of 2.4), in
+/// which case the clause's own words say the display "shows the new values"
+/// and there are none to show. `src/sim/digital.zig`'s `monitorPrint` takes
+/// exactly this route for exactly this reason; this is the analog half of the
+/// same rule.
+///
+/// Returns the text when it differs from what this site last reported — which
+/// includes the FIRST accepted step, where there is no "last accepted step" to
+/// compare against — and null when the step is to be suppressed.
+//
+// ponytail: one 4096-byte latch per call site, file scope, on `zSBuf`'s terms
+// and for `zSBuf`'s reason — the comparison has to outlive the step that made
+// it. A record longer than the latch is reported every step rather than
+// compared; per-instance latches are the upgrade the day a host runs two
+// instances of a model that monitors.
+pub fn zMonitor(comptime site: usize, text: []const u8) ?[]const u8 {
+    const Last = struct {
+        const n = site;
+        var b: [4096]u8 = undefined;
+        var len: usize = 0;
+        var seen: bool = false;
+    };
+    if (text.len > Last.b.len) return text;
+    if (Last.seen and Last.len == text.len and zstd.mem.eql(u8, Last.b[0..text.len], text)) return null;
+    @memcpy(Last.b[0..text.len], text);
+    Last.len = text.len;
+    Last.seen = true;
+    return text;
+}
+
 /// §3.3 string storage excludes NUL bytes. Compact the completed formatter
 /// output in its existing call-site scratch; padding counted the original bytes.
 /// ponytail: scalar compaction is bounded by the existing 512-byte formatter;
