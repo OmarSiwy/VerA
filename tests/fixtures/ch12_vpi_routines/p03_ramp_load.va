@@ -1,4 +1,3 @@
-`include "disciplines.vams"
 // The stimulus every timing fixture in P03 reads back through
 // vpi_get_analog_value(). Deliberately the simplest circuit whose solution is a
 // CLOSED FORM of time, so a plugin's expected value at a forced solution point
@@ -19,21 +18,64 @@
 //     t = 3.0e-3 -> V(out) = 3.0     t = 4.0e-3 -> V(out) = 4.0
 //
 // Used by: 02, 03, 04, 05.
+//
+// WHAT THIS FILE ASSERTS ON ITS OWN. The four rows above, and the load current
+// beside them — the same table the plugins read back, checked here without a
+// plugin. `//! time` puts the solve on exactly those instants (plus the dc
+// point at t = 0, where the ramp is zero and so is the current), and `//! solve`
+// unties every unknown, so nothing is pinned by hand: both wants are written
+// piecewise in `$abstime` because that is what the closed form IS, and §3.6.1
+// makes the node value the solution of the instances' equations rather than
+// anything a directive supplied.
+//
+// The bands are 1e-12 V on a 4 V signal and 1e-15 A on a 4 mA one, both far
+// tighter than any step controller could reach and far looser than the exact
+// arithmetic the clause fixes — a source that ramped at 1024 V/s, or a load
+// whose override never arrived, is orders of magnitude out.
+//
+// VerA DOES NOT SOLVE THIS DECK TODAY, and the `//! xfail` records why. When a
+// module instance contributes a POTENTIAL to a node pair and another instance
+// contributes a FLOW to the same pair, VerA keeps only the last one elaborated
+// and silently drops the other: `src`'s branch equation V(out,gnd) − 1000·t = 0
+// never reaches the residual — the flow unknown is declared and never written —
+// so the deck solves to x = 0 at every instant and both checks read 0.
+// Reversing the two instantiations reverses which one survives, which is what
+// makes it a merge and not a missing feature. §5.4.2.2 is the sentence it
+// contradicts: "A branch, either named or unnamed, is a source branch if either
+// the potential or the flow of that branch is assigned a value by a
+// contribution statement ... anywhere in the MODULE." A branch belongs to a
+// module instance, so `src` and `load` own two different branches between out
+// and gnd and neither can turn the other into a switch branch.
+//
+//! lrm 3.6
+//! lrm 5.4.2.2
+//! lrm 9.10
+//! analysis tran
+//! solve
+//! time 0, 1.5e-3, 2.5e-3, 3.0e-3, 4.0e-3
+//! xfail a potential contribution in one instance and a flow contribution in another, between the same two nodes, collide: VerA keeps only the last one elaborated, so the ramp's branch equation is dropped and the deck solves to zero
+`include "check.vh"
 
 module p03_ramp(p, n);
     inout p, n;
     electrical p, n;
     parameter real slope = 1000.0 from (0:inf);   // volts per second
-    analog
+    analog begin
+        `CHECK("the ideal ramp holds its terminals at 1000 volts per second of elapsed time",
+            V(p, n), $abstime * 1000.0, 1e-12);
         V(p, n) <+ slope * $abstime;
+    end
 endmodule
 
 module p03_res(p, n);
     inout p, n;
     electrical p, n;
     parameter real r = 1000.0 from (0:inf);
-    analog
+    analog begin
+        `CHECK("and the 1 kohm load draws t amperes without disturbing it",
+            V(p, n) / r, $abstime * 1.0, 1e-15);
         I(p, n) <+ V(p, n) / r;
+    end
 endmodule
 
 module p03_ramp_load;
