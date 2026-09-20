@@ -417,7 +417,9 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             const start = i;
             while (i < body.len and isIdentChar(body[i])) i += 1;
             const word = body[start..i];
-            const idx = findString(params, word);
+            const idx = for (params, 0..) |formal, n| {
+                if (std.mem.eql(u8, formal, word)) break n;
+            } else null;
             try out.appendSlice(pp.scratch, if (idx) |k| args[k] else word);
             // IEEE 1364 §19.3.1 substitutes each actual "literally", and an
             // escaped identifier's terminating white space (§2.8.1) is part of
@@ -480,12 +482,4 @@ fn endsInEscapedIdent(text: []const u8) bool {
         }
     }
     return false;
-}
-
-/// Returns the index of the first element of `haystack` equal to `needle`.
-fn findString(haystack: []const []const u8, needle: []const u8) ?usize {
-    for (haystack, 0..) |s, k| {
-        if (std.mem.eql(u8, s, needle)) return k;
-    }
-    return null;
 }
