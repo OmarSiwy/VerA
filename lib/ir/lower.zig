@@ -796,6 +796,11 @@ const DeferredDisplay = struct {
     /// §5.9.3 genvar bindings live at the statement, re-established around the
     /// end-of-block lowering so `I(pair[k])` in an unrolled body still folds.
     genvars: []const GenvarBind,
+    /// `Ast.AnalogBlock.unit` of the block this statement was written in.
+    /// Re-established around the end-of-block lowering for the same reason
+    /// `genvars` is: `flowAccum` keys on it (§5.6.8.1's per-instance branch),
+    /// and by `finishDisplays` time `cur_unit` is whatever block lowered last.
+    unit: u32,
     /// Index of the placeholder row in `displays` whose `.val` this fills.
     display: u32,
 };
@@ -6078,6 +6083,7 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         .args = args,
         .pre = pre,
         .genvars = genvars,
+        .unit = self.cur_unit,
         .display = @intCast(self.displays.items.len),
     });
     // The placeholder keeps `displays` in source order — W0850 reporting and
@@ -6123,6 +6129,7 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         // Provenance: instructions minted here belong to the display
         // statement, not to whatever token the block ended on.
         self.mir.cur_tok = dd.tok;
+        self.cur_unit = dd.unit;
         for (dd.genvars) |g| try self.consts.put(self.arena, g.name, g.c);
         var vals: std.ArrayList(Mir.Value) = .empty;
         defer vals.deinit(self.arena);
@@ -7774,8 +7781,11 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // branch is a §5.4.2.1 flow PROBE — a short whose current is a
             // genuine unknown of the solve — and a POTENTIAL source's branch
             // current is pinned by the branch row codegen emits for it. Both of
-            // those keep the unknown and read it.
-            if (self.flowAccum(t)) |acc| {
+            // those keep the unknown and read it — the second of them including
+            // §5.6.8.1's hierarchical case, where the source this instance just
+            // created runs in PARALLEL with another instance's accumulator
+            // (`potentialSourceHere`).
+            if (!self.potentialSourceHere(t)) if (self.flowAccum(t)) |acc| {
                 // §5.6.1.2: the retained value of a source branch is the WHOLE
                 // of what was contributed to it, and §5.4.2.2 makes that whole
                 // readable. No clause lets a reactive term count for the node
@@ -7801,7 +7811,7 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                     break :blk if (r == .f_zero) dq else try self.emit(.fadd, &.{ r, dq });
                 };
                 return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
-            }
+            };
             const u = try self.flowUnknown(t.hi, t.lo);
             const v = try self.probe(u);
             return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
@@ -7812,12 +7822,44 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The §5.6.1.2 retained-flow accumulator of the branch (hi, lo), if a `<+` has
 /// already made it a flow source. Keyed exactly like `contribIndex` — on the
 /// canonicalised pair, so `I(n,p)` finds the one entry `I(p,n)` created.
+///
+/// NOT keyed on the unit, unlike `discardOpposite`: §5.5.5 lets "a module
+/// access the potential and flow of a branch in another module instance ...
+/// providing that value is available in the other instance", and a hierarchical
+/// `I(x1.p, x1.n)` is exactly that read. §5.5.4's new-branch rule is about the
+/// access functions whose examples are all POTENTIAL probes, which draw no flow
+/// — see `potentialSourceHere` for the case where this unit's OWN source is the
+/// branch being read.
 fn flowAccum(self: *const Lower, t: Target) ?Accum {
     for (self.contributions.items, self.accum.items) |c, acc| {
         if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
             return acc;
     }
     return null;
+}
+
+/// §5.6.8.1: "Direct contribution statements can contribute to a branch between
+/// combinations of local and hierarchical nets. In these cases, a new unnamed
+/// branch is created in the module containing the direct contribution
+/// statements." So a potential `<+` written HERE is a source branch of THIS
+/// instance, in parallel with whatever another instance retained over the same
+/// node pair — §5.4.1's "only one unnamed branch between any two nets" is a
+/// PER-INSTANCE rule, and flattening has already collapsed the pairs.
+///
+/// The flow of that source is the branch-current unknown codegen pins with its
+/// branch row, never the parallel branch's accumulator. Without this a parent's
+/// `I(drv.x, drv.y)` read back the CHILD's conduction current.
+///
+/// `unit` is the id of the contribution that OPENED the entry (see its doc), so
+/// a second instance potential-sourcing a pair another already sources reads the
+/// accumulator instead — two ideal potential sources in parallel is a degenerate
+/// topology the clause does not describe either way.
+fn potentialSourceHere(self: *const Lower, t: Target) bool {
+    for (self.contributions.items) |c| {
+        if (c.kind == .direct and c.access == .potential and c.hi == t.hi and c.lo == t.lo and
+            c.br == t.br and c.unit == self.cur_unit) return true;
+    }
+    return false;
 }
 
 /// LRM §5.4.3 port access — `I(<p>)`.
