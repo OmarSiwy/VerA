@@ -56,7 +56,12 @@ const ZFSlot = struct {
     /// into the count plus one reader per destination, exactly as `lowerScan`
     /// splits `$sscanf`. The readers are pure over this latch, so the read
     /// happens once however many destinations there are.
-    line: [512]u8 = undefined,
+    /// 4096 and not 512, for the reason `str_kernels.zSBuf`'s row is: §9.5.4.1
+    /// puts no length limit on a line ("until a newline character is read and
+    /// transferred to str, or an EOF condition is encountered") and §3.3's
+    /// `string` is not a fixed-width type, so a short row does not truncate a
+    /// record — it silently splits it across two reads.
+    line: [4096]u8 = undefined,
     line_len: usize = 0,
 };
 

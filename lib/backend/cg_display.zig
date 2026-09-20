@@ -46,10 +46,12 @@ pub const Spec = struct {
     prec: ?usize = null, // null = no precision given
 
     // ponytail: the scratch for a composed field is a stack array in the
-    // emitted block, so `%99999999d` would otherwise emit a 100 MB frame. 512
-    // is wider than any transcript line; a wider request is clamped, not
+    // emitted block, so `%99999999d` would otherwise emit a 100 MB frame.
+    // 4096 matches `str_kernels.zSBuf`'s row and `file_kernels.ZFSlot.line`,
+    // so a record this formatter composes is one a §9.5.2 write can emit and a
+    // §9.5.4.1 `$fgets` can read back whole; a wider request is clamped, not
     // honored. Upgrade path: spill to zSBuf if a real model ever wants more.
-    const max_field = 512;
+    const max_field = 4096;
     fn w(self: Spec) usize {
         return @min(self.width, max_field);
     }
@@ -67,8 +69,10 @@ pub const PrintArg = struct {
     want: VTy,
     how: Mode = .plain,
     spec: Spec = .{},
-    /// `%E`: C prints the exponent marker in the case the source wrote.
-    upper: bool = false,
+    /// `.creal`: the source's own conversion letter. Its CASE is data —
+    /// `%E`/`%G` print the exponent marker and INF/NAN the way they were
+    /// written — so the raw byte travels rather than a normalized one.
+    conv: u8 = 0,
     /// Original integer width, before SSA and the i64 storage carrier.
     bits: u7 = 64,
 
@@ -87,10 +91,14 @@ pub const PrintArg = struct {
         /// `+42`, ` 42`, `-0042` — which no Zig format spec can spell, so the
         /// field text is composed in per-op scratch and printed as `{s}`.
         cint,
-        /// `%e`/`%E`: C default precision 6, a signed exponent of at least two
-        /// digits (`1.000000e+00`). Zig's `{e}` prints `1e0`, so the operand
-        /// formats through `{e:.P}` and the exponent is rewritten.
-        cexp,
+        /// §9.4.3 Table 9-23's real conversions — `%e`, `%f`, `%g` and the
+        /// engineering `%r` — through `str_kernels.zCReal`, which is C11
+        /// 7.21.6.1 (flags, width, precision, correct round-half-to-EVEN)
+        /// where Zig's float verbs are shortest-round-trip and round half
+        /// away from zero. The kernel composes the WHOLE field, sign and
+        /// padding included, because C's '0' flag puts the pad between the
+        /// sign and the digits and no Zig format spec can spell that.
+        creal,
         /// `%h`/`%o`/`%b`: the two's-complement bit pattern of the operand.
         /// Zig's radix verbs on an i64 print `-2a` instead, hence a u64
         /// bitcast around the rendered integer.
@@ -106,9 +114,9 @@ pub const PrintArg = struct {
             .ascii => @sizeOf(i64),
             .pad => 24, // i64's widest decimal (20 chars) plus slack
             .cint => @max(24, self.spec.w() + 2), // the full zero-filled field
-            // two halves: the raw `{e:.P}` text, then the C-ified copy which
-            // can grow by "+0" — see `renderPrintArg`'s .cexp arm.
-            .cexp => 2 * (self.spec.p(6) + 20),
+            // The widest `%f` body is a sign, f64's 309 integer digits, the
+            // point and the precision; the field can be wider still.
+            .creal => @max(self.spec.w(), self.spec.p(6) + 320) + 8,
             else => null,
         };
     }
@@ -587,15 +595,16 @@ pub fn appendConv(
     const conv = std.ascii.toLower(conv_raw);
     const ty = g.an.tyOf(g.an.rv(v));
     switch (conv) {
-        // §9.4.3 Table 9-23 gives the real conversions "the full formatting
-        // capabilities available in the C language", and C's %e is
-        // `1.000000e+00`: default precision 6, a signed exponent of at least
-        // two digits. Zig's `{e}` prints `1e0`, so the operand renders through
-        // the .cexp fixup block. An integer operand converts to real first —
+        // §9.4.3 Table 9-23's four real conversions. They "have the full
+        // formatting capabilities available in the C language", which is
+        // C11 7.21.6.1 and not Zig's float verbs — and `%r`/`%R` is the one
+        // row C does not have, §2.6.2's engineering notation. One kernel
+        // answers all four; it composes the whole field, so there is no outer
+        // alignment to apply. An integer operand converts to real first —
         // Table 9-23 is "for real numbers", and §4.2.1.1 defines the step.
-        'e' => {
-            try appendStrField(g, fmt, spec, false);
-            try ops.append(a, .{ .v = v, .want = .real, .how = .cexp, .spec = spec, .upper = conv_raw == 'E' });
+        'e', 'f', 'g', 'r' => {
+            try fmt.appendSlice(a, "{s}");
+            try ops.append(a, .{ .v = v, .want = .real, .how = .creal, .spec = spec, .conv = conv_raw });
         },
         // §9.4.3 Table 9-22: a radix conversion shows the two's-complement bit
         // pattern of the operand — 1364-2005 §17.1.1.2 sizes the display to
@@ -660,23 +669,22 @@ pub fn appendConv(
             }
         },
         else => {
-            // The Zig verb. `%f` is C's fixed-point default of six decimals;
-            // `%g` and `%r` are shortest-round-trip, which is what `{d}` on a
-            // float is. §9.4.3's engineering-notation `%r` scale suffix is NOT
-            // reproduced. `conv == 0` — an operand outside every format run —
-            // is §9.4.3's "default decimal format": the value in its own type's
-            // natural spelling ({d} minimal-width, not 1364's auto-sized
-            // field; see `buildArgs`), and `%s`/the default on a string print
-            // the text, which is what every `CHECK` macro's `%s` depends on.
+            // The Zig verb, for the conversions VerA does not spell out.
+            // `conv == 0` — an operand outside every format run — is §9.4.3's
+            // "default decimal format": the value in its own type's natural
+            // spelling ({d} minimal-width, not 1364's auto-sized field; see
+            // `buildArgs`), and `%s`/the default on a string print the text,
+            // which is what every `CHECK` macro's `%s` depends on. `%t`/`%u`/
+            // `%z`/`%v` are §9.4.3's timeformat/binary/strength rows, none of
+            // which an analog device carries — they render as the value.
             const verb: []const u8 = switch (conv) {
                 's' => "s",
-                'f', 'g', 'r', 't', 'u', 'z', 'v' => "d",
+                't', 'u', 'z', 'v' => "d",
                 else => if (ty == .str) "s" else "d",
             };
             try fmt.append(a, '{');
             try fmt.appendSlice(a, verb);
-            // `%f`'s six decimals only apply when the source did not say otherwise.
-            try appendZigSpec(g, fmt, spec, if (conv == 'f' and spec.prec == null) ".6" else null);
+            try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
             try ops.append(a, .{ .v = v, .want = ty, .spec = spec });
         },
@@ -736,21 +744,23 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
                 try g.b("; break :zi{d} std.fmt.bufPrint(&zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, i, sign });
             }
         },
-        .cexp => {
-            // Format with Zig's `{e:.P}` into the first half of the scratch,
-            // then rewrite the exponent the way C spells it: sign always
-            // present, at least two digits ("1e4" → "1e+04"). A text with no
-            // 'e' (inf/nan) passes through — C prints those bare too. f64
-            // exponents have at most three digits, so one padding '0' is the
-            // most ever inserted.
-            const prec = p.spec.p(6);
-            const half = prec + 20;
-            try g.b("ze{d}: {{ const zv: f64 = (", .{i});
+        .creal => {
+            // C11 7.21.6.1's flag bits, in `str_kernels.zCReal`'s order:
+            // 1 '-', 2 '+', 4 ' ', 8 '0'. The kernel composes the whole field
+            // — sign, digits and padding — so nothing is left for the format
+            // string to align.
+            const flags: u8 = (@as(u8, @intFromBool(p.spec.left))) |
+                (@as(u8, @intFromBool(p.spec.plus)) << 1) |
+                (@as(u8, @intFromBool(p.spec.space)) << 2) |
+                (@as(u8, @intFromBool(p.spec.zero)) << 3);
+            try g.b("zCReal(&zb{d}, (", .{i});
             try g.renderVal(p.v, .real);
-            try g.b(").val(); const zt = std.fmt.bufPrint(zb{d}[0..{d}], \"{{e:.{d}}}\", .{{zv}}) catch unreachable; ", .{ i, half, prec });
-            try g.b("const zx = std.mem.lastIndexOfScalar(u8, zt, 'e') orelse break :ze{d} zt; ", .{i});
-            try g.b("const zn = zt[zx + 1] == '-'; const zg = zt[zx + 1 + @intFromBool(zn) ..]; ", .{});
-            try g.b("break :ze{d} std.fmt.bufPrint(zb{d}[{d}..], \"{{s}}{c}{{s}}{{s}}{{s}}\", .{{ zt[0..zx], if (zn) \"-\" else \"+\", if (zg.len < 2) \"0\" else \"\", zg }}) catch unreachable; }}", .{ i, i, half, @as(u8, if (p.upper) 'E' else 'e') });
+            try g.b(").val(), '{c}', {d}, {d}, {d})", .{
+                p.conv,
+                flags,
+                p.spec.w(),
+                if (p.spec.prec) |pr| @as(i64, @intCast(@min(pr, Spec.max_field))) else -1,
+            });
         },
         .plain => switch (p.want) {
             .real => {
@@ -853,26 +863,68 @@ test "§9.7.3 $fatal's finish_number is a diagnostic level, not message text" {
     try std.testing.expect(!has(out, "{d}died"));
 }
 
-test "§9.4.3 Table 9-23: %e is C's exponential — .6 default, signed 2-digit exponent" {
+test "§9.4.3 Table 9-23: every real conversion routes through the C kernel" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
 
-    // `%e` of 1.5 must print `1.500000e+00`: the block formats with Zig's
-    // `{e:.6}` and rewrites the exponent to C's signed, zero-padded form.
+    // All four conversions become one `zCReal` call and one `{s}` — the kernel
+    // composes the whole field, so no outer alignment is left to apply.
     const e = try emitBody(a, "$strobe(\"%e\", 1.5);");
-    try std.testing.expect(has(e, "\"{e:.6}\""));
-    try std.testing.expect(has(e, "\"{s}e{s}{s}{s}\"")); // the C-ifying rewrite
-    try std.testing.expect(has(e, "\"{s}\\n\"")); // printed as a composed field
+    try std.testing.expect(has(e, "zCReal(&zb0, (S.con(1.5)).val(), 'e', 0, 0, -1)"));
+    try std.testing.expect(has(e, "\"{s}\\n\""));
 
-    // Explicit width/precision are honored: `%10.4e` pads the composed field.
+    // Width and precision reach the kernel as NUMBERS (C puts the pad inside
+    // the field, behind the sign), never as a Zig format tail.
     const wp = try emitBody(a, "$strobe(\"%10.4e\", 1.5);");
-    try std.testing.expect(has(wp, "\"{e:.4}\""));
-    try std.testing.expect(has(wp, "\"{s:>10}\\n\""));
+    try std.testing.expect(has(wp, "'e', 0, 10, 4)"));
+    try std.testing.expect(!has(wp, "{s:>10}"));
 
-    // `%E` keeps C's uppercase exponent marker.
+    // The conversion letter travels in the CASE the source wrote it: `%E`
+    // spells the exponent marker (and INF/NAN) upper case.
     const up = try emitBody(a, "$strobe(\"%E\", 1.5);");
-    try std.testing.expect(has(up, "\"{s}E{s}{s}{s}\""));
+    try std.testing.expect(has(up, "'E', 0, 0, -1)"));
+
+    // The flag bits, in `zCReal`'s order: 1 '-', 2 '+', 4 ' ', 8 '0'.
+    const fl = try emitBody(a, "$strobe(\"%+08.1f\", 2.5);");
+    try std.testing.expect(has(fl, "'f', 10, 8, 1)"));
+
+    // Table 9-23's `%r` is engineering notation, not a second spelling of
+    // `%g` — it reaches the same kernel with its own letter.
+    const r = try emitBody(a, "$strobe(\"%r\", 1.5);");
+    try std.testing.expect(has(r, "'r', 0, 0, -1)"));
+}
+
+test "§9.4.3/C11 7.21.6.1: zCReal is the conversion the device runs" {
+    // `str_kernels.zig` is `@embedFile`d into every printing artifact AND
+    // imported here, so these ARE the renderings a model gets. Each row is a
+    // rule of the clause rather than a sample: the %g style choice on both
+    // sides of its window, the sign/zero-fill placement, the tie that
+    // separates round-half-to-EVEN from round-half-away, and §2.6.2's
+    // mantissa normalisation.
+    // Through the `kernels` module door, never by relative path: a kernel file
+    // may live in exactly ONE module — see `kernels.zig`'s header.
+    const k = @import("kernels").str_kernels;
+    var b: [1024]u8 = undefined;
+    const rows = .{
+        .{ 1234.5678, 'g', @as(u8, 0), @as(usize, 0), @as(i64, -1), "1234.57" },
+        .{ 1.0e-5, 'g', 0, 0, -1, "1e-05" }, // exponent below -4 -> %e
+        .{ 1.0e8, 'g', 0, 0, -1, "1e+08" }, // exponent at/above P -> %e
+        .{ 2.5, 'f', 10, 8, 1, "+00002.5" }, // '+' then the zero fill
+        .{ -3.5, 'f', 8, 9, 2, "-00003.50" }, // the pad is BEHIND the sign
+        .{ -3.5, 'f', 1, 9, 2, "-3.50    " }, // '-' overrides '0'
+        .{ 2.5, 'f', 0, 0, 0, "2" }, // an exact tie goes to the EVEN digit
+        .{ 3.5, 'f', 0, 0, 0, "4" }, // ...which round-half-away gets wrong
+        .{ 1.5, 'e', 0, 0, -1, "1.500000e+00" },
+        .{ 0.0015, 'r', 0, 0, -1, "1.5m" },
+        .{ 2.0e-13, 'R', 0, 0, -1, "200f" }, // not "0.2p": the mantissa is >= 1
+    };
+    inline for (rows) |row| {
+        try std.testing.expectEqualStrings(row[5], k.zCReal(&b, row[0], row[1], row[2], row[3], row[4]));
+    }
+    // C11 7.21.6.1p13 rounds the VALUE, not its shortest decimal: 0.1 is not
+    // 0.1, and past 17 digits that is visible.
+    try std.testing.expectEqualStrings("0.10000000000000000555", k.zCReal(&b, 0.1, 'f', 0, 0, 20));
 }
 
 test "§9.4.3/C: integer sign flags — %05d packs zeros after the sign, %+d prints it" {
