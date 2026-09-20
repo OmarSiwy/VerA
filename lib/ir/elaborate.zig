@@ -360,6 +360,13 @@ const Flatten = struct {
     /// read by `cloneExpr`'s sys_call arm (`rewriteParamsetDist`).
     in_paramset: bool = false,
 
+    /// True while cloning the branch a `<+` or an indirect assignment DRIVES.
+    /// §6.3.6's second automatic rule divides "the value returned by any branch
+    /// flow PROBE" by $mfactor, and a contribution's left-hand side is not a
+    /// probe of the branch — it is the branch. Read by `cloneExpr`'s
+    /// branch_access arm, which cannot otherwise tell the two apart.
+    contrib_target: bool = false,
+
     /// One `segs` row: the disciplines a net's child segments declared, and
     /// where the first one was declared (the diagnostic anchor — the same
     /// "the DECLARATION's token" convention `resolveDiscipline`'s addNet
@@ -1832,6 +1839,60 @@ const Flatten = struct {
         return self.ctx.file.exprs.strOf(v);
     }
 
+    /// §6.3.6's two automatic scaling rules, applied to one already-cloned
+    /// branch access. `flow_scale` is the running `$mfactor` product the unit
+    /// was instantiated with, as an expression in the flat namespace.
+    ///
+    ///     "All contributions to a branch flow quantity in the analog block
+    ///      shall be multiplied by $mfactor. The value returned by any branch
+    ///      flow probe in the analog block ... shall be divided by $mfactor."
+    ///
+    /// The clause's own justification is why this is arithmetic on the SOURCE
+    /// and not a knob the host turns: "the behavior of the module in the design
+    /// is identical to the behavior of a quantity $mfactor of identical modules
+    /// with the same connections". A flattened child IS the design, so the only
+    /// place those $mfactor copies can come from is its own equations. (The
+    /// TOP's $mfactor is a different thing and stays with the host, which scales
+    /// the whole stamp by it — Table 9-29 gives the top the value 1.0, so
+    /// `unit.mfactor` is `.none` there and nothing here fires.)
+    ///
+    /// Is this access a FLOW? The discipline of the net the terminal resolved to
+    /// names a flow nature, and §3.6.1.4's `access` attribute of that nature is
+    /// the spelling — the same three-step lookup `primitiveAccess` does, for the
+    /// same reason: `I` is electrical's spelling and not every discipline's.
+    ///
+    /// ponytail: a NAMED branch (`I(br)`) is not in `disc_of`, so it is left
+    /// unscaled; the upgrade is a branch → net map here. Rules 3 and 4 (noise
+    /// power, multiplied for a flow contribution and divided for a potential
+    /// one) are likewise not applied — `mfactor_flow_noise.va` and
+    /// `mfactor_potential_noise.va` pin the unscaled top-level case only.
+    fn mfactorScale(
+        self: *Flatten,
+        value: Ast.ExprId,
+        access: Ast.StrId,
+        net: Ast.ExprId,
+        op: Ast.BinaryOp,
+        tok: u32,
+    ) Error!?Ast.ExprId {
+        if (self.unit.mfactor == .none) return null;
+        const name = self.netRefName(net) orelse return null;
+        const disc = self.disc_of.get(name) orelse return null;
+        const d = for (self.ctx.file.disciplines) |*x| {
+            if (x.name == disc) break x;
+        } else return null;
+        if (d.flow == .none) return null;
+        const v = self.ctx.file.natureAttrExpr(d.flow, "access") orelse return null;
+        if (self.ctx.file.exprs.tag(v) != .ident) return null;
+        if (self.ctx.file.exprs.strOf(v) != access) return null; // a potential
+        return try self.ctx.file.exprs.add(self.ctx.arena, .{
+            .tag = .binary,
+            .main_tok = tok,
+            .lhs = value,
+            .rhs = self.unit.mfactor,
+            .extra = @intFromEnum(op),
+        });
+    }
+
     /// §6.2.2 an instance array bound. Integer literals and the arithmetic over
     /// them, which is what a range is written as; a bound reading a parameter is
     /// E0909, because the parameter table does not exist until lowering.
@@ -1996,6 +2057,15 @@ const Flatten = struct {
     /// belong to the unit being inlined. Every row is appended, never mutated:
     /// the child's own ids stay valid because a second instance of the same
     /// module clones the same source rows again, under its own map.
+    /// The branch a `<+` or an indirect assignment DRIVES, as opposed to one it
+    /// reads: §6.3.6's flow-probe division must not fire on it. Everything else
+    /// about the clone is the same.
+    fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
+        self.contrib_target = true;
+        defer self.contrib_target = false;
+        return self.cloneExpr(e);
+    }
+
     fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
         if (e == .none) return .none;
         const x = &self.ctx.file.exprs;
@@ -2042,6 +2112,14 @@ const Flatten = struct {
                 n.lhs = try self.cloneExpr(x.lhs(e));
                 n.rhs = try self.cloneExpr(x.rhs(e));
                 if (self.unit.primitive) n.str = self.primitiveAccess(n.str, n.lhs);
+                // §6.3.6 rule 2: a flow PROBE inside a scaled instance reads the
+                // branch's whole flow, which is $mfactor copies' worth, so the
+                // per-copy value the equation was written against is that over
+                // $mfactor. Not the branch a `<+` drives — see `contrib_target`.
+                if (!self.contrib_target) {
+                    const probe = try self.ctx.file.exprs.add(self.ctx.arena, n);
+                    return (try self.mfactorScale(probe, n.str, n.lhs, .div, n.main_tok)) orelse probe;
+                }
             },
             .call => {
                 // §4.7 a user function was renamed with the declarations.
@@ -2268,12 +2346,24 @@ const Flatten = struct {
                 .target = try self.cloneExpr(v.target),
                 .value = try self.cloneExpr(v.value),
             } },
-            .contribute => |v| .{ .contribute = .{
-                .lhs = try self.cloneExpr(v.lhs),
-                .rhs = try self.cloneExpr(v.rhs),
-            } },
+            .contribute => |v| blk: {
+                const lhs = try self.cloneTarget(v.lhs);
+                const rhs = try self.cloneExpr(v.rhs);
+                // §6.3.6 rule 1: "all contributions to a branch flow quantity in
+                // the analog block shall be multiplied by $mfactor", and the
+                // clause adds that "Verilog-AMS does not provide a method to
+                // disable" it. A potential contribution is left alone — the
+                // clause states the rule for flow, and $mfactor copies in
+                // parallel share a potential.
+                const x = &self.ctx.file.exprs;
+                const scaled = if (x.tag(lhs) == .branch_access or x.tag(lhs) == .port_access)
+                    try self.mfactorScale(rhs, x.strOf(lhs), x.lhs(lhs), .mul, x.mainTok(lhs))
+                else
+                    null;
+                break :blk .{ .contribute = .{ .lhs = lhs, .rhs = scaled orelse rhs } };
+            },
             .indirect => |v| .{ .indirect = .{
-                .lhs = try self.cloneExpr(v.lhs),
+                .lhs = try self.cloneTarget(v.lhs),
                 .probe = try self.cloneExpr(v.probe),
                 .eqn = try self.cloneExpr(v.eqn),
             } },
@@ -2496,6 +2586,39 @@ test "a module instantiating itself is E0905, not a stack overflow" {
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
     try std.testing.expectEqual(diag.Code.E0905, f.bag.at(0).code);
+}
+
+test "§6.3.6 a scaled instance's flow contribution is multiplied, its flow probe divided" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+
+    try parseWithPrelude(&f,
+        \\module top(p, n, o); inout p, n, o; electrical p, n, o;
+        \\  kid #(.$mfactor(4.0)) u(p, n, o);
+        \\endmodule
+        \\module kid(a, b, c); inout a, b, c; electrical a, b, c;
+        \\  analog I(a, b) <+ V(a, b);
+        \\  analog V(c) <+ I(a, b);
+        \\endmodule
+    );
+    const design = try elaborate(f.ctx());
+    const x = &f.file.exprs;
+    try std.testing.expectEqual(@as(usize, 2), design.top.analog.len);
+
+    // Rule 1: the FLOW contribution's value is `V(a,b) * 4.0`. The left-hand
+    // side is untouched — it names the branch, it is not a read of it.
+    const flow = f.file.stmt(design.top.analog[0].body).contribute;
+    try std.testing.expectEqual(Ast.ExprTag.branch_access, x.tag(flow.lhs));
+    try std.testing.expectEqual(Ast.BinaryOp.mul, x.binOp(flow.rhs));
+    try std.testing.expectEqual(@as(f64, 4.0), x.realValue(x.rhs(flow.rhs)));
+
+    // Rule 2: the POTENTIAL contribution is not scaled, but the flow probe
+    // inside it is divided — one instance of 4 copies carries a quarter each.
+    const pot = f.file.stmt(design.top.analog[1].body).contribute;
+    try std.testing.expectEqual(Ast.ExprTag.branch_access, x.tag(pot.lhs));
+    try std.testing.expectEqual(Ast.BinaryOp.div, x.binOp(pot.rhs));
+    try std.testing.expectEqual(Ast.ExprTag.branch_access, x.tag(x.lhs(pot.rhs)));
+    try std.testing.expectEqual(@as(f64, 4.0), x.realValue(x.rhs(pot.rhs)));
 }
 
 test "§6.3.1 a defparam beats the instance's own override, and an unmatched one is E0907" {

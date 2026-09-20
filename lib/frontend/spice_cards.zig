@@ -8,15 +8,16 @@
 //! "the subcircuits and models contained within the SPICE netlist are treated as
 //! module definitions" — has objects to range over.
 //!
-//! WHAT IT IS NOT. It is not a netlist parser and does not become one. There is
-//! no device card, no `.TRAN`/`.DC`/`.OP`, no `.INCLUDE`/`.LIB`, no `.PARAM`
+//! WHAT IT IS NOT. It is not a general netlist simulator and does not become
+//! one. There is no `.TRAN`/`.DC`/`.OP`, no `.INCLUDE`/`.LIB`, no `.PARAM`
 //! expression evaluator and no dialect tokenizer. E.2's noun phrase is
 //! "subcircuits and models ... treated as module definitions", and a module
-//! definition is an INTERFACE plus a body; the two cards this reads are exactly
-//! the two that declare an interface. Everything else on the line is SKIPPED
-//! silently rather than diagnosed, because a netlist VerA only mines for
-//! declarations is not a netlist VerA claims to simulate — refusing a `.TRAN`
-//! would be claiming jurisdiction this file does not have.
+//! definition is an INTERFACE plus a BODY — so the cards read here are the two
+//! that declare an interface, plus, INSIDE a `.SUBCKT`, the device cards that
+//! are its body (`emitBody`). Everything else on the line is SKIPPED silently
+//! rather than diagnosed, because a netlist VerA only mines for declarations is
+//! not a netlist VerA claims to simulate — refusing a `.TRAN` would be claiming
+//! jurisdiction this file does not have.
 //!
 //! WHY IT SYNTHESIZES TEXT instead of building declarations. Same argument as
 //! `Preprocessor.spice_primitives`, which this extends and which is worth reading
@@ -140,8 +141,15 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     }
     if (logical.items.len != 0) try cards.append(arena, logical.items);
 
-    for (cards.items) |card| {
-        if (try emitCard(arena, &out, card, &seen)) count += 1;
+    // INDEX-BASED, because a `.SUBCKT` header is not the whole card it reads:
+    // E.2 makes it a module DEFINITION, and a definition runs to its `.ENDS`.
+    // The body is consumed with the header whether or not anything is emitted,
+    // so a repeated `.SUBCKT`'s cards are not read a second time at top level.
+    var i: usize = 0;
+    while (i < cards.items.len) {
+        const body = subcktBody(cards.items[i..]);
+        if (try emitCard(arena, &out, cards.items[i], body, &seen)) count += 1;
+        i += 1 + body.len;
     }
 
     if (count == 0) return .{};
@@ -157,11 +165,30 @@ fn strip(raw: []const u8) []const u8 {
     return line;
 }
 
-/// One complete card. Returns true if it produced a module.
+/// The cards `rest[0]` OWNS, exclusive of the `.ENDS` that terminates them:
+/// empty for anything that is not a `.SUBCKT` header. E.2 makes a subcircuit a
+/// module definition and E.2.2.2 shows what the definition contains — eleven
+/// device cards it calls an oscillator — so these cards are the body, not
+/// top-level netlist.
+///
+/// ponytail: the FIRST `.ENDS` ends it, so a nested `.SUBCKT` would close the
+/// outer one early. The SPEC puts multi-level netlists out of scope; make this a
+/// depth counter when one comes in.
+fn subcktBody(rest: []const []const u8) []const []const u8 {
+    if (!std.mem.startsWith(u8, rest[0], ".subckt")) return &.{};
+    for (rest[1..], 1..) |card, i| {
+        if (std.mem.startsWith(u8, card, ".ends")) return rest[1..i];
+    }
+    return rest[1..]; // an unterminated `.SUBCKT` still has a body
+}
+
+/// One complete card, plus the body `subcktBody` gave it. Returns true if it
+/// produced a module.
 fn emitCard(
     arena: Allocator,
     out: *std.ArrayList(u8),
     card: []const u8,
+    body: []const []const u8,
     seen: *std.ArrayList([]const u8),
 ) Allocator.Error!bool {
     // `(` `)` and `,` are noise in a SPICE port list: E.2.2.2's own example
@@ -210,27 +237,80 @@ fn emitCard(
         // A.1.2 makes the port list optional, so a portless `.SUBCKT` is a legal
         // module — and an empty `electrical ;` would not be.
         if (ports.items.len == 0) {
-            try out.print(arena, "module {s};\nendmodule\n\n", .{decl});
+            try out.print(arena, "module {s};\n", .{decl});
         } else {
             const list = try std.mem.join(arena, ", ", ports.items);
-            // EMPTY BODY. The subcircuit's contents are device cards written in
-            // SPICE, which this reader does not read (see the file docstring), so
-            // the module contributes no equations: under `//! solve` an instance
-            // of it is an open circuit. What it does carry is the thing E.2 calls
-            // for — the interface, in order, so §6.5.4 ordered connection and
-            // §6.7.1 hierarchical access both work on it.
             try out.print(arena,
                 \\module {s}({s});
                 \\   inout {s};
                 \\   electrical {s};
-                \\endmodule
-                \\
                 \\
             , .{ decl, list, list, list });
         }
+        try emitBody(arena, out, body);
+        try out.appendSlice(arena, "endmodule\n\n");
     }
     try seen.append(arena, name);
     return true;
+}
+
+/// E.2.2.3 is the annex translating E.2.2.2's subcircuit card by card, and it is
+/// the only place the LRM says what a DEVICE card means. It prints
+/// `R1 B1 GND 10K` as `resistor #(.r(10k)) R1 (b1, gnd);`, `VA VCC GND 5` as
+/// `vsine #(.dc(5)) Vcc (vcc, gnd);` and `IEE E GND 1MA` as
+/// `isine #(.dc(1m)) Iee (e, gnd);` — so the card's leading LETTER picks the
+/// Table E.1 primitive and the card's one positional value lands on the
+/// parameter named here. `c` and `l` are the remaining two-terminal rows whose
+/// Behavior column Table E.1 actually fills in; the letters with an empty one
+/// (`Q`, `M`, `J`, `D`) have no equation to contribute and are not listed.
+const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8 }{
+    .{ .letter = 'r', .prim = "resistor", .param = "r" },
+    .{ .letter = 'c', .prim = "capacitor", .param = "c" },
+    .{ .letter = 'l', .prim = "inductor", .param = "l" },
+    .{ .letter = 'v', .prim = "vsine", .param = "dc" },
+    .{ .letter = 'i', .prim = "isine", .param = "dc" },
+};
+
+/// The instance lines a `.SUBCKT`'s device cards become — the equations that
+/// make E.2's "module definition" a circuit rather than two floating pins.
+///
+/// A card this cannot read contributes nothing and is not diagnosed, on the same
+/// argument as the skipped `.TRAN` above: a letter with no `device_cards` row
+/// (`Q`, `M`, `X`), or a value that is a model name rather than a number
+/// (`R1 A B RMOD`, where `spiceNumber` returns null). Both are out of the H04
+/// SPEC's scope, and a body VerA reads part of is still more of a definition
+/// than the empty one this replaces.
+///
+/// Nodes are run through `spell` for the same reason the port list is, and a
+/// node the port list does not name needs no declaration: it is an implicit net
+/// of the synthesized module, resolved by §7.5 from the primitive port it
+/// touches, exactly as `rDiv x1(in, mid, gnd);` resolves `mid` in the caller.
+///
+/// ponytail: two terminals and one positional value, which is every row of
+/// `device_cards`; a three-terminal or `k=v` card needs its own arity column.
+fn emitBody(
+    arena: Allocator,
+    out: *std.ArrayList(u8),
+    body: []const []const u8,
+) Allocator.Error!void {
+    for (body) |card| {
+        var it = std.mem.tokenizeAny(u8, card, " \t(),");
+        const inst = it.next() orelse continue;
+        const row = for (device_cards) |d| {
+            if (inst[0] == d.letter) break d;
+        } else continue;
+        const p = it.next() orelse continue;
+        const n = it.next() orelse continue;
+        const value = spiceNumber(it.next() orelse continue) orelse continue;
+        try out.print(arena, "   {s} #(.{s}({d})) {s}({s}, {s});\n", .{
+            row.prim,
+            row.param,
+            value,
+            try spell(arena, inst),
+            try spell(arena, p),
+            try spell(arena, n),
+        });
+    }
 }
 
 /// The `parameter` declarations a model-derived module carries, and the argument
@@ -474,9 +554,52 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
     try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real area = 1.0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "bjt #(.area(area)) prim(c, b, e, s);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
-    // E.2.2.2: ports from the card, lowered, parentheses dropped, no body.
+    // E.2.2.2: ports from the card, lowered, parentheses dropped — and the two
+    // device cards between it and `.ENDS` as E.2.2.3 translates them. `vcc` is
+    // an internal node and appears only in the body.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module ecposc(out, gnd);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "vcc") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "vsine #(.dc(5)) va(vcc, gnd);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(10000)) r1(b1, gnd);") != null);
+    // The `.TRAN` after `.ENDS` is outside the body and is still not a module.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "100n") == null);
+}
+
+test "a .SUBCKT's device cards are its body, and an unreadable one is skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.SUBCKT RDIV IN OUT GND
+        \\R1 IN OUT 1K
+        \\R2 OUT GND 3K
+        \\Q1 OUT IN GND VERTNPN
+        \\R3 A B RMOD
+        \\.ENDS RDIV
+        \\R9 X Y 1K
+    );
+    try std.testing.expectEqual(@as(u32, 1), s.modules);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(1000)) r1(in, out);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(3000)) r2(out, gnd);") != null);
+    // No Table E.1 equation for a bjt and no number on a model-referenced card,
+    // so neither becomes an instance — and neither stops the two that do.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "q1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "r3") == null);
+    // `R9` is after `.ENDS`: top-level netlist, not part of any definition.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "r9") == null);
+
+    // A repeated `.SUBCKT` is dropped WITH its body — the cards inside must not
+    // fall out into the next module, or into a module of their own.
+    const dup = try synthesize(arena,
+        \\.SUBCKT PAD A B
+        \\R1 A B 1K
+        \\.ENDS
+        \\.SUBCKT PAD A B
+        \\R1 A B 9K
+        \\.ENDS
+    );
+    try std.testing.expectEqual(@as(u32, 1), dup.modules);
+    try std.testing.expect(std.mem.indexOf(u8, dup.text, "9000") == null);
 }
 
 test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
