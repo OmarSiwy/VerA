@@ -30,12 +30,13 @@
 // bus[1] carries a 1k to ground of its own so the unused half of the vector is
 // not a floating node in the solve; nothing is asserted about it.
 //
-// GROUND TRUTH TODAY: refused with E0902, "`bus[0]` is already of discipline
-// `electrical`" — the escaped scalar is read as a second discipline declaration
-// of the vector's element. The same file with the escaped net renamed
-// `\other[0] ` compiles and prints exactly the 1.5 V and 2.0 V above, so the two
-// numbers below are VerA's own arithmetic on the intended topology and the only
-// thing missing is keeping the two names apart.
+// GROUND TRUTH TODAY: green, both checks, and the solve carries two separate
+// unknowns for the two nets. It was refused with E0902, "`bus[0]` is already of
+// discipline `electrical`" — the escaped scalar was read as a second discipline
+// declaration of the vector's element, because the node table was keyed on the
+// printed form. `Lower.netKey` discriminates at the TOKEN, which is the only
+// place the backslash still exists, and puts it back for a net name ending in
+// `]` so the key cannot collide with a generated element spelling.
 //
 //! lrm 2.8.1
 //! lrm 3.6.3

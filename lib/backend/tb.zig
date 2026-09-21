@@ -731,7 +731,14 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| {
-        try print(&out, arena, "    model.{f} = {f};\n", .{ std.zig.fmtId(p.name), fmtF64(p.value) });
+        // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
+        // integer parameter rounds, away from zero on a tie. Writing the real
+        // straight into an `i64` field was not even a wrong number — it was a
+        // `zig build-exe` failure, "fractional component prevents float value
+        // '-1.5' from coercion to type 'i64'".
+        try print(&out, arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
+            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
+        });
         // §9.19 `$param_given` is answered from a companion field when codegen
         // emitted one. Setting the value without it would make an explicit
         // override read as "not given".
@@ -862,7 +869,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try print(&out, arena, "        pm.{f} = {f};\n", .{ std.zig.fmtId(s.name), fmtF64(v) });
+                try print(&out, arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{
+                    std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v),
+                });
                 try print(
                     &out,
                     arena,
@@ -1314,6 +1323,25 @@ const runner_body =
     \\}
     \\comptime {
     \\    contract.validateHost(@This(), D);
+    \\}
+    \\
+    \\/// §3.4.1: "If the type of the parameter is specified as integer or real,
+    \\/// and the value assigned to the parameter conflicts with the type of the
+    \\/// parameter, the value is converted to the type of the parameter (see
+    \\/// 4.2.1.1)." A `//! param` card is written in reals, like any host's, so
+    \\/// an integer parameter is handed one here.
+    \\///
+    \\/// §4.2.1.1: "Real numbers are converted to integers by rounding the real
+    \\/// number to the nearest integer, rather than by truncating it ... If the
+    \\/// fractional part of the real number is exactly 0.5, it shall be rounded
+    \\/// away from zero." `@round` is exactly that tie rule; `lossyCast` then
+    \\/// saturates rather than trapping, which is the model card's own guard
+    \\/// against a number outside the field's width.
+    \\fn cardValue(comptime T: type, v: f64) T {
+    \\    return switch (@typeInfo(T)) {
+    \\        .int => std.math.lossyCast(T, @round(v)),
+    \\        else => v,
+    \\    };
     \\}
     \\
     \\/// Index of the unknown a directive named. A miss is a compile error that
@@ -2506,5 +2534,7 @@ test "renderRunner emits parseable Zig" {
     // The sweep really did become two straight-line blocks.
     try testing.expect(std.mem.indexOf(u8, src, "point(0, &x") != null);
     try testing.expect(std.mem.indexOf(u8, src, "point(1, &x") != null);
-    try testing.expect(std.mem.indexOf(u8, src, "model.g = 0.002") != null);
+    // §3.4.1/§4.2.1.1: the card's value goes through `cardValue`, which is what
+    // converts it when `g` turns out to be an `integer` parameter.
+    try testing.expect(std.mem.indexOf(u8, src, "model.g = cardValue(@TypeOf(model.g), 0.002)") != null);
 }

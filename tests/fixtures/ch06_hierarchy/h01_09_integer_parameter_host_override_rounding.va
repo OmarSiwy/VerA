@@ -29,11 +29,13 @@
 // 35.2, whose nearest double is 35.2000000000000028…, still well inside the
 // rounding interval of 35.
 //
-// GROUND TRUTH TODAY: the fixture does not even get to run. VerA writes host
-// overrides into the generated model card verbatim, so the testbench contains
-// `model.n_half_neg = -1.5;` against an i64 field and `zig build-exe` fails with
-// "fractional component prevents float value '-1.5' from coercion to type 'i64'".
-// The conversion §4.2.1.1 mandates happens nowhere on the host-override path.
+// GROUND TRUTH TODAY: green, all four. The fixture used not to get as far as
+// running: VerA wrote host overrides into the generated model card verbatim, so
+// the testbench held `model.n_half_neg = -1.5;` against an i64 field and
+// `zig build-exe` failed with "fractional component prevents float value '-1.5'
+// from coercion to type 'i64'" — the conversion §4.2.1.1 mandates happened
+// nowhere on the host-override path. `tb.cardValue` is that conversion, at both
+// card-write sites (the shared card and `//! psweep`'s per-point one).
 //
 //! lrm 4.2.1.1
 //! lrm 3.4.1

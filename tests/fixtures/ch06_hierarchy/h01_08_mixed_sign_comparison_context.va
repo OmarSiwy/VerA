@@ -37,11 +37,13 @@
 // operand is 0x7FFFFFFF = 2147483647, and NOT the -1 an arithmetic shift of a
 // 64-bit carrier would give.
 //
-// GROUND TRUTH TODAY: r1, r3's arithmetic and r5 are right; r2 and r4 come out
-// 1 and 0 (VerA compares its i64 carrier, so -1 stays -1 and loses to both 1 and
-// 0xFFFFFFFF), and r3 comes out 1. E0364 refuses one KNOWN mixed-signedness shape
-// — an unsigned comparison against a shift — and these four are outside it, so
-// they compile and answer wrongly rather than diagnose.
+// GROUND TRUTH TODAY: green, all five. r2, r3 and r4 used to come out 1, 1 and 0
+// — VerA emitted the signed i64 comparison unconditionally, so -1 stayed -1 and
+// lost to both 1 and 0xFFFFFFFF, and the four shapes here are outside E0364's
+// one known refusal so they compiled and answered wrongly rather than diagnose.
+// `Lower.unsignedCompareMask` masks both operands to the wider width first,
+// which leaves both non-negative and turns the signed opcodes into §4.2.9's
+// unsigned comparison.
 //
 //! lrm 4.2.9
 //! lrm 4.2.5
