@@ -24,6 +24,7 @@ const shim = @import("driver/shim.zig");
 const server_mod = @import("driver/server.zig");
 const Server = server_mod.Server;
 const send = server_mod.send;
+const assert = std.debug.assert;
 
 /// Which Zig code generator builds the artifact, independent of the optimize
 /// mode. `.self_hosted` does not optimise and has no nvptx/amdgcn target.
@@ -61,7 +62,13 @@ pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
     if (plain and name.len <= 128) return name;
     var n: usize = 0;
     while (n < @min(name.len, 64) and (std.ascii.isAlphanumeric(name[n]) or name[n] == '_')) n += 1;
-    return a.print("{s}-{x:0>16}", .{ name[0..n], std.hash.Wyhash.hash(0, name) });
+    assert(n <= 64);
+    assert(n <= name.len);
+    const stem = try a.print("{s}-{x:0>16}", .{ name[0..n], std.hash.Wyhash.hash(0, name) });
+    // The plain prefix, the `-` no plain name holds, 16 hex digits of a u64.
+    assert(stem.len == n + 1 + 16);
+    assert(stem[n] == '-');
+    return stem;
 }
 
 /// Everything the layout hash pins, plus where to put things. Strings are
@@ -171,6 +178,7 @@ fn writeIfChanged(
     sub_path: []const u8,
     data: []const u8,
 ) !bool {
+    assert(sub_path.len > 0);
     if (dir.readFileAlloc(io, sub_path, gpa, .limited(data.len + 1))) |old| {
         defer gpa.free(old);
         if (std.mem.eql(u8, old, data)) return false;
@@ -184,7 +192,9 @@ fn writeIfChanged(
 /// A split `device` gets one file per emitted unit (`zig`'s cache unit is the
 /// file) and `device.zig` imports them by their stable names; a single
 /// `device` is written as `device.zig` alone. Deletes `u/*.zig` files no
-/// longer emitted. Creates `work_dir` if absent.
+/// longer emitted. Creates `work_dir` if absent. Asserts that a split
+/// `device` keeps `codegen.Output`'s invariant: one row per unit in every
+/// column, and ranges that tile `text` in order.
 pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !usize {
     const cwd: Io.Dir = .cwd();
     try cwd.createDirPath(io, o.work_dir);
@@ -199,6 +209,8 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
 
     if (device.names.len == 0) {
         // No `names`: the un-split form, one `device.zig` and no `u/`.
+        assert(device.unit_lo.len == 0);
+        assert(device.unit_hi.len == 0);
         if (try writeIfChanged(io, gpa, dir, "device.zig", device.text)) writes += 1;
         return writes;
     }
@@ -212,7 +224,15 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);
 
-    for (device.names, device.unit_lo, device.unit_fn, device.unit_hi) |name, lo, fn_at, hi| {
+    assert(device.unit_lo.len == device.names.len);
+    assert(device.unit_fn.len == device.names.len);
+    assert(device.unit_hi.len == device.names.len);
+    for (device.names, device.unit_lo, device.unit_fn, device.unit_hi, 0..) |name, lo, fn_at, hi, i| {
+        assert(name.len > 0);
+        assert(lo <= fn_at);
+        assert(fn_at < hi);
+        assert(hi <= device.text.len);
+        if (i > 0) assert(lo == device.unit_hi[i - 1]);
         body.clearRetainingCapacity();
         try body.appendSlice(gpa, device.prelude);
         // `pub ` goes in here, not in the emission: `device.text` is also the
@@ -300,6 +320,7 @@ pub fn splits(o: Options, device: codegen.Output) bool {
 /// a `Part` or a setup chunk (`pieceNames`). As in
 /// `std.Build.Step.Compile.getZigArgs`, each `--dep` applies to the next `-M`.
 fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u8 {
+    if (part) |p| assert(p.len > 0);
     var a: std.ArrayList([]const u8) = .empty;
 
     try a.appendSlice(arena, &.{
@@ -345,6 +366,9 @@ fn buildArgv(arena: Allocator, o: Options, part: ?[]const u8) ![]const []const u
         try a.append(arena, try arena.print("-M{s}={s}", .{ m.name, m.root }));
     }
 
+    // The program, its subcommand and `--listen=-` lead: `Server` speaks to it.
+    assert(a.items.len >= 3);
+    assert(a.items[0].ptr == o.zig_exe.ptr);
     return a.items;
 }
 
@@ -355,12 +379,15 @@ fn pieceNames(arena: Allocator, chunks: u32) ![]const []const u8 {
     const names = try arena.alloc([]const u8, parts.len + chunks);
     for (names[0..parts.len], parts) |*n, p| n.* = @tagName(p);
     for (names[parts.len..], 0..) |*n, k| n.* = try arena.print("setup{d}", .{k});
+    assert(names.len == parts.len + chunks);
     return names;
 }
 
 /// `zig build-lib --listen=- -dynamic` over the parts' objects. The link
 /// takes `-O` and `-fstrip` for the compiler_rt it adds.
 fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []const u8 {
+    // One object per `Part` at least (`pieceNames`).
+    assert(objs.len >= std.enums.values(Part).len);
     const head = [_][]const u8{
         o.zig_exe,
         "build-lib",
@@ -484,22 +511,27 @@ pub fn compileRelease(
     const parts = comptime std.enums.values(Part);
     const split = splits(o, device);
     const pieces = try pieceNames(arena, if (split) device.setup_chunks else 0);
+    if (!split) assert(pieces.len == parts.len);
 
     // Spawned before the tree is written, so the compilers start up while
     // VerA writes.
     const servers = try arena.alloc(Server, if (split) pieces.len else 1);
+    assert(servers.len <= pieces.len);
+    if (split) assert(servers.len == pieces.len);
     var started: usize = 0;
     defer for (servers[0..started]) |*s| s.close(io);
     for (servers, pieces[0..servers.len]) |*s, p| {
         try s.spawn(io, arena, try buildArgv(arena, o, if (split) p else null));
         started += 1;
     }
+    assert(started == servers.len);
 
     _ = try writeTree(io, gpa, o, device);
     if (split) {
         var dir = try Io.Dir.cwd().openDir(io, o.work_dir, .{});
         defer dir.close(io);
         for (pieces, 0..) |p, i| {
+            if (i >= parts.len) assert(i - parts.len < device.setup_chunks);
             const text = if (i < parts.len)
                 try shim.part(arena, o.name, parts[i], o.engine != null, device.setup_chunks != 0)
             else

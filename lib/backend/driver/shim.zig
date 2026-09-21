@@ -7,10 +7,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Part = @import("../orchestrator.zig").Part;
+const assert = std.debug.assert;
 
 /// Returns the `shim_<piece>.zig` file name of a split build's piece.
+/// Asserts that `piece` is not empty.
 pub fn fileName(arena: Allocator, piece: []const u8) ![]const u8 {
-    return arena.print("shim_{s}.zig", .{piece});
+    assert(piece.len > 0);
+    const name = try arena.print("shim_{s}.zig", .{piece});
+    assert(name.len == "shim_".len + piece.len + ".zig".len);
+    return name;
 }
 
 /// Returns the dyn-ABI export shim, which re-exports the device under the
@@ -68,6 +73,14 @@ pub fn part(arena: Allocator, name: []const u8, which: Part, engine: bool, chunk
 /// exactly when the chunk objects export them: when the host names the
 /// value scalar it passes `setup` (`contract.DevicePart`).
 const setup_split_decl = "pub const vera_setup_split = @hasDecl(@import(\"dyn\"), \"SetupValue\");\n";
+
+// `part` and `chunk` splice the root declarations in front of `comptime {`:
+// each must be whole lines.
+comptime {
+    assert(std.mem.endsWith(u8, setup_split_decl, "\n"));
+    assert(std.mem.endsWith(u8, rootDecls(false), "\n"));
+    assert(std.mem.endsWith(u8, rootDecls(true), "\n"));
+}
 
 /// The root of setup chunk `k`'s object: the chunk, for the host's value
 /// scalar, or nothing for a host that does not name one. Allocated in `arena`.

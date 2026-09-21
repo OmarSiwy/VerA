@@ -9,6 +9,12 @@ const Allocator = std.mem.Allocator;
 const Cache = std.Build.Cache;
 const ClientMsg = std.zig.Client.Message;
 const ServerMsg = std.zig.Server.Message;
+const assert = std.debug.assert;
+
+// `wait` copies `bin_digest_len` bytes into a `BinDigest`.
+comptime {
+    assert(@sizeOf(Cache.BinDigest) == Cache.bin_digest_len);
+}
 
 /// One `zig ... --listen=-` child: the compiler server protocol over its
 /// stdin/stdout. Must not move after `spawn`: `out.interface` is the reader.
@@ -19,7 +25,9 @@ pub const Server = struct {
     /// Starts `argv` with piped stdin and stdout and inherited stderr. The
     /// 64 KiB read buffer is allocated in `arena`, which must outlive `close`.
     /// Fails with `error.CompilerGone` when the child cannot be spawned.
+    /// Asserts that `argv` names a program.
     pub fn spawn(s: *Server, io: Io, arena: Allocator, argv: []const []const u8) !void {
+        assert(argv.len > 0);
         s.child = std.process.spawn(io, .{
             .argv = argv,
             .stdin = .pipe,
@@ -30,6 +38,8 @@ pub const Server = struct {
         }) catch return error.CompilerGone;
         // Steady-state buffer; larger message bodies go through `readAlloc`.
         s.out = s.child.stdout.?.readerStreaming(io, try arena.alloc(u8, 64 * 1024));
+        // `.pipe` above: `send` and `close` write to it.
+        assert(s.child.stdin != null);
     }
 
     /// Asks for an exit and reaps the child.
