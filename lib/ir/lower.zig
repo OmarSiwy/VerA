@@ -7993,7 +7993,17 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .v = try self.emit(.pow, &.{ try self.toReal(a), try self.toReal(b) }),
             .ty = .real,
         },
-        .eq, .neq, .lt, .le, .gt, .ge => return .{ .v = try self.cmp(op, a, b), .ty = .integer },
+        .eq, .neq, .lt, .le, .gt, .ge => {
+            // §4.2.9's unsigned context, applied to the pair rather than to
+            // either operand. See `unsignedCompareMask`.
+            if (a.ty == .integer and b.ty == .integer) if (self.unsignedCompareMask(e)) |m| {
+                const k = try self.mir.addIntConst(self.arena, m);
+                const az: TypedValue = .{ .v = try self.emit(.bitand, &.{ a.v, k }), .ty = .integer };
+                const bz: TypedValue = .{ .v = try self.emit(.bitand, &.{ b.v, k }), .ty = .integer };
+                return .{ .v = try self.cmp(op, az, bz), .ty = .integer };
+            };
+            return .{ .v = try self.cmp(op, a, b), .ty = .integer };
+        },
         .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr => {
             if (a.ty != .integer or b.ty != .integer) {
                 try self.err(self.file.exprs.mainTok(e), .E0322, "got {s} and {s}", .{ @tagName(a.ty), @tagName(b.ty) });
@@ -10962,6 +10972,49 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
         .index => self.integerSourceSigned(ex.lhs(e), depth + 1),
         else => null,
     };
+}
+
+/// §4.2.9, the rule that makes signedness a property of the COMPARISON and not
+/// of either operand: "When one or both operands are unsigned, the expression
+/// shall be interpreted as a comparison between unsigned values. If the operands
+/// are of unequal bit lengths, the smaller operand shall be zero-extended to the
+/// size of the larger operand."
+///
+/// The mask that zero-extension is, or `null` when both operands are signed (or
+/// nothing proves either one unsigned) and the ordinary signed compare stands.
+/// Masking BOTH sides to the wider width is the whole of the rule: the results
+/// are then non-negative, so the signed i64 opcodes `cmp` emits compare them as
+/// the unsigned values §4.2.9 asks for. `a < 32'd1` with `a` at -1 is
+/// 4294967295 < 1, not -1 < 1.
+///
+/// §3.2 supplies the width of everything that is not a sized literal: "variables
+/// can hold values ranging from -2**31 to 2**31-1", so 32 bits.
+///
+/// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
+/// widening the carrier. `Lower`'s integer carrier is i64 and the top bit is its
+/// sign, so a 64-bit unsigned comparison has nowhere to be performed; the
+/// upgrade path is a u64 compare opcode pair in `cmp`.
+fn unsignedCompareMask(self: *const Lower, e: Ast.ExprId) ?i64 {
+    const ex = &self.file.exprs;
+    const l = ex.lhs(e);
+    const r = ex.rhs(e);
+    const sl = self.integerSourceSigned(l, 0);
+    const sr = self.integerSourceSigned(r, 0);
+    const unsigned = (sl != null and !sl.?) or (sr != null and !sr.?);
+    if (!unsigned) return null;
+    const w = @max(self.operandWidth(l), self.operandWidth(r));
+    if (w >= 64) return null;
+    return (@as(i64, 1) << @intCast(w)) - 1;
+}
+
+/// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
+fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
+    const ex = &self.file.exprs;
+    if (e != .none and ex.tag(e) == .int_literal) {
+        const w = ex.intLiteral(e).width;
+        if (w != 0) return w;
+    }
+    return 32;
 }
 
 fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
