@@ -1388,18 +1388,30 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         const name = try self.netKey(self.file.str(n.name), n.main_tok);
         // §3.6.3 a vector net is N independent nets, scalarised here.
         //
-        // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
-        // constant ARRAY expression with holes — `electrical [0:4] bus =
-        // '{2.3,4.5,,6.0};`, where "a null value in the constant array
-        // indicates that no nodeset value is being specified for this element"
-        // — and A.8.1's assignment_pattern as this parser reads it has no null
-        // element, so there is nothing to pair with `r.at(k)` yet. The upgrade
-        // path is an empty slot in `parsePrimary`'s `'{ ... }` arm plus the
-        // same `recordNodeset` call per element, keyed by position.
+        // §3.6.3.2's bus initializer is scalarised with them: "In the case of
+        // analog buses, a constant array expression is used as an initializer.
+        // A null value in the constant array indicates that no nodeset value is
+        // being specified for this element of the bus." `flattenPattern` is
+        // already the per-cell reader the §3.4.4 parameter arrays use, and it
+        // answers `.none` for both spellings of "nothing here" — the clause's
+        // hole and a pattern shorter than the bus.
         if (n.range) |d| {
             if (try self.foldDim(d, n.main_tok)) |r| {
-                for (0..r.size()) |k|
-                    _ = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
+                if (n.init != .none and self.file.exprs.tag(n.init) != .assign_pattern) {
+                    var b = self.errWith(self.file.exprs.mainTok(n.init), .E0349);
+                    b.msg("initialising the analog bus `{s}`", .{name});
+                    b.help("§3.6.3.2 takes a constant array expression: `'{{ ... }}`", .{});
+                    try b.emit();
+                }
+                const seeds: []const Ast.ExprId = if (n.init == .none)
+                    &.{}
+                else
+                    try self.flattenPattern(n.init, &.{Bounds{ .lo = 0, .hi = r.size() - 1 }});
+                for (0..r.size()) |k| {
+                    const idx = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
+                    if (k < seeds.len and seeds[k] != .none)
+                        try self.recordNodeset(idx, seeds[k], n.main_tok, name);
+                }
                 try self.vectors.put(self.arena, name, r);
             }
             continue;
