@@ -166,17 +166,19 @@ pub const Parser = struct {
         try self.access_names.put(self.arena, "I", {});
 
         // Seeded (`initSeeded`) these already hold the prefix's declarations, in
-        // source order; unseeded all five are empty and this is five no-ops.
+        // source order; unseeded all six are empty and this is six no-ops.
         var modules: std.ArrayList(Ast.ModuleDecl) = .empty;
         var disciplines: std.ArrayList(Ast.DisciplineDecl) = .empty;
         var natures: std.ArrayList(Ast.NatureDecl) = .empty;
         var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
         var connectrules: std.ArrayList(Ast.ConnectRulesDecl) = .empty;
+        var udps: std.ArrayList(Ast.UdpDecl) = .empty;
         try modules.appendSlice(self.arena, self.file.modules);
         try disciplines.appendSlice(self.arena, self.file.disciplines);
         try natures.appendSlice(self.arena, self.file.natures);
         try paramsets.appendSlice(self.arena, self.file.paramsets);
         try connectrules.appendSlice(self.arena, self.file.connectrules);
+        try udps.appendSlice(self.arena, self.file.udps);
 
         while (true) {
             try self.skipAttributes();
@@ -264,7 +266,10 @@ pub const Parser = struct {
                 .kw_reserved => {
                     const w = self.tokenText(self.pos);
                     const r: Error!void = if (std.mem.eql(u8, w, "primitive"))
-                        self.parseUdpDecl()
+                        udp: {
+                            const u = self.parseUdpDecl() catch |e| break :udp e;
+                            break :udp udps.append(self.arena, u);
+                        }
                     else if (std.mem.eql(u8, w, "config"))
                         self.parseConfigDecl()
                     else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
@@ -297,6 +302,7 @@ pub const Parser = struct {
         self.file.natures = natures.items;
         self.file.paramsets = paramsets.items;
         self.file.connectrules = connectrules.items;
+        self.file.udps = udps.items;
         if (self.failed) return error.ParseError;
         return self.file;
     }
@@ -537,16 +543,26 @@ pub const Parser = struct {
     /// finds one, and the `udp_port_declaration` run after the `;` is a
     /// repetition that may be empty.
     ///
-    /// NOTHING IS RECORDED. The table is validated against A.5.3 and dropped —
-    /// there is no discrete engine here to evaluate it, and `parseUdpInst`'s
-    /// W0252 is what says so at the site that would have used it.
-    // ponytail: the upgrade is a `UdpDecl` on `Ast.SourceFile` plus a matcher
-    // in `src/sim/digital.zig`, which is another agent's column. Storing the
-    // rows before that exists is dead weight in an arena.
-    fn parseUdpDecl(self: *Parser) Error!void {
+    /// RECORDED, AND EVALUATED BY NOTHING. The declaration lands on
+    /// `Ast.SourceFile.udps`; there is still no discrete engine that matches a
+    /// table against its inputs, and `parseUdpInst`'s W0252 is what says so at
+    /// the site that would have used it.
+    ///
+    /// It used to be dropped, on the ground that rows nothing reads are dead
+    /// weight in an arena. That was true while the evaluator was unreachable
+    /// for a different reason — a `primitive` was E0201 — and it stopped being
+    /// true when this routine landed: the table is A.5.3's alphabets, its
+    /// combinational/sequential agreement and its column count already
+    /// checked, and an evaluator that had to re-derive all of that from tokens
+    /// would be a second implementation of this clause.
+    fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
+        const main_tok = self.pos;
         self.pos += 1; // `primitive`
-        _ = try self.expectIdent();
+        const name = try self.expectIdent();
         _ = try self.expect(.lparen);
+        // A.5.2 puts the output port first in both header arms, so declaration
+        // order IS `ports[0] = output, ports[1..] = inputs` with no lookup.
+        var ports: std.ArrayList(Ast.StrId) = .empty;
         while (true) {
             // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
             // only the second A.5.1 arm puts inside the parentheses.
@@ -554,7 +570,7 @@ pub const Parser = struct {
                 _ = try self.optDiscipline();
                 _ = self.eat(.kw_reg);
             }
-            _ = try self.expectIdent();
+            try ports.append(self.arena, try self.expectIdent());
             // `udp_output_declaration ::= … output [ discipline_identifier ]
             // reg port_identifier [ = constant_expression ]`
             if (self.eat(.assign_eq)) _ = try self.parseExpr();
@@ -581,16 +597,26 @@ pub const Parser = struct {
         }
         // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
         // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
+        var init_val: Ast.ExprId = .none;
         if (self.eat(.kw_initial)) {
             _ = try self.expectIdent();
             _ = try self.expect(.assign_eq);
-            _ = try self.parseExpr();
+            init_val = try self.parseExpr();
             _ = try self.expect(.semicolon);
         }
-        try self.parseUdpTable();
+        var rows: std.ArrayList(Ast.UdpRow) = .empty;
+        const sequential = try self.parseUdpTable(&rows);
         if (!self.reservedIs(self.pos, "endprimitive"))
             return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
         self.pos += 1;
+        return .{
+            .name = name,
+            .ports = ports.items,
+            .is_sequential = sequential,
+            .init = init_val,
+            .rows = rows.items,
+            .main_tok = main_tok,
+        };
     }
 
     /// A.5.3's `table … endtable`, and the whole of what a parser can judge in
@@ -610,7 +636,12 @@ pub const Parser = struct {
     /// of its tokens, in order, and judged against the alphabets — the token
     /// boundaries inside a table carry no meaning of their own, and a parser
     /// that read them as if they did would reject half of A.5.3's own examples.
-    fn parseUdpTable(self: *Parser) Error!void {
+    ///
+    /// Returns which `udp_body` alternative the table was, for
+    /// `Ast.UdpDecl.is_sequential`. An EMPTY table reads combinational: A.5.3's
+    /// two alternatives both require at least one entry, so `table endtable`
+    /// derives from neither and the answer is arbitrary either way.
+    fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool {
         if (!self.reservedIs(self.pos, "table"))
             return self.failAt(self.pos, .E0207, "found {s}: a udp_body is a `table … endtable`", .{self.found(self.pos)});
         self.pos += 1;
@@ -621,13 +652,15 @@ pub const Parser = struct {
         while (!self.reservedIs(self.pos, "endtable")) {
             if (self.peek() == .eof)
                 return self.failAt(self.pos, .E0207, "found {s}: no `endtable` closes the table", .{self.found(self.pos)});
-            try self.parseUdpEntry(&sequential);
+            try self.parseUdpEntry(&sequential, rows);
         }
         self.pos += 1;
+        return sequential orelse false;
     }
 
-    /// One `combinational_entry` or `sequential_entry`, judged column by column.
-    fn parseUdpEntry(self: *Parser, sequential: *?bool) Error!void {
+    /// One `combinational_entry` or `sequential_entry`, judged column by column
+    /// and then appended to `rows`.
+    fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.UdpRow)) Error!void {
         const tok = self.pos;
         // Column 0 is the input list; a colon opens each of the 1 or 2 that
         // follow, so the colon count IS the entry's `udp_body` alternative.
@@ -683,6 +716,18 @@ pub const Parser = struct {
         if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
         const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
         if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
+
+        // The columns live in a stack buffer, so `inputs` is copied out. Only
+        // the input list needs it: the other two columns are one character.
+        try rows.append(self.arena, .{
+            .inputs = try self.arena.dupe(u8, inputs),
+            // A.5.3 `current_state ::= level_symbol` is one symbol, which the
+            // loop above does not require and this does not either — a
+            // longer column stores its first character and the row is as
+            // usable as the table is legal.
+            .state = if (is_seq and cols[1].len != 0) cols[1].text[0] else 0,
+            .output = last[0],
+        });
     }
 
     fn udpBodyName(sequential: bool) []const u8 {
@@ -1166,16 +1211,41 @@ pub const Parser = struct {
         };
     }
 
-    /// A.2.1.2 `[ discipline_identifier ] [ net_type ] [ signed ]` prefix of a
-    /// port declaration. A discipline is an identifier followed by another
-    /// identifier (the first port name), so one token of lookahead decides.
+    /// A.2.1.2 `[ discipline_identifier ] [ net_type | wreal ] [ signed ]`
+    /// prefix of a port declaration. A discipline is an identifier followed by
+    /// another identifier (the first port name), so one token of lookahead
+    /// decides.
+    ///
+    /// For the callers that have somewhere to put the net type — `Ast.Port`
+    /// does now, see `Port.kind` — `optPortType` reports it. `wreal` is a
+    /// separate alternative in A.2.1.2's brackets rather than a `net_type`
+    /// (A.2.2.1 does not list it), and `token.isNetType` follows the annex, so
+    /// the extra spelling is tested here.
     fn optDiscipline(self: *Parser) Error!Ast.StrId {
+        var kind: Ast.NetKind = .wire;
+        return self.optPortType(&kind);
+    }
+
+    fn optPortType(self: *Parser, kind: *Ast.NetKind) Error!Ast.StrId {
         var disc: Ast.StrId = .none;
         if (self.peek() == .identifier and self.identLike(self.pos + 1)) {
             disc = try self.internTok(self.pos);
             self.pos += 1;
         }
-        if (token.isNetType(self.peek())) self.pos += 1;
+        if (token.isNetType(self.peek())) {
+            kind.* = netKind(self.peek());
+            self.pos += 1;
+        } else if (self.digital and self.reservedIs(self.pos, "wreal")) {
+            // Annex C.4 bullet 2: "From 3.7, Real net declarations: the wreal
+            // data type is not supported in Verilog-A." C.8 says it again for
+            // the PORT — "except support for real value ports is only
+            // applicable to Verilog-AMS HDL and IEEE Std 1364 Verilog (see
+            // 6.5.3)" — so in a `.va` the spelling stays a reserved word in an
+            // identifier position, which is the E0208 three annex C fixtures
+            // pin.
+            kind.* = .wreal;
+            self.pos += 1;
+        }
         _ = self.eat(.kw_signed);
         return disc;
     }
@@ -1448,9 +1518,11 @@ pub const Parser = struct {
                 }
                 _ = try self.expect(.semicolon);
             },
-            // A.4.1 `gate_instantiation ::= … | pass_switchtype
-            // pass_switch_instance { , pass_switch_instance } ;`
-            .kw_tran, .kw_rtran => try self.parsePassSwitch(),
+            // A.3.1 `gate_instantiation ::= … | pass_switchtype
+            // pass_switch_instance { , pass_switch_instance } ;` — the two
+            // A.3.4 switch spellings with tags of their own. The other eight
+            // reach `parseSwitch` through the `.kw_reserved` arm below.
+            .kw_tran, .kw_rtran => try self.parseSwitch(),
             // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
             // compute a logic value.
             .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try self.parseGates(b),
@@ -1536,10 +1608,69 @@ pub const Parser = struct {
                 // A.3.2 gives them a strength set no other gate takes.
                 if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
                     return self.parsePullGate();
+                // A.3.1's cmos/mos/pass-enable switch arms — A.3.4's eight
+                // remaining `*_switchtype` spellings, none of which has a tag
+                // because `Ast.GateKind` has nothing to put them in. See
+                // `parseSwitch` for what refuses them and why it is no longer
+                // E0205.
+                if (switch_arms.has(w)) return self.parseSwitch();
+                // A.2.1.3's two `wreal` arms — §3.7's real net, which the
+                // annex gives arms of its own rather than a `net_type`.
+                if (std.mem.eql(u8, w, "wreal")) return self.parseWrealDecl(b);
                 return self.unsupportedItem();
             },
             else => return self.unsupportedItem(),
         }
+    }
+
+    /// The one sentence of §3.7 that a four-state engine gets wrong, which is
+    /// why a `wreal` is refused rather than minted as one more net.
+    const wreal_unimplemented =
+        "§3.7 real nets are not implemented by digital execution: a wreal " ++
+        "carries a real and reads 0.0 undriven, where every net this engine " ++
+        "resolves carries four-state bits and reads z";
+
+    /// A.2.1.3's two `wreal` alternatives — §3.7's real net:
+    ///
+    ///     | wreal [ discipline_identifier ] [ range ] list_of_net_identifiers ;
+    ///     | wreal [ discipline_identifier ] [ range ] list_of_net_decl_assignments ;
+    ///
+    /// It is not a `net_type`: A.2.2.1's production lists eleven spellings and
+    /// `wreal` is not among them, so the annex gives it arms of its own — with
+    /// no `signed`, no strength bracket and no `vectored`/`scalared`, none of
+    /// which means anything on a real.
+    ///
+    /// OUTSIDE A DIGITAL RUN IT IS NOT DERIVABLE AT ALL, and stays the E0205
+    /// it has always been. Annex C.4 bullet 2 is the clause, and it is a rule
+    /// about the LANGUAGE rather than a limitation of this compiler: "From
+    /// 3.7, Real net declarations: the wreal data type is not supported in
+    /// Verilog-A." C.8 says the same of the port spelling. So a `.va` refusing
+    /// `wreal` is conformance, and three annex C fixtures pin it.
+    ///
+    /// UNDER `--run` the source is IEEE Std 1364 digital, C.4 does not reach
+    /// it, and the declaration parses — and is then E1100, which is the case
+    /// that must not be silent. `src/sim/digital.zig` resolves four-state
+    /// bits: `undriven` returns `.z` for every kind it does not name, `wired`
+    /// folds by agreement, `filled` starts a net at z. §3.7 says the opposite
+    /// of all three — "If no driver is connected to a wreal net, its value
+    /// shall be zero (0.0). Unlike other digital nets which have an initial
+    /// value of 'z', wreal nets shall have an initial value of zero" — so
+    /// accepting the declaration and letting it fall into those `else` arms
+    /// would turn a refusal into a wrong number with no diagnostic.
+    // ponytail: the refusal is one line and the upgrade deletes it. What it
+    // wants is a real-valued lane in that file's net storage plus §3.7's
+    // wire/tri/wreal port merge; `Ast.NetKind.wreal` is the frontend half and
+    // it is here now.
+    fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
+        if (!self.digital) return self.unsupportedItem();
+        const kw = self.pos;
+        self.pos += 1;
+        // `[ discipline_identifier ]` — an identifier followed by another
+        // identifier or a `[`, which is `optDiscipline`'s own lookahead.
+        var ignored: Ast.NetKind = .wire;
+        const disc = try self.optPortType(&ignored);
+        try self.parseNetNames(b, disc, .wreal, false, .{});
+        if (self.digital) _ = self.failAt(kw, .E1100, wreal_unimplemented, .{}) catch {};
     }
 
     /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
@@ -2203,9 +2334,82 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
     }
 
-    fn parsePassSwitch(self: *Parser) Error!void {
-        if (self.digital) return self.failAt(self.pos, .E1100, "switch primitives are not implemented by digital execution", .{});
+    /// The shape of one A.3.1 switch arm, which is all four of them differ by:
+    /// how many terminals an instance takes, how many of those are A.3.3
+    /// `net_lvalue`s (everything after them is an `expression`), and whether a
+    /// delay bracket precedes the instance list.
+    const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool };
+
+    /// A.3.4's ten switch spellings, keyed the way annex B reserves them — by
+    /// SPELLING. Eight of the ten share `.kw_reserved` (`tran` and `rtran` are
+    /// the two with tags, because A.4.1 needed them before this did), so a tag
+    /// dispatch would have to be two dispatches; this is one.
+    const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
+        // `cmos_switchtype [delay3] ( output , input , ncontrol , pcontrol )`
+        .{ "cmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
+        .{ "rcmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
+        // `mos_switchtype [delay3] ( output , input , enable )`
+        .{ "nmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "pmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "rnmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "rpmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        // `pass_switchtype ( inout , inout )` — the one arm with no delay
+        // bracket at all, which is why A.4.1 prints it on its own.
+        .{ "tran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
+        .{ "rtran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
+        // `pass_en_switchtype [delay2] ( inout , inout , enable )`. `delay2` is
+        // a `delay3` that stops at two values, which `parseDelay3` already
+        // returns for a two-value list.
+        .{ "tranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "tranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "rtranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "rtranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+    });
+
+    /// A.3.1's four switch arms — the primitives whose output is a CONDUCTION
+    /// PATH rather than a computed value:
+    ///
+    ///     | cmos_switchtype    [delay3] cmos_switch_instance         { , … } ;
+    ///     | mos_switchtype     [delay3] mos_switch_instance          { , … } ;
+    ///     | pass_en_switchtype [delay2] pass_enable_switch_instance  { , … } ;
+    ///     | pass_switchtype            pass_switch_instance          { , … } ;
+    ///
+    ///     cmos_switch_instance ::= [ name_of_gate_instance ] ( output_terminal ,
+    ///             input_terminal , ncontrol_terminal , pcontrol_terminal )
+    ///     mos_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( output_terminal , input_terminal , enable_terminal )
+    ///     pass_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( inout_terminal , inout_terminal )
+    ///     pass_enable_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( inout_terminal , inout_terminal , enable_terminal )
+    ///
+    /// Only `tran`/`rtran` reached a production before this; the other eight
+    /// A.3.4 spellings were `E0205: unsupported module item`, which says "this
+    /// text is not derivable" about text the annex above derives — the same
+    /// wrong answer `gateNotModelled`'s docstring retired for A.3.1's computing
+    /// arms. §1.1 ("Verilog-AMS HDL consists of the complete IEEE Std 1364
+    /// Verilog specification") is what makes the grammar VerA's to read.
+    ///
+    /// WHAT IT IS REFUSED BY INSTEAD, unchanged from `tran`'s two verdicts:
+    ///
+    ///   - outside a digital run, W0250 — §8.5.3.5 puts switch processing in
+    ///     the discrete simulation cycle, so a switch propagates LOGIC values
+    ///     and strengths between its terminals and there is no equation for a
+    ///     compiled analog device to stamp. `--deny=W0250` is the refusal.
+    ///   - under `--run`, E1100 — the discrete engine has no switch, and
+    ///     `Ast.GateKind` is not the place to put one: §7.10's strength
+    ///     REDUCTION (a `r`-prefixed switch drops its input one level) and
+    ///     §7.9's bidirectional conduction are neither of them a function of
+    ///     the input bits, which is what `digital.gateBit` is.
+    // ponytail: nothing is recorded, for `parseUdpDecl`'s reason — `Body` has
+    // no switch list because nothing would read one, and `Ast.GateKind` is
+    // closed by an exhaustive switch in `src/sim/digital.zig`, another agent's
+    // column. The upgrade is that file's conduction model and a `Body.switches`
+    // beside it, landed together.
+    fn parseSwitch(self: *Parser) Error!void {
         const main_tok = self.pos;
+        const arm = switch_arms.get(self.tokenText(main_tok)).?; // the caller dispatched on exactly these
+        if (self.digital) return self.failAt(main_tok, .E1100, "switch primitives are not implemented by digital execution", .{});
         self.pos += 1;
         try self.bag.add(
             .parse,
@@ -2214,14 +2418,25 @@ pub const Parser = struct {
             "{s} switch primitive",
             .{self.found(main_tok)},
         );
+        if (arm.delay and self.peek() == .hash) _ = try self.parseDelay3();
         while (true) {
-            // A.4.1 makes the instance name optional, and the fixture's `tran
-            // (a, b);` uses that arm. `(` after the name tells the two apart.
-            if (self.identLike(self.pos)) self.pos += 1;
+            // A.3.1 makes `name_of_gate_instance ::= gate_instance_identifier
+            // [ range ]` optional, and the fixture's `tran (a, b);` uses that
+            // arm. `(` after the name tells the two apart, as in `parseGates`.
+            if (self.identLike(self.pos)) {
+                self.pos += 1;
+                if (self.peek() == .lbracket) _ = try self.parseDim();
+            }
             _ = try self.expect(.lparen);
-            _ = try self.parseNetRef();
-            _ = try self.expect(.comma);
-            _ = try self.parseNetRef();
+            for (0..arm.terminals) |i| {
+                if (i != 0) _ = try self.expect(.comma);
+                // A.3.3: `output_terminal` and `inout_terminal` are
+                // `net_lvalue`s and lead; `input_terminal`, `enable_terminal`,
+                // `ncontrol_terminal` and `pcontrol_terminal` are all
+                // `expression`, so `cmos (o, d, ~g, g)` is derivable and
+                // `cmos (~o, d, ng, g)` is not.
+                _ = if (i < arm.lvalues) try self.parseNetRef() else try self.parseExpr();
+            }
             _ = try self.expect(.rparen);
             if (!self.eat(.comma)) break;
         }
@@ -2516,8 +2731,12 @@ pub const Parser = struct {
     /// and discipline, it does not introduce a new terminal.
     fn parsePortDecl(self: *Parser, b: *Body) Error!void {
         const dir = portDirection(self.peek());
+        const dir_tok = self.pos;
         self.pos += 1;
-        const disc = try self.optDiscipline();
+        // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
+        // It is §7.9's resolution input — see `Ast.Port.kind`.
+        var kind: Ast.NetKind = .wire;
+        const disc = try self.optPortType(&kind);
         // A.2.1.2's two VARIABLE arms, which only `output` has:
         //
         //     output_declaration ::=
@@ -2591,6 +2810,7 @@ pub const Parser = struct {
                     p.direction = dir;
                     if (disc != .none) p.discipline = disc;
                     if (range != null) p.range = range;
+                    if (kind != .wire) p.kind = kind;
                 }
             } else {
                 _ = self.failAt(tok, .E0206, "`{s}`", .{self.file.str(name)}) catch {};
@@ -2598,6 +2818,10 @@ pub const Parser = struct {
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
+        // A.2.1.2's `wreal` alternative, refused AFTER the declaration is read
+        // and recorded — see `parseWrealDecl` for the clause and for why
+        // silence is the one answer that is not available.
+        if (kind == .wreal) _ = self.failAt(dir_tok, .E1100, wreal_unimplemented, .{}) catch {};
     }
 
     fn findPort(b: *Body, name: Ast.StrId) ?*Ast.Port {
@@ -2889,6 +3113,13 @@ pub const Parser = struct {
                 // the direction declaration's range rather than over it — see
                 // Ast.Port.type_range.
                 port.?.type_range = range;
+                // …and the net TYPE with it. A.2.1.3 gives every one of its
+                // twelve alternatives a `net_type`, and §7.9's resolution is a
+                // function of it, so dropping it here made `tri0 p;` on a port
+                // resolve as a plain `wire`. `.wire` is what a discipline-only
+                // declaration passes in, which is also A.2.1.3's default, so the
+                // assignment is a no-op for every net that never named a type.
+                port.?.kind = kind;
                 // `electrical p = 5.0;` on a header port lands here, and the
                 // discipline is all this branch can carry: a Port has no
                 // initializer slot. The nodeset gets a net entry of its own
@@ -5524,6 +5755,110 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
         \\endconnectrules
     );
     try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
+}
+
+test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const src =
+        \\module m(a, b);
+        \\  input wreal a;
+        \\  output b;
+        \\  wreal b;
+        \\  wreal [3:0] bus;
+        \\  wreal seeded = 2.5;
+        \\endmodule
+    ;
+
+    // Annex C.4 bullet 2 / C.8: `wreal` is not in Verilog-A, so a `.va` sees a
+    // reserved word where the grammar wants a name. Three annex C fixtures
+    // pin the two codes; this is the parse under them.
+    const va = try parseForTest(arena, src);
+    try std.testing.expectEqual(diag.Code.E0208, va.code(0)); // `input wreal a;`
+
+    // Under `--run` the same text is A.2.1.2 `[ net_type | wreal ]` and
+    // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, and the
+    // declaration is then E1100 because the engine resolves four-state bits.
+    var list = try lexer.Lexer.tokenize(arena, src);
+    const bag = try newBag(arena, src);
+    var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
+    p.digital = true;
+    const file = p.parseSourceFile() catch |e| switch (e) {
+        error.ParseError => p.file,
+        else => return e,
+    };
+    const res: TestResult = .{ .file = file, .bag = bag };
+    try std.testing.expectEqual(diag.Code.E1100, res.code(0));
+
+    const m = file.modules[0];
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.ports[0].kind); // `input wreal a;`
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.ports[1].kind); // `output b;` + `wreal b;`
+    // The body nets keep the range and the `net_decl_assignment` driver.
+    try std.testing.expectEqual(@as(usize, 2), m.nets.len);
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.nets[0].kind);
+    try std.testing.expect(m.nets[0].range != null);
+    try std.testing.expect(m.nets[1].init != .none);
+}
+
+test "A.5.1 a udp_declaration survives the parse, both header arms" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both A.5.1 arms, and the sequential body's three moving parts: the
+    // `udp_initial_statement`, an `edge_indicator` spelled across several
+    // tokens, and a `next_state` of `-`. No fixture can see any of this —
+    // there is no evaluator — so the parse into the right slot is the whole
+    // of what there is to pin.
+    const src =
+        \\primitive comb (q, a, b);
+        \\  output q; input a, b;
+        \\  table
+        \\    0 ? : 0;
+        \\    ? 0 : 0;
+        \\    1 1 : 1;
+        \\  endtable
+        \\endprimitive
+        \\primitive dff (output reg q, input clk, input d);
+        \\  initial q = 1'b0;
+        \\  table
+        \\    (01) 0 : ? : 0;
+        \\    (01) 1 : ? : 1;
+        \\    (0x) ? : ? : -;
+        \\  endtable
+        \\endprimitive
+    ;
+    const res = try parseForTest(arena, src);
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    try std.testing.expectEqual(@as(usize, 2), res.file.udps.len);
+
+    const comb = res.file.udps[0];
+    try std.testing.expectEqualStrings("comb", res.file.str(comb.name));
+    // A.5.2 puts the output first, so ports[0] is `q` and the rest are inputs.
+    try std.testing.expectEqual(@as(usize, 3), comb.ports.len);
+    try std.testing.expectEqualStrings("q", res.file.str(comb.ports[0]));
+    try std.testing.expectEqualStrings("b", res.file.str(comb.ports[2]));
+    try std.testing.expect(!comb.is_sequential);
+    try std.testing.expectEqual(Ast.ExprId.none, comb.init);
+    try std.testing.expectEqual(@as(usize, 3), comb.rows.len);
+    try std.testing.expectEqualStrings("0?", comb.rows[0].inputs);
+    try std.testing.expectEqual(@as(u8, '0'), comb.rows[0].output);
+    try std.testing.expectEqual(@as(u8, 0), comb.rows[0].state);
+
+    const dff = res.file.udps[1];
+    try std.testing.expectEqualStrings("dff", res.file.str(dff.name));
+    try std.testing.expectEqualStrings("clk", res.file.str(dff.ports[1]));
+    try std.testing.expect(dff.is_sequential);
+    try std.testing.expect(dff.init != .none);
+    // `(01) 0` is ONE edge field and one level field — six characters and
+    // several tokens. The grouping is kept because splitting the list into one
+    // field per input port is the evaluator's, and needs the port count.
+    try std.testing.expectEqualStrings("(01)0", dff.rows[0].inputs);
+    try std.testing.expectEqual(@as(u8, '?'), dff.rows[0].state);
+    try std.testing.expectEqual(@as(u8, '1'), dff.rows[1].output);
+    try std.testing.expectEqual(@as(u8, '-'), dff.rows[2].output);
 }
 
 test "A.2.5: `from` needs a bracket, and saying so is a diagnostic not an assert" {
