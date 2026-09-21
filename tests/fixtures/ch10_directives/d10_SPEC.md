@@ -472,6 +472,18 @@ same argument at length.
 
 ### Observed today
 
+Both pass.
+
+```
+##### d10_11_assert_is_an_ordinary_identifier.va
+`assert` names an ordinary net under the VAMS-2023 keyword set got=1 want=1 ok=1
+##### d10_12_net_resolution_is_an_ordinary_identifier.va
+`net_resolution` names an ordinary net under VAMS-2023 got=1 want=1 ok=1
+```
+
+They did not. Until `lib/frontend/token.zig`'s `reserved_keywords` lost the two
+spellings, the parser refused the port before it ever reached the analog block:
+
 ```
 FAIL tests/fixtures/ch10_directives/d10_11_assert_is_an_ordinary_identifier.va: did not compile: NoModule
 error[E0208]: expected an identifier: found assert
@@ -481,15 +493,25 @@ error[E0208]: expected an identifier: found net_resolution
   = note: LRM 2.8
 ```
 
-`NoModule` rather than `CompileFailed` is the phase, not a second problem: the
-reservation is enforced in the parser, so the port list never becomes a module
-declaration and elaboration has nothing to select. E0208 is the diagnostic, and
-it cites §2.8.2 — the clause that makes Annex B the whole list, which does not
+`NoModule` rather than `CompileFailed` was the phase, not a second problem: the
+reservation was enforced in the parser, so the port list never became a module
+declaration and elaboration had nothing to select. E0208 was the diagnostic, and
+it cited §2.8.2 — the clause that makes Annex B the whole list, which does not
 contain either word.
 
-The reservation is specific to the AMS sets and not to the spelling: the
-identical modules under `` `begin_keywords "1364-2005" `` compile today. So the
-defect is one table entry per word, in `lib/frontend/token.zig`'s `kw_reserved`,
-and not a parsing problem. `m04_SPEC.md` records the same list as the place
+The reservation was specific to the AMS sets and not to the spelling — the
+identical modules under `` `begin_keywords "1364-2005" `` compiled even then —
+so the fix was one table entry per word and not a parsing change. `token.zig`'s
+`keyword_map` test now pins both spellings' absence, since both are easy to
+re-add from an older printing. `m04_SPEC.md` records the same list as the place
 `wreal` is reserved, which is why `13`'s removal sentence in Table G.7 ("B.1,
 C.16") names the two clauses a fix has to move together.
+
+**One thing the fix gives up, recorded rather than hidden.** `net_resolution`
+*was* reserved under `"VAMS-2.3"` and `token.isReserved` can no longer say so:
+§10.6's five sets are modelled as a nesting chain with one introduction date per
+spelling, which cannot express a word that LEAVES a later set — and the unit
+test in `token.zig` asserts exactly that monotonicity. Expressing it needs a
+retirement date beside the introduction one. Nothing in the suite asks for it: a
+file under `` `begin_keywords "VAMS-2.3" `` naming a net `net_resolution` ought
+to be refused and is not.
