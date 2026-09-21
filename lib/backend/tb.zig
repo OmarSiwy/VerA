@@ -1594,7 +1594,20 @@ const runner_body =
     \\}
     \\
     \\/// Iteration history advances independently of accepted-time operators.
+    \\/// §5.6.1.2 the accepted step's CHARGE, which is the other operand of the
+    \\/// backward-Euler difference `solve` forms at the next time point. Taken
+    \\/// before `step`, so it is the q of the state `eval` saw while this point
+    \\/// was being solved and not of the history `updateState` is about to write.
+    \\var q_prev: [n_u]f64 = @splat(0.0);
+    \\
+    \\fn commitCharge(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64) void {
+    \\    if (comptime !@hasDecl(D, "q")) return;
+    \\    const qq = D.q(Dual, seed(x), model, inst, inst.abstime);
+    \\    for (0..n_u) |i| q_prev[i] = qq[i].v;
+    \\}
+    \\
     \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) void {
+    \\    commitCharge(model, inst, x);
     \\    if (@hasDecl(D, "advanceIteration")) if (!solved) {
     \\        // Forced-point fixtures sample both lifetimes. Both updates must
     \\        // read the same evaluated state, even when their inputs depend
@@ -1747,11 +1760,25 @@ const runner_body =
     \\/// system in the suite converges from the declared guess. Add the minimum
     \\/// and name it here if one ever does not.
     \\///
-    \\/// ponytail: the RESISTIVE residual only. §5.6.1.2's reactive half would
-    \\/// need `q(x)` plus the `q` of the last accepted step, and nothing asks for
-    \\/// it: a node whose only path is a capacitance stamps an all-zero `eval`
-    \\/// row, so it takes the no-pivot branch and holds its declared value the
-    \\/// way it always did. Fold q in when a fixture needs a transient solve.
+    \\/// §5.6.1.2's reactive half is folded in by BACKWARD EULER, because a
+    \\/// fixture finally needed a transient solve: §5.4.3's port current is the
+    \\/// whole of what the module stamps at the port, charge included, and
+    \\/// `res[flow(<p>)] = x − res[p]` alone can only ever hand back the
+    \\/// conduction half (ch05_analog_behavior/a02_06). So the row Newton sees is
+    \\///
+    \\///     eval(x) + (q(x) − q_prev) / dt
+    \\///
+    \\/// with `q_prev` the charge of the last accepted point (`commitCharge`).
+    \\///
+    \\/// ponytail: first order, fixed step, no LTE control and no step rejection
+    \\/// — `//! time` states the steps and the suite asserts values a clause
+    \\/// derives, not a waveform's accuracy. Trapezoidal or gear-2 is the upgrade
+    \\/// if a fixture ever asserts a number the Euler truncation error moves.
+    \\///
+    \\/// dt = 0 is the DC point that opens a transient (`renderRunner` gives the
+    \\/// first time step dt = 0 for exactly this reason, §4.5.3), and there the
+    \\/// difference is undefined and the charge contributes nothing — so that
+    \\/// point is still the resistive solve it always was.
     \\fn solve(x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *D.Instance) bool {
     \\    // Nothing to determine: every unknown is one a `//!` line named, or the
     \\    // reference the harness ties the rest to without `//! solve`. x already
@@ -1769,7 +1796,17 @@ const runner_body =
     \\    while (iter < solve_max_iter) : (iter += 1) {
     \\        if (@hasDecl(D, "advanceIteration")) if (iter != 0) D.advanceIteration(model, inst, previous);
     \\        previous = x.*;
-    \\        const r = D.eval(Dual, seed(x), model, inst, inst.abstime);
+    \\        const xd = seed(x);
+    \\        var r = D.eval(Dual, xd, model, inst, inst.abstime);
+    \\        // §5.6.1.2 backward Euler — see the header. Value and derivative
+    \\        // both, so the capacitance matrix reaches the Jacobian too.
+    \\        if (comptime @hasDecl(D, "q")) if (inst.dt > 0.0) {
+    \\            const qq = D.q(Dual, xd, model, inst, inst.abstime);
+    \\            for (0..n_u) |i| {
+    \\                r[i].v += (qq[i].v - q_prev[i]) / inst.dt;
+    \\                for (0..n_u) |j| r[i].d[j] += qq[i].d[j] / inst.dt;
+    \\            }
+    \\        };
     \\        var a: [n_u][n_u]f64 = undefined;
     \\        var b: [n_u]f64 = undefined;
     \\        var scale: f64 = 0.0;

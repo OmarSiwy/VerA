@@ -228,29 +228,33 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 ///
 /// The zero-count shift identity adds 130 bytes to the shared emitted helper;
 /// these shapes have unchanged MIR and runtime signatures.
+/// §4.3.2's runtime domain check adds 411 bytes: the four Table 4-15 guards in
+/// `math_txt` and the empty `domain_quiet_txt` a DEVICE gets in place of the
+/// executable's report. Every shape shifts by that constant; the MIR is
+/// untouched.
 /// MEASURED on this tree, not predicted: the numbers came out of this bench.
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 20837, .defs = 8, .insts = 5 },
-        .{ .device = 21195, .defs = 35, .insts = 26 },
-        .{ .device = 23938, .defs = 258, .insts = 194 },
-        .{ .device = 46303, .defs = 2050, .insts = 1538 },
-        .{ .device = 228600, .defs = 16386, .insts = 12290 },
+        .{ .device = 21248, .defs = 8, .insts = 5 },
+        .{ .device = 21606, .defs = 35, .insts = 26 },
+        .{ .device = 24349, .defs = 258, .insts = 194 },
+        .{ .device = 46714, .defs = 2050, .insts = 1538 },
+        .{ .device = 229011, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 20837, .defs = 8, .insts = 5 },
-        .{ .device = 21019, .defs = 24, .insts = 19 },
-        .{ .device = 22475, .defs = 136, .insts = 131 },
-        .{ .device = 34123, .defs = 1032, .insts = 1027 },
-        .{ .device = 127307, .defs = 8200, .insts = 8195 },
+        .{ .device = 21248, .defs = 8, .insts = 5 },
+        .{ .device = 21430, .defs = 24, .insts = 19 },
+        .{ .device = 22886, .defs = 136, .insts = 131 },
+        .{ .device = 34534, .defs = 1032, .insts = 1027 },
+        .{ .device = 127718, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 20837, .defs = 8, .insts = 5 },
-        .{ .device = 22041, .defs = 50, .insts = 40 },
-        .{ .device = 31889, .defs = 386, .insts = 320 },
-        .{ .device = 112385, .defs = 3074, .insts = 2560 },
-        .{ .device = 769889, .defs = 24578, .insts = 20480 },
+        .{ .device = 21248, .defs = 8, .insts = 5 },
+        .{ .device = 22452, .defs = 50, .insts = 40 },
+        .{ .device = 32300, .defs = 386, .insts = 320 },
+        .{ .device = 112796, .defs = 3074, .insts = 2560 },
+        .{ .device = 770300, .defs = 24578, .insts = 20480 },
     },
 });
 

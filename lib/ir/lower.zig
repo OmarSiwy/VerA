@@ -821,6 +821,11 @@ const DeferredDisplay = struct {
     /// §5.9.3 genvar bindings live at the statement, re-established around the
     /// end-of-block lowering so `I(pair[k])` in an unrolled body still folds.
     genvars: []const GenvarBind,
+    /// `Ast.AnalogBlock.unit` of the block this statement was written in.
+    /// Re-established around the end-of-block lowering for the same reason
+    /// `genvars` is: `flowAccum` keys on it (§5.6.8.1's per-instance branch),
+    /// and by `finishDisplays` time `cur_unit` is whatever block lowered last.
+    unit: u32,
     /// Index of the placeholder row in `displays` whose `.val` this fills.
     display: u32,
 };
@@ -4098,6 +4103,13 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
             return;
         }
     }
+    // §5.7 SLICE assignment — "The array on the LHS of the assignment shall be
+    // an array variable, A SLICE OF AN ARRAY VARIABLE or an array parameter",
+    // and A.8.5's rvalue production allows a subscript list SHORTER than the
+    // declared dimension list on the right. Asked before the whole-array and
+    // runtime-element paths below because a slice is neither: it is a whole
+    // array on one side and a short subscript list on the other.
+    if (try self.copyArraySlice(target, value)) return;
     // §5.7 whole-array assignment from another ARRAY, `A = B`. The clause is a
     // shape rule, checked here and nowhere else because this is the only place
     // both shapes are in scope; when it holds the copy is element-wise, since
@@ -4147,18 +4159,39 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
 /// ponytail: N masked writes per assignment; replace scalarization with explicit
 /// array storage if large mutable arrays make this compile-time expansion costly.
 fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+    // Asked BEFORE the rhs is lowered: a `false` here falls through to the
+    // scalar path, which lowers `value` itself, and lowering it twice would
+    // run its side effects twice.
+    if (!try self.isRuntimeElem(target)) return false;
+    return self.writeRuntimeIndex(target, value, try self.lowerExpr(value));
+}
+
+/// Is `target` an element of a declared array whose subscript only has a value
+/// at run time? The precondition `assignRuntimeIndex` and §4.7.2.3's
+/// output-argument writeback share.
+fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = (try self.indexChain(target, &subs)) orelse return false;
-    var dynamic = false;
-    for (chain.subs) |s| dynamic = dynamic or self.foldExpr(s, false) == null;
-    if (!dynamic) return false;
+    for (chain.subs) |s| {
+        if (self.foldExpr(s, false) != null) continue;
+        return self.arrays.contains(self.file.str(chain.name));
+    }
+    return false;
+}
+
+/// The masked-write half, with the value already lowered — §4.7.2.3's
+/// `output`/`inout` writeback has a `Mir.Value` and no expression to lower.
+/// `at` is only the diagnostic site for §3.3's string conversion.
+fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv: TypedValue) Oom!bool {
+    if (!try self.isRuntimeElem(target)) return false;
+    var subs: [max_stack_dims]Ast.ExprId = undefined;
+    const chain = (try self.indexChain(target, &subs)).?;
     const name = self.file.str(chain.name);
-    const info = self.arrays.get(name) orelse return false;
+    const info = self.arrays.get(name).?;
     if (!try self.checkSubscriptCount(target, name, info, chain.subs.len)) return true;
 
     const iv = try self.runtimeArrayIndex(chain.subs, info.dims);
-    const tv = try self.lowerExpr(value);
-    const new = try self.coerceTo(value, info.ty, tv);
+    const new = try self.coerceTo(at_e, info.ty, tv);
     var key_buf: [elem_key_len]u8 = undefined;
     var sub: [max_stack_dims]i64 = undefined;
     const at = try self.subscriptBuf(&sub, info.dims.len);
@@ -4275,6 +4308,183 @@ fn copyWholeArray(
         // The element types are already known equivalent, so there is no
         // conversion to make here — only the source's `Value` to re-bind.
         try self.builder.writeVariable(slot.place, self.cur, v.v);
+    }
+    return true;
+}
+
+/// §5.7 / A.8.5 an array reference that is NOT a scalar element: a whole array
+/// (`subs.len == 0`) or a SLICE — a subscript list shorter than the declared
+/// dimension list. A full subscript list names one cell and is not this.
+const ArraySlice = struct { name: []const u8, info: ArrayInfo, subs: []const Ast.ExprId };
+
+fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[max_stack_dims]Ast.ExprId) Oom!?ArraySlice {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            const info = self.arrays.get(name) orelse return null;
+            return .{ .name = name, .info = info, .subs = &.{} };
+        },
+        .index => {
+            const chain = (try self.indexChain(e, buf)) orelse return null;
+            const name = self.file.str(chain.name);
+            const info = self.arrays.get(name) orelse return null;
+            if (chain.subs.len >= info.dims.len) return null; // a cell, not a slice
+            return .{ .name = name, .info = info, .subs = chain.subs };
+        },
+        else => return null,
+    }
+}
+
+/// §5.7 slice assignment, `A[i] = B` / `B = A[i]`, and A.8.5's production for
+/// the right-hand side:
+///
+///   array_analog_variable_rvalue ::=
+///         array_variable_identifier
+///       | array_variable_identifier [ analog_expression ] { [ analog_expression ] }
+///       | assignment_pattern
+///
+/// The `{ }` is zero-or-more, so a SHORT subscript list is the grammar's own
+/// spelling of a slice: on §3.2's declared `integer flag_array[0:8][0:3]`,
+/// `flag_array[3]` is the four-element row and not a scalar.
+///
+/// The subscript is an `analog_expression`, NOT a `constant_expression`, so a
+/// slice index may be decided during the solve. Arrays are scalarised, so a
+/// dynamic prefix becomes the same select chain a dynamic scalar index already
+/// takes: one `$idx` per destination cell on the read side, one masked write per
+/// candidate row on the write side (`writeRuntimeIndex`'s shape, a row at a
+/// time). ponytail: P·N selects for a P-row array of N-element slices; the
+/// upgrade is real array storage, which is what would retire the scalarisation
+/// everywhere.
+///
+/// §5.7 assignment is a COPY. Both sides are scalarised, so the source cells are
+/// all read into `vals` before any destination cell is written — an overlapping
+/// `a[0] = a[1]`-style copy then behaves the way the clause says.
+///
+/// Returns false when neither side is a slice, so the whole-array and
+/// runtime-element paths keep their own diagnostics.
+fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+    var tbuf: [max_stack_dims]Ast.ExprId = undefined;
+    var vbuf: [max_stack_dims]Ast.ExprId = undefined;
+    const dst = (try self.arrayRef(target, &tbuf)) orelse return false;
+    const src = (try self.arrayRef(value, &vbuf)) orelse return false;
+    if (dst.subs.len == 0 and src.subs.len == 0) return false; // `copyWholeArray`
+
+    // "Every dimension of the source array shall have the same number of
+    // elements as the target array" — of the SLICES, which is what the clause's
+    // "an array, OR A SLICE OF SUCH AN ARRAY" makes the compared objects.
+    const dd = dst.info.dims[dst.subs.len..];
+    const sd = src.info.dims[src.subs.len..];
+    if (dd.len != sd.len or dst.info.ty != src.info.ty) {
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
+        b.msg("a `{s}` slice of `{s}` has {d} dimension(s) and a `{s}` slice of `{s}` has {d}", .{
+            @tagName(dst.info.ty), dst.name, dd.len, @tagName(src.info.ty), src.name, sd.len,
+        });
+        try b.emit();
+        return true;
+    }
+    for (dd, sd, 0..) |d, s, k| {
+        if (d.count() == s.count()) continue;
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
+        b.msg("dimension {d} of the `{s}` slice holds {d} elements and the `{s}` slice holds {d}", .{
+            k, dst.name, d.count(), src.name, s.count(),
+        });
+        b.note("§5.7 counts elements, not indices: `A[10:1] = B[0:9]` is legal", .{});
+        try b.emit();
+        return true;
+    }
+
+    const n = shapeCells(dd);
+    const vals = try self.arena.alloc(Mir.Value, n);
+    if (!try self.readSliceCells(value, src, dd, vals)) return true;
+    return self.writeSliceCells(target, dst, dd, vals);
+}
+
+/// Every cell of `s`'s slice, in the row-major order `shapeSubscripts` walks.
+fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const Bounds, out: []Mir.Value) Oom!bool {
+    var full: [max_stack_dims]i64 = undefined;
+    const idx = try self.subscriptBuf(&full, s.info.dims.len);
+    const pdims = s.info.dims[0..s.subs.len];
+
+    if (try self.constPrefix(at_e, s, idx[0..s.subs.len])) |known| {
+        if (!known) return false; // out of range — E0310 already reported
+        for (out, 0..) |*v, k| {
+            shapeSubscripts(sd, k, idx[s.subs.len..]);
+            const el = (try self.arrayElemValue(s.name, idx)) orelse return false;
+            v.* = el.v;
+        }
+        return true;
+    }
+    // A dynamic prefix: one `$idx` switch per destination cell, over the same
+    // cell of every candidate row. `runtimeArrayIndex` answers -1 for a
+    // subscript outside its dimension, which `$idx` reads as the default 0 —
+    // the rule `lowerIndex` already applies to an out-of-range scalar read.
+    const iv = try self.runtimeArrayIndex(s.subs, pdims);
+    const callee: []const u8 = switch (s.info.ty) {
+        .real => "$idx",
+        .integer => "$idx$int",
+        .string => "$idx$str",
+    };
+    for (out, 0..) |*v, k| {
+        var args: std.ArrayList(Mir.Value) = .empty;
+        defer args.deinit(self.arena);
+        try args.append(self.arena, .zero);
+        try args.append(self.arena, iv);
+        shapeSubscripts(sd, k, idx[s.subs.len..]);
+        for (0..shapeCells(pdims)) |p| {
+            shapeSubscripts(pdims, p, idx[0..s.subs.len]);
+            const el = (try self.arrayElemValue(s.name, idx)) orelse return false;
+            try args.append(self.arena, el.v);
+        }
+        v.* = try self.call(callee, args.items);
+    }
+    return true;
+}
+
+/// The mirror image: `vals` into every cell of `d`'s slice.
+fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []const Bounds, vals: []const Mir.Value) Oom!bool {
+    var key_buf: [elem_key_len]u8 = undefined;
+    var full: [max_stack_dims]i64 = undefined;
+    const idx = try self.subscriptBuf(&full, d.info.dims.len);
+    const pdims = d.info.dims[0..d.subs.len];
+
+    if (try self.constPrefix(at_e, d, idx[0..d.subs.len])) |known| {
+        if (!known) return true;
+        for (vals, 0..) |v, k| {
+            shapeSubscripts(dd, k, idx[d.subs.len..]);
+            const slot = self.vars.get(try self.elemKey(&key_buf, d.name, idx)) orelse continue;
+            try self.builder.writeVariable(slot.place, self.cur, v);
+        }
+        return true;
+    }
+    const iv = try self.runtimeArrayIndex(d.subs, pdims);
+    for (0..shapeCells(pdims)) |p| {
+        shapeSubscripts(pdims, p, idx[0..d.subs.len]);
+        const hit = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(p)) });
+        for (vals, 0..) |v, k| {
+            shapeSubscripts(dd, k, idx[d.subs.len..]);
+            const slot = self.vars.get(try self.elemKey(&key_buf, d.name, idx)) orelse continue;
+            const old = try self.builder.readVariable(slot.place, self.cur);
+            try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ hit, v, old }));
+        }
+    }
+    return true;
+}
+
+/// The slice's leading subscripts, if every one of them folds: true when they
+/// are also in range, false when §3.2.2 has been reported on them, null when at
+/// least one is only known during the solve.
+fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
+    for (s.subs, out) |e, *o| {
+        const c = self.foldExpr(e, false) orelse return null;
+        o.* = c.asInt();
+    }
+    for (out, s.info.dims[0..s.subs.len], 0..) |i, d, k| {
+        if (i >= d.lo and i <= d.hi) continue;
+        try self.err(self.file.exprs.mainTok(at_e), .E0310, "index {d} is outside dimension {d} of `{s}[{d}:{d}]`", .{
+            i, k, s.name, d.lo, d.hi,
+        });
+        return false;
     }
     return true;
 }
@@ -6256,6 +6466,7 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         .args = args,
         .pre = pre,
         .genvars = genvars,
+        .unit = self.cur_unit,
         .display = @intCast(self.displays.items.len),
     });
     // The placeholder keeps `displays` in source order — W0850 reporting and
@@ -6301,6 +6512,7 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         // Provenance: instructions minted here belong to the display
         // statement, not to whatever token the block ended on.
         self.mir.cur_tok = dd.tok;
+        self.cur_unit = dd.unit;
         for (dd.genvars) |g| try self.consts.put(self.arena, g.name, g.c);
         var vals: std.ArrayList(Mir.Value) = .empty;
         defer vals.deinit(self.arena);
@@ -7206,9 +7418,10 @@ fn isDigitalOnlySysFunc(name: []const u8) bool {
         // additionally deprecates $realtime in the analog context.
                   "$time",             "$stime",
         "$realtime",
-        // Table 9-8 (§9.11) — the extension is $bitstoreal and $realtobits and
-        // nothing else.
-                "$itor",             "$rtoi",
+        // Table 9-8 (§9.11) — the extension is FOUR names, not two:
+        // "$bitstoreal and $realtobits,$rtoi and $itor can be used in the
+        // analog context". Table 9-8's analog column agrees — only $signed and
+        // $unsigned read No, and both presuppose a sized vector.
         "$signed",           "$unsigned",
     };
     for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
@@ -7943,10 +8156,10 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // the statement's own entry already exists by the time its rhs
             // lowers (`contribIndex` runs first), and the accumulator it would
             // find is exactly the stale self-reference §5.6.6 rules out.
-            // ponytail: the unknown this mints has no defining row — no
-            // fixture `//! solve`s an implicit flow (the harness sweeps it);
-            // the day one does, codegen owes `x[u] − Σ contributions = 0`, the
-            // same shape `portFlowRead` documents for `I(<p>)`.
+            // The unknown this mints is defined by codegen's `FreeFlow` row,
+            // `x[u] − Σ contributions = 0` — the same shape `portFlowRead`
+            // documents for `I(<p>)`. Without it the self-reference answered
+            // its seed of 0 and the model was silently linearised.
             if (self.contrib_target) |ct| {
                 if (ct.access == .flow and t.access == .flow and
                     ct.hi == t.hi and ct.lo == t.lo and ct.br == t.br)
@@ -7961,8 +8174,11 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // branch is a §5.4.2.1 flow PROBE — a short whose current is a
             // genuine unknown of the solve — and a POTENTIAL source's branch
             // current is pinned by the branch row codegen emits for it. Both of
-            // those keep the unknown and read it.
-            if (self.flowAccum(t)) |acc| {
+            // those keep the unknown and read it — the second of them including
+            // §5.6.8.1's hierarchical case, where the source this instance just
+            // created runs in PARALLEL with another instance's accumulator
+            // (`potentialSourceHere`).
+            if (!self.potentialSourceHere(t)) if (self.flowAccum(t)) |acc| {
                 // §5.6.1.2: the retained value of a source branch is the WHOLE
                 // of what was contributed to it, and §5.4.2.2 makes that whole
                 // readable. No clause lets a reactive term count for the node
@@ -7988,7 +8204,7 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                     break :blk if (r == .f_zero) dq else try self.emit(.fadd, &.{ r, dq });
                 };
                 return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
-            }
+            };
             const u = try self.flowUnknown(t.hi, t.lo);
             const v = try self.probe(u);
             return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
@@ -7999,12 +8215,44 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The §5.6.1.2 retained-flow accumulator of the branch (hi, lo), if a `<+` has
 /// already made it a flow source. Keyed exactly like `contribIndex` — on the
 /// canonicalised pair, so `I(n,p)` finds the one entry `I(p,n)` created.
+///
+/// NOT keyed on the unit, unlike `discardOpposite`: §5.5.5 lets "a module
+/// access the potential and flow of a branch in another module instance ...
+/// providing that value is available in the other instance", and a hierarchical
+/// `I(x1.p, x1.n)` is exactly that read. §5.5.4's new-branch rule is about the
+/// access functions whose examples are all POTENTIAL probes, which draw no flow
+/// — see `potentialSourceHere` for the case where this unit's OWN source is the
+/// branch being read.
 fn flowAccum(self: *const Lower, t: Target) ?Accum {
     for (self.contributions.items, self.accum.items) |c, acc| {
         if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
             return acc;
     }
     return null;
+}
+
+/// §5.6.8.1: "Direct contribution statements can contribute to a branch between
+/// combinations of local and hierarchical nets. In these cases, a new unnamed
+/// branch is created in the module containing the direct contribution
+/// statements." So a potential `<+` written HERE is a source branch of THIS
+/// instance, in parallel with whatever another instance retained over the same
+/// node pair — §5.4.1's "only one unnamed branch between any two nets" is a
+/// PER-INSTANCE rule, and flattening has already collapsed the pairs.
+///
+/// The flow of that source is the branch-current unknown codegen pins with its
+/// branch row, never the parallel branch's accumulator. Without this a parent's
+/// `I(drv.x, drv.y)` read back the CHILD's conduction current.
+///
+/// `unit` is the id of the contribution that OPENED the entry (see its doc), so
+/// a second instance potential-sourcing a pair another already sources reads the
+/// accumulator instead — two ideal potential sources in parallel is a degenerate
+/// topology the clause does not describe either way.
+fn potentialSourceHere(self: *const Lower, t: Target) bool {
+    for (self.contributions.items) |c| {
+        if (c.kind == .direct and c.access == .potential and c.hi == t.hi and c.lo == t.lo and
+            c.br == t.br and c.unit == self.cur_unit) return true;
+    }
+    return false;
 }
 
 /// LRM §5.4.3 port access — `I(<p>)`.
@@ -10347,6 +10595,13 @@ pub fn inlineUserFuncPre(
             try self.funcArrayOut(actual, vals);
             continue;
         }
+        // §3.2 a runtime subscript names no single storage slot, so the
+        // writeback is the same masked one `a[i] = …` takes. §4.7.2.3 says
+        // only that "the last value assigned to the output argument is then
+        // assigned to the corresponding analog variable reference" — it puts
+        // no constant-expression condition on the reference, and `resolveLvalue`
+        // was refusing one with E0311.
+        if (try self.writeRuntimeIndex(actual, actual, .{ .v = vals[0], .ty = astTy(formal.ty) })) continue;
         const slot = try self.resolveLvalue(actual) orelse continue;
         try self.builder.writeVariable(slot.place, self.cur, vals[0]);
     }
