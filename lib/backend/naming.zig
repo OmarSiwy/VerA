@@ -282,6 +282,34 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
     return units.toOwnedSlice(gpa);
 }
 
+/// Check THE CANONICAL UNIT ORDER above actually holds. proof.zig states the
+/// contract in prose and says, of this file, "assert it there" — this is there.
+///
+/// Until now nothing checked it, and the failure mode is SILENT. codegen's
+/// `unitMode` reads `verdict.unit_modes[i]` for every `i` below that slice's
+/// length and takes `.strict` above it, so a unit kind inserted anywhere but
+/// the END makes every later contribution read a DIFFERENT unit's float mode.
+/// Half of those reads land on `.optimized`, which is `@setFloatMode(.optimized)`
+/// — nnan and ninf asserted on a unit that was never proven finite. That is
+/// Release-only, convergence-corrupting UB with no diagnostic anywhere (see
+/// proof.zig's SOUNDNESS MODEL).
+///
+/// So the three facts, in the order they can break:
+///   (a) proof rated exactly the contribution units (`proof.unitCount`),
+///   (b) those units are the PREFIX of the canonical order, and
+///   (c) everything after them is an appended kind, never interleaved.
+///
+/// O(units) — tens of iterations on the largest model in the catalogue, and
+/// `assert` is a no-op in ReleaseFast. The edit that would break this is made
+/// in Debug, which is where the tests run.
+pub fn assertCanonicalOrder(units: []const Unit, lower: *const Lower, unit_modes_len: usize) void {
+    const n_contrib = lower.contributions.items.len;
+    std.debug.assert(unit_modes_len == n_contrib); // (a)
+    std.debug.assert(units.len >= n_contrib);
+    for (units[0..n_contrib]) |u| std.debug.assert(u.role == .analog); // (b)
+    for (units[n_contrib..]) |u| std.debug.assert(u.role == .analog_op); // (c)
+}
+
 /// Does this `call` callee name a per-instance-stateful analog operator?
 /// Reuses token.zig's annex-A.8.2/A.6.5 groups rather than restating them.
 pub fn isStatefulAnalogOp(name: []const u8) bool {
