@@ -3,18 +3,26 @@
 // `digital_scale` is declared `function` (not `analog function`), so it is a
 // digital function, and its only caller is the analog block.
 //
-// The rule is MASKED here, not exercised, and the mask is VerA's ceiling rather
-// than C.7's subset rule: a non-analog `function` is a digital subprogram, its
-// body is digital procedural code, and VerA has no discrete kernel to run one, so
-// the declaration dies as an unsupported module item (E0205) before any caller is
-// analysed. The domain-crossing check therefore never fires. The other direction
-// is no longer masked — analog_function_from_digital_rejected.va reaches E0430
-// now — and cross_domain_function_unsupported.va is still masked, by the same
-// digital `function` plus an `always` block.
+// THE MASK IS GONE, as of 2026-09-21. It used to read: the declaration dies as
+// an unsupported module item (E0205) before any caller is analysed, so the
+// domain-crossing check never fires. §4.7 admits the declaration ("Each
+// function can be an analog user-defined function or a digital function"), so
+// refusing it was refusing §4.7 rather than enforcing §7.3.7; the declaration
+// is now accepted and the CALL is refused, as E0436.
+//
+// This file keeps its place beside `m01_90_digital_function_from_analog_
+// rejected.va` because the two pin DIFFERENT SPELLINGS of the same rule: this
+// one is A.2.6's non-ANSI form with no ports at all (`function real
+// digital_scale;`), m01_90 is the ANSI form with a parenthesised `input real
+// x`. Both had to start parsing for either to be judged.
+//
+// The other direction was already unmasked — analog_function_from_digital_
+// rejected.va reaches E0430 — and cross_domain_function_unsupported.va is
+// still masked, by an `always` block rather than by the function.
 //
 //! lrm 7.3.7
 //! lrm C.7
-//! reject E0205
+//! reject E0436
 module ch7_digital_function_from_analog(p);
   inout p; electrical p;
   function real digital_scale;

@@ -402,6 +402,12 @@ pub const Code = enum(u16) {
     /// A.6.4 an `-> ev;` event trigger written on the analog spine, outside any
     /// `@(<event>)`.
     E0434,
+    /// §7.3 a CONTINUOUS net written — contributed to — from the discrete
+    /// context. The read direction is legal and is what §7.3.3 exists for.
+    E0435,
+    /// §7.3.7 a DIGITAL function called from the analog context. E0430 is the
+    /// other sentence of the same clause, in the other direction.
+    E0436,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3301,6 +3307,65 @@ fn infoOf(c: Code) Info {
             \\A bare trigger would have to mean "this event is active at every
             \\timepoint", which hands the event's rate to the solver's step
             \\control rather than to the model.
+            ,
+        },
+
+        .E0435 => .{
+            .title = "a continuous net cannot be written from a discrete context",
+            .lrm = "7.3",
+            .explain =
+            \\LRM 7.3 draws the line in one sentence: "Read operations of nets
+            \\and variables in both domains are allowed from both contexts.
+            \\WRITE operations of nets and variables are only allowed from the
+            \\context of their domain."
+            \\
+            \\So `V(p) <+ ...` inside an `always` or `initial` block is not a
+            \\contribution the simulator can place: §7.2.1 assigns potentials
+            \\and flows to the CONTINUOUS domain, and if a digital process
+            \\could contribute to a branch then both kernels would own that
+            \\node's equation and neither would be solving it.
+            \\
+            \\§7.3.3 states the permitted half from the other side — "All
+            \\continuous nets can be PROBED from a discrete context using
+            \\access functions". Probed, not driven. Syntax 7-3 likewise
+            \\admits an analog event into a digital sensitivity list without
+            \\admitting a contribution into a digital statement.
+            \\
+            \\This is NOT E0432 (§7.2.2, "assigned in both contexts"), which
+            \\is about a variable with two writers and fires only when both
+            \\exist. Here there is one writer and it is in the wrong domain.
+            \\
+            \\Move the contribution into the `analog` block and let the
+            \\digital process set a variable the analog block reads — that
+            \\read is §7.3's legal direction and Table 7-1 is its conversion.
+            ,
+        },
+
+        .E0436 => .{
+            .title = "a digital function cannot be called from the analog context",
+            .lrm = "7.3.7",
+            .explain =
+            \\LRM 7.3.7 is two sentences and this is the first: "Digital
+            \\functions cannot be called from within the analog context.
+            \\Analog functions cannot be called from within the digital
+            \\context." E0430 is the second.
+            \\
+            \\The DECLARATION is legal. LRM 4.7 says "Each function can be an
+            \\analog user-defined function or a digital function (as defined
+            \\in IEEE Std 1364 Verilog)", so a module may hold a digital
+            \\function and call it from a digital process; what it may not do
+            \\is call it from an `analog` block. The diagnostic therefore
+            \\lands on the CALL, never on the `function` keyword.
+            \\
+            \\A digital function runs in the discrete domain: it is evaluated
+            \\once per event, and the analog kernel would have to call it once
+            \\per Newton iterate with no event to attach the result to.
+            \\
+            \\Write `analog function` if the body is analog — it is inlined
+            \\into the contribution and its arguments are solver values. If
+            \\the body genuinely belongs to the discrete domain, let the
+            \\digital process call it and have the analog block read the
+            \\variable it wrote (LRM 7.3's legal direction, Table 7-1).
             ,
         },
 

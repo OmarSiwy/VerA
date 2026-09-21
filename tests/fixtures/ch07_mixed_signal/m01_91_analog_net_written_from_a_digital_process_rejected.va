@@ -26,12 +26,16 @@
 // nothing in §7.2.2 applies. The rule broken is §7.3's, and the diagnostic has
 // to say so.
 //
-// WHAT FAILS TODAY, and why that is not a pass: `error[E0205]: unsupported
-// module item: found `always``. VerA refuses the block, so it never judges the
+// WHAT USED TO FAIL, and why it was not a pass: `error[E0205]: unsupported
+// module item: found `always``. VerA refused the block, so it never judged the
 // contribution inside it — the same masking that makes
 // `tests/fixtures/ch07_mixed_signal/digital_probe_unsupported.va` uncredited
-// for §7.3.3. Once `always` is a legal module item (fixtures 06, 08, 09 and 10
-// all require it), this file is what stops the contribution coming with it.
+// for §7.3.3. As of 2026-09-21 the contribution is judged on its own terms
+// (E0435) and the clause is pinned whether or not the block is executable —
+// which is the point, because §7.3 holds in a compiler that supports `always`
+// perfectly, while E0205 is a statement about VerA. The E0205 still arrives
+// alongside; when `always` becomes executable (fixtures 06, 08, 09 and 10 all
+// require it) this file is what stops the contribution coming with it.
 //
 // The clock is a plain reg toggled once, with no `#` delay, so the fixture does
 // not additionally depend on the discrete timeline: the rule is decidable from
@@ -39,7 +43,7 @@
 //
 //! lrm 7.3
 //! lrm 7.2.1
-//! reject LRM 7.3
+//! reject E0435
 module m01_contribution_from_digital(p);
   inout p;
   electrical p;

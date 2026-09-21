@@ -7,12 +7,13 @@
 // gets E0430 reported at the call site inside an `initial` block, with the
 // block itself accepted so nothing masks it.
 //
-// The FIRST sentence has no coverage. `digital_function_from_analog_unsupported.va`
-// is the right shape but is refused at `error[E0205]: unsupported module item`
-// on the `function` DECLARATION — VerA has no production for a non-`analog`
-// function at all — so no caller is ever analysed and the clause's rule is
-// never reached. Chapter 7's COVERAGE.md says so in as many words: "The other
-// half is still masked".
+// The FIRST sentence had no coverage until 2026-09-21.
+// `digital_function_from_analog_unsupported.va` was the right shape but was
+// refused at `error[E0205]: unsupported module item` on the `function`
+// DECLARATION — VerA had no production for a non-`analog` function at all — so
+// no caller was ever analysed and the clause's rule was never reached. Chapter
+// 7's COVERAGE.md said so in as many words: "The other half is still masked".
+// The declaration is now accepted and the CALL is refused, as E0436.
 //
 // WHAT MUST HAPPEN INSTEAD. A Verilog-AMS compiler accepts the declaration —
 // §4.7's opening paragraph is the authority, verbatim: "A user-defined function
@@ -46,7 +47,7 @@
 //
 //! lrm 7.3.7
 //! lrm 4.7
-//! reject LRM 7.3.7
+//! reject E0436
 module m01_digital_function_from_analog(p);
   inout p;
   electrical p;
