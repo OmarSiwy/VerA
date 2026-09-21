@@ -18,6 +18,7 @@ const gen_render = @import("render.zig");
 const gen_wide = @import("wide.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
+const proof = @import("ir").proof;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
 const Error = codegen.Error;
@@ -131,7 +132,7 @@ pub fn emitUnits(self: *Gen) Error!void {
         self.emitting_display = true;
         defer self.emitting_display = false;
         const lo = self.out.items.len;
-        const at = try emitUnit(self, job.name, job.target, @tagName(job.mode), job.comment);
+        const at = try emitUnit(self, job.name, job.target, job.mode, job.comment);
         try gen_file.recordUnitFile(self, job.name, lo, at);
     }
     self.pre_fatal = null;
@@ -319,7 +320,7 @@ pub fn opInputIdx(self: *const Gen, i: u32) u32 {
 /// Returns the offset of the `fn` keyword, where `orchestrator.writeTree`
 /// splices `pub ` for the split form. `text` itself stays private because
 /// `contract.rejectStrayPubDecls` allows only contract-recognized public names.
-pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u8, comment: []const u8) Error!usize {
+pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: proof.FloatMode, comment: []const u8) Error!usize {
     self.uses = .{};
     self.fatal = self.pre_fatal;
     self.plan.display_unit = self.emitting_display;
@@ -329,8 +330,8 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     const at_fn = self.out.items.len;
     const slots = try openSig(self, name);
     try self.w(") {s} {{\n", .{try family.ofText(self, family.mask(self, target))});
-    try self.w("    @setFloatMode(.{s});\n", .{mode});
-    self.float.strict = std.mem.eql(u8, mode, "strict");
+    try self.w("    @setFloatMode(.{t});\n", .{mode});
+    self.float.strict = mode == .strict;
 
     const body_start = self.out.items.len;
     try emitUnitBody(self, target);

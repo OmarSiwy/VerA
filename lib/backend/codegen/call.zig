@@ -29,15 +29,6 @@ const none_u32 = codegen.none_u32;
 const OpKind = @import("ir").op.OpKind;
 const diag = @import("diag");
 
-/// Returns the LRM Table 4-14/4-15 opcode for `name`, including the `log10`
-/// spelling of the `$` form (IEEE 1364 §17.11). Reuses lowering's tables.
-fn mathOpByName(name: []const u8) ?Mir.Opcode {
-    if (Lower.unaryMathOp(name)) |op| return op;
-    if (Lower.binaryMathOp(name)) |op| return op;
-    if (std.mem.eql(u8, name, "log10")) return .log10;
-    return null;
-}
-
 /// Returns whether `s` is an analysis name `analysis()` recognises (LRM §4.6.1).
 fn isAnalysisName(s: []const u8) bool {
     const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
@@ -916,7 +907,33 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$hypot",
         .@"$atan2",
         => |t| {
-            const op = comptime mathOpByName(@tagName(t)[1..]).?;
+            // LRM Table 4-14/4-15 opcodes; `$log` is base 10, as lowering's `log`.
+            const op: Mir.Opcode = comptime switch (t) {
+                .@"$sqrt" => .sqrt,
+                .@"$exp" => .exp,
+                .@"$expm1" => .expm1,
+                .@"$ln" => .ln,
+                .@"$ln1p" => .ln1p,
+                .@"$log", .@"$log10" => .log10,
+                .@"$floor" => .floor,
+                .@"$ceil" => .ceil,
+                .@"$sin" => .sin,
+                .@"$cos" => .cos,
+                .@"$tan" => .tan,
+                .@"$asin" => .asin,
+                .@"$acos" => .acos,
+                .@"$atan" => .atan,
+                .@"$sinh" => .sinh,
+                .@"$cosh" => .cosh,
+                .@"$tanh" => .tanh,
+                .@"$asinh" => .asinh,
+                .@"$acosh" => .acosh,
+                .@"$atanh" => .atanh,
+                .@"$pow" => .pow,
+                .@"$hypot" => .hypot,
+                .@"$atan2" => .atan2,
+                else => unreachable, // else: `t` is one of this prong's callees, each mapped above
+            };
             if (Mir.opClass(op) == .unary and args.len >= 1) return gen_render.renderOp(self, op, args[0], .f_zero, .real);
             if (Mir.opClass(op) == .binary and args.len >= 2) return gen_render.renderOp(self, op, args[0], args[1], .real);
             return emitUnregistered(self, inst, name, args);

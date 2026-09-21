@@ -624,8 +624,8 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             assert(!react); // splitContribution never runs on an indirect
             try self.ind(2);
             try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
-            try stamp(self, 2, c.hi, "add", "ib", uBit(u), u);
-            try stamp(self, 2, c.lo, "sub", "ib", uBit(u), u);
+            try stamp(self, 2, c.hi, .add, "ib", uBit(u), u);
+            try stamp(self, 2, c.lo, .sub, "ib", uBit(u), u);
             try self.ind(2);
             patRow(self, @intCast(u), self.an.unknownDeps(val));
             linClear(self, u);
@@ -660,15 +660,15 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 }
             } else {
                 // §1.3.1.2: the value flows INTO hi and OUT OF lo.
-                try stamp(self, 2, c.hi, "add", "c", self.an.unknownDeps(val), null);
-                try stamp(self, 2, c.lo, "sub", "c", self.an.unknownDeps(val), null);
+                try stamp(self, 2, c.hi, .add, "c", self.an.unknownDeps(val), null);
+                try stamp(self, 2, c.lo, .sub, "c", self.an.unknownDeps(val), null);
                 // §5.6.6: the model also reads `I(hi,lo)`, so this current is
                 // an unknown whose row is `x[u] − Σ contributions`. Accumulated
                 // here (contributions to one branch are one sum, §5.6.1) and
                 // closed with the `+ x[u]` term after the loop.
                 if (self.topo.freeFlowOf(c.hi, c.lo)) |f| {
                     assert(f.sourced);
-                    try stamp(self, 2, @intCast(f.u), "sub", "c", self.an.unknownDeps(val), null);
+                    try stamp(self, 2, @intCast(f.u), .sub, "c", self.an.unknownDeps(val), null);
                 }
             },
             .potential => {
@@ -680,8 +680,8 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     const u = self.names.branch_u[i];
                     try self.ind(2);
                     try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
-                    try stamp(self, 2, c.hi, "add", "ib", uBit(u), u);
-                    try stamp(self, 2, c.lo, "sub", "ib", uBit(u), u);
+                    try stamp(self, 2, c.hi, .add, "ib", uBit(u), u);
+                    try stamp(self, 2, c.lo, .sub, "ib", uBit(u), u);
                     try self.ind(2);
                     patRow(self, @intCast(u), nodeBit(c.hi) | nodeBit(c.lo) | self.an.unknownDeps(val));
                     linBranch(self, u, c.hi, c.lo);
@@ -730,8 +730,8 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             // §5.4.2.1 "The branch potential of a flow probe is zero (0)",
             // the ammeter of Figure 5-1. Its current enters KCL at both ends,
             // which makes it a short rather than an observation.
-            try stamp(self, 1, f.hi, "add", try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
-            try stamp(self, 1, f.lo, "sub", try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.hi, .add, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.lo, .sub, try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
             try self.ind(1);
             patRow(self, @intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
             linBranch(self, f.u, f.hi, f.lo);
@@ -877,8 +877,8 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
         // Guarded: the constant is `guardTerm`'s, not an unconditional `lin`.
         const col: ?u32 = if (guard == null) u else null;
-        try stamp(self, d, c.hi, "add", "ib", uBit(u), col);
-        try stamp(self, d, c.lo, "sub", "ib", uBit(u), col);
+        try stamp(self, d, c.hi, .add, "ib", uBit(u), col);
+        try stamp(self, d, c.lo, .sub, "ib", uBit(u), col);
         try self.ind(d);
         patRow(self, @intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | switchRowDeps(self, i, c, react));
         try rowSet(self, u);
@@ -913,8 +913,8 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try switchOpen(self, partner, react);
         try self.b(";\n", .{});
         const bits = switchRowDeps(self, i, c, react);
-        try stamp(self, 3, c.hi, "add", "flow", bits, null);
-        try stamp(self, 3, c.lo, "sub", "flow", bits, null);
+        try stamp(self, 3, c.hi, .add, "flow", bits, null);
+        try stamp(self, 3, c.lo, .sub, "flow", bits, null);
         try self.ind(2);
         try self.b("}}\n", .{});
     }
@@ -1020,17 +1020,23 @@ fn coreRef(self: *Gen, v: Mir.Value) Error!void {
     try self.b("m.f{d}", .{self.core.lo_idx[@backingInt(v)]});
 }
 
-/// Emits one term into row `node`: `opx` (`add`/`sub`) of `val`, recording
+/// A stamp's sign; its tag names are the emitted row methods `.add`/`.sub`.
+const StampSign = enum { add, sub };
+
+/// Emits one term into row `node`: `sign` (`add`/`sub`) of `val`, recording
 /// `bits` in the row pattern. `col` names the unknown when `val` is exactly `x[col]` (a ±1 term
 /// whose coefficient `Gen.jac.lin` records), and is null for a core value, whose
 /// lanes `renderValueRef` already marked. Ground has no row and writes nothing.
-pub fn stamp(self: *Gen, depth: u32, node: u32, opx: []const u8, val: []const u8, bits: u64, col: ?u32) Error!void {
+pub fn stamp(self: *Gen, depth: u32, node: u32, sign: StampSign, val: []const u8, bits: u64, col: ?u32) Error!void {
     if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
     patRow(self, node, bits);
-    if (col) |k| linTerm(self, node, k, if (std.mem.eql(u8, opx, "add")) 1 else -1);
+    if (col) |k| linTerm(self, node, k, switch (sign) {
+        .add => 1,
+        .sub => -1,
+    });
     try self.ind(depth);
     try rowSet(self, node);
-    try self.b("res[@intFromEnum(U.{s})].{s}({s})", .{ self.names.u_names[node], opx, val });
+    try self.b("res[@intFromEnum(U.{s})].{s}({s})", .{ self.names.u_names[node], @tagName(sign), val });
     try rowEnd(self);
 }
 

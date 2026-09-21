@@ -16,6 +16,8 @@ pub const Spell = union(enum) {
     method: []const u8,
     /// A kernel from `kernel_text`: `zLog10(S, a)`, `zHypot(S, a, b)`.
     helper: []const u8,
+    /// A unary kernel taking `S` as written rather than a lane mask: `zAbs(S, a)`.
+    helper_s: []const u8,
 };
 
 /// One opcode's backend facts.
@@ -89,7 +91,7 @@ pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .hypot = .{ .s = .{ .helper = "zHypot" }, .pins_lanes = true, .host_f64 = &.{ "std.math.hypot(", ", ", ")" }, .dev_safe = false, .libm = true },
     .floor = .{ .s = .{ .helper = "zFloor" }, .pins_lanes = true, .host_f64 = &.{ "@floor(", ")" }, .dev_safe = true, .libm = false },
     .ceil = .{ .s = .{ .helper = "zCeil" }, .pins_lanes = true, .host_f64 = &.{ "@ceil(", ")" }, .dev_safe = true, .libm = false },
-    .fabs = .{ .s = .{ .method = "abs" }, .pins_lanes = false, .host_f64 = &.{ "@abs(", ")" }, .dev_safe = true, .libm = false },
+    .fabs = .{ .s = .{ .helper_s = "zAbs" }, .pins_lanes = false, .host_f64 = &.{ "@abs(", ")" }, .dev_safe = true, .libm = false },
     .fmin = .{ .s = .{ .helper = "zMin" }, .pins_lanes = false, .host_f64 = &.{ "zMinF(", ", ", ")" }, .dev_safe = true, .libm = false },
     .fmax = .{ .s = .{ .helper = "zMax" }, .pins_lanes = false, .host_f64 = &.{ "zMaxF(", ", ", ")" }, .dev_safe = true, .libm = false },
     .iabs = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "@abs(", ")" }, .dev_safe = false, .libm = false },

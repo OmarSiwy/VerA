@@ -581,6 +581,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             switch (r.s) {
                 .method => |m| if (binary) try method2(self, a, m, b2) else try method1(self, a, m),
                 .helper => |h| if (binary) try helper2(self, h, a, b2) else try helper1(self, h, a),
+                .helper_s => |h| if (binary) @compileError("renderOp: `helper_s` is unary, `" ++ @tagName(o) ++ "` is binary") else try helperS(self, h, a),
                 .custom => @compileError("renderOp: opcode_zig gives `" ++ @tagName(o) ++ "` no S spelling"),
             }
         },
@@ -688,12 +689,12 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         // An anonymous struct, so two nested `**` cannot collide on a label.
         .ipow => try intCall2(self, ipow_fn, a, b2),
         // §4.2.5/§4.2.7 relational and equality, integer 0/1
-        .flt => try cmpReal(self, a, "<", b2),
-        .fgt => try cmpReal(self, a, ">", b2),
-        .fle => try cmpReal(self, a, "<=", b2),
-        .fge => try cmpReal(self, a, ">=", b2),
-        .feq => try cmpReal(self, a, "==", b2),
-        .fne => try cmpReal(self, a, "!=", b2),
+        .flt => try cmpReal(self, a, .lt, b2),
+        .fgt => try cmpReal(self, a, .gt, b2),
+        .fle => try cmpReal(self, a, .lte, b2),
+        .fge => try cmpReal(self, a, .gte, b2),
+        .feq => try cmpReal(self, a, .eq, b2),
+        .fne => try cmpReal(self, a, .neq, b2),
         .ilt => try cmpInt(self, a, "<", b2),
         .igt => try cmpInt(self, a, ">", b2),
         .ile => try cmpInt(self, a, "<=", b2),
@@ -796,7 +797,6 @@ fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
 }
 
 fn method1(self: *Gen, a: Mir.Value, name: []const u8) Error!void {
-    if (std.mem.eql(u8, name, "abs")) return helperS(self, "zAbs", a);
     try self.b("(", .{});
     try renderVal(self, a, .real);
     try self.b(").{s}()", .{name});
@@ -1075,11 +1075,11 @@ pub fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
     try self.b(")", .{});
 }
 
-fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+/// `op`'s tag names are the device kernel `zCmp`'s operator names.
+fn cmpReal(self: *Gen, a: Mir.Value, op: std.math.CompareOperator, b2: Mir.Value) Error!void {
     float_lanes.leadLanes(self, a);
     float_lanes.leadLanes(self, b2);
-    const op: []const u8 = if (std.mem.eql(u8, opx, "<")) "lt" else if (std.mem.eql(u8, opx, "<=")) "lte" else if (std.mem.eql(u8, opx, ">")) "gt" else if (std.mem.eql(u8, opx, ">=")) "gte" else if (std.mem.eql(u8, opx, "==")) "eq" else "neq";
-    try self.b("@as(i64, @intFromBool(zCmp(S, .{s}, ", .{op});
+    try self.b("@as(i64, @intFromBool(zCmp(S, .{s}, ", .{@tagName(op)});
     try renderVal(self, a, .real);
     try self.b(", ", .{});
     try renderVal(self, b2, .real);
