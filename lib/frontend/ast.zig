@@ -1204,6 +1204,59 @@ pub const SeqBlock = struct {
 };
 
 // ---------------------------------------------------------------------------
+// User-defined primitives — LRM §8.5.3, annex A.5
+// ---------------------------------------------------------------------------
+
+/// One A.5.3 `combinational_entry` or `sequential_entry`, as the CHARACTERS of
+/// its columns.
+///
+/// Characters and not tokens, because that is what A.5.3's alphabets are:
+/// `level_symbol ::= 0 | 1 | x | X | ? | b | B`, and an `edge_indicator ::= (
+/// level_symbol level_symbol )` is one input field spelled with four of them
+/// that the lexer hands over as three tokens. `parseUdpEntry` concatenates a
+/// column's token text for exactly that reason, and this carries the result.
+pub const UdpRow = struct {
+    /// `level_input_list` or `seq_input_list`, validated against A.5.3's
+    /// alphabets — `( )` included, so an edge entry keeps its grouping.
+    inputs: []const u8,
+    /// `current_state ::= level_symbol`; 0 for a combinational entry, which
+    /// has no such column.
+    state: u8 = 0,
+    /// `output_symbol ::= 0 | 1 | x | X`, or `-` for a `next_state` that holds.
+    output: u8,
+};
+
+/// LRM §8.5.3 / A.5.1 `udp_declaration`. The declaration as validated by
+/// `parseUdpDecl`; §8.5.3's evaluation of it belongs to whatever executes the
+/// discrete cycle.
+// ponytail: `inputs` is not split into one field per input port. A.5.3 gives
+// the table one field per input in header order, and a splitter needs the
+// `( … )` grouping above; the evaluator is where that split has a consumer,
+// and it is also where the "one field per input port" count can be checked
+// against a diagnostic instead of dropped.
+pub const UdpDecl = struct {
+    name: StrId,
+    /// A.5.2 `udp_port_list ::= output_port_identifier , input_port_identifier
+    /// { , input_port_identifier }` — so `ports[0]` is the output and
+    /// `ports[1..]` are the inputs, in the order A.5.3's input list is written
+    /// in. Both A.5.1 header arms produce the same order.
+    ports: []const StrId = &.{},
+    /// Which A.5.3 `udp_body` alternative the table is, taken from the table
+    /// itself: a `sequential_entry` is the two-colon one, and `parseUdpTable`
+    /// already requires every entry to agree.
+    ///
+    /// NOT taken from the `reg` on the output declaration. A.5.2 admits one
+    /// there and A.5.3 decides the body; a UDP that writes `reg` over a
+    /// combinational table is malformed, and nothing checks that yet.
+    is_sequential: bool = false,
+    /// A.5.3 `udp_initial_statement ::= initial output_port_identifier =
+    /// init_val ;`; `.none` when the declaration carries none.
+    init: ExprId = .none,
+    rows: []const UdpRow = &.{},
+    main_tok: u32 = 0,
+};
+
+// ---------------------------------------------------------------------------
 // Source file — LRM §1 source_text, A.1.2
 // ---------------------------------------------------------------------------
 
@@ -1225,6 +1278,7 @@ pub const SourceFile = struct {
     natures: []const NatureDecl = &.{}, // §3.6.1
     paramsets: []const ParamsetDecl = &.{}, // §6.4
     connectrules: []const ConnectRulesDecl = &.{}, // §7.7
+    udps: []const UdpDecl = &.{}, // §8.5.3 / A.5.1
 
     /// Annex E — how many LEADING entries of `modules` are shipped Table E.1
     /// SPICE primitives rather than the user's own declarations.

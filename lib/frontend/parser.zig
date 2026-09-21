@@ -166,17 +166,19 @@ pub const Parser = struct {
         try self.access_names.put(self.arena, "I", {});
 
         // Seeded (`initSeeded`) these already hold the prefix's declarations, in
-        // source order; unseeded all five are empty and this is five no-ops.
+        // source order; unseeded all six are empty and this is six no-ops.
         var modules: std.ArrayList(Ast.ModuleDecl) = .empty;
         var disciplines: std.ArrayList(Ast.DisciplineDecl) = .empty;
         var natures: std.ArrayList(Ast.NatureDecl) = .empty;
         var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
         var connectrules: std.ArrayList(Ast.ConnectRulesDecl) = .empty;
+        var udps: std.ArrayList(Ast.UdpDecl) = .empty;
         try modules.appendSlice(self.arena, self.file.modules);
         try disciplines.appendSlice(self.arena, self.file.disciplines);
         try natures.appendSlice(self.arena, self.file.natures);
         try paramsets.appendSlice(self.arena, self.file.paramsets);
         try connectrules.appendSlice(self.arena, self.file.connectrules);
+        try udps.appendSlice(self.arena, self.file.udps);
 
         while (true) {
             try self.skipAttributes();
@@ -264,7 +266,10 @@ pub const Parser = struct {
                 .kw_reserved => {
                     const w = self.tokenText(self.pos);
                     const r: Error!void = if (std.mem.eql(u8, w, "primitive"))
-                        self.parseUdpDecl()
+                        udp: {
+                            const u = self.parseUdpDecl() catch |e| break :udp e;
+                            break :udp udps.append(self.arena, u);
+                        }
                     else if (std.mem.eql(u8, w, "config"))
                         self.parseConfigDecl()
                     else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
@@ -297,6 +302,7 @@ pub const Parser = struct {
         self.file.natures = natures.items;
         self.file.paramsets = paramsets.items;
         self.file.connectrules = connectrules.items;
+        self.file.udps = udps.items;
         if (self.failed) return error.ParseError;
         return self.file;
     }
@@ -537,16 +543,26 @@ pub const Parser = struct {
     /// finds one, and the `udp_port_declaration` run after the `;` is a
     /// repetition that may be empty.
     ///
-    /// NOTHING IS RECORDED. The table is validated against A.5.3 and dropped —
-    /// there is no discrete engine here to evaluate it, and `parseUdpInst`'s
-    /// W0252 is what says so at the site that would have used it.
-    // ponytail: the upgrade is a `UdpDecl` on `Ast.SourceFile` plus a matcher
-    // in `src/sim/digital.zig`, which is another agent's column. Storing the
-    // rows before that exists is dead weight in an arena.
-    fn parseUdpDecl(self: *Parser) Error!void {
+    /// RECORDED, AND EVALUATED BY NOTHING. The declaration lands on
+    /// `Ast.SourceFile.udps`; there is still no discrete engine that matches a
+    /// table against its inputs, and `parseUdpInst`'s W0252 is what says so at
+    /// the site that would have used it.
+    ///
+    /// It used to be dropped, on the ground that rows nothing reads are dead
+    /// weight in an arena. That was true while the evaluator was unreachable
+    /// for a different reason — a `primitive` was E0201 — and it stopped being
+    /// true when this routine landed: the table is A.5.3's alphabets, its
+    /// combinational/sequential agreement and its column count already
+    /// checked, and an evaluator that had to re-derive all of that from tokens
+    /// would be a second implementation of this clause.
+    fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
+        const main_tok = self.pos;
         self.pos += 1; // `primitive`
-        _ = try self.expectIdent();
+        const name = try self.expectIdent();
         _ = try self.expect(.lparen);
+        // A.5.2 puts the output port first in both header arms, so declaration
+        // order IS `ports[0] = output, ports[1..] = inputs` with no lookup.
+        var ports: std.ArrayList(Ast.StrId) = .empty;
         while (true) {
             // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
             // only the second A.5.1 arm puts inside the parentheses.
@@ -554,7 +570,7 @@ pub const Parser = struct {
                 _ = try self.optDiscipline();
                 _ = self.eat(.kw_reg);
             }
-            _ = try self.expectIdent();
+            try ports.append(self.arena, try self.expectIdent());
             // `udp_output_declaration ::= … output [ discipline_identifier ]
             // reg port_identifier [ = constant_expression ]`
             if (self.eat(.assign_eq)) _ = try self.parseExpr();
@@ -581,16 +597,26 @@ pub const Parser = struct {
         }
         // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
         // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
+        var init_val: Ast.ExprId = .none;
         if (self.eat(.kw_initial)) {
             _ = try self.expectIdent();
             _ = try self.expect(.assign_eq);
-            _ = try self.parseExpr();
+            init_val = try self.parseExpr();
             _ = try self.expect(.semicolon);
         }
-        try self.parseUdpTable();
+        var rows: std.ArrayList(Ast.UdpRow) = .empty;
+        const sequential = try self.parseUdpTable(&rows);
         if (!self.reservedIs(self.pos, "endprimitive"))
             return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
         self.pos += 1;
+        return .{
+            .name = name,
+            .ports = ports.items,
+            .is_sequential = sequential,
+            .init = init_val,
+            .rows = rows.items,
+            .main_tok = main_tok,
+        };
     }
 
     /// A.5.3's `table … endtable`, and the whole of what a parser can judge in
@@ -610,7 +636,12 @@ pub const Parser = struct {
     /// of its tokens, in order, and judged against the alphabets — the token
     /// boundaries inside a table carry no meaning of their own, and a parser
     /// that read them as if they did would reject half of A.5.3's own examples.
-    fn parseUdpTable(self: *Parser) Error!void {
+    ///
+    /// Returns which `udp_body` alternative the table was, for
+    /// `Ast.UdpDecl.is_sequential`. An EMPTY table reads combinational: A.5.3's
+    /// two alternatives both require at least one entry, so `table endtable`
+    /// derives from neither and the answer is arbitrary either way.
+    fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool {
         if (!self.reservedIs(self.pos, "table"))
             return self.failAt(self.pos, .E0207, "found {s}: a udp_body is a `table … endtable`", .{self.found(self.pos)});
         self.pos += 1;
@@ -621,13 +652,15 @@ pub const Parser = struct {
         while (!self.reservedIs(self.pos, "endtable")) {
             if (self.peek() == .eof)
                 return self.failAt(self.pos, .E0207, "found {s}: no `endtable` closes the table", .{self.found(self.pos)});
-            try self.parseUdpEntry(&sequential);
+            try self.parseUdpEntry(&sequential, rows);
         }
         self.pos += 1;
+        return sequential orelse false;
     }
 
-    /// One `combinational_entry` or `sequential_entry`, judged column by column.
-    fn parseUdpEntry(self: *Parser, sequential: *?bool) Error!void {
+    /// One `combinational_entry` or `sequential_entry`, judged column by column
+    /// and then appended to `rows`.
+    fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.UdpRow)) Error!void {
         const tok = self.pos;
         // Column 0 is the input list; a colon opens each of the 1 or 2 that
         // follow, so the colon count IS the entry's `udp_body` alternative.
@@ -683,6 +716,18 @@ pub const Parser = struct {
         if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
         const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
         if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
+
+        // The columns live in a stack buffer, so `inputs` is copied out. Only
+        // the input list needs it: the other two columns are one character.
+        try rows.append(self.arena, .{
+            .inputs = try self.arena.dupe(u8, inputs),
+            // A.5.3 `current_state ::= level_symbol` is one symbol, which the
+            // loop above does not require and this does not either — a
+            // longer column stores its first character and the row is as
+            // usable as the table is legal.
+            .state = if (is_seq and cols[1].len != 0) cols[1].text[0] else 0,
+            .output = last[0],
+        });
     }
 
     fn udpBodyName(sequential: bool) []const u8 {
@@ -5623,6 +5668,65 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
         \\endconnectrules
     );
     try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
+}
+
+test "A.5.1 a udp_declaration survives the parse, both header arms" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both A.5.1 arms, and the sequential body's three moving parts: the
+    // `udp_initial_statement`, an `edge_indicator` spelled across several
+    // tokens, and a `next_state` of `-`. No fixture can see any of this —
+    // there is no evaluator — so the parse into the right slot is the whole
+    // of what there is to pin.
+    const src =
+        \\primitive comb (q, a, b);
+        \\  output q; input a, b;
+        \\  table
+        \\    0 ? : 0;
+        \\    ? 0 : 0;
+        \\    1 1 : 1;
+        \\  endtable
+        \\endprimitive
+        \\primitive dff (output reg q, input clk, input d);
+        \\  initial q = 1'b0;
+        \\  table
+        \\    (01) 0 : ? : 0;
+        \\    (01) 1 : ? : 1;
+        \\    (0x) ? : ? : -;
+        \\  endtable
+        \\endprimitive
+    ;
+    const res = try parseForTest(arena, src);
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    try std.testing.expectEqual(@as(usize, 2), res.file.udps.len);
+
+    const comb = res.file.udps[0];
+    try std.testing.expectEqualStrings("comb", res.file.str(comb.name));
+    // A.5.2 puts the output first, so ports[0] is `q` and the rest are inputs.
+    try std.testing.expectEqual(@as(usize, 3), comb.ports.len);
+    try std.testing.expectEqualStrings("q", res.file.str(comb.ports[0]));
+    try std.testing.expectEqualStrings("b", res.file.str(comb.ports[2]));
+    try std.testing.expect(!comb.is_sequential);
+    try std.testing.expectEqual(Ast.ExprId.none, comb.init);
+    try std.testing.expectEqual(@as(usize, 3), comb.rows.len);
+    try std.testing.expectEqualStrings("0?", comb.rows[0].inputs);
+    try std.testing.expectEqual(@as(u8, '0'), comb.rows[0].output);
+    try std.testing.expectEqual(@as(u8, 0), comb.rows[0].state);
+
+    const dff = res.file.udps[1];
+    try std.testing.expectEqualStrings("dff", res.file.str(dff.name));
+    try std.testing.expectEqualStrings("clk", res.file.str(dff.ports[1]));
+    try std.testing.expect(dff.is_sequential);
+    try std.testing.expect(dff.init != .none);
+    // `(01) 0` is ONE edge field and one level field — six characters and
+    // several tokens. The grouping is kept because splitting the list into one
+    // field per input port is the evaluator's, and needs the port count.
+    try std.testing.expectEqualStrings("(01)0", dff.rows[0].inputs);
+    try std.testing.expectEqual(@as(u8, '?'), dff.rows[0].state);
+    try std.testing.expectEqual(@as(u8, '1'), dff.rows[1].output);
+    try std.testing.expectEqual(@as(u8, '-'), dff.rows[2].output);
 }
 
 test "A.2.5: `from` needs a bracket, and saying so is a diagnostic not an assert" {
