@@ -1713,15 +1713,23 @@ fn infoOf(c: Code) Info {
         },
         .W0250 => .{
             .title = "switch primitive accepted, and it stamps nothing",
-            .lrm = "A.4.1",
+            .lrm = "A.3.1",
             .explain =
-            \\`tran` and `rtran` are A.4.1's `pass_switchtype`, and the source is
-            \\legal: A.1.4 makes `gate_instantiation` a module_or_generate_item,
-            \\so the module around it compiles and its analog block runs.
+            \\A.3.4's ten switch spellings — `cmos`/`rcmos`, `nmos`/`pmos`/
+            \\`rnmos`/`rpmos`, `tran`/`rtran`, `tranif0`/`tranif1`/`rtranif0`/
+            \\`rtranif1` — open four of A.3.1's nine `gate_instantiation` arms,
+            \\and the source is legal: A.1.4 makes `gate_instantiation` a
+            \\module_or_generate_item, so the module around it compiles and its
+            \\analog block runs.
+            \\
+            \\(This note used to read A.4.1. A.4.1 is `module_instantiation`;
+            \\the annex prints every switch arm under "A.3.1 Primitive
+            \\instantiation and instances", which is where W0252 already
+            \\pointed for the gate arms of the same production.)
             \\
             \\What the instance does NOT do is contribute to the device. LRM
             \\8.5.3.5 puts switch processing in the DISCRETE simulation cycle: a
-            \\pass switch propagates logic values and strengths between its two
+            \\switch propagates logic values and strengths between its
             \\terminals, and the LRM gives it no continuous behavior at all. So
             \\there is no equation to stamp, and writing one anyway — a zero-volt
             \\source across the terminals is the obvious guess — would freeze a
@@ -1743,6 +1751,12 @@ fn infoOf(c: Code) Info {
             \\merely connects. They used to be E0205 on the ground that the two
             \\cases differ in kind; they do not, and both are now accepted out
             \\loud. See that entry.
+            \\
+            \\Under `--run` a switch is E1100 instead: the discrete engine has
+            \\no conduction model, and §7.10's strength REDUCTION (`rnmos` drops
+            \\its input one strength level) and bidirectional flow are neither
+            \\of them a function of the input bits, which is all
+            \\`src/sim/digital.zig`'s gate evaluator computes.
             ,
         },
         .W0252 => .{
