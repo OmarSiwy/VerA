@@ -1,0 +1,99 @@
+// E.3.2.2, the resolution half of primitive discipline:
+//
+//     If no attribute exists on the instance of an analog primitive, then the
+//     discipline may be determined by the disciplines of other instances
+//     connected to the same net segment. The disciplines of the vpiLoConn of all
+//     other instances on the net segment shall be evaluated to determine if they
+//     are of domain continuous and compatible with each other. If they are, then
+//     the discipline of the analog primitive shall be set to the same discipline.
+//     If they are not compatible, then an error will occur as defined in 3.11.
+//     If there are no continuous disciplines defined on the net segment, then the
+//     discipline shall default to electrical.
+//
+// E.3.2 lists the three levels this sits between: "A port_discipline attribute on
+// the analog primitive; The resolution of the discipline; The default analog
+// primitive of electrical."
+//
+// THE CIRCUIT. Three Table E.1 resistors, two of them on ONE net pair:
+//
+//     (* port_discipline="rotational" *) resistor #(.r(1k)) r1(shaft1, shaft2);
+//                                        resistor #(.r(2k)) r2(shaft1, shaft2);
+//                                        resistor #(.r(4k)) r3(u, v);
+//
+// `r1` is E.3.2.1's instance — the LRM's own `port_discipline` on the primitive.
+// `r2` is the instance E.3.2.2 speaks about: no attribute of its own, and the
+// segment it sits on already carries a continuous discipline. `u`/`v` occur
+// nowhere but in `r3`'s instance and are declared by nothing, so THAT segment
+// carries none, which is the clause's last sentence.
+//
+// HOW A DISCIPLINE IS OBSERVED. A behaviour cannot read a discipline back as a
+// value; what a discipline decides is which access functions exist on the net.
+// Annex D gives `rotational` the natures Angle and Angular_Force, whose access
+// functions are Theta and Tau, where `electrical` has V and I. So
+// `Theta(r2.p, r2.n)` type-checks only if r2's ports came out rotational, and
+// `V(r3.p, r3.n)` only if r3's came out electrical — a tool that left r2 on the
+// electrical default, or refused the attribute-less instance, cannot reach the
+// first assertion at all (VerA's refusal, when the segment says nothing, is
+// measured in primitive_segment_scan.va). §6.7.1 is what lets the branch be
+// reached from here: "potential and flow access for named and unnamed branches
+// (including port branches) can be done hierarchically".
+//
+// THE DIGITS. Bias: Theta(shaft1) = 2.0 rad, Theta(shaft2) = 0.0, V(u) = 1.5,
+// V(v) = 0.0. Table E.1's resistor row is V = I*r, written in the nature-neutral
+// V/I of the table and holding in whatever discipline the ports end up in, so
+// there Theta = Tau*r:
+//
+//     r2's own branch:  Tau = 2.0/2000 = 1.0e-3
+//     r1's own branch:  Tau = 2.0/1000 = 2.0e-3
+//     r3's branch:      I   = 1.5/4000 = 3.75e-4
+//
+// The third assertion is the §5.4.1 pair probe `Tau(r2.p, r2.n)`, which is the
+// branch flow of the NET PAIR and not of r2's branch alone: r1 and r2 are two
+// branches between the same two nets, so the flow between them is their sum,
+// 3.0e-3. That is what makes the two primitives share one segment rather than two
+// — a tool that gave each primitive its own private branch prints 1.0e-3 there,
+// and the electrical pair's 3.75e-4 differs from both, so a crossed instance
+// fails a second line.
+//
+// WHAT IS NOT PINNED, and where it is pinned instead. The nets here are also
+// DECLARED `rotational`, so this fixture cannot tell a tool that resolved r2 from
+// the segment's declaration from one that ran E.3.2.2's scan over the other
+// instances — both roads end at rotational, and the assertion is on the
+// destination. primitive_discipline.va is where the attribute alone is
+// load-bearing, and primitive_segment_scan.va is where the scan is: the same
+// circuit with `shaft1`/`shaft2` left undeclared, so the attribute on r1 is the
+// only place the discipline can come from. Nor is the §3.11 error of the
+// incompatible case here: declaring two different continuous disciplines on one
+// segment is an error a tool owes on the DECLARATION (§3.11), and the LRM's own
+// E.3.2.1 example — printed on one pair with `electrical` on one instance and
+// `rotational` on the other — is that example, not a circuit (see
+// primitive_discipline.va).
+//
+//! lrm E.3.2.2
+//! lrm E.3.2
+//! lrm E.3.2.1
+//! lrm E.1
+//! lrm 5.4.1
+//! lrm 6.7.1
+//! bias shaft1 = 2.0, shaft2 = 0.0, u = 1.5, v = 0.0
+`include "check.vh"
+module annex_e_primitive_segment_discipline(shaft1, shaft2);
+  inout shaft1, shaft2;
+  rotational shaft1, shaft2;
+  (* port_discipline="rotational" *) resistor #(.r(1k)) r1(shaft1, shaft2);
+  resistor #(.r(2k)) r2(shaft1, shaft2);
+  resistor #(.r(4k)) r3(u, v);
+  analog begin
+    `CHECKX("r2 keeps its 2k", r2.r, 2000.0);
+    // E.3.2.2: r2 has no attribute of its own; its ports carry the discipline of
+    // the segment, so Theta is the access function and 2 theta across them is
+    // the value r1's bias put there.
+    `CHECKX("r2's ports took the segment's discipline", Theta(r2.p, r2.n), 2.0);
+    // §5.4.1: the pair probe is the flow between the NETS, both branches' share.
+    `CHECKR("both branches ride the segment", Tau(r2.p, r2.n), 3.0e-3, 1e-15);
+    // E.3.2.2, last sentence: u/v are declared by nothing and no instance on
+    // them carries an attribute, so this segment defaults to electrical.
+    `CHECKX("r3's segment defaults to electrical", V(r3.p, r3.n), 1.5);
+    `CHECKX("Table E.1 V = I*r there", I(r3.p, r3.n), 3.75e-4);
+  end
+endmodule

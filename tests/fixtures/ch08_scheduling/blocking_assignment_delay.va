@@ -1,0 +1,62 @@
+// §8.5.3.3, verbatim: "A blocking assignment statement (see 9.2.1 of IEEE Std
+// 1364 Verilog) with a delay computes the right-hand side value using the
+// current values, then causes the executing process to be suspended and
+// scheduled as a future event. If the delay is 0, the process is scheduled as
+// an inactive event for the current time."
+//
+// "COMPUTES THE RIGHT-HAND SIDE VALUE USING THE CURRENT VALUES" is the sentence
+// with a number in it, and the statement below is the smallest one that can
+// catch it being deferred:
+//
+//     t = 0    x = 1;
+//     t = 0    y = #5 x;    the RHS is sampled NOW, against x = 1
+//     t = 0    x = 2;       this runs while the assignment is pending
+//     t = 5    the process resumes and performs the assignment, so y = 1
+//
+// A compiler that evaluated the right-hand side when the process RESUMED —
+// the natural way to write it if the delay is lowered as "suspend first, then
+// evaluate" — reads x = 2 and leaves y = 2. That is not a rounding difference;
+// it is the whole rule, and the clause's second sentence is what makes the
+// distinction explicit rather than accidental: "the values at the time the
+// process resumes are used to determine the TARGET(s)", not the value. The
+// target is `y`; the value being assigned was fixed at t = 0.
+//
+// WHY THE GUARD. The assignment has not resumed at t = 0, and `y` is an
+// `integer` no statement has written yet, so the t = 0 row asserts the constant
+// that is true whatever the scheduler did with the pending process — this is
+// not slack for the rule, it is the statement that the rule is about t = 5 and
+// later. `($abstime > 5.0)` selects those rows, and the one literal below is
+// what they must read: 1, the value x held when the right-hand side was
+// sampled, not 2.
+//
+// WHY THIS IS `//! xfail` AND NOT `//! reject`. blocking_timing_unsupported.va
+// in this directory pins VerA's refusal of the construct — it says `#` has no
+// statement production (E0209) and that `y = #5 x` is therefore not
+// representable. This file is the rule that refusal leaves unimplemented: it
+// states what a conforming compiler prints, and it XPASSes the day the
+// statement is parsed. A fixture that only demanded the diagnostic would go
+// stale on that day; this one cannot, because its number is the LRM's.
+//
+//! lrm 8.5.3.3
+//! xfail VerA has no statement production for a `#` delay in an initial block (E0209, lib/frontend/parser.zig), so the assignment is never scheduled and no transcript exists to read `y` from
+//! analysis tran
+//! time 0, 25
+`include "check.vh"
+module ch8_blocking_delay(p);
+  inout p;
+  electrical p;
+
+  integer x, y;
+
+  initial begin
+    x = 1;
+    y = #5 x;
+    x = 2;
+  end
+
+  analog begin
+    `CHECKI("a delayed blocking assignment samples its right-hand side first",
+            ($abstime > 5.0) ? y : 1, 1);
+    I(p) <+ V(p);
+  end
+endmodule
