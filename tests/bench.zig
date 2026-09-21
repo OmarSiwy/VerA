@@ -131,12 +131,16 @@ pub fn main(init: std.process.Init) !u8 {
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
-    // `devices` is the ONE remaining word in argument position 2, and it is not
-    // a mode of the benchmark: it is the other run of this executable, the one
-    // on `test`, whose cases need the BINARY rather than the engine. Everything
-    // else is a benchmark argument, including a bare filter word.
+    // `devices` and `vpi` are the TWO remaining words in argument position 2,
+    // and neither is a mode of the benchmark: they are the other runs of this
+    // executable, whose cases need the BINARY (or a C compiler) rather than the
+    // engine. Everything else is a benchmark argument, including a bare filter
+    // word — which is why these two are matched exactly and not by prefix.
     const first = args.next();
-    if (first) |a| if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args);
+    if (first) |a| {
+        if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args);
+        if (std.mem.eql(u8, a, "vpi")) return vpiFixtures(init, &args);
+    }
     return benchmark(init, vera_exe, first, &args);
 }
 
@@ -144,7 +148,7 @@ fn usage(io: Io, why: []const u8) !u8 {
     var buf: [256]u8 = undefined;
     var e = Io.File.stderr().writer(io, &buf);
     try e.interface.print(
-        "suite: {s}\nusage: <vera-exe> [devices | benchmark args]\n",
+        "suite: {s}\nusage: <vera-exe> [devices | vpi | benchmark args]\n",
         .{why},
     );
     try e.interface.flush();
@@ -1083,6 +1087,153 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
     }
     try w.print("devices: {d}/{d} cases behave as they say they do\n", .{ ran - failed, ran });
     return if (failed == 0) 0 else 1;
+}
+
+// ---------------------------------------------------------------------------
+// The `vpi` mode — the 26 `.c` fixtures, which nothing read.
+//
+// `tests/harness.zig:collect` walks `.va` and `.v`; these are `.c`, and they
+// are not VerA source at all. A VPI fixture is a C translation unit: it
+// `#include`s a header, names constants and structs from it, and calls the
+// routines `src/vpi/root.zig` exports. So the question it asks is the ABI —
+// whether the surface the LRM describes EXISTS with the shape it describes —
+// and a C compiler is what asks it. `build.zig`'s comment beside `vpi_app`
+// already makes this argument for the one acceptance test; this generalises it
+// to the 26.
+//
+// COMPILE, NOT RUN, and the distinction is the release. Running them needs a
+// simulator host per design — `p02_design.v` elaborated through the digital
+// path, five `.va` designs through the analog one — plus the routines
+// themselves. That is P02 and P03, `ROADMAP.md` v0.9.0. v0.0.3 makes them
+// visible, and "does this even compile against the header we ship" is the
+// largest true statement available without implementing them.
+//
+//   zig build test-vpi-fixtures           # all 26
+//   zig build test-vpi-fixtures -- p03    # the ones whose name contains p03
+// ---------------------------------------------------------------------------
+
+/// The two directories holding `.c` fixtures, each with its own shared header
+/// beside it (`p02_check.h`, `p03_vpi_analog.h`) which is why the fixture's own
+/// directory goes on the include path as well as `src/vpi`.
+const vpi_dirs = [_][]const u8{ "ch11_vpi", "ch12_vpi_routines" };
+
+fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+
+    var filter: ?[]const u8 = null;
+    while (args.next()) |a| filter = a;
+
+    var buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writer(io, &buf);
+    const w = &stderr.interface;
+    defer w.flush() catch {};
+
+    // One object path, reused: the loop is sequential, nothing reads the object
+    // back, and only its existence-or-not matters. `-o` still has to name
+    // something writable, so it names this.
+    const work = options.work_root ++ "/vpi-fixtures";
+    Io.Dir.cwd().createDirPath(io, work) catch {};
+    const obj = try std.fs.path.join(arena_state.allocator(), &.{ work, "fixture.o" });
+    const vpi_include = options.vpi_include;
+
+    var ran: usize = 0;
+    var failed: usize = 0;
+    for (vpi_dirs) |sub| {
+        const dir_path = try std.fs.path.join(gpa, &.{ options.fixture_root, sub });
+        defer gpa.free(dir_path);
+        var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+
+        // Sorted, so a failing run is reproducible and its name list diffs.
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(gpa);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".c")) continue;
+            try names.append(gpa, try arena_state.allocator().dupe(u8, entry.name));
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+
+        for (names.items) |name| {
+            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            ran += 1;
+            const pa = arena_state.allocator();
+            const src = try std.fs.path.join(pa, &.{ dir_path, name });
+            // Compile to an object and stop: no link. Linking would answer a
+            // different and currently duller question — every routine these
+            // call beyond the eleven P01 exports is missing, which `grep
+            // 'export fn' src/vpi/root.zig` already says without a linker.
+            //
+            // `-c -o` and NOT `-fsyntax-only`, which looks like the tidier way
+            // to say "do not link" and is not: `zig cc` passes its own `-c`,
+            // `-fsyntax-only` then makes that argument unused, and `-Werror`
+            // turns the unused-argument warning into an error — so every
+            // fixture fails identically and the census reads 0/26 for a reason
+            // that has nothing to do with the fixtures.
+            //
+            // The flags are `vpi_app.c`'s, deliberately. These fixtures are the
+            // same kind of translation unit asking the same question, and a
+            // laxer `-W` set here would let a fixture pass that the acceptance
+            // test's own flags would refuse.
+            const r = capture(pa, io, &.{
+                options.zig_exe, "cc",      "-std=c99", "-Wall", "-Werror",
+                "-c",            "-o",      obj,        "-I",    vpi_include,
+                "-I",            dir_path,  src,
+            }) catch |e| {
+                try w.print("FAIL {s}: could not run the C compiler: {s}\n", .{ name, @errorName(e) });
+                failed += 1;
+                continue;
+            };
+            if (r.exit == 0) continue;
+            failed += 1;
+            // One line of the compiler's own words. The whole log is available
+            // by running the command by hand; a census that printed it for
+            // thirteen fixtures would bury the census.
+            const first = std.mem.trim(u8, firstErrorLine(r.stderr), " \t\r");
+            try w.print("FAIL {s}: {s}\n", .{ name, first });
+        }
+    }
+
+    if (ran == 0) {
+        try w.print("vpi: nothing matched `{s}`\n", .{filter orelse ""});
+        return 1;
+    }
+    try w.print("vpi: {d}/{d} fixtures compile against src/vpi/vpi_user.h\n", .{ ran - failed, ran });
+    return if (failed == 0) 0 else 1;
+}
+
+/// The compiler's first `error:` line, or its first line if it never said one.
+fn firstErrorLine(stderr: []const u8) []const u8 {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |l| if (std.mem.indexOf(u8, l, "error:") != null) return l;
+    var again = std.mem.splitScalar(u8, stderr, '\n');
+    return again.next() orelse "";
+}
+
+test "the first error line is the compiler's, not the last line of a log" {
+    const log =
+        \\p02_01.c:77:24: note: expanded from here
+        \\p02_01.c:77:24: error: unknown type name 'p_cb_data'
+        \\p02_01.c:93:14: error: use of undeclared identifier 'vpiBinStrVal'
+        \\1 error generated.
+    ;
+    try std.testing.expectEqualStrings(
+        "p02_01.c:77:24: error: unknown type name 'p_cb_data'",
+        firstErrorLine(log),
+    );
+    // A compiler that failed without the word `error:` still has to report
+    // something, or a FAIL row would be a bare name.
+    try std.testing.expectEqualStrings("cc: killed", firstErrorLine("cc: killed\n"));
+    try std.testing.expectEqualStrings("", firstErrorLine(""));
 }
 
 const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
