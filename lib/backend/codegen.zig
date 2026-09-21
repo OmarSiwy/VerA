@@ -377,6 +377,12 @@ pub const Gen = struct {
     /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
     /// and sorted by `planNoise`. Position k is `noise_rows[j].table == k`.
     noise_tabs: []const []const [2]f64 = &.{},
+    /// The same knots as `noise_tabs`, in the same order, still as MIR values —
+    /// and only for a table A.8.2's `parameter_identifier` spelling made
+    /// MODEL-DEPENDENT, so `noise_tabs` holds its declared defaults and only
+    /// this can state the card's. An empty slice is a table of literals, which
+    /// needs nothing beyond the comptime export. See `emitNoiseTablePoints`.
+    noise_tab_vals: []const []const [2]Mir.Value = &.{},
     /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `noise_rows`
     /// and separated from it by `kind`: a stimulus is not a generator and must
     /// never reach `noise_gens`, but it reaches codegen through the same
@@ -1484,7 +1490,7 @@ pub const Gen = struct {
         self.cpairs = try self.collapsePairs();
         const cpairs = self.cpairs;
         if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches() or
-            self.hp_vals.len != 0 or self.noise_rows.len != 0)
+            self.hp_vals.len != 0 or self.noise_rows.len != 0 or try self.acUsesCore())
         {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
@@ -2724,6 +2730,7 @@ pub const Gen = struct {
         var ac: std.ArrayList(NoiseRow) = .empty;
         var ids: std.ArrayList(u32) = .empty;
         var tabs: std.ArrayList([]const [2]f64) = .empty;
+        var tab_vals: std.ArrayList([]const [2]Mir.Value) = .empty;
         for (self.lower.contributions.items) |c| {
             if (c.noise_srcs.len == 0) continue;
             // §1.3.1.1 ground is not an unknown: a to-ground generator is
@@ -2770,8 +2777,8 @@ pub const Gen = struct {
                         for (rows.items) |r| {
                             if (r.source == i and r.table != null) break :rows_table r.table;
                         }
-                        break :rows_table (try self.planNoiseTable(&tabs, s)) orelse continue;
-                    } else (try self.planNoiseTable(&tabs, s)) orelse continue,
+                        break :rows_table (try self.planNoiseTable(&tabs, &tab_vals, s)) orelse continue;
+                    } else (try self.planNoiseTable(&tabs, &tab_vals, s)) orelse continue,
                 };
                 const sid = seen orelse blk: {
                     try ids.append(self.arena, s.id);
@@ -2792,23 +2799,28 @@ pub const Gen = struct {
         }
         self.noise_rows = rows.items;
         self.noise_tabs = tabs.items;
+        self.noise_tab_vals = tab_vals.items;
         self.ac_rows = ac.items;
     }
 
     /// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
-    /// comptime `(frequency, power)` table and appended to `tabs`.
+    /// `(frequency, power)` table and appended to `tabs`.
     ///
-    /// CONSTANTS ONLY, and that is a real restriction: §4.6.4.3 also allows "an
-    /// array parameter" and a file name, and neither can become the comptime
-    /// `noise_tables` this exports. Folding an array parameter through its
-    /// DECLARED DEFAULT would be worse than refusing — the model card's
-    /// override would be silently ignored, which is exactly the trap E0515
-    /// names — so `resolve_params` is false and a parameter table is E0519.
+    /// ALL FOUR of A.8.2's `noise_table_input_arg` spellings land here. Three
+    /// of them are literals by the time they arrive: the assignment pattern is
+    /// one, a file name "shall be constant" so `Lower.readNoiseTableFile` has
+    /// already turned it into the same flat pairs, and a `[msb:lsb]` slice of
+    /// a parameter is the parameter.
     ///
-    /// ponytail: the ceiling is "the table is comptime data". The upgrade path
-    /// for both spellings is the same one: build the points into `Model` in
-    /// `derive` and export an accessor instead of an array, at which point a
-    /// parameter table and a file read at elaboration both fit.
+    /// The fourth, an ARRAY PARAMETER, is a table the MODEL CARD owns, and
+    /// this is where the two halves of that are separated. `tabs` gets the
+    /// DECLARED DEFAULTS (`resolve_params = true`), which is what a comptime
+    /// `noise_tables` can hold and all a compiler knows; `tab_vals` gets the
+    /// knots as MIR values, and `emitNoiseTablePoints` renders them over
+    /// `Model` so a card that overrides the parameter moves them. Folding the
+    /// default and stopping there is the trap E0515 names — the override would
+    /// be silently ignored — and refusing the spelling outright, which VerA
+    /// used to do, refuses a form the clause names FIRST.
     ///
     /// Sorting is done HERE, not by the host: §4.6.4.3 says "the simulator
     /// shall internally sort the pairs into ascending frequency if required",
@@ -2816,11 +2828,22 @@ pub const Gen = struct {
     /// gets an invariant instead of a chore. Uniqueness is the clause's own
     /// requirement ("Each frequency value must be unique") and cannot be
     /// repaired by sorting, so it is the one ordering fact that is an error.
-    fn planNoiseTable(self: *Gen, tabs: *std.ArrayList([]const [2]f64), s: Lower.NoiseSrc) Error!?u16 {
+    ///
+    /// A card can defeat BOTH at run time, because both are statements about
+    /// values this compiler never sees. The sort survives — the generated
+    /// accessor re-sorts — and uniqueness does not: it is checked on the
+    /// defaults here and is the host's precondition afterwards, which is what
+    /// `contract.NoiseTable` says.
+    fn planNoiseTable(
+        self: *Gen,
+        tabs: *std.ArrayList([]const [2]f64),
+        tab_vals: *std.ArrayList([]const [2]Mir.Value),
+        s: Lower.NoiseSrc,
+    ) Error!?u16 {
         const vals = s.table;
         if (vals.len == 0) {
             try self.refuseNoise(.E0519, s.tok, "the argument is not a vector of " ++
-                "(frequency, power) pairs; a file name is not supported", .{});
+                "(frequency, power) pairs", .{});
             return null;
         }
         if (vals.len % 2 != 0) {
@@ -2828,23 +2851,41 @@ pub const Gen = struct {
                 "a whole number of (frequency, power) pairs", .{vals.len});
             return null;
         }
-        const pts = try self.arena.alloc([2]f64, vals.len / 2);
-        for (pts, 0..) |*p, i| {
-            const f = self.an.foldConst(vals[2 * i], 0, false);
-            const pwr = self.an.foldConst(vals[2 * i + 1], 0, false);
+        // One array of both halves, so the sort below permutes the values and
+        // the defaults together and position k of each keeps meaning the same
+        // knot. `noise_tables[k]` and `noiseTablePoints`'s k-th pair have to
+        // BE the same pair; two sorts of two arrays is one comparator away
+        // from not being.
+        const Knot = struct { f: f64, p: f64, fv: Mir.Value, pv: Mir.Value };
+        const knots = try self.arena.alloc(Knot, vals.len / 2);
+        var parametric = false;
+        for (knots, 0..) |*k, i| {
+            const fv = vals[2 * i];
+            const pv = vals[2 * i + 1];
+            // `resolve_params = false` first, so "is this knot a literal?" is
+            // answered before "what is it by default?" — a table with no
+            // parameter in it must not gain an accessor, because that would
+            // oblige every host of every existing device to read one.
+            const lit = self.an.foldConst(fv, 0, false) != null and
+                self.an.foldConst(pv, 0, false) != null;
+            const f = self.an.foldConst(fv, 0, true);
+            const pwr = self.an.foldConst(pv, 0, true);
             if (f == null or pwr == null) {
-                try self.refuseNoise(.E0519, s.tok, "the table must be constant: it is " ++
-                    "exported as comptime data, so an array parameter or a solve-time " ++
-                    "value has no value to export", .{});
+                try self.refuseNoise(.E0519, s.tok, "the table has no value at compile " ++
+                    "time: a knot is computed during the solve, and 4.6.4.3's input is " ++
+                    "a vector, a file or a parameter", .{});
                 return null;
             }
-            p.* = .{ f.?.f, pwr.?.f };
+            if (!lit) parametric = true;
+            k.* = .{ .f = f.?.f, .p = pwr.?.f, .fv = fv, .pv = pv };
         }
-        std.mem.sort([2]f64, pts, {}, struct {
-            fn lt(_: void, x: [2]f64, y: [2]f64) bool {
-                return x[0] < y[0];
+        std.mem.sort(Knot, knots, {}, struct {
+            fn lt(_: void, x: Knot, y: Knot) bool {
+                return x.f < y.f;
             }
         }.lt);
+        const pts = try self.arena.alloc([2]f64, knots.len);
+        for (knots, pts) |k, *p| p.* = .{ k.f, k.p };
         for (pts, 0..) |p, i| {
             if (!(p[0] > 0) or !std.math.isFinite(p[0])) {
                 try self.refuseNoise(.E0519, s.tok, "frequency {d} is not a positive " ++
@@ -2870,6 +2911,14 @@ pub const Gen = struct {
             }
         }
         try tabs.append(self.arena, pts);
+        if (parametric) {
+            const mvs = try self.arena.alloc([2]Mir.Value, knots.len);
+            for (knots, mvs) |k, *m| m.* = .{ k.fv, k.pv };
+            // Positional against `tabs`, so a constant table ahead of this one
+            // still occupies its index.
+            while (tab_vals.items.len + 1 < tabs.items.len) try tab_vals.append(self.arena, &.{});
+            try tab_vals.append(self.arena, mvs);
+        }
         return @intCast(tabs.items.len - 1);
     }
 
@@ -3062,6 +3111,27 @@ pub const Gen = struct {
                     .target = v,
                     .mode = .strict,
                     .comment = "§4.6.4 noise PSD",
+                });
+            }
+        }
+        // §4.6.3 the same, for an `ac_stim` magnitude or phase the SOLVE
+        // computes. A.8.2 makes both `analog_expression`, so `acStim` has to
+        // answer at a state vector exactly as `noisePsd` does, and the only
+        // way it reads one is out of the core sweep.
+        //
+        // ONLY the arguments that do not fold, on the terms Table 4-20's
+        // dynamic arguments are queued on above: a literal or a model
+        // parameter renders over `Model` and puts nothing here, so every
+        // device with a constant stimulus keeps the fields it had.
+        for (self.ac_rows) |nr| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
+                if (v == .f_zero) continue;
+                if (!try self.ctrlIsDynamic(v)) continue;
+                try jobs.append(self.arena, .{
+                    .name = "$ac_stim",
+                    .target = v,
+                    .mode = .strict,
+                    .comment = "§4.6.3 AC stimulus magnitude or phase",
                 });
             }
         }
@@ -5416,6 +5486,14 @@ pub const Gen = struct {
     fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
         if (i >= args.len) return dflt;
         if (try self.f64Const(args[i], 0, false)) |s| return s;
+        // `.val()` is a COLLAPSE: on the batch scalar it reads lane 0, so an
+        // x-dependent control argument gives every lane the operating point of
+        // the first one. That is exactly what `lane_pinned` records — and the
+        // collapse itself is right, not a bug to route around: a control
+        // argument is a number the operator is configured WITH, and §4.6.3's
+        // stimulus magnitude is an independent source's amplitude at the
+        // operating point, so neither belongs in the Jacobian.
+        self.pinLanes(self.an.rv(args[i]));
         return std.fmt.allocPrint(self.arena, "({s}).val()", .{
             try self.renderToArena(args[i], .real),
         });
@@ -5663,8 +5741,18 @@ pub const Gen = struct {
         // the contract has no complex side to hand it to.
         if (std.mem.eql(u8, name, "ac_stim")) {
             self.uses_inst = true;
-            const mag = try self.argF64(d.args, 1, "1.0");
-            const phase = try self.argF64(d.args, 2, "0.0");
+            // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
+            // same production a contribution's right-hand side uses, and puts
+            // `constant_expression` only where it means one (the filters'
+            // trailing argument, two productions above). §4.5's Table 4-20 is
+            // the constant-argument register and `ac_stim` is not in it,
+            // because it is not an analog operator and keeps no state. So
+            // `ctrlEval`, not `argF64`: a magnitude the solve computes —
+            // `ac_stim("ac", k*V(ctrl))`, a swept-amplitude source — is a
+            // rendered expression here, and only a literal or a parameter
+            // still folds to the number it always did.
+            const mag = try self.ctrlEval(d.args, 1, "1.0");
+            const phase = try self.ctrlEval(d.args, 2, "0.0");
             try self.b("S.con(if (", .{});
             if (d.args.len == 0)
                 try self.b("inst.analysis_kind == .ac", .{})
@@ -7179,6 +7267,7 @@ pub const Gen = struct {
                 try self.w(" }} }},\n", .{});
             }
             try self.w("}};\n\n", .{});
+            try self.emitNoiseTablePoints();
         }
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
         for (self.noise_rows) |nr| {
@@ -7243,10 +7332,80 @@ pub const Gen = struct {
         try self.w("    }};\n}}\n\n", .{});
     }
 
+    /// §4.6.4.3's ARRAY-PARAMETER input, which `noise_tables` alone cannot
+    /// state: "The vector can either be specified as an array parameter or an
+    /// array assignment pattern", and §3.4 makes a parameter something
+    /// "modified at compilation time to have values which are different from
+    /// those specified in the declaration assignment". So the knots are a
+    /// property of the model CARD, and a comptime array can only hold the
+    /// declared defaults — which is what `noise_tables` holds, unchanged, and
+    /// which is the right shape for the three spellings that ARE literal.
+    ///
+    /// This is the card's answer, one flat array over every table in
+    /// `noise_tables` order. FLAT and not indexed by a comptime `k`, because a
+    /// per-table return type is a generic function and `contract.expectFn`
+    /// cannot check one: the segment for table k starts at the sum of the
+    /// earlier `noise_tables[i].points.len`, which a host computes at comptime
+    /// from a decl it already reads.
+    ///
+    /// Emitted ONLY when some knot is a parameter. A device of literal tables
+    /// keeps exactly the text it had, and a host is never obliged to read a
+    /// hook that would tell it what `noise_tables` already did.
+    ///
+    /// RE-SORTED at run time. §4.6.4.3's "the simulator shall internally sort
+    /// the pairs into ascending frequency" is discharged at compile time for
+    /// the defaults, and a card that reorders the parameter re-opens it; the
+    /// host's `noiseTableAt` needs ascending knots, so the sort is here rather
+    /// than in a precondition nobody can check.
+    fn emitNoiseTablePoints(self: *Gen) Error!void {
+        var any = false;
+        for (self.noise_tab_vals) |mvs| any = any or mvs.len != 0;
+        if (!any) return;
+        var total: usize = 0;
+        for (self.noise_tabs) |pts| total += pts.len;
+        try self.w(
+            \\/// §4.6.4.3 every tabulated knot AT THIS CARD, in `noise_tables`
+            \\/// order and ascending in frequency within each table. Table k is
+            \\/// the segment starting at the sum of `noise_tables[i].points.len`
+            \\/// for i < k; `noise_tables` itself carries the array parameter's
+            \\/// DECLARED DEFAULTS, which is all a comptime table can hold.
+            \\pub fn noiseTablePoints(
+        , .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model) [{d}][2]f64 {{\n", .{total});
+        const saved_model = self.uses_model;
+        self.uses_model = false;
+        var body: std.ArrayList(u8) = .empty;
+        var at: usize = 0;
+        for (self.noise_tabs, 0..) |pts, k| {
+            const mvs = if (k < self.noise_tab_vals.len) self.noise_tab_vals[k] else &.{};
+            for (pts, 0..) |p, i| {
+                const pair: [2][]const u8 = if (i < mvs.len) .{
+                    (try self.f64Const(mvs[i][0], 0, false)) orelse try self.fmtF64(p[0]),
+                    (try self.f64Const(mvs[i][1], 0, false)) orelse try self.fmtF64(p[1]),
+                } else .{ try self.fmtF64(p[0]), try self.fmtF64(p[1]) };
+                try body.print(self.arena, "        .{{ {s}, {s} }},\n", .{ pair[0], pair[1] });
+            }
+            at += pts.len;
+        }
+        const reads_model = self.uses_model;
+        self.uses_model = saved_model or reads_model;
+        if (!reads_model) self.patchParam(at_model, "model".len);
+        try self.w("    var pts: [{d}][2]f64 = .{{\n", .{total});
+        try self.w("{s}", .{body.items});
+        try self.w("    }};\n", .{});
+        at = 0;
+        for (self.noise_tabs) |pts| {
+            try self.w("    contract.sortNoiseTable(pts[{d}..{d}]);\n", .{ at, at + pts.len });
+            at += pts.len;
+        }
+        try self.w("    return pts;\n}}\n\n", .{});
+    }
+
     /// §4.6.3 the AC stimulus topology AND each stimulus' phasor.
     ///
-    /// `ac_gens[k]` is the branch and the analysis name; `acStim(m, i)[k]` is
-    /// `(mag, phase)`. The split is `noise_gens`/`noisePsd`'s, for the same
+    /// `ac_gens[k]` is the branch and the analysis name; `acStim(x, m, i)[k]`
+    /// is `(mag, phase)`. The split is `noise_gens`/`noisePsd`'s, for the same
     /// reason: the branch and the name are model TEXT, the two numbers are the
     /// model CARD — `ac_stim("ac", AMPL)` with `AMPL` a parameter has a
     /// magnitude the card sets, and a comptime table could only have frozen
@@ -7261,26 +7420,27 @@ pub const Gen = struct {
     /// complex system. Both spell the SAME source, so such a host reads this
     /// INSTEAD OF the residual term — see `contract.AcGen`.
     ///
-    /// ponytail: the ceiling is A.8.2's `analog_expression` arguments. VerA
-    /// folds mag/phase through `f64Const`, which answers for literals,
-    /// parameters and arithmetic over them and not for anything the solve
-    /// computes — so `ac_stim("ac", V(ctrl))` is E0515 from the residual
-    /// lowering and this table is refused with it. Lifting that means giving
-    /// this hook the `[n_u]f64` state vector `noisePsd` already takes and a
-    /// core sweep to read it with; the signature is deliberately not carrying
-    /// an `x` it would have to ignore until then.
+    /// A.8.2 makes both numeric arguments `analog_expression`, so a magnitude
+    /// the SOLVE computes — `ac_stim("ac", k*V(ctrl))`, a swept-amplitude
+    /// source — is legal, and this hook takes the `[n_u]f64` state vector
+    /// `noisePsd` takes for exactly that reason. A stimulus that folds through
+    /// `f64Const` still renders over `Model` and touches neither `x` nor the
+    /// core, which is what keeps a constant-magnitude device's body what it
+    /// always was.
     fn emitAcTable(self: *Gen) Error!void {
         if (self.ac_rows.len == 0) return;
 
-        // Rendered BEFORE anything is written, so the `model`/`inst` parameters
-        // can be patched to `_` when nothing reached them — same bookkeeping
-        // `emitUnit` does, and the flags are saved because they are Gen-wide.
+        // Rendered BEFORE anything is written, so the `x`/`model`/`inst`
+        // parameters can be patched to `_` when nothing reached them — same
+        // bookkeeping `emitUnit` does, and the flags are saved because they are
+        // Gen-wide.
         const saved_model = self.uses_model;
         const saved_inst = self.uses_inst;
         self.uses_model = false;
         self.uses_inst = false;
         const vals = try self.arena.alloc([2][]const u8, self.ac_rows.len);
         var all_stated = true;
+        var uses_core = false;
         for (self.ac_rows, vals) |nr, *v| {
             // §4.6.4.6's per-use coefficient, FOLDED into the magnitude rather
             // than exported beside it. A phasor is scaled by a real factor
@@ -7289,9 +7449,9 @@ pub const Gen = struct {
             // own reason for keeping it separate does not apply here: there is
             // no cross-spectrum between two stimuli and no comptime table to
             // keep a bias-dependent factor out of.
-            const mag = try self.f64Const(nr.pwr, 0, false);
-            const phase = try self.f64Const(nr.exp, 0, false);
-            const coeff = try self.f64Const(nr.coeff, 0, false);
+            const mag = try self.acRef(nr.pwr, &uses_core);
+            const phase = try self.acRef(nr.exp, &uses_core);
+            const coeff = try self.acRef(nr.coeff, &uses_core);
             if (mag == null or phase == null or coeff == null) {
                 all_stated = false;
                 break;
@@ -7301,8 +7461,8 @@ pub const Gen = struct {
                 phase.?,
             };
         }
-        const reads_model = self.uses_model;
-        const reads_inst = self.uses_inst;
+        const reads_model = self.uses_model or uses_core;
+        const reads_inst = self.uses_inst or uses_core;
         self.uses_model = saved_model or reads_model;
         self.uses_inst = saved_inst or reads_inst;
         if (!all_stated) return self.refuseAc();
@@ -7316,19 +7476,58 @@ pub const Gen = struct {
         try self.w("}};\n\n", .{});
 
         try self.w(
-            \\/// §4.6.3 each stimulus' phasor: mag·e^(j·phase), phase in radians.
-            \\/// Position k belongs to `ac_gens[k]`.
+            \\/// §4.6.3 each stimulus' phasor at `x`: mag·e^(j·phase), phase in
+            \\/// radians. Position k belongs to `ac_gens[k]`.
             \\pub fn acStim(
         , .{});
+        const at_x = self.out.items.len;
+        try self.w("x: [n_u]f64, ", .{});
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
         try self.w("inst: *const Instance) [ac_gens.len]contract.AcPhasor {{\n", .{});
+        if (!uses_core) self.patchParam(at_x, "x".len);
         if (!reads_model) self.patchParam(at_model, "model".len);
         if (!reads_inst) self.patchParam(at_inst, "inst".len);
+        if (uses_core) {
+            try self.w("    var xr: [n_u]R = undefined;\n", .{});
+            try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
+            try self.w("    const m = core(R, xr, model, {s});\n", .{try self.probeInstance()});
+        }
         try self.w("    return .{{\n", .{});
         for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });
         try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// Does any §4.6.3 stimulus need `acStim` to sweep the core? Asked before
+    /// `emitAcTable` renders anything, because the `R` scalar the sweep runs in
+    /// is declared far earlier in the file — same question `noise_rows.len != 0`
+    /// answers for `noisePsd`, which always sweeps.
+    fn acUsesCore(self: *Gen) Error!bool {
+        for (self.ac_rows) |nr| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
+                if (v == .f_zero) continue;
+                if (try self.ctrlIsDynamic(v)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// One §4.6.3 magnitude, phase or §4.6.4.6 coefficient in `acStim`'s frame.
+    ///
+    /// `f64Const` first, so a literal or a model parameter renders over `Model`
+    /// exactly as it did before this hook had an `x` at all. What does not fold
+    /// is a solve result, and the only thing that holds one here is the core
+    /// sweep `buildJobs` queued a field for — the same two-frame split
+    /// `ctrlStep` makes in `updateState`. Null means neither, which is a
+    /// planning defect rather than a legal program, and `refuseAc` says so
+    /// instead of exporting a wrong number.
+    fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
+        if (try self.f64Const(v, 0, false)) |s| return s;
+        const k = self.lo_idx[@intFromEnum(v)];
+        if (k == none_u32) return null;
+        uses_core.* = true;
+        return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
     }
 
     /// §4.6.3 a stimulus VerA cannot state, as a `@compileError` VALUE on
@@ -9902,6 +10101,54 @@ test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own inter
     );
 }
 
+test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a literal one does not" {
+    // A.8.2's `noise_table_input_arg` names `parameter_identifier` FIRST, and
+    // §3.4 makes a parameter's value the model card's. So the comptime
+    // `noise_tables` can only be the DECLARED DEFAULT and the card's answer is
+    // the extra hook — which must not appear on a device that has no
+    // parameter in any table, or every host of every such device would be
+    // obliged to read something `noise_tables` already told it.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module nparam(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real tbl[0:3] = '{1e6, 1e-24, 1.0, 1e-18};
+        \\  analog I(p, n) <+ noise_table(tbl);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // Sorted at compile time on the DEFAULTS, so `noise_tables` keeps the
+    // invariant `contract.validate` enforces...
+    try std.testing.expect(std.mem.indexOf(u8, src,
+        ".points = &.{ .{ 1.0, 0.000000000000000001 }, .{ 1000000.0, 0.000000000000000000000001 } }") != null);
+    // ...and the hook returns the same two knots in the same order, reading
+    // the card, with the run-time sort a reordering card would need.
+    const at = std.mem.indexOf(u8, src, "pub fn noiseTablePoints(model: *const Model) [2][2]f64 {").?;
+    const end = std.mem.indexOfPos(u8, src, at, "\n}\n").?;
+    const body = src[at..end];
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b2Z5d, model.tblZ5b3Z5d }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b0Z5d, model.tblZ5b1Z5d }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "contract.sortNoiseTable(pts[0..2]);") != null);
+    // The default's order is the EXPORT's order: `noise_tables[k]` and the
+    // hook's k-th pair are the same knot, so the sort permuted both.
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b2Z5d, model.tblZ5b3Z5d }").? <
+        std.mem.indexOf(u8, body, ".{ model.tblZ5b0Z5d, model.tblZ5b1Z5d }").?);
+
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module nlit(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 1e6, 1e-24});
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const lit = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, lit, "noiseTablePoints") == null);
+}
+
 test "codegen: §4.6.4.6 each use of a shared generator exports its own coefficient" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -10050,22 +10297,17 @@ test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
         \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 10.0});
         \\endmodule
         ,
-        // §4.6.4.3's file form, which a comptime table cannot hold (E0519).
-        \\module nfile(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  analog I(p, n) <+ noise_table("table.tbl");
-        \\endmodule
-        ,
-        // An array PARAMETER: legal per §4.6.4.3, and refused rather than
-        // frozen at its default, which a model card may override.
-        \\module nparam(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  parameter real tbl[0:3] = '{1.0, 1e-18, 1e6, 1e-24};
-        \\  analog I(p, n) <+ noise_table(tbl);
-        \\endmodule
-        ,
+        // NOT here: §4.6.4.3's FILE form. Its name "shall be constant", so
+        // `Lower.readNoiseTableFile` reads the pairs at compile time and the
+        // table it produces is indistinguishable from the vector form's. A
+        // file that cannot be read is a lowering error on the .va, which never
+        // reaches codegen at all.
+        //
+        // NOT here either: an array PARAMETER. It used to be refused rather
+        // than frozen at its declared default, which a model card may
+        // override; now `noise_tables` carries the defaults and
+        // `noiseTablePoints` carries the card, so neither is frozen and
+        // nothing is refused. The test below this one pins both halves.
         // §4.6.4.4 interpolates log(power), and log(0) is not on the line.
         \\module nlog0(p, n);
         \\  inout p, n;

@@ -61,20 +61,26 @@
 // comment lines and 13 points; both were wrong.
 //
 // WHY THIS IS NOT COVERED BY THE EXISTING SUITE. `ch04_expressions/
-// lrm_4_6_4_3.va` is green today and asserts nothing about it: it binds the
-// call to a variable, checks the §4.6 zero, and carries no `//! noise` line, so
-// nothing ever reads the export — and the export is EMPTY. Compiling that
-// fixture with `--emit-zig` produces a device with no `noise_gens` at all: the
-// generator vanished silently, which is worse than the E0519 the inline spelling
-// gets, because a host cannot tell a model with no noise from a model whose
-// noise was dropped. This fixture is the one that fails on that.
+// lrm_4_6_4_3.va` was green and asserts nothing about it: it binds the call to
+// a variable, checks the §4.6 zero, and carries no `//! noise` line, so nothing
+// ever reads the export — and the export was EMPTY. Compiling that fixture with
+// `--emit-zig` produced a device with no `noise_gens` at all: the generator
+// vanished silently, which is worse than the E0519 the inline spelling got,
+// because a host cannot tell a model with no noise from a model whose noise was
+// dropped. This fixture is the one that failed on that. (It also named a `.tbl`
+// that did not exist in the tree, which nothing could notice while the name was
+// being ignored; the clause's verbatim example file is now beside it.)
 //
 // WHERE THIS FIXTURE'S CLAIM LIVES. On the `//! noise table(…) points=` line.
 // A file table is read by the COMPILER and handed to the host; §4.6.4.3 gives
 // the model's own text no way to index it, and §4.6.4 gives an active generator
-// no deterministic scalar value, so no `CHECK` can see a knot. Today the file
-// spelling does not even reach the export: E0519, "a file name is not
-// supported".
+// no deterministic scalar value, so no `CHECK` can see a knot.
+//
+// FIXED 2026-09-20. The file spelling used to stop at E0519, "a file name is
+// not supported". §4.6.4.3's own "the file name argument shall be constant"
+// is why that was wrong: a constant name is compile-time data, so the pairs
+// are too, and they now fold into the same comptime `noise_tables` the vector
+// form produces.
 //
 // The two `CHECK`s an earlier draft carried are gone, because neither could go
 // red on any compiler: `3.31516e-23/1.65758e-23` against 2.0 is arithmetic over

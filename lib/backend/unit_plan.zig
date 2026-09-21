@@ -405,6 +405,18 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         const d = self.mir.instData(def.inst_result);
         if (d == .call and cg.opNeedsInput(cg.opKind(d.call.name)) and d.call.args.len != 0 and
             self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
+        // §4.6.3 the same hole, for `ac_stim`'s magnitude and phase. A.8.2
+        // gives both as `analog_expression` and `emitCall` renders them
+        // through `ctrlEval`; `callArgIsValue` still says no, because the
+        // constant spelling every model writes is consumed at codegen time.
+        // A solve-computed one is a core live-out, so outside the core it is
+        // a cache read this loop would otherwise never see. Argument 0 is the
+        // analysis NAME and is never rendered.
+        if (d == .call and std.mem.eql(u8, d.call.name, "ac_stim")) {
+            for (d.call.args, 0..) |a, ai| {
+                if (ai != 0 and self.cached(self.an.rv(a))) self.uses_cache = true;
+            }
+        }
         self.slot[v] = self.n_slots;
         self.n_slots += 1;
     }
