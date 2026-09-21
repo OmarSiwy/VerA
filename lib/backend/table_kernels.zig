@@ -45,6 +45,15 @@ fn ztExtrapError() noreturn {
 /// §9.21: "If there are two or more data points with the same independent values
 /// but different dependent values then an error is generated." See `zTable` for
 /// why the generation point is the call and not elaboration.
+/// §9.21.1: the data source named by this site could not be read. Reported at
+/// the call for the same reason `ztDuplicateError` is — "the state of the data
+/// source is captured on the first call", so a site that is never executed
+/// captures nothing and has nothing to be wrong about.
+fn ztMissingSource() noreturn {
+    ztstd.debug.print("error: $table_model: LRM 9.21.1: the data source of this call could not be read\n", .{});
+    ztstd.process.exit(1);
+}
+
 fn ztDuplicateError() noreturn {
     ztstd.debug.print("error: $table_model: LRM 9.21: two data points share their independent values and disagree on the dependent\n", .{});
     ztstd.process.exit(1);
@@ -421,6 +430,12 @@ pub fn zTable(
     rows: [NP * NCOL]f64,
     pt: [ND]S,
 ) S {
+    // §9.21.1: "The state of the data source is captured on the first call to
+    // the table model function." NP == 0 is the compiler saying the source
+    // could not be read; the error belongs to the CALL that would have captured
+    // it, which is here, and a site that never executes never reaches it.
+    if (NP == 0) ztMissingSource();
+
     var order: [NP]usize = undefined;
     for (0..NP) |i| order[i] = i;
     zTabSort(NCOL, ND, &rows, &order);

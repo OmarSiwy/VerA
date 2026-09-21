@@ -9502,21 +9502,40 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         ctl = strs[1];
-        const nums = (try self.readTableFile(e, strs[0], "$table_model", .E0815)) orelse return poison;
-        if (nums.cols <= nd) {
-            try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ strs[0], nd, nd, nums.cols });
-            return poison;
+        // §9.21.1: "The state of the data source is captured on the FIRST CALL
+        // to the table model function." An absent file is therefore the CALL's
+        // error, not the compilation's — a site that never executes makes no
+        // first call and captures nothing. The bytes are still read eagerly
+        // (they have to be constants in the device), but a failure to find them
+        // lowers to an EMPTY data set, which `zTable` refuses the moment a
+        // lookup reaches it and never otherwise.
+        var absent = false;
+        if (try self.readTableFile(e, strs[0], "$table_model", .E0815, &absent)) |nums| {
+            if (nums.cols <= nd) {
+                try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ strs[0], nd, nd, nums.cols });
+                return poison;
+            }
+            ncol = nums.cols;
+            np = nums.vals.len / ncol;
+            const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
+            for (nums.vals, flat) |v, *out| out.* = try self.mir.addFloatConst(self.arena, v);
+            rows = flat;
+        } else {
+            if (!absent) return poison;
+            // The empty data set. §9.21.2's control string describes columns
+            // that do not exist, so it is dropped with them; `parseTableCtl`
+            // fills `ext` with Table 9-32's defaults over `nd + 1` columns and
+            // the projection below copies no rows.
+            ncol = nd + 1;
+            np = 0;
+            ctl = "";
         }
-        ncol = nums.cols;
-        np = nums.vals.len / ncol;
-        const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
-        for (nums.vals, flat) |v, *out| out.* = try self.mir.addFloatConst(self.arena, v);
-        rows = flat;
     }
 
     // §9.21: "The minimum data requirement is to have the product of at least
-    // two points per dimension (2ᴺ for N dimensions)."
-    if (np < std.math.pow(usize, 2, @min(nd, 30))) {
+    // two points per dimension (2ᴺ for N dimensions)." `np == 0` is the absent
+    // file above, whose whole point is that it has no data set to measure.
+    if (np != 0 and np < std.math.pow(usize, 2, @min(nd, 30))) {
         try self.err(self.file.exprs.mainTok(e), .E0815, "a {d}-dimensional table needs at least {d} samples, got {d}", .{ nd, std.math.pow(usize, 2, @min(nd, 30)), np });
         return poison;
     }
@@ -9613,7 +9632,7 @@ const max_table_bytes: usize = 16 << 20;
 /// where the vector form's identical values are checked; this reads the bytes
 /// and nothing more.
 fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]const f64 {
-    const f = (try self.readTableFile(e, name, "noise_table", .E0519)) orelse return null;
+    const f = (try self.readTableFile(e, name, "noise_table", .E0519, null)) orelse return null;
     if (f.cols != 2) {
         try self.err(self.file.exprs.mainTok(e), .E0519, "\"{s}\": LRM 4.6.4.3's input file is frequency / power PAIRS, one pair per line; found {d} numbers on a line", .{ name, f.cols });
         return null;
@@ -9638,12 +9657,22 @@ fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]cons
 /// Resolved against the `include_dirs` the caller passed, which is where the
 /// source file's own directory is: §9.21 says nothing about the search path, and
 /// a data file sits beside the model that names it exactly as an `include does.
+/// `missing` non-null defers the NOT-FOUND case to the caller instead of
+/// diagnosing it — see `lowerTableModel`, which owes §9.21.1's "captured on the
+/// first call" a data source whose absence is the CALL's error and not the
+/// compilation's. Only that case: a file that exists and is not a table is read
+/// either way, so its diagnostic stays here.
+//
+// ponytail: so an unexecuted site naming a MALFORMED file is still refused,
+// where an unexecuted site naming an ABSENT one is not. Give the parse failures
+// the same treatment when a fixture asks; nothing in the suite does today.
 fn readTableFile(
     self: *Lower,
     e: Ast.ExprId,
     name: []const u8,
     who: []const u8,
     code: diag.Code,
+    missing: ?*bool,
 ) Oom!?TableFile {
     const io = std.Io.Threaded.global_single_threaded.io();
     const dir: std.Io.Dir = .cwd();
@@ -9658,6 +9687,10 @@ fn readTableFile(
         }
         const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
             if (e2 == error.OutOfMemory) return error.OutOfMemory;
+            if (missing) |m| {
+                m.* = true;
+                return null;
+            }
             try self.err(self.file.exprs.mainTok(e), code, "cannot read the `{s}` data source \"{s}\"", .{ who, name });
             return null;
         };
