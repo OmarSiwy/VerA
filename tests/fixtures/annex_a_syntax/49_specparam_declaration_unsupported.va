@@ -1,0 +1,53 @@
+// A.2.1.1's fourth production, the only one of the four that 48_parameter_declarations.va
+// does not reach:
+//
+//     specparam_declaration ::= specparam [ range ] list_of_specparam_assignments ;
+//
+// It is a MODULE ITEM and not only a specify-block item, and §6.2's own Syntax
+// 6-1 says so in the list this file is derivable from:
+//
+//     non_port_module_item ::=
+//             module_or_generate_item
+//             | generate_region
+//             | specify_block
+//             | { attribute_instance } parameter_declaration ;
+//             | { attribute_instance } specparam_declaration
+//             | aliasparam_declaration
+//
+// (that list is reproduced under §6.2 Modules; A.7.1 repeats the production as a
+// `specify_item`, which is the other place a specparam may be written). §1.1
+// makes the complete IEEE Std 1364 Verilog part of Verilog-AMS HDL, and
+// `specparam` — the *parameter* of a specify block, as distinct from the
+// `parameter` of a module — is 1364's, together with the `specify` section that
+// consumes it (62/63/64 record the rest of that family).
+//
+// A CONFORMING FULL-AMS COMPILER MUST ACCEPT IT, so this file is an xfail rather
+// than a `//! reject`: the fixture pins the clause's requirement, and the marker
+// records that VerA does not meet it. The diagnostic is E0205 "unsupported
+// module item: found specparam" — a subset refusal at the module-item dispatch,
+// so the token was recognised and the construct declined.
+//
+// `tdr` is not a decoration: it is the `t_path_delay_expression` a
+// `simple_path_declaration` would name (A.7.2/A.7.4), which is what a specparam
+// is FOR, and `real` is one of A.2.2.1's types. The assertion below reads the
+// bias back, so the day the declaration is accepted this file XPASSes loudly
+// instead of decaying into `unasserted`.
+//
+//! lrm A.2.1.1
+//! lrm 6.2
+//! lrm 1.1
+//! xfail VerA refuses `specparam` as a module item with E0205 "unsupported module item: found specparam" — there is no specify section for it to parameterize
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_specparam(p, n);
+    inout p, n;
+    electrical p, n;
+
+    specparam tdr = 1.5;
+
+    analog begin
+        `CHECKX("the file carrying the A.2.1.1 specparam declaration compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

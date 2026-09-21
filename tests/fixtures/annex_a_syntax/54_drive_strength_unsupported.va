@@ -1,0 +1,54 @@
+// A.2.2.2 Strengths:
+//
+//     drive_strength ::=
+//             ( strength0 , strength1 )
+//             | ( strength1 , strength0 )
+//             | ( strength0 , highz1 )
+//             | ( strength1 , highz0 )
+//             | ( highz0 , strength1 )
+//             | ( highz1 , strength0 )
+//     strength0 ::= supply0 | strong0 | pull0 | weak0
+//     strength1 ::= supply1 | strong1 | pull1 | weak1
+//     charge_strength ::= ( small ) | ( medium ) | ( large )
+//
+// A strength is what `net_declaration` puts between the net type and the
+// identifier (`net_type [ discipline_identifier ] [ drive_strength ] [ signed ]
+// [ delay3 ] list_of_net_decl_assignments`, A.2.1.3's second arm) and what the
+// gate instantiations of A.3.1 take; `charge_strength` is the `trireg` arm's.
+// The file spells the first `drive_strength` arm, `( strength1 , strength0 )` in
+// the grammar's second position — `(strong1, pull0)` — on a net that is assigned
+// as it is declared, so the declaration and A.2.4's `net_decl_assignment` are
+// reached in one line.
+//
+// NEITHER OTHER PRODUCTION IS SPELLED: `trireg (small) tr;` is refused at the
+// same token with the same code (probe: E0208 "expected an identifier: found
+// `(`"), and a `pulldown (strong0)` is A.3.2, which is
+// 57_primitive_strengths_unsupported.va. Note that `trireg tr;` WITHOUT the
+// charge strength is accepted — the arm itself is implemented and only the
+// bracket is missing — so a reader who deletes the parentheses from this line
+// gets a different fixture, not a smaller one.
+//
+// §1.1 makes the complete IEEE Std 1364 Verilog part of Verilog-AMS HDL. A
+// strength is a 1364 construct (a real netlist's resolution function needs it,
+// which §7.7's connect-rule work in ch07_mixed_signal is the AMS-side echo of),
+// so this file is an xfail and not a `//! reject`: it states what the annex
+// requires and records that VerA does not do it.
+//
+//! lrm A.2.2.2
+//! lrm A.2.1.3
+//! lrm 1.1
+//! xfail VerA's net declaration has no strength bracket — `wire (strong1, pull0) w = 1'b1;` and `trireg (small) tr;` both report E0208 "expected an identifier: found `(`"
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_drive_strength(p, n);
+    inout p, n;
+    electrical p, n;
+
+    wire (strong1, pull0) w = 1'b1;
+
+    analog begin
+        `CHECKX("the file carrying the strength bracket compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

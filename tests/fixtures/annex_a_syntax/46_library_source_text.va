@@ -1,0 +1,57 @@
+// A.1.1 Library source text:
+//
+//     library_text ::= { library_description }
+//     library_description ::=
+//             library_declaration
+//             | include_statement
+//             | config_declaration
+//     library_declaration ::=
+//             library library_identifier file_path_spec [ { , file_path_spec } ]
+//             [ -incdir file_path_spec { , file_path_spec } ] ;
+//     file_path_spec ::= file_path
+//     include_statement ::= include file_path_spec ;
+//
+// The annex's preamble names the starting symbol this production belongs to:
+// "The syntax of a library map file is derived from the starting symbol
+// library_text", while the `source_text` of A.1.2 is the one a `.va` is derived
+// from. So what follows is library text rather than a design.
+//
+// WHY IT IS STILL A FIXTURE. §1.1: "Verilog-AMS HDL consists of the complete
+// IEEE Std 1364 Verilog specification". A library map file is part of that
+// specification, and the family is already half-claimed in this suite:
+// annex_b_keywords/05_config_library_keywords.va censuses `library`, `include`,
+// `config`, `incdir`, `liblist`, `use`, `cell`, `design`, `instance` and
+// `endconfig` as RESERVED, and its header says in as many words that the earlier
+// fixture there "spelled a well-formed library/config source and demanded an
+// error, which a conforming AMS tool would refuse to give". That is the negative
+// half — these spellings are not identifiers. This file is the positive half,
+// taken through the first arm the grammar offers.
+//
+// WHAT IS NOT CLAIMED. `include_statement` (a bare `include`, not the
+// preprocessor's `` `include `` of §10.3) is the second arm of the same
+// `library_description` and is NOT spelled below: VerA stops at `library`, the
+// first item of the file, so a second refused keyword would add nothing to what
+// the xfail records, and a real `include` names a file that would have to exist
+// on the day the gap closes. `config_declaration` is the third arm and is the
+// subject of 47_configuration_source_text.va.
+//
+// THE WANT IS THE BIAS READ BACK, so the day VerA accepts a library declaration
+// this file XPASSes loudly instead of decaying into silence: an xfail with no
+// assertion can only ever report `unasserted`.
+//
+//! lrm A.1.1
+//! lrm 1.1
+//! xfail VerA refuses the whole library-text family at the parser — `library`, `include` and `config` each report E0201 "construct is not in the supported subset", so a library map file cannot be compiled at all
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+library annex_a_lib "." ;
+module annex_a_library_host(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECKX("the file carrying the A.1.1 library declaration compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

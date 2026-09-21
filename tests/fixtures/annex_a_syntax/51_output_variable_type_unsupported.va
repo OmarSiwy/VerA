@@ -1,0 +1,53 @@
+// A.2.1.2's THIRD arm, and the A.2.2.1 production it names:
+//
+//     output_declaration ::=
+//             output [ discipline_identifier ] [ net_type | wreal ] [ signed ] [ range ]
+//                 list_of_port_identifiers
+//             | output [ discipline_identifier ] reg [ signed ] [ range ]
+//                 list_of_variable_port_identifiers
+//             | output output_variable_type list_of_variable_port_identifiers      // A.2.1.2
+//     output_variable_type ::= integer | time                                       // A.2.2.1
+//
+// The first arm — a port that is a NET — is what 52_net_and_variable_types.va and
+// 02_module_ports.va spell (`output wire c`, `output electrical drive`). This file
+// takes the third: a port that is a VARIABLE of one of the two integral types
+// 1364 gives an output port, which is what a `$strobe`-style monitor port or a
+// digital driver is declared as.
+//
+// ONE OF THE TWO VARIABLE ARMS IS SPELLED. The middle arm (`output … reg`) is
+// refused by the same token in the same place — probe: `output reg o;` reports
+// E0208 "expected an identifier: found `reg`", `output integer o;` reports the
+// same code naming `integer` — so a second module here would add a line, not a
+// claim. The header records it instead, the way this directory's A.6.4 row
+// records the eleven statements that share one production.
+//
+// WHY IT IS AN XFAIL AND NOT A `//! reject`. §1.1: "Verilog-AMS HDL consists of
+// the complete IEEE Std 1364 Verilog specification". An output port declared with
+// a variable type is legal 1364 and the AMS annex admits it explicitly, so a
+// conforming full-AMS compiler must ACCEPT this file; VerA's refusal is the gap
+// the marker records. §1.2's feature list is the same claim from the other side —
+// "digital signal values can be set (write operations) from any context outside
+// of an analog procedural block" — which needs a digital-lvalue port to write to.
+//
+// `o` is in the port list, which is not decoration: in the non-ANSI style this
+// file uses, a port declaration must name a port the header listed. Without it
+// the first diagnostic is E0206 ("identifier is not a port of this module"),
+// which would pin a different rule and hide this one.
+//
+//! lrm A.2.1.2
+//! lrm A.2.2.1
+//! lrm 1.1
+//! xfail VerA refuses an output port declared with a variable type — `output integer o;` and `output reg o;` both report E0208 "expected an identifier"
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_output_variable(p, n, o);
+    inout p, n;
+    electrical p, n;
+    output integer o;
+
+    analog begin
+        `CHECKX("the file carrying the variable-typed output port compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

@@ -1,0 +1,59 @@
+// A.5.4 UDP instantiation:
+//
+//     udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ]
+//             udp_instance { , udp_instance } ;
+//     udp_instance ::= [ name_of_udp_instance ]
+//             ( output_terminal , input_terminal { , input_terminal } )
+//     name_of_udp_instance ::= udp_instance_identifier [ range ]
+//
+// The instantiation site, which is a different production from A.5.1's
+// declaration and can be missing from a compiler that has the other one: 58
+// records VerA's refusal of the declaration, this file records the USE.
+//
+// WHY THE MODULE COMES FIRST AND THE PRIMITIVE SECOND. VerA stops at the first
+// diagnostic, so the order of the file decides which claim the fixture makes.
+// With `annex_a_udp_pulse (b, a);` in the module at the top, the refusal is
+// E0205 "unsupported module item: found annex_a_udp_pulse" — the module-item
+// dispatch declining an identifier followed by a port list — where a file with
+// the `primitive` first would stop at E0201 and say nothing about the
+// instantiation at all. On the day both features land, the file is a complete
+// design: the module instantiates the primitive declared below it, and the
+// declaration is a legal one (58 spells the same four lines).
+//
+// `b` and `a` are the output and input terminals of A.3.3's `output_terminal`/
+// `input_terminal`, reused by A.5.4 by reference. The `[ drive_strength ]` and
+// `[ delay2 ]` brackets are omitted, which the grammar allows.
+//
+// §1.1 again: the complete IEEE Std 1364 Verilog is part of Verilog-AMS HDL, so
+// refusing this is the gap the marker records, not a conformance choice. A UDP
+// is also the only way a user-defined *digital* cell enters a mixed design, so
+// the row is not decorative for the AMS side either.
+//
+//! lrm A.5.4
+//! lrm A.3.3
+//! lrm 1.1
+//! xfail VerA's module-item dispatch does not recognise a UDP instantiation — `annex_a_udp_pulse (b, a);` reports E0205 "unsupported module item"
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_udp_use(p, n);
+    inout p, n;
+    electrical p, n;
+
+    wire a, b;
+    annex_a_udp_pulse (b, a);
+
+    analog begin
+        `CHECKX("the file carrying the UDP instantiation compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule
+
+primitive annex_a_udp_pulse (o, a);
+    output o;
+    input a;
+    table
+        0 : 1;
+        1 : 0;
+    endtable
+endprimitive
