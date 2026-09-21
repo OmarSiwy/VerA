@@ -39,9 +39,36 @@
 // this file XPASSes loudly instead of decaying into silence: an xfail with no
 // assertion can only ever report `unasserted`.
 //
+// THE MARKER'S CLAIM HAS NARROWED, AND ITS GROUND HAS MOVED. It used to say the
+// whole library-text family was one E0201 "construct is not in the supported
+// subset"; that was true of all three arms and is now true of none of them.
+// `config_declaration` is ACCEPTED — A.1.2's `description` list contains it, so
+// a configuration in a source file is derivable from `source_text`, and
+// 47_configuration_source_text.va no longer carries a marker at all. The two
+// arms this file is about are read in full and then refused with a code of
+// their own, E0232 "library map text in a source file", which names the
+// starting symbol rather than the subset.
+//
+// WHICH IS WHY THIS ROW STAYS RED, AND IT IS NOT A GAP OF THE KIND THE OTHER
+// MARKERS IN THIS DIRECTORY RECORD. A `library_declaration` is reachable from
+// `library_text` and from nothing else. The preamble quoted above draws the
+// line and A.1.2's list confirms it from the other side: module, udp, config,
+// paramset, nature, discipline, connectrules — and no `library_description`. So
+// no growth of the analog subset makes this text legal in a `.va`, and a
+// compiler that accepted it would be accepting a file kind it was not given.
+// What is missing is a LIBRARY MAP READER, a second front end over a second
+// starting symbol, and until VerA has one there is nowhere for this text to go.
+// E0232's `--explain` states that in full.
+//
+// The marker therefore records a real absence, and the file's `CHECKX` remains
+// the thing that will fire on the day the absence is filled — this row wants a
+// compiler that can compile a library map file, not one that will take one
+// anywhere.
+//
 //! lrm A.1.1
+//! lrm A.1.2
 //! lrm 1.1
-//! xfail VerA refuses the whole library-text family at the parser — `library`, `include` and `config` each report E0201 "construct is not in the supported subset", so a library map file cannot be compiled at all
+//! xfail VerA reads no library map files — a `library_declaration` is reachable only from A.1.1's `library_text`, and a `.va` is `source_text`, so the declaration is parsed and then refused with E0232 "library map text in a source file"
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 library annex_a_lib "." ;

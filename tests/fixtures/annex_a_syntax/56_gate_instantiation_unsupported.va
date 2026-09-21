@@ -29,17 +29,37 @@
 // §1.1: "Verilog-AMS HDL consists of the complete IEEE Std 1364 Verilog
 // specification". A gate primitive is 1364's, and §1.2's feature list assumes
 // the digital side of the language is there ("signals of both analog and digital
-// types can be declared in the same module"). So this file is an xfail and not a
-// `//! reject`: it states what the annex requires and records that VerA declines
-// the whole `gate_instantiation` production with E0205 "unsupported module item:
-// found and" — the module-item dispatch refusing the keyword after recognising
+// types can be declared in the same module"). So this file was an xfail and not
+// a `//! reject`: it states what the annex requires and recorded that VerA
+// declined the whole `gate_instantiation` production with E0205 "unsupported
+// module item: found and" — the module-item dispatch refusing the keyword after
+// recognising it.
+//
+// IT IS READ NOW, AND IT COMPUTES NOTHING, and the second half is said out loud
+// (W0252). The production was already implemented for `vera --run` over a `.v`
+// source, where the discrete engine executes the gate for real; what refused
+// this line was a gate on the ARTIFACT being built, not on the grammar. §8.5.3.5
+// is why that distinction is a real one: "The event-driven simulation algorithm
+// described in 11 of IEEE Std 1364 Verilog depends on unidirectional signal
+// flow and can process each event independently. The inputs are read, the result
+// is computed, and the update is scheduled. The IEEE Std 1364 Verilog provides
+// switch-level modeling in addition to behavioral and gate-level modeling." A
+// gate's output is that scheduled UPDATE, and a compiled analog device has no
+// queue to put one on, so `c` below keeps whatever the continuous solver leaves
 // it.
+//
+// WHICH IS WHY THE THREE NETS ARE UNCONNECTED HERE. `a`, `b` and `c` touch
+// nothing the analog block reads, so the module's answer is the same with the
+// gate and without it, and this file's want is not silently a want about a
+// dropped driver. The warning is what carries that claim; `--deny=W0252` turns
+// it back into a refusal for a model that cannot afford the omission, which is
+// W0250's arrangement for A.4.1's pass switches and the reason this one is
+// shaped like it.
 //
 //! lrm A.3.1
 //! lrm A.3.3
 //! lrm A.3.4
 //! lrm 1.1
-//! xfail VerA refuses gate primitives at the module-item dispatch — `and nand_g1 (c, a, b);` reports E0205 "unsupported module item: found and"
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_gate(p, n);

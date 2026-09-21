@@ -253,9 +253,30 @@ pub const Parser = struct {
                     };
                     try connectrules.append(self.arena, cr);
                 },
+                // A.1.2's `description` has three more alternatives, and they
+                // share one token tag: annex B reserves `primitive`, `config`,
+                // `library` and `include` and this compiler gives none of them
+                // a tag of its own, so the spelling is the dispatch. All four
+                // used to be one E0201, which said "not in the supported
+                // subset" about two productions A.1.2 lists (and, for
+                // `library`, about a production no version of the subset can
+                // ever admit — see E0232).
+                .kw_reserved => {
+                    const w = self.tokenText(self.pos);
+                    const r: Error!void = if (std.mem.eql(u8, w, "primitive"))
+                        self.parseUdpDecl()
+                    else if (std.mem.eql(u8, w, "config"))
+                        self.parseConfigDecl()
+                    else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
+                        self.parseLibraryDecl()
+                    else
+                        self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
+                    r catch |e| {
+                        if (e == error.OutOfMemory) return e;
+                        self.recoverTopLevel(before);
+                    };
+                },
                 else => {
-                    // UDPs and config/library files are out of the annex C
-                    // subset (and have no discrete kernel to mean anything on).
                     _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
                     self.recoverTopLevel(before);
                 },
@@ -338,8 +359,377 @@ pub const Parser = struct {
                 self.pos += 1;
                 return;
             },
+            // A.1.2's other two descriptions close with reserved spellings this
+            // compiler gives no tag to. Without them a bad `primitive` swallowed
+            // the module after it.
+            .kw_reserved => if (self.reservedIs(self.pos, "endprimitive") or
+                self.reservedIs(self.pos, "endconfig"))
+            {
+                self.pos += 1;
+                return;
+            } else if (self.reservedIs(self.pos, "primitive") or
+                self.reservedIs(self.pos, "config"))
+            {
+                if (self.pos != before) return;
+            },
             else => {},
         };
+    }
+
+    // -----------------------------------------------------------------------
+    // A.1.1 library source text · A.1.5 configuration — LRM §1.1
+    // -----------------------------------------------------------------------
+
+    /// A.1.1's two library-map-only descriptions:
+    ///
+    ///     library_declaration ::=
+    ///             library library_identifier file_path_spec [ { , file_path_spec } ]
+    ///             [ -incdir file_path_spec { , file_path_spec } ] ;
+    ///     include_statement ::= include file_path_spec ;
+    ///
+    /// READ AND THEN REFUSED (E0232), which is the point of reading them. Annex
+    /// A's preamble names the starting symbol each file kind derives from — "The
+    /// syntax of Verilog-AMS HDL source is derived from the starting symbol
+    /// source_text. The syntax of a library map file is derived from the
+    /// starting symbol library_text" — and `library_description` hangs off
+    /// `library_text` alone. A.1.2's `description` list does not contain either
+    /// of these, so this text is not derivable from what a `.va` IS.
+    ///
+    /// That makes E0201 ("not in the supported subset") the wrong verdict: it
+    /// says a subset that could grow, and no growth of the analog subset makes
+    /// a library declaration legal in a source file. E0232 names the starting
+    /// symbol instead. The production is still walked first, so the diagnostic
+    /// lands on the keyword of a construct that was UNDERSTOOD.
+    ///
+    /// `file_path_spec ::= file_path` is taken as a string literal only.
+    // ponytail: an unquoted `file_path` — `./lib/*.v`, which is how real map
+    // files write one — is not a token sequence this lexer can produce, and it
+    // should not be asked to: §2.2's token set is `source_text`'s. A library map
+    // file needs its own reader, which is the same work E0232 says is absent.
+    fn parseLibraryDecl(self: *Parser) Error!void {
+        const kw = self.pos;
+        const is_library = self.reservedIs(kw, "library");
+        self.pos += 1;
+        if (is_library) _ = try self.expectIdent();
+        while (true) {
+            _ = try self.expect(.string_literal);
+            if (!self.eat(.comma)) break;
+        }
+        // `-incdir file_path_spec { , file_path_spec }`, the one option the
+        // production has. The `-` and the keyword are two tokens; §2.2 has no
+        // production that joins them, so they are matched as two.
+        if (is_library and self.eat(.minus)) {
+            if (!self.reservedIs(self.pos, "incdir")) return self.failAt(self.pos, .E0207, "found {s}, and `-` begins only A.1.1's `-incdir`", .{self.found(self.pos)});
+            self.pos += 1;
+            while (true) {
+                _ = try self.expect(.string_literal);
+                if (!self.eat(.comma)) break;
+            }
+        }
+        _ = try self.expect(.semicolon);
+        return self.failAt(kw, .E0232, "`{s}` is a library_description, and this file is source_text", .{self.tokenText(kw)});
+    }
+
+    /// A.1.5 `config_declaration`, which A.1.2 lists as a `description` — so
+    /// unlike A.1.1's two, a configuration in a `.va` is derivable from
+    /// `source_text` and is accepted:
+    ///
+    ///     config_declaration ::=
+    ///             config config_identifier ;
+    ///                 design_statement
+    ///                 {config_rule_statement}
+    ///             endconfig
+    ///     design_statement ::= design { [library_identifier.]cell_identifier } ;
+    ///     config_rule_statement ::=
+    ///             default_clause liblist_clause ;
+    ///             | inst_clause liblist_clause ; | inst_clause use_clause ;
+    ///             | cell_clause liblist_clause ; | cell_clause use_clause ;
+    ///
+    /// ACCEPTED AND BINDING NOTHING, out loud (W0253). A configuration selects
+    /// which CELL of which LIBRARY an instance resolves to; VerA has no library
+    /// map, so every instance resolves to a module declared in the source it was
+    /// given, by name, and the elaborated design is what it would have been with
+    /// the configuration deleted.
+    // ponytail: nothing is recorded, for `parseSpecifyBlock`'s reason — there
+    // is no library table for a rule to select from, so a stored clause would
+    // have no consumer. The upgrade is a map reader, which E0232 also wants.
+    fn parseConfigDecl(self: *Parser) Error!void {
+        const kw = self.pos;
+        self.pos += 1;
+        _ = try self.expectIdent();
+        _ = try self.expect(.semicolon);
+        // `design_statement` is mandatory and first — the production puts it
+        // above the repetition, not inside it.
+        if (!self.reservedIs(self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
+        self.pos += 1;
+        while (self.peek() != .semicolon) _ = try self.parseDottedName(false);
+        self.pos += 1;
+        while (!self.reservedIs(self.pos, "endconfig")) {
+            if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
+            try self.parseConfigRule();
+        }
+        self.pos += 1;
+        try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
+    }
+
+    /// A.1.5 `config_rule_statement`. The five alternatives are three left
+    /// clauses over two right ones, and `default` is the one that pairs with
+    /// `liblist` alone:
+    ///
+    ///     default_clause ::= default
+    ///     inst_clause ::= instance inst_name
+    ///     inst_name ::= topmodule_identifier { . instance_identifier }
+    ///     cell_clause ::= cell [ library_identifier . ] cell_identifier
+    ///     liblist_clause ::= liblist { library_identifier }
+    ///     use_clause ::= use [ library_identifier . ] cell_identifier [ : config ]
+    fn parseConfigRule(self: *Parser) Error!void {
+        const tok = self.pos;
+        // `default` is the one word of A.1.5 that this compiler has a tag for:
+        // A.6.7's `case` default takes the same spelling, and annex B reserves
+        // it once.
+        const is_default = self.peek() == .kw_default;
+        if (!is_default and !self.reservedIs(tok, "instance") and !self.reservedIs(tok, "cell"))
+            return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
+        self.pos += 1;
+        if (!is_default) _ = try self.parseDottedName(false);
+        if (self.reservedIs(self.pos, "liblist")) {
+            self.pos += 1;
+            // `liblist { library_identifier }` — a repetition with no commas,
+            // and the empty one is legal (it is what clears an inherited list).
+            while (self.peek() != .semicolon) _ = try self.expectIdent();
+        } else if (!is_default and self.reservedIs(self.pos, "use")) {
+            self.pos += 1;
+            _ = try self.parseDottedName(false);
+            // `[ : config ]` — the literal keyword, not a name.
+            if (self.eat(.colon) and !self.reservedIs(self.pos, "config"))
+                return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)})
+            else if (self.reservedIs(self.pos, "config")) self.pos += 1;
+        } else return self.failAt(
+            self.pos,
+            .E0207,
+            "found {s}: a {s} pairs with `liblist`{s}",
+            .{ self.found(self.pos), self.tokenText(tok), if (is_default) "" else " or `use`" },
+        );
+        _ = try self.expect(.semicolon);
+    }
+
+    // -----------------------------------------------------------------------
+    // A.5 user-defined primitives — LRM §1.1, §8.5.3
+    // -----------------------------------------------------------------------
+
+    /// A.5.1 `udp_declaration`, both arms:
+    ///
+    ///     { attribute_instance } primitive udp_identifier ( udp_port_list ) ;
+    ///         udp_port_declaration { udp_port_declaration }
+    ///         udp_body
+    ///     endprimitive
+    ///     | { attribute_instance } primitive udp_identifier
+    ///         ( udp_declaration_port_list ) ; udp_body endprimitive
+    ///
+    /// A.1.2 lists `udp_declaration` as a `description`, so a `.va` holding one
+    /// is derivable from `source_text` and the old E0201 was refusing text the
+    /// standard admits.
+    ///
+    /// The two arms differ only in whether the header's parenthesis holds bare
+    /// names (A.5.2 `udp_port_list`) or full declarations
+    /// (`udp_declaration_port_list`), and both then reach the same body, so one
+    /// routine reads both: the port list takes a declaration keyword where it
+    /// finds one, and the `udp_port_declaration` run after the `;` is a
+    /// repetition that may be empty.
+    ///
+    /// NOTHING IS RECORDED. The table is validated against A.5.3 and dropped —
+    /// there is no discrete engine here to evaluate it, and `parseUdpInst`'s
+    /// W0252 is what says so at the site that would have used it.
+    // ponytail: the upgrade is a `UdpDecl` on `Ast.SourceFile` plus a matcher
+    // in `src/sim/digital.zig`, which is another agent's column. Storing the
+    // rows before that exists is dead weight in an arena.
+    fn parseUdpDecl(self: *Parser) Error!void {
+        self.pos += 1; // `primitive`
+        _ = try self.expectIdent();
+        _ = try self.expect(.lparen);
+        while (true) {
+            // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
+            // only the second A.5.1 arm puts inside the parentheses.
+            if (self.eat(.kw_output) or self.eat(.kw_input)) {
+                _ = try self.optDiscipline();
+                _ = self.eat(.kw_reg);
+            }
+            _ = try self.expectIdent();
+            // `udp_output_declaration ::= … output [ discipline_identifier ]
+            // reg port_identifier [ = constant_expression ]`
+            if (self.eat(.assign_eq)) _ = try self.parseExpr();
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+        // A.5.2's separate declarations, the first arm's. A.5.1 writes the run
+        // as `udp_port_declaration { udp_port_declaration }` — one or more —
+        // but the second arm reaches the body with none, so the count is not
+        // checked here: which arm the header took is what decides it, and a
+        // primitive whose ports are never typed is A.5.2's problem and not the
+        // parser's.
+        while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
+            self.pos += 1;
+            _ = try self.optDiscipline();
+            _ = self.eat(.kw_reg);
+            while (true) {
+                _ = try self.expectIdent();
+                if (self.eat(.assign_eq)) _ = try self.parseExpr();
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.semicolon);
+        }
+        // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
+        // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
+        if (self.eat(.kw_initial)) {
+            _ = try self.expectIdent();
+            _ = try self.expect(.assign_eq);
+            _ = try self.parseExpr();
+            _ = try self.expect(.semicolon);
+        }
+        try self.parseUdpTable();
+        if (!self.reservedIs(self.pos, "endprimitive"))
+            return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
+        self.pos += 1;
+    }
+
+    /// A.5.3's `table … endtable`, and the whole of what a parser can judge in
+    /// one:
+    ///
+    ///     combinational_entry ::= level_input_list : output_symbol ;
+    ///     sequential_entry ::= seq_input_list : current_state : next_state ;
+    ///     level_symbol ::= 0 | 1 | x | X | ? | b | B
+    ///     edge_symbol ::= r | R | f | F | p | P | n | N | *
+    ///     output_symbol ::= 0 | 1 | x | X
+    ///     next_state ::= output_symbol | -
+    ///
+    /// THE SYMBOLS ARE CHARACTERS AND NOT TOKENS, which is the one thing about
+    /// this region that has to be got right. `(01)` is four symbols and reaches
+    /// the parser as three tokens; `0 0` is two symbols and two tokens; `b` is
+    /// a symbol and an identifier. So an entry is collected as the CHARACTERS
+    /// of its tokens, in order, and judged against the alphabets — the token
+    /// boundaries inside a table carry no meaning of their own, and a parser
+    /// that read them as if they did would reject half of A.5.3's own examples.
+    fn parseUdpTable(self: *Parser) Error!void {
+        if (!self.reservedIs(self.pos, "table"))
+            return self.failAt(self.pos, .E0207, "found {s}: a udp_body is a `table … endtable`", .{self.found(self.pos)});
+        self.pos += 1;
+        // Which `udp_body` alternative this table is, decided by its FIRST
+        // entry and then required of every other one (A.5.3 gives a table one
+        // body and not a mixture).
+        var sequential: ?bool = null;
+        while (!self.reservedIs(self.pos, "endtable")) {
+            if (self.peek() == .eof)
+                return self.failAt(self.pos, .E0207, "found {s}: no `endtable` closes the table", .{self.found(self.pos)});
+            try self.parseUdpEntry(&sequential);
+        }
+        self.pos += 1;
+    }
+
+    /// One `combinational_entry` or `sequential_entry`, judged column by column.
+    fn parseUdpEntry(self: *Parser, sequential: *?bool) Error!void {
+        const tok = self.pos;
+        // Column 0 is the input list; a colon opens each of the 1 or 2 that
+        // follow, so the colon count IS the entry's `udp_body` alternative.
+        var cols: [3]struct { text: [64]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
+        var n: usize = 0;
+        cols[0].tok = tok;
+        while (!self.eat(.semicolon)) {
+            if (self.peek() == .eof or self.reservedIs(self.pos, "endtable"))
+                return self.failAt(self.pos, .E0207, "found {s}: a UDP table entry ends with `;`", .{self.found(self.pos)});
+            if (self.eat(.colon)) {
+                n += 1;
+                if (n > 2) return self.failAt(tok, .E0234, "a UDP table entry has one colon (combinational) or two (sequential), not {d}", .{n});
+                cols[n].tok = self.pos;
+                continue;
+            }
+            const t = self.tokenText(self.pos);
+            if (cols[n].len + t.len > cols[n].text.len)
+                return self.failAt(self.pos, .E0233, "a UDP table column of more than {d} symbols", .{cols[n].text.len});
+            @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
+            cols[n].len += t.len;
+            self.pos += 1;
+        }
+        if (n == 0) return self.failAt(tok, .E0234, "a UDP table entry has one colon (combinational) or two (sequential), not 0", .{});
+        const is_seq = n == 2;
+        if (sequential.*) |was| {
+            if (was != is_seq) return self.failAt(
+                tok,
+                .E0234,
+                "this entry is {s} and the table's first entry is {s}; A.5.3 gives a table ONE udp_body",
+                .{ udpBodyName(is_seq), udpBodyName(was) },
+            );
+        } else sequential.* = is_seq;
+
+        // `level_input_list` in a combinational body, `seq_input_list` — which
+        // adds `edge_input_list` — in a sequential one.
+        const inputs = cols[0].text[0..cols[0].len];
+        for (inputs) |c| {
+            if (std.mem.indexOfScalar(u8, "01xX?bB", c) != null) continue;
+            if (std.mem.indexOfScalar(u8, "rRfFpPnN*()", c) != null) {
+                if (is_seq) continue;
+                return self.failAt(cols[0].tok, .E0234, "an edge indicator `{c}` in a combinational UDP table entry: A.5.3 reaches `edge_input_list` only from a sequential_entry", .{c});
+            }
+            return self.failAt(cols[0].tok, .E0233, "`{c}` is not a UDP input symbol", .{c});
+        }
+        // `output_symbol ::= 0 | 1 | x | X` closes a combinational entry;
+        // `current_state ::= level_symbol` and `next_state ::= output_symbol
+        // | -` close a sequential one.
+        if (is_seq) for (cols[1].text[0..cols[1].len]) |c| {
+            if (std.mem.indexOfScalar(u8, "01xX?bB", c) == null)
+                return self.failAt(cols[1].tok, .E0233, "`{c}` is not a UDP current_state symbol", .{c});
+        };
+        const last = cols[n].text[0..cols[n].len];
+        if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
+        const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
+        if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
+    }
+
+    fn udpBodyName(sequential: bool) []const u8 {
+        return if (sequential) "sequential" else "combinational";
+    }
+
+    /// A.5.4 `udp_instantiation`, at module scope:
+    ///
+    ///     udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ]
+    ///             udp_instance { , udp_instance } ;
+    ///     udp_instance ::= [ name_of_udp_instance ]
+    ///             ( output_terminal , input_terminal { , input_terminal } )
+    ///
+    /// Told from A.4.1's `module_instantiation` by ONE token, with no
+    /// backtrack and no lookup of the name: `module_instance ::=
+    /// name_of_module_instance ( [ list_of_port_connections ] )` makes the
+    /// instance name MANDATORY, and A.5.4's is optional, so an identifier
+    /// followed directly by `(` derives from A.5.4 and from nothing else.
+    /// (A UDP instance WITH a name is indistinguishable from a module instance
+    /// at this point, and stays a module instantiation — elaboration resolves
+    /// the name, which is where the difference is knowable.)
+    ///
+    /// W0252 for the same reason a gate gets one: a UDP's function is a table
+    /// (A.5.3) rather than a keyword, and the table computes a logic value for
+    /// an event queue a compiled analog device does not have.
+    fn parseUdpInst(self: *Parser) Error!void {
+        try self.gateNotModelled();
+        self.pos += 1; // the udp_identifier
+        var s0: Ast.Strength = .strong;
+        var s1: Ast.Strength = .strong;
+        if (self.peek() == .lparen and self.strengthWord(self.pos + 1) != null) try self.parseDriveStrength(&s0, &s1);
+        // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
+        // `parseDelay3` already returns for a two-value list.
+        if (self.peek() == .hash) _ = try self.parseDelay3();
+        while (true) {
+            if (self.identLike(self.pos)) {
+                self.pos += 1;
+                // `name_of_udp_instance ::= udp_instance_identifier [ range ]`
+                if (self.peek() == .lbracket) _ = try self.parseDim();
+            }
+            _ = try self.expect(.lparen);
+            _ = try self.parseNetRef(); // A.3.3 output_terminal ::= net_lvalue
+            while (self.eat(.comma)) _ = try self.parseExpr(); // input_terminal ::= expression
+            _ = try self.expect(.rparen);
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
     }
 
     // -----------------------------------------------------------------------
@@ -937,7 +1327,7 @@ pub const Parser = struct {
             .kw_ground => {
                 self.pos += 1;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, .wire, true, .medium);
+                try self.parseNetNames(b, disc, .wire, true, .{});
             },
             // §6.5.2 non-ANSI port declarations
             .kw_input, .kw_output, .kw_inout => try self.parsePortDecl(b),
@@ -960,9 +1350,35 @@ pub const Parser = struct {
                 // A.2.1.3: `charge_strength` sits right after the net type, and
                 // only `trireg`'s alternatives have one. §3.8's default for a
                 // `trireg` that names none is `medium`.
-                const charge: Ast.Strength = if (self.peek() == .lparen) try self.parseChargeStrength(kind) else .medium;
+                //
+                // …and so does `drive_strength`, on the `list_of_net_decl_assignments`
+                // arms of the SAME production — four of A.2.1.3's twelve
+                // `net_declaration` alternatives carry one:
+                //
+                //     net_type [ discipline_identifier ] [ drive_strength ] [ signed ]
+                //         [ delay3 ] list_of_net_decl_assignments ;
+                //
+                // One token tells the two brackets apart without a backtrack.
+                // A.2.2.2's six `drive_strength` alternatives are all PAIRS, so
+                // a comma after the first strength word is the discriminator;
+                // A.2.2.1's `charge_strength ::= ( small ) | ( medium ) |
+                // ( large )` is always the single word. Anything else stays
+                // with `parseChargeStrength`, whose two diagnostics ("not a
+                // charge strength", "only legal on a trireg") are the ones
+                // that say what went wrong.
+                // The default pair is IEEE 1364-2005 §7.10's: "the strengths
+                // default to strong1 and strong0", so a declaration with no
+                // bracket is indistinguishable from `(strong1, strong0)` and
+                // needs no flag to say the bracket was absent.
+                var st: Ast.NetStrength = .{};
+                if (self.peek() == .lparen) {
+                    if (self.strengthWord(self.pos + 1) != null and self.peekAt(2) == .comma)
+                        try self.parseDriveStrength(&st.strength0, &st.strength1)
+                    else
+                        st.charge = try self.parseChargeStrength(kind);
+                }
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, kind, false, charge);
+                try self.parseNetNames(b, disc, kind, false, st);
             },
             // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
             // list_of_net_assignments ;`. Only the digital executor has nets
@@ -1001,8 +1417,23 @@ pub const Parser = struct {
                 while (true) {
                     const name_tok = self.pos;
                     const name = try self.expectIdent();
-                    const dims = if (self.digital) try self.parseDims() else &.{};
-                    const value = if (self.digital and self.eat(.assign_eq)) try self.parseExpr() else Ast.ExprId.none;
+                    // A.2.1.3 `reg_declaration ::= reg [ discipline_identifier ]
+                    // [ signed ] [ range ] list_of_variable_identifiers ;` and
+                    // A.2.3 `list_of_variable_identifiers ::= variable_type
+                    // { , variable_type }`, so both of these belong to A.2.2.1's
+                    //
+                    //     variable_type ::=
+                    //         variable_identifier { dimension } [ = constant_assignment_pattern ]
+                    //         | variable_identifier = constant_expression
+                    //
+                    // which is the same production `integer`/`time` reach
+                    // through `parseVarDecl`, where neither is gated. Gating
+                    // them on `digital` here made `reg [7:0] rbus = 8'h5a;` an
+                    // E0207 in a `.va` while `integer iv = 7;` beside it was
+                    // fine — one production, two answers, and the annex draws
+                    // no such line.
+                    const dims = try self.parseDims();
+                    const value = if (self.eat(.assign_eq)) try self.parseExpr() else Ast.ExprId.none;
                     try b.vars.append(self.arena, .{
                         .name = name,
                         .ty = .integer,
@@ -1022,10 +1453,7 @@ pub const Parser = struct {
             .kw_tran, .kw_rtran => try self.parsePassSwitch(),
             // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
             // compute a logic value.
-            .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => {
-                if (!self.digital) return self.unsupportedItem();
-                try self.parseGates(b);
-            },
+            .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try self.parseGates(b),
             // A.6.2 `initial_construct` / `always_construct` — §7.2.2's discrete
             // context.
             .kw_initial, .kw_always => try self.parseDiscrete(b),
@@ -1066,6 +1494,12 @@ pub const Parser = struct {
                     (self.identLike(self.pos + 1) and
                         (self.peekAt(2) == .lparen or self.peekAt(2) == .lbracket)))
                     return self.parseInstantiation(b);
+                // A.5.4 `udp_instantiation`, whose `udp_instance` makes
+                // `name_of_udp_instance` OPTIONAL where A.4.1's `module_instance
+                // ::= name_of_module_instance ( … )` does not. So an identifier
+                // followed directly by `(` derives from A.5.4 and from nothing
+                // else at module scope, and one token settles it.
+                if (self.peekAt(1) == .lparen) return self.parseUdpInst();
                 // `discipline [range] names ;` — a vector net's range is
                 // rejected by the name list ("expected identifier"), which is
                 // the wording the fixtures pin.
@@ -1074,10 +1508,354 @@ pub const Parser = struct {
                 }
                 const disc = try self.internTok(self.pos);
                 self.pos += 1;
-                try self.parseNetNames(b, disc, .wire, false, .medium);
+                try self.parseNetNames(b, disc, .wire, false, .{});
+            },
+            // Annex B reserves a family of 1364 spellings that this compiler
+            // has no tag for — `specify`, `specparam`, `primitive`, `pulldown`
+            // and the rest all lex to one `.kw_reserved`, which is what keeps
+            // them unusable as identifiers. The spelling is therefore the
+            // dispatch, and the two below are the ones with a production here.
+            .kw_reserved => {
+                const w = self.tokenText(self.pos);
+                if (std.mem.eql(u8, w, "specify")) return self.parseSpecifyBlock();
+                // A.2.1.1 `specparam_declaration ::= specparam [ range ]
+                // list_of_specparam_assignments ;`, reached BOTH as a module
+                // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
+                // `specify_item`. This is the module-item half.
+                if (std.mem.eql(u8, w, "specparam")) return self.parseSpecparamDecl(&b.params);
+                // A.3.1's last two arms. They have no tags of their own because
+                // A.3.2 gives them a strength set no other gate takes.
+                if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
+                    return self.parsePullGate();
+                return self.unsupportedItem();
             },
             else => return self.unsupportedItem(),
         }
+    }
+
+    /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
+    /// keywords share one tag, so every grammar that needs one of them by name
+    /// asks here.
+    fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
+        return self.tags[i] == .kw_reserved and std.mem.eql(u8, self.tokenText(i), w);
+    }
+
+    /// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
+    /// recognises as single tokens and tags `.invalid`, because outside a
+    /// specify block none of them is an operator at all (`lexer.zig` spells
+    /// exactly that at each of the three). So the spelling is the test, and
+    /// the tag is what keeps them from meaning anything anywhere else.
+    fn eatSymbol(self: *Parser, w: []const u8) bool {
+        if (self.peek() != .invalid or !std.mem.eql(u8, self.tokenText(self.pos), w)) return false;
+        self.pos += 1;
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // A.7 specify blocks — LRM §1.1 (1364 is part of the language), §8
+    // -----------------------------------------------------------------------
+
+    /// A.7.1 `specify_block ::= specify { specify_item } endspecify`.
+    ///
+    /// READ IN FULL AND MODELLED BY NOTHING (W0251) — W0250's shape, and the
+    /// reasoning is that entry's. The block is legal source under §1.1, and
+    /// annex C.16 does not exempt it (`specify` is not one of the spellings
+    /// that clause lists as unused by Verilog-A), so refusing it was refusing
+    /// text the standard requires a full-AMS compiler to take. Its content is
+    /// entirely §8 scheduling — A.7.2 path delays, A.7.5 system timing checks —
+    /// and a compiled analog device has no event queue to schedule a path delay
+    /// on, so there is nothing to record and nothing that could read it.
+    ///
+    /// PARSED, not skipped to `endspecify`. A token skip would accept any text
+    /// at all between the keywords, which is a strictly weaker claim than the
+    /// annex makes and would let a typo in a path declaration ship silently.
+    // ponytail: nothing is recorded, because nothing consumes it — same call as
+    // `parsePassSwitch`. The upgrade path is a discrete half in `Flatten`, and
+    // until that exists an AST field for a path delay is dead weight.
+    fn parseSpecifyBlock(self: *Parser) Error!void {
+        const open = self.pos;
+        self.pos += 1; // `specify`
+        while (!self.reservedIs(self.pos, "endspecify")) {
+            if (self.peek() == .eof or self.peek() == .kw_endmodule)
+                return self.failAt(self.pos, .E0207, "found {s}: no `endspecify` closes the specify block", .{self.found(self.pos)});
+            try self.parseSpecifyItem();
+        }
+        self.pos += 1; // `endspecify`
+        try self.bag.add(
+            .parse,
+            .W0251,
+            lexer.tokenSpan(self.src, self.starts, open),
+            "",
+            .{},
+        );
+    }
+
+    /// A.7.1 `specify_item`, all five arms:
+    ///
+    ///     specify_item ::=
+    ///             specparam_declaration
+    ///             | pulsestyle_declaration
+    ///             | showcancelled_declaration
+    ///             | path_declaration
+    ///             | system_timing_check
+    fn parseSpecifyItem(self: *Parser) Error!void {
+        switch (self.peek()) {
+            .kw_reserved => {
+                const w = self.tokenText(self.pos);
+                // A.2.1.1's declaration, here as a specify_item. The list is
+                // DISCARDED rather than appended to the module's parameters:
+                // a specparam declared inside the block is scoped to it, and
+                // the block is not elaborated.
+                if (std.mem.eql(u8, w, "specparam")) return self.parseSpecparamDecl(null);
+                // A.7.1 `pulsestyle_declaration` / `showcancelled_declaration`,
+                // four keywords over one `list_of_path_outputs ;`.
+                if (std.mem.eql(u8, w, "pulsestyle_onevent") or
+                    std.mem.eql(u8, w, "pulsestyle_ondetect") or
+                    std.mem.eql(u8, w, "showcancelled") or
+                    std.mem.eql(u8, w, "noshowcancelled"))
+                {
+                    self.pos += 1;
+                    // A.7.2's `list_of_path_outputs` has no parentheses of its
+                    // own; §14.2.6's examples write them, so one pair is taken
+                    // if it is there.
+                    const paren = self.eat(.lparen);
+                    try self.parseSpecifyTerminalList();
+                    if (paren) _ = try self.expect(.rparen);
+                    _ = try self.expect(.semicolon);
+                    return;
+                }
+                // A.7.2 `state_dependent_path_declaration ::= … | ifnone
+                // simple_path_declaration`.
+                if (std.mem.eql(u8, w, "ifnone")) {
+                    self.pos += 1;
+                    return self.parsePathDeclaration();
+                }
+                return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)});
+            },
+            // A.7.2 `state_dependent_path_declaration ::= if ( module_path_expression )`
+            // followed by a simple or edge-sensitive path.
+            .kw_if => {
+                self.pos += 1;
+                _ = try self.expect(.lparen);
+                _ = try self.parseExpr();
+                _ = try self.expect(.rparen);
+                return self.parsePathDeclaration();
+            },
+            .lparen => return self.parsePathDeclaration(),
+            .system_identifier => return self.parseTimingCheck(),
+            else => return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)}),
+        }
+    }
+
+    /// A.7.3 `specify_input_terminal_descriptor ::= input_identifier
+    /// [ [ constant_range_expression ] ]` and its output twin, which differ
+    /// only in which port directions the identifier may name — a rule about
+    /// the NAME, judged where the ports are known, not here.
+    fn parseSpecifyTerminal(self: *Parser) Error!void {
+        _ = try self.expectIdent();
+        if (!self.eat(.lbracket)) return;
+        _ = try self.parseExpr();
+        if (self.eat(.colon)) _ = try self.parseExpr();
+        _ = try self.expect(.rbracket);
+    }
+
+    /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
+    /// comma-separated run of A.7.3 descriptors under two names.
+    fn parseSpecifyTerminalList(self: *Parser) Error!void {
+        while (true) {
+            try self.parseSpecifyTerminal();
+            if (!self.eat(.comma)) return;
+        }
+    }
+
+    /// A.7.2 `path_declaration`, all three arms and both descriptions:
+    ///
+    ///     parallel_path_description ::=
+    ///             ( specify_input_terminal_descriptor [ polarity_operator ]
+    ///               => specify_output_terminal_descriptor )
+    ///     full_path_description ::=
+    ///             ( list_of_path_inputs [ polarity_operator ] *> list_of_path_outputs )
+    ///     parallel_edge_sensitive_path_description ::=
+    ///             ( [ edge_identifier ] specify_input_terminal_descriptor =>
+    ///               ( specify_output_terminal_descriptor [ polarity_operator ]
+    ///                 : data_source_expression ) )
+    ///
+    /// One routine for all of them, because the four descriptions differ only
+    /// in which optional pieces are present and the grammar disambiguates each
+    /// one by a token the cursor is already on: `=>` versus `*>` chooses
+    /// parallel from full, and a `(` after the arrow chooses edge-sensitive
+    /// from simple. The caller has consumed any `if (…)` or `ifnone` prefix.
+    fn parsePathDeclaration(self: *Parser) Error!void {
+        _ = try self.expect(.lparen);
+        // A.7.4 `edge_identifier ::= posedge | negedge`, present only on the
+        // two edge-sensitive descriptions.
+        _ = self.eat(.kw_posedge) or self.eat(.kw_negedge);
+        try self.parseSpecifyTerminalList();
+        // A.7.4 `polarity_operator ::= + | -`.
+        _ = self.eat(.plus) or self.eat(.minus);
+        const parallel = self.eatSymbol("=>");
+        if (!parallel and !self.eatSymbol("*>")) return self.failAt(
+            self.pos,
+            .E0207,
+            "found {s}: a path description connects its terminals with `=>` or `*>`",
+            .{self.found(self.pos)},
+        );
+        if (self.eat(.lparen)) {
+            // The edge-sensitive arms: the outputs, a polarity and the
+            // `data_source_expression` the path's value comes from.
+            try self.parseSpecifyTerminalList();
+            _ = self.eat(.plus) or self.eat(.minus);
+            _ = try self.expect(.colon);
+            _ = try self.parseExpr();
+            _ = try self.expect(.rparen);
+        } else try self.parseSpecifyTerminalList();
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.assign_eq);
+        // A.7.4 `path_delay_value ::= list_of_path_delay_expressions
+        // | ( list_of_path_delay_expressions )`. The parenthesis is read HERE
+        // and not by `parseExpr`, because `( tplh , tphl )` is a list of two
+        // and a parenthesized expression is one.
+        const bracketed = self.eat(.lparen);
+        while (true) {
+            _ = try self.parseExpr();
+            if (!self.eat(.comma)) break;
+        }
+        if (bracketed) _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+    }
+
+    /// A.7.5.1's twelve `system_timing_check` commands, as the argument counts
+    /// their productions give them. The whole content of the clause that a
+    /// parser can check is the NAME and the ARITY: every command is
+    /// `$name ( arg { , arg } ) ;`, and the arms differ only in how many
+    /// arguments are mandatory and how many optional brackets follow.
+    ///
+    /// The pairs are `{ mandatory, mandatory + optional }`, counted straight
+    /// off A.7.5.1 — e.g. `$setup ( data_event , reference_event ,
+    /// timing_check_limit [ , [ notifier ] ] ) ;` is 3 and 4.
+    const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
+        .{ "$setup", .{ 3, 4 } },
+        .{ "$hold", .{ 3, 4 } },
+        .{ "$setuphold", .{ 4, 9 } },
+        .{ "$recovery", .{ 3, 4 } },
+        .{ "$removal", .{ 3, 4 } },
+        .{ "$recrem", .{ 4, 9 } },
+        .{ "$skew", .{ 3, 4 } },
+        .{ "$timeskew", .{ 3, 6 } },
+        .{ "$fullskew", .{ 4, 7 } },
+        .{ "$period", .{ 2, 3 } },
+        .{ "$width", .{ 2, 4 } },
+        .{ "$nochange", .{ 4, 5 } },
+    });
+
+    /// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
+    /// of exactly twelve commands — A.7.1 admits no other system task there —
+    /// so a name the table does not hold is an error rather than a call.
+    fn parseTimingCheck(self: *Parser) Error!void {
+        const tok = self.pos;
+        const arity = timing_checks.get(self.tokenText(tok)) orelse return self.failAt(
+            tok,
+            .E0207,
+            "found {s}: A.7.1 admits only A.7.5.1's twelve timing checks inside a specify block",
+            .{self.found(tok)},
+        );
+        self.pos += 1;
+        _ = try self.expect(.lparen);
+        var n: u8 = 0;
+        if (self.peek() != .rparen) while (true) {
+            // A.7.5.1 writes the optional arguments `[ , [ notifier ] ]` — the
+            // comma outside the inner bracket, so the slot may be present and
+            // EMPTY. That is why an argument is counted before it is read.
+            n +|= 1;
+            if (self.peek() != .comma and self.peek() != .rparen) try self.parseTimingCheckArg();
+            if (!self.eat(.comma)) break;
+        };
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+        if (n < arity[0] or n > arity[1]) return self.failAt(
+            tok,
+            .E0207,
+            "`{s}` takes {d} to {d} arguments, not {d}",
+            .{ self.tokenText(tok), arity[0], arity[1], n },
+        );
+    }
+
+    /// One argument of A.7.5.1's commands. The clause's argument productions
+    /// (A.7.5.2) are `expression` under a dozen names — `timing_check_limit`,
+    /// `threshold`, `notifier`, the two offsets — except for the two event
+    /// slots, which A.7.5.3 gives a prefix and a suffix:
+    ///
+    ///     timing_check_event ::= [ timing_check_event_control ]
+    ///             specify_terminal_descriptor [ &&& timing_check_condition ]
+    ///     timing_check_event_control ::= posedge | negedge | edge_control_specifier
+    ///
+    /// One routine takes the union, which over-accepts: `$width`'s first
+    /// argument is a `controlled_reference_event` whose event control is
+    /// MANDATORY, and that is not checked here. What the union does buy is
+    /// that every optional piece of A.7.5.3 is read rather than skipped.
+    fn parseTimingCheckArg(self: *Parser) Error!void {
+        if (!self.eat(.kw_posedge) and !self.eat(.kw_negedge) and self.reservedIs(self.pos, "edge")) {
+            // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
+            // { , edge_descriptor } ]`. The descriptors are two-character
+            // symbols (`01`, `z1`, `0x`) that reach here as numbers or
+            // identifiers depending on which characters they hold, so the
+            // bracket is read as a balanced run rather than as a list of
+            // values nothing would consume.
+            // ponytail: an unchecked descriptor set. A table of the ten
+            // spellings A.7.5.3 admits is the upgrade; no fixture asks.
+            self.pos += 1;
+            if (self.eat(.lbracket)) while (!self.eat(.rbracket)) {
+                if (self.peek() == .eof) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
+                self.pos += 1;
+            };
+        }
+        _ = try self.parseExpr();
+        // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
+        // has no tag for it.
+        if (self.eatSymbol("&&&")) _ = try self.parseExpr();
+    }
+
+    /// A.2.1.1 `specparam_declaration ::= specparam [ range ]
+    /// list_of_specparam_assignments ;`, and A.2.4:
+    ///
+    ///     specparam_assignment ::=
+    ///             specparam_identifier = constant_mintypmax_expression
+    ///             | pulse_control_specparam
+    ///
+    /// `out` is the module's parameter list for the Syntax 6-1 module-item
+    /// form and `null` for an A.7.1 `specify_item`, whose specparams are scoped
+    /// to a block this compiler does not elaborate.
+    ///
+    /// A LOCALPARAM is what the module-item form becomes: a specparam is a
+    /// constant with a mandatory default and no `parameter_value_assignment`
+    /// can name it, which is exactly `localparam`'s shape in §3.4.5.
+    // ponytail: that is an approximation with a known edge. 1364's specparams
+    // are the values an SDF back-annotation overrides, and a `localparam`
+    // cannot be overridden by anything. VerA reads no SDF, so the two are
+    // indistinguishable here; the day it does, this needs its own storage.
+    //
+    // `pulse_control_specparam` — A.2.4's `PATHPULSE$ = ( … )` arm — is not
+    // read. Its identifier holds a `$`, which §2.8 does not admit in an
+    // identifier at all, so it is not a token this lexer can produce.
+    fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
+        self.pos += 1; // `specparam`
+        const packed_range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
+        while (true) {
+            const tok = self.pos;
+            const name = try self.expectIdent();
+            _ = try self.expect(.assign_eq);
+            const default = try self.parseExpr();
+            if (out) |o| try o.append(self.arena, .{
+                .name = name,
+                .ty = .unspecified, // §3.4.1 — derived from the default, as for `parameter`
+                .default = default,
+                .is_local = true,
+                .packed_range = packed_range,
+                .main_tok = tok,
+            });
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
     }
 
     /// A.4.1 module_instantiation — LRM §6.2.2 (instances), §6.3 (overrides).
@@ -1255,7 +2033,11 @@ pub const Parser = struct {
     /// `parseDelay3` already returns `.none` for an omitted one, so the three
     /// arms need no separate delay parser — an n-input gate never turns off, so
     /// a third value would be rejected by §7.14 rather than by the grammar.
+    ///
+    /// OUTSIDE A DIGITAL RUN the instance is accepted and modelled by nothing,
+    /// out loud (W0252) — see `gateNotModelled`.
     fn parseGates(self: *Parser, b: *Body) Error!void {
+        try self.gateNotModelled();
         const kind: Ast.GateKind = switch (self.peek()) {
             .kw_and => .g_and,
             .kw_nand => .g_nand,
@@ -1319,6 +2101,94 @@ pub const Parser = struct {
                     try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
                 },
             }
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
+    }
+
+    /// W0252 for the primitive at the cursor, when the artifact being built is
+    /// an analog device. §8.5.3.5's first paragraph is the clause: "The
+    /// event-driven simulation algorithm described in 11 of IEEE Std 1364
+    /// Verilog depends on unidirectional signal flow … The IEEE Std 1364
+    /// Verilog provides switch-level modeling in addition to behavioral and
+    /// GATE-LEVEL modeling." A gate's update is an event, and a compiled analog
+    /// device has no queue to schedule one on, so the instance reaches nothing.
+    ///
+    /// Silent was the wrong answer and E0205 was the other wrong answer: the
+    /// source is derivable from A.3.1 and §1.1 makes it VerA's to accept, so
+    /// refusing it said "not derivable" about text that is. `--deny=W0252` is
+    /// the refusal, for a model that cannot afford the omission.
+    ///
+    /// Not reported under `--run`: the discrete engine executes the gate there,
+    /// so there is nothing missing to warn about.
+    fn gateNotModelled(self: *Parser) Error!void {
+        if (self.digital) return;
+        try self.bag.add(
+            .parse,
+            .W0252,
+            lexer.tokenSpan(self.src, self.starts, self.pos),
+            "{s} primitive",
+            .{self.found(self.pos)},
+        );
+    }
+
+    /// A.3.1's last two `gate_instantiation` arms, which are the only ones with
+    /// a one-terminal instance and a strength set of their own:
+    ///
+    ///     | pulldown [pulldown_strength] pull_gate_instance { , … } ;
+    ///     | pullup   [pullup_strength]   pull_gate_instance { , … } ;
+    ///     pull_gate_instance ::= [ name_of_gate_instance ] ( output_terminal )
+    ///
+    /// A.3.2's brackets are NOT A.2.2.2's, which is why they have a clause to
+    /// themselves and this routine does not call `parseDriveStrength`:
+    ///
+    ///     pulldown_strength ::= ( strength0 , strength1 ) | ( strength1 , strength0 )
+    ///             | ( strength0 )
+    ///     pullup_strength   ::= ( strength0 , strength1 ) | ( strength1 , strength0 )
+    ///             | ( strength1 )
+    ///
+    /// Two differences, both checked below: the single-strength arm exists here
+    /// and does not in A.2.2.2, and it is the SIDE the gate pulls toward —
+    /// `strength0` for a `pulldown`, `strength1` for a `pullup` — so
+    /// `pulldown (strong1)` is derivable from neither of the two productions.
+    /// `highz0`/`highz1` are the other difference: A.2.2.2 admits them and
+    /// A.3.2 does not, which `strengthWord`'s `.side == 2` test is.
+    ///
+    /// A `pull_gate_instance` takes ONE terminal and drives it to a constant,
+    /// so like every other A.3.1 arm outside a digital run it is accepted and
+    /// modelled by nothing (W0252).
+    fn parsePullGate(self: *Parser) Error!void {
+        try self.gateNotModelled();
+        // A.3.2's `strength0`/`strength1` name the side the gate pulls toward:
+        // 0 for `pulldown`, 1 for `pullup`, which is also `StrengthWord.side`.
+        const side: u8 = if (self.reservedIs(self.pos, "pulldown")) 0 else 1;
+        self.pos += 1;
+        if (self.peek() == .lparen and self.strengthWord(self.pos + 1) != null) {
+            const tok = self.pos + 1;
+            if (self.peekAt(2) == .comma) {
+                var s0: Ast.Strength = .strong;
+                var s1: Ast.Strength = .strong;
+                try self.parseDriveStrength(&s0, &s1);
+            } else {
+                self.pos += 1;
+                const w = self.strengthWord(self.pos).?;
+                self.pos += 1;
+                _ = try self.expect(.rparen);
+                if (w.side != side) return self.failAt(
+                    tok,
+                    .E0207,
+                    "a single-strength bracket on this gate is A.3.2's `( strength{d} )`",
+                    .{side},
+                );
+            }
+        }
+        while (true) {
+            // A.3.1 makes `name_of_gate_instance` optional here too; `(` after
+            // the name tells the two apart, as in `parseGates`.
+            if (self.identLike(self.pos)) self.pos += 1;
+            _ = try self.expect(.lparen);
+            _ = try self.parseNetRef(); // A.3.3 output_terminal ::= net_lvalue
+            _ = try self.expect(.rparen);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
@@ -1639,6 +2509,40 @@ pub const Parser = struct {
         const dir = portDirection(self.peek());
         self.pos += 1;
         const disc = try self.optDiscipline();
+        // A.2.1.2's two VARIABLE arms, which only `output` has:
+        //
+        //     output_declaration ::=
+        //         output [ discipline_identifier ] [ net_type | wreal ] [ signed ]
+        //             [ range ] list_of_port_identifiers
+        //       | output [ discipline_identifier ] reg [ signed ] [ range ]
+        //             list_of_variable_port_identifiers
+        //       | output output_variable_type list_of_variable_port_identifiers
+        //     output_variable_type ::= integer | time
+        //
+        // `optDiscipline` above has already eaten the `[ net_type ]` of the
+        // first arm and the `[ signed ]` all three share, so the only thing
+        // left to tell the arms apart is this keyword. The port is then a
+        // VARIABLE and not a net — §6.5.2 calls it a port type declaration —
+        // which is why the name list gets a `VarDecl` below as well as the
+        // direction, and why the `[ = constant_expression ]` of
+        // `list_of_variable_port_identifiers` (A.2.3) is read here and nowhere
+        // else in this function.
+        const var_storage: ?@FieldType(Ast.VarDecl, "storage") = switch (self.peek()) {
+            .kw_integer => .variable, // A.2.2.1 output_variable_type
+            .kw_time => .time, // …its other alternative
+            .kw_reg => .reg, // A.2.1.2's second arm
+            else => null,
+        };
+        if (var_storage != null) {
+            if (dir != .output) return self.failAt(
+                self.pos,
+                .E0207,
+                "found {s}: A.2.1.2 gives a variable type to `output` only",
+                .{self.found(self.pos)},
+            );
+            self.pos += 1;
+            _ = self.eat(.kw_signed);
+        }
         // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
         // "port direction declaration", the half of the clause that carries
         // the direction. Its range is compared against the port TYPE
@@ -1647,6 +2551,24 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
+            if (var_storage) |storage| {
+                // A.2.3 `list_of_variable_port_identifiers ::= port_identifier
+                // [ = constant_expression ] { , … }` — the initializer slot the
+                // net arms do not have.
+                const init_expr: Ast.ExprId = if (self.eat(.assign_eq)) try self.parseExpr() else .none;
+                try b.vars.append(self.arena, .{
+                    .name = name,
+                    // Both arms are integral: A.2.2.1's `output_variable_type`
+                    // is `integer | time`, and §3.4.1 folds `time` to the same
+                    // representation VerA gives an `integer`; Table 7-1 does
+                    // the same for a `reg`'s bits.
+                    .ty = .integer,
+                    .init = init_expr,
+                    .storage = storage,
+                    .packed_range = range,
+                    .main_tok = tok,
+                });
+            }
             if (findPort(b, name)) |p| {
                 // §6.2 "Ports declared in the list of port declarations shall
                 // not be redeclared within the body of the module." A direction
@@ -1901,13 +2823,23 @@ pub const Parser = struct {
         return self.parseExpr();
     }
 
-    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, charge: Ast.Strength) Error!void {
+    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength) Error!void {
         const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
         // belongs to the NET, not to the declaration's optional assignment:
         // `wire #3 y = ~a;` delays y's own transition.
+        //
+        // NOT gated on `digital`. The bracket used to be an E0207 ("a net delay
+        // has no meaning outside a digital design element") outside a `.v`
+        // source, which is a verdict on the SEMANTICS written as a refusal of
+        // the SYNTAX: §1.1 makes "the complete IEEE Std 1364 Verilog
+        // specification" part of Verilog-AMS HDL, and A.2.1.3 grants the
+        // bracket to every one of its twelve alternatives. A delay VerA has no
+        // discrete kernel to honour is a delay it drops, the way it drops the
+        // strength brackets above — silently dropping a timing annotation is
+        // what every analog-only tool does with one, and it is not the same
+        // claim as "this text is not derivable from the annex".
         const delay: Ast.Delay3 = if (self.peek() == .hash) try self.parseDelay3() else .{};
-        if (delay.any() and !self.digital) return self.failAt(self.pos, .E0207, "a net delay has no meaning outside a digital design element", .{});
         while (true) {
             const tok = self.pos;
             // Annex F.2.1 step 3 / §3.10 order 1: an OUT-OF-CONTEXT declaration,
@@ -1967,7 +2899,9 @@ pub const Parser = struct {
                     .discipline = disc,
                     .is_ground = is_ground,
                     .range = range,
-                    .charge = charge,
+                    .charge = st.charge,
+                    .strength0 = st.strength0,
+                    .strength1 = st.strength1,
                     .delay = delay,
                     .init = nodeset,
                     .main_tok = tok,
@@ -2040,6 +2974,33 @@ pub const Parser = struct {
             else => .unspecified, // §3.4.1 — inferred from the default by lowering
         };
         if (ty != .unspecified) self.pos += 1;
+        // A.2.1.1's FIRST arm, the `[ range ]` slot between `[ signed ]` and the
+        // assignment list:
+        //
+        //     parameter_declaration ::=
+        //         parameter [ signed ] [ range ] list_of_param_assignments
+        //         | parameter parameter_type list_of_param_assignments
+        //
+        // A.2.5's `range ::= [ msb_constant_expression :
+        // lsb_constant_expression ]` — a WIDTH, which is why it cannot go in
+        // `dims` (§3.4.4 array parameters, which lowering scalarizes) and gets
+        // the same `packed_range` slot `VarDecl` gives a `reg`'s. The two arms
+        // are exclusive in the production, so a range is only read when no
+        // `parameter_type` was written.
+        //
+        // The TYPE is not forced by the bracket: §3.4.1 — "If the type of a
+        // parameter is not specified, it is derived from the type of the final
+        // value assigned to the parameter, after any value overrides have been
+        // applied" — so `.unspecified` stays and lowering infers `integer`
+        // from `4'h5` exactly as it would without the bracket.
+        //
+        // ponytail: the width is CARRIED, not enforced. `parameter [3:0] p =
+        // 8'hff;` reads 255 here and 15 in a tool that truncates to the
+        // declared width. Enforcing it is a fold of two constant expressions
+        // and a mask in `ir/lower.zig`, where the parameter's default is
+        // already folded; nothing in the suite asks for it yet.
+        const packed_range: ?Ast.Dim =
+            if (ty == .unspecified and self.peek() == .lbracket) try self.parseDim() else null;
 
         while (true) {
             const tok = self.pos;
@@ -2058,6 +3019,7 @@ pub const Parser = struct {
                 .default = default,
                 .is_local = is_local,
                 .dims = dims,
+                .packed_range = packed_range,
                 .ranges = ranges.items,
                 .main_tok = tok,
             });
