@@ -253,9 +253,30 @@ pub const Parser = struct {
                     };
                     try connectrules.append(self.arena, cr);
                 },
+                // A.1.2's `description` has three more alternatives, and they
+                // share one token tag: annex B reserves `primitive`, `config`,
+                // `library` and `include` and this compiler gives none of them
+                // a tag of its own, so the spelling is the dispatch. All four
+                // used to be one E0201, which said "not in the supported
+                // subset" about two productions A.1.2 lists (and, for
+                // `library`, about a production no version of the subset can
+                // ever admit — see E0232).
+                .kw_reserved => {
+                    const w = self.tokenText(self.pos);
+                    const r: Error!void = if (std.mem.eql(u8, w, "primitive"))
+                        self.parseUdpDecl()
+                    else if (std.mem.eql(u8, w, "config"))
+                        self.parseConfigDecl()
+                    else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
+                        self.parseLibraryDecl()
+                    else
+                        self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
+                    r catch |e| {
+                        if (e == error.OutOfMemory) return e;
+                        self.recoverTopLevel(before);
+                    };
+                },
                 else => {
-                    // UDPs and config/library files are out of the annex C
-                    // subset (and have no discrete kernel to mean anything on).
                     _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
                     self.recoverTopLevel(before);
                 },
@@ -338,8 +359,377 @@ pub const Parser = struct {
                 self.pos += 1;
                 return;
             },
+            // A.1.2's other two descriptions close with reserved spellings this
+            // compiler gives no tag to. Without them a bad `primitive` swallowed
+            // the module after it.
+            .kw_reserved => if (self.reservedIs(self.pos, "endprimitive") or
+                self.reservedIs(self.pos, "endconfig"))
+            {
+                self.pos += 1;
+                return;
+            } else if (self.reservedIs(self.pos, "primitive") or
+                self.reservedIs(self.pos, "config"))
+            {
+                if (self.pos != before) return;
+            },
             else => {},
         };
+    }
+
+    // -----------------------------------------------------------------------
+    // A.1.1 library source text · A.1.5 configuration — LRM §1.1
+    // -----------------------------------------------------------------------
+
+    /// A.1.1's two library-map-only descriptions:
+    ///
+    ///     library_declaration ::=
+    ///             library library_identifier file_path_spec [ { , file_path_spec } ]
+    ///             [ -incdir file_path_spec { , file_path_spec } ] ;
+    ///     include_statement ::= include file_path_spec ;
+    ///
+    /// READ AND THEN REFUSED (E0232), which is the point of reading them. Annex
+    /// A's preamble names the starting symbol each file kind derives from — "The
+    /// syntax of Verilog-AMS HDL source is derived from the starting symbol
+    /// source_text. The syntax of a library map file is derived from the
+    /// starting symbol library_text" — and `library_description` hangs off
+    /// `library_text` alone. A.1.2's `description` list does not contain either
+    /// of these, so this text is not derivable from what a `.va` IS.
+    ///
+    /// That makes E0201 ("not in the supported subset") the wrong verdict: it
+    /// says a subset that could grow, and no growth of the analog subset makes
+    /// a library declaration legal in a source file. E0232 names the starting
+    /// symbol instead. The production is still walked first, so the diagnostic
+    /// lands on the keyword of a construct that was UNDERSTOOD.
+    ///
+    /// `file_path_spec ::= file_path` is taken as a string literal only.
+    // ponytail: an unquoted `file_path` — `./lib/*.v`, which is how real map
+    // files write one — is not a token sequence this lexer can produce, and it
+    // should not be asked to: §2.2's token set is `source_text`'s. A library map
+    // file needs its own reader, which is the same work E0232 says is absent.
+    fn parseLibraryDecl(self: *Parser) Error!void {
+        const kw = self.pos;
+        const is_library = self.reservedIs(kw, "library");
+        self.pos += 1;
+        if (is_library) _ = try self.expectIdent();
+        while (true) {
+            _ = try self.expect(.string_literal);
+            if (!self.eat(.comma)) break;
+        }
+        // `-incdir file_path_spec { , file_path_spec }`, the one option the
+        // production has. The `-` and the keyword are two tokens; §2.2 has no
+        // production that joins them, so they are matched as two.
+        if (is_library and self.eat(.minus)) {
+            if (!self.reservedIs(self.pos, "incdir")) return self.failAt(self.pos, .E0207, "found {s}, and `-` begins only A.1.1's `-incdir`", .{self.found(self.pos)});
+            self.pos += 1;
+            while (true) {
+                _ = try self.expect(.string_literal);
+                if (!self.eat(.comma)) break;
+            }
+        }
+        _ = try self.expect(.semicolon);
+        return self.failAt(kw, .E0232, "`{s}` is a library_description, and this file is source_text", .{self.tokenText(kw)});
+    }
+
+    /// A.1.5 `config_declaration`, which A.1.2 lists as a `description` — so
+    /// unlike A.1.1's two, a configuration in a `.va` is derivable from
+    /// `source_text` and is accepted:
+    ///
+    ///     config_declaration ::=
+    ///             config config_identifier ;
+    ///                 design_statement
+    ///                 {config_rule_statement}
+    ///             endconfig
+    ///     design_statement ::= design { [library_identifier.]cell_identifier } ;
+    ///     config_rule_statement ::=
+    ///             default_clause liblist_clause ;
+    ///             | inst_clause liblist_clause ; | inst_clause use_clause ;
+    ///             | cell_clause liblist_clause ; | cell_clause use_clause ;
+    ///
+    /// ACCEPTED AND BINDING NOTHING, out loud (W0253). A configuration selects
+    /// which CELL of which LIBRARY an instance resolves to; VerA has no library
+    /// map, so every instance resolves to a module declared in the source it was
+    /// given, by name, and the elaborated design is what it would have been with
+    /// the configuration deleted.
+    // ponytail: nothing is recorded, for `parseSpecifyBlock`'s reason — there
+    // is no library table for a rule to select from, so a stored clause would
+    // have no consumer. The upgrade is a map reader, which E0232 also wants.
+    fn parseConfigDecl(self: *Parser) Error!void {
+        const kw = self.pos;
+        self.pos += 1;
+        _ = try self.expectIdent();
+        _ = try self.expect(.semicolon);
+        // `design_statement` is mandatory and first — the production puts it
+        // above the repetition, not inside it.
+        if (!self.reservedIs(self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
+        self.pos += 1;
+        while (self.peek() != .semicolon) _ = try self.parseDottedName(false);
+        self.pos += 1;
+        while (!self.reservedIs(self.pos, "endconfig")) {
+            if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
+            try self.parseConfigRule();
+        }
+        self.pos += 1;
+        try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
+    }
+
+    /// A.1.5 `config_rule_statement`. The five alternatives are three left
+    /// clauses over two right ones, and `default` is the one that pairs with
+    /// `liblist` alone:
+    ///
+    ///     default_clause ::= default
+    ///     inst_clause ::= instance inst_name
+    ///     inst_name ::= topmodule_identifier { . instance_identifier }
+    ///     cell_clause ::= cell [ library_identifier . ] cell_identifier
+    ///     liblist_clause ::= liblist { library_identifier }
+    ///     use_clause ::= use [ library_identifier . ] cell_identifier [ : config ]
+    fn parseConfigRule(self: *Parser) Error!void {
+        const tok = self.pos;
+        // `default` is the one word of A.1.5 that this compiler has a tag for:
+        // A.6.7's `case` default takes the same spelling, and annex B reserves
+        // it once.
+        const is_default = self.peek() == .kw_default;
+        if (!is_default and !self.reservedIs(tok, "instance") and !self.reservedIs(tok, "cell"))
+            return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
+        self.pos += 1;
+        if (!is_default) _ = try self.parseDottedName(false);
+        if (self.reservedIs(self.pos, "liblist")) {
+            self.pos += 1;
+            // `liblist { library_identifier }` — a repetition with no commas,
+            // and the empty one is legal (it is what clears an inherited list).
+            while (self.peek() != .semicolon) _ = try self.expectIdent();
+        } else if (!is_default and self.reservedIs(self.pos, "use")) {
+            self.pos += 1;
+            _ = try self.parseDottedName(false);
+            // `[ : config ]` — the literal keyword, not a name.
+            if (self.eat(.colon) and !self.reservedIs(self.pos, "config"))
+                return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)})
+            else if (self.reservedIs(self.pos, "config")) self.pos += 1;
+        } else return self.failAt(
+            self.pos,
+            .E0207,
+            "found {s}: a {s} pairs with `liblist`{s}",
+            .{ self.found(self.pos), self.tokenText(tok), if (is_default) "" else " or `use`" },
+        );
+        _ = try self.expect(.semicolon);
+    }
+
+    // -----------------------------------------------------------------------
+    // A.5 user-defined primitives — LRM §1.1, §8.5.3
+    // -----------------------------------------------------------------------
+
+    /// A.5.1 `udp_declaration`, both arms:
+    ///
+    ///     { attribute_instance } primitive udp_identifier ( udp_port_list ) ;
+    ///         udp_port_declaration { udp_port_declaration }
+    ///         udp_body
+    ///     endprimitive
+    ///     | { attribute_instance } primitive udp_identifier
+    ///         ( udp_declaration_port_list ) ; udp_body endprimitive
+    ///
+    /// A.1.2 lists `udp_declaration` as a `description`, so a `.va` holding one
+    /// is derivable from `source_text` and the old E0201 was refusing text the
+    /// standard admits.
+    ///
+    /// The two arms differ only in whether the header's parenthesis holds bare
+    /// names (A.5.2 `udp_port_list`) or full declarations
+    /// (`udp_declaration_port_list`), and both then reach the same body, so one
+    /// routine reads both: the port list takes a declaration keyword where it
+    /// finds one, and the `udp_port_declaration` run after the `;` is a
+    /// repetition that may be empty.
+    ///
+    /// NOTHING IS RECORDED. The table is validated against A.5.3 and dropped —
+    /// there is no discrete engine here to evaluate it, and `parseUdpInst`'s
+    /// W0252 is what says so at the site that would have used it.
+    // ponytail: the upgrade is a `UdpDecl` on `Ast.SourceFile` plus a matcher
+    // in `src/sim/digital.zig`, which is another agent's column. Storing the
+    // rows before that exists is dead weight in an arena.
+    fn parseUdpDecl(self: *Parser) Error!void {
+        self.pos += 1; // `primitive`
+        _ = try self.expectIdent();
+        _ = try self.expect(.lparen);
+        while (true) {
+            // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
+            // only the second A.5.1 arm puts inside the parentheses.
+            if (self.eat(.kw_output) or self.eat(.kw_input)) {
+                _ = try self.optDiscipline();
+                _ = self.eat(.kw_reg);
+            }
+            _ = try self.expectIdent();
+            // `udp_output_declaration ::= … output [ discipline_identifier ]
+            // reg port_identifier [ = constant_expression ]`
+            if (self.eat(.assign_eq)) _ = try self.parseExpr();
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+        // A.5.2's separate declarations, the first arm's. A.5.1 writes the run
+        // as `udp_port_declaration { udp_port_declaration }` — one or more —
+        // but the second arm reaches the body with none, so the count is not
+        // checked here: which arm the header took is what decides it, and a
+        // primitive whose ports are never typed is A.5.2's problem and not the
+        // parser's.
+        while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
+            self.pos += 1;
+            _ = try self.optDiscipline();
+            _ = self.eat(.kw_reg);
+            while (true) {
+                _ = try self.expectIdent();
+                if (self.eat(.assign_eq)) _ = try self.parseExpr();
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.semicolon);
+        }
+        // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
+        // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
+        if (self.eat(.kw_initial)) {
+            _ = try self.expectIdent();
+            _ = try self.expect(.assign_eq);
+            _ = try self.parseExpr();
+            _ = try self.expect(.semicolon);
+        }
+        try self.parseUdpTable();
+        if (!self.reservedIs(self.pos, "endprimitive"))
+            return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
+        self.pos += 1;
+    }
+
+    /// A.5.3's `table … endtable`, and the whole of what a parser can judge in
+    /// one:
+    ///
+    ///     combinational_entry ::= level_input_list : output_symbol ;
+    ///     sequential_entry ::= seq_input_list : current_state : next_state ;
+    ///     level_symbol ::= 0 | 1 | x | X | ? | b | B
+    ///     edge_symbol ::= r | R | f | F | p | P | n | N | *
+    ///     output_symbol ::= 0 | 1 | x | X
+    ///     next_state ::= output_symbol | -
+    ///
+    /// THE SYMBOLS ARE CHARACTERS AND NOT TOKENS, which is the one thing about
+    /// this region that has to be got right. `(01)` is four symbols and reaches
+    /// the parser as three tokens; `0 0` is two symbols and two tokens; `b` is
+    /// a symbol and an identifier. So an entry is collected as the CHARACTERS
+    /// of its tokens, in order, and judged against the alphabets — the token
+    /// boundaries inside a table carry no meaning of their own, and a parser
+    /// that read them as if they did would reject half of A.5.3's own examples.
+    fn parseUdpTable(self: *Parser) Error!void {
+        if (!self.reservedIs(self.pos, "table"))
+            return self.failAt(self.pos, .E0207, "found {s}: a udp_body is a `table … endtable`", .{self.found(self.pos)});
+        self.pos += 1;
+        // Which `udp_body` alternative this table is, decided by its FIRST
+        // entry and then required of every other one (A.5.3 gives a table one
+        // body and not a mixture).
+        var sequential: ?bool = null;
+        while (!self.reservedIs(self.pos, "endtable")) {
+            if (self.peek() == .eof)
+                return self.failAt(self.pos, .E0207, "found {s}: no `endtable` closes the table", .{self.found(self.pos)});
+            try self.parseUdpEntry(&sequential);
+        }
+        self.pos += 1;
+    }
+
+    /// One `combinational_entry` or `sequential_entry`, judged column by column.
+    fn parseUdpEntry(self: *Parser, sequential: *?bool) Error!void {
+        const tok = self.pos;
+        // Column 0 is the input list; a colon opens each of the 1 or 2 that
+        // follow, so the colon count IS the entry's `udp_body` alternative.
+        var cols: [3]struct { text: [64]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
+        var n: usize = 0;
+        cols[0].tok = tok;
+        while (!self.eat(.semicolon)) {
+            if (self.peek() == .eof or self.reservedIs(self.pos, "endtable"))
+                return self.failAt(self.pos, .E0207, "found {s}: a UDP table entry ends with `;`", .{self.found(self.pos)});
+            if (self.eat(.colon)) {
+                n += 1;
+                if (n > 2) return self.failAt(tok, .E0234, "a UDP table entry has one colon (combinational) or two (sequential), not {d}", .{n});
+                cols[n].tok = self.pos;
+                continue;
+            }
+            const t = self.tokenText(self.pos);
+            if (cols[n].len + t.len > cols[n].text.len)
+                return self.failAt(self.pos, .E0233, "a UDP table column of more than {d} symbols", .{cols[n].text.len});
+            @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
+            cols[n].len += t.len;
+            self.pos += 1;
+        }
+        if (n == 0) return self.failAt(tok, .E0234, "a UDP table entry has one colon (combinational) or two (sequential), not 0", .{});
+        const is_seq = n == 2;
+        if (sequential.*) |was| {
+            if (was != is_seq) return self.failAt(
+                tok,
+                .E0234,
+                "this entry is {s} and the table's first entry is {s}; A.5.3 gives a table ONE udp_body",
+                .{ udpBodyName(is_seq), udpBodyName(was) },
+            );
+        } else sequential.* = is_seq;
+
+        // `level_input_list` in a combinational body, `seq_input_list` — which
+        // adds `edge_input_list` — in a sequential one.
+        const inputs = cols[0].text[0..cols[0].len];
+        for (inputs) |c| {
+            if (std.mem.indexOfScalar(u8, "01xX?bB", c) != null) continue;
+            if (std.mem.indexOfScalar(u8, "rRfFpPnN*()", c) != null) {
+                if (is_seq) continue;
+                return self.failAt(cols[0].tok, .E0234, "an edge indicator `{c}` in a combinational UDP table entry: A.5.3 reaches `edge_input_list` only from a sequential_entry", .{c});
+            }
+            return self.failAt(cols[0].tok, .E0233, "`{c}` is not a UDP input symbol", .{c});
+        }
+        // `output_symbol ::= 0 | 1 | x | X` closes a combinational entry;
+        // `current_state ::= level_symbol` and `next_state ::= output_symbol
+        // | -` close a sequential one.
+        if (is_seq) for (cols[1].text[0..cols[1].len]) |c| {
+            if (std.mem.indexOfScalar(u8, "01xX?bB", c) == null)
+                return self.failAt(cols[1].tok, .E0233, "`{c}` is not a UDP current_state symbol", .{c});
+        };
+        const last = cols[n].text[0..cols[n].len];
+        if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
+        const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
+        if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
+    }
+
+    fn udpBodyName(sequential: bool) []const u8 {
+        return if (sequential) "sequential" else "combinational";
+    }
+
+    /// A.5.4 `udp_instantiation`, at module scope:
+    ///
+    ///     udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ]
+    ///             udp_instance { , udp_instance } ;
+    ///     udp_instance ::= [ name_of_udp_instance ]
+    ///             ( output_terminal , input_terminal { , input_terminal } )
+    ///
+    /// Told from A.4.1's `module_instantiation` by ONE token, with no
+    /// backtrack and no lookup of the name: `module_instance ::=
+    /// name_of_module_instance ( [ list_of_port_connections ] )` makes the
+    /// instance name MANDATORY, and A.5.4's is optional, so an identifier
+    /// followed directly by `(` derives from A.5.4 and from nothing else.
+    /// (A UDP instance WITH a name is indistinguishable from a module instance
+    /// at this point, and stays a module instantiation — elaboration resolves
+    /// the name, which is where the difference is knowable.)
+    ///
+    /// W0252 for the same reason a gate gets one: a UDP's function is a table
+    /// (A.5.3) rather than a keyword, and the table computes a logic value for
+    /// an event queue a compiled analog device does not have.
+    fn parseUdpInst(self: *Parser) Error!void {
+        try self.gateNotModelled();
+        self.pos += 1; // the udp_identifier
+        var s0: Ast.Strength = .strong;
+        var s1: Ast.Strength = .strong;
+        if (self.peek() == .lparen and self.strengthWord(self.pos + 1) != null) try self.parseDriveStrength(&s0, &s1);
+        // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
+        // `parseDelay3` already returns for a two-value list.
+        if (self.peek() == .hash) _ = try self.parseDelay3();
+        while (true) {
+            if (self.identLike(self.pos)) {
+                self.pos += 1;
+                // `name_of_udp_instance ::= udp_instance_identifier [ range ]`
+                if (self.peek() == .lbracket) _ = try self.parseDim();
+            }
+            _ = try self.expect(.lparen);
+            _ = try self.parseNetRef(); // A.3.3 output_terminal ::= net_lvalue
+            while (self.eat(.comma)) _ = try self.parseExpr(); // input_terminal ::= expression
+            _ = try self.expect(.rparen);
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
     }
 
     // -----------------------------------------------------------------------
@@ -1104,6 +1494,12 @@ pub const Parser = struct {
                     (self.identLike(self.pos + 1) and
                         (self.peekAt(2) == .lparen or self.peekAt(2) == .lbracket)))
                     return self.parseInstantiation(b);
+                // A.5.4 `udp_instantiation`, whose `udp_instance` makes
+                // `name_of_udp_instance` OPTIONAL where A.4.1's `module_instance
+                // ::= name_of_module_instance ( … )` does not. So an identifier
+                // followed directly by `(` derives from A.5.4 and from nothing
+                // else at module scope, and one token settles it.
+                if (self.peekAt(1) == .lparen) return self.parseUdpInst();
                 // `discipline [range] names ;` — a vector net's range is
                 // rejected by the name list ("expected identifier"), which is
                 // the wording the fixtures pin.
