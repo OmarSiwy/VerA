@@ -10917,12 +10917,44 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     }
 }
 
+/// Table 3-3's string operators, folded. "Equality. Checks whether the two
+/// strings are equal. Result is 1 if they are equal and 0 if they are not" and
+/// "Relational operators return 1 if the corresponding condition is true using
+/// the lexicographical ordering of the two strings".
+///
+/// A MIXED pair declines to fold. §2.7 does make a string operand "unsigned
+/// integer constants" for an arithmetic context, but the conversion is
+/// `lowerBinary`'s (`strNum`) and duplicating it here to answer a constant
+/// expression is not worth a second copy of the rule; declining leaves the
+/// runtime path — which is correct — to answer, at the cost of a "not a
+/// constant expression" on a shape nothing in the suite writes.
+fn foldStrBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
+    if (a != .str or b != .str) return null;
+    const c = std.mem.order(u8, a.str, b.str);
+    return .{ .int = @intFromBool(switch (op) {
+        .eq => c == .eq,
+        .neq => c != .eq,
+        .lt => c == .lt,
+        .le => c != .gt,
+        .gt => c == .gt,
+        .ge => c != .lt,
+        else => return null,
+    }) };
+}
+
 fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     const ex = &self.file.exprs;
     if (self.mixedShiftComparison(e)) return null;
     const a = self.foldExpr(ex.lhs(e), params) orelse return null;
     const b = self.foldExpr(ex.rhs(e), params) orelse return null;
     const op = ex.binOp(e);
+    // Table 3-3, before anything numeric touches a string. `Const.asReal` is 0
+    // for EVERY string, so `"slow" == "fast"` folded as `0 == 0` and came out
+    // TRUE — silently, and only in the folder: `lowerBinary` compares strings
+    // properly at runtime, so the same expression answered differently
+    // depending on whether it was a constant expression. A `for` bound over
+    // `(mode == "fast") ? 3 : 1` ran three times with `mode` at "slow".
+    if (a == .str or b == .str) return foldStrBinary(op, a, b);
     // §4.2.1 integer arithmetic only when BOTH operands are integer.
     const int = a == .int and b == .int;
     const x = a.asReal();
