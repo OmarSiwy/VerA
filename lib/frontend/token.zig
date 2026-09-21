@@ -133,6 +133,11 @@ pub const Tag = enum(u8) {
     kw_assign,
     kw_begin,
     kw_end,
+    // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`. It gets
+    // a tag for the same reason `assign` did: the digital executor runs it.
+    // Outside a digital run it is still refused — A.6.4 offers no analog
+    // statement production for it, so `parseStmt` reports it as before.
+    kw_wait,
     kw_generate, // §6.9
     kw_endgenerate,
     kw_defparam, // §6.3.1 parameter_override (A.1.4)
@@ -190,14 +195,28 @@ pub const Tag = enum(u8) {
     // A.4.1 `pass_switchtype ::= tran | rtran`, the unconditional bidirectional
     // switch. Both stay reserved — they are on the
     // 1364-1995 list, which `keyword_intro` keys by spelling.
-    //
-    // The rest of A.4.1's gate types have no tag: they are still `.kw_reserved`
-    // and still E0205. What separates them is not effort but §6.2.2's meaning —
-    // an `and` gate computes a logic value, so accepting one and modelling
-    // nothing would be a wrong answer, while `tran` and `rtran` add no equation
-    // of their own (see `parsePassSwitch`).
     kw_tran,
     kw_rtran,
+
+    // A.3.4 `n_input_gatetype ::= and | nand | or | nor | xor | xnor`,
+    // `n_output_gatetype ::= buf | not`, `enable_gatetype ::= bufif0 | bufif1 |
+    // notif0 | notif1`. These compute a logic value, so they get tags now that
+    // the digital executor has §7.8.5's tables to compute it WITH; the rest of
+    // A.4.1's gate types (the MOS and CMOS switches, `pullup`/`pulldown`) are
+    // still `.kw_reserved` and still E0205, because accepting one and modelling
+    // nothing would be a wrong answer. `or` is `kw_or` already — §5.10.1 spends
+    // the same spelling on the event `or`.
+    kw_and,
+    kw_nand,
+    kw_nor,
+    kw_xor,
+    kw_xnor,
+    kw_buf,
+    kw_not,
+    kw_bufif0,
+    kw_bufif1,
+    kw_notif0,
+    kw_notif1,
 
     // disciplines & natures §3.6, §3.9, annex D
     kw_discipline,
@@ -770,16 +789,20 @@ const reserved_keywords = [_][]const u8{
     // `assign` left this list when A.6.1 got a tag (`kw_assign`) — §10.6
     // membership is keyed by spelling, so it is still reserved everywhere it
     // was, and `keyword_intro` still finds it through `kw_1364_1995`.
-    "and",                "assert",
-    "automatic",          "buf",           "bufif0",       "bufif1",
+    // A.3.4's twelve computing gate types are no longer here either: they have
+    // tags (`kw_and` … `kw_notif1`) now that §7.8.5's tables are implemented.
+    // Reserved-word membership is keyed by spelling, so `keyword_intro` still
+    // finds every one of them through `kw_1364_1995`.
+    "assert",
+    "automatic",
     "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",
     "force",              "fork",          "highz0",       "highz1",
     "ifnone",             "join",          "large",        "medium",
     // `posedge`/`negedge` are no longer here: §5.10.1 gives them their own
     // tags, because an event expression has to tell the two apart.
-    "nand",               "nmos",          "nor",
-    "noshowcancelled",    "not",           "notif0",       "notif1",
+    "nmos",
+    "noshowcancelled",
     "pmos",               "primitive",     "pull0",
     "pull1",              "pulldown",      "pullup",       "pulsestyle_ondetect",
     "pulsestyle_onevent", "rcmos",         "release",      "rnmos",
@@ -789,7 +812,10 @@ const reserved_keywords = [_][]const u8{
     "rpmos",              "rtranif0",      "rtranif1",
     "showcancelled",      "small",         "specify",      "specparam",
     "strong0",            "strong1",       "table",        "task",
-    "tranif0",            "tranif1",       "wait",
+    // `wait` left this list when A.6.5's `wait_statement` got a tag
+    // (`kw_wait`) — §10.6 membership is keyed by spelling, so it is still
+    // reserved everywhere it was, through `kw_1364_1995`.
+    "tranif0",            "tranif1",
     "weak0",              "weak1",         "xnor",         "xor",
     // configuration / library (IEEE 1364 clause 13)
     "cell",               "config",        "design",       "endconfig",

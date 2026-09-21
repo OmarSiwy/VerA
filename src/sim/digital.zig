@@ -27,7 +27,7 @@ const Pending = union(enum) {
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
     /// not when the call executed — the whole point of the task is that it
     /// reports the settled value.
-    strobe: struct { args: []const Ast.ExprId, show: Show },
+    strobe: struct { args: []const Ast.ExprId, show: Show, scope: u32 },
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
     monitor_tick,
@@ -99,6 +99,28 @@ const Instruction = union(enum(u4)) {
     repeat_next: struct { counter: u32, body: u32 },
     // §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
+    // A.6.5 `@*`. §9.7.5's implicit list is derived from the body and is
+    // STATIC, so it is resolved to slots once at compile time; a resumption is
+    // then the same `.any` waiter an explicit `@(a or b)` installs.
+    wait_slots: []const u32,
+    // A.6.5 `wait_statement`, which is LEVEL sensitive: the condition is tested
+    // on arrival and again on every resumption, and only a true reading falls
+    // through. `slots` is the same operand list `@*` uses, here only to decide
+    // when it is worth re-testing.
+    wait_level: struct { cond: Ast.ExprId, slots: []const u32 },
+    // §8.5.3.3 the two halves of A.6.2's intra-assignment timing control.
+    // `sample` evaluates the right-hand side with the values current when the
+    // statement is REACHED and parks it in `cell`, then applies the timing;
+    // `deposit` resolves the target and writes the parked value when the
+    // process resumes ("the values at the time the process resumes are used to
+    // determine the target(s)"). A nonblocking one emits no `deposit`: it
+    // schedules the write from `sample` and does not suspend.
+    sample: struct { statement: Ast.StmtId, cell: u32 },
+    deposit: struct { statement: Ast.StmtId, cell: u32 },
+    // A.6.5 `-> named_event`. §5.10: events "have no time duration" and "do not
+    // hold any data", so this publishes NOTHING — it only resumes whoever is
+    // waiting on the slot right now. A trigger nobody is waiting for is gone.
+    trigger: u32,
     // §9.9.2 an `always` body returning to its own start.
     restart: struct { target: u32, tok: u32 },
     stop,
@@ -125,6 +147,15 @@ const Edge = enum(u2) {
 // resumption point and the process's identity while it is suspended: the terms
 // of one `or` share it, and retire together when any one of them fires.
 const Waiter = struct { slot: u32, edge: Edge, pc: u32 };
+/// One declared identifier, qualified by the §6.2.2 instance that declared it.
+const Name = struct { scope: u32, str: Ast.StrId };
+/// §6.5.7.1's "vector port ... connected to a ... concatenated net expression
+/// of the matching width", the half of a port connection that cannot be a net
+/// collapse: `width` bits starting at `src_lo` of one slot are carried onto
+/// `dst_lo` of another net. Everything outside that window is z, which is the
+/// identity of §7.9's resolution, so a window is an ordinary driver that
+/// happens to assert only part of the net.
+const Bridge = struct { src: u32, src_lo: u32, dst_lo: u32, width: u32 };
 // §3.9 an unpacked array is `count` consecutive element slots; the declared
 // name maps to the first. `low`/`high` are the declared address bounds, in
 // either order of declaration — no operation here observes element ORDER, only
@@ -137,6 +168,9 @@ const Net = struct {
     kind: Ast.NetKind,
     slot: u32,
     resolved: Int.Literal,
+    /// The declaring token, for a verdict reached after elaboration (§7.9's
+    /// `uwire` driver count is the only one so far).
+    tok: u32 = 0,
     drivers: []const u32 = &.{},
     /// A.2.1.3 `charge_strength`, the level the stored charge of a `trireg` in
     /// the capacitive state asserts. `medium` is §3.8's default and is ignored
@@ -156,6 +190,75 @@ const Net = struct {
     capacitive: bool = false,
     charge_gen: Inertial = .{},
 };
+/// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
+/// the type and the input terminals in source order.
+const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId };
+/// §7.8.5: "a gate transmits a logic value, not a connection" — every primitive
+/// but the MOS switches reads a z input as x. This is the one place the gate
+/// tables part company with the expression operators.
+fn gateIn(b: Int.Bit) Int.Bit {
+    return if (b == .z) .x else b;
+}
+/// §7.8.5's tables for A.3.4's twelve computing gate types, one output bit.
+///
+/// The n-input arms are written as controlling-value rules rather than as 4x4
+/// tables because that is what the tables ARE: `and(0, x)` is 0 because the 0
+/// controls, while `xor(0, x)` is x because xor has no controlling value. An
+/// implementation that folds "unknown in, unknown out" uniformly gets the and
+/// and or rows wrong and nothing else.
+fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
+    const invert = struct {
+        fn f(b: Int.Bit) Int.Bit {
+            return switch (b) {
+                .zero => .one,
+                .one => .zero,
+                // ~x is x and ~z is x: the complement of "unknown" is unknown.
+                else => .x,
+            };
+        }
+    }.f;
+    switch (kind) {
+        .g_and, .g_nand, .g_or, .g_nor => {
+            // The value that decides the output on its own, and the output it
+            // decides — `and` is controlled by 0 and produces 0.
+            const control: Int.Bit = if (kind == .g_and or kind == .g_nand) .zero else .one;
+            var unknown = false;
+            for (ins) |raw| {
+                const b = gateIn(raw);
+                if (b == control) return if (kind == .g_and or kind == .g_or) control else invert(control);
+                if (b == .x) unknown = true;
+            }
+            if (unknown) return .x;
+            const quiet = invert(control);
+            return if (kind == .g_and or kind == .g_or) quiet else control;
+        },
+        .g_xor, .g_xnor => {
+            var ones: u32 = 0;
+            for (ins) |raw| {
+                const b = gateIn(raw);
+                if (b == .x) return .x;
+                if (b == .one) ones += 1;
+            }
+            const parity: Int.Bit = if (ones % 2 == 1) .one else .zero;
+            return if (kind == .g_xor) parity else invert(parity);
+        },
+        .g_buf => return gateIn(ins[0]),
+        .g_not => return invert(ins[0]),
+        // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
+        // regimes: the OFF enable gives z whatever the data is; the ON enable
+        // gives the gate function of the data; an x/z enable means the gate may
+        // or may not be conducting, which IEEE 1364 writes as L (0-or-z) or H
+        // (1-or-z). Neither is a member of {0,1,x,z} — L is not 0, because it
+        // might be z — so the only sound four-state projection is x.
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
+            const on: Int.Bit = if (kind == .g_bufif1 or kind == .g_notif1) .one else .zero;
+            const enable = ins[1];
+            if (enable == .x or enable == .z) return .x;
+            if (enable != on) return .z;
+            return if (kind == .g_bufif0 or kind == .g_bufif1) gateIn(ins[0]) else invert(ins[0]);
+        },
+    }
+}
 // §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
 // of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
 // are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
@@ -163,6 +266,16 @@ const Net = struct {
 const Driver = struct {
     net: u32,
     value: Ast.ExprId,
+    /// The §6.2.2 instance `value` is written in. A port connection expression
+    /// belongs to the PARENT, which is not the scope of the net it feeds.
+    scope: u32 = 0,
+    /// Set instead of `value` (which is then `.none`) for a port connection
+    /// that cannot collapse — see `Bridge`.
+    bridge: ?Bridge = null,
+    /// Set instead of `value` for an A.3.1 gate instance. A gate is a driver
+    /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
+    /// which no operator does.
+    gate: ?Gate = null,
     sensitivity: []const u32,
     current: Int.Literal,
     s0: Ast.Strength = .strong,
@@ -499,22 +612,46 @@ const Run = struct {
     starts: []const u32,
     bag: *diag.Bag,
     out: *std.Io.Writer,
-    names: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty,
+    /// §6.2.2 names are per INSTANCE, not per module: two instances of one
+    /// definition declare the same identifiers over different storage, so the
+    /// key is the scope the name was declared in plus the interned name. The
+    /// scope in force is `self.scope`, which the executing process carries.
+    names: std.AutoHashMapUnmanaged(Name, u32) = .empty,
+    scope: u32 = 0,
+    /// The highest scope id handed out; the root is 0.
+    scopes: u32 = 0,
     /// Variables, array elements and nets share one slot space, so one `store`
-    /// wakes event waiters for all three. Nets occupy `net_base..values.len`.
+    /// wakes event waiters for all three.
     values: []Int.Literal,
-    net_base: u32 = 0,
+    /// Which of `nets` a slot is, for the slots that are nets at all. A map and
+    /// not a `net_base` boundary because §6.2.2 elaboration interleaves one
+    /// instance's variables with the next one's nets.
+    net_of: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     nets: []Net = &.{},
     drivers: []Driver = &.{},
     /// Keyed by the base slot of an unpacked array (§3.9).
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
+    /// The slots that are §5.10.4 named events. They occupy a slot only so that
+    /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
+    /// there, because §5.10's events "do not hold any data".
+    events: std.AutoHashMapUnmanaged(u32, void) = .empty,
     // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
     types: []Type = &.{},
     replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
     code: std.ArrayList(Instruction) = .empty,
+    /// The instance scope each instruction was compiled in, one row per `code`
+    /// row. A process never leaves the scope it was written in, so `execute`
+    /// reads this once per dispatch — including on an event resumption, which
+    /// re-enters at a pc in the middle of a body.
+    code_scope: std.ArrayList(u32) = .empty,
     case_targets: std.ArrayList(u32) = .empty,
     // One counter per lexical repeat is sufficient without recursive processes.
     repeats: std.ArrayList(u64) = .empty,
+    // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
+    // control. One cell per SITE is enough for the same reason `repeats` is:
+    // the process that reached it is suspended there, so it cannot reach it
+    // again before the `deposit` consumes the value.
+    holds: std.ArrayList(Int.Literal) = .empty,
     pending: std.ArrayList(Pending) = .empty,
     waiters: std.ArrayList(Waiter) = .empty,
     scheduler: Scheduler,
@@ -530,7 +667,7 @@ const Run = struct {
     time_format: TimeFormat = .{},
     /// §17.1.3 the one standing monitor. A second `$monitor` replaces it;
     /// there is no stack.
-    monitor: ?struct { args: []const Ast.ExprId, show: Show } = null,
+    monitor: ?struct { args: []const Ast.ExprId, show: Show, scope: u32 } = null,
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
@@ -550,7 +687,7 @@ const Run = struct {
     fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
-        return self.names.get(ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
+        return self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse self.exprFail(e, "undeclared digital variable");
     }
     /// One declared bound. Digital execution takes literal bounds only: the
     /// parameters and constant functions §3.9 also admits are not declared yet.
@@ -594,12 +731,19 @@ const Run = struct {
         return @intCast(@abs(hi - lo) + 1);
     }
     fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
-        const entry = try self.names.getOrPut(self.arena, name);
+        const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
         if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
         entry.value_ptr.* = at;
     }
     /// A reference to ONE whole value. §3.9's unpacked array has no value of
     /// its own — only its elements do — so a bare array name is refused here.
+    /// The slot an lvalue's WIDTH comes from: an array element reference is as
+    /// wide as element zero, so a parked value can be sized before §8.5.3.3
+    /// resolves which element it lands in.
+    fn baseSlot(self: *Run, e: Ast.ExprId) Error!u32 {
+        const ex = &self.file.exprs;
+        return if (ex.tag(e) == .index) self.slot(ex.lhs(e)) else self.scalarSlot(e);
+    }
     fn scalarSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const at = try self.slot(e);
         if (self.arrays.contains(at)) return self.exprFail(e, "an unpacked array reference requires an element index");
@@ -616,7 +760,11 @@ const Run = struct {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
             .ident => blk: {
-                const v = self.values[try self.scalarSlot(e)];
+                const at = try self.scalarSlot(e);
+                // §5.10: events "do not hold any data", so a named event has no
+                // value an expression could read.
+                if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
+                const v = self.values[at];
                 break :blk .{ .width = v.width, .signed = v.signed };
             },
             .int_literal => blk: {
@@ -1028,6 +1176,7 @@ const Run = struct {
         if (self.code.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital instructions", .{});
         const at = self.position();
         try self.code.append(self.arena, instruction);
+        try self.code_scope.append(self.arena, self.scope);
         return at;
     }
     fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
@@ -1115,26 +1264,72 @@ const Run = struct {
             .assign => |s| {
                 try self.checkTarget(s.target);
                 try self.checkExpr(s.value);
-                _ = try self.append(.{ .statement = id });
+                if (s.timing == .none) {
+                    _ = try self.append(.{ .statement = id });
+                    return;
+                }
+                // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
+                if (s.timing_is_delay) try self.checkDelay(s.timing, tok) else {
+                    // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
+                    // does not suspend, so the parked value would have to be
+                    // held by the WAITER rather than by a per-site cell; give
+                    // `Waiter` a payload when something needs it.
+                    if (s.nonblocking) return self.fail(tok, "an event control inside a nonblocking assignment is not implemented", .{});
+                    try self.checkEvent(s.timing);
+                }
+                if (self.holds.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many intra-assignment timing controls", .{});
+                const cell: u32 = @intCast(self.holds.items.len);
+                try self.holds.append(self.arena, try filled(self.arena, 1, false, .x));
+                _ = try self.append(.{ .sample = .{ .statement = id, .cell = cell } });
+                // §8.5.3.4: a nonblocking one does not suspend the process — it
+                // schedules the update and falls through — so it has no
+                // resumption point and needs no `deposit`.
+                if (!s.nonblocking) _ = try self.append(.{ .deposit = .{ .statement = id, .cell = cell } });
+            },
+            // A.6.5 `event_trigger`. The slot is resolved here, not at run
+            // time, so a trigger cannot fail in the middle of a dispatch.
+            .event_trigger => |s| {
+                const at = self.names.get(.{ .scope = self.scope, .str = s.name }) orelse
+                    return self.fail(tok, "undeclared named event", .{});
+                if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+                _ = try self.append(.{ .trigger = at });
             },
             .event_control => |s| {
-                if (!s.is_delay) {
-                    try self.checkEvent(s.event);
-                    _ = try self.append(.{ .wait_event = s.event });
-                    return self.compileStmt(s.body, depth + 1);
+                // A.6.5 `@*`. The terms come from the body, so the body has to
+                // be type-checked before they can be read off it: emit the wait
+                // with an empty list, compile the body, then patch the list in.
+                if (s.event == .none) {
+                    const at = try self.append(.{ .wait_slots = &.{} });
+                    try self.compileStmt(s.body, depth + 1);
+                    var watched: std.ArrayList(u32) = .empty;
+                    try self.readSlots(s.body, &watched, depth);
+                    // §9.7.5's list is what the statement READS. A statement
+                    // that reads nothing would suspend forever, which is never
+                    // what `@*` was written to mean.
+                    if (watched.items.len == 0) return self.fail(tok, "§9.7.5: `@*` needs the statement to read at least one net or variable", .{});
+                    self.code.items[at].wait_slots = watched.items;
+                    return;
                 }
-                if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
-                // §9.7.1 a delay is a "delay_value", and A.8.3 makes that
-                // `unsigned_number | real_number | ...` — so `#0.5` is as
-                // ordinary as `#1`. It is rounded to the module's PRECISION
-                // rather than truncated to its unit, which `Scale.realDelay`
-                // already does, and which is the only thing that makes a
-                // sub-unit delay mean anything.
-                if (self.file.exprs.tag(s.event) != .real_literal) {
-                    try self.checkExpr(s.event);
-                    if (self.typeOf(s.event).width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
+                switch (s.kind) {
+                    .event => {
+                        try self.checkEvent(s.event);
+                        _ = try self.append(.{ .wait_event = s.event });
+                    },
+                    .delay => {
+                        try self.checkDelay(s.event, tok);
+                        _ = try self.append(.{ .statement = id });
+                    },
+                    // A.6.5 `wait_statement`. The condition's operands ARE the
+                    // wake-up list, but unlike `@` they only bring the process
+                    // back to the same pc to re-test the level.
+                    .level => {
+                        try self.checkExpr(s.event);
+                        var watched: std.ArrayList(u32) = .empty;
+                        try self.sensitivity(s.event, &watched);
+                        if (watched.items.len == 0) return self.fail(tok, "a `wait` on a constant expression would never be reconsidered", .{});
+                        _ = try self.append(.{ .wait_level = .{ .cond = s.event, .slots = watched.items } });
+                    },
                 }
-                _ = try self.append(.{ .statement = id });
                 try self.compileStmt(s.body, depth + 1);
             },
             .sys_task => |s| {
@@ -1527,8 +1722,14 @@ const Run = struct {
             self.monitor_pending = true;
             try self.enqueueMonitor(.monitor_tick);
         }
-        if (!changed or self.waiters.items.len == 0) return;
-        const after = dest.bit(0);
+        if (!changed) return;
+        return self.wake(target, before, dest.bit(0));
+    }
+    /// Resume every process suspended on `target` whose edge matches. Split out
+    /// of `store` because §5.10.4's `-> e` resumes without publishing anything:
+    /// a named event has no value for a change to be detected in.
+    fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
+        if (self.waiters.items.len == 0) return;
         // ponytail: linear scan. The list holds only currently-suspended
         // processes, so it is bounded by the source's process count; index it
         // by slot if a design ever suspends in bulk.
@@ -1678,6 +1879,79 @@ const Run = struct {
             else => unreachable, // checkExpr admitted only the forms above
         }
     }
+    /// §9.7.5's implicit event expression: every net and variable the statement
+    /// READS. The identifier on the left of an assignment is written, not read,
+    /// so it contributes nothing — but an index into it is read, which is why
+    /// the target is walked for its subscript and not for its base.
+    ///
+    /// Runs only after `compileStmt` accepted the same statement, so every form
+    /// reachable here is one of the forms below and every expression in it is
+    /// already type-checked.
+    fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) Error!void {
+        if (id == .none) return;
+        if (depth == 256) return self.fail(self.file.stmtTok(id), "digital statements deeper than 256 AST levels are not implemented", .{});
+        const ex = &self.file.exprs;
+        switch (self.file.stmt(id)) {
+            .block => |b| for (b.body) |s| try self.readSlots(s, out, depth + 1),
+            .if_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                try self.readSlots(s.then_s, out, depth + 1);
+                try self.readSlots(s.else_s, out, depth + 1);
+            },
+            .while_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                try self.readSlots(s.body, out, depth + 1);
+            },
+            .for_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                for ([_]Ast.StmtId{ s.init, s.body, s.step }) |part| try self.readSlots(part, out, depth + 1);
+            },
+            .repeat_stmt => |s| {
+                try self.sensitivity(s.count, out);
+                try self.readSlots(s.body, out, depth + 1);
+            },
+            .case_stmt => |s| {
+                try self.sensitivity(s.scrutinee, out);
+                for (s.arms) |arm| {
+                    for (arm.labels) |label| try self.sensitivity(label, out);
+                    try self.readSlots(arm.body, out, depth + 1);
+                }
+            },
+            .assign => |s| {
+                try self.sensitivity(s.value, out);
+                // An element lvalue reads its subscript; `sensitivity` on the
+                // whole `.index` would also add the array's own elements.
+                if (ex.tag(s.target) == .index) try self.sensitivity(ex.rhs(s.target), out);
+            },
+            .sys_task => |s| for (s.args) |a| {
+                if (a != .none and ex.tag(a) != .str_literal) try self.sensitivity(a, out);
+            },
+            // A trigger reads nothing, an empty statement reads nothing, and a
+            // nested `@`/`#` inside `@*` suspends on its own terms — §9.7.5
+            // takes the implicit list from the statement's reads either way.
+            .empty, .event_trigger => {},
+            .event_control => |s| try self.readSlots(s.body, out, depth + 1),
+            else => unreachable, // compileStmt admitted only the forms above
+        }
+    }
+    /// What a gate driver contributes: §7.8.5's one output bit.
+    fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate) Error!Int.Literal {
+        // One scratch list per evaluation, which `execute` resets each
+        // instruction — the point is to keep `gateBit` a pure function of the
+        // input bits, where §7.8.5's tables can be read straight off.
+        var bits: std.ArrayList(Int.Bit) = .empty;
+        for (g.ins) |in| try bits.append(scratch, (try self.eval(scratch, in, 1)).bit(0));
+        const out = try filled(scratch, 1, false, .z);
+        setBit(out, 0, gateBit(g.kind, bits.items));
+        return out;
+    }
+    /// What a `Bridge` driver contributes: its window, z everywhere else.
+    fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
+        const out = try filled(scratch, width, false, .z);
+        const from = self.values[b.src];
+        for (0..b.width) |i| setBit(out, b.dst_lo + @as(u32, @intCast(i)), from.bit(b.src_lo + @as(u32, @intCast(i))));
+        return out;
+    }
     fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
         for (out.items) |seen| if (seen == at) return;
         try out.append(self.arena, at);
@@ -1691,8 +1965,34 @@ const Run = struct {
             if (self.typeOf(ex.rhs(e)).width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
             return;
         }
-        if (try self.scalarSlot(e) >= self.net_base)
+        if (self.net_of.contains(try self.scalarSlot(e)))
             return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
+    }
+    /// §9.7.1 a delay is a "delay_value", and A.8.3 makes that
+    /// `unsigned_number | real_number | ...` — so `#0.5` is as ordinary as
+    /// `#1`. A real literal is left untyped here and rounded to the module's
+    /// PRECISION at run time (`Scale.realDelay`) rather than truncated to its
+    /// unit, which is the only thing that makes a sub-unit delay mean anything.
+    fn checkDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!void {
+        if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
+        if (self.file.exprs.tag(e) == .real_literal) return;
+        try self.checkExpr(e);
+        if (self.typeOf(e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
+    }
+    /// The run-time counterpart of `checkDelay`, in the module's precision.
+    fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Error!u64 {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) == .real_literal) {
+            return self.scale.?.realDelay(ex.realValue(e)) catch |err|
+                return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
+        }
+        const value = try self.eval(scratch, e, 0);
+        // §9.7.1 leaves an x/z delay undefined; zero is the reading that keeps
+        // the process running rather than losing it.
+        if (value.hasUnknown()) return 0;
+        if (value.width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
+        return (if (value.signed) self.scale.?.signedDelay(value.asInt().?) else self.scale.?.unsignedDelay(value.values()[0])) catch |err|
+            return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
     }
     /// Event terms resolve to watched slots at compile time, so a resumption
     /// never has to fail in the middle of a dispatch.
@@ -1744,6 +2044,9 @@ const Run = struct {
     /// handful of signals out of thousands.
     fn monitorPrint(self: *Run, a: std.mem.Allocator, force: bool) Error!void {
         const m = self.monitor orelse return;
+        // §17.1.3 the monitor renders in the instance that installed it; the
+        // `.monitor` region runs outside any process's dispatch.
+        self.scope = m.scope;
         if (!self.monitor_on and !force) return;
         var buffer = std.Io.Writer.Allocating.init(a);
         const saved = self.out;
@@ -1785,6 +2088,10 @@ const Run = struct {
     fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) Error!void {
         var pc = start;
         var restarted = false;
+        // §6.2.2: every name this body reads is its own instance's. A body
+        // never crosses an instance boundary, so one read at entry covers the
+        // whole dispatch — including a resumption landing mid-body.
+        self.scope = self.code_scope.items[start];
         while (true) {
             // Each instruction completes its copies/captures before scratch is
             // reused; an untimed loop therefore retains no iteration temporaries.
@@ -1798,13 +2105,93 @@ const Run = struct {
                     continue;
                 },
                 .wait_event => |e| return self.suspendOn(e, pc + 1),
+                // §9.7.5 the implicit list is a plain `or` of value changes.
+                .wait_slots => |slots| {
+                    for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1 });
+                    return;
+                },
+                // A.6.5 a `wait` that is already satisfied does not suspend at
+                // all; one that is not comes back to THIS pc, not the next, so
+                // the level is re-tested rather than the edge trusted.
+                .wait_level => |s| {
+                    if ((try self.eval(scratch, s.cond, 0)).truth() == .one) {
+                        pc += 1;
+                        continue;
+                    }
+                    for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc });
+                    return;
+                },
+                // §8.5.3.3 "computes the right-hand side value using the
+                // current values, then causes the executing process to be
+                // suspended". Both halves of that sentence are here.
+                .sample => |s| {
+                    const a = self.file.stmt(s.statement).assign;
+                    const tok = self.file.stmtTok(s.statement);
+                    // The parked value is the target's width, and the target
+                    // may be an array element, so the width comes from the
+                    // lvalue's base slot rather than from `address` — which
+                    // §8.5.3.3 says is not resolved until the process resumes.
+                    const width = self.values[try self.baseSlot(a.target)].width;
+                    const rhs = try self.eval(scratch, a.value, width);
+                    // The arena, not scratch: the value has to outlive this
+                    // dispatch, which is the whole point of parking it.
+                    self.holds.items[s.cell] = try normalize(self.arena, rhs, .{ .width = width, .signed = rhs.signed });
+                    if (a.nonblocking) {
+                        // §8.5.3.4 the process does not suspend; the write is
+                        // one more NBA update, delayed if the control was one.
+                        if (try self.address(scratch, a.target)) |target|
+                            try self.enqueue(
+                                .{ .write = .{ .target = target, .value = self.holds.items[s.cell] } },
+                                if (a.timing_is_delay) try self.delayOf(scratch, a.timing, tok) else null,
+                                true,
+                            );
+                        pc += 1;
+                        continue;
+                    }
+                    if (a.timing_is_delay)
+                        try self.enqueue(.{ .run_process = pc + 1 }, try self.delayOf(scratch, a.timing, tok), false)
+                    else
+                        try self.suspendOn(a.timing, pc + 1);
+                    return;
+                },
+                // §8.5.3.3 "the values at the time the process resumes are used
+                // to determine the target(s)" — so the address is resolved now,
+                // even though the value was fixed before the suspension.
+                .deposit => |s| {
+                    const a = self.file.stmt(s.statement).assign;
+                    // §3.9: an out-of-range or X/Z index names no element, so
+                    // the write is discarded rather than landing somewhere.
+                    if (try self.address(scratch, a.target)) |target|
+                        try self.store(target, self.holds.items[s.cell].planes);
+                    pc += 1;
+                    continue;
+                },
+                // §5.10 an event has "no time duration": the resumed processes
+                // are scheduled in the active region of this same timestep, and
+                // execution of the triggering process continues meanwhile.
+                .trigger => |at| {
+                    try self.wake(at, .x, .x);
+                    pc += 1;
+                    continue;
+                },
                 // §6.1: drive this assignment's own value, resolve the net from
                 // every driver of it, then suspend on the operands. The
                 // resumption point is this same pc, so a change re-drives.
                 .continuous => |at| {
                     const d = self.drivers[at];
-                    const rhs = try self.eval(scratch, d.value, d.current.width);
-                    const value = try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
+                    // A driver's expression is written in the instance that
+                    // wrote the assignment — for a port connection that is the
+                    // PARENT of the net it feeds, so it is the driver's scope
+                    // and not the dispatch's that resolves its names.
+                    self.scope = d.scope;
+                    const value = if (d.bridge) |b|
+                        try self.window(scratch, b, d.current.width)
+                    else if (d.gate) |g|
+                        try self.gateValue(scratch, g)
+                    else blk: {
+                        const rhs = try self.eval(scratch, d.value, d.current.width);
+                        break :blk try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
+                    };
                     // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
                     // not what the net shows: the other drivers are unaffected
                     // and the net re-resolves when the delayed value lands.
@@ -1879,22 +2266,7 @@ const Run = struct {
                     }
                 },
                 .event_control => |s| {
-                    // §9.7.1 `#0.5`: rounded to the module's precision, not
-                    // truncated to its unit. `compileStmt` let this through
-                    // without a type, so it never reaches `eval`.
-                    if (self.file.exprs.tag(s.event) == .real_literal) {
-                        const delay = self.scale.?.realDelay(self.file.exprs.realValue(s.event)) catch |e|
-                            return self.fail(self.file.stmtTok(id), "digital delay cannot be represented: {t}", .{e});
-                        try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
-                        return;
-                    }
-                    const value = try self.eval(scratch, s.event, 0);
-                    const delay: u64 = if (value.hasUnknown()) 0 else blk: {
-                        if (value.width > 64) return self.exprFail(s.event, "delay values wider than 64 bits are not implemented");
-                        break :blk (if (value.signed) self.scale.?.signedDelay(value.asInt().?) else self.scale.?.unsignedDelay(value.values()[0])) catch |e|
-                            return self.fail(self.file.stmtTok(id), "digital delay cannot be represented: {t}", .{e});
-                    };
-                    try self.enqueue(.{ .run_process = pc + 1 }, delay, false);
+                    try self.enqueue(.{ .run_process = pc + 1 }, try self.delayOf(scratch, s.event, self.file.stmtTok(id)), false);
                     return;
                 },
                 .sys_task => |s| switch (tasks.get(self.file.str(s.name)).?) {
@@ -1902,9 +2274,9 @@ const Run = struct {
                     // §17.1.2: the arguments are NOT captured, the call is.
                     // What it reports is the value at the end of the timestep,
                     // so evaluation waits for the `.monitor` region.
-                    .strobe => |sh| try self.enqueueMonitor(.{ .strobe = .{ .args = s.args, .show = sh } }),
+                    .strobe => |sh| try self.enqueueMonitor(.{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope } }),
                     .monitor => |sh| {
-                        self.monitor = .{ .args = s.args, .show = sh };
+                        self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope };
                         self.monitor_last = null;
                         try self.monitorPrint(scratch, true);
                     },
@@ -1948,6 +2320,275 @@ const Run = struct {
     }
 };
 
+/// A.2.4 `net_assignment` and everything else that ends up as one driver of one
+/// net: the module's own `assign`s, a `net_decl_assignment`, and the two halves
+/// of a §6.5.7 port connection that could not collapse to a single net.
+///
+/// `scope` is the instance the EXPRESSION is written in, which for a port
+/// connection is the parent and not the module that owns the net.
+const Wire = struct {
+    net: u32,
+    scope: u32,
+    value: Ast.ExprId = .none,
+    bridge: ?Bridge = null,
+    gate: ?Gate = null,
+    s0: Ast.Strength = .strong,
+    s1: Ast.Strength = .strong,
+    delay: Ast.Delay3 = .{},
+    tok: u32,
+};
+
+/// What the parent decided one port connection is. §6.5.7.1's "matching size
+/// rule" plus IEEE 1364 clause 12's "a port is a connection, not an
+/// assignment": wherever one net can stand for both sides, `collapse` makes
+/// them literally the same net, which is the only model under which a child's
+/// DRIVE STRENGTH survives the boundary (d03_11). The other two arms are the
+/// fallback for a connection no single net can express.
+const PortBind = union(enum) {
+    /// §6.2.2 an unconnected port: the child's net exists and nothing feeds it.
+    open,
+    /// The parent net index this port IS.
+    collapse: u32,
+    /// An input port fed by a parent expression that is not one whole net.
+    receive: struct { expr: Ast.ExprId, scope: u32, tok: u32 },
+    /// An output port whose parent side is a concatenation: the operand nets,
+    /// leftmost first (§6.5.7.1 joins them highest-order first).
+    send: struct { operands: []const u32, tok: u32 },
+};
+
+/// Everything §6.2.2 elaboration accumulates before any expression is compiled.
+/// The split is load-bearing: a name lookup in pass two must not run against a
+/// slot space a later instance is still growing, and `Int.Literal` slices would
+/// move under it.
+const Elab = struct {
+    values: std.ArrayList(Int.Literal) = .empty,
+    nets: std.ArrayList(Net) = .empty,
+    wires: std.ArrayList(Wire) = .empty,
+    /// One row per elaborated instance: the definition and its name scope.
+    insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
+};
+
+/// §6.2.2: the root of the design is the description nothing instantiates.
+fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl {
+    var top: ?*const Ast.ModuleDecl = null;
+    outer: for (modules) |*candidate| {
+        if (candidate.is_connect) continue;
+        for (modules) |other| for (other.instances) |inst| {
+            if (inst.module == candidate.name) continue :outer;
+        };
+        if (top != null) return r.fail(candidate.main_tok, "digital execution requires exactly one top-level module", .{});
+        top = candidate;
+    }
+    return top orelse r.fail(0, "digital execution found no top-level module", .{});
+}
+
+fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
+    for (r.file.modules) |*m| if (m.name == name) {
+        if (m.is_connect) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
+        return m;
+    };
+    return r.fail(tok, "undeclared module in instantiation", .{});
+}
+
+/// One instance's storage: its variables, its nets, its ports' nets, and the
+/// driver rows its continuous assignments and port connections contribute.
+/// Recurses into child instances AFTER its own nets exist, so a port connection
+/// always resolves against a parent that is fully declared.
+fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
+    const arena = r.arena;
+    if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
+    if (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
+        return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
+    r.scope = scope;
+    try e.insts.append(arena, .{ .module = m, .scope = scope });
+    // §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
+    // point on the waiter list; the stored value is never read or written.
+    for (m.events) |name| {
+        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(m.main_tok, "too many digital storage slots", .{});
+        const at: u32 = @intCast(e.values.items.len);
+        try r.bind(name, at, m.main_tok);
+        try e.values.append(arena, try filled(arena, 1, false, .x));
+        try r.events.put(arena, at, {});
+    }
+    for (m.vars) |v| {
+        if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
+        // ponytail: one unpacked dimension. §3.9 admits any number; the second
+        // one needs a row-major address fold this has no consumer for yet.
+        if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
+        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else if (v.storage == .reg) 1 else 32;
+        const base: u32 = @intCast(e.values.items.len);
+        try r.bind(v.name, base, v.main_tok);
+        var count: u32 = 1;
+        if (v.dims.len == 1) {
+            const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
+            const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
+            const low = @min(lo, hi);
+            const high = @max(lo, hi);
+            if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
+            count = @intCast(high - low + 1);
+            try r.arrays.put(arena, base, .{ .count = count, .low = low, .high = high });
+        }
+        if (count > std.math.maxInt(u32) - e.values.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
+        for (0..count) |_| try e.values.append(arena, try filled(arena, width, if (v.storage == .reg) v.is_signed else true, .x));
+    }
+    for (m.nets) |n| {
+        if (n.discipline != .none or n.is_ground)
+            return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
+        const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
+        const at = try mintNet(r, e, n.kind, width, n.name, n.main_tok);
+        var net = &e.nets.items[at];
+        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+        // a trireg in the capacitive state does not turn off, it holds — so the
+        // net's own turn-off falls back to §7.14's "smallest of the delays".
+        if (n.kind == .trireg and n.delay.off != .none) {
+            net.decay = net.delay.off;
+            net.delay.off = @min(net.delay.rise, net.delay.fall);
+        }
+        net.charge = n.charge;
+        // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+        // declaration, so it is one more driver of that net and not a separate
+        // construct. Its delay is the NET's (`wire #3 y = ~a;` — A.2.1.3 puts
+        // the `delay3` before the name list, not on the `=`), which is why the
+        // row it contributes carries none of its own.
+        if (n.init != .none)
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .value = n.init, .tok = n.main_tok });
+    }
+    // §6.5 the ports, after the body nets: a port net minted here is the one a
+    // body `wire w;` on the same name was folded into by the parser.
+    for (m.ports, 0..) |p, i| {
+        const bind = if (i < binds.len) binds[i] else PortBind.open;
+        const width = if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
+        if (bind == .collapse) {
+            const outer = e.nets.items[bind.collapse];
+            if (outer.resolved.width != width)
+                return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+            try r.bind(p.name, outer.slot, p.main_tok);
+            continue;
+        }
+        const at = try mintNet(r, e, .wire, width, p.name, p.main_tok);
+        switch (bind) {
+            .open, .collapse => {},
+            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .tok = c.tok }),
+            .send => |c| {
+                // §6.5.7.1 joins the operands highest-order first, so the
+                // rightmost operand takes the port's low bits.
+                var lo: u32 = 0;
+                var k = c.operands.len;
+                while (k != 0) {
+                    k -= 1;
+                    const dst = &e.nets.items[c.operands[k]];
+                    const w = dst.resolved.width;
+                    if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+                    try e.wires.append(arena, .{
+                        .net = c.operands[k],
+                        .scope = scope,
+                        .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w },
+                        .tok = c.tok,
+                    });
+                    lo += w;
+                }
+                if (lo != width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+            },
+        }
+    }
+    for (m.assigns) |a| {
+        const target = try r.scalarSlot(a.target);
+        const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+    }
+    // §7.1 a gate instance is one more driver of its output net, so it joins
+    // the same list an `assign` does and resolves against them.
+    for (m.gates) |g| {
+        const target = try r.scalarSlot(g.out);
+        const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
+        // §7.8.5's tables are one bit wide. A vector terminal would be A.3.1's
+        // `net_lvalue`, whose per-bit expansion nothing here asks for.
+        if (e.nets.items[net].resolved.width != 1) return r.fail(g.main_tok, "only scalar gate terminals are implemented", .{});
+        try e.wires.append(arena, .{
+            .net = net,
+            .scope = scope,
+            .gate = .{ .kind = g.kind, .ins = g.ins },
+            .s0 = g.strength0,
+            .s1 = g.strength1,
+            .delay = g.delay,
+            .tok = g.main_tok,
+        });
+    }
+    for (m.instances) |inst| {
+        if (inst.range != null or inst.params.len != 0)
+            return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
+        const child = try findModule(r, inst.module, inst.main_tok);
+        const binds_out = try arena.alloc(PortBind, child.ports.len);
+        @memset(binds_out, .open);
+        for (inst.ports, 0..) |conn, i| {
+            const at = if (conn.name == .none) i else blk: {
+                for (child.ports, 0..) |p, k| if (p.name == conn.name) break :blk k;
+                return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
+            };
+            if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+            r.scope = scope;
+            binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
+        }
+        try declare(r, e, child, try newScope(r, inst.main_tok), binds_out, depth + 1);
+        r.scope = scope;
+    }
+}
+
+fn newScope(r: *Run, tok: u32) Error!u32 {
+    r.scopes += 1;
+    if (r.scopes == std.math.maxInt(u32)) return r.fail(tok, "too many digital instances", .{});
+    return r.scopes;
+}
+
+/// Allocate one net and its slot, and bind `name` to it in the current scope.
+fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, name: Ast.StrId, tok: u32) Error!u32 {
+    if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
+    const slot: u32 = @intCast(e.values.items.len);
+    const at: u32 = @intCast(e.nets.items.len);
+    try r.bind(name, slot, tok);
+    // §3.7: a net with no driver is Z, not X — except where the net type itself
+    // supplies a value. That is the whole net/variable difference.
+    try e.values.append(r.arena, try filled(r.arena, width, false, undriven(kind)));
+    try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, width, false, .z), .tok = tok });
+    try r.net_of.put(r.arena, slot, at);
+    return at;
+}
+
+/// §6.5.7 one port connection, decided in the PARENT's scope.
+fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
+    if (conn.expr == .none) return .open;
+    const ex = &r.file.exprs;
+    // One whole net of the right size on the outside is a net COLLAPSE, and
+    // that is the only arm under which the child's drive strengths reach the
+    // parent's resolution unchanged (IEEE 1364 clause 12: a port is a
+    // connection). `bindPort` does not size-check here — `declare` does, once
+    // the port's own width is known.
+    if (ex.tag(conn.expr) == .ident) {
+        if (r.net_of.get(try r.scalarSlot(conn.expr))) |net| return .{ .collapse = net };
+    }
+    return switch (port.direction) {
+        // §6.5.2.2 an input port is a RECEIVER: the child puts no driver on the
+        // outside, so whatever the parent wrote feeds the port net.
+        .input => .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok } },
+        .output => blk: {
+            if (ex.tag(conn.expr) != .concat) return r.exprFail(conn.expr, "an output port connects to a net or a concatenation of nets");
+            const args = ex.args(conn.expr);
+            const operands = try r.arena.alloc(u32, args.len);
+            for (args, operands) |arg, *out| {
+                if (ex.tag(arg) != .ident) return r.exprFail(arg, "an output port connects to a net or a concatenation of nets");
+                out.* = r.net_of.get(try r.scalarSlot(arg)) orelse return r.exprFail(arg, "an output port can only drive a net");
+            }
+            break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
+        },
+        // A collapse already covers the useful `inout`; anything else would
+        // need a bidirectional bit bridge, which no fixture asks for.
+        .inout => r.fail(conn.main_tok, "an inout port connection must name one whole net", .{}),
+        .unspecified => r.fail(port.main_tok, "§6.5.2.2: this port has no direction declaration", .{}),
+    };
+}
+
 /// Callers own the run arena and diagnostic source lifetime. No analog lowering,
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
@@ -1965,12 +2606,14 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     };
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io };
-    if (file.modules.len != 1 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires exactly one ordinary module", .{});
-    const m = file.modules[0];
-    if (m.is_connect or m.ports.len != 0 or m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.instances.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.events.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
-        return r.fail(m.main_tok, "digital execution currently requires a portless module with only variables and initial processes", .{});
+    if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
+    const m = try pickTop(&r, file.modules);
+    // §6.2.2: a `timescale applies from where it is written, and the FIRST
+    // description in the file is what "before any module" means once there is
+    // more than one — the root is not necessarily the first one declared.
+    const first_tok = file.modules[0].main_tok;
     for (times) |event| {
-        if (event.at > r.starts[m.main_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
+        if (event.at > r.starts[first_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
         // A null scale is now only ever IEEE 1364 §19.6's `resetall, which
         // returns `timescale to "none specified". A MALFORMED directive no
         // longer reaches here at all: the preprocessor refuses it where it is
@@ -1986,110 +2629,76 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         // One module here, so that is this one's precision.
         r.time_format.units = @intFromEnum(precision);
     }
-    // Variables, then array elements, then nets — one slot space, so one
-    // `store` publishes all three and wakes the same event waiters.
-    var values: std.ArrayList(Int.Literal) = .empty;
-    for (m.vars) |v| {
-        if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
-        // ponytail: one unpacked dimension. §3.9 admits any number; the second
-        // one needs a row-major address fold this has no consumer for yet.
-        if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
-        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else if (v.storage == .reg) 1 else 32;
-        const base: u32 = @intCast(values.items.len);
-        try r.bind(v.name, base, v.main_tok);
-        var count: u32 = 1;
-        if (v.dims.len == 1) {
-            const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
-            const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
-            const low = @min(lo, hi);
-            const high = @max(lo, hi);
-            if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-            count = @intCast(high - low + 1);
-            try r.arrays.put(arena, base, .{ .count = count, .low = low, .high = high });
-        }
-        if (count > std.math.maxInt(u32) - values.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
-        for (0..count) |_| try values.append(arena, try filled(arena, width, if (v.storage == .reg) v.is_signed else true, .x));
-    }
-    r.net_base = @intCast(values.items.len);
-    if (m.nets.len > std.math.maxInt(u32) - values.items.len) return r.fail(m.main_tok, "too many digital storage slots", .{});
-    r.nets = try arena.alloc(Net, m.nets.len);
-    for (m.nets, 0..) |n, i| {
-        if (n.discipline != .none or n.is_ground)
-            return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
-        const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        const at: u32 = @intCast(values.items.len);
-        try r.bind(n.name, at, n.main_tok);
-        // §3.7: a net with no driver is Z, not X — except where the net type
-        // itself supplies a value. That is the whole net/variable difference.
-        try values.append(arena, try filled(arena, width, false, undriven(n.kind)));
-        r.nets[i] = .{ .kind = n.kind, .slot = at, .resolved = try filled(arena, width, false, .z), .charge = n.charge };
-    }
-    r.values = values.items;
+    // PASS ONE — storage. Variables, array elements and nets share one slot
+    // space, so one `store` publishes all three and wakes the same event
+    // waiters. §6.2.2 elaboration walks the instance tree parent-first, which
+    // is what lets a port connection resolve against nets that already exist.
+    var e: Elab = .{};
+    try declare(&r, &e, m, 0, &.{}, 0);
+    r.values = e.values.items;
+    r.nets = e.nets.items;
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
     @memset(r.types, .{ .width = 0, .signed = false });
-    // §6.1 one continuous assignment is one driver of one net; §7.9 resolution
-    // needs them grouped, because every update reads all of a net's drivers.
+    // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
+    // driver of one net; §7.9 resolution needs them grouped, because every
+    // update reads all of a net's drivers.
     //
-    // They compile FIRST so that no driver's pc can also be a process's
+    // Drivers compile FIRST so that no driver's pc can also be a process's
     // resumption point: a `wait_event` resumes at its own pc plus one, and
     // every instruction from here on belongs to a process.
-    // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-    // declaration, so it is one more driver of that net and not a separate
-    // construct. Its delay is the NET's (`wire #3 y = ~a;` — A.2.1.3 puts the
-    // `delay3` before the name list, not on the `=`), which is why the row it
-    // contributes carries none of its own.
-    const Wire = struct { slot: u32, value: Ast.ExprId, s0: Ast.Strength, s1: Ast.Strength, delay: Ast.Delay3, tok: u32 };
-    var wires: std.ArrayList(Wire) = .empty;
-    for (m.assigns) |a| {
-        const target = try r.scalarSlot(a.target);
-        if (target < r.net_base) return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
-        try wires.append(arena, .{ .slot = target, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
-    }
-    for (m.nets, 0..) |n, i| if (n.init != .none)
-        try wires.append(arena, .{ .slot = r.nets[i].slot, .value = n.init, .s0 = .strong, .s1 = .strong, .delay = .{}, .tok = n.main_tok });
-    if (wires.items.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
-    r.drivers = try arena.alloc(Driver, wires.items.len);
-    const grouped = try arena.alloc(std.ArrayList(u32), m.nets.len);
+    if (e.wires.items.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
+    r.drivers = try arena.alloc(Driver, e.wires.items.len);
+    const grouped = try arena.alloc(std.ArrayList(u32), e.nets.items.len);
     @memset(grouped, .empty);
-    for (wires.items, 0..) |a, i| {
-        try r.checkExpr(a.value);
+    for (e.wires.items, 0..) |a, i| {
+        r.scope = a.scope;
         var watched: std.ArrayList(u32) = .empty;
-        try r.sensitivity(a.value, &watched);
+        if (a.bridge) |b| {
+            try watched.append(arena, b.src);
+        } else if (a.gate) |g| {
+            // §7.8.5 a gate re-evaluates on any input change, exactly as a
+            // continuous assignment does on any operand change.
+            for (g.ins) |in| {
+                try r.checkExpr(in);
+                if (r.typeOf(in).width != 1) return r.exprFail(in, "only scalar gate terminals are implemented");
+                try r.sensitivity(in, &watched);
+            }
+        } else {
+            try r.checkExpr(a.value);
+            try r.sensitivity(a.value, &watched);
+        }
         r.drivers[i] = .{
-            .net = a.slot - r.net_base,
+            .net = a.net,
             .value = a.value,
+            .scope = a.scope,
+            .bridge = a.bridge,
+            .gate = a.gate,
             .sensitivity = watched.items,
-            .current = try filled(arena, r.values[a.slot].width, false, .z),
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
         };
-        try grouped[a.slot - r.net_base].append(arena, @intCast(i));
+        try grouped[a.net].append(arena, @intCast(i));
         try r.enqueue(.{ .run_process = try r.append(.{ .continuous = @intCast(i) }) }, null, false);
     }
-    for (r.nets, grouped, m.nets) |*n, g, decl| {
+    for (r.nets, grouped) |*n, g| {
         // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
         // resolution question there, it is an error.
-        if (n.kind == .uwire and g.items.len > 1) return r.fail(decl.main_tok, "a uwire net accepts a single driver", .{});
+        if (n.kind == .uwire and g.items.len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
         n.drivers = g.items;
-        n.delay = try r.declaredDelay3(decl.delay, decl.main_tok);
-        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
-        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-        // a trireg in the capacitive state does not turn off, it holds — so the
-        // net's own turn-off falls back to §7.14's "smallest of the delays".
-        if (n.kind == .trireg and decl.delay.off != .none) {
-            n.decay = n.delay.off;
-            n.delay.off = @min(n.delay.rise, n.delay.fall);
-        }
     }
-    for (m.discrete) |process| {
-        const start: u32 = @intCast(r.code.items.len);
-        try r.compileStmt(process.body, 0);
-        _ = try r.append(if (process.is_always)
-            .{ .restart = .{ .target = start, .tok = process.main_tok } }
-        else
-            .stop);
-        try r.enqueue(.{ .run_process = start }, null, false);
+    for (e.insts.items) |inst| {
+        r.scope = inst.scope;
+        for (inst.module.discrete) |process| {
+            const start: u32 = @intCast(r.code.items.len);
+            try r.compileStmt(process.body, 0);
+            _ = try r.append(if (process.is_always)
+                .{ .restart = .{ .target = start, .tok = process.main_tok } }
+            else
+                .stop);
+            try r.enqueue(.{ .run_process = start }, null, false);
+        }
     }
     var scratch = std.heap.ArenaAllocator.init(arena);
     defer scratch.deinit();
@@ -2098,7 +2707,10 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         switch (r.pending.items[event.payload]) {
             .run_process => |start| try r.execute(&scratch, start),
             .write => |w| try r.store(w.target, w.value.planes),
-            .strobe => |s| try r.display(s.args, scratch.allocator(), s.show),
+            .strobe => |s| {
+                r.scope = s.scope;
+                try r.display(s.args, scratch.allocator(), s.show);
+            },
             .monitor_tick => {
                 r.monitor_pending = false;
                 try r.monitorPrint(scratch.allocator(), false);
@@ -2561,6 +3173,10 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"%b\",'hx); endmodule", "unsized four-state");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
+    // §5.10 "events do not hold any data", so neither direction of the
+    // event/variable confusion compiles.
+    try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");
+    try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
     try expectRejected("module m; initial $finish(2); endmodule", "only $finish");

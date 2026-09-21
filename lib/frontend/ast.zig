@@ -720,6 +720,29 @@ pub const ContAssign = struct {
     main_tok: u32 = 0,
 };
 
+/// A.3.4's gate types that compute a logic value. §7.8.5's tables define all
+/// twelve; `n_input`, `n_output` and `enable` gates differ only in what their
+/// terminal list means, which `GateInst` records in its SHAPE.
+pub const GateKind = enum { g_and, g_nand, g_or, g_nor, g_xor, g_xnor, g_buf, g_not, g_bufif0, g_bufif1, g_notif0, g_notif1 };
+
+/// A.3.1 one `gate_instance`. `out` is the output terminal (§7.8.5.1's `out`,
+/// or one of `out1..outN` for a `buf`/`not` with several — each of those
+/// becomes its own `GateInst` over the same input, since each is a separate
+/// driver). `ins` is the rest in source order: the inputs of an n-input gate,
+/// `(data, enable)` for an enable gate, the single input of `buf`/`not`.
+///
+/// A gate IS a driver of `out` (§7.1), which is why it carries the same
+/// `drive_strength` and `delay` a `ContAssign` does.
+pub const GateInst = struct {
+    kind: GateKind,
+    out: ExprId,
+    ins: []const ExprId,
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
+    delay: Delay3 = .{},
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -820,6 +843,10 @@ pub const ModuleDecl = struct {
     /// net_assignment, because each is a separate DRIVER of its net
     /// (IEEE 1364-2005 §6.1).
     assigns: []const ContAssign = &.{},
+    /// A.3.1 gate instantiations in source order. Separate from `assigns`
+    /// because §7.8.5's value tables are not the expression operators: a gate
+    /// input is a logic VALUE, so z on one reads as x.
+    gates: []const GateInst = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
@@ -1006,6 +1033,20 @@ pub const ConnectResolution = struct {
 // Statements — LRM ch5, A.6
 // ---------------------------------------------------------------------------
 
+/// Which of A.6.5's three procedural timing controls a prefixed statement
+/// carries. All three suspend the process and then run the same body, so they
+/// share `Stmt.event_control`; only what they wait FOR differs.
+pub const Timing = enum {
+    /// `@(event)` — an edge, a named event, or `@*` (§5.10, §9.7.5).
+    event,
+    /// `#delay` — `delay_control`, so the statement's `event` is the delay.
+    delay,
+    /// `wait (expression)` — LEVEL sensitive: if the expression is already true
+    /// the body runs without suspending at all, and a resumption re-tests it
+    /// instead of firing on whichever change woke the process.
+    level,
+};
+
 /// Statement node. LRM §5. Kept as a tagged union in a flat pool (closed set →
 /// enum+union, not vtable). Statements are walked once by lowering, never in a
 /// hot loop, so the union's width (driven by `.block`) is not a cache concern.
@@ -1017,7 +1058,20 @@ pub const Stmt = union(enum) {
     /// §5.7 procedural assignment (A.6.2 analog_variable_assignment). `target`
     /// is an lvalue *expression* (`.ident` or `.index`) so array element
     /// assignment (§3.2.2) is representable.
-    assign: struct { target: ExprId, value: ExprId, nonblocking: bool = false },
+    ///
+    /// `timing` is A.6.2's optional `delay_or_event_control` between the `=`
+    /// and the expression — the INTRA-assignment form, which §8.5.3.3 gives a
+    /// different meaning from the statement prefix `#5 b = a;`: the right-hand
+    /// side is sampled when the statement is reached and only the write waits.
+    /// `timing_is_delay` picks `delay_control` over `event_control`, exactly as
+    /// `event_control.is_delay` does for the prefix form.
+    assign: struct {
+        target: ExprId,
+        value: ExprId,
+        nonblocking: bool = false,
+        timing: ExprId = .none,
+        timing_is_delay: bool = false,
+    },
     /// §5.6 contribution `V(a,b) <+ expr;` — `lhs` is a `.branch_access` or
     /// `.port_access` node (A.8.5 branch_lvalue).
     contribute: struct { lhs: ExprId, rhs: ExprId },
@@ -1059,7 +1113,13 @@ pub const Stmt = union(enum) {
     repeat_stmt: struct { count: ExprId, body: StmtId },
     /// §5.10 `@(event) body` (A.6.5 analog_event_control_statement). `event` is
     /// one of the `event_*` expression tags, or an `.ident` naming an event.
-    event_control: struct { event: ExprId, body: StmtId, is_delay: bool = false },
+    ///
+    /// `.none` is A.6.5's `@*` / `@ (*)`: the implicit event expression, whose
+    /// terms are every net and variable `body` READS. It carries no expression
+    /// because the list is derived from the body, not written by the source.
+    /// A.6.5 offers it to `event_control` only — `analog_event_control` has no
+    /// such alternative, so an analog block rejects it.
+    event_control: struct { event: ExprId, body: StmtId, kind: Timing = .event },
     /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
     /// `hierarchical_event_identifier`, so only its last (and, in a flat
     /// elaboration, only) component is kept.
