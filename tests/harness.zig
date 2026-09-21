@@ -831,6 +831,88 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
     }
 }
 
+/// Is this path a fixture for the accept/reject walk, and if so what extension
+/// does its stem end at? `null` means "not this walk's business".
+///
+/// `.va` is unconditional. `.v` is the awkward one, because three different
+/// things share that extension in `tests/fixtures/digital/`:
+///
+///   1. 66 files with a `<stem>.expected.txt` beside them. Those belong to
+///      `zig build test-devices`, which runs `vera --run` and diffs the
+///      transcript (`bench.zig`'s `digitalCases`). Judging them here as well
+///      would score one fixture twice, under two different questions.
+///   2. 12 files carrying a directive and no golden — ten `//! reject` rows
+///      plus two `//! expect vcd`. **These were read by nothing at all**, which
+///      is what this function exists to fix. The ten are ordinary accept/reject
+///      fixtures and the verdict algebra already handles them; the two VCD ones
+///      assert nothing any runner understands and are therefore honestly
+///      `unasserted` until §18 lands (`ROADMAP.md` v0.8.1).
+///   3. `p02_design.v`, `p02_systf.v`, `p02_scales.v` — VPI support material
+///      with no directives at all. A design a test loads is not a fixture, and
+///      counting one as `unasserted` would be dishonest in the other direction.
+///
+/// So: a `.v` joins the walk when it carries a directive and has no golden.
+///
+/// **The whole file is scanned, and the line rule is `tb.parse`'s own** — a
+/// line whose trimmed form starts with `//!`. Neither shortcut works here. A
+/// byte bound does not, because `AGENTS.md §6` has the header quote the LRM and
+/// derive the value by hand *before* the machine-readable tags, which puts the
+/// first directive between 1.5 KB and 4.4 KB into these twelve files; a 512-byte
+/// header scan found none of them. A plain substring does not, because `//!`
+/// inside a string literal is not a directive. Membership has to agree with the
+/// parser that reads them, or a fixture is collected and then asserts nothing.
+fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[]const u8 {
+    if (std.mem.endsWith(u8, rel, ".va")) return ".va";
+    if (!std.mem.endsWith(u8, rel, ".v")) return null;
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const stem = rel[0 .. rel.len - ".v".len];
+    const golden = std.fmt.bufPrint(&buf, "{s}.expected.txt", .{stem}) catch return null;
+    if (dir.access(io, golden, .{})) |_| return null else |_| {}
+
+    const source = dir.readFileAlloc(io, rel, arena, .limited(1 << 20)) catch return null;
+    return if (hasDirective(source)) ".v" else null;
+}
+
+/// Does this source carry a `//!` directive? `tb.parse`'s own line rule, and it
+/// must stay that rule: this decides whether a file is collected and `tb.parse`
+/// decides whether it asserts anything, so a disagreement collects a fixture
+/// that then reports nothing.
+fn hasDirective(source: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        if (std.mem.startsWith(u8, std.mem.trim(u8, raw, " \t\r"), "//!")) return true;
+    }
+    return false;
+}
+
+test "a directive is found after the hand-derivation, not just in a header" {
+    // The bug this pins: a 512-byte header scan found none of the twelve `.v`
+    // fixtures, because AGENTS.md §6 puts the LRM quote and the by-hand
+    // derivation BEFORE the machine-readable tags. In the real files the first
+    // directive lands between 1.5 KB and 4.4 KB in.
+    var prose: [4096]u8 = @splat('x');
+    const late = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "// {s}\n//! reject E0205\n",
+        .{prose[0..]},
+    );
+    defer std.testing.allocator.free(late);
+    try std.testing.expect(hasDirective(late));
+
+    try std.testing.expect(hasDirective("//! reject E0205\n"));
+    try std.testing.expect(hasDirective("  \t //! lrm 9.4.1\r\n"));
+
+    // A design a test loads is not a fixture: no directive, no collection.
+    try std.testing.expect(!hasDirective("module m; endmodule\n"));
+    try std.testing.expect(!hasDirective(""));
+
+    // `//!` has to START the trimmed line. A plain substring search would take
+    // this string literal for a directive and collect a file that asserts
+    // nothing.
+    try std.testing.expect(!hasDirective("initial $display(\"//! reject\");\n"));
+}
+
 /// Sorted so the run is deterministic (`Dir.walk` order is explicitly undefined)
 /// and a failing run is reproducible and diffable. `filter` is a plain substring
 /// over the whole path: `zig build benchmark -- ch04` runs one group.
@@ -846,17 +928,17 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.path, ".va")) continue;
+        const ext = fixtureExt(arena, io, dir, entry.path) orelse continue;
         const path = try std.fs.path.join(arena, &.{ root, entry.path });
         if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
         const base = std.fs.path.basename(path);
-        const slug = try arena.dupe(u8, entry.path[0 .. entry.path.len - ".va".len]);
+        const slug = try arena.dupe(u8, entry.path[0 .. entry.path.len - ext.len]);
         for (slug) |*c| if (c.* == '/' or c.* == '\\') {
             c.* = '_';
         };
         try list.append(arena, .{
             .path = path,
-            .stem = base[0 .. base.len - ".va".len],
+            .stem = base[0 .. base.len - ext.len],
             .dir = std.fs.path.dirname(path) orelse ".",
             .root = root,
             .slug = slug,

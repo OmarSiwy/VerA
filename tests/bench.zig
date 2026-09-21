@@ -109,6 +109,20 @@ const external = @import("external.zig");
 const options = @import("suite_options");
 
 const Io = std.Io;
+
+// Zig collects `test` blocks from a test artifact's ROOT source file and from
+// whatever those tests reference. An ordinary `@import` used only by non-test
+// code is not enough. Without this line `zig build test` ran four tests, all of
+// them this file's, and the sibling runners' never executed at all — including
+// the assertion lint and the verdict algebra, which build.zig's own comment
+// beside `test_step.dependOn` calls "what stops a fixture from asserting
+// nothing while looking like it does". They compiled on every run and checked
+// nothing. `torture` and `external` are referenced for the same reason.
+test {
+    _ = harness;
+    _ = torture;
+    _ = external;
+}
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
@@ -117,12 +131,17 @@ pub fn main(init: std.process.Init) !u8 {
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
-    // `devices` is the ONE remaining word in argument position 2, and it is not
-    // a mode of the benchmark: it is the other run of this executable, the one
-    // on `test`, whose cases need the BINARY rather than the engine. Everything
-    // else is a benchmark argument, including a bare filter word.
+    // `devices`, `vpi` and `spice` are the THREE remaining words in argument
+    // position 2, and none is a mode of the benchmark: they are the other runs of this
+    // executable, whose cases need the BINARY (or a C compiler) rather than the
+    // engine. Everything else is a benchmark argument, including a bare filter
+    // word — which is why these two are matched exactly and not by prefix.
     const first = args.next();
-    if (first) |a| if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args);
+    if (first) |a| {
+        if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args);
+        if (std.mem.eql(u8, a, "vpi")) return vpiFixtures(init, &args);
+        if (std.mem.eql(u8, a, "spice")) return spiceDecks(init, vera_exe, &args);
+    }
     return benchmark(init, vera_exe, first, &args);
 }
 
@@ -130,7 +149,7 @@ fn usage(io: Io, why: []const u8) !u8 {
     var buf: [256]u8 = undefined;
     var e = Io.File.stderr().writer(io, &buf);
     try e.interface.print(
-        "suite: {s}\nusage: <vera-exe> [devices | benchmark args]\n",
+        "suite: {s}\nusage: <vera-exe> [devices | vpi | spice | benchmark args]\n",
         .{why},
     );
     try e.interface.flush();
@@ -1069,6 +1088,359 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
     }
     try w.print("devices: {d}/{d} cases behave as they say they do\n", .{ ran - failed, ran });
     return if (failed == 0) 0 else 1;
+}
+
+// ---------------------------------------------------------------------------
+// The `vpi` mode — the 26 `.c` fixtures, which nothing read.
+//
+// `tests/harness.zig:collect` walks `.va` and `.v`; these are `.c`, and they
+// are not VerA source at all. A VPI fixture is a C translation unit: it
+// `#include`s a header, names constants and structs from it, and calls the
+// routines `src/vpi/root.zig` exports. So the question it asks is the ABI —
+// whether the surface the LRM describes EXISTS with the shape it describes —
+// and a C compiler is what asks it. `build.zig`'s comment beside `vpi_app`
+// already makes this argument for the one acceptance test; this generalises it
+// to the 26.
+//
+// COMPILE, NOT RUN, and the distinction is the release. Running them needs a
+// simulator host per design — `p02_design.v` elaborated through the digital
+// path, five `.va` designs through the analog one — plus the routines
+// themselves. That is P02 and P03, `ROADMAP.md` v0.9.0. v0.0.3 makes them
+// visible, and "does this even compile against the header we ship" is the
+// largest true statement available without implementing them.
+//
+//   zig build test-vpi-fixtures           # all 26
+//   zig build test-vpi-fixtures -- p03    # the ones whose name contains p03
+// ---------------------------------------------------------------------------
+
+/// The two directories holding `.c` fixtures, each with its own shared header
+/// beside it (`p02_check.h`, `p03_vpi_analog.h`) which is why the fixture's own
+/// directory goes on the include path as well as `src/vpi`.
+const vpi_dirs = [_][]const u8{ "ch11_vpi", "ch12_vpi_routines" };
+
+fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+
+    var filter: ?[]const u8 = null;
+    while (args.next()) |a| filter = a;
+
+    var buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writer(io, &buf);
+    const w = &stderr.interface;
+    defer w.flush() catch {};
+
+    // One object path, reused: the loop is sequential, nothing reads the object
+    // back, and only its existence-or-not matters. `-o` still has to name
+    // something writable, so it names this.
+    const work = options.work_root ++ "/vpi-fixtures";
+    Io.Dir.cwd().createDirPath(io, work) catch {};
+    const obj = try std.fs.path.join(arena_state.allocator(), &.{ work, "fixture.o" });
+    const vpi_include = options.vpi_include;
+
+    var ran: usize = 0;
+    var failed: usize = 0;
+    for (vpi_dirs) |sub| {
+        const dir_path = try std.fs.path.join(gpa, &.{ options.fixture_root, sub });
+        defer gpa.free(dir_path);
+        var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+
+        // Sorted, so a failing run is reproducible and its name list diffs.
+        var names: std.ArrayList([]const u8) = .empty;
+        defer names.deinit(gpa);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".c")) continue;
+            try names.append(gpa, try arena_state.allocator().dupe(u8, entry.name));
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+
+        for (names.items) |name| {
+            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            ran += 1;
+            const pa = arena_state.allocator();
+            const src = try std.fs.path.join(pa, &.{ dir_path, name });
+            // Compile to an object and stop: no link. Linking would answer a
+            // different and currently duller question — every routine these
+            // call beyond the eleven P01 exports is missing, which `grep
+            // 'export fn' src/vpi/root.zig` already says without a linker.
+            //
+            // `-c -o` and NOT `-fsyntax-only`, which looks like the tidier way
+            // to say "do not link" and is not: `zig cc` passes its own `-c`,
+            // `-fsyntax-only` then makes that argument unused, and `-Werror`
+            // turns the unused-argument warning into an error — so every
+            // fixture fails identically and the census reads 0/26 for a reason
+            // that has nothing to do with the fixtures.
+            //
+            // The flags are `vpi_app.c`'s, deliberately. These fixtures are the
+            // same kind of translation unit asking the same question, and a
+            // laxer `-W` set here would let a fixture pass that the acceptance
+            // test's own flags would refuse.
+            const r = capture(pa, io, &.{
+                options.zig_exe, "cc",      "-std=c99", "-Wall", "-Werror",
+                "-c",            "-o",      obj,        "-I",    vpi_include,
+                "-I",            dir_path,  src,
+            }) catch |e| {
+                try w.print("FAIL {s}: could not run the C compiler: {s}\n", .{ name, @errorName(e) });
+                failed += 1;
+                continue;
+            };
+            if (r.exit == 0) continue;
+            failed += 1;
+            // One line of the compiler's own words. The whole log is available
+            // by running the command by hand; a census that printed it for
+            // thirteen fixtures would bury the census.
+            const first = std.mem.trim(u8, firstErrorLine(r.stderr), " \t\r");
+            try w.print("FAIL {s}: {s}\n", .{ name, first });
+        }
+    }
+
+    if (ran == 0) {
+        try w.print("vpi: nothing matched `{s}`\n", .{filter orelse ""});
+        return 1;
+    }
+    try w.print("vpi: {d}/{d} fixtures compile against src/vpi/vpi_user.h\n", .{ ran - failed, ran });
+    return if (failed == 0) 0 else 1;
+}
+
+/// The compiler's first `error:` line, or its first line if it never said one.
+fn firstErrorLine(stderr: []const u8) []const u8 {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |l| if (std.mem.indexOf(u8, l, "error:") != null) return l;
+    var again = std.mem.splitScalar(u8, stderr, '\n');
+    return again.next() orelse "";
+}
+
+test "the first error line is the compiler's, not the last line of a log" {
+    const log =
+        \\p02_01.c:77:24: note: expanded from here
+        \\p02_01.c:77:24: error: unknown type name 'p_cb_data'
+        \\p02_01.c:93:14: error: use of undeclared identifier 'vpiBinStrVal'
+        \\1 error generated.
+    ;
+    try std.testing.expectEqualStrings(
+        "p02_01.c:77:24: error: unknown type name 'p_cb_data'",
+        firstErrorLine(log),
+    );
+    // A compiler that failed without the word `error:` still has to report
+    // something, or a FAIL row would be a bare name.
+    try std.testing.expectEqualStrings("cc: killed", firstErrorLine("cc: killed\n"));
+    try std.testing.expectEqualStrings("", firstErrorLine(""));
+}
+
+// ---------------------------------------------------------------------------
+// The `spice` mode — the 7 `.sp` decks, which nothing read either.
+//
+// A deck is not VerA source and never goes through `collect`: it is a SPICE
+// netlist — `.hdl "model.va"`, instance cards, a `.tran` or `.noise` card —
+// paired with an `.expected.json` carrying an ANALYTIC oracle (expected plot
+// columns, values, tolerances, and a hand derivation of why). Running one needs
+// a circuit simulator to link the compiled device and turn the Newton loop.
+// That simulator is ARPice and it is not in this repository (`ROADMAP.md §6`),
+// so these cannot be executed here at any release.
+//
+// What CAN be checked is the half this repository owns, and it is not nothing:
+// the deck is paired with an oracle, every model it names RESOLVES, and every
+// model VerA is asked to compile COMPILES. A deck whose `.hdl` points at
+// nothing is broken regardless of which simulator would run it.
+//
+// That is exactly what this found. All 7 decks name their models through an
+// `.assets/` subdirectory — `.hdl "a10_host.assets/a10_vsine.va"` — and no such
+// directory exists: the models sit in the deck's own directory under flattened
+// names, `a10_host.assets_a10_vsine.va`, with `/` turned into `_`. It is the
+// slug rule from `harness.zig:collect` applied to the tree itself, so a nested
+// fixture layout was flattened and the decks' relative references were not
+// updated with it. `resolveModel` absorbs that rather than papering over it.
+//
+//   zig build test-spice            # all 7
+//   zig build test-spice -- a10     # the decks whose name contains a10
+// ---------------------------------------------------------------------------
+
+/// Where a `.hdl` reference actually is.
+///
+/// Tried in order, and the ORDER is the point: the literal relative path first,
+/// so that if the tree is ever un-flattened this silently starts taking the
+/// correct branch and the fallback dies unused. Only then the flattened name —
+/// the reference with `/` replaced by `_`, matched as a SUFFIX of a file in the
+/// deck's own directory, because flattening also prefixed each name with the
+/// directories above it (`a06_ntab.assets/a06_ntab_lin.va` is filed as
+/// `a06_noisetables_a06_ntab.assets_a06_ntab_lin.va`).
+///
+/// A suffix and not a substring, and REQUIRED TO BE UNIQUE: a match that hits
+/// two files is reported unresolved rather than settled on whichever the
+/// directory yielded first. Guessing which model a deck meant is how a deck
+/// ends up silently testing the wrong device.
+fn resolveModel(arena: Allocator, io: Io, dir_path: []const u8, ref: []const u8) !?[]const u8 {
+    const literal = try std.fs.path.join(arena, &.{ dir_path, ref });
+    if (Io.Dir.cwd().access(io, literal, .{})) |_| return literal else |_| {}
+
+    const flat = try arena.dupe(u8, ref);
+    for (flat) |*c| if (c.* == '/' or c.* == '\\') {
+        c.* = '_';
+    };
+
+    var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return null;
+    defer dir.close(io);
+    var hit: ?[]const u8 = null;
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, flat)) continue;
+        if (hit != null) return null; // ambiguous: two files claim one reference
+        hit = try std.fs.path.join(arena, &.{ dir_path, entry.name });
+    }
+    return hit;
+}
+
+fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+
+    var filter: ?[]const u8 = null;
+    while (args.next()) |a| filter = a;
+
+    var buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writer(io, &buf);
+    const w = &stderr.interface;
+    defer w.flush() catch {};
+
+    var decks: std.ArrayList([]const u8) = .empty;
+    defer decks.deinit(gpa);
+    {
+        var root = try Io.Dir.cwd().openDir(io, options.fixture_root, .{ .iterate = true });
+        defer root.close(io);
+        var walker = try root.walk(arena_state.allocator());
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".sp")) continue;
+            try decks.append(gpa, try arena_state.allocator().dupe(u8, entry.path));
+        }
+    }
+    std.mem.sort([]const u8, decks.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+
+    var ran: usize = 0;
+    var failed: usize = 0;
+    for (decks.items) |rel| {
+        if (filter) |f| if (std.mem.indexOf(u8, rel, f) == null) continue;
+        ran += 1;
+        const pa = arena_state.allocator();
+        const path = try std.fs.path.join(pa, &.{ options.fixture_root, rel });
+        const dir_path = std.fs.path.dirname(path) orelse ".";
+        const name = std.fs.path.basename(rel);
+        var bad = false;
+
+        // 1. The oracle. A deck with no `.expected.json` states no result, so
+        //    no simulator could grade it and it is not a fixture yet.
+        const stem = path[0 .. path.len - ".sp".len];
+        const oracle = try std.fmt.allocPrint(pa, "{s}.expected.json", .{stem});
+        if (Io.Dir.cwd().access(io, oracle, .{})) |_| {} else |_| {
+            try w.print("FAIL {s}: no .expected.json beside it\n", .{name});
+            bad = true;
+        }
+
+        // 2. Every model the deck names, one `.hdl "<path>"` per line.
+        const source = try Io.Dir.cwd().readFileAlloc(io, path, pa, .limited(1 << 20));
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var models: usize = 0;
+        while (lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (!std.mem.startsWith(u8, line, ".hdl")) continue;
+            const open = std.mem.indexOfScalar(u8, line, '"') orelse continue;
+            const rest = line[open + 1 ..];
+            const close = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+            const ref = rest[0..close];
+            models += 1;
+
+            const model = (try resolveModel(pa, io, dir_path, ref)) orelse {
+                try w.print("FAIL {s}: .hdl \"{s}\" resolves to no file\n", .{ name, ref });
+                bad = true;
+                continue;
+            };
+            // 3. VerA's own half: the model has to compile. `--check` and both
+            //    include dirs, per AGENTS.md §6 — `check.vh` is at the suite
+            //    root and the model's siblings are beside it.
+            const r = capture(pa, io, &.{
+                vera_exe, "--check",             "--contract", options.contract,
+                "-I",     options.fixture_root,  "-I",         dir_path,
+                model,
+            }) catch |e| {
+                try w.print("FAIL {s}: could not run vera: {s}\n", .{ name, @errorName(e) });
+                bad = true;
+                continue;
+            };
+            if (r.exit != 0) {
+                try w.print("FAIL {s}: model {s} does not compile\n{s}", .{
+                    name, std.fs.path.basename(model), r.stderr,
+                });
+                bad = true;
+            }
+        }
+        if (models == 0) {
+            try w.print("FAIL {s}: no .hdl card, so the deck names no model\n", .{name});
+            bad = true;
+        }
+        if (bad) failed += 1;
+    }
+
+    if (ran == 0) {
+        try w.print("spice: nothing matched `{s}`\n", .{filter orelse ""});
+        return 1;
+    }
+    try w.print(
+        \\spice: {d}/{d} decks are paired with an oracle and name models that compile
+        \\spice: NOT executed — a deck needs a circuit simulator to link the device and
+        \\spice:   turn the Newton loop. That is ARPice (ROADMAP.md §6), which is not in
+        \\spice:   this repository, so no release here can run one.
+        \\
+    , .{ ran - failed, ran });
+    return if (failed == 0) 0 else 1;
+}
+
+test "a flattened .assets reference is a suffix of the committed name" {
+    // Why resolveModel needs a fallback at all: every deck says
+    // `.hdl "a10_host.assets/a10_vsine.va"` and the tree was flattened under
+    // them. Only the slug half of the rule is pure, so only it is pinned here;
+    // the filesystem half is covered by the census, which reports 0/7 the
+    // moment resolution breaks.
+    const ref = "a10_host.assets/a10_vsine.va";
+    var flat: [64]u8 = undefined;
+    @memcpy(flat[0..ref.len], ref);
+    for (flat[0..ref.len]) |*c| if (c.* == '/') {
+        c.* = '_';
+    };
+    try std.testing.expectEqualStrings("a10_host.assets_a10_vsine.va", flat[0..ref.len]);
+
+    // Flattening also prefixes the directories above, which is why the match is
+    // a SUFFIX and not an equality.
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        "a06_noisetables_a06_ntab.assets_a06_ntab_lin.va",
+        "a06_ntab.assets_a06_ntab_lin.va",
+    ));
+    // ...and why it is not a substring: that would let a model match a deck it
+    // has nothing to do with.
+    try std.testing.expect(!std.mem.endsWith(
+        u8,
+        "a06_ntab.assets_a06_ntab_lin_UNRELATED.va",
+        "a06_ntab.assets_a06_ntab_lin.va",
+    ));
 }
 
 const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
