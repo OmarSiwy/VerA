@@ -3,7 +3,7 @@
 //! generated device that needs it (`codegen/kernel_text.zig` `@embedFile`s
 //! it), and ordinary Zig compiled here for the callers that run the same
 //! numerics outside a device.
-//! LRM: §4.5.11, §4.5.12, §4.5.15, §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3,
+//! LRM: §4.5, §4.5.11, §4.5.12, §4.5.15, §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3,
 //! §9.5.4.2, §9.13, §9.17.3, §9.21; IEEE 1364-2005 §17.2.4, §17.9.3.
 //!
 //! Each kernel file is one data domain, spliced only into a device that uses
@@ -18,6 +18,9 @@
 //!   timer_kernels  §5.10.3.3 timer deadlines; the controls live in `Instance`
 //!   hist_kernels   §4.5.7 absdelay ring and its thinning; the samples live in `Instance`
 //!   wide_kernels   IEEE 1364 §5.4 integers past 32 bits; pure, stack only
+//!   ops_kernels    §4.5 analog operators over `S`; the accepted state is the
+//!                  caller's. Its functions are private device text, so only
+//!                  AstGen checks it here
 //! The `Instance`/`Model` fields that hold filter, timer and rng state are
 //! codegen's: these files only read and write the slots they are passed.
 //!
@@ -58,6 +61,8 @@ pub const timer_kernels = @import("kernels/timer_kernels.zig");
 pub const hist_kernels = @import("kernels/hist_kernels.zig");
 /// IEEE 1364 §5.4 integers of any width (`lower/wide.zig`'s trees).
 pub const wide_kernels = @import("kernels/wide_kernels.zig");
+/// §4.5 the analog operator kernels (`zIdt`, `zSlew`, `zTransition`, ...): device text only.
+pub const ops_kernels = @import("kernels/ops_kernels.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
