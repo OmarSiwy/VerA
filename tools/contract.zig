@@ -941,7 +941,12 @@ pub fn AcGen(comptime D: type) type {
 }
 
 /// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, returned by the optional
-/// `acStim` hook (position k = `ac_gens[k]`).
+/// `acStim(x, model, inst)` hook (position k = `ac_gens[k]`).
+///
+/// EVALUATED AT A STATE VECTOR, like `noisePsd` and for the same reason: A.8.2
+/// gives `ac_stim`'s magnitude and phase as `analog_expression`, so a
+/// swept-amplitude source — `ac_stim("ac", k*V(ctrl))` — has a phasor that is
+/// a function of the operating point and not of the card alone.
 ///
 /// Polar and not `Complex`, because polar is what the clause states and what
 /// the model wrote: converting here would round `cos(π/2)` to 6.1e-17 and hand
@@ -1334,7 +1339,7 @@ pub fn validate(comptime D: type) void {
     expectArray(D, "ac_gens", AcGen(D));
     requireWith(D, "acStim", "ac_gens");
     if (@hasDecl(D, "acStim"))
-        expectFn(D, "acStim", fn (*const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
+        expectFn(D, "acStim", fn ([n]f64, *const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
 
     // Small-signal stamp: the complex contribution `G + jwC` cannot carry.
     // Sparse — `ac_stamps` is the comptime pattern, `acStamp` the values at a
@@ -2041,7 +2046,7 @@ const MockAll = struct {
     pub fn acStamp(_: [n_u]f64, _: *const Model, _: *const Instance, _: f64) [ac_stamps.len]Complex {
         return .{ .{}, .{} };
     }
-    pub fn acStim(_: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
+    pub fn acStim(_: [n_u]f64, _: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
         return .{.{ .mag = 1, .phase = 0 }};
     }
     pub fn derive(_: *Model) void {}

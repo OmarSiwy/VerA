@@ -23,7 +23,7 @@ could be observed; that is stated wherever such a number appears.
 | clause | what the source actually does | evidence |
 | --- | --- | --- |
 | §4.6.3 activation, defaults, mag, phase 0/π | **works** | `a06_ac_stim_ac_analysis.va` and `a06_ac_stim_noise_analysis.va` run green today; no fixture in `tests/fixtures/` had ever run `ac_stim` in a small-signal analysis — `ch04_expressions/37_ac_stim.va` only pins the dc zero |
-| §4.6.3 mag/phase as `analog_expression` | **refused**, `E0515` "analog operator control argument is not a constant or parameter expression" — but `ac_stim` is not an analog operator and is absent from Table 4-20 | `a06_ac_stim_dynamic_magnitude.va`, 3× E0515 |
+| §4.6.3 mag/phase as `analog_expression` | **works** (fixed 2026-09-20). Was `E0515`, "analog operator control argument is not a constant or parameter expression" — but `ac_stim` is not an analog operator and is absent from Table 4-20. The residual reads both through `ctrlEval` and `acStim` gained the `[n_u]f64` state vector `noisePsd` already took, so a solve-computed magnitude reaches the phasor export too. A device with one is no longer `lane_clean`: a control argument collapses to one scalar, which is the batch host's business to know | `a06_ac_stim_dynamic_magnitude.va` |
 | §4.6.3 phase ≠ {0, π} | **dropped.** `codegen.zig:5430` lowers `ac_stim` to `mag * @cos(phase)` and its own comment says the quadrature component is lost; the 90° source's residual row measures **1.923132e-17 V** instead of a unit imaginary source. No `ac_gens` export exists | `a06_ac_stim_quadrature.va` |
 | §4.6.4.1/.2 PSD values | **exported and correct** (`noisePsd` → `{.white = m.f1.v}`, `{.flicker = m.f2.v, .ef = 1.25}`), and **nothing asserts them**: the `//! noise` directive carries kind/branch/source id only | `a06_psd_white_flicker_export.va`, `a06_psd_bias_dependent.va` |
 | §4.6.4.1 `name` argument | **parsed and discarded.** `Lower.NoiseSrc` has kind/id/pwr/exp/table; `contract.NoiseGen` has row/col/kind/source/table. No name field anywhere, so no contribution summary is possible | `a06_noise_source_name.va` |
@@ -103,7 +103,7 @@ Positive unless marked.
    arguments are `analog_expression` and `ac_stim` is absent from Table 4-20.
    With V(ctrl) = 2.0 V: `ac_stim("ac",V(ctrl))` = **2.0**,
    `ac_stim("ac",0.5*V(ctrl))` = **1.0**, ``ac_stim("ac",V(ctrl),`M_PI)`` =
-   **−2.0** (magnitude and phase compose). *Fails: 3× E0515.*
+   **−2.0** (magnitude and phase compose). *Passes since 2026-09-20.*
 4. **`a06_ac_stim_quadrature.va`** — §4.6.3 phase. The (mag, phase) claim is the
    two `//! acstim` lines and **nothing else**: 2.0 ∠ π/3 →
    **(1.0, 1.7320508075688772)** = (2cos 60°, 2sin 60°); 1.0 ∠ π/2 →

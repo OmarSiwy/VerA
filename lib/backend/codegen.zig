@@ -1478,7 +1478,7 @@ pub const Gen = struct {
         self.cpairs = try self.collapsePairs();
         const cpairs = self.cpairs;
         if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches() or
-            self.hp_vals.len != 0 or self.noise_rows.len != 0)
+            self.hp_vals.len != 0 or self.noise_rows.len != 0 or try self.acUsesCore())
         {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
@@ -3076,6 +3076,27 @@ pub const Gen = struct {
                     .target = v,
                     .mode = .strict,
                     .comment = "§4.6.4 noise PSD",
+                });
+            }
+        }
+        // §4.6.3 the same, for an `ac_stim` magnitude or phase the SOLVE
+        // computes. A.8.2 makes both `analog_expression`, so `acStim` has to
+        // answer at a state vector exactly as `noisePsd` does, and the only
+        // way it reads one is out of the core sweep.
+        //
+        // ONLY the arguments that do not fold, on the terms Table 4-20's
+        // dynamic arguments are queued on above: a literal or a model
+        // parameter renders over `Model` and puts nothing here, so every
+        // device with a constant stimulus keeps the fields it had.
+        for (self.ac_rows) |nr| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
+                if (v == .f_zero) continue;
+                if (!try self.ctrlIsDynamic(v)) continue;
+                try jobs.append(self.arena, .{
+                    .name = "$ac_stim",
+                    .target = v,
+                    .mode = .strict,
+                    .comment = "§4.6.3 AC stimulus magnitude or phase",
                 });
             }
         }
@@ -5430,6 +5451,14 @@ pub const Gen = struct {
     fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
         if (i >= args.len) return dflt;
         if (try self.f64Const(args[i], 0, false)) |s| return s;
+        // `.val()` is a COLLAPSE: on the batch scalar it reads lane 0, so an
+        // x-dependent control argument gives every lane the operating point of
+        // the first one. That is exactly what `lane_pinned` records — and the
+        // collapse itself is right, not a bug to route around: a control
+        // argument is a number the operator is configured WITH, and §4.6.3's
+        // stimulus magnitude is an independent source's amplitude at the
+        // operating point, so neither belongs in the Jacobian.
+        self.pinLanes(self.an.rv(args[i]));
         return std.fmt.allocPrint(self.arena, "({s}).val()", .{
             try self.renderToArena(args[i], .real),
         });
@@ -5677,8 +5706,18 @@ pub const Gen = struct {
         // the contract has no complex side to hand it to.
         if (std.mem.eql(u8, name, "ac_stim")) {
             self.uses_inst = true;
-            const mag = try self.argF64(d.args, 1, "1.0");
-            const phase = try self.argF64(d.args, 2, "0.0");
+            // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
+            // same production a contribution's right-hand side uses, and puts
+            // `constant_expression` only where it means one (the filters'
+            // trailing argument, two productions above). §4.5's Table 4-20 is
+            // the constant-argument register and `ac_stim` is not in it,
+            // because it is not an analog operator and keeps no state. So
+            // `ctrlEval`, not `argF64`: a magnitude the solve computes —
+            // `ac_stim("ac", k*V(ctrl))`, a swept-amplitude source — is a
+            // rendered expression here, and only a literal or a parameter
+            // still folds to the number it always did.
+            const mag = try self.ctrlEval(d.args, 1, "1.0");
+            const phase = try self.ctrlEval(d.args, 2, "0.0");
             try self.b("S.con(if (", .{});
             if (d.args.len == 0)
                 try self.b("inst.analysis_kind == .ac", .{})
@@ -7259,8 +7298,8 @@ pub const Gen = struct {
 
     /// §4.6.3 the AC stimulus topology AND each stimulus' phasor.
     ///
-    /// `ac_gens[k]` is the branch and the analysis name; `acStim(m, i)[k]` is
-    /// `(mag, phase)`. The split is `noise_gens`/`noisePsd`'s, for the same
+    /// `ac_gens[k]` is the branch and the analysis name; `acStim(x, m, i)[k]`
+    /// is `(mag, phase)`. The split is `noise_gens`/`noisePsd`'s, for the same
     /// reason: the branch and the name are model TEXT, the two numbers are the
     /// model CARD — `ac_stim("ac", AMPL)` with `AMPL` a parameter has a
     /// magnitude the card sets, and a comptime table could only have frozen
@@ -7275,26 +7314,27 @@ pub const Gen = struct {
     /// complex system. Both spell the SAME source, so such a host reads this
     /// INSTEAD OF the residual term — see `contract.AcGen`.
     ///
-    /// ponytail: the ceiling is A.8.2's `analog_expression` arguments. VerA
-    /// folds mag/phase through `f64Const`, which answers for literals,
-    /// parameters and arithmetic over them and not for anything the solve
-    /// computes — so `ac_stim("ac", V(ctrl))` is E0515 from the residual
-    /// lowering and this table is refused with it. Lifting that means giving
-    /// this hook the `[n_u]f64` state vector `noisePsd` already takes and a
-    /// core sweep to read it with; the signature is deliberately not carrying
-    /// an `x` it would have to ignore until then.
+    /// A.8.2 makes both numeric arguments `analog_expression`, so a magnitude
+    /// the SOLVE computes — `ac_stim("ac", k*V(ctrl))`, a swept-amplitude
+    /// source — is legal, and this hook takes the `[n_u]f64` state vector
+    /// `noisePsd` takes for exactly that reason. A stimulus that folds through
+    /// `f64Const` still renders over `Model` and touches neither `x` nor the
+    /// core, which is what keeps a constant-magnitude device's body what it
+    /// always was.
     fn emitAcTable(self: *Gen) Error!void {
         if (self.ac_rows.len == 0) return;
 
-        // Rendered BEFORE anything is written, so the `model`/`inst` parameters
-        // can be patched to `_` when nothing reached them — same bookkeeping
-        // `emitUnit` does, and the flags are saved because they are Gen-wide.
+        // Rendered BEFORE anything is written, so the `x`/`model`/`inst`
+        // parameters can be patched to `_` when nothing reached them — same
+        // bookkeeping `emitUnit` does, and the flags are saved because they are
+        // Gen-wide.
         const saved_model = self.uses_model;
         const saved_inst = self.uses_inst;
         self.uses_model = false;
         self.uses_inst = false;
         const vals = try self.arena.alloc([2][]const u8, self.ac_rows.len);
         var all_stated = true;
+        var uses_core = false;
         for (self.ac_rows, vals) |nr, *v| {
             // §4.6.4.6's per-use coefficient, FOLDED into the magnitude rather
             // than exported beside it. A phasor is scaled by a real factor
@@ -7303,9 +7343,9 @@ pub const Gen = struct {
             // own reason for keeping it separate does not apply here: there is
             // no cross-spectrum between two stimuli and no comptime table to
             // keep a bias-dependent factor out of.
-            const mag = try self.f64Const(nr.pwr, 0, false);
-            const phase = try self.f64Const(nr.exp, 0, false);
-            const coeff = try self.f64Const(nr.coeff, 0, false);
+            const mag = try self.acRef(nr.pwr, &uses_core);
+            const phase = try self.acRef(nr.exp, &uses_core);
+            const coeff = try self.acRef(nr.coeff, &uses_core);
             if (mag == null or phase == null or coeff == null) {
                 all_stated = false;
                 break;
@@ -7315,8 +7355,8 @@ pub const Gen = struct {
                 phase.?,
             };
         }
-        const reads_model = self.uses_model;
-        const reads_inst = self.uses_inst;
+        const reads_model = self.uses_model or uses_core;
+        const reads_inst = self.uses_inst or uses_core;
         self.uses_model = saved_model or reads_model;
         self.uses_inst = saved_inst or reads_inst;
         if (!all_stated) return self.refuseAc();
@@ -7330,19 +7370,58 @@ pub const Gen = struct {
         try self.w("}};\n\n", .{});
 
         try self.w(
-            \\/// §4.6.3 each stimulus' phasor: mag·e^(j·phase), phase in radians.
-            \\/// Position k belongs to `ac_gens[k]`.
+            \\/// §4.6.3 each stimulus' phasor at `x`: mag·e^(j·phase), phase in
+            \\/// radians. Position k belongs to `ac_gens[k]`.
             \\pub fn acStim(
         , .{});
+        const at_x = self.out.items.len;
+        try self.w("x: [n_u]f64, ", .{});
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
         try self.w("inst: *const Instance) [ac_gens.len]contract.AcPhasor {{\n", .{});
+        if (!uses_core) self.patchParam(at_x, "x".len);
         if (!reads_model) self.patchParam(at_model, "model".len);
         if (!reads_inst) self.patchParam(at_inst, "inst".len);
+        if (uses_core) {
+            try self.w("    var xr: [n_u]R = undefined;\n", .{});
+            try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
+            try self.w("    const m = core(R, xr, model, {s});\n", .{try self.probeInstance()});
+        }
         try self.w("    return .{{\n", .{});
         for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });
         try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// Does any §4.6.3 stimulus need `acStim` to sweep the core? Asked before
+    /// `emitAcTable` renders anything, because the `R` scalar the sweep runs in
+    /// is declared far earlier in the file — same question `noise_rows.len != 0`
+    /// answers for `noisePsd`, which always sweeps.
+    fn acUsesCore(self: *Gen) Error!bool {
+        for (self.ac_rows) |nr| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
+                if (v == .f_zero) continue;
+                if (try self.ctrlIsDynamic(v)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// One §4.6.3 magnitude, phase or §4.6.4.6 coefficient in `acStim`'s frame.
+    ///
+    /// `f64Const` first, so a literal or a model parameter renders over `Model`
+    /// exactly as it did before this hook had an `x` at all. What does not fold
+    /// is a solve result, and the only thing that holds one here is the core
+    /// sweep `buildJobs` queued a field for — the same two-frame split
+    /// `ctrlStep` makes in `updateState`. Null means neither, which is a
+    /// planning defect rather than a legal program, and `refuseAc` says so
+    /// instead of exporting a wrong number.
+    fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
+        if (try self.f64Const(v, 0, false)) |s| return s;
+        const k = self.lo_idx[@intFromEnum(v)];
+        if (k == none_u32) return null;
+        uses_core.* = true;
+        return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
     }
 
     /// §4.6.3 a stimulus VerA cannot state, as a `@compileError` VALUE on
