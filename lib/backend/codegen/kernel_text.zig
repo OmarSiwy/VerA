@@ -1172,7 +1172,7 @@ pub fn appendAliases(out: *std.ArrayList(u8), gpa: std.mem.Allocator, src: []con
 // placement here.
 pub const display_txt =
     \\fn zPadInt(buf: []u8, v: i64) []const u8 { // §9.4.3 %<width>d
-    \\    return std.fmt.bufPrint(buf, "{d}", .{v}) catch unreachable;
+    \\    return std.mem.print(buf, "{d}", .{v}) catch unreachable;
     \\}
     \\
     \\/// §9.7 simulation control: the run ends here. Declared `f64` and not
@@ -1211,4 +1211,26 @@ test appendAliases {
         \\const zQux = zh.zQux;
         \\
     , out.items);
+}
+
+/// Names Zig 0.17 deprecates and a later Zig removes. A device is compiled by
+/// whatever Zig its host has, so one of these in device text breaks every
+/// device that carries it.
+pub const deprecated_std = [_][]const u8{ "std.fmt.bufPrint", "std.fmt.allocPrint", "std.mem.indexOf", "std.mem.lastIndexOf" };
+
+test "no fixed device text names a std decl Zig 0.17 deprecates" {
+    const texts = [_][]const u8{
+        header_txt,    math_txt,         domain_quiet_txt, domain_report_txt,
+        family_txt,    family_dev_txt,   ops_txt,          tp_txt,
+        timer_txt,     str_txt,          rng_txt,          table_txt,
+        file_txt,      wide_txt,         limit_txt,        filt_txt,
+        ac_txt,        ac_fam_txt,       arr_txt,          hist_txt,
+        hist_quad_txt, helpers_head_txt, prelude_head_txt, display_txt,
+    };
+    for (texts) |src| for (deprecated_std) |name| {
+        if (std.mem.find(u8, src, name)) |at| {
+            std.debug.print("`{s}` at byte {d}\n", .{ name, at });
+            return error.TestUnexpectedResult;
+        }
+    };
 }

@@ -257,7 +257,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     // uncaptured, every point for a site never called; a per-site flag the
     // core returns is the upgrade if a model measures it.
     if (self.lowered.table_samples.items.len != 0 and self.core.lo_vals.len != 0) try self.w(
-        \\    if (std.mem.indexOfScalar(bool, &inst.table_kept, false) != null) {{
+        \\    if (std.mem.findScalar(bool, &inst.table_kept, false) != null) {{
         \\        _ = {s}(S, zVals(S, &x), model, inst, sim{s});
         \\        inst.table_kept = inst.table_ready;
         \\    }}

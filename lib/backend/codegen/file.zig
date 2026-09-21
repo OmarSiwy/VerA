@@ -876,7 +876,7 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
 /// scans as 0 or "", §17.10.2's own answer).
 const plusarg_txt =
     \\fn zPlusarg(args: []const [:0]const u8, want: []const u8, fmt: bool) ?[]const u8 {
-    \\    const key = if (fmt) want[0 .. std.mem.indexOfScalar(u8, want, '%') orelse want.len] else want;
+    \\    const key = if (fmt) want[0 .. std.mem.findScalar(u8, want, '%') orelse want.len] else want;
     \\    for (args) |a| if (a.len != 0 and a[0] == '+' and std.mem.startsWith(u8, a[1..], key)) return a[1..];
     \\    return null;
     \\}

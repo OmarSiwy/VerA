@@ -23,9 +23,10 @@
 //!
 //! A kernel file must compile alone inside a device: it names `std` by a
 //! private alias and calls no other kernel file. It opens with `//`, not `//!`
-//! (a doc header cannot sit mid-file); `timer_kernels.zig` alone opens with a
-//! `//!` paragraph, which `kernel_text.timer_txt` cuts off at the first blank
-//! line. Its bytes are device text, so editing one moves every golden that
+//! (a doc header cannot sit mid-file), except `timer_kernels.zig` and
+//! `hist_kernels.zig`, which open with a `//!` paragraph that
+//! `kernel_text.timer_txt` and `kernel_text.hist_txt` cut off at the first
+//! blank line. Its bytes are device text, so editing one moves every golden that
 //! embeds it, comments included, and a kernel file holds no `test` block: its
 //! tests are `kernels/test.zig`, which this root's `test` block pulls in. No
 //! device imports this root. `zig build test-kernels` runs them.

@@ -1,5 +1,5 @@
 //! Void display, file-I/O and simulation-control `call`s -> labeled block
-//! expressions around `std.debug.print`, `bufPrint` or the file kernels, with
+//! expressions around `std.debug.print`, `std.mem.print` or the file kernels, with
 //! §9.4.3 conversions translated into Zig format text.
 //! LRM §9.4 (display), §9.5 (file I/O), §9.7 (simulation control).
 //! Runs only when `codegen.Display` is `.emit`; under `.drop` no call reaches it.
@@ -218,13 +218,13 @@ fn fits(g: *Gen, site: usize, cap: u64) Error!bool {
     return false;
 }
 
-/// `std.fmt.bufPrint(row, fmt, .{ops})` into call `site`'s row, as a slice
+/// `std.mem.print(row, fmt, .{ops})` into call `site`'s row, as a slice
 /// expression; an overrun is E1011 (`zSOver`). Past `fmt_chunk` operands the
 /// text goes through one fixed writer, a print per chunk.
 fn emitBufPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg, site: usize) Error!void {
     const cap = try siteCap(g, fmt, ops);
     if (ops.len <= fmt_chunk) {
-        try g.b("std.fmt.bufPrint(", .{});
+        try g.b("std.mem.print(", .{});
         try emitRow(g, site, cap);
         try g.b(", \"{f}\", .{{", .{std.zig.fmtString(fmt)});
         try renderPrintArgs(g, ops, 0);
@@ -1138,10 +1138,10 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             if (zero_fill) {
                 // @abs in both branches: Zig spells `+42` for a signed int
                 // once a width fixes the field; a u64 has no sign to spell.
-                try g.b("; if (zv < 0) break :zi{d} std.fmt.bufPrint({s}zb{d}, \"-{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable", .{ i, p.amp(), i, w - 1 });
-                try g.b("; break :zi{d} std.fmt.bufPrint({s}zb{d}, \"{s}{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable; }}", .{ i, p.amp(), i, sign, w - sign.len });
+                try g.b("; if (zv < 0) break :zi{d} std.mem.print({s}zb{d}, \"-{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable", .{ i, p.amp(), i, w - 1 });
+                try g.b("; break :zi{d} std.mem.print({s}zb{d}, \"{s}{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable; }}", .{ i, p.amp(), i, sign, w - sign.len });
             } else {
-                try g.b("; break :zi{d} std.fmt.bufPrint({s}zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, p.amp(), i, sign });
+                try g.b("; break :zi{d} std.mem.print({s}zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, p.amp(), i, sign });
             }
         },
         .creal => {

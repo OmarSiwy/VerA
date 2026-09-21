@@ -78,13 +78,6 @@ pub fn zwConst(comptime n: u32, comptime w: [zwLimbs(n)]u32) ZW(n) {
     return comptime zwFromLimbs(n, zwL.norm(n, w));
 }
 
-/// Word `j` (bits 32j to 32j+31) of `a`, as a §3.2 integer: a `reg`'s word
-/// as the analog context stores it.
-pub fn zwWord(comptime n: u32, a: ZW(n), comptime j: u32) i64 {
-    const l = zwToLimbs(n, a);
-    return @as(i32, @bitCast(l[j]));
-}
-
 /// `a`'s value as the analog integer a select reads (§7.3.1): `n` <= 32 bits,
 /// zero-extended, or sign-extended when `signed`.
 pub fn zwInt(comptime n: u32, comptime signed: bool, a: ZW(n)) i64 {

@@ -4051,6 +4051,12 @@ fn expectSoundDevice(src: []const u8, display: codegen.Display) !void {
     try std.testing.expectEqualStrings(o.text, again.text);
     try std.testing.expectEqualStrings(o.prelude, again.prelude);
     try std.testing.expectEqualStrings(o.helpers, again.helpers);
+    for ([_][]const u8{ o.text, o.prelude, o.helpers }) |t| for (gen_kernel_text.deprecated_std) |name| {
+        if (std.mem.find(u8, t, name)) |at| {
+            std.debug.print("{t} device names deprecated `{s}` at byte {d}:\n{s}\n", .{ display, name, at, src });
+            return error.TestUnexpectedResult;
+        }
+    };
     try expectAstGen(o.text);
     try std.testing.expectEqual(o.names.len, o.unit_lo.len);
     try std.testing.expectEqual(o.names.len, o.unit_fn.len);
