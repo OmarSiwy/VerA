@@ -2221,8 +2221,9 @@ pub const Gen = struct {
                 // with its input, so a ramp spanning several timesteps keeps
                 // counting from where it actually started.
                 .transition => try self.w(
-                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value, time)\n    {s}__t0: f64 = 0.0,\n",
-                    .{ n, n },
+                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value), destination, start time\n" ++
+                        "    {s}__to: f64 = 0.0,\n    {s}__t0: f64 = 0.0,\n",
+                    .{ n, n, n },
                 ),
                 .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
                 .absdelay => try self.w(
@@ -2259,8 +2260,14 @@ pub const Gen = struct {
                         n, p.ns * p.deg, if (opKind(u.target) == .zi) "12" else "11",
                     });
                     try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
+                    // §4.5.12 the filter's own clock as a COUNT of samples
+                    // taken, not as the next sample TIME. A time re-armed by
+                    // `next += zn*T` drifts off the k·T grid by an ulp or two
+                    // (1e-9 + 1e-9 + 1e-9 is strictly greater than the double
+                    // nearest 3e-9), and the first timepoint that lands under
+                    // the drifted clock loses a sample for the whole run.
                     if (opKind(u.target) == .zi) try self.w(
-                        "    {s}__next: f64 = 0.0, // §4.5.12 next sample time\n    {s}__out: f64 = 0.0,\n",
+                        "    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n",
                         .{ n, n },
                     );
                 },
@@ -6092,18 +6099,25 @@ pub const Gen = struct {
                 });
             },
             // §4.5.12 "acts like a simple sample-and-hold which samples every T
-            // seconds": between samples the output does not depend on the
-            // current unknowns, so it enters the residual as a constant — the
-            // same companion model `absdelay` uses.
+            // seconds and EXHIBITS NO DELAY": between samples the output does
+            // not depend on the current unknowns and enters the residual as a
+            // constant — the same companion model `absdelay` uses — but AT a
+            // sample instant it is the output of THAT sample. `zZiEval` decides
+            // which, off the same `__next` clock `updateState` advances; it
+            // used to be handed `inst.__out` alone, which `updateState` writes
+            // after the timepoint is evaluated, so every zi_* ran one whole
+            // sample period late.
             .zi => {
                 const p = try cg_filters.filterPlan(self, inst, args);
                 if (p.err) |m| return self.abort("{s}", .{m});
                 // Same reason `.laplace` above forces it: `__sec` takes a
                 // `*const Model` whatever its coefficients read.
                 self.uses_model = true;
-                try self.b("zZiHold(S, {d}, {d}, {s}, {s}__sec(model), inst.dt, inst.{s}__out)", .{
-                    p.ns, p.deg, in, n, n,
-                });
+                try self.b(
+                    "zZiEval(S, {0d}, {1d}, {2s}, {3s}__sec(model), inst.dt, inst.{3s}__out, " ++
+                        "inst.abstime, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
+                    .{ p.ns, p.deg, in, n, p.period orelse "0.0" },
+                );
             },
             .ddt => try self.b("zDdt(S, {s}, inst.{s}__prev, inst.dt)", .{ in, n }),
             // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
@@ -6135,9 +6149,11 @@ pub const Gen = struct {
             // approximation of it.
             .transition => {
                 const t = try self.transitionTimes(args);
-                try self.b("zTransition(S, {s}, inst.{s}__from, inst.{s}__t0, inst.abstime, inst.dt, {s}, {s})", .{
-                    in, n, n, t[0], t[1],
-                });
+                try self.b(
+                    "zTransition(S, {0s}, inst.{1s}__from, inst.{1s}__to, inst.{1s}__t0, " ++
+                        "inst.abstime, inst.dt, {2s}, {3s})",
+                    .{ in, n, t[0], t[1] },
+                );
             },
             .slew => {
                 const r = try self.slewRates(args);
@@ -7410,8 +7426,9 @@ pub const Gen = struct {
                 .transition => {
                     const t = try self.transitionTimes(args);
                     try self.w(
-                        "        zTransStep(in, &inst.{s}__from, &inst.{s}__t0, inst.abstime, dt, {s}, {s});\n",
-                        .{ n, n, t[0], t[1] },
+                        "        zTransStep(in, &inst.{0s}__from, &inst.{0s}__to, &inst.{0s}__t0, " ++
+                            "inst.abstime, dt, {1s}, {2s}, {3s});\n",
+                        .{ n, try self.argF64(args, 1, "0.0"), t[0], t[1] },
                     );
                 },
                 .slew => {
@@ -7497,31 +7514,24 @@ pub const Gen = struct {
                     const p = try cg_filters.filterPlan(self, inst, args);
                     if (p.err == null) try self.w(
                         \\        const period = {1s};
-                        \\        if (period > 0.0 and inst.abstime >= inst.{0s}__next) {{
-                        \\            // §4.5.12: "T specifies the sampling period of the filter".
-                        \\            // The recurrence runs once per T of SIMULATED TIME, so a step
-                        \\            // that crosses k sample instants runs it k times. Stepping it
-                        \\            // ONCE per evaluation — which is what this did — makes the
-                        \\            // output a function of how densely the host happened to place
-                        \\            // its timepoints, and the same filter at the same T returned
-                        \\            // bit-identical values for 20 us and 200 us of elapsed time.
-                        \\            var zn = @floor((inst.abstime - inst.{0s}__next) / period) + 1.0;
-                        \\            // ponytail: a ceiling, and `bound_step` below is the reason it
-                        \\            // is almost never reached — the filter ASKS the host to keep
-                        \\            // the step at or under T, so the honouring host always has
-                        \\            // zn == 1. A host that ignores it far enough to need more than
-                        \\            // this has already aliased the filter beyond what replaying
-                        \\            // the held input could recover.
-                        \\            if (zn > 4096.0) zn = 4096.0;
-                        \\            var zi_k: u32 = @intFromFloat(zn);
+                        \\        // §4.5.12: "T specifies the sampling period of the filter".
+                        \\        // The recurrence runs once per T of SIMULATED TIME, so a step that
+                        \\        // crosses k sample instants runs it k times. Stepping it ONCE per
+                        \\        // evaluation — which is what this did — makes the output a function
+                        \\        // of how densely the host happened to place its timepoints, and the
+                        \\        // same filter at the same T returned bit-identical values for 20 us
+                        \\        // and 200 us of elapsed time.
+                        \\        //
+                        \\        // `zZiDue` counts off the k*T GRID, and `eval` calls the identical
+                        \\        // function: the two halves of the operator cannot disagree about
+                        \\        // which timepoint is a sample instant. A `__next` time re-armed by
+                        \\        // `+= zn*T` could and did — three additions of 1e-9 overshoot the
+                        \\        // double nearest 3e-9, and the sample at t = 3T was lost for good.
+                        \\        var zi_k = zZiDue(inst.abstime, inst.{0s}__nk, period);
+                        \\        if (zi_k > 0) {{
+                        \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
                         \\            while (zi_k > 0) : (zi_k -= 1)
                         \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
-                        \\            // Re-armed on the sample GRID, not from the accepted time.
-                        \\            // `abstime + period` lost the phase: it made every sample land
-                        \\            // wherever the host last stopped, so the instants drifted with
-                        \\            // the timestep. Advancing by zn*T cannot leave the clock
-                        \\            // behind either, since zn is chosen to pass abstime.
-                        \\            inst.{0s}__next += zn * period;
                         \\            inst.discontinuity_order = 0; // §9.17.1 the held output steps
                         \\        }}
                         \\        inst.bound_step = @min(inst.bound_step, period);
@@ -8130,17 +8140,19 @@ fn isAnalysisName(s: []const u8) bool {
 }
 
 /// Length of the §4.5.7 absdelay history ring.
-// ponytail: fixed 512 samples with linear interpolation. The floor is set by
+// ponytail: a fixed 1024 samples with linear interpolation. The floor is set by
 // SPICE canon, not by the model: maxstep = min(tstep, span/50), so a fixture
 // like `T TD=2n` under `.tran 20p` legitimately runs td/dt = 100 accepted
-// steps per delay — at 32 the whole lookback fell off the ring and the line
-// transported with ZERO delay (devices/tline read its far port half an edge
-// early for the entire run). Edge-resolving LTE shrinkage pushes the worst
-// case a few times higher, hence 512. A query older than the ring clamps to
-// the OLDEST sample (see zHistAt) — bounded staleness, never a time machine.
-// Upgrade path if a fixture still underruns: host-owned growable history
-// (the engine's dormant HistoryBuffer channel), which is what ngspice does.
-const hist_len: usize = 512;
+// steps per delay, and edge-resolving LTE shrinkage pushes the worst case a
+// few times higher; 1024 also covers a delay of 515 steps on a uniform grid
+// (ch04_expressions/a04_05), which 512 did not. THE CEILING IS NOW LOUD: a
+// query older than the whole ring @panics out of `zHistAt` instead of clamping
+// to the oldest retained sample and reporting a shorter delay as this one.
+// §4.5.7 bounds no lookback, so a silent clamp is a different operator, not an
+// implementation-defined limit.
+// Upgrade path: host-owned growable history (the engine's dormant
+// HistoryBuffer channel), which is what ngspice does.
+const hist_len: usize = 1024;
 
 fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
     if (react) return "§5.6.1.2 reactive part (charge/flux; q() differentiates it)";
@@ -8626,47 +8638,73 @@ const ops_txt =
     \\    if (!(tt > 0.0)) return 1.0;
     \\    return @min(@max((t - t0) / tt, 0.0), 1.0);
     \\}
-    \\fn zTransition(comptime S: type, v: S, from: f64, t0: f64, t: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.8
+    \\fn zTransition(comptime S: type, v: S, from: f64, to: f64, t0: f64, t: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.8
     \\    // "In DC analysis, transition() passes the value of the expr directly
     \\    // to its output." There is no elapsed time to ramp over.
     \\    if (dt <= 0.0) return v;
-    \\    // LINEAR in the current input, so the Jacobian the solver gets is the
-    \\    // slope of the ramp itself.
-    \\    const f = zTransFrac(v.val(), from, t0, t, rise, fall);
-    \\    return v.addC(-from).scale(f).addC(from);
+    \\    // In a transient the output is a function of the input's PAST alone:
+    \\    // the excursion in flight was armed by the accepted step that SAW the
+    \\    // input change, "after an initial delay of td". Taking the CURRENT
+    \\    // input as the ramp's target — which this did — armed every ramp at the
+    \\    // previous accepted timepoint, so the output was already part-way up it
+    \\    // at the corner itself and no td could have shifted that.
+    \\    return S.con(from + (to - from) * zTransFrac(to, from, t0, t, rise, fall));
     \\}
-    \\/// §4.5.8 accepted-step bookkeeping: move the ramp's origin, or leave it.
+    \\/// §4.5.8 accepted-step bookkeeping. "A transition is created when the
+    \\/// input expression changes, and at this point it uses the value of td,
+    \\/// rise_time, fall_time and time_tol to determine the new pending
+    \\/// transition operator." `to` is the armed destination and so also the last
+    \\/// ACCEPTED input, which makes `in != to` that sentence's test.
     \\///
-    \\/// LEAVE IT is the important half. While the output is still climbing
-    \\/// towards its input the excursion is the one that started at `from`, and
+    \\/// LEAVING THE EXCURSION ALONE is the important half: while the input has
+    \\/// not changed the excursion is the one that started at `from`, and
     \\/// re-arming the origin every step would shrink the remaining distance by
     \\/// the same factor each time — an exponential decay wearing a ramp's
     \\/// coefficients, which is the bug this operator used to have.
-    \\fn zTransStep(in: f64, from: *f64, t0: *f64, t: f64, dt: f64, rise: f64, fall: f64) void {
-    \\    if (dt <= 0.0) { // the DC point: the output IS the input, so arm here
+    \\fn zTransStep(in: f64, from: *f64, to: *f64, t0: *f64, t: f64, dt: f64, td: f64, rise: f64, fall: f64) void {
+    \\    if (dt <= 0.0) { // the DC point: the output IS the input, so sit on it
     \\        from.* = in;
+    \\        to.* = in;
     \\        t0.* = t;
     \\        return;
     \\    }
-    \\    const f = zTransFrac(in, from.*, t0.*, t, rise, fall);
-    \\    const y = from.* + (in - from.*) * f;
-    \\    // Settled — the output has caught up — so the NEXT excursion starts
-    \\    // from here, and its rise/fall time is counted from this instant.
-    \\    if (f >= 1.0 or y == in) {
-    \\        from.* = in;
-    \\        t0.* = t;
-    \\        return;
+    \\    if (in == to.*) return;
+    \\    // "td models transport delay": the ramp begins td after the change and
+    \\    // the output stays on its old trajectory until then, so it leaves from
+    \\    // where that trajectory will be at t + td, not from where it is now.
+    \\    const te = t + td;
+    \\    const f = zTransFrac(to.*, from.*, t0.*, te, rise, fall);
+    \\    const vi = from.* + (to.* - from.*) * f;
+    \\    // §4.5.8's four interruption paragraphs (Figures 4-7 … 4-12): an input
+    \\    // that changes inside the active region is "not ... a new transition,
+    \\    // but rather a readjustment", whose slope uses "either the original
+    \\    // transition's origin or destination as the new origin". One rule, four
+    \\    // figures — the reference is the DESTINATION when the new direction
+    \\    // opposes the original and the ORIGIN when it agrees:
+    \\    //   rising,  v3 < vi -> opposes -> (v3-v2)/tf3    rising,  v3 > vi -> (v3-v1)/tr3
+    \\    //   falling, v3 > vi -> opposes -> (v3-v2)/tr3    falling, v3 < vi -> (v3-v1)/tf3
+    \\    // "applied from the point of interruption (ti,vi)", spelled here as the
+    \\    // shifted origin (t4,v4) those paragraphs also name: v4 is the reference
+    \\    // level, t4 where the slope line through (te,vi) reaches it. The arrival
+    \\    // t3 = ti + (v3-vi)/slope then falls out of zTransFrac.
+    \\    //
+    \\    // NOT active is a new transition from where the output is — the branch
+    \\    // this took unconditionally, which is the reading the four paragraphs
+    \\    // exist to rule out.
+    \\    if (f < 1.0 and in != vi) {
+    \\        const tt3 = if (in > vi) rise else fall;
+    \\        const vref = if ((in > vi) != (to.* > from.*)) to.* else from.*;
+    \\        const slope = if (tt3 > 0.0) (in - vref) / tt3 else 0.0;
+    \\        if (slope != 0.0) {
+    \\            from.* = vref;
+    \\            to.* = in;
+    \\            t0.* = te + (vref - vi) / slope;
+    \\            return;
+    \\        }
     \\    }
-    \\    // §4.5.8 says nothing about an input that REVERSES mid-ramp. The
-    \\    // reading taken here is the one that keeps the output continuous: the
-    \\    // new excursion starts where the output actually is (`y`), and is
-    \\    // traversed in the full rise/fall time of its own direction. Detected
-    \\    // as the output sitting on the opposite side of the origin from the
-    \\    // target, which cannot happen while a single excursion is in progress.
-    \\    if ((in - from.*) * (y - from.*) < 0.0) {
-    \\        from.* = y;
-    \\        t0.* = t;
-    \\    }
+    \\    from.* = vi;
+    \\    to.* = in;
+    \\    t0.* = te;
     \\}
     \\
 ;
@@ -8744,44 +8782,7 @@ const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limit_ke
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
 /// device runs. Only devices that actually use a filter carry them.
 const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
-    @embedFile("filter_kernels.zig") ++ "\n" ++ zi_hold_txt;
-
-/// §4.5.12 the residual side of a Z-filter, the counterpart of `zZiStep`'s
-/// sampling side. It lives here rather than in `filter_kernels.zig` only
-/// because it is the piece `emitOperator` calls; the numerics are the same
-/// sections `__sec` builds.
-const zi_hold_txt =
-    \\/// §4.5.12 the Z-filter as the residual sees it. Between samples it "acts
-    \\/// like a simple sample-and-hold", so the output is the held constant and
-    \\/// carries no derivative. `dt <= 0` is a static analysis: there is no
-    \\/// history and no clock, a constant input makes every sample equal, so
-    \\/// z = 1 and the filter IS its DC gain H(1) = ∏ Σ_k num[i][k] / Σ_k den[i][k]
-    \\/// — the exact value of the transfer function at z = 1, applied to the
-    \\/// input so the operating point gets the right Jacobian too. This mirrors
-    \\/// `zLaplace`'s H(0) branch; without it every zi_* answered a DC operating
-    \\/// point with the 0.0 its `__out` field initialises to.
-    \\pub fn zZiHold(
-    \\    comptime S: type,
-    \\    comptime NS: usize,
-    \\    comptime D: usize,
-    \\    uin: S,
-    \\    sec: [NS][2][D + 1]f64,
-    \\    dt: f64,
-    \\    out: f64,
-    \\) S {
-    \\    if (dt > 0.0) return S.con(out);
-    \\    var y = uin;
-    \\    for (0..NS) |i| {
-    \\        var num: f64 = 0.0;
-    \\        var den: f64 = 0.0;
-    \\        for (sec[i][0]) |c| num += c;
-    \\        for (sec[i][1]) |c| den += c;
-    \\        y = y.scale(num / den);
-    \\    }
-    \\    return y;
-    \\}
-    \\
-;
+    @embedFile("filter_kernels.zig");
 
 const hist_txt =
     \\/// §4.5.7 the delayed value, as the residual sees it: Output(t) = Input(t − td).
@@ -8809,6 +8810,11 @@ const hist_txt =
     \\/// runtime-negative td, which lowering rejects where it can fold.
     \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
     \\    if (dt <= 0.0) return vin;
+    \\    // §4.5.15 "no state history prior to time t == 0": nothing has been
+    \\    // accepted yet, so the input IS the output. The ring used to be SEEDED
+    \\    // full on the first push, which made this unreachable; `head` is a
+    \\    // count now, so the empty ring has to answer for itself.
+    \\    if (head == 0) return vin;
     \\    const t = now - td;
     \\    const newest = (head + ts.len - 1) % ts.len;
     \\    if (t > ts[newest]) {
@@ -8820,14 +8826,33 @@ const hist_txt =
     \\    return S.con(zHistAt(ts, vs, head, t));
     \\}
     \\/// §4.5.7 absdelay history: a fixed ring of (t, v) samples, linearly
-    \\/// interpolated.
+    \\/// interpolated. `head` is the TOTAL number of accepted samples pushed, not
+    \\/// a wrapped index — the ring slot is `head % n`. That one extra fact is
+    \\/// what separates the two queries that used to answer the same way: a
+    \\/// query before recorded history began, which §4.5.15 settles ("all analog
+    \\/// operators are considered to have no state history prior to time t == 0")
+    \\/// and `Output(t) = Input(max(t − td, 0))` answers with Input(0); and a
+    \\/// query the ring has FORGOTTEN, which the clause settles not at all.
     \\fn zHistAt(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
-    \\    const n = ts.len;
-    \\    // O(1) clamp for a query at/before the oldest sample (ts[head] once the
-    \\    // ring is full, which the seeding first push below guarantees) — the
-    \\    // scan would walk all n entries to reach the same answer.
-    \\    if (t <= ts[head]) return vs[head];
-    \\    var i: usize = 0;
+    \\    const n: u32 = @intCast(ts.len);
+    \\    const wrapped = head > n;
+    \\    const oldest: usize = if (wrapped) head % n else 0;
+    \\    // O(1) for a query at or before the oldest sample — the scan would walk
+    \\    // all n entries to reach the same answer.
+    \\    if (t <= ts[oldest]) {
+    \\        // Before the first sample the operator HAS no history, and Input(0)
+    \\        // is the value the formula's max(t − td, 0) floor asks for.
+    \\        if (!wrapped) return vs[oldest];
+    \\        // Older than the whole ring. There is no honest answer here: the
+    \\        // clause bounds no lookback, so shortening the delay to whatever the
+    \\        // ring still holds is not an implementation-defined limit, it is a
+    \\        // different transport delay reported as this one. This used to
+    \\        // `return vs[head]` and say nothing.
+    \\        @panic("VerA: absdelay history underrun — td spans more accepted timepoints than " ++
+    \\            "the per-site history ring holds (codegen.hist_len); the host must take " ++
+    \\            "fewer, larger steps across the delay");
+    \\    }
+    \\    var i: u32 = 0;
     \\    var newer: usize = (head + n - 1) % n;
     \\    while (i < n) : (i += 1) {
     \\        const older = (newer + n - 1) % n;
@@ -8839,30 +8864,19 @@ const hist_txt =
     \\        }
     \\        newer = older;
     \\    }
-    \\    // Query older than the whole ring: clamp to the OLDEST sample.
-    \\    // Returning the newest here (as this once did) collapses the delay
-    \\    // to zero — the output tracks the input live, which is maximally
-    \\    // wrong for a transport operator. Oldest is bounded staleness.
-    \\    return vs[head];
+    \\    // Unreachable for a monotone ring: the clamp above covers t ≤ oldest and
+    \\    // `zAbsdelay` covers t > newest, so every remaining t is bracketed.
+    \\    return vs[(head + n - 1) % n];
     \\}
     \\fn zHistPush(ts: []f64, vs: []f64, head: *u32, t: f64, v: f64) void {
-    \\    // First push seeds the WHOLE ring: before it, every slot is an
-    \\    // unwritten 0, so a query older than recorded history (any t < td
-    \\    // early in a transient) read 0 V instead of the operating point —
-    \\    // the line launched a false transient off a value nothing ever wrote.
-    \\    // Full-from-first-push also makes `head` the oldest sample always,
-    \\    // which zHistAt's clamps rely on.
-    \\    if (head.* == 0 and ts[ts.len - 1] == 0) {
-    \\        @memset(ts, t);
-    \\        @memset(vs, v);
-    \\        head.* = 1;
-    \\        return;
-    \\    }
-    \\    ts[head.*] = t;
-    \\    vs[head.*] = v;
-    \\    head.* = (head.* + 1) % @as(u32, @intCast(ts.len));
+    \\    const n: u32 = @intCast(ts.len);
+    \\    ts[head.* % n] = t;
+    \\    vs[head.* % n] = v;
+    \\    // Saturating, not wrapping: `head` is a COUNT and zHistAt reads
+    \\    // `head > n` as "the ring has overwritten its oldest sample". Letting it
+    \\    // wrap at 2^32 accepted steps would read as an empty history.
+    \\    if (head.* != ~@as(u32, 0)) head.* += 1;
     \\}
-    \\
 ;
 
 // ---- the `u/<key>.zig` file-scope prologue (see `Output.prelude`) ----------
