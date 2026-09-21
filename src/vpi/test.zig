@@ -2,7 +2,8 @@
 //! `vera.compileSource` (or the digital `run.Harness`), opened, and its rows
 //! and failure paths checked. The ABI, the header's constants and C object
 //! lifetimes are `zig build test-vpi` (tests/fixtures/ch11_vpi/vpi_app.c against
-//! src/vpi/vpi_user.h).
+//! src/vpi/vpi_user.h); the last test here checks every Zig copy of a header
+//! constant against the header text.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -15,6 +16,7 @@ const iterate = @import("iterate.zig");
 const property = @import("property.zig");
 const root = @import("root.zig");
 const run = @import("run.zig");
+const systf = @import("systf.zig");
 const value = @import("value.zig");
 
 const ErrorInfo = root.ErrorInfo;
@@ -1294,4 +1296,71 @@ test "§12.22: vpi_handle_multi(vpiInterModPath) is one path per port pair, hold
     try std.testing.expect(std.mem.find(u8, lastMessage(), "same size") != null);
     try std.testing.expect(multi(imp, vpi_handle_by_name("top.n", null), a2) == null);
     try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+/// True for a decl name spelled as a vpi_user.h constant: `vpi*`, `cb*` or
+/// VerA's `acb*`, with no underscore (that is `vpi_get` and the routines).
+fn isHeaderSpelling(comptime name: []const u8) bool {
+    const prefixed = std.mem.startsWith(u8, name, "vpi") or std.mem.startsWith(u8, name, "cb") or
+        std.mem.startsWith(u8, name, "acb");
+    return prefixed and std.mem.findScalar(u8, name, '_') == null;
+}
+
+test "every vpi_user.h constant the Zig side spells has the header's value" {
+    // The header's integer macros: `#define NAME <int>`, decimal or `0x` hex,
+    // signed, at most one pair of parentheses. Aliases (`vpiSysFuncInt`),
+    // include guards and the `PLI_*` macros are not integers and are skipped.
+    const gpa = std.testing.allocator;
+    var macros: std.StringHashMapUnmanaged(c_int) = .empty;
+    defer macros.deinit(gpa);
+    var lines = std.mem.splitScalar(u8, @embedFile("vpi_user.h"), '\n');
+    while (lines.next()) |line| {
+        var words = std.mem.tokenizeAny(u8, line, " \t\r");
+        if (!std.mem.eql(u8, words.next() orelse continue, "#define")) continue;
+        const name = words.next() orelse continue;
+        const text = std.mem.trim(u8, words.next() orelse continue, "()");
+        const v = std.fmt.parseInt(c_int, text, 0) catch continue;
+        const gop = try macros.getOrPut(gpa, name);
+        // One name, one number: a second `#define` must agree with the first.
+        if (gop.found_existing) try std.testing.expectEqual(gop.value_ptr.*, v);
+        gop.value_ptr.* = v;
+    }
+    // The parser, against values read off the header by hand: line 124
+    // `vpiModule 32`, line 449 `vpiUndefined -1`, line 606 `vpiSupplyDrive
+    // 0x80` = 128, and Annex G's edge masks, whose unions are the header's own
+    // `vpiPosedge 0x0D` and `vpiNegedge 0x32` = 50.
+    try std.testing.expectEqual(@as(?c_int, 32), macros.get("vpiModule"));
+    try std.testing.expectEqual(@as(?c_int, -1), macros.get("vpiUndefined"));
+    try std.testing.expectEqual(@as(?c_int, 128), macros.get("vpiSupplyDrive"));
+    try std.testing.expectEqual(macros.get("vpiPosedge").?, macros.get("vpiEdge01").? | macros.get("vpiEdge0x").? | macros.get("vpiEdgex1").?);
+    try std.testing.expectEqual(@as(?c_int, 50), macros.get("vpiNegedge"));
+    try std.testing.expectEqual(macros.get("vpiNegedge").?, macros.get("vpiEdge10").? | macros.get("vpiEdge1x").? | macros.get("vpiEdgex0").?);
+
+    // Every `pub` c_int the routines spell as a header name (Zig 0.17
+    // reflection sees `pub` decls only). A `vpi*`/`cb*` name the header does
+    // not define is an error too: VerA's own numbers in that namespace
+    // (`vpiQuantity`, `vpiExpStrVal`) are in the header. The `acb*` analog
+    // reasons are not: tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h
+    // defines them, outside this module's directory.
+    @setEvalBranchQuota(100_000);
+    var checked: usize = 0;
+    inline for (.{ root, code, callback, value, systf, run, property }) |file| {
+        inline for (comptime std.meta.declarations(file)) |name| {
+            if (comptime !isHeaderSpelling(name)) continue;
+            if (comptime @TypeOf(@field(file, name)) != c_int) continue;
+            if (macros.get(name)) |want| {
+                std.testing.expectEqual(want, @field(file, name)) catch |e| {
+                    std.debug.print("{s}: vpi_user.h says {d}\n", .{ name, want });
+                    return e;
+                };
+                checked += 1;
+            } else if (comptime !std.mem.startsWith(u8, name, "acb")) {
+                std.debug.print("{s} is not a vpi_user.h integer macro\n", .{name});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    // 2026-10-17: 345 (the seven files' 351 top-level `pub` c_int decls less
+    // the six `acb*`). A floor, so a reflection that finds nothing cannot pass.
+    try std.testing.expect(checked >= 345);
 }
