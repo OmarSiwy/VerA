@@ -50,11 +50,12 @@
 // body Syntax 6-4 admits — one item declaration and one statement — and it is
 // legal under both readings, so the file's only claim is the chain itself.
 //
-// GROUND TRUTH TODAY: refused. `Flatten` resolves `ps.target` with `findModule`
-// only (E0904, "`h01_slow`, the module this paramset specializes"), so the second
-// identifier is required to be a module and the chain is unreachable. The
-// rewrite above changes nothing about that: verified by running --check, the
-// file still stops at E0904 on line 68 — the same diagnostic the old one gave.
+// GROUND TRUTH TODAY: green, both checks. It was refused at line 68 with E0904,
+// "`h01_slow`, the module this paramset specializes": `Flatten` resolved
+// `ps.target` with `findModule` only, so the second identifier was required to
+// be a module and no chain could elaborate. `paramsetChain` now walks it, and
+// the far link's statements are applied before the near link's — a choice §6.4
+// does not make, recorded at `paramsetOverrides` and asserted nowhere.
 //
 //! lrm 6.4
 //! lrm 6.4.1

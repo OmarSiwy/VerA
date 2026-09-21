@@ -19,12 +19,11 @@
 // this mapping: "the string parameter transistortype associates the string
 // "PNP" with a negative one (-1) value for the variable sign".)
 //
-// GROUND TRUTH TODAY: VerA's `Flatten.paramsetAdmits` judges a paramset's
-// ranges through `inRanges`, which folds only reals (`constReal`) and ignores
-// `ValueRange.strings` entirely. Both paramsets therefore admit, both survive
-// all three tie-breaks, and the instance is refused with E0914 "2 paramsets
-// named `h01_type_ps` are still applicable". The clause's own rule 2 is what
-// decides this instance, so the ambiguity is manufactured, not real.
+// GROUND TRUTH TODAY: green, both checks. It was refused with E0914, "2
+// paramsets named `h01_type_ps` are still applicable": `Flatten.inRanges` folded
+// only reals (`constReal`) and ignored `ValueRange.strings` entirely, so both
+// bins admitted, both survived all three tie-breaks, and the ambiguity rule 2
+// decides was manufactured rather than real. `inRanges` now has the string arm.
 //
 //! lrm 6.4.2
 //! lrm 3.4.2
