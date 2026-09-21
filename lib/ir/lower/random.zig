@@ -225,3 +225,39 @@ fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
     }
     return entry.value_ptr.*;
 }
+
+test "§9.13 distributions: the seed and the parameter rules" {
+    try Lower.expectBodies(&.{
+        // "For each system function, the seed argument shall be an integer."
+        .{ .src = "analog begin iv = $random(r); I(p) <+ iv; end", .code = .E0816 },
+        // Syntax 9-9: $dist_uniform takes a seed, a start and an end.
+        .{ .src = "analog begin iv = $dist_uniform(seed, 0); I(p) <+ iv; end", .code = .E0816 },
+        // "The start value shall be smaller than the end value."
+        .{ .src = "analog begin x = $rdist_uniform(seed, 2.0, 1.0); I(p) <+ x; end", .code = .E0816 },
+        .{ .src = "analog begin x = $rdist_uniform(seed, 0.0, 1.0); I(p) <+ x * V(p); end", .code = null },
+        // "mean ... shall be greater than zero (0)."
+        .{ .src = "analog begin x = $rdist_exponential(seed, -1.0); I(p) <+ x; end", .code = .E0816 },
+        // A type_string "shall only be used ... from within a paramset".
+        .{ .src = "analog begin x = $rdist_uniform(seed, 0.0, 1.0, \"global\"); I(p) <+ x; end", .code = .E0816 },
+    });
+}
+
+test "§9.13.1 omitted seeds number their sites in source order" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer a, b;
+        \\  analog begin
+        \\    a = $random;
+        \\    b = $random;
+        \\    I(p) <+ (a + b) * V(p);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    // "the simulator picks a seed": VerA's pick is 1 + 7919·ordinal, so the
+    // two sites start apart (`lowerRandom`).
+    try std.testing.expectEqualSlices(i64, &.{ 1, 7920 }, h.low.out.rng_auto_seeds.items);
+}

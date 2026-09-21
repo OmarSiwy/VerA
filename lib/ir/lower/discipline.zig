@@ -371,3 +371,109 @@ pub fn checkNetCompat(self: *Lower, tok: u32, hi: u32, lo: u32) Oom!void {
     d.note("{s}", .{why});
     try d.emit();
 }
+
+test "§3.6 natures and disciplines: the declaration rules" {
+    const cases = [_]Lower.Case{
+        // §3.6.2.1 one nature on both bindings.
+        .{ .src =
+        \\nature lb_n1; units = "V"; access = LbV1; abstol = 1u; endnature
+        \\discipline lb_d1; potential lb_n1; flow lb_n1; enddiscipline
+        \\module m; endmodule
+        , .code = .E0338 },
+        // §3.6.2.2 a discrete domain with a nature binding.
+        .{ .src =
+        \\nature lb_n2; units = "V"; access = LbV2; abstol = 1u; endnature
+        \\discipline lb_d2; potential lb_n2; domain discrete; enddiscipline
+        \\module m; endmodule
+        , .code = .E0339 },
+        // §3.6.1.2 abstol "is required for all base natures".
+        .{ .src =
+        \\nature lb_n3; units = "V"; access = LbV3; endnature
+        \\module m; endmodule
+        , .code = .E0332 },
+        // A derived nature inherits units and access; it does not restate them.
+        .{ .src =
+        \\nature lb_n4; units = "V"; access = LbV4; abstol = 1u; endnature
+        \\nature lb_n5 : lb_n4; units = "mV"; endnature
+        \\module m; endmodule
+        , .code = .E0333 },
+        .{ .src =
+        \\nature lb_n4; units = "V"; access = LbV4; abstol = 1u; endnature
+        \\nature lb_n6 : lb_n4; access = LbV6; endnature
+        \\module m; endmodule
+        , .code = .E0334 },
+        // §3.6.1.3 "The name of the attribute shall be unique".
+        .{ .src =
+        \\nature lb_n7; units = "V"; access = LbV7; abstol = 1u; abstol = 2u; endnature
+        \\module m; endmodule
+        , .code = .E0343 },
+        // §3.6.1.2 access "shall be an identifier (by name, not as a string)".
+        .{ .src =
+        \\nature lb_n8; units = "V"; access = "LbV8"; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0340 },
+        // §3.13.1 one scope for natures and disciplines.
+        .{ .src =
+        \\nature lb_x; units = "V"; access = LbX; abstol = 1u; endnature
+        \\discipline lb_x; potential lb_x; enddiscipline
+        \\module m; endmodule
+        , .code = .E0336 },
+        .{ .src =
+        \\nature lb_n9; units = "V"; access = LbV9; abstol = 1u; endnature
+        \\nature lb_n9; units = "V"; access = LbV9b; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0342 },
+        // §3.13.2 "the access function of each base nature shall be unique".
+        .{ .src =
+        \\nature lb_a; units = "V"; access = LbAcc; abstol = 1u; endnature
+        \\nature lb_b; units = "A"; access = LbAcc; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0335 },
+        // §3.6.1.2 ddt_nature "shall be the name ... of a nature which is
+        // defined elsewhere".
+        .{ .src =
+        \\nature lb_n10; units = "V"; access = LbV10; abstol = 1u; ddt_nature = lb_nowhere; endnature
+        \\module m; endmodule
+        , .code = .E0374 },
+        .{ .src =
+        \\nature lb_n11; units = "Wb"; access = LbPhi11; abstol = 1u; endnature
+        \\nature lb_n12; units = "V"; access = LbV12; abstol = 1u; ddt_nature = lb_n11; endnature
+        \\module m; endmodule
+        , .code = null },
+        // §3.6.2.5 "the bound nature and attribute needs to be defined".
+        .{ .src =
+        \\nature lb_n13; units = "V"; access = LbV13; abstol = 1u; endnature
+        \\discipline lb_d13; potential lb_n13; flow.abstol = 1u; enddiscipline
+        \\module m; endmodule
+        , .code = .E0370 },
+        // §3.11 "if an access function has two nets as arguments, they must
+        // be compatible": electrical and thermal bind different natures.
+        .{ .src =
+        \\module m(a, b);
+        \\  inout a, b;
+        \\  electrical a;
+        \\  thermal b;
+        \\  analog I(a, b) <+ V(a, b);
+        \\endmodule
+        , .code = .E0355 },
+    };
+    for (cases) |c| try Lower.expectVerdict(c.src, c.code);
+}
+
+test "§3.6.2.5 a discipline's abstol override is the value its net reads" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\nature lb_i; units = "A"; access = LbI; abstol = 1u; endnature
+        \\nature lb_v; units = "V"; access = LbV; abstol = 100u; endnature
+        \\discipline lb_ttl; potential lb_v; flow lb_i; flow.abstol = 10u; enddiscipline
+        \\module m; endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    const info = h.low.out.disciplines.get("lb_ttl").?;
+    // §2.6.2: 10u and 1e-5 are one real number, so the comparison is exact.
+    try std.testing.expectEqual(@as(f64, 1e-5), info.flow_abstol);
+    try std.testing.expectEqual(@as(f64, 1e-4), info.potential_abstol);
+    try std.testing.expectEqualStrings("LbV", info.potential_access);
+    try std.testing.expect(info.has_potential and info.has_flow and !info.is_discrete);
+}

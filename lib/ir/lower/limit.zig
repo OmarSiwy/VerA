@@ -132,3 +132,33 @@ pub const AliasResult = enum {
     /// treated as a normal continuous node declared in the module".
     unresolved,
 };
+
+test "§9.17.3 one $limit state slot per access function, whatever the site count" {
+    const cases = [_]struct { second: []const u8, slots: usize }{
+        .{ .second = "V(p)", .slots = 1 }, // two sites, one access function
+        .{ .second = "V(q)", .slots = 2 },
+    };
+    for (cases) |c| {
+        const gpa = std.testing.allocator;
+        const src = try gpa.print(
+            \\module m(p, q);
+            \\  inout p, q; electrical p, q;
+            \\  analog function real lim;
+            \\    input vnew, vold;
+            \\    real vnew, vold;
+            \\    lim = vnew;
+            \\  endfunction
+            \\  analog begin
+            \\    I(p) <+ 1m * $limit(V(p), lim);
+            \\    I(q) <+ 1m * $limit({s}, lim);
+            \\  end
+            \\endmodule
+        , .{c.second});
+        defer gpa.free(src);
+        var h: Lower.Harness = undefined;
+        try h.init(gpa, src);
+        defer h.deinit();
+        _ = try h.low.lowerFile();
+        try std.testing.expectEqual(c.slots, h.low.out.limit_slots.items.len);
+    }
+}

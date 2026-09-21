@@ -838,3 +838,26 @@ test simparamIsRuntime {
     try std.testing.expect(simparamIsRuntime("dt"));
     try std.testing.expect(!simparamIsRuntime("gmin"));
 }
+
+test "Clause 9 system functions: context and argument rules" {
+    try Lower.expectBodies(&.{
+        // §9.2 Table 9-7: `$time` reads No in the analog column.
+        .{ .src = "analog begin x = $time; I(p) <+ x; end", .code = .E0806 },
+        // §9.22 "Driver access functions can only be called from connect modules."
+        .{ .src = "analog begin x = $driver_count(p); I(p) <+ x; end", .code = .E0818 },
+        // Annex G: `$limexp` became §4.5.13's `limexp`.
+        .{ .src = "analog begin x = $limexp(1.0); I(p) <+ x; end", .code = .E0808 },
+        // §9.17.3: pnjlim takes vte and vcrit.
+        .{ .src = "analog I(p) <+ $limit(V(p), \"pnjlim\", 0.025);", .code = .E0809 },
+        // §9.15: an unknown name is an error only without the fallback.
+        .{ .src = "analog begin x = $simparam(\"vera_no_such\"); I(p) <+ x; end", .code = .E0811 },
+        .{ .src = "analog begin x = $simparam(\"vera_no_such\", 1.0); I(p) <+ x * V(p); end", .code = null },
+        .{ .src = "analog begin sv = $simparam$str(\"vera_no_such\"); I(p) <+ V(p); end", .code = .E0811 },
+        // §9.19: "a single argument, which must be a parameter identifier".
+        .{ .src = "analog begin x = $param_given(x); I(p) <+ x; end", .code = .E0822 },
+        .{ .src = "analog begin x = $param_given(g); I(p) <+ x * V(p); end", .code = null },
+        // §4.6.1 / A.8.2: each analysis name is a quoted string.
+        .{ .src = "analog begin x = analysis(dc); I(p) <+ x; end", .code = .E0574 },
+        .{ .src = "analog begin x = analysis(\"dc\"); I(p) <+ x * V(p); end", .code = null },
+    });
+}

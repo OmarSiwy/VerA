@@ -424,3 +424,29 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
     }
     return col + sel - 1;
 }
+
+test "§9.21.2 $table_model: the control string, the dependent selector and the sample count" {
+    // One lookup input, two pattern columns (§9.21.1 "Arrays may be specified
+    // directly"): ncol = 2, so the leading columns are 1 and there is M = 1
+    // dependent. "This number runs 1 though M", so only `;1` selects one.
+    try Lower.expectBodies(&.{
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;1\");", .code = null },
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;2\");", .code = .E0815 },
+        // A selector that parses as an integer but is past every column: the
+        // same refusal, never an overflow in the column arithmetic.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;18446744073709551615\");", .code = .E0815 },
+        // "Each sub-string ... has at most 3 characters."
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LLL\");", .code = .E0815 },
+        // `X` is in neither Table 9-30 nor Table 9-31.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1X\");", .code = .E0815 },
+        // One sub-string per independent variable; there is one.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL,1LL\");", .code = .E0815 },
+        // Table 9-30's `I` ignores a column; it takes no extrapolation.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"IC;1\");", .code = .E0815 },
+        // §9.21: two dimensions need 2^2 = 4 samples; these columns hold 2.
+        .{ .src = "analog I(p) <+ $table_model(V(p), V(q), '{0.0, 1.0}, '{0.0, 1.0}, '{0.0, 1.0});", .code = .E0815 },
+        // §9.21.1: the data source "is captured on the first call", so a file
+        // that is not there is that call's error, not the compilation's.
+        .{ .src = "analog I(p) <+ $table_model(V(p), \"vera_lower_test_no_such_table.tbl\");", .code = null },
+    });
+}

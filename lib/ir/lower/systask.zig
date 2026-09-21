@@ -1257,3 +1257,127 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         self.out.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }
 }
+
+test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditionally" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module bs(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    $bound_step(1n);
+        \\    if (V(p,n) > 0.0) $bound_step(1p);
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expect(h.bag.isEmpty());
+
+    // Exactly ONE synthetic call, and its argument is a phi: the guarded
+    // `$bound_step(1p)` must NOT bound the step on the arm that never ran.
+    var found: ?Mir.Value = null;
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @fromBackingInt(@intCast(bi));
+        var it = h.mir.blockInsts(b);
+        while (it.next()) |inst| {
+            if (h.mir.instOp(inst) != .call) continue;
+            if (!std.mem.eql(u8, h.mir.instData(inst).call.name, "$bound_step")) continue;
+            try std.testing.expect(found == null);
+            found = h.mir.instData(inst).call.args[0];
+        }
+    }
+    const arg = h.mir.resolveAlias(found orelse return error.NoBoundStepCall);
+    try std.testing.expectEqual(Mir.Opcode.phi, h.mir.instOp(h.mir.valueDef(arg).inst_result));
+    // …and nothing was emitted for §9.17.1, which this module never calls.
+    try std.testing.expect(h.low.systask_state.disc_place == null);
+}
+
+test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    $discontinuity(-1);
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expect(h.bag.isEmpty());
+    try std.testing.expectEqual(Mir.Value.one, h.low.out.reject_iteration);
+    // Iteration rejection must not become a timestep discontinuity.
+    try std.testing.expect(h.low.systask_state.disc_place == null);
+    try std.testing.expect(h.low.systask_state.bound_step_place == null);
+
+    var h2: Lower.Harness = undefined;
+    try h2.init(std.testing.allocator,
+        \\module d2(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    $discontinuity(2);
+        \\    $discontinuity;
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    );
+    defer h2.deinit();
+    _ = try h2.low.lowerFile();
+    try std.testing.expect(h2.bag.isEmpty());
+    try std.testing.expect(h2.low.systask_state.disc_place != null);
+}
+
+test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neighbours" {
+    try Lower.expectBodies(&.{
+        // §9.7.3 `finish_number ::= 0 | 1 | 2`.
+        .{ .src = "analog begin $fatal(3); I(p) <+ V(p); end", .code = .E0824 },
+        .{ .src = "analog begin $fatal(1, \"stop\"); I(p) <+ V(p); end", .code = null },
+        // §9.17.2 "The expression argument shall be non-negative."
+        .{ .src = "analog begin $bound_step(-1.0); I(p) <+ V(p); end", .code = .E0803 },
+        .{ .src = "analog begin $bound_step(1n); I(p) <+ V(p); end", .code = null },
+        // §9.17.1: "i must be a non-negative integer"; -1 is the special form.
+        .{ .src = "analog begin $discontinuity(-2); I(p) <+ V(p); end", .code = .E0820 },
+        .{ .src = "analog begin $discontinuity(-1); I(p) <+ V(p); end", .code = null },
+        // §9.17.1's argument is a constant_expression.
+        .{ .src = "analog begin x = V(p); $discontinuity(x); I(p) <+ V(p); end", .code = .E0805 },
+        // §9.4.3: one argument per consuming conversion; `%%` consumes none.
+        .{ .src = "analog begin $strobe(\"%d %d\", 1); I(p) <+ V(p); end", .code = .E0810 },
+        .{ .src = "analog begin $strobe(\"%d%%\", 1); I(p) <+ V(p); end", .code = null },
+        .{ .src = "analog begin $strobe(\"%s\", 1.5); I(p) <+ V(p); end", .code = .E0819 },
+        // §9.5.3: `$swrite` writes into a string variable.
+        .{ .src = "analog begin $swrite(x, \"a\"); I(p) <+ V(p); end", .code = .E0813 },
+        // §9.5.4.2's six conversion codes, and nothing else.
+        .{ .src = "analog begin iv = $sscanf(\"1\", \"%q\", r); I(p) <+ V(p); end", .code = .E0813 },
+        .{ .src = "analog begin iv = $sscanf(\"1\", \"%d\", r); I(p) <+ V(p) * r; end", .code = null },
+        // §9.7.2 "The $stop task shall not be used within an analog initial block."
+        .{ .src = "analog initial begin $stop; end\nanalog I(p) <+ V(p);", .code = .E0807 },
+    });
+}
+
+test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" {
+    // `$strobe` reads a branch flow, so its operand is lowered at the end of
+    // the block, where §5.4.2.2's flow is converged. `x` is the named block's
+    // own variable, and the operand was written in its scope.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p, q);
+        \\  inout p, q; electrical p, q;
+        \\  analog begin : blk
+        \\    real x;
+        \\    x = 2.0;
+        \\    $strobe("%g", x * I(p, q));
+        \\    I(p, q) <+ V(p, q);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = h.low.lowerFile() catch |err| switch (err) {
+        error.DiagnosticsReported => {},
+        else => |e| return e,
+    };
+    if (h.bag.err_count != 0) for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.bag.at(i).code), h.bag.at(i).message });
+    try std.testing.expectEqual(@as(u32, 0), h.bag.err_count);
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.displays.items.len);
+}

@@ -28,6 +28,7 @@ const lower_node = @import("node.zig");
 const lower_table_model = @import("table_model.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
+const diag = @import("diag");
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const ground = Lower.ground;
@@ -1026,4 +1027,159 @@ test isCoefFilter {
     try std.testing.expect(isCoefFilter("zi_zp"));
     try std.testing.expect(!isCoefFilter("transition"));
     try std.testing.expect(!isCoefFilter("laplace"));
+}
+
+test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
+    // What makes this rule worth a diagnostic: an analog operator is a state
+    // machine the kernel steps once per accepted timestep. Under a branch the
+    // solve can flip, the step its arm was off feeds it the type's zero, and its
+    // history is wrong from then on — with a residual that still looks ordinary.
+    //
+    // Each case is the SAME operator under a different condition; only the
+    // condition decides the verdict, which is exactly what §5.8.1 says.
+    const cases = [_]struct { cond: []const u8, warns: bool }{
+        // Not an analysis_or_constant_expression: a probe moves every iteration.
+        .{ .cond = "V(c) > 0.5", .warns = true },
+        .{ .cond = "V(c) > 0.5 && gain > 0.0", .warns = true },
+        // A.8.2 analysis_function_call — §5.8.1 names it explicitly.
+        .{ .cond = "analysis(\"dc\")", .warns = false },
+        .{ .cond = "!analysis(\"tran\")", .warns = false },
+        // constant_primary: a §3.4 parameter cannot move mid-analysis.
+        .{ .cond = "gain > 0.0", .warns = false },
+        .{ .cond = "analysis(\"dc\") || gain > 0.0", .warns = false },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p, n, c);
+            \\  inout p, n, c;
+            \\  electrical p, n, c;
+            \\  parameter real gain = 1.0;
+            \\  real q;
+            \\  analog begin
+            \\    q = 0.0;
+            \\    if ({s}) q = ddt(V(p, n));
+            \\    I(p, n) <+ q;
+            \\  end
+            \\endmodule
+        , .{c.cond});
+        defer std.testing.allocator.free(src);
+
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        }
+
+        var seen = false;
+        for (0..h.bag.count()) |i| {
+            if (h.bag.at(i).code == .E0514) seen = true;
+        }
+        std.testing.expectEqual(c.warns, seen) catch |e| {
+            std.debug.print("condition: if ({s})\n", .{c.cond});
+            return e;
+        };
+    }
+}
+
+test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no history" {
+    // §5.9's ban on analog filter functions in repeat/while/non-genvar `for` is
+    // unconditional — there is no analysis_or_constant escape hatch — so a
+    // constant loop bound does NOT license the operator.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  integer i; real q;
+        \\  analog begin
+        \\    q = 0.0;
+        \\    for (i = 0; i < 3; i = i + 1) q = q + ddt(V(p, n));
+        \\    I(p, n) <+ q;
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
+    try std.testing.expectEqual(diag.Code.E0514, h.bag.at(0).code);
+
+    // ...but a genvar `for` (§5.9.3 analog_for) is unrolled onto the spine, so
+    // every operator instance is stepped every time: no warning.
+    var h2: Lower.Harness = undefined;
+    try h2.init(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  genvar i; real q;
+        \\  analog begin
+        \\    q = 0.0;
+        \\    for (i = 0; i < 3; i = i + 1) q = q + ddt(V(p, n));
+        \\    I(p, n) <+ q;
+        \\  end
+        \\endmodule
+    );
+    defer h2.deinit();
+    _ = try h2.low.lowerFile();
+    try std.testing.expect(h2.bag.isEmpty());
+
+    // `ddx` (§4.5.6) and `limexp` (§4.5.13) read no previous timestep, so a
+    // branch that was off cannot corrupt them. `vdmos.va` calls conditional
+    // `limexp` three times; warning there would be noise, and noise is what
+    // teaches a modeller to silence the code.
+    var h3: Lower.Harness = undefined;
+    try h3.init(std.testing.allocator,
+        \\module m(p, n, c);
+        \\  inout p, n, c;
+        \\  electrical p, n, c;
+        \\  real q;
+        \\  analog begin
+        \\    q = 0.0;
+        \\    if (V(c) > 0.5) q = limexp(V(p, n)) + ddx(V(p, n), V(p));
+        \\    I(p, n) <+ q;
+        \\  end
+        \\endmodule
+    );
+    defer h3.deinit();
+    _ = try h3.low.lowerFile();
+    try std.testing.expect(h3.bag.isEmpty());
+}
+
+test "§4.5 analog operators: argument shapes and bounds" {
+    try Lower.expectBodies(&.{
+        // §4.5.1: only the laplace and Z-transform coefficient slots take an
+        // array. Anywhere else a pattern is §4.2's scalar context (E0509),
+        // never a vector flattened into the operator's other arguments.
+        .{ .src = "analog I(p) <+ transition('{1.0, 2.0});", .code = .E0509 },
+        .{ .src = "analog I(p) <+ laplace_nd(V(p), '{1.0}, '{1.0, 1.0});", .code = null },
+        // §4.5.11: a scalar in a coefficient slot is neither array spelling.
+        .{ .src = "analog I(p) <+ laplace_nd(V(p), 1.0, '{1.0, 1.0});", .code = .E0572 },
+        // §4.5.6: the second argument is one unknown; V(p, q) is two.
+        .{ .src = "analog I(p) <+ ddx(V(p), V(p, q));", .code = .E0504 },
+        .{ .src = "analog I(p) <+ ddx(V(p), V(p));", .code = null },
+        // §4.5.8 td, §4.5.9 the two rates, §4.5.5 modulus, §4.5.10 direction.
+        .{ .src = "analog I(p) <+ transition(V(p), -1.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ transition(V(p), 0.0);", .code = null },
+        .{ .src = "analog I(p) <+ slew(V(p), 1.0, 1.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ idtmod(V(p), 0.0, 0.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ last_crossing(V(p), 2);", .code = .E0516 },
+        // Table 4-20: abstol is a constant expression argument; a probe moves.
+        .{ .src = "analog I(p) <+ ddt(V(p), V(q));", .code = .E0515 },
+        .{ .src = "analog I(p) <+ ddt(V(p), 1e-6);", .code = null },
+    });
+}
+
+test "§4.6 small-signal sources: arguments and labels" {
+    try Lower.expectBodies(&.{
+        // §4.6.4.1 `white_noise(pwr[, name])`: the power is a scalar. Only
+        // `noise_table`'s input (§4.6.4.3) is a vector.
+        .{ .src = "analog I(p) <+ white_noise('{1.0, 2.0});", .code = .E0509 },
+        .{ .src = "analog I(p) <+ white_noise(1e-20);", .code = null },
+        // Syntax 4-4: the optional last argument is a string label.
+        .{ .src = "analog I(p) <+ white_noise(1e-20, 3);", .code = .E0573 },
+        // §4.6.4.2: 1/f^exp has no default exponent.
+        .{ .src = "analog I(p) <+ flicker_noise(1e-20);", .code = .E0522 },
+        // A.8.2 puts the quotation marks inside `ac_stim`'s production.
+        .{ .src = "analog I(p) <+ ac_stim(1);", .code = .E0521 },
+    });
 }

@@ -744,3 +744,65 @@ test collectDeclMeta {
     try std.testing.expectEqualStrings("internal", rows[2].desc.?);
     try std.testing.expect(rows[2].units == null);
 }
+
+test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
+    // Every row is one attr_spec in a slot Syntax 2-7 really has, so the only
+    // thing under test is the VALUE. The accepting rows matter as much as the
+    // refusing ones: §2.9 leaves an unlisted name's meaning to the tool, so a
+    // domain check that fired on `tool_hint` would refuse conforming source.
+    const cases = [_]struct { attr: []const u8, code: ?diag.Code }{
+        // §2.9 `attr_spec ::= attr_name [ = constant_expression ]`.
+        .{ .attr = "q = 1", .code = null },
+        .{ .attr = "q", .code = null }, // "the default value is 1"
+        .{ .attr = "q = gain", .code = null }, // A.8.4 a parameter IS constant
+        .{ .attr = "q = z", .code = .E0357 }, // a variable is not
+        .{ .attr = "q = 1 + z", .code = .E0357 },
+        // §2.9.2's four names and nothing else.
+        .{ .attr = "desc = \"a resistance\"", .code = null },
+        .{ .attr = "desc = 7", .code = .E0358 },
+        .{ .attr = "units = \"S\"", .code = null },
+        .{ .attr = "units = 1.0", .code = .E0358 },
+        .{ .attr = "op = \"yes\"", .code = null },
+        .{ .attr = "op = \"no\"", .code = null },
+        .{ .attr = "op = \"maybe\"", .code = .E0358 },
+        .{ .attr = "op = 1", .code = .E0358 },
+        .{ .attr = "multiplicity = \"multiply\"", .code = null },
+        .{ .attr = "multiplicity = \"divide\"", .code = null },
+        .{ .attr = "multiplicity = \"none\"", .code = null },
+        .{ .attr = "multiplicity = \"sideways\"", .code = .E0358 },
+        // Not a §2.9.2 name: no stated domain, so no check.
+        .{ .attr = "tool_hint = \"anything\"", .code = null },
+        .{ .attr = "full_case = 1", .code = null },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  real z;
+            \\  (* {s} *) parameter real gain = 1.0;
+            \\  analog begin
+            \\    z = 2.0;
+            \\    I(p, n) <+ gain * V(p, n);
+            \\  end
+            \\endmodule
+        , .{c.attr});
+        defer std.testing.allocator.free(src);
+
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        }
+        var seen: ?diag.Code = null;
+        for (0..h.bag.count()) |i| {
+            if (h.bag.at(i).code == .E0357 or h.bag.at(i).code == .E0358) seen = h.bag.at(i).code;
+        }
+        std.testing.expectEqual(c.code, seen) catch |e| {
+            std.debug.print("attribute: (* {s} *)\n", .{c.attr});
+            return e;
+        };
+    }
+}

@@ -1221,6 +1221,35 @@ pub fn expectBodyVerdict(decls: []const u8, body: []const u8, want: ?diag.Code) 
     return expectVerdict(src, want);
 }
 
+/// Test support: one rule case for `expectBodies`, a module body and the code
+/// it must report, or null for a body that must lower with no error at all.
+/// The oracle is the LRM sentence each case cites: every refusal has a legal
+/// neighbour beside it, so a blanket refusal fails the table.
+pub const Case = struct { src: []const u8, code: ?diag.Code };
+
+/// Test support: `expectVerdict` over every case, stopping at the first that
+/// fails. Each `src` is a module body with electrical ports `p` and `q`, a real
+/// parameter `g`, and the variables `x`, `r` (real), `iv`, `seed` (integer)
+/// and `sv` (string).
+pub fn expectBodies(cases: []const Case) !void {
+    const gpa = std.testing.allocator;
+    for (cases) |c| {
+        const src = try gpa.print(
+            \\module m(p, q);
+            \\  inout p, q;
+            \\  electrical p, q;
+            \\  parameter real g = 1.0;
+            \\  real x, r;
+            \\  integer iv, seed;
+            \\  string sv;
+            \\{s}
+            \\endmodule
+        , .{c.src});
+        defer gpa.free(src);
+        try expectVerdict(src, c.code);
+    }
+}
+
 /// The frontend parser, which only `Harness` drives.
 const Parser = @import("frontend").Parser;
 

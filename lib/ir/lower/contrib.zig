@@ -1630,3 +1630,161 @@ test addNoiseSrc {
     try std.testing.expectEqual(@as(u32, 3), out.items[0].id);
     try std.testing.expectEqual(@as(u32, 9), out.items[1].id);
 }
+
+test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module amp(out, pin, nin);
+        \\  inout out, pin, nin;
+        \\  electrical out, pin, nin;
+        \\  analog begin
+        \\    V(out) : V(pin, nin) == 2.0 * V(out);
+        \\    V(out) : V(pin) == 0.0;
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+
+    // §5.6.7.1 several indirect contributions are legal, and each is its own
+    // equation — NEVER accumulated the way §5.6.1.3 accumulates `<+`.
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.contributions.items.len);
+    for (h.low.out.contributions.items) |c| {
+        try std.testing.expectEqual(Lower.Kind.indirect, c.kind);
+        try std.testing.expectEqual(Lower.Access.potential, c.access);
+        try std.testing.expectEqual(@as(u32, 0), c.hi); // out
+        try std.testing.expectEqual(Lower.ground, c.lo);
+        try std.testing.expectEqual(Mir.Value.f_zero, c.react_val);
+    }
+    // Row ORIENTATION: probe − equation, so the top-level op is `fsub` whose
+    // LHS is the probe slice. Reversed, the residual is negated and an
+    // asymmetric equation converges to the wrong point.
+    const row = h.mir.resolveAlias(h.low.out.contributions.items[0].resist_val);
+    const inst = h.mir.valueDef(row).inst_result;
+    try std.testing.expectEqual(Mir.Opcode.fsub, h.mir.instOp(inst));
+    const lhs = h.mir.resolveAlias(h.mir.instData(inst).binary.lhs);
+    // lhs is V(pin,nin) = x[pin] − x[nin]; rhs is the 2.0*V(out) product.
+    try std.testing.expectEqual(Mir.Opcode.fsub, h.mir.instOp(h.mir.valueDef(lhs).inst_result));
+    const rhs = h.mir.resolveAlias(h.mir.instData(inst).binary.rhs);
+    try std.testing.expectEqual(Mir.Opcode.fmul, h.mir.instOp(h.mir.valueDef(rhs).inst_result));
+}
+
+test "lower: §5.6.7.2 an indirectly assigned branch refuses <+, in either order" {
+    // The two orders are mirror images, and each has its own code.
+    const cases = [_]struct { want: diag.Code, src: []const u8 }{
+        .{ .want = .E0409, .src =
+        \\module a(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    V(p, n) : V(p) == 0.0;
+        \\    I(p, n) <+ 1e-6;
+        \\  end
+        \\endmodule
+        },
+        // …and the reverse order, on the reversed net pair (a "parallel
+        // branch" in §5.6.7.2's words).
+        .{ .want = .E0415, .src =
+        \\module a(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    I(n, p) <+ 1e-6;
+        \\    V(p, n) : V(p) == 0.0;
+        \\  end
+        \\endmodule
+        },
+    };
+    for (cases) |c| {
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, c.src);
+        defer h.deinit();
+        try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
+        try std.testing.expectEqual(c.want, h.bag.at(0).code);
+    }
+}
+
+test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under a constant one" {
+    var bad: Lower.Harness = undefined;
+    try bad.init(std.testing.allocator,
+        \\module a(o, i);
+        \\  inout o, i;
+        \\  electrical o, i;
+        \\  analog if (V(i) > 0.0) V(o) : V(i) == 0.0;
+        \\endmodule
+    );
+    defer bad.deinit();
+    try std.testing.expectError(error.DiagnosticsReported, bad.low.lowerFile());
+    try std.testing.expectEqual(diag.Code.E0412, bad.bag.at(0).code);
+
+    // "…unless the conditional expression is a constant expression": a folded
+    // condition lowers its arm straight into the current block, so it never
+    // raises `cond_depth`. A parameter condition folds too, as a shape
+    // parameter (`lowerIf`); the second harness below.
+    var ok: Lower.Harness = undefined;
+    try ok.init(std.testing.allocator,
+        \\module a(o, i);
+        \\  inout o, i;
+        \\  electrical o, i;
+        \\  analog if (1) V(o) : V(i) == 0.0;
+        \\endmodule
+    );
+    defer ok.deinit();
+    _ = try ok.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 1), ok.low.out.contributions.items.len);
+    try std.testing.expectEqual(Lower.Kind.indirect, ok.low.out.contributions.items[0].kind);
+
+    var par: Lower.Harness = undefined;
+    try par.init(std.testing.allocator,
+        \\module a(o, i);
+        \\  inout o, i;
+        \\  electrical o, i;
+        \\  parameter integer sel = 1;
+        \\  analog if (sel) V(o) : V(i) == 0.0;
+        \\endmodule
+    );
+    defer par.deinit();
+    _ = try par.low.lowerFile();
+    try std.testing.expectEqual(Lower.Kind.indirect, par.low.out.contributions.items[0].kind);
+    try std.testing.expect(par.low.out.params.items[0].shape);
+}
+
+test "§5.6 contributions: the rules a `<+` is judged by" {
+    try Lower.expectBodies(&.{
+        // §6.3.6: every flow contribution is already scaled by $mfactor.
+        .{ .src = "analog I(p) <+ V(p) * $mfactor;", .code = .E0912 },
+        .{ .src = "analog I(p) <+ V(p) + 0.0 * $mfactor;", .code = null },
+        // §4.5.12: a zero-transition Z-filter "shall not be directly assigned".
+        .{ .src = "analog V(p) <+ zi_nd(V(q), '{1.0}, '{1.0}, 1n, 0);", .code = .E0518 },
+        // §7.3.2.1: an infinite value contributed to a branch.
+        .{ .src = "analog begin x = 1.0 / 0.0; I(p) <+ x + 0.0 * V(p); end", .code = .E0424 },
+        .{ .src = "analog begin x = 1.0 / 2.0; I(p) <+ x + 0.0 * V(p); end", .code = null },
+        // §1.3.1: both quantities of a probe branch; a contribution makes it a
+        // source, whose two quantities §5.4.2.2 makes accessible.
+        .{ .src = "analog begin x = V(p, q) + I(p, q); I(p) <+ x; end", .code = .E0423 },
+        .{ .src = "analog begin x = V(p, q) + I(p, q); I(p, q) <+ x * 1m; end", .code = null },
+        // §4.4 Table 4-16: `I(n1,n1)` is an error.
+        .{ .src = "analog I(p) <+ I(p, p);", .code = .E0315 },
+        // §5.9: no contribution inside a procedural `for`.
+        .{ .src = "analog for (iv = 0; iv < 2; iv = iv + 1) I(p) <+ 1.0;", .code = .E0426 },
+    });
+}
+
+test "§1.3.1.2 a reversed spelling accumulates into one source" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p, q);
+        \\  inout p, q; electrical p, q;
+        \\  analog begin
+        \\    I(p, q) <+ 1.0;
+        \\    I(q, p) <+ 2.0;
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    // `I(q,p) <+ 2` is `I(p,q) <+ -2`: one row, in canonical (p, q) order.
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
+    try std.testing.expectEqual(@as(u32, 0), h.low.out.contributions.items[0].hi);
+    try std.testing.expectEqual(@as(u32, 1), h.low.out.contributions.items[0].lo);
+}

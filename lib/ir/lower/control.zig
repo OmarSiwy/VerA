@@ -13,6 +13,7 @@ const lower_hier_name = @import("hier_name.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
+const diag = @import("diag");
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
 const Const = Lower.Const;
@@ -767,4 +768,39 @@ test "loops: §5.9 the procedural loops and their jumps" {
     try Lower.expectBodyVerdict(decls, "    for (k = 0; k < 3; k = k + 1) begin\n      if (k == 1) continue;\n      y = y + 1.0;\n    end", null);
     // A jump outside every loop (E0404).
     try Lower.expectBodyVerdict(decls, "    break;", .E0404);
+}
+
+test "§6.6.1 a genvar loop that ends is unrolled however long; one that never ends is E0420" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { cond: []const u8, step: []const u8, code: ?diag.Code }{
+        .{ .cond = "i < 4096", .step = "i = i + 1", .code = null }, // the old cap
+        .{ .cond = "i < 4097", .step = "i = i + 1", .code = null }, // one past it
+        .{ .cond = "i < 100000", .step = "i = i + 1", .code = null }, // far past it
+        .{ .cond = "i < 9000", .step = "i = (i + 1) % 8", .code = .E0420 }, // repeats a value
+        .{ .cond = "i < 3", .step = "i = i", .code = .E0420 }, // repeats at once
+        // A cycle far longer than the old cap.
+        .{ .cond = "i < 300000", .step = "i = (i + 1) % 100000", .code = .E0420 },
+    };
+    for (cases) |c| {
+        const src = try gpa.print(
+            \\module m(p);
+            \\inout p; electrical p;
+            \\genvar i;
+            \\generate for (i = 0; {s}; {s}) begin end endgenerate
+            \\analog I(p) <+ 0.0;
+            \\endmodule
+        , .{ c.cond, c.step });
+        defer gpa.free(src);
+        var h: Lower.Harness = undefined;
+        try h.init(gpa, src);
+        defer h.deinit();
+        _ = h.low.lowerFile() catch |err| switch (err) {
+            error.DiagnosticsReported => {},
+            else => |e| return e,
+        };
+        if (c.code) |want| {
+            try std.testing.expect(h.bag.count() >= 1);
+            try std.testing.expectEqual(want, h.bag.at(0).code);
+        } else try std.testing.expectEqual(@as(usize, 0), h.bag.count());
+    }
 }

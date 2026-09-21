@@ -774,3 +774,71 @@ test timerSystemPure {
     try std.testing.expect(!timerSystemPure(.fromName("$fopen")));
     try std.testing.expect(!timerSystemPure(.fromName("$strobe")));
 }
+
+test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514" {
+    // §5.8: event control "cannot be used inside conditional statements unless
+    // the conditional expression is a constant expression" — CONSTANT, not
+    // analysis_or_constant. So the very condition that licenses `ddt` above
+    // still rejects `@(cross(...))`, and the two rules must not share a counter.
+    const cases = [_]struct { cond: []const u8, warns: bool }{
+        .{ .cond = "V(c) > 0.5", .warns = true },
+        .{ .cond = "analysis(\"dc\")", .warns = true },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p, c);
+            \\  inout p, c;
+            \\  electrical p, c;
+            \\  real held;
+            \\  analog begin
+            \\    held = 0.0;
+            \\    if ({s}) @(cross(V(c) - 1.0, 1)) held = V(p);
+            \\    I(p) <+ held;
+            \\  end
+            \\endmodule
+        , .{c.cond});
+        defer std.testing.allocator.free(src);
+
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        }
+
+        var seen = false;
+        for (0..h.bag.count()) |i| {
+            if (h.bag.at(i).code == .E0707) seen = true;
+        }
+        std.testing.expectEqual(c.warns, seen) catch |e| {
+            std.debug.print("condition: if ({s})\n", .{c.cond});
+            return e;
+        };
+    }
+}
+
+test "§5.10.3 monitored events: argument rules, each beside a legal call" {
+    try Lower.expectBodies(&.{
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, 1n, 1u)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.1 the direction "shall evaluate to integers".
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 0.5)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // "If either or both tolerances are defined, then the direction shall
+        // also be defined."
+        .{ .src = "analog begin @(cross(V(p) - 0.5, , 1n)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // "If expr_tol is specified, time_tol shall also be specified."
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, , 1u)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // A.6.5: the enable is analog_expression, not `_or_null`.
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, 1n, 1u, )) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // §5.10.3.3 time_tol is non-negative.
+        .{ .src = "analog begin @(timer(0, 1n, -1p)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        .{ .src = "analog begin @(timer(0, 1n)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.2 the enable "shall evaluate to an integer".
+        .{ .src = "analog begin @(above(V(p) - 0.5, 1n, 1u, 0.5)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        .{ .src = "analog begin @(above(V(p) - 0.5)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.4 absdelta is "only allowed in an initial or always block".
+        .{ .src = "analog begin @(absdelta(V(p), 0.1)) x = 1.0; I(p) <+ x; end", .code = .E0513 },
+        // §5.10 "Nested event control statements are not allowed."
+        .{ .src = "analog begin @(initial_step) @(final_step) x = 1.0; I(p) <+ x; end", .code = .E0703 },
+    });
+}

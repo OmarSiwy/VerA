@@ -558,3 +558,52 @@ fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!v
         else => unreachable, // else: the call refused any other shape (`arrayActualCells`, `funcArrayIn`)
     }
 }
+
+test "§4.7 analog functions: recursion on the declarations, arity at the call" {
+    // §4.7.3 "recursive functions are not permitted", called or not.
+    try Lower.expectVerdict(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  analog function real f;
+        \\    input a; real a;
+        \\    f = h(a);
+        \\  endfunction
+        \\  analog function real h;
+        \\    input a; real a;
+        \\    h = f(a);
+        \\  endfunction
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    , .E0510);
+    try Lower.expectVerdict(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  real r;
+        \\  analog function real f;
+        \\    input a; real a;
+        \\    f = 2.0 * a;
+        \\  endfunction
+        \\  analog begin r = f(1.0, 2.0); I(p) <+ r * V(p); end
+        \\endmodule
+    , .E0511);
+}
+
+test "§4.7.2.3/§6.8 an array formal's bounds are the function's own declarations" {
+    // §6.8 makes the analog function a scope, so its local `n` (2) shadows the
+    // module's (3) in the formal's declaration as it does in the body: `v` is
+    // two cells, and a two-element pattern is "of equivalent size".
+    try Lower.expectVerdict(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter integer n = 3;
+        \\  real r;
+        \\  analog function real sum2;
+        \\    input v;
+        \\    parameter integer n = 2;
+        \\    real v[0:n-1];
+        \\    sum2 = v[0] + v[1];
+        \\  endfunction
+        \\  analog begin r = sum2('{1.0, 2.0}); I(p) <+ r * V(p); end
+        \\endmodule
+    , null);
+}

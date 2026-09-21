@@ -16,6 +16,7 @@ const lower_systask = @import("systask.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
+const diag = @import("diag");
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 
@@ -1199,4 +1200,69 @@ test "checkDiscreteContext: §5.2.1 and §7.2.2 judge the analog side against th
     try Lower.expectBodyVerdict("  real x;\n  initial x = 1.0;", "    x = 2.0;", .E0432);
     // §5.10: initial_step "not allowed in the digital context" (E0708).
     try Lower.expectBodyVerdict("  real x;\n  initial @(initial_step) x = 1.0;", "", .E0708);
+}
+
+test "§6.3.4 monitored-event parameters retain their dependencies, not unrelated reals" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter real base = 0.1, unused = 7.0;
+        \\  parameter delta = 2.0 * base;
+        \\  localparam real tol = base / 100.0;
+        \\  integer n;
+        \\  initial n = 0;
+        \\  always @(absdelta(V(p), delta, 1p, tol)) n = n + 1;
+        \\  analog I(p) <+ 0.0;
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 3), h.low.out.discrete_params.count());
+    for ([_][]const u8{ "delta", "base", "tol" }) |name|
+        try std.testing.expect(h.low.out.discrete_params.contains(name));
+    try std.testing.expect(!h.low.out.discrete_params.contains("unused"));
+}
+
+test "lower: A.6.1 an assign target is judged by declaration kind, then by domain" {
+    // IEEE 1364-2005 §6.1 (via VAMS §1.1): a continuous assignment drives a
+    // NET, so a variable is E0438. Among nets, §7.3's "write operations ... are
+    // only allowed from the context of their domain" refuses a continuous one
+    // (E0435) and admits a discrete one — `ddiscrete` (§3.6.2.2 `domain
+    // discrete`) exactly as an undisciplined `wire`. Pinned here because the
+    // positive fixture (ch07/ddiscrete_net_continuously_assigned) is xfail on the
+    // digital runner and would not catch a wrong E0438.
+    const cases = [_]struct { decl: []const u8, code: ?diag.Code }{
+        .{ .decl = "integer t;", .code = .E0438 },
+        .{ .decl = "electrical t;", .code = .E0435 },
+        .{ .decl = "ddiscrete t;", .code = null },
+        .{ .decl = "wire t;", .code = null },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p);
+            \\  inout p; electrical p;
+            \\  {s}
+            \\  assign t = 1'b1;
+            \\  analog I(p) <+ V(p) + t;
+            \\endmodule
+        , .{c.decl});
+        defer std.testing.allocator.free(src);
+
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        }
+        var first: ?diag.Code = null;
+        for (0..h.bag.count()) |i| {
+            if (h.bag.at(i).code == .E0438 or h.bag.at(i).code == .E0435) first = first orelse h.bag.at(i).code;
+        }
+        std.testing.expectEqual(c.code, first) catch |e| {
+            std.debug.print("declaration: {s}\n", .{c.decl});
+            return e;
+        };
+    }
 }
