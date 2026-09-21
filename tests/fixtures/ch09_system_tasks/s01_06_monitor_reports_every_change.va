@@ -64,8 +64,8 @@
 // changes value" condition.
 //
 // FAILS TODAY for the same two reasons fixture 05 does, and they are listed in
-// full there: no change detection in `Lower.isDisplayTask`, and W0851 dropping
-// the event-guarded `$fopen`/`$fmonitor` so `fd` is never assigned. This file no
+// full there: no change detection in `Lower.isDisplayTask`, and a `$fopen`
+// result that reads back as 0 outside the display unit, so `$ftell(fd)` is −1. This file no
 // longer passes at HEAD; the earlier version did, and only because $fmonitor
 // was $fdisplay and the measurement was taken inline.
 //

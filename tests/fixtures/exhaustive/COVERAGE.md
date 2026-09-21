@@ -174,8 +174,9 @@ snapshot would have frozen the wrong answer:
   declaration is lowered once per execution of the block, so a slot keyed on the
   source name would collide with itself under a §6.6.1 unrolled `for`. See the
   `ponytail:` note on `Lower.markHeldVars` for the upgrade path.
-- **`$strobe` under a conditional** is dropped with W0851 and cannot be
-  fixtured here; see `check.vh` for the idiom that replaces it.
+- **`$strobe` under a conditional** is emitted inside its arm since W0851 was
+  lifted; the checks here still use `check.vh`'s operand idiom, because an
+  assertion that prints on one arm only is not an assertion.
 - **`7 % -3`** is rejected by proof.zig (E0601): a negated integer literal loses
   its constant range, so a divisor §4.2.4 makes obviously nonzero looks
   unbounded. Noted in `021`.

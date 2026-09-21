@@ -15,8 +15,8 @@
 //
 // The previous shape put the call under `if (V(p,n) > 1.0)` and then asserted
 // the guard. That asserts that `>` is strict — arithmetic, not §9.7 — and under
-// check.vh:19's note (VerA drops a display task under an `if` with W0851) the
-// task did not run at all. $error and $fatal still have to be guarded, because
+// the drop that then applied to a display task under an `if` (W0851, since
+// lifted) the task did not run at all. $error and $fatal still have to be guarded, because
 // executing them is what they are FOR; these two do not.
 //
 //! lrm 9.2

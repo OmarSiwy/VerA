@@ -121,22 +121,38 @@ net type, which is why `digital-prims` should land before Wave B.
 
 ---
 
-## 4. Do this one first, and do it alone
+## 4. ~~Do this one first, and do it alone~~ — DONE 2026-09-20
 
 **W0851 — a display task under a conditional in an analog block is silently
-dropped.** Three separate agents hit it independently in one session. It blocks
-`s01_05`/`s01_06`, the rewrite of every fixture whose want is piecewise in
-time, and probably some of ch07.
+dropped.** Fixed exactly as sketched: `display_cond_place`, an SSA place seeded
+`.f_zero` in `.entry`, `fadd`-ed at each guarded call site and read once in
+`finishDisplays`. The call keeps its position in the arm, so codegen emits it
+inside the generated `if` and §9.4.6 is satisfied by placement rather than by
+dropping. W0851 the diagnostic is deleted; `lib/backend/codegen.zig`'s
+"§9.4.6 a display task under an `if` prints inside its arm" pins it.
 
-The fix is about ten lines: `Lower.finishDisplays` skips every `conditional`
-entry because the call's value does not dominate the chain root and so cannot
-be `fadd`-chained; routing it through an SSA place instead (seeded in `.entry`,
-written inside the guarded block, read at the end) makes it chainable.
+**Verdict diff: none.** 1457/59/41 before and after, FAIL names identical,
+111→112 unit tests, `test-devices` 20 FAIL unchanged. The change is strictly
+additive — nothing that printed before moved or changed — which is also its one
+wart: print order is MIR order, guarded calls sit at their statement and
+unconditional ones are minted at the end of the block, so a module that prints
+both shows the guarded lines first. Noted at `finishDisplays` with the upgrade
+path (a source-order index on `Display`).
 
-It is small and it is NOT delegable, because it changes the behaviour of every
-conditional print in the corpus and `tests/fixtures/check.vh:19` documents
-relying on the current drop. It wants one person, one verdict diff, and a
-careful look at what moves.
+What it actually unblocked: `combined/16_file_display_diagnostics.va` now runs
+its whole guarded open/write/flush/close lifecycle, and the fixture rewrites
+whose want is piecewise in time are now writable.
+
+**What it did NOT unblock, and this is new information.** `s01_05`/`s01_06`
+measure the same −1/−3/−3/−3 they did before. The event-guarded `$fopen` now
+runs, but its RESULT cannot leave the display unit: `codegen.emitFileCallDropped`
+renders every §9.5 call as the literal `0` in any unit that is not the display
+one, so the shared core computes `fd = 0`, `updateState` stores that 0 into the
+held slot, and `$ftell(fd)` is `$ftell(0)`. A descriptor assigned in the analog
+block and read as a VALUE is unrepresentable until a file call's result can be
+carried out of the display unit — a persistent `Instance` slot the display unit
+writes and the core reads, in the shape `held_vars` already has. That is the
+real `s01_05`/`s01_06` blocker and it is a separate, unscoped item.
 
 ---
 

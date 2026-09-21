@@ -13,12 +13,17 @@
 // a reference implementation once; after that a regression turns `ok=1` into
 // `ok=0` and the runner fails on the diff.
 //
-// WHY THE VERDICT IS A NUMBER AND NOT A BRANCH. `if (ok) $strobe("PASS")` is the
-// obvious shape and it does not work here: VerA hoists a module's display
-// tasks into one straight-line unit, so a task under a conditional is dropped
-// with W0851 (LRM §9.4.6 makes emission a property of the solve, which compiled
-// device code has no way to consult). A comparison is an integer in Verilog-A
-// (§4.2.5), so making the verdict an OPERAND keeps everything unconditional.
+// WHY THE VERDICT IS A NUMBER AND NOT A BRANCH. `if (ok) $strobe("PASS")` now
+// works — a guarded display is emitted inside its arm — but it is still the
+// wrong shape for an assertion: a check that prints only when it PASSES is
+// indistinguishable from a check that never ran, and the runner counts `ok=`
+// columns. A comparison is an integer in Verilog-A (§4.2.5), so making the
+// verdict an OPERAND makes every check announce itself either way.
+//
+// (Until 2026-09-20 it was also the only shape that worked: a task under a
+// conditional was dropped with W0851, which no longer exists. Fixture comments
+// citing that drop as current behaviour are stale, not wrong about their own
+// history.)
 
 `ifndef VERA_CHECK_VH
 `define VERA_CHECK_VH
