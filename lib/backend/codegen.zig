@@ -2911,6 +2911,37 @@ pub const Gen = struct {
                 .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
             });
         }
+        // §4.5 Table 4-20's DYNAMIC control arguments, on exactly the terms the
+        // `$limit` arguments below are queued on: `updateState` has only ONE
+        // core sweep, so an argument it must read on the accepted solution has
+        // to be a field of it. The table is normative — for `absdelay` the
+        // dynamic arguments are `expr, td`, for `idt` they are `expr, ic,
+        // assert`, for `idtmod` `expr, ic, modulus, offset` — and VerA used to
+        // refuse every one of them with E0515, which is the opposite of what
+        // the table says.
+        //
+        // ONLY the arguments that do not fold are queued. A literal or a model
+        // parameter still renders over Model and puts nothing in the core, so
+        // every device that exists today is byte-identical.
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op) continue;
+            const inst = self.opInstOf(@intCast(i)) orelse continue;
+            const args = self.mir.instData(inst).call.args;
+            for (dynCtrlArgs(opKind(u.target))) |ai| {
+                if (ai >= args.len) continue;
+                const v = self.an.rv(args[ai]);
+                if (v == .f_zero) continue;
+                if (!try self.ctrlIsDynamic(args[ai])) continue;
+                try jobs.append(self.arena, .{
+                    // Like `$limit`'s below, this job exists to put a value in
+                    // the core; the name is never written.
+                    .name = "$ctrl",
+                    .target = v,
+                    .mode = self.unitMode(i),
+                    .comment = "§4.5 Table 4-20 dynamic operator control argument",
+                });
+            }
+        }
         // §5.10 the end-of-block value of every held variable, so `updateState`
         // can store it back. Queued AFTER the operator inputs and before the
         // §9.4 display job for the same insert-tolerance reason: a model that
@@ -5322,6 +5353,46 @@ pub const Gen = struct {
         return self.f64Expr(args[i]);
     }
 
+    /// Does this §4.5 control argument need the core, i.e. is it a solve result
+    /// rather than a constant/parameter expression? Speculative — `f64Const`'s
+    /// `uses_model` side effect is rolled back, because whether the rendered
+    /// text is ever emitted is decided later.
+    fn ctrlIsDynamic(self: *Gen, v: Mir.Value) Error!bool {
+        const saved = self.uses_model;
+        defer self.uses_model = saved;
+        return (try self.f64Const(v, 0, false)) == null;
+    }
+
+    /// §4.5 Table 4-20 lists some operator control arguments as DYNAMIC, which
+    /// `argF64` cannot render: it goes through `f64Const`, whose frame is the
+    /// host's Model and which refuses a solve result with E0515. These two read
+    /// the same argument in the two frames that actually evaluate one, and both
+    /// fall back to `f64Const`'s text when it folds — so a literal or a model
+    /// parameter renders exactly as it always did.
+    ///
+    /// `ctrlEval` is the RESIDUAL's frame: the argument is an ordinary rendered
+    /// expression there, S-valued, and only its value is wanted.
+    fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+        if (i >= args.len) return dflt;
+        if (try self.f64Const(args[i], 0, false)) |s| return s;
+        return std.fmt.allocPrint(self.arena, "({s}).val()", .{
+            try self.renderToArena(args[i], .real),
+        });
+    }
+
+    /// `ctrlStep` is `updateState`'s frame, where the only thing evaluated is
+    /// the single `core(R, …)` sweep — so the argument has to be a field of it,
+    /// which `buildJobs` is what arranges. A dynamic argument with no core
+    /// field left is still E0515: that is a planning defect, not a legal
+    /// program, and answering it with a wrong number would hide it.
+    fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+        if (i >= args.len) return dflt;
+        if (try self.f64Const(args[i], 0, false)) |s| return s;
+        const k = self.lo_idx[@intFromEnum(self.an.rv(args[i]))];
+        if (k == none_u32) return self.f64Expr(args[i]);
+        return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
+    }
+
     /// "the signal crossed zero since the last accepted step, in the direction
     /// argument 1 asks for": `+1` rising, `-1` falling, `0` (or absent) either.
     /// §4.5.10 `last_crossing` and §5.10.3 `cross` take the SAME argument with
@@ -6040,14 +6111,14 @@ pub const Gen = struct {
             // `updateState` holds at `ic` for as long as assert is nonzero.
             .idt => if (args.len >= 3) try self.b(
                 "zIdtReset(S, {s}, inst.{s}__acc, inst.dt, {s}, {s})",
-                .{ in, n, try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0") },
+                .{ in, n, try self.ctrlEval(args, 1, "0.0"), try self.ctrlEval(args, 2, "0.0") },
             ) else try self.b("zIdt(S, {s}, inst.{s}__acc, inst.dt, {s})", .{
-                in, n, try self.argF64(args, 1, "0.0"),
+                in, n, try self.ctrlEval(args, 1, "0.0"),
             }),
             .idtmod => try self.b("zIdtmod(S, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
-                in,                              n,
-                try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0"),
-                try self.argF64(args, 3, "0.0"),
+                in,                                 n,
+                try self.ctrlEval(args, 1, "0.0"), try self.ctrlEval(args, 2, "0.0"),
+                try self.ctrlEval(args, 3, "0.0"),
             }),
             .absdelay => try self.b(
                 "zAbsdelay(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
@@ -7249,17 +7320,17 @@ pub const Gen = struct {
                 .idt => if (args.len >= 3) try self.w(
                     "        inst.{s}__acc = if (({s}) != 0.0) ({s}) else zIdtAcc(in, inst.{s}__acc, dt, {s});\n",
                     .{
-                        n,                               try self.argF64(args, 2, "0.0"),
-                        try self.argF64(args, 1, "0.0"), n,
-                        try self.argF64(args, 1, "0.0"),
+                        n,                                 try self.ctrlStep(args, 2, "0.0"),
+                        try self.ctrlStep(args, 1, "0.0"), n,
+                        try self.ctrlStep(args, 1, "0.0"),
                     },
                 ) else try self.w("        inst.{s}__acc = zIdtAcc(in, inst.{s}__acc, dt, {s});\n", .{
-                    n, n, try self.argF64(args, 1, "0.0"),
+                    n, n, try self.ctrlStep(args, 1, "0.0"),
                 }),
                 .idtmod => try self.w("        inst.{s}__acc = zWrap(zIdtAcc(in, inst.{s}__acc, dt, {s}), {s}, {s});\n", .{
-                    n,                               n,
-                    try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0"),
-                    try self.argF64(args, 3, "0.0"),
+                    n,                                 n,
+                    try self.ctrlStep(args, 1, "0.0"), try self.ctrlStep(args, 2, "0.0"),
+                    try self.ctrlStep(args, 3, "0.0"),
                 }),
                 .absdelay => {
                     try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n });
@@ -7923,6 +7994,19 @@ fn isAnalysisName(s: []const u8) bool {
         if (std.mem.eql(u8, s, n)) return true;
     }
     return false;
+}
+
+/// §4.5 Table 4-20 "Analog operator arguments": which argument positions the
+/// clause marks DYNAMIC (the input at position 0 is already a unit of its own,
+/// so it is not listed here). Everything absent from this table stays a
+/// `constant_expression` and is still E0515 when it is a solve result.
+fn dynCtrlArgs(k: OpKind) []const usize {
+    return switch (k) {
+        .absdelay => &.{1}, // td  ("dynamic: expr, td"; maxdelay is the constant one)
+        .idt => &.{ 1, 2 }, // ic, assert
+        .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
+        else => &.{},
+    };
 }
 
 /// Length of the §4.5.7 absdelay history ring.
