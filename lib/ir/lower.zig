@@ -3925,6 +3925,13 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
             return;
         }
     }
+    // §5.7 SLICE assignment — "The array on the LHS of the assignment shall be
+    // an array variable, A SLICE OF AN ARRAY VARIABLE or an array parameter",
+    // and A.8.5's rvalue production allows a subscript list SHORTER than the
+    // declared dimension list on the right. Asked before the whole-array and
+    // runtime-element paths below because a slice is neither: it is a whole
+    // array on one side and a short subscript list on the other.
+    if (try self.copyArraySlice(target, value)) return;
     // §5.7 whole-array assignment from another ARRAY, `A = B`. The clause is a
     // shape rule, checked here and nowhere else because this is the only place
     // both shapes are in scope; when it holds the copy is element-wise, since
@@ -4123,6 +4130,183 @@ fn copyWholeArray(
         // The element types are already known equivalent, so there is no
         // conversion to make here — only the source's `Value` to re-bind.
         try self.builder.writeVariable(slot.place, self.cur, v.v);
+    }
+    return true;
+}
+
+/// §5.7 / A.8.5 an array reference that is NOT a scalar element: a whole array
+/// (`subs.len == 0`) or a SLICE — a subscript list shorter than the declared
+/// dimension list. A full subscript list names one cell and is not this.
+const ArraySlice = struct { name: []const u8, info: ArrayInfo, subs: []const Ast.ExprId };
+
+fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[max_stack_dims]Ast.ExprId) Oom!?ArraySlice {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            const info = self.arrays.get(name) orelse return null;
+            return .{ .name = name, .info = info, .subs = &.{} };
+        },
+        .index => {
+            const chain = (try self.indexChain(e, buf)) orelse return null;
+            const name = self.file.str(chain.name);
+            const info = self.arrays.get(name) orelse return null;
+            if (chain.subs.len >= info.dims.len) return null; // a cell, not a slice
+            return .{ .name = name, .info = info, .subs = chain.subs };
+        },
+        else => return null,
+    }
+}
+
+/// §5.7 slice assignment, `A[i] = B` / `B = A[i]`, and A.8.5's production for
+/// the right-hand side:
+///
+///   array_analog_variable_rvalue ::=
+///         array_variable_identifier
+///       | array_variable_identifier [ analog_expression ] { [ analog_expression ] }
+///       | assignment_pattern
+///
+/// The `{ }` is zero-or-more, so a SHORT subscript list is the grammar's own
+/// spelling of a slice: on §3.2's declared `integer flag_array[0:8][0:3]`,
+/// `flag_array[3]` is the four-element row and not a scalar.
+///
+/// The subscript is an `analog_expression`, NOT a `constant_expression`, so a
+/// slice index may be decided during the solve. Arrays are scalarised, so a
+/// dynamic prefix becomes the same select chain a dynamic scalar index already
+/// takes: one `$idx` per destination cell on the read side, one masked write per
+/// candidate row on the write side (`writeRuntimeIndex`'s shape, a row at a
+/// time). ponytail: P·N selects for a P-row array of N-element slices; the
+/// upgrade is real array storage, which is what would retire the scalarisation
+/// everywhere.
+///
+/// §5.7 assignment is a COPY. Both sides are scalarised, so the source cells are
+/// all read into `vals` before any destination cell is written — an overlapping
+/// `a[0] = a[1]`-style copy then behaves the way the clause says.
+///
+/// Returns false when neither side is a slice, so the whole-array and
+/// runtime-element paths keep their own diagnostics.
+fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+    var tbuf: [max_stack_dims]Ast.ExprId = undefined;
+    var vbuf: [max_stack_dims]Ast.ExprId = undefined;
+    const dst = (try self.arrayRef(target, &tbuf)) orelse return false;
+    const src = (try self.arrayRef(value, &vbuf)) orelse return false;
+    if (dst.subs.len == 0 and src.subs.len == 0) return false; // `copyWholeArray`
+
+    // "Every dimension of the source array shall have the same number of
+    // elements as the target array" — of the SLICES, which is what the clause's
+    // "an array, OR A SLICE OF SUCH AN ARRAY" makes the compared objects.
+    const dd = dst.info.dims[dst.subs.len..];
+    const sd = src.info.dims[src.subs.len..];
+    if (dd.len != sd.len or dst.info.ty != src.info.ty) {
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
+        b.msg("a `{s}` slice of `{s}` has {d} dimension(s) and a `{s}` slice of `{s}` has {d}", .{
+            @tagName(dst.info.ty), dst.name, dd.len, @tagName(src.info.ty), src.name, sd.len,
+        });
+        try b.emit();
+        return true;
+    }
+    for (dd, sd, 0..) |d, s, k| {
+        if (d.count() == s.count()) continue;
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
+        b.msg("dimension {d} of the `{s}` slice holds {d} elements and the `{s}` slice holds {d}", .{
+            k, dst.name, d.count(), src.name, s.count(),
+        });
+        b.note("§5.7 counts elements, not indices: `A[10:1] = B[0:9]` is legal", .{});
+        try b.emit();
+        return true;
+    }
+
+    const n = shapeCells(dd);
+    const vals = try self.arena.alloc(Mir.Value, n);
+    if (!try self.readSliceCells(value, src, dd, vals)) return true;
+    return self.writeSliceCells(target, dst, dd, vals);
+}
+
+/// Every cell of `s`'s slice, in the row-major order `shapeSubscripts` walks.
+fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const Bounds, out: []Mir.Value) Oom!bool {
+    var full: [max_stack_dims]i64 = undefined;
+    const idx = try self.subscriptBuf(&full, s.info.dims.len);
+    const pdims = s.info.dims[0..s.subs.len];
+
+    if (try self.constPrefix(at_e, s, idx[0..s.subs.len])) |known| {
+        if (!known) return false; // out of range — E0310 already reported
+        for (out, 0..) |*v, k| {
+            shapeSubscripts(sd, k, idx[s.subs.len..]);
+            const el = (try self.arrayElemValue(s.name, idx)) orelse return false;
+            v.* = el.v;
+        }
+        return true;
+    }
+    // A dynamic prefix: one `$idx` switch per destination cell, over the same
+    // cell of every candidate row. `runtimeArrayIndex` answers -1 for a
+    // subscript outside its dimension, which `$idx` reads as the default 0 —
+    // the rule `lowerIndex` already applies to an out-of-range scalar read.
+    const iv = try self.runtimeArrayIndex(s.subs, pdims);
+    const callee: []const u8 = switch (s.info.ty) {
+        .real => "$idx",
+        .integer => "$idx$int",
+        .string => "$idx$str",
+    };
+    for (out, 0..) |*v, k| {
+        var args: std.ArrayList(Mir.Value) = .empty;
+        defer args.deinit(self.arena);
+        try args.append(self.arena, .zero);
+        try args.append(self.arena, iv);
+        shapeSubscripts(sd, k, idx[s.subs.len..]);
+        for (0..shapeCells(pdims)) |p| {
+            shapeSubscripts(pdims, p, idx[0..s.subs.len]);
+            const el = (try self.arrayElemValue(s.name, idx)) orelse return false;
+            try args.append(self.arena, el.v);
+        }
+        v.* = try self.call(callee, args.items);
+    }
+    return true;
+}
+
+/// The mirror image: `vals` into every cell of `d`'s slice.
+fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []const Bounds, vals: []const Mir.Value) Oom!bool {
+    var key_buf: [elem_key_len]u8 = undefined;
+    var full: [max_stack_dims]i64 = undefined;
+    const idx = try self.subscriptBuf(&full, d.info.dims.len);
+    const pdims = d.info.dims[0..d.subs.len];
+
+    if (try self.constPrefix(at_e, d, idx[0..d.subs.len])) |known| {
+        if (!known) return true;
+        for (vals, 0..) |v, k| {
+            shapeSubscripts(dd, k, idx[d.subs.len..]);
+            const slot = self.vars.get(try self.elemKey(&key_buf, d.name, idx)) orelse continue;
+            try self.builder.writeVariable(slot.place, self.cur, v);
+        }
+        return true;
+    }
+    const iv = try self.runtimeArrayIndex(d.subs, pdims);
+    for (0..shapeCells(pdims)) |p| {
+        shapeSubscripts(pdims, p, idx[0..d.subs.len]);
+        const hit = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(p)) });
+        for (vals, 0..) |v, k| {
+            shapeSubscripts(dd, k, idx[d.subs.len..]);
+            const slot = self.vars.get(try self.elemKey(&key_buf, d.name, idx)) orelse continue;
+            const old = try self.builder.readVariable(slot.place, self.cur);
+            try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ hit, v, old }));
+        }
+    }
+    return true;
+}
+
+/// The slice's leading subscripts, if every one of them folds: true when they
+/// are also in range, false when §3.2.2 has been reported on them, null when at
+/// least one is only known during the solve.
+fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
+    for (s.subs, out) |e, *o| {
+        const c = self.foldExpr(e, false) orelse return null;
+        o.* = c.asInt();
+    }
+    for (out, s.info.dims[0..s.subs.len], 0..) |i, d, k| {
+        if (i >= d.lo and i <= d.hi) continue;
+        try self.err(self.file.exprs.mainTok(at_e), .E0310, "index {d} is outside dimension {d} of `{s}[{d}:{d}]`", .{
+            i, k, s.name, d.lo, d.hi,
+        });
+        return false;
     }
     return true;
 }
