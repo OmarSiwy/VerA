@@ -206,6 +206,22 @@ pub fn build(b: *std.Build) void {
     b.step("test-vpi-fixtures", "Compile the 26 .c VPI fixtures against src/vpi/vpi_user.h")
         .dependOn(&vpi_fx.step);
 
+    // The 7 `.sp` decks. Also not VerA source: a SPICE netlist naming a model
+    // through `.hdl`, plus instance cards and an analysis card, paired with an
+    // `.expected.json` holding an analytic oracle.
+    //
+    // NOT executed, and not because of a missing release: running a deck needs
+    // a circuit simulator to link the compiled device and turn the Newton loop,
+    // and that simulator is ARPice, which is not in this repository
+    // (`ROADMAP.md §6`). The step checks the half that IS here — the deck has
+    // an oracle, every model it names resolves, every model compiles — and
+    // says plainly in its own output that it ran no circuit.
+    const spice = b.addRunArtifact(suite_exe);
+    spice.addArtifactArg(exe);
+    spice.addArg("spice");
+    b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
+        .dependOn(&spice.step);
+
     // The VPI acceptance test, and the reason `test-vpi` is not just the module
     // loop's `addTest`: a VPI implementation is only tested FROM C. The loop
     // above already gave `vpi` its Zig tests, and a Zig test calling these
