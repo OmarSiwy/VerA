@@ -41,6 +41,13 @@ const Pending = union(enum) {
     /// A.2.1.3's third `delay3` value on a `trireg`: the charge that has now
     /// been held long enough to be worth nothing.
     decay: struct { net: u32, gen: u32 },
+    /// Nothing left to do: the row has already been dispatched, or a `disable`
+    /// cancelled it. The scheduler owns no cancel operation and needs none —
+    /// the payload row is the event, so emptying the row empties the event.
+    /// Retiring a row ON DISPATCH is what makes the cancel exact: without it a
+    /// `disable` scanning for this block's resumptions could not tell one still
+    /// queued from one the process already consumed.
+    retired,
 };
 
 /// IEEE 1364-2005 §6.1.3: a delayed continuous assignment is INERTIAL — "if
@@ -123,6 +130,12 @@ const Instruction = union(enum(u4)) {
     trigger: u32,
     // §9.9.2 an `always` body returning to its own start.
     restart: struct { target: u32, tok: u32 },
+    // A.6.5 `disable_statement ::= disable hierarchical_block_identifier ;`.
+    // A named block is a contiguous pc range and that range IS its activity, so
+    // terminating the block is dropping whatever resumption points into it.
+    // Resolved to a range after every process is compiled, because a `disable`
+    // may name a block written later in the file.
+    disable_block: struct { start: u32, end: u32 },
     stop,
 };
 // §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
@@ -645,6 +658,16 @@ const Run = struct {
     /// re-enters at a pc in the middle of a body.
     code_scope: std.ArrayList(u32) = .empty,
     case_targets: std.ArrayList(u32) = .empty,
+    /// §5.3.2 the pc range of each named sequential block, keyed the way every
+    /// other declared name is — per §6.2.2 INSTANCE, so two instances of one
+    /// definition disable their own copy and not each other's.
+    blocks: std.AutoHashMapUnmanaged(Name, struct { start: u32, end: u32 }) = .empty,
+    /// The `.disable_block` instructions still waiting for their range, and the
+    /// name each one is waiting for. A.6.5 puts no ordering rule on a
+    /// `disable`: the block it names is routinely in ANOTHER process, which may
+    /// not be compiled yet, so the lookup is deferred to one pass at the end
+    /// rather than failing in the middle of a dispatch.
+    disables: std.ArrayList(struct { at: u32, name: Name, tok: u32 }) = .empty,
     // One counter per lexical repeat is sufficient without recursive processes.
     repeats: std.ArrayList(u64) = .empty,
     // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
@@ -1185,8 +1208,25 @@ const Run = struct {
         switch (self.file.stmt(id)) {
             .empty => {},
             .block => |b| {
-                if (b.name != .none or b.vars.len != 0 or b.params.len != 0) return self.fail(tok, "block declarations/named scopes are not implemented", .{});
+                // §5.3.2's block-local declarations are a SCOPE, which the flat
+                // `Name` space has no room for; the name on its own is not, and
+                // that is all `disable` needs.
+                if (b.vars.len != 0 or b.params.len != 0) return self.fail(tok, "block-local declarations are not implemented", .{});
+                const start = self.position();
                 for (b.body) |s| try self.compileStmt(s, depth + 1);
+                if (b.name != .none) {
+                    const entry = try self.blocks.getOrPut(self.arena, .{ .scope = self.scope, .str = b.name });
+                    if (entry.found_existing) return self.fail(tok, "duplicate named block", .{});
+                    // `end` is one past the block, which is the statement
+                    // execution continues with once the block is terminated.
+                    entry.value_ptr.* = .{ .start = start, .end = self.position() };
+                }
+            },
+            // A.6.5 `disable_statement`. The range is patched in once every
+            // process exists — see `Run.disables`.
+            .disable => |s| {
+                const at = try self.append(.{ .disable_block = .{ .start = 0, .end = 0 } });
+                try self.disables.append(self.arena, .{ .at = at, .name = .{ .scope = self.scope, .str = s.name }, .tok = tok });
             },
             .if_stmt => |s| {
                 if (s.is_generate) return self.fail(tok, "conditional generate is not implemented", .{});
@@ -1926,10 +1966,11 @@ const Run = struct {
             .sys_task => |s| for (s.args) |a| {
                 if (a != .none and ex.tag(a) != .str_literal) try self.sensitivity(a, out);
             },
-            // A trigger reads nothing, an empty statement reads nothing, and a
-            // nested `@`/`#` inside `@*` suspends on its own terms — §9.7.5
-            // takes the implicit list from the statement's reads either way.
-            .empty, .event_trigger => {},
+            // A trigger reads nothing, a `disable` reads nothing, an empty
+            // statement reads nothing, and a nested `@`/`#` inside `@*`
+            // suspends on its own terms — §9.7.5 takes the implicit list from
+            // the statement's reads either way.
+            .empty, .event_trigger, .disable => {},
             .event_control => |s| try self.readSlots(s.body, out, depth + 1),
             else => unreachable, // compileStmt admitted only the forms above
         }
@@ -2064,6 +2105,47 @@ const Run = struct {
         try self.out.writeAll(text);
     }
 
+    /// IEEE 1364-2005 clause 11's `disable`, which §1.1 makes part of this
+    /// language: it "terminates the activity" of a named block, and "execution
+    /// continues with the statement following the block".
+    ///
+    /// A suspended process is nothing but a resumption point, so the first
+    /// sentence is: drop every resumption whose pc lands inside the block —
+    /// the waiters it parked on an event, and the scheduled `.run_process`
+    /// rows a `#` delay left behind. The second sentence is then one enqueue at
+    /// `end`, and only when something WAS cancelled: a block nobody is
+    /// suspended inside has no activity to terminate, and resuming a process
+    /// that is not there would run the tail of a body twice.
+    ///
+    /// ponytail: an NBA update already scheduled from inside the block still
+    /// lands. It is a write the block completed before it was disabled, not
+    /// activity of its own, and no fixture measures the alternative.
+    ///
+    /// ponytail: a `disable` of the block CONTAINING it is a no-op here — the
+    /// process doing the disabling is mid-dispatch, so it has no resumption row
+    /// to find. Verilog's loop-break idiom wants that to jump to `end`; it
+    /// needs `execute` to be able to set its own pc from this instruction,
+    /// which is where to put it when a fixture asks.
+    fn disableRange(self: *Run, start: u32, end: u32) Error!void {
+        var hit = false;
+        var i = self.waiters.items.len;
+        while (i != 0) {
+            i -= 1;
+            const at = self.waiters.items[i].pc;
+            if (at >= start and at < end) {
+                _ = self.waiters.swapRemove(i);
+                hit = true;
+            }
+        }
+        for (self.pending.items) |*p| switch (p.*) {
+            .run_process => |at| if (at >= start and at < end) {
+                p.* = .retired;
+                hit = true;
+            },
+            else => {},
+        };
+        if (hit) try self.enqueue(.{ .run_process = end }, null, false);
+    }
     fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!void {
         if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
         const payload: u32 = @intCast(self.pending.items.len);
@@ -2206,6 +2288,11 @@ const Run = struct {
                     }
                     for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
                     return;
+                },
+                .disable_block => |b| {
+                    try self.disableRange(b.start, b.end);
+                    pc += 1;
+                    continue;
                 },
                 .restart => |s| {
                     // A suspension returns from this dispatch, so reaching the
@@ -2700,11 +2787,23 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             try r.enqueue(.{ .run_process = start }, null, false);
         }
     }
+    // A.6.5's `disable` names a block that needs no declaration before its use
+    // — d04_14's is in the process next door — so the ranges are bound here,
+    // once every process has a pc range at all.
+    for (r.disables.items) |d| {
+        const range = r.blocks.get(d.name) orelse return r.fail(d.tok, "undeclared named block", .{});
+        r.code.items[d.at].disable_block = .{ .start = range.start, .end = range.end };
+    }
     var scratch = std.heap.ArenaAllocator.init(arena);
     defer scratch.deinit();
     while (r.scheduler.next()) |event| {
         _ = scratch.reset(.retain_capacity);
-        switch (r.pending.items[event.payload]) {
+        // Take the row and empty it in one step: a row still holding a
+        // `.run_process` is a resumption that has NOT happened yet, which is
+        // what `disableRange` reads the list for.
+        const item = r.pending.items[event.payload];
+        r.pending.items[event.payload] = .retired;
+        switch (item) {
             .run_process => |start| try r.execute(&scratch, start),
             .write => |w| try r.store(w.target, w.value.planes),
             .strobe => |s| {
@@ -2733,6 +2832,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
                 for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
                 try r.store(n.slot, n.resolved.planes);
             },
+            .retired => {},
         }
     }
 }
@@ -3294,6 +3394,30 @@ test "unknown delay is zero and finish discards pending later processes" {
         \\initial begin #2 $display("not run"); end
         \\endmodule
     , "unknown-delay 0\nlater 1\n");
+}
+
+test "disable terminates a named block and resumes after it" {
+    // Both halves of IEEE 1364 clause 11's sentence, and they are separable:
+    // a `disable` that only cancelled would print 0001, and one that only
+    // resumed would let the block's own `#4` write 0010 land first.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg [3:0] r;
+        \\initial begin
+        \\  r = 4'b0001;
+        \\  begin : work
+        \\    #4 r = 4'b0010;
+        \\  end
+        \\  r = 4'b0100;
+        \\end
+        \\initial begin
+        \\  #2 disable work;
+        \\  #4 $display("after %b", r);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "after 0100\n");
 }
 
 test "display retains escaped NUL bytes and unsized integer width" {
