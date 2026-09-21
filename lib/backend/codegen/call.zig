@@ -984,8 +984,7 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
 pub fn abort(self: *Gen, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
     const msg = try self.arena.print(fmt, args);
     if (self.diags) |bag| try bag.add(.codegen, code, self.lowered.tokenSpan(self.call_tok), "{s}", .{msg});
-    self.any_fatal = true;
-    if (self.fatal == null) self.fatal = msg;
+    self.poison(msg);
     try self.b("S.con(0.0)", .{});
 }
 

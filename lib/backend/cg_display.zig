@@ -214,8 +214,7 @@ pub fn emitRow(g: *Gen, site: usize, cap: u64) Error!void {
 fn fits(g: *Gen, site: usize, cap: u64) Error!bool {
     if (cap <= strcap.max_row) return true;
     if (g.diags) |bag| try bag.add(.codegen, .E1011, g.lowered.tokenSpan(g.mir.instTok(@fromBackingInt(@intCast(site)))), "the text here can need {d} bytes, more than a device can address", .{cap});
-    g.any_fatal = true;
-    if (g.fatal == null) g.fatal = "a string row is larger than a device can address";
+    g.poison("a string row is larger than a device can address");
     return false;
 }
 

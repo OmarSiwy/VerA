@@ -385,9 +385,8 @@ pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
             "and arithmetic over them are available where the host evaluates it",
         .{},
     );
-    self.any_fatal = true;
-    if (self.fatal == null) self.fatal = "LRM 4.5: an analog operator control argument " ++
-        "must be a constant or parameter expression";
+    self.poison("LRM 4.5: an analog operator control argument " ++
+        "must be a constant or parameter expression");
     return "0.0";
 }
 

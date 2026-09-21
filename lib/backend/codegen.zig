@@ -407,6 +407,13 @@ pub const Gen = struct {
         return .{ .arena = self.arena, .mir = self.mir, .an = self.an, .lowered = self.lowered };
     }
 
+    /// Fails generation (`any_fatal`) and collapses the current unit to a
+    /// `@compileError` naming `msg`, unless an earlier refusal already named it.
+    pub fn poison(self: *Gen, msg: []const u8) void {
+        self.any_fatal = true;
+        if (self.fatal == null) self.fatal = msg;
+    }
+
     // ---- the writer: every emitted byte goes through these ----
 
     /// Appends formatted file-scaffolding text to the output.

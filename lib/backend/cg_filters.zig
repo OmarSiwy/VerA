@@ -190,10 +190,7 @@ pub fn planAll(g: *Gen) Error!void {
 /// Precondition: `planAll` ran and `unit` is a `laplace`/`zi` unit.
 pub fn planOf(g: *Gen, unit: usize) FilterPlan {
     const p = g.filters[unit].?;
-    if (p.fatal) |m| {
-        g.any_fatal = true;
-        if (g.fatal == null) g.fatal = m;
-    }
+    if (p.fatal) |m| g.poison(m);
     return p;
 }
 
