@@ -480,6 +480,12 @@ pub const ParamDecl = struct {
     is_local: bool = false, // §3.4.5 localparam
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
+    /// A.2.1.1's `[ range ]`, the first arm's width bracket (`parameter [3:0]
+    /// nib = 4'h5;`). NOT `dims`: A.2.5's `range` is a vector width and
+    /// `dimension` is an array bound, and lowering scalarizes the latter.
+    /// `null` when the declaration writes no bracket, which is every
+    /// `parameter_type` form — the two A.2.1.1 arms are exclusive.
+    packed_range: ?Dim = null,
     /// §6.3 this parameter's value came from an instance parameter value
     /// assignment (or a paramset), not from its own declaration. Set only by
     /// `ir/elaborate.zig`, when it turns a flattened child's parameter into a
@@ -540,6 +546,18 @@ pub const NetKind = enum(u8) { wire, tri, tri0, tri1, triand, trior, trireg, wan
 /// the parser (which has to reject `(strong0, pull0)`) and not here.
 pub const Strength = enum(u8) { highz = 0, small = 1, medium = 2, weak = 3, large = 4, pull = 5, strong = 6, supply = 7 };
 
+/// The three strength slots A.2.1.3 puts on ONE `net_declaration` — a
+/// `charge_strength` on the `trireg` arms, a `drive_strength` pair on the
+/// `list_of_net_decl_assignments` arms — carried together so the parser can
+/// hand its caller whichever bracket the source actually wrote. The defaults
+/// are the clause's: `medium` (IEEE 1364-2005 §3.8, an unbracketed `trireg`)
+/// and `(strong1, strong0)` (§7.10, an unbracketed driver).
+pub const NetStrength = struct {
+    charge: Strength = .medium,
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
+};
+
 /// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value [ , delay_value ] ] )`.
 /// One value means all three; two mean rise and fall with the turn-off delay
 /// taken as the minimum of them (IEEE 1364-2005 §7.14); three are given. On a
@@ -579,6 +597,12 @@ pub const NetDecl = struct {
     /// A.2.1.3 `charge_strength` — `trireg` only, and `medium` is IEEE
     /// 1364-2005 §3.8's default for a `trireg` that names none.
     charge: Strength = .medium,
+    /// A.2.1.3 `[ drive_strength ]`, the bracket four of the twelve
+    /// `net_declaration` alternatives carry (the `list_of_net_decl_assignments`
+    /// ones). IEEE 1364-2005 §7.10's default is `(strong1, strong0)`, so a
+    /// declaration that writes no bracket is these two values.
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
     /// A.2.1.3 `[ delay3 ]`. On a `trireg` the third value is the charge decay
     /// time; on every other net type it is the turn-off delay of the net's own
     /// transition.
