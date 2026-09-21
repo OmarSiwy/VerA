@@ -22,6 +22,28 @@ This document was written **2026-09-16** against a 1301-fixture tree, deleted in
 v0.0.2 (`ROADMAP.md §4`). **It is two documents in one and the sections are
 dated separately.**
 
+> **The re-derivation read a moving tree, and four citations were wrong because
+> of it.** The rows below were re-read while seven commits were landing on
+> `ddt-capform` between tag `v0.0.1` (`2e7cfaa`, 09:19) and `a99a37f` (09:50) —
+> a parser change of +142 lines, a merge, and a 9-line change to
+> `src/sim/digital.zig`, the file most of §4.1 and §4.3 cite. The baseline
+> FAIL/XFAIL name list was taken at `f692b3b` and the verifying one at
+> `a99a37f`; they are **identical**, 35 and 28, and this release changed no
+> `.zig`, `.va` or `.vh` file, so measure A is untouched either way.
+>
+> Every line citation was then re-checked against `a99a37f`. **Four had
+> drifted** and are corrected here: `lib/frontend/parser.zig:4812` → `:5043`,
+> `src/sim/digital.zig:3477` → `:3478`, `:3414` → `:3421`, `:3515` → `:3522`.
+> The rest were spot-checked and land. `ROADMAP.md` Appendix A item 8 already
+> warns that line citations drift and concludes "cite sections and symbols, not
+> line numbers" — this document still cites lines, because a verdict needs the
+> exact site, and that is the maintenance cost of doing so.
+>
+> This is `AGENTS.md §8`'s first rule — **own worktree per agent** — and it was
+> not followed: five readers ran in the shared checkout while it was being
+> committed to. The findings survived because this release changes no code and
+> the drift was mechanical, but the *next* re-derivation should take a worktree.
+
 | Section | State | As of |
 |---|---|---|
 | §1 measured baseline | **re-measured at HEAD** | 2026-09-21 |
@@ -99,7 +121,7 @@ Work it in this order; each part is independently completable.
 
 ## 1. Measured baseline
 
-Re-measured at HEAD (`2e7cfaa`, tag `v0.0.1`) on **2026-09-21**. The step is
+Re-measured on **2026-09-21** at `a99a37f`; every figure below reproduces unchanged at `05ae554`, where this text lands. **Not at tag `v0.0.1` (`2e7cfaa`)** — see the provenance block. The step is
 `benchmark`; **`zig build torture` no longer exists** and every citation of it in
 this document has been corrected.
 
@@ -338,7 +360,7 @@ Recorded so they are not re-litigated:
 
 ## 4. Inherited IEEE 1364 §§17–18 obligation inventory
 
-**Re-derived row by row at HEAD (`2e7cfaa`) on 2026-09-21.** This deepens the D09
+**Re-derived row by row at `a99a37f` on 2026-09-21.** This deepens the D09
 table in the plan, which has one row per clause group and marks every row "open".
 Here each row is one independently reviewable obligation with a verdict and a
 reason.
@@ -384,7 +406,7 @@ outside measure A; see §1.1 b′.
 |---|---|---|---|---|---|
 | 17.1-01 | `$display`, `$write` base spellings | present (`lib/ir/lower.zig:6849` `isDisplayTask`, `lib/backend/cg_display.zig:174`, `:196` "`$write` is the family member that does NOT end the line"); `02`, `03` pass | both present (`src/sim/digital.zig:596`, `:600`); `d09_01_display_radix.v` pins `$write`'s missing newline | **verified** | Table 9-1 Yes/Yes; §9.4.1 Syntax 9-1. Both halves now have a passing executable test |
 | 17.1-02 | `$displayb/o/h`, `$writeb/o/h` radix variants | refused, correctly — `lib/ir/lower.zig:7521-7527` → E0806 at `:6454`; `152_display_radix_variants_analog_rejected.va` emits all eight in one run | implemented (`src/sim/digital.zig:597-599`, `:601-603`); `d09_01` pins `$displayh`→`a5`, `$displayo`→`245`, `$displayb`→`10100101`. **No fixture uses `$writeb/o/h`** | **implemented-without-evidence (digital `$write*`)** / verified (`$display*` digital; analog prohibition) | Table 9-1 `Yes/No`. No longer `missing`: the code path is named. Caveat — `//! reject` passes on any diagnostic, so `152` pins the family, not each name |
-| 17.1-03 | 17.1.1.1 escape sequences | present — `lib/frontend/lexer.zig:624`, `lib/ir/lower.zig:10367` ("direct output literals retain their lexical bytes (§9.4.2)"); `lexer.zig:918` and `188_numeric_string.va`'s `"\377"`/`"\001A"` | present (`lib/frontend/parser.zig:4812` keeps octal NUL); **no d09 golden contains an escape** | **implemented-without-evidence (digital)** / verified (analog) | §9.4.2 Table 9-21. **`zig build test-literal-output` no longer exists** — deleted in `2cc1c08`; the old citation is dead and survives only in `ch09_system_tasks/COVERAGE.md:50` |
+| 17.1-03 | 17.1.1.1 escape sequences | present — `lib/frontend/lexer.zig:624`, `lib/ir/lower.zig:10367` ("direct output literals retain their lexical bytes (§9.4.2)"); `lexer.zig:918` and `188_numeric_string.va`'s `"\377"`/`"\001A"` | present (`lib/frontend/parser.zig:5043` keeps octal NUL); **no d09 golden contains an escape** | **implemented-without-evidence (digital)** / verified (analog) | §9.4.2 Table 9-21. **`zig build test-literal-output` no longer exists** — deleted in `2cc1c08`; the old citation is dead and survives only in `ch09_system_tasks/COVERAGE.md:50` |
 | 17.1-04 | 17.1.1.2 format specifications | full C prefix `%[flags][width][.prec]conv` via `lib/backend/cg_display.zig:641`; `171_display_c_format_flags.va` plus `s01_01`–`s01_04` all pass (`%g` significant digits, sign before zero fill, round-half-to-even, `%r` engineering notation) | Table 9-22 radix only, `%e/%f/%g` restricted to `$realtime` (`src/sim/digital.zig:1548`), `%t` (`:1516`); `%c %l %m %s %r` refused (`:1525-1528`); bare width, no flags, no precision (`:1499-1503`) | **partial (digital)** / verified (analog) | Boundary nameable: digital has Table 9-22's radix rows, a width and `%t`; it lacks `%c %l %m %s`, C flags/precision, and **§9.4.7's `%r` on reals in the digital context** (row AMS-02) |
 | 17.1-05 | 17.1.1.3 automatic sizing of displayed data | documented **deviation** — `cg_display.zig:136-141`: a bare integer prints minimal-width where 1364 auto-sizes `%d` to 20 columns for 64-bit | implemented — `src/sim/digital.zig:1683` `width orelse autoWidth(v, radix)`, `:1693`; `d09_01` pins `%d` of an 8-bit 7 as `[  7]`, `%0d` as `[7]`, `%h`→2, `%o`→3, `%b`→8 | **partial** | was `missing`. Digital half verified; analog half deviates deliberately and the deviation is in-source |
 | 17.1-06 | 17.1.1.4 unknown / high-impedance display | `x`/`z` cannot reach a display operand — E0130 at `lib/ir/lower.zig:1310` | implemented — `src/sim/digital.zig:1716` `groupText`, `:1739-1744` ("all unknown prints lowercase, partly unknown prints uppercase"); `d09_02_display_unknown_radix.v` pins `ax`/`2Xx`, `z3`/`zZ3`, LSB-first octal grouping | **partial** | was `missing`. Digital verified. **The analog half is contested inside this repo — see §7.5 item 1; not settled here** |
@@ -445,16 +467,16 @@ value and 17.2-12's invalid-code half; **implementation-defined** on 17.2-17.
 | # | Obligation | Verdict | Reason / reference |
 |---|---|---|---|
 | 17.3-01 | `$printtimescale`, `$timeformat`: scope, rounding, formatted output | **partial** | `$timeformat` is **implemented and pinned**: `src/sim/digital.zig:614`, the clause's defaults at `:620-623`, argument rules at `:1420-1426`, `%t` at `:1516`/`:1638-1640`. `tests/fixtures/digital/d09_07_timeformat.v` passes and pins the `units_number` conversion at −9/−6/−12, precision, suffix, min field width, and that `%t` formats its **argument** rather than the clock. `$printtimescale` remains a name on `lib/ir/lower.zig:7541`'s refusal list — `d09_SPEC.md:209-211` declares its banner text non-derivable from the offline chapter and deliberately unfixtured. Analog refusal correct (§9.6 Table 9-3), pinned by `154`. **Boundary: `$timeformat` verified (digital), `$printtimescale` missing** |
-| 17.4-01 | `$finish` and its optional diagnostic level | **partial** | The 2026-09-16 claim that "the level's diagnostic output is not implemented in either context" is **false at HEAD**. Analog: `lib/backend/cg_display.zig:239` `finishLevel` (default 1 per §9.7.1), `:269-271` prints accepted time and module for level ≥ 1, `:255-258` documents level 2 collapsing to level 1 with a named ceiling. Digital: `src/sim/digital.zig:617`, arity at `:1445`, **level 2 refused** at `:1449`, `:2424-2431` prints for level ≥ 1 and nothing for 0. `172_finish_terminates.va` pins analog termination; `digital.zig:3414` pins the level-2 refusal, `:3515-3529` level-0 silence. **Boundary: Table 9-25's level-2 memory/CPU statistics exist nowhere, and the level-1 text is asserted by no test in either context** |
+| 17.4-01 | `$finish` and its optional diagnostic level | **partial** | The 2026-09-16 claim that "the level's diagnostic output is not implemented in either context" is **false at HEAD**. Analog: `lib/backend/cg_display.zig:239` `finishLevel` (default 1 per §9.7.1), `:269-271` prints accepted time and module for level ≥ 1, `:255-258` documents level 2 collapsing to level 1 with a named ceiling. Digital: `src/sim/digital.zig:617`, arity at `:1445`, **level 2 refused** at `:1449`, `:2424-2431` prints for level ≥ 1 and nothing for 0. `172_finish_terminates.va` pins analog termination; `digital.zig:3421` pins the level-2 refusal inside the test at `:3408`. **Boundary: Table 9-25's level-2 memory/CPU statistics exist nowhere, and the level-1 text is asserted by no test in either context** |
 | 17.4-02 | `$stop` host behavior | **partial** | `174_stop_terminates.va` pins print-and-exit-0, which `cg_display.zig:266-269` names as a deliberate simplification with "a debugger hook" as the upgrade path — **implementation-defined and documented** — but the LRM's suspension semantics are absent. Digital half added at this re-derivation: `$stop` appears nowhere in `src/sim/digital.zig:596-617`; the digital engine has no `$stop` at all |
-| 17.4-03 | Scheduler and resource cleanup on `$finish`/`$stop` | **partial** | Pending-process discard **is** observed: `src/sim/digital.zig:3515` `test "unknown delay is zero and finish discards pending later processes"` — a sibling `initial begin #2 $display("not run"); end` never runs — and it is on `zig build test`. Implementation at `:2431` `self.scheduler.finish()`. Nothing observes file-descriptor or memory release, and the analog context has no cleanup observation at all |
+| 17.4-03 | Scheduler and resource cleanup on `$finish`/`$stop` | **partial** | Pending-process discard **is** observed: `src/sim/digital.zig:3522` `test "unknown delay is zero and finish discards pending later processes"` — a sibling `initial begin #2 $display("not run"); end` never runs — and it is on `zig build test`. Implementation at `:2431` `self.scheduler.finish()`. Nothing observes file-descriptor or memory release, and the analog context has no cleanup observation at all |
 | 17.5-01…16 | PLA: 16 spellings of `$async`/`$sync` × `and`/`nand`/`or`/`nor` × `array`/`plane` | **missing** ×16 | `lib/ir/lower.zig:7547-7552`, refused at `:6454`/`:9230` via E0806. §9.8: AMS "does not extend" them, placing them in the digital context only, where nothing implements them — no PLA name appears in `src/sim/digital.zig`. `154_timescale_pla_queue_analog_rejected.va` pins the analog refusal and is **not** coverage of the tasks |
 | 17.5-17 | PLA personality data, four-state logic, update timing | **missing** | |
 | 17.6-01…05 | `$q_initialize`, `$q_add`, `$q_remove`, `$q_full`, `$q_exam` | **missing** ×5 | `lib/ir/lower.zig:7555-7557`; §9.9 same structure as PLA; no name in `src/sim/digital.zig` |
 | 17.6-06 | Queue discipline (FIFO/LIFO), status codes, capacity, time statistics | **missing** | |
-| 17.7-01 | `$time` — 64-bit, scaled to the caller's timescale | **verified** | `src/sim/digital.zig:460`, return type at `:957-960` (`.width = if (f == .time) 64 else 32`), value at `:1167-1172` via `self.scale.?.unitsAt(...)`. `tests/fixtures/digital/d09_05_time_queries.v` passes and pins **scaling** under `` `timescale 10ns/1ns `` (t = 0/3/7, not 0/30/70), the 64-bit width via a 64-character `%b`, and arithmetic participation; `d09_06_time_rounding.v` pins half-unit rounding away from zero; `digital.zig:3477` pins the same on `zig build test`. Analog refusal is **verified on the prohibition** (§9.10 Table 9-7 `No`) by `149_time_stime_analog_rejected.va` |
+| 17.7-01 | `$time` — 64-bit, scaled to the caller's timescale | **verified** | `src/sim/digital.zig:460`, return type at `:957-960` (`.width = if (f == .time) 64 else 32`), value at `:1167-1172` via `self.scale.?.unitsAt(...)`. `tests/fixtures/digital/d09_05_time_queries.v` passes and pins **scaling** under `` `timescale 10ns/1ns `` (t = 0/3/7, not 0/30/70), the 64-bit width via a 64-character `%b`, and arithmetic participation; `d09_06_time_rounding.v` pins half-unit rounding away from zero; `digital.zig:3478` pins the rounding rule on `zig build test`. Analog refusal is **verified on the prohibition** (§9.10 Table 9-7 `No`) by `149_time_stime_analog_rejected.va` |
 | 17.7-02 | `$stime` — 32-bit | **partial** | Same path (`src/sim/digital.zig:461`, `:1172` `units & 0xffff_ffff`); `d09_05` pins the scaled value. **Boundary: the 32-bit truncation itself is unreachable by any fixture** — no test drives time past 2³² ticks, so "the low order 32 bits" is asserted nowhere. Analog prohibition verified by `149` |
-| 17.7-03 | `$realtime` | **partial**; §9.10's NOTE **deprecates** `$realtime` in the analog context, so the analog refusal is correct and is pinned by `148_realtime_analog_rejected.va` | `src/sim/digital.zig:541` `realtime_name` and `:1549-1560` — recognised **only as a real display argument**, because `:537-540` records that there are no real variables to put it in yet. Values pinned by `d09_05` and `d09_06` (the sub-unit instants where `$time` and `$realtime` must disagree), plus `digital.zig:3477`. **Boundary: printable, not storable, not an operand** |
+| 17.7-03 | `$realtime` | **partial**; §9.10's NOTE **deprecates** `$realtime` in the analog context, so the analog refusal is correct and is pinned by `148_realtime_analog_rejected.va` | `src/sim/digital.zig:541` `realtime_name` and `:1549-1560` — recognised **only as a real display argument**, because `:537-540` records that there are no real variables to put it in yet. Values pinned by `d09_05` and `d09_06` (the sub-unit instants where `$time` and `$realtime` must disagree), plus `digital.zig:3478`. **Boundary: printable, not storable, not an operand** |
 | 17.7-04 | `$abstime` (AMS addition, `Yes` in both columns) | **missing (digital)** / verified (analog) | `14_abstime.va`; §9.10. No `$abstime` in `src/sim/digital.zig`. Weaker context sets the row |
 | 17.8-01 | `$rtoi`, `$itor` | **missing (digital)** / **implemented-without-evidence (analog)** | The analog-prohibition claim is **withdrawn**: the 2023 Table 9-8 reads `$rtoi Yes Yes` and `$itor Yes Yes`, and fixtures `061`/`062` were deleted in `2cc1c08` as 2.4-contaminated. Both names **are** implemented — `lib/backend/codegen.zig:6043` (`lossyCast(i64, @trunc(...))`, §17.8's truncation) and `:6049` — with `$rtoi` typed integer at `lib/ir/lower.zig:10496`. **No fixture exists.** `ch09_system_tasks/COVERAGE.md:78`'s "neither name is implemented" is stale |
 | 17.8-02 | `$realtobits`, `$bitstoreal` | **partial** | Analog path exists (`063`, `064`, `15_conversion_functions.va`) at `lib/backend/codegen.zig:6057`/`:6063`; `lib/ir/lower.zig:6953` fixes the width at 64 for `$realtobits`. Digital typing, x/z and overflow untested — `tests/fixtures/digital/m04_06_realtobits_bitstoreal_bridge.v` FAILS on `wreal` (E0205) |
@@ -835,7 +857,7 @@ the cheapest way to close this section permanently.
 
 ### 7.1 Obligations classified in this document — **measure B**
 
-**Re-derived row by row at HEAD (`2e7cfaa`) on 2026-09-21.** This is the only
+**Re-derived row by row at `a99a37f` on 2026-09-21.** This is the only
 one of `ROADMAP.md`'s four measures with no command behind it. It cannot be
 measured, so the next best thing is an arithmetic a reader can redo: **every
 number below is a count of rows in §4, and each §4 subsection carries its own
@@ -869,7 +891,7 @@ unasserted. Everything else is open.
 | **open** | **97** | 65 `missing` + 20 `partial` + 10 `implemented-without-evidence` + 2 untested resource limits (17.2-04, 17.2-05) |
 
 > ### Measure B at v0.0.2 — **30 / 127 closed, 97 open**
-> Hand-read against this section, 2026-09-21, at `2e7cfaa`.
+> Hand-read against this section, 2026-09-21, at `a99a37f`.
 > Of the 30 closed, 27 are `verified`. Of the 97 open, **65 are `missing`** and
 > 22 of those 65 are the whole of §18.
 
@@ -917,7 +939,7 @@ top of this file.
 **This document no longer owns these numbers.** `tools/conformance.sh` writes
 them into `CHANGELOG.md` from `zig build benchmark -- --coverage`, and
 `publish.yaml` re-measures them on a clean runner. Reproduced here as the
-cross-check they have always been, measured 2026-09-21 at `2e7cfaa`:
+cross-check they have always been, measured 2026-09-21 at `a99a37f` and re-confirmed at `05ae554`:
 
 | | 2026-09-16 | **2026-09-21** | Meaning for this audit |
 |---|---|---|---|
@@ -1023,7 +1045,7 @@ Recorded rather than guessed. Each would change a §7.1 row.
    47/66** — though no `d09_*` case is among its failures and each was re-diffed
    individually. If "executable test" is meant to mean "inside `zig build test`",
    those four weaken. 17.7-01, 17.7-03 and 17.4-03 survive it on
-   `src/sim/digital.zig:3477`/`:3515`, which *are* in `zig build test`.
+   `src/sim/digital.zig:3478`/`:3522`, which *are* in `zig build test`.
 
 ### 7.6 `docs/CONFORMANCE-GAPS.md` — retired, not rebuilt
 
