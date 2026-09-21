@@ -647,6 +647,16 @@ pub const Port = struct {
     /// first. Folded and compared in lowering (E0350), which is the only place
     /// a constant expression like `[0:4-1]` can be reduced.
     type_range: ?Dim = null,
+    /// A.2.1.2 `net_type` from the port TYPE declaration, `.wire` when none was
+    /// written (A.2.1.3's own default, and §3.5's for an undeclared port).
+    ///
+    /// A net declaration that names a header port is FOLDED into the port
+    /// (`parseNetNames`), which is what keeps §6.5.2.2's two declarations one
+    /// net. Before this field the fold kept the discipline and the range and
+    /// dropped the type, so `tri0 t;` on a port and `tri0 t;` on an internal
+    /// net minted different nets from identical text: §7.9's resolution reads
+    /// the net TYPE, so the port's read `z` where the internal one read `0`.
+    kind: NetKind = .wire,
     /// A.1.3 `port ::= . port_identifier ( [ port_expression ] )` — the port's
     /// EXTERNAL name, the one an instantiation connects to; `.none` when the
     /// port is named by the net it carries. Several consecutive ports share one
