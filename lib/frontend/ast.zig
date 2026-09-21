@@ -531,7 +531,31 @@ pub const VarDecl = struct {
 /// through (IEEE 1364-2005 §7.9, Verilog-AMS §3.7). A declaration that names
 /// no net type (`electrical a;`, `ground gnd;`) is `.wire`, which is also the
 /// §7.9 default resolution.
-pub const NetKind = enum(u8) { wire, tri, tri0, tri1, triand, trior, trireg, wand, wor, uwire, supply0, supply1 };
+/// A.2.2.1 `net_type` plus the two spellings A.2.1.3 gives arms of their own
+/// rather than listing in `net_type`: `trireg` (§3.8's charge storage) and
+/// `wreal` (§3.7's real net).
+pub const NetKind = enum(u8) {
+    wire,
+    tri,
+    tri0,
+    tri1,
+    triand,
+    trior,
+    trireg,
+    wand,
+    wor,
+    uwire,
+    supply0,
+    supply1,
+    /// §3.7: "The wreal, or real net data type, represents a real-valued
+    /// physical connection between structural entities." NOT four-state —
+    /// "Unlike other digital nets which have an initial value of 'z', wreal
+    /// nets shall have an initial value of zero" — so every `else` arm of a
+    /// four-state resolution is the WRONG answer for one, not a harmless
+    /// default. `Parser.parseWrealDecl` refuses it under `--run` for exactly
+    /// that reason.
+    wreal,
+};
 
 /// A.2.2.2 `strength0`/`strength1`/`charge_strength`, as ONE enum because
 /// §1.1's IEEE Std 1364 clause 7 orders all eight on a single scale and the

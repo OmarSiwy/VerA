@@ -1211,16 +1211,41 @@ pub const Parser = struct {
         };
     }
 
-    /// A.2.1.2 `[ discipline_identifier ] [ net_type ] [ signed ]` prefix of a
-    /// port declaration. A discipline is an identifier followed by another
-    /// identifier (the first port name), so one token of lookahead decides.
+    /// A.2.1.2 `[ discipline_identifier ] [ net_type | wreal ] [ signed ]`
+    /// prefix of a port declaration. A discipline is an identifier followed by
+    /// another identifier (the first port name), so one token of lookahead
+    /// decides.
+    ///
+    /// For the callers that have somewhere to put the net type — `Ast.Port`
+    /// does now, see `Port.kind` — `optPortType` reports it. `wreal` is a
+    /// separate alternative in A.2.1.2's brackets rather than a `net_type`
+    /// (A.2.2.1 does not list it), and `token.isNetType` follows the annex, so
+    /// the extra spelling is tested here.
     fn optDiscipline(self: *Parser) Error!Ast.StrId {
+        var kind: Ast.NetKind = .wire;
+        return self.optPortType(&kind);
+    }
+
+    fn optPortType(self: *Parser, kind: *Ast.NetKind) Error!Ast.StrId {
         var disc: Ast.StrId = .none;
         if (self.peek() == .identifier and self.identLike(self.pos + 1)) {
             disc = try self.internTok(self.pos);
             self.pos += 1;
         }
-        if (token.isNetType(self.peek())) self.pos += 1;
+        if (token.isNetType(self.peek())) {
+            kind.* = netKind(self.peek());
+            self.pos += 1;
+        } else if (self.digital and self.reservedIs(self.pos, "wreal")) {
+            // Annex C.4 bullet 2: "From 3.7, Real net declarations: the wreal
+            // data type is not supported in Verilog-A." C.8 says it again for
+            // the PORT — "except support for real value ports is only
+            // applicable to Verilog-AMS HDL and IEEE Std 1364 Verilog (see
+            // 6.5.3)" — so in a `.va` the spelling stays a reserved word in an
+            // identifier position, which is the E0208 three annex C fixtures
+            // pin.
+            kind.* = .wreal;
+            self.pos += 1;
+        }
         _ = self.eat(.kw_signed);
         return disc;
     }
@@ -1589,10 +1614,63 @@ pub const Parser = struct {
                 // `parseSwitch` for what refuses them and why it is no longer
                 // E0205.
                 if (switch_arms.has(w)) return self.parseSwitch();
+                // A.2.1.3's two `wreal` arms — §3.7's real net, which the
+                // annex gives arms of its own rather than a `net_type`.
+                if (std.mem.eql(u8, w, "wreal")) return self.parseWrealDecl(b);
                 return self.unsupportedItem();
             },
             else => return self.unsupportedItem(),
         }
+    }
+
+    /// The one sentence of §3.7 that a four-state engine gets wrong, which is
+    /// why a `wreal` is refused rather than minted as one more net.
+    const wreal_unimplemented =
+        "§3.7 real nets are not implemented by digital execution: a wreal " ++
+        "carries a real and reads 0.0 undriven, where every net this engine " ++
+        "resolves carries four-state bits and reads z";
+
+    /// A.2.1.3's two `wreal` alternatives — §3.7's real net:
+    ///
+    ///     | wreal [ discipline_identifier ] [ range ] list_of_net_identifiers ;
+    ///     | wreal [ discipline_identifier ] [ range ] list_of_net_decl_assignments ;
+    ///
+    /// It is not a `net_type`: A.2.2.1's production lists eleven spellings and
+    /// `wreal` is not among them, so the annex gives it arms of its own — with
+    /// no `signed`, no strength bracket and no `vectored`/`scalared`, none of
+    /// which means anything on a real.
+    ///
+    /// OUTSIDE A DIGITAL RUN IT IS NOT DERIVABLE AT ALL, and stays the E0205
+    /// it has always been. Annex C.4 bullet 2 is the clause, and it is a rule
+    /// about the LANGUAGE rather than a limitation of this compiler: "From
+    /// 3.7, Real net declarations: the wreal data type is not supported in
+    /// Verilog-A." C.8 says the same of the port spelling. So a `.va` refusing
+    /// `wreal` is conformance, and three annex C fixtures pin it.
+    ///
+    /// UNDER `--run` the source is IEEE Std 1364 digital, C.4 does not reach
+    /// it, and the declaration parses — and is then E1100, which is the case
+    /// that must not be silent. `src/sim/digital.zig` resolves four-state
+    /// bits: `undriven` returns `.z` for every kind it does not name, `wired`
+    /// folds by agreement, `filled` starts a net at z. §3.7 says the opposite
+    /// of all three — "If no driver is connected to a wreal net, its value
+    /// shall be zero (0.0). Unlike other digital nets which have an initial
+    /// value of 'z', wreal nets shall have an initial value of zero" — so
+    /// accepting the declaration and letting it fall into those `else` arms
+    /// would turn a refusal into a wrong number with no diagnostic.
+    // ponytail: the refusal is one line and the upgrade deletes it. What it
+    // wants is a real-valued lane in that file's net storage plus §3.7's
+    // wire/tri/wreal port merge; `Ast.NetKind.wreal` is the frontend half and
+    // it is here now.
+    fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
+        if (!self.digital) return self.unsupportedItem();
+        const kw = self.pos;
+        self.pos += 1;
+        // `[ discipline_identifier ]` — an identifier followed by another
+        // identifier or a `[`, which is `optDiscipline`'s own lookahead.
+        var ignored: Ast.NetKind = .wire;
+        const disc = try self.optPortType(&ignored);
+        try self.parseNetNames(b, disc, .wreal, false, .{});
+        if (self.digital) _ = self.failAt(kw, .E1100, wreal_unimplemented, .{}) catch {};
     }
 
     /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
@@ -2653,8 +2731,12 @@ pub const Parser = struct {
     /// and discipline, it does not introduce a new terminal.
     fn parsePortDecl(self: *Parser, b: *Body) Error!void {
         const dir = portDirection(self.peek());
+        const dir_tok = self.pos;
         self.pos += 1;
-        const disc = try self.optDiscipline();
+        // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
+        // It is §7.9's resolution input — see `Ast.Port.kind`.
+        var kind: Ast.NetKind = .wire;
+        const disc = try self.optPortType(&kind);
         // A.2.1.2's two VARIABLE arms, which only `output` has:
         //
         //     output_declaration ::=
@@ -2728,6 +2810,7 @@ pub const Parser = struct {
                     p.direction = dir;
                     if (disc != .none) p.discipline = disc;
                     if (range != null) p.range = range;
+                    if (kind != .wire) p.kind = kind;
                 }
             } else {
                 _ = self.failAt(tok, .E0206, "`{s}`", .{self.file.str(name)}) catch {};
@@ -2735,6 +2818,10 @@ pub const Parser = struct {
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
+        // A.2.1.2's `wreal` alternative, refused AFTER the declaration is read
+        // and recorded — see `parseWrealDecl` for the clause and for why
+        // silence is the one answer that is not available.
+        if (kind == .wreal) _ = self.failAt(dir_tok, .E1100, wreal_unimplemented, .{}) catch {};
     }
 
     fn findPort(b: *Body, name: Ast.StrId) ?*Ast.Port {
@@ -5668,6 +5755,51 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
         \\endconnectrules
     );
     try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
+}
+
+test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const src =
+        \\module m(a, b);
+        \\  input wreal a;
+        \\  output b;
+        \\  wreal b;
+        \\  wreal [3:0] bus;
+        \\  wreal seeded = 2.5;
+        \\endmodule
+    ;
+
+    // Annex C.4 bullet 2 / C.8: `wreal` is not in Verilog-A, so a `.va` sees a
+    // reserved word where the grammar wants a name. Three annex C fixtures
+    // pin the two codes; this is the parse under them.
+    const va = try parseForTest(arena, src);
+    try std.testing.expectEqual(diag.Code.E0208, va.code(0)); // `input wreal a;`
+
+    // Under `--run` the same text is A.2.1.2 `[ net_type | wreal ]` and
+    // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, and the
+    // declaration is then E1100 because the engine resolves four-state bits.
+    var list = try lexer.Lexer.tokenize(arena, src);
+    const bag = try newBag(arena, src);
+    var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
+    p.digital = true;
+    const file = p.parseSourceFile() catch |e| switch (e) {
+        error.ParseError => p.file,
+        else => return e,
+    };
+    const res: TestResult = .{ .file = file, .bag = bag };
+    try std.testing.expectEqual(diag.Code.E1100, res.code(0));
+
+    const m = file.modules[0];
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.ports[0].kind); // `input wreal a;`
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.ports[1].kind); // `output b;` + `wreal b;`
+    // The body nets keep the range and the `net_decl_assignment` driver.
+    try std.testing.expectEqual(@as(usize, 2), m.nets.len);
+    try std.testing.expectEqual(Ast.NetKind.wreal, m.nets[0].kind);
+    try std.testing.expect(m.nets[0].range != null);
+    try std.testing.expect(m.nets[1].init != .none);
 }
 
 test "A.5.1 a udp_declaration survives the parse, both header arms" {
