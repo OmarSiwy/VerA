@@ -1417,7 +1417,14 @@ pub const Gen = struct {
         const timer = self.usesOp(.timer);
         // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
         // MIR is sliced into units the formatter's call may sit in any of them.
-        const strs = self.lower.uses_str_tasks;
+        //
+        // `display == .emit` joins it because §9.4.3's real conversions live in
+        // the same file: Table 9-23 grants them "the full formatting
+        // capabilities available in the C language", and `zCReal` is that C —
+        // so a printing artifact needs the string kernels whether or not the
+        // model ever names `$sformat`. This is the same condition `display_txt`
+        // has always carried, now spelled once.
+        const strs = self.lower.uses_str_tasks or self.display == .emit;
         // §9.21, set at the call for the same reason `strs` is: the lookup may
         // land in any unit once the MIR is sliced.
         const tbl = self.lower.uses_table_model;
@@ -1445,7 +1452,7 @@ pub const Gen = struct {
         // §9.4.3's padding helper serves §9.5.3 too — `$sformat` is the same
         // formatter — so a device that never prints still needs it if it formats
         // into a string.
-        if (self.display == .emit or strs) try self.out.appendSlice(self.gpa, display_txt);
+        if (strs) try self.out.appendSlice(self.gpa, display_txt);
         if (strs) try depublish(self.gpa, &self.out, str_txt);
         if (files) try depublish(self.gpa, &self.out, file_txt);
         if (tbl) try depublish(self.gpa, &self.out, table_txt);
@@ -5602,7 +5609,7 @@ pub const Gen = struct {
         // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
         // device they fall through to `void_tasks` below.
         if (self.display == .emit and Lower.isDisplayTask(name))
-            return cg_display.emitDisplayTask(self, name, args);
+            return cg_display.emitDisplayTask(self, name, args, @intFromEnum(inst));
         // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
         // the call's position among the prints; in a device the call is dead
         // (`Lower.isSimCtlTask` calls join the display chain and nothing else,
@@ -10205,8 +10212,11 @@ test "codegen: §9.4 display tasks are void by default and print on request" {
     // sliced in (a missing slice renders every one of them as `S.con(0.0)`).
     const exe = try h.genDisplay(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, exe, "pub fn display(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, exe, "g={d} n={s:>5} s={s}\\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, exe, "(S.con(model.g)).val()") != null);
+    // `%g` is a §9.4.3 Table 9-23 REAL conversion, so it composes its own
+    // field through `str_kernels.zCReal` and arrives as `{s}`; `%5d` is the
+    // documented zPadInt detour and `%s` is Zig's own verb.
+    try std.testing.expect(std.mem.indexOf(u8, exe, "g={s} n={s:>5} s={s}\\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exe, "zCReal(&zb0, (S.con(model.g)).val(), 'g', 0, 0, -1)") != null);
     // §9.4.1 `$write` is the one that does not end the line.
     try std.testing.expect(std.mem.indexOf(u8, exe, "\"no newline\"") != null);
     // §9.7.3 the severity is a prefix, not something a reader must infer.
