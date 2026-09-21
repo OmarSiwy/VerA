@@ -1388,18 +1388,41 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         const name = try self.netKey(self.file.str(n.name), n.main_tok);
         // §3.6.3 a vector net is N independent nets, scalarised here.
         //
-        // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
-        // constant ARRAY expression with holes — `electrical [0:4] bus =
-        // '{2.3,4.5,,6.0};`, where "a null value in the constant array
-        // indicates that no nodeset value is being specified for this element"
-        // — and A.8.1's assignment_pattern as this parser reads it has no null
-        // element, so there is nothing to pair with `r.at(k)` yet. The upgrade
-        // path is an empty slot in `parsePrimary`'s `'{ ... }` arm plus the
-        // same `recordNodeset` call per element, keyed by position.
+        // §3.6.3.2's bus initializer is scalarised with them: "In the case of
+        // analog buses, a constant array expression is used as an initializer.
+        // A null value in the constant array indicates that no nodeset value is
+        // being specified for this element of the bus." `flattenPattern` is
+        // already the per-cell reader the §3.4.4 parameter arrays use, and it
+        // answers `.none` for both spellings of "nothing here" — the clause's
+        // hole and a pattern shorter than the bus.
         if (n.range) |d| {
             if (try self.foldDim(d, n.main_tok)) |r| {
-                for (0..r.size()) |k|
-                    _ = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
+                // ONLY a pattern seeds nodesets, and a non-pattern initializer
+                // is NOT an error here. §3.6.3.2's rule is about the analog
+                // bus spelling — "a constant array expression is used as an
+                // initializer" — and `wire [3:0] wbus = 4'h5;` is not that: it
+                // is A.2.2.1's `net_declaration` with a continuous assignment
+                // of one sized value to the whole vector, which is legal 1364
+                // that VerA does not model yet (the same `assign` gap the ch07
+                // rows are blocked on, PLAN.md §3). Refusing it here rejected
+                // `annex_a_syntax/52_net_and_variable_types.va`, whose whole
+                // claim is that the eleven net_type spellings compile.
+                //
+                // ponytail: so the value is dropped, exactly as it was before
+                // the per-cell seeding below existed. Upgrade path: when
+                // `assign` lands, a non-pattern initializer becomes its
+                // continuous assignment rather than a nodeset, and this arm
+                // routes there instead of ignoring it.
+                const seeds: []const Ast.ExprId = if (n.init == .none or
+                    self.file.exprs.tag(n.init) != .assign_pattern)
+                    &.{}
+                else
+                    try self.flattenPattern(n.init, &.{Bounds{ .lo = 0, .hi = r.size() - 1 }});
+                for (0..r.size()) |k| {
+                    const idx = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
+                    if (k < seeds.len and seeds[k] != .none)
+                        try self.recordNodeset(idx, seeds[k], n.main_tok, name);
+                }
                 try self.vectors.put(self.arena, name, r);
             }
             continue;
@@ -4045,12 +4068,16 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// Sets the event's flag for this timepoint; `@(ev)` reads it.
 ///
 /// A.6.4 lists `event_trigger` under `analog_event_statement` and not under
-/// `analog_statement`, so a trigger on the analog spine has no derivation. That
-/// is NOT gated here: unlike `disable` (E0401), no fixture pins it, and the
-/// accepted form is harmless — an unconditional trigger means "this event is
-/// active every timepoint", which is what the source says. Add the
-/// `!in_event_stmt` gate beside `lowerDisable`'s when a fixture asks.
+/// `analog_statement`, so a trigger on the analog spine has no derivation —
+/// gated here exactly as `disable` (E0401) is, two alternatives over in the
+/// same list. A bare trigger would mean "active at every timepoint", which sets
+/// the event's rate from the solver's step control rather than from the model.
 fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
+    if (!self.in_event_stmt) {
+        var b = self.errWith(tok, .E0434);
+        b.help("only `@(<event>) -> ev;` is legal", .{});
+        return b.emit();
+    }
     const place = self.events.get(name) orelse
         return self.err(tok, .E0705, "`{s}`", .{name});
     try self.builder.writeVariable(place, self.cur, .one);
@@ -9498,21 +9525,40 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         ctl = strs[1];
-        const nums = (try self.readTableFile(e, strs[0], "$table_model", .E0815)) orelse return poison;
-        if (nums.cols <= nd) {
-            try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ strs[0], nd, nd, nums.cols });
-            return poison;
+        // §9.21.1: "The state of the data source is captured on the FIRST CALL
+        // to the table model function." An absent file is therefore the CALL's
+        // error, not the compilation's — a site that never executes makes no
+        // first call and captures nothing. The bytes are still read eagerly
+        // (they have to be constants in the device), but a failure to find them
+        // lowers to an EMPTY data set, which `zTable` refuses the moment a
+        // lookup reaches it and never otherwise.
+        var absent = false;
+        if (try self.readTableFile(e, strs[0], "$table_model", .E0815, &absent)) |nums| {
+            if (nums.cols <= nd) {
+                try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ strs[0], nd, nd, nums.cols });
+                return poison;
+            }
+            ncol = nums.cols;
+            np = nums.vals.len / ncol;
+            const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
+            for (nums.vals, flat) |v, *out| out.* = try self.mir.addFloatConst(self.arena, v);
+            rows = flat;
+        } else {
+            if (!absent) return poison;
+            // The empty data set. §9.21.2's control string describes columns
+            // that do not exist, so it is dropped with them; `parseTableCtl`
+            // fills `ext` with Table 9-32's defaults over `nd + 1` columns and
+            // the projection below copies no rows.
+            ncol = nd + 1;
+            np = 0;
+            ctl = "";
         }
-        ncol = nums.cols;
-        np = nums.vals.len / ncol;
-        const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
-        for (nums.vals, flat) |v, *out| out.* = try self.mir.addFloatConst(self.arena, v);
-        rows = flat;
     }
 
     // §9.21: "The minimum data requirement is to have the product of at least
-    // two points per dimension (2ᴺ for N dimensions)."
-    if (np < std.math.pow(usize, 2, @min(nd, 30))) {
+    // two points per dimension (2ᴺ for N dimensions)." `np == 0` is the absent
+    // file above, whose whole point is that it has no data set to measure.
+    if (np != 0 and np < std.math.pow(usize, 2, @min(nd, 30))) {
         try self.err(self.file.exprs.mainTok(e), .E0815, "a {d}-dimensional table needs at least {d} samples, got {d}", .{ nd, std.math.pow(usize, 2, @min(nd, 30)), np });
         return poison;
     }
@@ -9609,7 +9655,7 @@ const max_table_bytes: usize = 16 << 20;
 /// where the vector form's identical values are checked; this reads the bytes
 /// and nothing more.
 fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]const f64 {
-    const f = (try self.readTableFile(e, name, "noise_table", .E0519)) orelse return null;
+    const f = (try self.readTableFile(e, name, "noise_table", .E0519, null)) orelse return null;
     if (f.cols != 2) {
         try self.err(self.file.exprs.mainTok(e), .E0519, "\"{s}\": LRM 4.6.4.3's input file is frequency / power PAIRS, one pair per line; found {d} numbers on a line", .{ name, f.cols });
         return null;
@@ -9634,12 +9680,22 @@ fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]cons
 /// Resolved against the `include_dirs` the caller passed, which is where the
 /// source file's own directory is: §9.21 says nothing about the search path, and
 /// a data file sits beside the model that names it exactly as an `include does.
+/// `missing` non-null defers the NOT-FOUND case to the caller instead of
+/// diagnosing it — see `lowerTableModel`, which owes §9.21.1's "captured on the
+/// first call" a data source whose absence is the CALL's error and not the
+/// compilation's. Only that case: a file that exists and is not a table is read
+/// either way, so its diagnostic stays here.
+//
+// ponytail: so an unexecuted site naming a MALFORMED file is still refused,
+// where an unexecuted site naming an ABSENT one is not. Give the parse failures
+// the same treatment when a fixture asks; nothing in the suite does today.
 fn readTableFile(
     self: *Lower,
     e: Ast.ExprId,
     name: []const u8,
     who: []const u8,
     code: diag.Code,
+    missing: ?*bool,
 ) Oom!?TableFile {
     const io = std.Io.Threaded.global_single_threaded.io();
     const dir: std.Io.Dir = .cwd();
@@ -9654,6 +9710,10 @@ fn readTableFile(
         }
         const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
             if (e2 == error.OutOfMemory) return error.OutOfMemory;
+            if (missing) |m| {
+                m.* = true;
+                return null;
+            }
             try self.err(self.file.exprs.mainTok(e), code, "cannot read the `{s}` data source \"{s}\"", .{ who, name });
             return null;
         };

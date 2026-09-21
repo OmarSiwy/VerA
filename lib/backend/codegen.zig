@@ -4965,7 +4965,9 @@ pub const Gen = struct {
         const ext = self.strArg(args, 4) orelse "";
         const site = self.intArg(args, 5) orelse 0;
         const head = 7 + nd;
-        if (nd == 0 or np * ncol == 0 or args.len != head + np * ncol)
+        // `np == 0` is legal here and only here: §9.21.1's absent data source,
+        // whose error `zTable` raises at the call (`ztMissingSource`).
+        if (nd == 0 or ncol == 0 or args.len != head + np * ncol)
             return self.abort("malformed `$table_model` call reached codegen", .{});
         if (site != 0) {
             self.uses_inst = true;
@@ -5159,6 +5161,21 @@ pub const Gen = struct {
     /// Parameter derivation must preserve integral bits, including values beyond
     /// f64's exact range. Integer operators retain the analog MIR's existing
     /// 32-bit arithmetic rules; full expression sizing remains separate work.
+    /// A host-side `[]const u8` for a STRING operand: the literal, or the model
+    /// field a §3.4.6 string parameter occupies. Null for anything else, which
+    /// is how `i64Const` tells a string comparison from arithmetic.
+    fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
+        switch (self.mir.valueDef(self.an.rv(v0))) {
+            .str_const => |s| return try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
+            .param_ref => |p| {
+                if (Analysis.tyOfParam(self.lower.params.items[p].ty) != .str) return null;
+                self.uses_model = true;
+                return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]});
+            },
+            else => return null,
+        }
+    }
+
     fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
         const v = self.an.rv(v0);
@@ -5198,6 +5215,26 @@ pub const Gen = struct {
                     return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
                 }
                 if (Mir.opClass(row.op) != .unary and Mir.opClass(row.op) != .binary) return null;
+                // Table 3-3's relational row over two strings — "Result is 1 if
+                // they are equal and 0 if they are not", the rest by
+                // "lexicographical ordering". §3.4.6's own `ebersmoll` example
+                // writes exactly this in a parameter default
+                // (`sign = (transistortype == "NPN") ? 1.0 : -1.0`), so §6.3.4
+                // has to be able to redo it after a card write. `lowerBinary`
+                // ran `strNum` over any MIXED pair, so a string reaching here is
+                // one of two. Mirrors `foldStrBinary`, operator for operator.
+                if (try self.strConst(av)) |sa| if (try self.strConst(bv)) |sb| {
+                    const so: []const u8 = switch (row.op) {
+                        .ieq => "== .eq",
+                        .ine => "!= .eq",
+                        .ilt => "== .lt",
+                        .ile => "!= .gt",
+                        .igt => "== .gt",
+                        .ige => "!= .lt",
+                        else => return null,
+                    };
+                    return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(std.mem.order(u8, {s}, {s}) {s}))", .{ sa, sb, so });
+                };
                 const a = try self.i64Const(av, depth + 1) orelse return null;
                 if (Mir.opClass(row.op) == .unary) return switch (row.op) {
                     .opt_barrier => a,
