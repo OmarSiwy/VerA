@@ -2211,12 +2211,22 @@ pub const Gen = struct {
                     .{ n, n, n },
                 ),
                 .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
-                .absdelay => try self.w(
-                    "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
-                        "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
-                        "    {s}__head: u32 = 0,\n",
-                    .{ n, hist_len, n, hist_len, n },
-                ),
+                .absdelay => {
+                    try self.w(
+                        "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
+                            "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
+                            "    {s}__head: u32 = 0,\n",
+                        .{ n, hist_len, n, hist_len, n },
+                    );
+                    // §4.5.7 the frozen td of the two-argument form. Emitted
+                    // only for a SIGNAL-valued td — a constant or parameter one
+                    // is already its own first value, so the common site keeps
+                    // exactly the fields it had.
+                    if (try self.absdelayFreezes(self.opArgs(i))) try self.w(
+                        "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
+                        .{n},
+                    );
+                },
                 .last_crossing => try self.w("    {s}__prev: f64 = 0.0, // §4.5.10\n    {s}__t_last: f64 = -1.0,\n", .{ n, n }),
                 // §5.10.3 the history the event test compares against, and
                 // nothing else: there is no `__hit` flag any more, because a
@@ -5380,6 +5390,25 @@ pub const Gen = struct {
         });
     }
 
+    /// §4.5.7 the effective delay of one `absdelay` site, in the caller's
+    /// frame (`step` selects `updateState`'s over the residual's). Without
+    /// `maxdelay` a signal-valued td is read out of the field `updateState`
+    /// froze it in; with a constant td there is nothing to freeze.
+    fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool) Error![]const u8 {
+        if (try self.absdelayFreezes(args))
+            return std.fmt.allocPrint(self.arena, "inst.{s}__td", .{n});
+        return if (step) self.ctrlStep(args, 1, "0.0") else self.argF64(args, 1, "0.0");
+    }
+
+    /// §4.5.7 "If maxdelay is not specified, the value of td when the
+    /// absdelay() is first evaluated shall be used and ANY FUTURE CHANGES TO td
+    /// SHALL BE IGNORED." A td that folds already IS its first value and needs
+    /// nothing; only a signal-valued one has to be frozen into `Instance`.
+    fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
+        if (args.len != 2) return false;
+        return self.ctrlIsDynamic(args[1]);
+    }
+
     /// `ctrlStep` is `updateState`'s frame, where the only thing evaluated is
     /// the single `core(R, …)` sweep — so the argument has to be a field of it,
     /// which `buildJobs` is what arranges. A dynamic argument with no core
@@ -6122,7 +6151,7 @@ pub const Gen = struct {
             }),
             .absdelay => try self.b(
                 "zAbsdelay(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
-                .{ in, n, n, n, try self.argF64(args, 1, "0.0") },
+                .{ in, n, n, n, try self.absdelayTd(n, args, false) },
             ),
             // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
             // output was when the current excursion began, and when that was —
@@ -7334,6 +7363,16 @@ pub const Gen = struct {
                 }),
                 .absdelay => {
                     try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n });
+                    // §4.5.7 "the value of td when the absdelay() is first
+                    // evaluated shall be used and any future changes to td
+                    // shall be ignored" — the static point IS that first
+                    // evaluation, and `zAbsdelay` passes its input straight
+                    // through there, so latching here is before any delayed
+                    // value has been answered.
+                    if (try self.absdelayFreezes(args)) try self.w(
+                        "        if (inst.abstime <= state.t_prev) inst.{s}__td = {s};\n",
+                        .{ n, try self.ctrlStep(args, 1, "0.0") },
+                    );
                     // §9.17.2 the same self-defence the §4.5.12 filter mounts
                     // with its period: ask the host to keep the step at or
                     // under td, or a wide step flattens the delay to
@@ -7344,7 +7383,7 @@ pub const Gen = struct {
                     // positive one binds — `@min` with 0 would stop time.
                     try self.w(
                         "        const zad_td = {s};\n        if (zad_td > 0.0) inst.bound_step = @min(inst.bound_step, zad_td);\n",
-                        .{try self.argF64(args, 1, "0.0")},
+                        .{try self.absdelayTd(n, args, true)},
                     );
                 },
                 .transition => {
@@ -10660,15 +10699,23 @@ test "codegen: an x-steered zero short is NOT collapsed" {
 }
 
 test "codegen: §4.5 a control argument that is a solve result is E0515, not generated Zig" {
-    // The other half: a delay that genuinely cannot be resolved must be a
-    // diagnostic at the `.va` line. An `@compileError` pasted into an
-    // expression is not one — it reads as an engine bug in generated code.
+    // The other half: a control argument the CLAUSE makes constant and that
+    // genuinely cannot be resolved must be a diagnostic at the `.va` line. An
+    // `@compileError` pasted into an expression is not one — it reads as an
+    // engine bug in generated code.
+    //
+    // §4.5.8's rise_time, not §4.5.7's td: Table 4-20 lists every one of
+    // `transition`'s times among the CONSTANT expression arguments and
+    // `absdelay`'s td among the DYNAMIC ones, so `absdelay(V(p,n), V(c))` —
+    // which this used to spell — is a legal program and is now compiled (see
+    // `dynCtrlArgs` and
+    // ch04_expressions/a04_03_absdelay_td_frozen_without_maxdelay.va).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module bad(p, n, c);
         \\  inout p, n, c;
         \\  electrical p, n, c;
-        \\  analog I(p, n) <+ absdelay(V(p, n), V(c));
+        \\  analog I(p, n) <+ transition(V(p, n), 0, V(c));
         \\endmodule
     , &h);
     defer h.deinit();
@@ -10680,8 +10727,8 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
         if (e.code != .E0515) continue;
         found = true;
         try std.testing.expectEqual(diag.Stage.codegen, e.stage);
-        // The span is the `absdelay` call: a node probe has no instruction of
-        // its own to point at, which is what `ctrl_tok` is the fallback for.
+        // A node probe has no instruction of its own to point at, which is what
+        // `ctrl_tok`'s fallback to the operator call exists for.
         try std.testing.expect(e.span.end > e.span.start);
     }
     try std.testing.expect(found);
