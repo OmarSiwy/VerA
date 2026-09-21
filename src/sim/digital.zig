@@ -289,6 +289,13 @@ const Driver = struct {
     /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
     /// which no operator does.
     gate: ?Gate = null,
+    /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
+    /// directive pulls an unconnected input port to a logic level THROUGH A
+    /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
+    /// the net's own type through `Pair` like any other. A constant, hence no
+    /// expression and an empty sensitivity list — it is evaluated once, at the
+    /// initial `.continuous` dispatch, and never re-runs.
+    pull: ?Int.Bit = null,
     sensitivity: []const u32,
     current: Int.Literal,
     s0: Ast.Strength = .strong,
@@ -633,6 +640,15 @@ const Run = struct {
     scope: u32 = 0,
     /// The highest scope id handed out; the root is 0.
     scopes: u32 = 0,
+    /// §12.4 one instance NAME, keyed by the scope that instantiated it, to the
+    /// scope it minted. `names` cannot carry this: an instance is not storage,
+    /// and a downward hierarchical reference walks these before it reaches a
+    /// slot at all.
+    instances: std.AutoHashMapUnmanaged(Name, u32) = .empty,
+    /// IEEE 1364 §19.10's regions, in text-stream order. Read once per
+    /// unconnected input port; `lib/ir/lower.zig`'s `applyUnconnectedDrive` is
+    /// the analog half of the same directive.
+    drives: []const Front.Preprocessor.DriveRegion = &.{},
     /// Variables, array elements and nets share one slot space, so one `store`
     /// wakes event waiters for all three.
     values: []Int.Literal,
@@ -707,8 +723,22 @@ const Run = struct {
     fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }
+    /// §12.4 a DOWNWARD hierarchical reference: every part but the last names an
+    /// instance declared in the scope before it, and the last is a declared name
+    /// in the scope the final instance minted. Upward references (§12.5) resolve
+    /// by searching enclosing scopes and are not implemented — a name that does
+    /// not descend from the referring scope is simply undeclared here.
     fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
+        if (ex.tag(e) == .hier_ident) {
+            const parts = ex.nameParts(e);
+            var scope = self.scope;
+            for (parts[0 .. parts.len - 1]) |part|
+                scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
+                    return self.exprFail(e, "undeclared instance in a hierarchical reference");
+            return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
+                self.exprFail(e, "undeclared digital variable");
+        }
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse self.exprFail(e, "undeclared digital variable");
     }
@@ -782,7 +812,7 @@ const Run = struct {
     fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
-            .ident => blk: {
+            .ident, .hier_ident => blk: {
                 const at = try self.scalarSlot(e);
                 // §5.10: events "do not hold any data", so a named event has no
                 // value an expression could read.
@@ -884,7 +914,7 @@ const Run = struct {
         if (entry.width != 0 or self.replications.contains(e)) return entry.*;
         const ex = &self.file.exprs;
         const ty: Type = switch (ex.tag(e)) {
-            .int_literal, .logic_literal, .ident => try self.leafType(e),
+            .int_literal, .logic_literal, .ident, .hier_ident => try self.leafType(e),
             // §3.9 an array element has the element's declared type; the index
             // is self-determined and never widens the result.
             .index => blk: {
@@ -987,7 +1017,7 @@ const Run = struct {
     fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
-            .ident => self.values[try self.slot(e)],
+            .ident, .hier_ident => self.values[try self.slot(e)],
             .index => blk: {
                 const ty = self.typeOf(e);
                 const at = (try self.address(a, e)) orelse break :blk try filled(a, ty.width, ty.signed, .x);
@@ -1033,7 +1063,7 @@ const Run = struct {
     fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
         const ex = &self.file.exprs;
         switch (ex.tag(e)) {
-            .int_literal, .logic_literal, .ident, .index => return normalize(a, try self.leaf(a, e), ty),
+            .int_literal, .logic_literal, .ident, .hier_ident, .index => return normalize(a, try self.leaf(a, e), ty),
             .unary => {
                 const op = ex.unOp(e);
                 switch (op) {
@@ -1898,7 +1928,7 @@ const Run = struct {
         const ex = &self.file.exprs;
         switch (ex.tag(e)) {
             .int_literal, .logic_literal => {},
-            .ident => try self.watch(try self.slot(e), out),
+            .ident, .hier_ident => try self.watch(try self.slot(e), out),
             .index => {
                 const base = try self.slot(ex.lhs(e));
                 const arr = self.arrays.get(base).?; // infer proved this is an array
@@ -2270,6 +2300,8 @@ const Run = struct {
                         try self.window(scratch, b, d.current.width)
                     else if (d.gate) |g|
                         try self.gateValue(scratch, g)
+                    else if (d.pull) |b|
+                        try filled(scratch, d.current.width, false, b)
                     else blk: {
                         const rhs = try self.eval(scratch, d.value, d.current.width);
                         break :blk try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
@@ -2419,6 +2451,8 @@ const Wire = struct {
     value: Ast.ExprId = .none,
     bridge: ?Bridge = null,
     gate: ?Gate = null,
+    /// Set instead of `value` for IEEE 1364 §19.10's pull — see `Driver.pull`.
+    pull: ?Int.Bit = null,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -2556,7 +2590,25 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         }
         const at = try mintNet(r, e, .wire, width, p.name, p.main_tok);
         switch (bind) {
-            .open, .collapse => {},
+            // IEEE 1364 §19.10: an unconnected INPUT port declared in an
+            // `unconnected_drive` region is pulled to a logic level THROUGH A
+            // PULL-STRENGTH DRIVER. So it is one driver among drivers and meets
+            // the net's own type in §7.9 resolution — which is the whole
+            // difference from `lib/ir/lower.zig`'s analog approximation, where a
+            // potential source can neither tie with a `tri0` nor lose to a
+            // `supply0`.
+            .open => if (p.direction == .input) {
+                const drive = Front.Preprocessor.DriveRegion.inForce(r.drives, r.starts[@min(p.main_tok, r.starts.len - 1)], .default);
+                if (drive != .float) try e.wires.append(arena, .{
+                    .net = at,
+                    .scope = scope,
+                    .pull = if (drive == .pull1) .one else .zero,
+                    .s0 = .pull,
+                    .s1 = .pull,
+                    .tok = p.main_tok,
+                });
+            },
+            .collapse => {},
             .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .tok = c.tok }),
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
@@ -2618,7 +2670,11 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             r.scope = scope;
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
-        try declare(r, e, child, try newScope(r, inst.main_tok), binds_out, depth + 1);
+        const child_scope = try newScope(r, inst.main_tok);
+        // §12.4's path is walked by NAME, so the instance's own identifier has
+        // to outlive the recursion that consumes it.
+        if (inst.name != .none) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
+        try declare(r, e, child, child_scope, binds_out, depth + 1);
         r.scope = scope;
     }
 }
@@ -2680,7 +2736,8 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
     var times: []const Front.Preprocessor.TimescaleEvent = &.{};
-    const text = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .timescale_events = &times, .bag = bag }) catch |e| return switch (e) {
+    var drives: []const Front.Preprocessor.DriveRegion = &.{};
+    const text = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .timescale_events = &times, .drives = &drives, .bag = bag }) catch |e| return switch (e) {
         error.OutOfMemory => error.OutOfMemory,
         error.PreprocessFailed => error.DigitalFailed,
     };
@@ -2692,7 +2749,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         error.ParseError => error.DigitalFailed,
     };
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io };
+    var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives };
     if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
     const m = try pickTop(&r, file.modules);
     // §6.2.2: a `timescale applies from where it is written, and the FIRST
@@ -2750,7 +2807,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
                 if (r.typeOf(in).width != 1) return r.exprFail(in, "only scalar gate terminals are implemented");
                 try r.sensitivity(in, &watched);
             }
-        } else {
+        } else if (a.pull == null) {
             try r.checkExpr(a.value);
             try r.sensitivity(a.value, &watched);
         }
@@ -2760,6 +2817,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             .scope = a.scope,
             .bridge = a.bridge,
             .gate = a.gate,
+            .pull = a.pull,
             .sensitivity = watched.items,
             .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,
@@ -2849,6 +2907,80 @@ fn expectRun(source: []const u8, expected: []const u8) !void {
         return e;
     };
     try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "§12.4 a downward hierarchical reference reads the named instance's net" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module child(a, y);
+        \\input a;
+        \\output y;
+        \\wire a, y;
+        \\assign y = ~a;
+        \\endmodule
+        \\module top;
+        \\reg r;
+        \\wire w;
+        \\child u(r, w);
+        \\initial begin r = 1'b0; #0 $display("a=%b y=%b", u.a, u.y); end
+        \\endmodule
+    , "a=0 y=1\n");
+}
+
+test "§12.4 a hierarchical path descends one instance per part" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module leaf(a);
+        \\input a;
+        \\wire a;
+        \\endmodule
+        \\module mid(a);
+        \\input a;
+        \\wire a;
+        \\leaf d(a);
+        \\endmodule
+        \\module top;
+        \\reg r;
+        \\mid u(r);
+        \\initial begin r = 1'b1; #0 $display("%b", u.d.a); end
+        \\endmodule
+    , "1\n");
+}
+
+// IEEE 1364 §19.10. The directive drives at PULL strength, so the level it
+// asks for is not automatically the level the net shows — `strong0` outranks
+// it and wins, which is the half no "pull is just a value" model reproduces.
+test "§19.10 unconnected_drive pulls an open input port and loses to a stronger driver" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\`unconnected_drive pull1
+        \\module child(a, b);
+        \\input a;
+        \\input b;
+        \\wire a, b;
+        \\endmodule
+        \\`nounconnected_drive
+        \\module top;
+        \\wire s;
+        \\assign (strong0, strong1) s = 1'b0;
+        \\child u( , s);
+        \\initial #0 $display("open=%b driven=%b", u.a, u.b);
+        \\endmodule
+    , "open=1 driven=0\n");
+}
+
+test "§19.10 nounconnected_drive leaves an open input port floating" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module child(a);
+        \\input a;
+        \\wire a;
+        \\endmodule
+        \\module top;
+        \\child u( );
+        \\initial #0 $display("%b", u.a);
+        \\endmodule
+    , "z\n");
 }
 
 test "source processes suspend at zero delay and NBA captures RHS in lexical order" {
