@@ -2226,12 +2226,22 @@ pub const Gen = struct {
                     .{ n, n, n },
                 ),
                 .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
-                .absdelay => try self.w(
-                    "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
-                        "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
-                        "    {s}__head: u32 = 0,\n",
-                    .{ n, hist_len, n, hist_len, n },
-                ),
+                .absdelay => {
+                    try self.w(
+                        "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
+                            "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
+                            "    {s}__head: u32 = 0,\n",
+                        .{ n, hist_len, n, hist_len, n },
+                    );
+                    // §4.5.7 the frozen td of the two-argument form. Emitted
+                    // only for a SIGNAL-valued td — a constant or parameter one
+                    // is already its own first value, so the common site keeps
+                    // exactly the fields it had.
+                    if (try self.absdelayFreezes(self.opArgs(i))) try self.w(
+                        "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
+                        .{n},
+                    );
+                },
                 .last_crossing => try self.w("    {s}__prev: f64 = 0.0, // §4.5.10\n    {s}__t_last: f64 = -1.0,\n", .{ n, n }),
                 // §5.10.3 the history the event test compares against, and
                 // nothing else: there is no `__hit` flag any more, because a
@@ -2925,6 +2935,37 @@ pub const Gen = struct {
                 },
                 .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
             });
+        }
+        // §4.5 Table 4-20's DYNAMIC control arguments, on exactly the terms the
+        // `$limit` arguments below are queued on: `updateState` has only ONE
+        // core sweep, so an argument it must read on the accepted solution has
+        // to be a field of it. The table is normative — for `absdelay` the
+        // dynamic arguments are `expr, td`, for `idt` they are `expr, ic,
+        // assert`, for `idtmod` `expr, ic, modulus, offset` — and VerA used to
+        // refuse every one of them with E0515, which is the opposite of what
+        // the table says.
+        //
+        // ONLY the arguments that do not fold are queued. A literal or a model
+        // parameter still renders over Model and puts nothing in the core, so
+        // every device that exists today is byte-identical.
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op) continue;
+            const inst = self.opInstOf(@intCast(i)) orelse continue;
+            const args = self.mir.instData(inst).call.args;
+            for (dynCtrlArgs(opKind(u.target))) |ai| {
+                if (ai >= args.len) continue;
+                const v = self.an.rv(args[ai]);
+                if (v == .f_zero) continue;
+                if (!try self.ctrlIsDynamic(args[ai])) continue;
+                try jobs.append(self.arena, .{
+                    // Like `$limit`'s below, this job exists to put a value in
+                    // the core; the name is never written.
+                    .name = "$ctrl",
+                    .target = v,
+                    .mode = self.unitMode(i),
+                    .comment = "§4.5 Table 4-20 dynamic operator control argument",
+                });
+            }
         }
         // §5.10 the end-of-block value of every held variable, so `updateState`
         // can store it back. Queued AFTER the operator inputs and before the
@@ -5364,6 +5405,78 @@ pub const Gen = struct {
         return self.f64Expr(args[i]);
     }
 
+    /// Does this §4.5 control argument need the core, i.e. is it a solve result
+    /// rather than a constant/parameter expression? Speculative — `f64Const`'s
+    /// `uses_model` side effect is rolled back, because whether the rendered
+    /// text is ever emitted is decided later.
+    fn ctrlIsDynamic(self: *Gen, v: Mir.Value) Error!bool {
+        const saved = self.uses_model;
+        defer self.uses_model = saved;
+        return (try self.f64Const(v, 0, false)) == null;
+    }
+
+    /// §4.5 Table 4-20 lists some operator control arguments as DYNAMIC, which
+    /// `argF64` cannot render: it goes through `f64Const`, whose frame is the
+    /// host's Model and which refuses a solve result with E0515. These two read
+    /// the same argument in the two frames that actually evaluate one, and both
+    /// fall back to `f64Const`'s text when it folds — so a literal or a model
+    /// parameter renders exactly as it always did.
+    ///
+    /// `ctrlEval` is the RESIDUAL's frame: the argument is an ordinary rendered
+    /// expression there, S-valued, and only its value is wanted.
+    fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+        if (i >= args.len) return dflt;
+        if (try self.f64Const(args[i], 0, false)) |s| return s;
+        return std.fmt.allocPrint(self.arena, "({s}).val()", .{
+            try self.renderToArena(args[i], .real),
+        });
+    }
+
+    /// §4.5.7 the effective delay of one `absdelay` site, in the caller's
+    /// frame (`step` selects `updateState`'s over the residual's). Without
+    /// `maxdelay` a signal-valued td is read out of the field `updateState`
+    /// froze it in; with a constant td there is nothing to freeze.
+    fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool) Error![]const u8 {
+        if (try self.absdelayFreezes(args))
+            return std.fmt.allocPrint(self.arena, "inst.{s}__td", .{n});
+        const td = if (step)
+            try self.ctrlStep(args, 1, "0.0")
+        else
+            try self.ctrlEval(args, 1, "0.0");
+        if (args.len < 3) return td;
+        // §4.5.7 "If the optional maxdelay is specified, THEN td CAN VARY. If
+        // td becomes greater than maxdelay, MAXDELAY WILL BE USED AS A
+        // SUBSTITUTE FOR td." Argument 2 was read by nothing at all — the
+        // three-argument form behaved as the two-argument one, with no clamp
+        // and no varying td. Table 4-20 makes maxdelay the constant argument,
+        // so it renders over Model where td renders over the core.
+        return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{
+            td, try self.argF64(args, 2, "0.0"),
+        });
+    }
+
+    /// §4.5.7 "If maxdelay is not specified, the value of td when the
+    /// absdelay() is first evaluated shall be used and ANY FUTURE CHANGES TO td
+    /// SHALL BE IGNORED." A td that folds already IS its first value and needs
+    /// nothing; only a signal-valued one has to be frozen into `Instance`.
+    fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
+        if (args.len != 2) return false;
+        return self.ctrlIsDynamic(args[1]);
+    }
+
+    /// `ctrlStep` is `updateState`'s frame, where the only thing evaluated is
+    /// the single `core(R, …)` sweep — so the argument has to be a field of it,
+    /// which `buildJobs` is what arranges. A dynamic argument with no core
+    /// field left is still E0515: that is a planning defect, not a legal
+    /// program, and answering it with a wrong number would hide it.
+    fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+        if (i >= args.len) return dflt;
+        if (try self.f64Const(args[i], 0, false)) |s| return s;
+        const k = self.lo_idx[@intFromEnum(self.an.rv(args[i]))];
+        if (k == none_u32) return self.f64Expr(args[i]);
+        return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
+    }
+
     /// "the signal crossed zero since the last accepted step, in the direction
     /// argument 1 asks for": `+1` rising, `-1` falling, `0` (or absent) either.
     /// §4.5.10 `last_crossing` and §5.10.3 `cross` take the SAME argument with
@@ -6128,18 +6241,18 @@ pub const Gen = struct {
             // `updateState` holds at `ic` for as long as assert is nonzero.
             .idt => if (args.len >= 3) try self.b(
                 "zIdtReset(S, {s}, inst.{s}__acc, inst.dt, {s}, {s})",
-                .{ in, n, try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0") },
+                .{ in, n, try self.ctrlEval(args, 1, "0.0"), try self.ctrlEval(args, 2, "0.0") },
             ) else try self.b("zIdt(S, {s}, inst.{s}__acc, inst.dt, {s})", .{
-                in, n, try self.argF64(args, 1, "0.0"),
+                in, n, try self.ctrlEval(args, 1, "0.0"),
             }),
             .idtmod => try self.b("zIdtmod(S, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
-                in,                              n,
-                try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0"),
-                try self.argF64(args, 3, "0.0"),
+                in,                                 n,
+                try self.ctrlEval(args, 1, "0.0"), try self.ctrlEval(args, 2, "0.0"),
+                try self.ctrlEval(args, 3, "0.0"),
             }),
             .absdelay => try self.b(
                 "zAbsdelay(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
-                .{ in, n, n, n, try self.argF64(args, 1, "0.0") },
+                .{ in, n, n, n, try self.absdelayTd(n, args, false) },
             ),
             // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
             // output was when the current excursion began, and when that was —
@@ -7396,20 +7509,30 @@ pub const Gen = struct {
                 .idt => if (args.len >= 3) try self.w(
                     "        inst.{s}__acc = if (({s}) != 0.0) ({s}) else zIdtAcc(in, inst.{s}__acc, dt, {s});\n",
                     .{
-                        n,                               try self.argF64(args, 2, "0.0"),
-                        try self.argF64(args, 1, "0.0"), n,
-                        try self.argF64(args, 1, "0.0"),
+                        n,                                 try self.ctrlStep(args, 2, "0.0"),
+                        try self.ctrlStep(args, 1, "0.0"), n,
+                        try self.ctrlStep(args, 1, "0.0"),
                     },
                 ) else try self.w("        inst.{s}__acc = zIdtAcc(in, inst.{s}__acc, dt, {s});\n", .{
-                    n, n, try self.argF64(args, 1, "0.0"),
+                    n, n, try self.ctrlStep(args, 1, "0.0"),
                 }),
                 .idtmod => try self.w("        inst.{s}__acc = zWrap(zIdtAcc(in, inst.{s}__acc, dt, {s}), {s}, {s});\n", .{
-                    n,                               n,
-                    try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0"),
-                    try self.argF64(args, 3, "0.0"),
+                    n,                                 n,
+                    try self.ctrlStep(args, 1, "0.0"), try self.ctrlStep(args, 2, "0.0"),
+                    try self.ctrlStep(args, 3, "0.0"),
                 }),
                 .absdelay => {
                     try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n });
+                    // §4.5.7 "the value of td when the absdelay() is first
+                    // evaluated shall be used and any future changes to td
+                    // shall be ignored" — the static point IS that first
+                    // evaluation, and `zAbsdelay` passes its input straight
+                    // through there, so latching here is before any delayed
+                    // value has been answered.
+                    if (try self.absdelayFreezes(args)) try self.w(
+                        "        if (inst.abstime <= state.t_prev) inst.{s}__td = {s};\n",
+                        .{ n, try self.ctrlStep(args, 1, "0.0") },
+                    );
                     // §9.17.2 the same self-defence the §4.5.12 filter mounts
                     // with its period: ask the host to keep the step at or
                     // under td, or a wide step flattens the delay to
@@ -7420,7 +7543,7 @@ pub const Gen = struct {
                     // positive one binds — `@min` with 0 would stop time.
                     try self.w(
                         "        const zad_td = {s};\n        if (zad_td > 0.0) inst.bound_step = @min(inst.bound_step, zad_td);\n",
-                        .{try self.argF64(args, 1, "0.0")},
+                        .{try self.absdelayTd(n, args, true)},
                     );
                 },
                 .transition => {
@@ -8137,6 +8260,19 @@ fn isAnalysisName(s: []const u8) bool {
         if (std.mem.eql(u8, s, n)) return true;
     }
     return false;
+}
+
+/// §4.5 Table 4-20 "Analog operator arguments": which argument positions the
+/// clause marks DYNAMIC (the input at position 0 is already a unit of its own,
+/// so it is not listed here). Everything absent from this table stays a
+/// `constant_expression` and is still E0515 when it is a solve result.
+fn dynCtrlArgs(k: OpKind) []const usize {
+    return switch (k) {
+        .absdelay => &.{1}, // td  ("dynamic: expr, td"; maxdelay is the constant one)
+        .idt => &.{ 1, 2 }, // ic, assert
+        .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
+        else => &.{},
+    };
 }
 
 /// Length of the §4.5.7 absdelay history ring.
@@ -10875,15 +11011,23 @@ test "codegen: an x-steered zero short is NOT collapsed" {
 }
 
 test "codegen: §4.5 a control argument that is a solve result is E0515, not generated Zig" {
-    // The other half: a delay that genuinely cannot be resolved must be a
-    // diagnostic at the `.va` line. An `@compileError` pasted into an
-    // expression is not one — it reads as an engine bug in generated code.
+    // The other half: a control argument the CLAUSE makes constant and that
+    // genuinely cannot be resolved must be a diagnostic at the `.va` line. An
+    // `@compileError` pasted into an expression is not one — it reads as an
+    // engine bug in generated code.
+    //
+    // §4.5.8's rise_time, not §4.5.7's td: Table 4-20 lists every one of
+    // `transition`'s times among the CONSTANT expression arguments and
+    // `absdelay`'s td among the DYNAMIC ones, so `absdelay(V(p,n), V(c))` —
+    // which this used to spell — is a legal program and is now compiled (see
+    // `dynCtrlArgs` and
+    // ch04_expressions/a04_03_absdelay_td_frozen_without_maxdelay.va).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module bad(p, n, c);
         \\  inout p, n, c;
         \\  electrical p, n, c;
-        \\  analog I(p, n) <+ absdelay(V(p, n), V(c));
+        \\  analog I(p, n) <+ transition(V(p, n), 0, V(c));
         \\endmodule
     , &h);
     defer h.deinit();
@@ -10895,8 +11039,8 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
         if (e.code != .E0515) continue;
         found = true;
         try std.testing.expectEqual(diag.Stage.codegen, e.stage);
-        // The span is the `absdelay` call: a node probe has no instruction of
-        // its own to point at, which is what `ctrl_tok` is the fallback for.
+        // A node probe has no instruction of its own to point at, which is what
+        // `ctrl_tok`'s fallback to the operator call exists for.
         try std.testing.expect(e.span.end > e.span.start);
     }
     try std.testing.expect(found);
