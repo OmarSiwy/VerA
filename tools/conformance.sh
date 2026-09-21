@@ -73,7 +73,7 @@ block="$(cat <<EOF
 | &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | $fail · $unas · $xfail | all three to 0 | same run |
 | **C** — clauses with two-way evidence | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both)) clauses | \`zig build benchmark -- --coverage\` |
 | &nbsp;&nbsp;↳ accepted-only · refused-only · uncited | $acc · $ref · $unc | all three to 0 or classified | same run |
-| **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | 0 open | not yet machine-measured |
+| **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | 0 open | rows are read, not measured; \`tools/measure-b.sh\` checks the tally sums |
 | **D** — \`ARCHITECTURE.md\` §6 phases landed | hand-entered, see \`ARCHITECTURE.md\` §8 | 9 of 9 | not machine-measurable |
 | \`zig build test\` | **$unit** | pass | \`zig build test\` |
 | \`zig build test-devices\` | **$devices** | pass | \`zig build test-devices\` |
