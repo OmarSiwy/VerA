@@ -4,6 +4,7 @@
 //! §4.3.1, §4.3.2, §4.5, §9.4, §9.13, §9.21.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -60,8 +61,11 @@ pub fn imodFn(self: *const Gen) []const u8 {
 pub fn renderToArena(self: *Gen, v: Mir.Value, want: VTy) Error![]const u8 {
     const at = self.out.items.len;
     try renderVal(self, v, want);
+    // A nested rewind (`renderLoad`) never reaches below where it started.
+    assert(self.out.items.len >= at);
     const s = try self.arena.dupe(u8, self.out.items[at..]);
     self.out.shrinkRetainingCapacity(at);
+    assert(self.out.items.len == at);
     return s;
 }
 
@@ -296,6 +300,8 @@ fn renderArms(self: *Gen, then: Mir.Value, otherwise: Mir.Value, m: u64) Error!v
 
 /// Is array `id`'s storage plain `f64`/`i64` rather than `S`?
 fn arrPlain(self: *const Gen, id: u32) bool {
+    assert(id < self.lowered.mem_arrays.items.len);
+    assert(self.arr_s.len == self.lowered.mem_arrays.items.len);
     return self.lowered.mem_arrays.items[id].ty == .integer or !self.arr_s[id];
 }
 
@@ -308,6 +314,8 @@ pub fn cow(self: *const Gen, id: u32) bool {
 /// Returns whether the slice being emitted stores held array `id` straight
 /// into its `Instance` field (`plan.Core.in_place`, `state.zig`).
 pub fn inPlace(self: *const Gen, id: u32) bool {
+    // `inPlaceArrays` returns one flag per array, or none at all.
+    if (self.core.in_place.len != 0) assert(self.core.in_place.len == self.lowered.mem_arrays.items.len);
     return self.core.in_place.len != 0 and self.core.in_place[id];
 }
 
@@ -341,9 +349,11 @@ fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
         try renderVal(self, d.index, .int);
         return self.b(", 0)", .{});
     }
+    assert(d.op == .fload);
     const at = self.out.items.len;
     try self.b("zArrLd(S, ", .{});
     if (try arrRef(self, d.arr)) {
+        assert(self.out.items.len > at + "zArrLd(S, ".len);
         // Plain storage: re-spell the head, the index follows either way.
         const name = try self.arena.dupe(u8, self.out.items[at + "zArrLd(S, ".len ..]);
         self.out.shrinkRetainingCapacity(at);
@@ -414,6 +424,8 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
         .store => |d| {
             const id = self.an.arrOf(d.arr).?;
             const m = self.lowered.mem_arrays.items[id];
+            // Only a §5.10 held array has an `Instance` field to store into.
+            if (inPlace(self, id)) assert(m.held != none_u32);
             const r = self.an.rv(self.mir.instResult(inst));
             if (self.emitting_common and self.core.held_only.len != 0 and self.core.held_only[@backingInt(r)]) {
                 self.uses.held = true;
@@ -468,7 +480,10 @@ pub fn renderArrayOut(self: *Gen, v: Mir.Value) Error!void {
 
 /// Writes one opcode over its operands. Also serves the `$`-prefixed math
 /// functions (IEEE 1364 §17.11).
+///
+/// Asserts that `op` is a unary or binary opcode.
 pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty: VTy) Error!void {
+    assert(Mir.opClass(op) == .unary or Mir.opClass(op) == .binary);
     // §3.3.1 string relations: lowering types both operands `.string` and
     // picks the integer comparison opcodes for them.
     if (self.an.tyOf(self.an.rv(a)) == .str or self.an.tyOf(self.an.rv(b2)) == .str) {
@@ -923,7 +938,9 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
         },
         else => {}, // else: a distribution draw — `emitCall` routes only the `$rng$` tags here, and every other one is a kernel
     }
+    assert(std.mem.startsWith(u8, @tagName(c), "$rng$"));
     const tail = @tagName(c)["$rng$".len..];
+    assert(tail.len > 0);
     // The kernel name is the callee's tail in camel case (`zRngChiSquare`),
     // so the two lists cannot drift apart by a typo.
     // Bounded by the longest callee tag, so it is a stack buffer.
@@ -933,6 +950,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
         for (@typeInfo(Mir.Callee).@"enum".field_names) |n| m = @max(m, n.len);
         break :blk "zRng".len + m;
     };
+    comptime assert(cap > "zRng".len + "$rng$".len);
     var buf: [cap]u8 = undefined;
     var fn_name: std.ArrayList(u8) = .initBuffer(&buf);
     fn_name.appendSliceAssumeCapacity("zRng");
@@ -945,6 +963,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
         fn_name.appendAssumeCapacity(if (up) std.ascii.toUpper(ch) else ch);
         up = false;
     }
+    assert(fn_name.items.len > "zRng".len);
     try self.b("S.con({s}(", .{fn_name.items});
     try renderVal(self, if (args.len > 0) args[0] else .zero, .int);
     for (args[@min(1, args.len)..]) |a| {

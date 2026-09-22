@@ -7,6 +7,7 @@
 //! LRM: §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.2, §4.6.4.3, §4.6.4.4, §4.6.4.6, A.8.2.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const plan_noise = @import("plan/noise.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -44,6 +45,12 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         return;
     }
     if (self.noise.rows.len == 0) return;
+    // `planNoise` gives a table row its `tabs` index and no other row one.
+    for (self.noise.rows) |nr| switch (nr.kind) {
+        .table, .table_log => assert(nr.table.? < self.noise.tabs.len),
+        .thermal, .flicker => assert(nr.table == null),
+        .ac_stim => unreachable, // split into `ac_rows` by `plan/noise.zig`
+    };
     if (self.noise.tabs.len != 0) {
         try self.w(
             \\/// §4.6.4.3/.4 the tabulated PSDs, ascending in frequency (the
@@ -57,6 +64,10 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
             } else false;
             try self.w("    .{{ .interp = .{s}, .points = &.{{", .{if (log) "log" else "linear"});
             for (pts, 0..) |p, i| {
+                // `planNoiseTable` sorted the knots and refused a repeat or
+                // a non-positive frequency (E0519).
+                assert(p[0] > 0);
+                if (i != 0) assert(pts[i - 1][0] < p[0]);
                 try self.w("{s}.{{ {s}, {s} }}", .{
                     if (i == 0) " " else ", ",
                     try gen_file.fmtF64(self, p[0]),
@@ -175,6 +186,8 @@ pub fn emitNoiseCore(self: *Gen) Error!void {
 pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     if (!hasCardKnots(self)) return;
     const total = cardKnotCount(self);
+    assert(total > 0);
+    assert(self.noise.tab_vals.len <= self.noise.tabs.len);
     try self.w(
         \\/// §4.6.4.3 every tabulated knot AT THIS CARD, in `noise_tables`
         \\/// order and ascending in frequency within each table. Table k is
@@ -191,6 +204,8 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     var at: usize = 0;
     for (self.noise.tabs, 0..) |pts, k| {
         const mvs = if (k < self.noise.tab_vals.len) self.noise.tab_vals[k] else &.{};
+        // A parametric table's MIR knots are positional against its points.
+        if (mvs.len != 0) assert(mvs.len == pts.len);
         for (pts, 0..) |p, i| {
             const pair: [2][]const u8 = if (i < mvs.len) .{
                 (try gen_host.f64Const(self, mvs[i][0], 0, false)) orelse try gen_file.fmtF64(self, p[0]),
@@ -200,6 +215,7 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
         }
         at += pts.len;
     }
+    assert(at == total);
     const reads_model = self.uses.model;
     self.uses.model = saved_model or reads_model;
     if (!reads_model) gen_unit.patchParam(self, at_model, "model".len);
@@ -211,6 +227,7 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
         try self.w("    contract.sortNoiseTable(pts[{d}..{d}]);\n", .{ at, at + pts.len });
         at += pts.len;
     }
+    assert(at == total);
     try self.w("    return pts;\n}}\n\n", .{});
 }
 
@@ -252,6 +269,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
     var all_stated = true;
     var uses_core = false;
     for (self.noise.ac_rows, vals) |nr, *v| {
+        assert(nr.kind == .ac_stim);
         // §4.6.4.6's per-use coefficient, folded into the magnitude: a real
         // factor scales a phasor exactly (a negative one rides as a negative
         // magnitude), and stimuli have no cross-spectrum or comptime table

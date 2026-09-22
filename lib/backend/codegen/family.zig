@@ -7,6 +7,7 @@
 //! LRM clauses cited: none (it realises `contract.family_fns`).
 
 const std = @import("std");
+const assert = std.debug.assert;
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
@@ -42,6 +43,8 @@ pub fn note(self: *Gen, m: u64) Error!void {
 pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
     const ms = self.fam_masks.items;
     for (ms) |*m| m.* &= deriv_reads;
+    // The cut leaves every mask a subset of `deriv_reads`.
+    for (ms) |m| assert(m & ~deriv_reads == 0);
     std.mem.sort(u64, ms, {}, std.sort.asc(u64));
     try self.w(
         \\/// Every distinct `Of` mask a real in this device is declared at, and
@@ -50,12 +53,17 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
         \\
     , .{});
     var i: usize = 0;
+    var uses_total: usize = 0;
     while (i < ms.len) {
         var j = i;
         while (j < ms.len and ms[j] == ms[i]) j += 1;
+        assert(j > i);
         try self.w("    .{{ .mask = 0x{x}, .uses = {d} }},\n", .{ ms[i], j - i });
+        uses_total += j - i;
         i = j;
     }
+    assert(i == ms.len);
+    assert(uses_total == ms.len);
     try self.w("}};\n\n", .{});
 }
 
@@ -72,6 +80,7 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     const nv = self.an.nv;
     // `host` and `aff` are scratch of this pass (two nv-long columns, 250 KiB
     // on hisimhv_va): on the gpa, freed on return.
+    assert(nv >= Mir.Value.first_dynamic);
     const host = try self.gpa.alloc(bool, nv);
     defer self.gpa.free(host);
     @memset(host, false);
@@ -82,8 +91,12 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     }
     // The host-state cone, then the affine set: both monotone, so each
     // fixpoint settles in at most (longest chain) sweeps.
+    // Each sweep that changes anything sets at least one of the `nv` flags,
+    // so at most nv + 1 sweeps run.
     var changed = true;
-    while (changed) {
+    var sweeps: usize = 0;
+    while (changed) : (sweeps += 1) {
+        assert(sweeps <= nv);
         changed = false;
         for (0..nv) |v| {
             if (host[v] or !hostStep(self, @fromBackingInt(@intCast(v)), host)) continue;
@@ -95,7 +108,9 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     defer self.gpa.free(aff);
     @memset(aff, true);
     changed = true;
-    while (changed) {
+    sweeps = 0;
+    while (changed) : (sweeps += 1) {
+        assert(sweeps <= nv);
         changed = false;
         for (0..nv) |v| {
             if (!aff[v] or affineStep(self, @fromBackingInt(@intCast(v)), aff, host, steered)) continue;
@@ -119,6 +134,7 @@ const Lattice = struct {
     aff: []const bool,
     host: []const bool,
     fn affine(k: Lattice, v: Mir.Value) bool {
+        assert(k.aff.len == k.host.len);
         return k.aff[@backingInt(k.g.an.rv(v))];
     }
     fn card(k: Lattice, v: Mir.Value) bool {

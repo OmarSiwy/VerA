@@ -14,6 +14,8 @@ const gen_render = @import("render.zig");
 const Mir = @import("ir").Mir;
 const Lowered = @import("ir").Lowered;
 const Error = codegen.Error;
+const assert = std.debug.assert;
+const none_u32 = codegen.none_u32;
 
 /// The Zig type of a `.wide` value of `width` bits.
 pub fn zigTy(self: *Gen, width: u32) Error![]const u8 {
@@ -22,8 +24,11 @@ pub fn zigTy(self: *Gen, width: u32) Error![]const u8 {
 
 /// Writes `$wide(root, operands...)` (the root's bits) or, `as_int`,
 /// `$wide$int(root, operands...)` (the §7.3.1 integer a select reads).
+/// Asserts that `args` holds the root's node index first.
 pub fn emitWide(self: *Gen, args: []const Mir.Value, as_int: bool) Error!void {
+    assert(args.len >= 1);
     const root = gen_render.intArg(self, args, 0).?;
+    assert(root < self.lowered.wide_nodes.items.len);
     const n = self.lowered.wide_nodes.items[root];
     if (as_int) try self.b("zwInt({d}, {}, ", .{ n.width, n.signed });
     try node(self, args[1..], @intCast(root));
@@ -43,8 +48,14 @@ pub fn emitConstInit(self: *Gen, v: Mir.Value) Error!bool {
 
 fn node(self: *Gen, ops: []const Mir.Value, i: u32) Error!void {
     const nodes = self.lowered.wide_nodes.items;
+    assert(i < nodes.len);
     const n = nodes[i];
     const w = n.width;
+    // `lower/wide.zig` appends a node after its operands, so every operand
+    // index is below its parent's: the walk terminates and cannot cycle.
+    if (n.a != none_u32) assert(n.a < i);
+    if (n.b != none_u32) assert(n.b < i);
+    if (n.c != none_u32) assert(n.c < i);
     switch (n.op) {
         .leaf_int => {
             try self.b("zwLeaf({d}, ", .{w});
@@ -52,6 +63,7 @@ fn node(self: *Gen, ops: []const Mir.Value, i: u32) Error!void {
             try self.b(")", .{});
         },
         .leaf_words => {
+            assert(n.arg + (w + 31) / 32 <= ops.len);
             try self.b("zwWords({d}, .{{ ", .{w});
             for (0..(w + 31) / 32) |k| {
                 if (k != 0) try self.b(", ", .{});
@@ -81,11 +93,13 @@ fn node(self: *Gen, ops: []const Mir.Value, i: u32) Error!void {
             try self.b(")", .{});
         },
         .to_real => {
+            assert(w == 0);
             try self.b("zwToReal({d}, {}, ", .{ nodes[n.a].width, nodes[n.a].signed });
             try node(self, ops, n.a);
             try self.b(")", .{});
         },
         .from_real => {
+            assert(nodes[n.a].width == 0);
             try self.b("zwFromReal({d}, ", .{w});
             try node(self, ops, n.a);
             try self.b(")", .{});

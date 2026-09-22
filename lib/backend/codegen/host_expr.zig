@@ -8,6 +8,7 @@
 //! LRM: §3.2, §3.4.6, §4.5, §4.5.14, §6.3.4, §9.14, §9.15, Table 3-3.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -47,6 +48,8 @@ fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
     if (join == none_u32) return null;
     const header = self.an.idom[join];
     if (header == none_u32 or header == join) return null;
+    assert(join < self.an.nb);
+    assert(header < self.an.nb);
     // SSA may append a phi after the terminator; Analysis already records
     // the actual branch independently of its position in the chain.
     const last = self.an.term[header];
@@ -69,6 +72,8 @@ fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
         }
         if (!found) return null;
     }
+    // Two pairs, each claimed by exactly one arm.
+    assert(self.mir.instData(inst).phi.count == 2);
     // Value-only rendering must not lose calls or effects from an arm.
     for (0..self.an.nb) |bi| {
         const block_index: u32 = @intCast(bi);
@@ -142,6 +147,8 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                     return try self.arena.print("@as(i64, @intFromBool(model.{s}__given))", .{self.names.p_names[def.param_ref]});
                 }
                 if (d.callee != .@"$clog2") return null;
+                // `lowerClog2` writes the operand and its width, always both.
+                assert(d.args.len == 2);
                 const a = try i64Const(self, d.args[0], depth + 1) orelse return null;
                 const width = try i64Const(self, d.args[1], depth + 1) orelse return null;
                 return try self.arena.print("zClog2({s}, {s})", .{ a, width });
@@ -344,6 +351,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 .unary => {
                     const a = try f64Const(self, @fromBackingInt(@intCast(row.a)), depth + 1, in_unit) orelse return null;
                     const fix = opcode_zig.get(row.op).host_f64 orelse return null;
+                    assert(fix.len == 2);
                     return try self.arena.print("{s}{s}{s}", .{ fix[0], a, fix[1] });
                 },
                 .binary => {
@@ -353,6 +361,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                         return try self.arena.print("(if (({s}) == 0.0) @panic(\"VerA: real parameter remainder divisor is zero\") else @rem({s}, {s}))", .{ b2, a, b2 });
                     }
                     const fix = opcode_zig.get(row.op).host_f64 orelse return null;
+                    assert(fix.len == 3);
                     const a = try f64Const(self, @fromBackingInt(@intCast(row.a)), depth + 1, in_unit) orelse return null;
                     const b2 = try f64Const(self, @fromBackingInt(@intCast(row.b)), depth + 1, in_unit) orelse return null;
                     return try self.arena.print("{s}{s}{s}{s}{s}", .{
@@ -372,7 +381,10 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
 /// expression. Otherwise reports E0515 at the source, marks the build fatal
 /// and returns "0.0".
 pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
-    if (try f64Const(self, v0, 0, false)) |s| return s;
+    if (try f64Const(self, v0, 0, false)) |s| {
+        assert(s.len > 0);
+        return s;
+    }
     // Point at the argument's defining expression, else the operator call.
     const v = self.an.rv(v0);
     const def = self.mir.valueDef(v);
@@ -387,6 +399,8 @@ pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
     );
     self.poison("LRM 4.5: an analog operator control argument " ++
         "must be a constant or parameter expression");
+    assert(self.any_fatal);
+    assert(self.fatal != null);
     return "0.0";
 }
 

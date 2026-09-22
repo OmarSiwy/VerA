@@ -6,6 +6,7 @@
 //! each incoming edge. LRM clauses cited: §5.6.1.3.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -49,8 +50,11 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
 }
 
 /// Writes block `bi`'s statements. `decl` is the straight-line path, which
-/// declares every slot at its definition.
+/// declares every slot at its definition. Asserts that `bi` is a block of
+/// the unit.
 pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
+    assert(bi < self.an.term.len);
+    assert(self.an.stmt_off[bi] <= self.an.stmt_off[bi + 1]);
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
     for (stmts) |inst| {
         // `setup` computes a speculable value at its home instead.
@@ -71,6 +75,8 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
         return;
     }
     if (self.plan.slot[i] == none_u32) return;
+    // The straight-line path runs without a probe, so it never reads `place`.
+    if (!decl) assert(self.plan.slot[i] < self.probe.place.items.len);
     gen_unit.probeDef(self, self.plan.slot[i], true);
     // `or` short-circuits, so the straight-line path (`decl`, which runs
     // without a probe) never touches `place`.
@@ -207,10 +213,15 @@ fn emitResume(self: *Gen, r: Resume, stack: *std.ArrayList(Resume)) Error!?Step 
             // through to `k`'s code, emitted right after the brace anyway, so
             // the label is dropped by rewinding `out`. `planDeadBranches`
             // leaves many of these.
+            // A `merge_kids` row is pushed only for a block with merge children.
+            assert(m.mc.len > 0);
+            assert(m.j <= m.mc.len);
             if (!m.peeped) {
                 m.peeped = true;
                 m.dropped = isFallThrough(self, m.body_start, m.depth, m.mc[0]);
                 if (m.dropped) {
+                    assert(m.at_inner <= m.body_start);
+                    assert(m.depth > 0);
                     self.out.shrinkRetainingCapacity(m.at_inner);
                     gen_unit.scopeClose(self, m.at_inner);
                     m.depth -= 1;
@@ -219,6 +230,7 @@ fn emitResume(self: *Gen, r: Resume, stack: *std.ArrayList(Resume)) Error!?Step 
             if (m.j == m.mc.len) return null;
             const k = m.mc[m.j];
             if (m.j != 0 or !m.dropped) {
+                assert(m.depth > 0);
                 m.depth -= 1;
                 gen_unit.scopeClose(self, self.out.items.len);
                 try self.ind(m.depth);
@@ -240,7 +252,12 @@ fn emitResume(self: *Gen, r: Resume, stack: *std.ArrayList(Resume)) Error!?Step 
 fn emitCode(self: *Gen, bi0: u32, depth0: u32, stack: *std.ArrayList(Resume), target: Mir.Value) Error!?Step {
     var bi = bi0;
     var depth = depth0;
-    while (true) {
+    // Each turn moves to an inlined successor that is never a loop header,
+    // so the chain visits a block at most once.
+    var turns: usize = 0;
+    while (true) : (turns += 1) {
+        assert(turns < self.an.term.len);
+        assert(bi < self.an.term.len);
         const mc = self.an.mk_pool[self.an.mk_off[bi]..self.an.mk_off[bi + 1]];
         // Start of the innermost label (`mc[0]`, opened last); the peephole
         // rewinds to it.
@@ -255,6 +272,7 @@ fn emitCode(self: *Gen, bi0: u32, depth0: u32, stack: *std.ArrayList(Resume), ta
             depth += 1;
         }
         const body_start = self.out.items.len;
+        if (mc.len != 0) assert(at_inner < body_start);
         try emitBlockInsts(self, bi, depth, false);
         // With no label to close after it, an edge the terminator writes
         // inline is the last thing this block writes: take it as the next
@@ -298,6 +316,7 @@ fn inlineSuccessor(self: *const Gen, bi: u32) ?u32 {
 /// A break to any other label is not: dropping the label would then let
 /// control fall into `k`'s code instead of past it.
 fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
+    assert(at <= self.out.items.len);
     const body = self.out.items[at..];
     if (body.len == 0) return true;
     var buf: [64]u8 = undefined;
@@ -369,7 +388,11 @@ pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
 /// or a loop counter's `i + 1`), where sequential assignment would let a
 /// later copy see an earlier one's new value. Otherwise they are written
 /// straight into the slots.
+///
+/// Asserts that `from` and `to` are blocks of the unit.
 pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
+    assert(from < self.an.term.len);
+    assert(to < self.an.term.len);
     const phis = self.an.phi_pool[self.an.phi_off[to]..self.an.phi_off[to + 1]];
     var n: u32 = 0;
     var reads_own = false;
@@ -408,6 +431,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         try self.b(";\n", .{});
         k += 1;
     }
+    assert(k == n);
     if (!par) return;
     k = 0;
     for (phis) |inst| {
@@ -422,6 +446,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
             try self.b(" = c{d};\n", .{k});
         k += 1;
     }
+    assert(k == n);
     try self.ind(depth);
     try self.b("}}\n", .{});
 }
