@@ -16,14 +16,22 @@ assigns every remaining clause to a named version. A clause counts only with
 two-way evidence: one fixture that exercises it legally and one that gets refused
 for violating it. 416 clauses are one-sided today.
 
+```mermaid
+xychart-beta
+    title "Clauses with two-way evidence"
+    x-axis ["v0.0.1 today", "v0.2.1", "v0.6.2", "v0.9.1", "v1.0.0"]
+    y-axis "Clauses of 612" 0 --> 612
+    bar [196, 272, 529, 612, 612]
+    line [196, 272, 529, 612, 612]
 ```
-                                                        clauses with two-way evidence
-  v0.0.1  today               |#############                           |  196 / 612   32%
-  v0.2.1  +76 refused-only    |##################                      |  272 / 612   44%
-  v0.6.2  +257 accepted-only  |##################################      |  529 / 612   86%
-  v0.9.1  +83 uncited         |########################################|  612 / 612  100%
-  v1.0.0  conformance statement, asserting all four measures
-```
+
+| Release | Closes | Coverage |
+|---|---|---|
+| v0.0.1 | today | 196 / 612, 32% |
+| v0.2.1 | the 76 refused-only clauses | 272 / 612, 44% |
+| v0.6.2 | the 257 accepted-only clauses | 529 / 612, 86% |
+| v0.9.1 | the 83 uncited clauses | 612 / 612, 100% |
+| v1.0.0 | nothing new, it asserts all four measures | 612 / 612, 100% |
 
 26 releases, 17 of them closing conformance rows and 7 doing architecture work
 that closes none. Full table in `docs/ROADMAP.md` §3, per-obligation detail in
@@ -97,12 +105,20 @@ domains. A model that would hand your solver a NaN fails at compile time instead
 
 Measured 2026-09-21. Reproduce with `zig build benchmark -- --strict`.
 
+```mermaid
+xychart-beta
+    title "Suite pass rate"
+    x-axis ["va fixtures", "spice decks", "vpi fixtures", "lrm clauses"]
+    y-axis "Percent" 0 --> 100
+    bar [95.4, 100, 50, 32.2]
 ```
-va fixtures pass          95.4%  |######################################  |  1497 / 1570
-spice decks              100.0%  |########################################|     7 / 7
-vpi .c fixtures compile   50.0%  |####################                    |    13 / 26
-lrm clause coverage       32.2%  |#############                           |   197 / 612
-```
+
+| Suite | Passing | Step |
+|---|---|---|
+| va fixtures | 1497 / 1570 | `benchmark -- --strict` |
+| spice decks | 7 / 7 | `test-spice` |
+| vpi .c fixtures | 13 / 26 | `test-vpi-fixtures` |
+| lrm clauses | 197 / 612 | `benchmark -- --coverage` |
 
 Plain Verilog-A device models are the well-tested path. The 73 fixtures that do
 not pass are concentrated in mixed-signal, not in analog modelling.
