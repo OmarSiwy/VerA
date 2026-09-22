@@ -83,7 +83,7 @@
         });
 
         packages.default = pkgs.stdenv.mkDerivation {
-          pname = "zpicey";
+          pname = "vera";
           version = "1.0.0";
           src = ./.;
 
