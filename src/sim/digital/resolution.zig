@@ -22,6 +22,10 @@ const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 const wordMask = @import("net.zig").wordMask;
+const Tran = @import("net.zig").Tran;
+const reach = @import("net.zig").reach;
+const switchPaths = @import("net.zig").switchPaths;
+const crossed = @import("net.zig").crossed;
 const evaluate = @import("evaluate.zig");
 const exec = @import("exec.zig");
 const waiters = @import("waiters.zig");
@@ -131,19 +135,19 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
     var touched: std.ArrayList(u32) = .empty;
     try touched.append(a, start);
     for (0..self.nets[start].resolved.width) |i| {
-        const group = try reach(self, a, .{ .net = start, .bit = @intCast(i) });
+        const group = try reach(Switches{ .r = self }, a, .{ .net = start, .bit = @intCast(i) });
         for (group) |y| {
-            const paths = try switchPaths(self, a, y, group);
+            const paths = try switchPaths(Switches{ .r = self }, a, y, group);
             var acc: Signal = .{};
             for (group, paths) |z, p| {
                 const n = self.nets[z.net];
                 var own = netPull(n.kind);
                 for (self.netDrivers(z.net)) |d| own = own.combine(contribution(self.drivers[d], z.bit));
-                acc = acc.combine(arrive(own, z, y, p));
+                acc = acc.combine(crossed(own, z, y, p));
             }
             if (acc.none()) for (group, paths) |z, p| {
                 const n = self.nets[z.net];
-                if (n.kind == .trireg) acc = acc.combine(arrive(.of(self.values[n.slot].bit(z.bit), n.charge, n.charge), z, y, p));
+                if (n.kind == .trireg) acc = acc.combine(crossed(.of(self.values[n.slot].bit(z.bit), n.charge, n.charge), z, y, p));
             };
             const n = self.nets[y.net];
             self.signals[n.signal + y.bit] = acc;
@@ -154,79 +158,20 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
     for (touched.items) |t| try waiters.store(self, self.nets[t].slot, self.nets[t].resolved.planes);
 }
 
-/// What `own`, asserted at group member `z`, asserts at `y` over path `p`:
-/// reduced by the switches it crosses, and widened to include high impedance
-/// when no path surely conducts.
-fn arrive(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
-    const sig = @import("net.zig").reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
-    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
-}
-
-/// One bit of one net, as a pass switch terminal sees it.
-const Node = struct { net: u32, bit: u32 };
-
-/// The terminal of `t` across from `u`, or null when `u` is neither.
-fn across(t: @import("net.zig").Tran, u: Node) ?Node {
-    if (t.a == u.net and t.a_bit == u.bit) return .{ .net = t.b, .bit = t.b_bit };
-    if (t.b == u.net and t.b_bit == u.bit) return .{ .net = t.a, .bit = t.a_bit };
-    return null;
-}
-
-/// The net bits joined to `from` through pass switches that may conduct.
-fn reach(self: *Run, a: std.mem.Allocator, from: Node) Error![]const Node {
-    var seen: std.ArrayList(Node) = .empty;
-    try seen.append(a, from);
-    var i: usize = 0;
-    while (i < seen.items.len) : (i += 1) {
-        const u = seen.items[i];
-        for (self.netCold(self.nets[u.net]).trans) |ti| {
-            const t = self.trans[ti];
-            if (t.state == .off) continue;
-            const v = across(t, u) orelse continue;
-            for (seen.items) |w| {
-                if (std.meta.eql(w, v)) break;
-            } else try seen.append(a, v);
-        }
+/// `net.reach`'s and `net.switchPaths`'s view of the run's switches: each
+/// net's `NetCold.trans` list and the conduction held in its `Tran` row.
+const Switches = struct {
+    r: *const Run,
+    pub fn switches(g: Switches, net: u32) []const u32 {
+        return g.r.netCold(g.r.nets[net]).trans;
     }
-    return seen.items;
-}
-
-/// From each member of `group` to `y`: the fewest resistive switches on a
-/// path that may conduct, and whether some path surely does.
-const SwitchPath = struct { res: u32, sure: bool };
-
-fn switchPaths(self: *Run, a: std.mem.Allocator, y: Node, group: []const Node) Error![]const SwitchPath {
-    const p = try a.alloc(SwitchPath, group.len);
-    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
-    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
-        q.* = .{ .res = 0, .sure = true };
-    };
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (group, 0..) |u, iu| {
-            if (p[iu].res == std.math.maxInt(u32)) continue;
-            for (self.netCold(self.nets[u.net]).trans) |ti| {
-                const t = self.trans[ti];
-                if (t.state == .off) continue;
-                const v = across(t, u) orelse continue;
-                const iv = for (group, 0..) |w, k| {
-                    if (std.meta.eql(w, v)) break k;
-                } else continue;
-                const res = p[iu].res + @intFromBool(t.resistive);
-                if (res < p[iv].res) {
-                    p[iv].res = res;
-                    changed = true;
-                }
-                if (p[iu].sure and t.state == .on and !p[iv].sure) {
-                    p[iv].sure = true;
-                    changed = true;
-                }
-            }
-        }
+    pub fn tran(g: Switches, ti: u32) Tran {
+        return g.r.trans[ti];
     }
-    return p;
-}
+    pub fn conduction(g: Switches, ti: u32) Tran.State {
+        return g.r.trans[ti].state;
+    }
+};
 
 /// §7.6 what a MOS switch drives: its data's value, at the data's strength
 /// reduced by §7.12 (the resolved strength of a net, strong for anything

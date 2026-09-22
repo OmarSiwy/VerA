@@ -189,6 +189,93 @@ pub fn reduceSignal(sig: Signal, hops: u32, resistive: u32) Signal {
     return .{ .lo = one.side(sig.lo, resistive), .hi = one.side(sig.hi, resistive) };
 }
 
+// ---- switch paths (§7.6, §7.11, §7.12, §8.5.3.5) ----------------------------
+//
+// The joined-group search both resolutions run (`resolution.resolveJoined`,
+// `rt/net.zig`'s `resolveJoined`). It lives here because this is the one
+// file both already import: in `rt/net.zig` the interpreter's
+// `resolution.zig` would reach it through `rt/root.zig` -> `digital/root.zig`,
+// a file cycle. The two differ only in where a switch's conduction and a
+// net's switch list are kept, so each search takes `g`, which has
+// `switches(g, net: u32) []const u32` (the `trans` rows touching net `net`),
+// `tran(g, ti: u32)` (a row with `a`, `b`, `a_bit`, `b_bit`, `resistive`) and
+// `conduction(g, ti: u32) Tran.State`.
+
+/// One bit of one net, as a pass switch terminal sees it.
+pub const Node = struct { net: u32, bit: u32 };
+
+/// From a group member to `y`: the fewest resistive switches on a path that
+/// may conduct, and whether some path surely does.
+pub const SwitchPath = struct { res: u32, sure: bool };
+
+/// What `own`, asserted at group member `z`, asserts at `y` over path `p`:
+/// reduced by the switches it crosses, and widened to include high impedance
+/// when no path surely conducts (§7.10.2).
+pub fn crossed(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
+    const sig = reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
+    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
+}
+
+/// The terminal of switch `tr` across from `u`, or null when `u` is neither.
+fn across(tr: anytype, u: Node) ?Node {
+    if (tr.a == u.net and tr.a_bit == u.bit) return .{ .net = tr.b, .bit = tr.b_bit };
+    if (tr.b == u.net and tr.b_bit == u.bit) return .{ .net = tr.a, .bit = tr.a_bit };
+    return null;
+}
+
+/// The net bits joined to `from` through pass switches that may conduct.
+pub fn reach(g: anytype, a: std.mem.Allocator, from: Node) std.mem.Allocator.Error![]const Node {
+    var seen: std.ArrayList(Node) = .empty;
+    try seen.append(a, from);
+    var i: usize = 0;
+    while (i < seen.items.len) : (i += 1) {
+        const u = seen.items[i];
+        for (g.switches(u.net)) |ti| {
+            if (g.conduction(ti) == .off) continue;
+            const v = across(g.tran(ti), u) orelse continue;
+            for (seen.items) |w| {
+                if (std.meta.eql(w, v)) break;
+            } else try seen.append(a, v);
+        }
+    }
+    return seen.items;
+}
+
+/// From each member of `group` to `y`, its `SwitchPath`.
+pub fn switchPaths(g: anytype, a: std.mem.Allocator, y: Node, group: []const Node) std.mem.Allocator.Error![]const SwitchPath {
+    const p = try a.alloc(SwitchPath, group.len);
+    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
+    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
+        q.* = .{ .res = 0, .sure = true };
+    };
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (group, 0..) |u, iu| {
+            if (p[iu].res == std.math.maxInt(u32)) continue;
+            for (g.switches(u.net)) |ti| {
+                const st = g.conduction(ti);
+                if (st == .off) continue;
+                const tr = g.tran(ti);
+                const v = across(tr, u) orelse continue;
+                const iv = for (group, 0..) |w, k| {
+                    if (std.meta.eql(w, v)) break k;
+                } else continue;
+                const res = p[iu].res + @intFromBool(tr.resistive);
+                if (res < p[iv].res) {
+                    p[iv].res = res;
+                    changed = true;
+                }
+                if (p[iu].sure and st == .on and !p[iv].sure) {
+                    p[iv].sure = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    return p;
+}
+
 /// IEEE 1364-2005 §7.12 Table 7-8: what a resistive switch makes of the
 /// strength it passes; a non-resistive one only turns supply into strong.
 pub fn reduce(s: Ast.Strength, resistive: bool) Ast.Strength {

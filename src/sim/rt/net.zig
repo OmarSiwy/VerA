@@ -498,9 +498,6 @@ fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
     return floating == n.width;
 }
 
-/// One bit of one net, as a pass switch terminal sees it.
-const Node = struct { net: u32, bit: u32 };
-
 /// `resolution.resolveJoined`: §7.6 "switch processing shall consider all the
 /// devices in a bidirectional switch-connected net before it can determine
 /// the appropriate value for any node". Each bit of net `start` and the net
@@ -518,18 +515,18 @@ fn resolveJoined(s: *State, start: u32) Error!void {
     const a = arena.allocator();
     var touched: std.ArrayList(u32) = .empty;
     for (0..t.nets[start].width) |i| {
-        const group = try reach(t, a, .{ .net = start, .bit = @intCast(i) });
+        const group = try dnet.reach(Switches{ .t = t }, a, .{ .net = start, .bit = @intCast(i) });
         for (group) |y| {
-            const paths = try switchPaths(t, a, y, group);
+            const paths = try dnet.switchPaths(Switches{ .t = t }, a, y, group);
             var acc: Signal = .{};
             for (group, paths) |z, p| {
                 var own = dnet.netPull(t.nets[z.net].kind);
                 for (t.nets[z.net].drivers) |di| own = own.combine(contribution(t, di, z.bit));
-                acc = acc.combine(crossed(own, z, y, p));
+                acc = acc.combine(dnet.crossed(own, z, y, p));
             }
             if (acc.none()) for (group, paths) |z, p| {
                 const n = t.nets[z.net];
-                if (n.kind == .trireg) acc = acc.combine(crossed(.of(shown(s, n, z.bit), n.charge, n.charge), z, y, p));
+                if (n.kind == .trireg) acc = acc.combine(dnet.crossed(.of(shown(s, n, z.bit), n.charge, n.charge), z, y, p));
             };
             const n = t.nets[y.net];
             const res = t.res[t.nat[y.net]..][0 .. 2 * words(n.width)];
@@ -568,73 +565,20 @@ pub fn contribution(t: *const Nets, di: u32, at: u32) Signal {
     return if (t.or_z[di] and b != .z) .orZ(b, t.s0[di], t.s1[di]) else .of(b, t.s0[di], t.s1[di]);
 }
 
-/// `resolution.arrive`: what `own`, asserted at `z`, asserts at `y` over `p`.
-fn crossed(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
-    const sig = dnet.reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
-    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
-}
-
-/// The terminal of switch `tr` across from `u`, or null when `u` is neither.
-fn across(tr: Tran, u: Node) ?Node {
-    if (tr.a == u.net and tr.a_bit == u.bit) return .{ .net = tr.b, .bit = tr.b_bit };
-    if (tr.b == u.net and tr.b_bit == u.bit) return .{ .net = tr.a, .bit = tr.a_bit };
-    return null;
-}
-
-/// The net bits joined to `from` through pass switches that may conduct.
-fn reach(t: *const Nets, a: std.mem.Allocator, from: Node) Error![]const Node {
-    var seen: std.ArrayList(Node) = .empty;
-    try seen.append(a, from);
-    var i: usize = 0;
-    while (i < seen.items.len) : (i += 1) {
-        const u = seen.items[i];
-        for (t.on_net[u.net]) |ti| {
-            if (t.tstate[ti] == .off) continue;
-            const v = across(t.trans[ti], u) orelse continue;
-            for (seen.items) |w| {
-                if (std.meta.eql(w, v)) break;
-            } else try seen.append(a, v);
-        }
+/// `dnet.reach`'s and `dnet.switchPaths`'s view of the switches: the
+/// `on_net` lists and the conduction held in `tstate`.
+const Switches = struct {
+    t: *const Nets,
+    pub fn switches(g: Switches, k: u32) []const u32 {
+        return g.t.on_net[k];
     }
-    return seen.items;
-}
-
-/// From a group member to `y`: the fewest resistive switches on a path that
-/// may conduct, and whether some path surely does.
-const SwitchPath = struct { res: u32, sure: bool };
-
-fn switchPaths(t: *const Nets, a: std.mem.Allocator, y: Node, group: []const Node) Error![]const SwitchPath {
-    const p = try a.alloc(SwitchPath, group.len);
-    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
-    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
-        q.* = .{ .res = 0, .sure = true };
-    };
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (group, 0..) |u, iu| {
-            if (p[iu].res == std.math.maxInt(u32)) continue;
-            for (t.on_net[u.net]) |ti| {
-                const st = t.tstate[ti];
-                if (st == .off) continue;
-                const v = across(t.trans[ti], u) orelse continue;
-                const iv = for (group, 0..) |w, k| {
-                    if (std.meta.eql(w, v)) break k;
-                } else continue;
-                const res = p[iu].res + @intFromBool(t.trans[ti].resistive);
-                if (res < p[iv].res) {
-                    p[iv].res = res;
-                    changed = true;
-                }
-                if (p[iu].sure and st == .on and !p[iv].sure) {
-                    p[iv].sure = true;
-                    changed = true;
-                }
-            }
-        }
+    pub fn tran(g: Switches, ti: u32) Tran {
+        return g.t.trans[ti];
     }
-    return p;
-}
+    pub fn conduction(g: Switches, ti: u32) dnet.Tran.State {
+        return g.t.tstate[ti];
+    }
+};
 
 /// `exec` `.switch_ctrl`: pass switch `i`'s control reads `c`, so it
 /// conducts, does not, or may (x or z); both sides re-resolve now, or after
