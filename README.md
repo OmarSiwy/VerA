@@ -106,7 +106,7 @@ Fixtures live under `tests/fixtures/` and each names the clause it tests:
 `include "check.vh"
 ```
 
-## More
+## Contributing
 
 `AGENTS.md` for contributing, `docs/ROADMAP.md` for the release ladder,
 `docs/CLAUSE-AUDIT.md` for what is still open. The 2023 LRM is in `docs/` as PDF
