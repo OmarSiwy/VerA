@@ -6,6 +6,7 @@
 //! as the stock 0.17 runner sets them up. Clauses: none (tooling).
 
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");
 const TestFn = std.lang.TestFn;
 
@@ -23,6 +24,10 @@ const fuzz_runs = 256;
 /// The longest seeded input, in bytes.
 const fuzz_max_len = 4096;
 var fuzz_calls: u64 = 0;
+comptime {
+    assert(fuzz_runs > 0);
+    assert(fuzz_max_len > 0);
+}
 
 /// `std.testing.fuzz` resolves to this (`@import("root").fuzz`). A plain test
 /// run is not coverage-guided, so it replays the corpus, the empty input and
@@ -145,6 +150,8 @@ fn runTests(
         }
         report.is_mem_leak = report.is_mem_leak or report.test_results[idx].isMemoryLeak();
     }
+    // Every test counted exactly once.
+    assert(report.passed_count + report.failed_count + report.skipped_count + report.xfail_count == tests.len);
     const total_end = std.Io.Clock.Timestamp.now(io, .awake);
     report.total_duration = total_start.durationTo(total_end).raw;
 }
@@ -168,14 +175,19 @@ fn writeTestResults(
         }
     }
 
+    var written: usize = 0;
     var itr = grouped_tests.iterator();
     while (itr.next()) |group| {
+        assert(group.value_ptr.items.len > 0);
         try reporter.writeNamespace(group.key_ptr.*);
         for (group.value_ptr.items) |test_result| {
             try reporter.writeTestName(test_result.@"test"().name);
             try reporter.writeTestResult(test_result);
         }
+        written += group.value_ptr.items.len;
     }
+    // Grouping neither drops nor repeats a result.
+    assert(written == report.test_results.len);
 }
 
 /// One test and the namespace it was declared in.
@@ -207,6 +219,9 @@ const Test = struct {
             .{ "", test_fn.name };
         instance.namespace = names[0];
         instance.name = names[1];
+        // Both halves borrow `test_fn.name` and never overlap.
+        assert(instance.namespace.len + instance.name.len <= test_fn.name.len);
+        assert(std.mem.endsWith(u8, test_fn.name, instance.name));
         return instance;
     }
 
@@ -277,6 +292,9 @@ const Test = struct {
                 };
             },
         }
+        // An `xfail(...)` test never passes, and only one reports as xfailed.
+        if (xfail) assert(test_result != .passed);
+        if (!xfail) assert(test_result != .xfailed);
         return test_result;
     }
 };
@@ -367,7 +385,7 @@ const FileReporter = struct {
         self: *FileReporter,
         process_name: []const u8,
         tests_count: usize,
-    ) anyerror!void {
+    ) std.Io.Terminal.SetColorError!void {
         // move to the next line and cleanup output settings:
         _ = try self.file_writer.interface.write("\r\n\x1b[0K");
         try self.colorizeLine(colors.title, "{s}", .{border});
@@ -385,17 +403,17 @@ const FileReporter = struct {
     }
 
     /// One line naming the group the next tests belong to.
-    fn writeNamespace(self: *FileReporter, namespace: []const u8) anyerror!void {
+    fn writeNamespace(self: *FileReporter, namespace: []const u8) std.Io.Terminal.SetColorError!void {
         try self.colorizeLine(colors.namespace, "{s}", .{namespace});
     }
 
     /// ` - <name> `, the line `writeTestResult` finishes.
-    fn writeTestName(self: *FileReporter, test_name: []const u8) anyerror!void {
+    fn writeTestName(self: *FileReporter, test_name: []const u8) std.Io.Terminal.SetColorError!void {
         try self.colorize(colors.test_name, " - {s} ", .{test_name});
     }
 
     /// Finishes the line; a failure appends its error-return trace.
-    fn writeTestResult(self: *FileReporter, test_result: TestResult) anyerror!void {
+    fn writeTestResult(self: *FileReporter, test_result: TestResult) std.Io.Terminal.SetColorError!void {
         switch (test_result) {
             .passed => |result| {
                 try self.colorize(
@@ -437,7 +455,7 @@ const FileReporter = struct {
         xfail: u32,
         total_duration: Duration,
         is_mem_leak: bool,
-    ) anyerror!void {
+    ) std.Io.Terminal.SetColorError!void {
         if (passed + skipped + failed + xfail == 0 and !is_mem_leak)
             return;
 

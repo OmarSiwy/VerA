@@ -79,6 +79,7 @@
 pub const vera_validate_contract = true;
 
 const std = @import("std");
+const assert = std.debug.assert;
 const contract = @import("contract");
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,23 @@ const eval_ret_flag_fatal: u32 = 2;
 const log_lvl_warn: u32 = 3;
 const log_lvl_err: u32 = 4;
 const log_lvl_fatal: u32 = 5;
+
+comptime {
+    // osdi_0_4.h's flag words: each flag one bit, and the flags that share a
+    // word disjoint (their OR is their sum), so `flags & f` tests one flag.
+    for ([_]u32{ access_flag_set, access_flag_instance, jacobian_entry_resist, jacobian_entry_react, calc_react_residual, enable_lim, init_lim, analysis_noise, analysis_ac, analysis_tran, eval_ret_flag_lim, eval_ret_flag_fatal, para_kind_inst }) |f| assert(std.math.isPowerOfTwo(f));
+    assert(access_flag_set & access_flag_instance == 0);
+    assert(jacobian_entry_resist & jacobian_entry_react == 0);
+    assert(eval_ret_flag_lim & eval_ret_flag_fatal == 0);
+    assert(calc_react_residual | enable_lim | init_lim | analysis_noise | analysis_ac | analysis_tran ==
+        calc_react_residual + enable_lim + init_lim + analysis_noise + analysis_ac + analysis_tran);
+    // A parameter's type sits below its kind bit (`flags = ty | para_kind_inst`).
+    assert(para_ty_real < para_ty_int);
+    assert(para_ty_int < para_ty_str);
+    assert(para_ty_str < para_kind_inst);
+    assert(log_lvl_warn < log_lvl_err);
+    assert(log_lvl_err < log_lvl_fatal);
+}
 
 const SimParas = extern struct {
     names: ?[*]const Str,
@@ -217,6 +235,19 @@ const Descriptor = extern struct {
     absdelay_info: ?[*]const AbsDelayInfo,
 };
 
+comptime {
+    // The C sizes osdi_0_4.h's structs have on a 64-bit target: ngspice
+    // steps through the descriptor's arrays by them.
+    if (@sizeOf(usize) == 8) {
+        assert(@sizeOf(NodePair) == 8);
+        assert(@sizeOf(JacobianEntry) == 16);
+        assert(@sizeOf(InitError) == 8);
+        assert(@sizeOf(NoiseSource) == 16);
+        assert(@sizeOf(SimParas) == 32);
+        assert(@sizeOf(Node) == 48);
+    }
+}
+
 const osdi_version_major: u32 = 0;
 const osdi_version_minor: u32 = 4;
 const osdi_num_descriptors: u32 = 1;
@@ -233,6 +264,8 @@ fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
     // fatal status names its file and line first.
     const cut = msg[0..@min(msg.len, buf.len - 2)];
     const z = std.mem.printSentinel(&buf, "{s}\n", .{cut}, 0) catch unreachable;
+    assert(z.len == cut.len + 1);
+    assert(z.len < buf.len);
     f(handle, z.ptr, lvl);
 }
 
@@ -274,6 +307,7 @@ fn cName(comptime s: []const u8) [:0]const u8 {
                 i += 2;
             } else if (s[i] != 'Z') out = out ++ [_]u8{s[i]};
         }
+        assert(out.len <= s.len);
         break :blk out ++ [_]u8{0};
     };
     return z[0 .. z.len - 1 :0];
@@ -339,6 +373,15 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         /// One 8-byte slot per parameter, in OSDI's C types: double, int32,
         /// char*. ngspice writes them through `access` before setup.
         const Vals = [np]u64;
+        comptime {
+            // `slot` reinterprets one `u64` as each C type a parameter takes.
+            assert(@sizeOf(f64) <= @sizeOf(u64));
+            assert(@sizeOf(i32) <= @sizeOf(u64));
+            assert(@sizeOf(Str) <= @sizeOf(u64));
+            assert(@alignOf(Str) <= @alignOf(u64));
+            assert(num_inst_params >= np);
+            assert(num_params == num_inst_params + np);
+        }
 
         fn slot(comptime T: type, vals: *Vals, comptime i: usize) *T {
             return @ptrCast(@alignCast(&vals[i]));
@@ -387,6 +430,9 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             const vals = p.vals orelse return false;
             var changed = false;
             var i: usize = 0;
+            // ponytail: `names` is the host's NUL-terminated list (OSDI's
+            // contract) and is not bounded here; an unterminated one reads
+            // past its end.
             while (names[i]) |nm| : (i += 1) {
                 inline for (host_fields) |h| if (@hasField(D.Model, h[1]) and std.mem.eql(u8, std.mem.span(nm), h[0])) {
                     if (@field(m, h[1]) != vals[i]) changed = true;
@@ -420,6 +466,15 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             break :blk es;
         };
         const nj = entries.len;
+        comptime {
+            @setEvalBranchQuota(10_000_000);
+            assert(nj <= n * n);
+            for (entries) |e| {
+                assert(e.r < n);
+                assert(e.c < n);
+                assert(e.resist or e.react);
+            }
+        }
         fn entryOf(comptime r: usize, comptime c: usize) usize {
             @setEvalBranchQuota(10_000_000);
             for (entries, 0..) |e, k| if (e.r == r and e.c == c) return k;
@@ -438,6 +493,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             }
             break :blk fs;
         };
+        comptime {
+            assert(dead_flows.len <= n);
+            assert(D.num_ports <= n);
+        }
 
         /// Whether row `i` is a KCL row: a voltage unknown's.
         fn kcl(comptime i: usize) bool {
@@ -497,7 +556,8 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
 
         comptime {
             // ngspice places both at max_align_t (16 bytes).
-            std.debug.assert(@alignOf(Model) <= 16 and @alignOf(Instance) <= 16);
+            assert(@alignOf(Model) <= 16);
+            assert(@alignOf(Instance) <= 16);
         }
 
         fn access(ip: ?*anyopaque, mp: ?*anyopaque, id: u32, flags: u32) callconv(.c) ?*anyopaque {
@@ -720,12 +780,16 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 log(handle, log_lvl_fatal, w.buffered());
                 ret |= eval_ret_flag_fatal;
             }
+            assert(ret & ~(eval_ret_flag_lim | eval_ret_flag_fatal) == 0);
             return ret;
         }
 
         /// `updateState` and `stateCtl(.commit)` at the last evaluated point;
-        /// what `updateState` returned.
+        /// what `updateState` returned. Asserts that `eval` has evaluated a
+        /// point to commit.
         fn accept(self: *Instance) contract.UpdateResult {
+            comptime assert(State != void);
+            assert(self.have_x);
             const r = D.updateState(Val, &self.row, &self.inst, self.x, &self.state, self.sim);
             if (@hasDecl(D, "stateCtl")) _ = D.stateCtl(&self.row, &self.inst, &self.state, .commit);
             self.t_acc = self.sim.t;
@@ -742,6 +806,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         /// known yet: the next step is held to this one's length. The device's
         /// own `$bound_step` bounds it too.
         fn boundStep(self: *Instance, sim: contract.SimState) void {
+            comptime assert(has_bp);
             const inf = std.math.inf(f64);
             self.bound = if (@hasField(D.Instance, "bound_step")) self.inst.bound_step else inf;
             if (sim.kind != .tran) return;
@@ -916,6 +981,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 .name = if (g.name.len != 0) zStr(g.name) else std.fmt.comptimePrint("noise{d}", .{k}),
                 .nodes = .{ .node_1 = g.row, .node_2 = if (g.row == g.col) no_off else g.col },
             };
+            for (gens) |g| {
+                assert(g.row < n);
+                assert(g.col < n);
+            }
             break :blk a;
         };
 
@@ -943,12 +1012,14 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             @setEvalBranchQuota(10_000_000);
             var c: u32 = 0;
             for (entries) |e| c += @intFromBool(e.resist);
+            assert(c <= nj);
             break :blk c;
         };
         const n_react = blk: {
             @setEvalBranchQuota(10_000_000);
             var c: u32 = 0;
             for (entries) |e| c += @intFromBool(e.react);
+            assert(c <= nj);
             break :blk c;
         };
 
