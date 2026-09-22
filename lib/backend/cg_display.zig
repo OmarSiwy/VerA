@@ -5,6 +5,7 @@
 //! Runs only when `codegen.Display` is `.emit`; under `.drop` no call reaches it.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
@@ -101,7 +102,7 @@ const PrintArg = struct {
     /// Bytes of per-op scratch the emitted block declares, or null for the
     /// modes that render straight into the print's argument tuple.
     fn scratch(self: PrintArg) ?usize {
-        return switch (self.how) {
+        const n: ?usize = switch (self.how) {
             .ascii => @sizeOf(i64),
             .pad => 24, // i64's widest decimal (20 chars) plus slack
             .cint => @max(24, self.spec.w() + 2), // the full zero-filled field
@@ -110,6 +111,8 @@ const PrintArg = struct {
             .creal => @max(self.spec.w(), self.spec.p(6) + 320) + 8,
             else => null,
         };
+        if (n) |bytes| assert(bytes > 0);
+        return n;
     }
 
     /// Whether the scratch is a stack array (`max_stack`) or a static row,
@@ -163,8 +166,10 @@ pub fn buildArgs(
     fmt: *std.ArrayList(u8),
     ops: *Ops,
 ) Error!void {
+    const ops_before = ops.items().len;
     var i: usize = 0;
     while (i < args.len) {
+        const i_before = i;
         if (g.strArg(args, i)) |s| {
             i += 1;
             i += try translateFormat(g, s, args[i..], fmt, ops);
@@ -172,6 +177,16 @@ pub fn buildArgs(
             try appendConv(g, fmt, ops, args[i], 0, .{});
             i += 1;
         }
+        assert(i > i_before);
+    }
+    assert(i == args.len);
+    // `chunkText` splits the text at the operands' starts, so they ascend
+    // and lie inside it.
+    var at_prev: usize = 0;
+    for (ops.items()[ops_before..]) |op| {
+        assert(op.at >= at_prev);
+        assert(op.at <= fmt.items.len);
+        at_prev = op.at;
     }
 }
 
@@ -191,6 +206,10 @@ pub const Ops = struct {
 /// The most operands one `std.fmt` call takes (`std.fmt.ArgSetType`'s bits).
 /// A call with more is emitted as consecutive calls of at most this many.
 const fmt_chunk = @typeInfo(std.fmt.ArgSetType).int.bits;
+comptime {
+    // The chunk loops advance by it.
+    assert(fmt_chunk > 0);
+}
 
 /// The bytes call `site`'s text can need: the Zig format text (an upper
 /// bound on its literal part) plus each operand's `textMax`, never below
@@ -198,12 +217,16 @@ const fmt_chunk = @typeInfo(std.fmt.ArgSetType).int.bits;
 pub fn siteCap(g: *Gen, fmt: []const u8, ops: []const PrintArg) Error!u64 {
     var n: u64 = fmt.len;
     for (ops) |p| n +|= try p.textMax(g);
-    return @max(n, strcap.row);
+    const c = @max(n, strcap.row);
+    assert(c >= strcap.row);
+    return c;
 }
 
 /// Call `site`'s formatted-text row: `zSBuf` for the 4096-byte row, else a
-/// row of `cap` bytes (`str_kernels.zSRow`, slot 0).
+/// row of `cap` bytes (`str_kernels.zSRow`, slot 0). Asserts that `cap` is
+/// at least `strcap.row` (`siteCap`, `strcap.rtFormatCap`).
 pub fn emitRow(g: *Gen, site: usize, cap: u64) Error!void {
+    assert(cap >= strcap.row);
     if (cap == strcap.row or !try fits(g, site, cap)) return g.b("zSBuf({d})", .{site});
     return g.b("zSRow({d}, 0, {d})", .{ site, cap });
 }
@@ -215,6 +238,7 @@ fn fits(g: *Gen, site: usize, cap: u64) Error!bool {
     if (cap <= strcap.max_row) return true;
     if (g.diags) |bag| try bag.add(.codegen, .E1011, g.lowered.tokenSpan(g.mir.instTok(@fromBackingInt(@intCast(site)))), "the text here can need {d} bytes, more than a device can address", .{cap});
     g.poison("a string row is larger than a device can address");
+    assert(g.any_fatal);
     return false;
 }
 
@@ -247,6 +271,8 @@ fn emitBufPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg, site: usize) Er
 fn emitDebugPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg) Error!void {
     var k: usize = 0;
     while (true) : (k += fmt_chunk) {
+        // One print per chunk, and one for no operands at all.
+        assert(k <= ops.len);
         const end = @min(k + fmt_chunk, ops.len);
         try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(chunkText(fmt, ops, k, end))});
         try renderPrintArgs(g, ops[k..end], k);
@@ -258,8 +284,11 @@ fn emitDebugPrint(g: *Gen, fmt: []const u8, ops: []const PrintArg) Error!void {
 /// The format text of operands `k..end`: from operand k's `{` (the call's
 /// start for the first chunk) to the next chunk's (the end for the last).
 fn chunkText(fmt: []const u8, ops: []const PrintArg, k: usize, end: usize) []const u8 {
+    assert(k <= end);
+    assert(end <= ops.len);
     const from = if (k == 0) 0 else ops[k].at;
     const to = if (end == ops.len) fmt.len else ops[end].at;
+    assert(from <= to);
     return fmt[from..to];
 }
 
@@ -302,6 +331,8 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     // so a (nonconforming but unambiguous) `$fatal("bye")` keeps its text.
     // §9.4.1 a monitor report carries its site key first (`Lower.armMonitor`).
     const mon = c == .@"$monitor";
+    // `Lower.armMonitor` puts the site key first.
+    if (mon) assert(args.len > 0);
     const body = if (mon or (c == .@"$fatal" and args.len > 0 and g.strArg(args, 0) == null))
         args[1..]
     else
@@ -389,6 +420,7 @@ pub fn planSay(g: *Gen) Error![]const SaySite {
         if (endsLine(c)) try fmt.append(g.arena, '\n');
         try out.append(g.arena, .{ .call = call, .fmt = fmt.items, .tok = d.tok, .vals = vals.items, .debug = c == .@"$debug" });
     }
+    assert(out.items.len <= g.lowered.displays.items.len);
     return out.items;
 }
 
@@ -413,6 +445,7 @@ pub fn planPasses(g: *Gen) Error!void {
         }
         try init.append(g.arena, def.inst_result);
     }
+    assert(init.items.len <= g.lowered.displays.items.len);
     if (g.passes) g.init_calls = init.items;
 }
 
@@ -432,6 +465,7 @@ pub fn sayRecords(c: Mir.Callee) bool {
 /// arguments to `vals`. False when one has no numeric record: a string that
 /// is not a constant, or a number under `%s` (§9.4.5's bytes).
 fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *std.ArrayList(Mir.Value)) Error!bool {
+    const vals_before = vals.items.len;
     var i: usize = 0;
     while (i < args.len) {
         const s = g.strArg(args, i) orelse {
@@ -485,15 +519,19 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
             try vals.append(g.arena, a);
         }
     }
+    assert(i == args.len);
+    assert(vals.items.len - vals_before <= args.len);
     return true;
 }
 
 /// `text` into a format as itself: each `%` doubled.
 fn appendLiteral(g: *Gen, fmt: *std.ArrayList(u8), text: []const u8) Error!void {
+    const len_before = fmt.items.len;
     for (text) |ch| {
         if (ch == '%') try fmt.append(g.arena, '%');
         try fmt.append(g.arena, ch);
     }
+    assert(fmt.items.len >= len_before + text.len);
 }
 
 /// Emits a `.record` display unit's task (`planSay`) as a labeled block that
@@ -750,6 +788,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     }
     // §9.4.1 a monitor report carries its site key ahead of the descriptor.
     const mon = c == .@"$fmonitor";
+    if (mon) assert(args.len > 0);
     const all = if (mon) args[1..] else args;
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
@@ -823,7 +862,10 @@ fn monitorValues(g: *Gen, ops: []const PrintArg) Error!void {
 /// The site key `Lower.armMonitor` put first in a monitor's registration and
 /// report: a literal, so it can key a comptime latch.
 fn monitorKey(g: *const Gen, args: []const Mir.Value) i64 {
-    return g.mir.valueDef(g.an.rv(args[0])).int_const;
+    assert(args.len > 0);
+    const def = g.mir.valueDef(g.an.rv(args[0]));
+    assert(def == .int_const);
+    return def.int_const;
 }
 
 /// Emits §9.4.1's registration half: arms the monitor latch of the site keyed
@@ -867,7 +909,11 @@ pub fn translateFormat(
     const a = g.arena;
     var next: usize = 0;
     var i: usize = 0;
-    while (i < src.len) {
+    var steps: usize = 0;
+    while (i < src.len) : (steps += 1) {
+        // Every pass consumes at least one byte of `src`.
+        assert(steps <= i);
+        assert(steps < src.len);
         const c = src[i];
         if (c == '{' or c == '}') { // std.fmt's own escape
             try fmt.append(a, c);
@@ -944,6 +990,8 @@ fn appendZigSpec(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, extra_prec: ?[]co
     const a = g.arena;
     if (spec.width == 0 and spec.prec == null and extra_prec == null) return;
     var buf: [48]u8 = undefined;
+    // `.{d}` of any usize fits, so the prints below cannot fail.
+    comptime assert(buf.len >= std.math.log10_int(@as(usize, std.math.maxInt(usize))) + 2);
     try fmt.append(a, ':');
     if (spec.width > 0) {
         // Zig's fill/alignment are only meaningful WITH a width.
@@ -965,6 +1013,8 @@ fn appendStrField(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, full: bool) Erro
     const a = g.arena;
     if (full or spec.width == 0) return fmt.appendSlice(a, "{s}");
     var buf: [48]u8 = undefined;
+    // `{s:<W}` of any usize W fits.
+    comptime assert(buf.len >= std.math.log10_int(@as(usize, std.math.maxInt(usize))) + 1 + 5);
     try fmt.appendSlice(a, std.mem.print(&buf, "{{s:{c}{d}}}", .{
         @as(u8, if (spec.left) '<' else '>'), spec.width,
     }) catch unreachable);
@@ -987,6 +1037,7 @@ pub fn appendConv(
         const inst = g.mir.valueDef(g.an.rv(v)).inst_result;
         const data = g.mir.instData(inst);
         if (data == .call and data.call.callee == .@"$display$width") {
+            assert(data.call.args.len == 2); // (value, width): lower/systask.zig
             bits = @intCast(g.mir.valueDef(data.call.args[1]).int_const);
         }
     }
@@ -1011,6 +1062,7 @@ pub fn appendConv(
         }
     }
     const at = fmt.items.len;
+    const ops_before = ops.items().len;
     switch (conv) {
         // §9.4.3 Table 9-23's four real conversions "have the full formatting
         // capabilities available in the C language"; `%r` adds §2.6.2's
@@ -1091,12 +1143,21 @@ pub fn appendConv(
             try ops.append(a, .{ .at = at, .v = v, .want = ty, .spec = spec });
         },
     }
+    // One `{…}` and one operand per conversion.
+    assert(ops.items().len == ops_before + 1);
+    assert(fmt.items.len > at);
 }
 
 /// Emits operand `i` of a print's argument tuple. A real crosses into the
 /// format layer through `.val()`. The `.ascii`/`.cint` arms emit labeled block
 /// expressions whose scratch is the `zb{i}` array `emitScratch` declared.
 fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
+    // `appendConv` pairs every helper mode with the type it reads.
+    switch (p.how) {
+        .pad, .cint, .chr, .bits, .ascii => assert(p.want == .int),
+        .creal => assert(p.want == .real),
+        .plain => {},
+    }
     switch (p.how) {
         .ascii => {
             // Mask the i64 carrier to the source width so sign extension adds
@@ -1133,6 +1194,9 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             const sign: []const u8 = if (p.spec.plus) "+" else if (p.spec.space) " " else "";
             const w = p.spec.w();
             const zero_fill = p.spec.zero and !p.spec.left and p.spec.width > 0;
+            // The zero-filled field leaves room for its sign.
+            if (zero_fill) assert(w >= 1);
+            if (zero_fill) assert(w >= sign.len);
             try g.b("zi{d}: {{ const zv: i64 = ", .{i});
             try g.renderVal(p.v, .int);
             if (zero_fill) {
@@ -1147,6 +1211,7 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
         .creal => {
             // C11 7.21.6.1's flag bits, in `str_kernels.zCReal`'s order:
             // 1 '-', 2 '+', 4 ' ', 8 '0'. The kernel composes the whole field.
+            assert(p.conv != 0); // the source's letter: 'e', 'f', 'g' or 'r', either case
             const flags: u8 = (@as(u8, @intFromBool(p.spec.left))) |
                 (@as(u8, @intFromBool(p.spec.plus)) << 1) |
                 (@as(u8, @intFromBool(p.spec.space)) << 2) |

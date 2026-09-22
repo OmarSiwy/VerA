@@ -5,6 +5,7 @@
 //! sections call are `filter_kernels.zig`, spliced verbatim into the device.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Mir = @import("ir").Mir;
 // ponytail: filter planning reuses Gen's analysis and expression renderers.
 const cg = @import("codegen.zig");
@@ -62,8 +63,12 @@ pub const FilterPlan = struct {
     /// Section `i` of one side; a side that ran out of sections is the
     /// polynomial 1, which is how a 3-zero / 1-pole filter still cascades.
     fn poly(g: FilterPlan, numerator: bool, i: usize) Poly {
+        assert(i < g.ns);
         const list = if (numerator) g.num else g.den;
-        return if (i < list.len) list[i] else &.{"1.0"};
+        const result: Poly = if (i < list.len) list[i] else &.{"1.0"};
+        // `deg` is `len - 1`: every section has at least its constant term.
+        assert(result.len > 0);
+        return result;
     }
 };
 
@@ -112,6 +117,9 @@ fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan
         .lets = lets.items,
         .sampled = cx.sampled.items,
     };
+    // `filterSide` refuses an empty denominator, so a plan has a section.
+    assert(den.items.len > 0);
+    assert(lets.items.len <= 2);
     for (0..p.ns) |i| {
         p.deg = @max(p.deg, @max(p.poly(true, i).len, p.poly(false, i).len) - 1);
     }
@@ -158,6 +166,10 @@ fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan
     // §4.5.11 the optional ε argument only "deriv[es] an absolute
     // tolerance (if needed)"; VerA has no per-signal tolerance table, so
     // dropping it changes no value the device computes.
+    assert(p.err == null);
+    if (z) assert(p.period != null);
+    if (!z) assert(p.period == null);
+    if (p.tau != null) assert(p.t0 != null);
     return p;
 }
 
@@ -167,6 +179,7 @@ fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan
 pub fn planAll(g: *Gen) Error!void {
     g.filters = try g.arena.alloc(?FilterPlan, g.names.units.len);
     @memset(g.filters, null);
+    assert(g.filters.len == g.names.units.len);
     const saved_tok = g.ctrl_tok;
     defer g.ctrl_tok = saved_tok;
     for (g.names.units, 0..) |u, i| {
@@ -187,8 +200,9 @@ pub fn planAll(g: *Gen) Error!void {
 
 /// Returns filter unit `unit`'s plan, replaying the refusal planning raised the
 /// way `f64Expr` raises it (sticky `any_fatal`, first `fatal` wins).
-/// Precondition: `planAll` ran and `unit` is a `laplace`/`zi` unit.
+/// Asserts that `planAll` ran and `unit` is a `laplace`/`zi` unit.
 pub fn planOf(g: *Gen, unit: usize) FilterPlan {
+    assert(unit < g.filters.len);
     const p = g.filters[unit].?;
     if (p.fatal) |m| g.poison(m);
     return p;
@@ -207,7 +221,10 @@ fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
     if (def != .int_const or def.int_const < 0) return null;
     const n: usize = @intCast(def.int_const);
     if (i + 1 + n > args.len) return null;
-    return .{ .elems = args[i + 1 ..][0..n], .next = i + 1 + n };
+    const v: Vec = .{ .elems = args[i + 1 ..][0..n], .next = i + 1 + n };
+    assert(v.next <= args.len);
+    assert(v.next > i);
+    return v;
 }
 
 /// Renders filter coefficients, collecting the ones §4.5.14 samples.
@@ -220,6 +237,7 @@ const Coefs = struct {
     fn text(cx: *Coefs, g: *Gen, e: Mir.Value) Error![]const u8 {
         if (!try gen_host.ctrlIsDynamic(g, e)) return g.f64Expr(e);
         try cx.sampled.append(g.arena, e);
+        assert(cx.sampled.items.len > 0);
         return g.arena.print("k[{d}]", .{cx.sampled.items.len - 1});
     }
 };
@@ -255,6 +273,7 @@ fn filterSide(
         if (is_den and all_zero)
             return "LRM 4.5.11/4.5.12: the denominator coefficients of this filter are identically zero";
         try out.append(g.arena, poly);
+        assert(out.items.len > 0);
         return null;
     }
     // §4.5.11.1 "ζ is a vector of M pairs of real numbers … the first
@@ -272,6 +291,7 @@ fn filterSide(
         card = card or c;
         card_im = card_im or (c and i % 2 == 1);
     }
+    assert(elems.len > 0);
     if (card_im) return runtimeRoots(g, cx, out, lets, elems, z);
     const mark = out.items.len;
     const smark = cx.sampled.items.len;
@@ -293,8 +313,13 @@ fn runtimeRoots(
     elems: []const Mir.Value,
     z: bool,
 ) Error!?[]const u8 {
+    assert(elems.len % 2 == 0);
+    assert(elems.len > 0);
     const m = elems.len / 2;
     const k = lets.items.len;
+    // One let per side at most: the capacity `filterPlan` reserved.
+    assert(k < 2);
+    const out_before = out.items.len;
     var t: std.ArrayList(u8) = .empty;
     try t.print(g.arena, "const zr{d} = zRootSecs({d}, {s}, .{{ ", .{ k, m, if (z) "true" else "false" });
     for (elems, 0..) |e, i| {
@@ -308,6 +333,7 @@ fn runtimeRoots(
         for (poly, 0..) |*c, j| c.* = try g.arena.print("zr{d}[{d}][{d}]", .{ k, s, j });
         try out.append(g.arena, poly);
     }
+    assert(out.items.len == out_before + (m + 1) / 2);
     return null;
 }
 
@@ -315,6 +341,8 @@ fn runtimeRoots(
 /// real root, one real quadratic per conjugate pair. Returns an LRM
 /// diagnostic, or null on success.
 fn constRoots(g: *Gen, cx: *Coefs, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: bool) Error!?[]const u8 {
+    assert(elems.len % 2 == 0);
+    assert(elems.len > 0);
     const m = elems.len / 2;
     const used = try g.arena.alloc(bool, m);
     @memset(used, false);
@@ -382,6 +410,8 @@ fn constRoots(g: *Gen, cx: *Coefs, out: *std.ArrayList(Poly), elems: []const Mir
 /// part, negated imaginary part. Real parts compare as emitted text, so
 /// `model.a` pairs with `model.a` without its value.
 fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
+    assert(elems.len == 2 * used.len);
+    assert(im != 0.0); // a real root takes a section of its own
     for (used, 0..) |u, j| {
         if (u) continue;
         const jm = g.an.foldConst(elems[2 * j + 1], true) orelse continue;
@@ -398,8 +428,12 @@ fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []cons
 /// on every call so a card override needs no recompile. It is `pub` in the
 /// device because a host doing `.ac`/`.noise` builds `H(jω)` from exactly these
 /// numbers. A filter with §4.5.14 sampled coefficients takes them as `k`
-/// after `model`. Returns the output offset where the fn starts.
+/// after `model`. Returns the output offset where the fn starts. Asserts that
+/// `p` is a usable plan (no refusal, at least one section) of kind `z`.
 pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!usize {
+    assert(p.err == null);
+    assert(p.ns > 0);
+    if (z) assert(p.period != null);
     const var_name = if (z) "z⁻¹" else "s";
     try g.w(
         "/// §4.5.{s} cascade sections of `{s}`: H = ∏ [i][0]({s}) / [i][1]({s}),\n" ++

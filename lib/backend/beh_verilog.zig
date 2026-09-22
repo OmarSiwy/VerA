@@ -39,6 +39,7 @@
 //! no static value, and more than `max_vars` pins plus nodes.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Mir = @import("ir").Mir;
 const Lowered = @import("ir").Lowered;
@@ -64,6 +65,11 @@ pub const Error = error{ OutOfMemory, Refused };
 /// The largest pins-plus-nodes count the truth tables enumerate: `emit`
 /// runs the analog block 2^n times and keeps three f64 per run and node.
 const max_vars = 20;
+comptime {
+    // `run` shifts 1 by up to `max_vars` to count the assignments.
+    assert(max_vars > 0);
+    assert(max_vars < @bitSizeOf(usize));
+}
 
 const Pin = enum { digital, analog, power, ground };
 
@@ -180,6 +186,8 @@ const Emitter = struct {
         const nv = vars.items.len;
         if (nv > max_vars) return self.refuse("{d} pins and driven nodes; the truth tables stop at {d}", .{ nv, max_vars });
         const states = vars.items[n_inputs..];
+        assert(n_inputs <= nv);
+        assert(states.len == nv - n_inputs);
 
         // One analog evaluation per assignment: each state's residual, charge,
         // transition delay and, for a potential-driven node, its target.
@@ -190,6 +198,7 @@ const Emitter = struct {
         // Whether the node's potential row is retained (§5.6.1.3) in that run:
         // then S is its target, else the flow residual.
         const P = try self.arena.alloc(bool, n_masks * states.len);
+        assert(n_masks <= @as(usize, 1) << max_vars);
         const volts = try self.arena.alloc(f64, n_nodes);
         var in: Interp = .{ .e = self, .volts = volts, .env = try self.arena.alloc(?Val, Mir.Value.first_dynamic + self.mir.defs.len) };
         for (0..n_masks) |m| {
@@ -281,6 +290,7 @@ const Emitter = struct {
                     break;
                 };
             }
+            assert(support.items.len <= nv);
             targets[si] = target;
             rises[si] = rise;
             falls[si] = fall;
@@ -292,7 +302,10 @@ const Emitter = struct {
         const live = try self.arena.alloc(bool, states.len);
         for (live, states) |*l, r| l.* = r < lw.num_ports and pins[r] == .digital;
         var grew = true;
-        while (grew) {
+        var rounds: usize = 0;
+        while (grew) : (rounds += 1) {
+            // Each round that continues marks at least one more state live.
+            assert(rounds <= states.len);
             grew = false;
             for (states, 0..) |_, si| if (live[si]) for (supports[si]) |k| if (k >= n_inputs and !live[k - n_inputs]) {
                 live[k - n_inputs] = true;
@@ -320,6 +333,7 @@ const Emitter = struct {
         const first_signal = for (pins, 0..) |p, i| {
             if (!self.hidden(p)) break i;
         } else return self.refuse("every port is a supply; nothing to model", .{});
+        assert(first_signal < pins.len);
         var in_ifdef = false;
         for (pins, names[0..lw.num_ports], 0..) |p, n, i| {
             const h = self.hidden(p);
@@ -360,6 +374,7 @@ const Emitter = struct {
     }
 
     fn isSupply(self: *const Emitter, pins: []const Pin, r: u32) bool {
+        assert(pins.len == self.lw.num_ports);
         return r < self.lw.num_ports and (pins[r] == .power or pins[r] == .ground);
     }
 
@@ -371,6 +386,8 @@ const Emitter = struct {
     /// port itself, else an internal `vera_n_*` (a driven analog port stays
     /// undriven outside).
     fn net(self: *const Emitter, pins: []const Pin, r: u32) Name {
+        assert(pins.len == self.lw.num_ports);
+        assert(self.driven.len == self.lw.nodes.len);
         const n = self.lw.nodes.items(.name)[r];
         if (r < self.lw.num_ports and (pins[r] == .digital or !self.driven[r])) return ident(n);
         return .{ .prefix = "vera_n_", .text = n };
@@ -378,6 +395,15 @@ const Emitter = struct {
 
     /// Emits row `r`'s target table and its delayed assignment.
     fn node(self: *Emitter, w: *std.ArrayList(u8), vars: []const u32, target: []const Bit, support: []const usize, r: u32, rise: f64, fall: f64) Error!void {
+        // One target per assignment of every variable; the support is a
+        // subset of the variables, in ascending order.
+        assert(vars.len <= max_vars);
+        assert(target.len == @as(usize, 1) << @intCast(vars.len));
+        assert(support.len <= vars.len);
+        for (support, 0..) |k, j| {
+            assert(k < vars.len);
+            if (j > 0) assert(k > support[j - 1]);
+        }
         const A = self.arena;
         const lw = self.lw;
         const name = lw.nodes.items(.name)[r];
@@ -427,6 +453,7 @@ const Name = struct {
     /// Writes the name as an IEEE 1364-2005 §3.7 identifier.
     pub fn format(n: Name, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (n.prefix) |p| {
+            assert(p.len > 0);
             // The prefix starts the identifier, so any text of identifier
             // bytes keeps it simple. Any other text escapes the whole name
             // rather than map its bytes onto `_`, which two texts could share.
@@ -481,6 +508,9 @@ const Interp = struct {
 
     fn run(self: *Interp) Error!void {
         const mir = self.e.mir;
+        // One slot per Value and one potential per `nodes` row.
+        assert(self.env.len == Mir.Value.first_dynamic + mir.defs.len);
+        assert(self.volts.len == self.e.lw.nodes.len);
         @memset(self.env, null);
         var block: Mir.Block = .entry;
         var prev: ?Mir.Block = null;
@@ -555,6 +585,7 @@ const Interp = struct {
                 break :blk self.get(info.default);
             },
             .block_param => |u| blk: {
+                assert(u < self.volts.len);
                 const x = self.volts[u];
                 if (std.math.isNan(x)) return self.e.refuse("`{s}` is read but is neither a pin nor a driven net", .{self.e.lw.nodes.items(.name)[u]});
                 break :blk .{ .c = .{ .real = x } };
@@ -566,6 +597,9 @@ const Interp = struct {
 
     fn op(self: *Interp, o: Mir.Opcode, operands: []const Mir.Value) Error!Val {
         var cs: [2]Const = undefined;
+        // `run` passes a unary's or a binary's operands.
+        assert(operands.len > 0);
+        assert(operands.len <= cs.len);
         var d: f64 = 0;
         for (operands, 0..) |x, i| {
             const v = try self.get(x);
@@ -581,13 +615,18 @@ const Interp = struct {
         return switch (callee) {
             // §4.5.8/§4.5.7: the settled value, `td` later.
             .transition, .absdelay, .@"absdelay$quad" => blk: {
+                assert(args.len > 0);
                 const x = try self.get(args[0]);
                 const td = if (args.len > 1) (try self.get(args[1])).c.asReal() else 0;
                 break :blk .{ .c = x.c, .d = x.d + @max(td, 0) };
             },
             // §4.5.9: the settled value; a slew's time depends on the swing.
-            .slew => self.get(args[0]),
+            .slew => blk: {
+                assert(args.len > 0);
+                break :blk self.get(args[0]);
+            },
             .limexp => blk: {
+                assert(args.len > 0);
                 const x = try self.get(args[0]);
                 break :blk .{ .c = .{ .real = @exp(x.c.asReal()) }, .d = x.d };
             },

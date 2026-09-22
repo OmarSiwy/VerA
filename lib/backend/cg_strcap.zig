@@ -13,6 +13,7 @@
 //! never below `row`, so a model that ran before still runs.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Mir = @import("ir").Mir;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
@@ -32,15 +33,23 @@ pub const max_row: u64 = 1 << 47;
 /// The longest `$ferror` description (`file_kernels.zFErrorStr`).
 const ferror_max: u64 = 32;
 
+comptime {
+    assert(row <= max_row);
+    assert(ferror_max <= row);
+    assert(std.math.isPowerOfTwo(max_row));
+}
+
 /// The most bytes string Value `v` can hold. Memoized per Value; a Value met
 /// again while its own capacity is computed (a loop's phi) counts `row`.
 pub fn cap(g: *Gen, v0: Mir.Value) Error!u64 {
     if (g.held_caps == null) try planHeld(g);
+    assert(g.held_caps != null);
     const v = g.an.rv(v0);
     if (g.str_caps.get(v)) |c| return c;
     try g.str_caps.put(g.arena, v, row);
     const c = try compute(g, v);
     try g.str_caps.put(g.arena, v, c);
+    assert(g.str_caps.get(v).? == c);
     return c;
 }
 
@@ -84,6 +93,7 @@ fn callCap(g: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!u64 {
             return @max(n, row);
         },
         .@"$str$repeat" => {
+            assert(args.len == 2); // lower/expr.zig mints (copies, string)
             const k = g.an.foldConst(args[0], false) orelse return row;
             const copies = std.math.lossyCast(u64, @max(k.f, 0));
             return @max(copies *| try cap(g, args[1]), row);
@@ -108,11 +118,14 @@ pub fn rtFormatCap(g: *Gen, args: []const Mir.Value) Error!u64 {
         .real, .int => 512,
         .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
     };
-    return @max(n, row);
+    const c = @max(n, row);
+    assert(c >= row);
+    return c;
 }
 
 /// The capacity of §5.10 held string `i` (`Lowered.held_vars` row): what its
-/// end-of-block value can hold, never below `row`. A held string's value may
+/// end-of-block value can hold, never below `row`. Asserts that the planned
+/// capacities have one row per `held_vars` row. A held string's value may
 /// read held strings (itself, through `$held_str`), so the capacities are
 /// solved together, each round reading the last round's; a model whose string
 /// grows by itself every step does not settle, and keeps the capacity the
@@ -120,7 +133,10 @@ pub fn rtFormatCap(g: *Gen, args: []const Mir.Value) Error!u64 {
 pub fn heldCap(g: *Gen, i: usize) Error!u64 {
     if (g.held_caps == null) try planHeld(g);
     const caps = g.held_caps.?;
-    return if (i < caps.len) caps[i] else row;
+    assert(caps.len == g.lowered.held_vars.items.len);
+    const c = if (i < caps.len) caps[i] else row;
+    assert(c >= row);
+    return c;
 }
 
 fn planHeld(g: *Gen) Error!void {
@@ -142,6 +158,7 @@ fn planHeld(g: *Gen) Error!void {
         }
         if (!changed) break;
     }
+    for (caps) |c| assert(c >= row);
     g.str_caps.clearRetainingCapacity();
 }
 
