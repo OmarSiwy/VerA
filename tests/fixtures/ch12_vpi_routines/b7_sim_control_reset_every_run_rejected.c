@@ -56,9 +56,17 @@ static void arm(void)
   CHECK(vpi_register_cb(&cb) != NULL, "cbAfterDelay(3) registration failed");
 }
 
+static PLI_INT32 end_of_reset(p_cb_data d);
+
+/* IEEE 1364-2005 §26.2.4: a reset reason may be registered only after
+   vlog_startup_routines, so cbEndOfReset is registered here. */
 static PLI_INT32 eoc(p_cb_data d)
 {
+  static s_cb_data r;
   (void)d;
+  r.reason = cbEndOfReset;
+  r.cb_rtn = end_of_reset;
+  CHECK(vpi_register_cb(&r) != NULL, "cbEndOfReset registration failed");
   arm();
   return 0;
 }
@@ -88,13 +96,10 @@ static PLI_INT32 eos(p_cb_data d)
 
 static void setup(void)
 {
-  static s_cb_data c, r, e, s;
+  static s_cb_data c, e, s;
   c.reason = cbEndOfCompile;
   c.cb_rtn = eoc;
   CHECK(vpi_register_cb(&c) != NULL, "cbEndOfCompile registration failed");
-  r.reason = cbEndOfReset;
-  r.cb_rtn = end_of_reset;
-  CHECK(vpi_register_cb(&r) != NULL, "cbEndOfReset registration failed");
   e.reason = cbError;
   e.cb_rtn = on_error;
   CHECK(vpi_register_cb(&e) != NULL, "cbError registration failed");
