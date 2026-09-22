@@ -9,35 +9,6 @@ NVPTX and AMDGCN.
 
 **Pre V1.0.0, Not yet at Verilog-AMS conformance.**
 
-## Road to conformance
-
-Clause coverage is the long pole, and the release ladder in `docs/ROADMAP.md`
-assigns every remaining clause to a named version. A clause counts only with
-two-way evidence: one fixture that exercises it legally and one that gets refused
-for violating it. 416 clauses are one-sided today.
-
-```mermaid
-xychart-beta
-    title "Clauses with two-way evidence"
-    x-axis ["v0.0.1 today", "v0.2.1", "v0.6.2", "v0.9.1", "v1.0.0"]
-    y-axis "Clauses of 612" 0 --> 612
-    bar [196, 272, 529, 612, 612]
-    line [196, 272, 529, 612, 612]
-```
-
-| Release | Closes | Coverage |
-|---|---|---|
-| v0.0.1 | today | 196 / 612, 32% |
-| v0.2.1 | the 76 refused-only clauses | 272 / 612, 44% |
-| v0.6.2 | the 257 accepted-only clauses | 529 / 612, 86% |
-| v0.9.1 | the 83 uncited clauses | 612 / 612, 100% |
-| v1.0.0 | nothing new, it asserts all four measures | 612 / 612, 100% |
-
-26 releases, 17 of them closing conformance rows and 7 doing architecture work
-that closes none. Full table in `docs/ROADMAP.md` §3, per-obligation detail in
-`docs/CLAUSE-AUDIT.md`. What passes today is in
-[will it compile my model](#will-it-compile-my-model).
-
 ## Install
 
 Needs Zig 0.16.0.
