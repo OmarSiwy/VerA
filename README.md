@@ -123,14 +123,6 @@ xychart-beta
 Plain Verilog-A device models are the well-tested path. The 73 fixtures that do
 not pass are concentrated in mixed-signal, not in analog modelling.
 
-Known gaps:
-
-- Chapter 7 mixed-signal. No analog-to-digital wiring, no scheduler coordination.
-  46 fixtures sit here.
-- VPI value access and callbacks (§12.16 to §12.20) are missing from the header.
-- SPICE decks validate and compile but do not execute yet.
-- `zig build test-devices`, the digital transcript diff, currently fails.
-
 ## Tests
 
 ```sh
@@ -159,4 +151,4 @@ and per-chapter HTML.
 
 ## License
 
-No license file yet. Until one lands, all rights are reserved.
+MIT. See [LICENSE](LICENSE).
