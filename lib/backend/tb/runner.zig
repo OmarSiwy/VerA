@@ -23,6 +23,12 @@ const Error = tb.Error;
 const Sweep = tb.Sweep;
 const Directives = tb.Directives;
 const max_points = tb.max_points;
+const assert = std.debug.assert;
+
+comptime {
+    // `expand`'s cell block is `total * dims`, with `1 <= total <= max_points`.
+    assert(max_points > 0);
+}
 
 /// Returns the `//! param` lines that name a shape parameter of `lowered`
 /// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
@@ -63,7 +69,9 @@ pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u32 {
         },
         .net, .branch_flow, .port_flow => {},
     };
-    std.debug.assert(n == out.len);
+    assert(n == out.len);
+    // Ascending, as `Directives.op_states` promises.
+    for (out[0..n -| 1], out[@min(n, 1)..]) |a, b| assert(a < b);
     return out;
 }
 
@@ -275,6 +283,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // transient run with a fresh `State`, so no bias inherits another's §4.5
     // operator history or §4.6.2 variables; a dc sweep's points share them.
     const points = try expand(arena, d);
+    assert(points.len != 0);
+    // `parse` gives every grid at least one time (`Directives.times`).
+    assert(d.times.len != 0);
     // §5.10.2 / Table 5-1: `initial_step` fires on an analysis's first point
     // and `final_step` on its last. With `//! time` each sweep block is its own
     // transient analysis; without it the blocks are the steps of one dc sweep.
@@ -303,6 +314,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         try pointUnknowns(&out, arena, d, pt, mdl, per_block or n == 0);
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
+                assert(wv.values.len != 0); // `parseNumbers` refuses an empty list.
                 // A short `wave` holds its last value.
                 const v = wv.values[@min(k, wv.values.len - 1)];
                 try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
@@ -340,6 +352,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         }
         try out.appendSlice(arena, "    }\n");
     }
+    // One block of `d.times` per point.
+    assert(n == points.len * d.times.len);
 
     try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
     return out.items;
@@ -353,6 +367,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 /// Device-table directives (noise, acstim, qsite, seed, limit) are a compile
 /// error in the emitted runner.
 fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
+    // A `timescale gives both or neither (`mixedPlan`).
+    if (mx.unit != null) assert(mx.precision != null);
+    if (mx.unit == null) assert(mx.precision == null);
     var out: std.ArrayList(u8) = .empty;
     try head(&out, arena, title, d);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
@@ -625,6 +642,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     );
     // Each sweep point is its own analysis: fresh digital elaboration and `State`.
     const points = try expand(arena, d);
+    assert(points.len != 0);
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points, 0..) |pt, pi| {
         try out.appendSlice(arena, "    {\n");
@@ -714,6 +732,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
 
 /// The page every runner opens with: the fixed head, `title`, the fixed body.
 fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
+    // Every runner starts on an empty buffer: the head is the page's first byte.
+    assert(out.items.len == 0);
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
     try out.print(arena, "/// The switch of `fdCheck`, `finiteCheck` and `stateCheck`: the suite's `--certify`.\nconst fd_certify = {};\n", .{d.certify});
@@ -728,6 +748,7 @@ fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directi
 
 /// Writes one card line, `<card>.<name> = value`, at `indent`.
 fn setCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: []const u8, name: []const u8, value: f64) Error!void {
+    assert(card.len != 0);
     // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
     // integer parameter rounds, away from zero on a tie.
     try out.print(arena, "{s}{s}.{f} = cardValue(@TypeOf({s}.{f}), {f});\n", .{
@@ -753,6 +774,9 @@ fn deriveCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, car
 /// `mdl` when the point starts an analysis (`fresh`), then what the
 /// directives pin. `pt` is the point's row of `expand`.
 fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: []const f64, mdl: []const u8, fresh: bool) Error!void {
+    // `pt` is an `expand` row: the unknown columns, then the parameter ones.
+    assert(pt.len == d.sweeps.len + d.psweeps.len);
+    assert(mdl.len != 0);
     // `forced` marks the unknowns the host drives rather than Newton. By
     // default every unknown is tied to the reference; `//! solve` unties
     // the ones no line names. §3.6.3.2 a nodeset is an initial guess: it
@@ -777,10 +801,13 @@ fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: [
 
 /// The `//! time` grid as `times`, and each `//! wave` as `wave_<k>`.
 fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!void {
+    // `parse` gives every grid and every wave at least one value.
+    assert(d.times.len != 0);
     try out.appendSlice(arena, "const times = [_]f64{");
     for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
     try out.appendSlice(arena, " };\n");
     for (d.waves, 0..) |wv, k| {
+        assert(wv.values.len != 0);
         try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
         for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
         try out.appendSlice(arena, " };\n");
@@ -1231,11 +1258,16 @@ pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
         while (k > 0) {
             k -= 1;
             const vals = col.at(d, k).values;
+            assert(vals.len != 0); // `parseNumbers` refuses an empty list.
             row_cells[k] = vals[rem % vals.len];
             rem /= vals.len;
         }
+        // `n < total`, the product of the lengths, so every digit was used.
+        assert(rem == 0);
         row.* = row_cells;
     }
+    assert(rows.len == total);
+    assert(total <= max_points);
     return rows;
 }
 

@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 const orchestrator = @import("../orchestrator.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 
 /// How `buildExe` builds and where it writes.
 pub const BuildOptions = struct {
@@ -62,7 +63,8 @@ pub const BuildResult = union(enum) {
 /// Builds device.zig and the runner into one native binary under
 /// `opts.work_dir`. A null `device_zig` builds `runner_zig` alone over `sim`
 /// and `diag` (an IEEE 1364 design). Asserts that `device_zig` is set or
-/// `opts.mixed` is. Spawns `opts.zig_exe` and blocks until it exits; an
+/// `opts.mixed` is, and that a `shared_lib` build has a device. Spawns
+/// `opts.zig_exe` and blocks until it exits; an
 /// error return means it could not be spawned or a file could not be
 /// written. Caller owns the result and must free it with `deinit(gpa)`.
 ///
@@ -77,6 +79,9 @@ pub fn buildExe(
     runner_zig: []const u8,
     opts: BuildOptions,
 ) !BuildResult {
+    assert(device_zig != null or opts.mixed);
+    // `renderVpiLib`'s runner calls the device; there is no 1364 library form.
+    if (opts.shared_lib) assert(device_zig != null);
     var dir = try openWorkDir(io, opts);
     defer dir.close(io);
 
@@ -88,7 +93,6 @@ pub fn buildExe(
     const bin = if (opts.out_path) |p| try gpa.dupe(u8, p) else try binPath(gpa, arena, opts);
     errdefer gpa.free(bin);
 
-    std.debug.assert(device_zig != null or opts.mixed);
     const m_root = try bind(arena, io, dir, opts, "tb", "root", runner_zig);
 
     // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
@@ -139,6 +143,7 @@ fn binPath(gpa: Allocator, arena: Allocator, opts: BuildOptions) ![]const u8 {
 /// `-O`, cache directory, backend, then `-fstrip` when stripping. Allocated in
 /// `arena`, as everything later appended to it must be.
 fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const u8) !std.ArrayList([]const u8) {
+    assert(std.mem.eql(u8, verb, "build-exe") or std.mem.eql(u8, verb, "build-lib"));
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{
         opts.zig_exe,
@@ -160,6 +165,8 @@ fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const
     // No debug info where there are no safety checks to trace: emitting it
     // is most of an unsafe build's LLVM time.
     if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    // Compiler, verb, output, `-O`, the cache pair, implib, then a backend.
+    assert(argv.items.len >= 8);
     return argv;
 }
 
@@ -167,6 +174,7 @@ fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const
 /// `.ok` payload; on a failed build it is freed and `zig`'s stderr becomes the
 /// `.failed` payload. On an error return `bin` is still the caller's.
 fn runZig(gpa: Allocator, io: Io, argv: []const []const u8, bin: []const u8) !BuildResult {
+    assert(argv.len >= 8); // `argvHead`'s floor.
     const r = try std.process.run(gpa, io, .{ .argv = argv });
     gpa.free(r.stdout);
     const failed = switch (r.term) {
@@ -198,6 +206,8 @@ fn bind(
 
 /// `bind`'s file half: writes `<name>.<suffix>.zig` and returns its path.
 fn writeModule(arena: Allocator, io: Io, dir: Io.Dir, opts: BuildOptions, suffix: []const u8, text: []const u8) ![]const u8 {
+    assert(suffix.len != 0);
+    assert(std.mem.findAny(u8, suffix, "/\\") == null);
     const file = try arena.print("{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
     try dir.writeFile(io, .{ .sub_path = file, .data = text });
     return std.fs.path.join(arena, &.{ opts.work_dir, file });
@@ -208,7 +218,10 @@ pub const Staged = struct { root: []const u8, device: []const u8 };
 
 /// Writes the two module files `buildExe` would build for this device and
 /// runner, under `opts.work_dir`, without building. Paths live in `arena`.
+/// Asserts that `opts` is a plain build, as `buildBatch` requires.
 pub fn stage(arena: Allocator, io: Io, device_zig: []const u8, runner_zig: []const u8, opts: BuildOptions) !Staged {
+    assert(!opts.mixed);
+    assert(!opts.shared_lib);
     var dir = try openWorkDir(io, opts);
     defer dir.close(io);
     return .{
@@ -234,7 +247,9 @@ pub const batch_argv0 = "vera-batch-";
 /// `mixed` nor `shared_lib`. Caller owns the result and must free it with
 /// `deinit(gpa)`.
 pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOptions) !BuildResult {
-    std.debug.assert(!opts.mixed and !opts.shared_lib and members.len != 0);
+    assert(!opts.mixed);
+    assert(!opts.shared_lib);
+    assert(members.len != 0);
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -262,6 +277,7 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
 /// allocated in `arena`: its `main` runs `@import("tb<i>").main` for the `i`
 /// that `argv[0]` ends in after `batch_argv0`, and panics on any other.
 fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
+    assert(n != 0); // `buildBatch`'s precondition: a switch with only `else`.
     var root: std.ArrayList(u8) = .empty;
     try root.print(arena,
         \\const std = @import("std");

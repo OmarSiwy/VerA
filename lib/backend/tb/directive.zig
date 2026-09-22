@@ -8,6 +8,7 @@ const tb = @import("../tb.zig");
 const naming = @import("../naming.zig");
 const Lexer = @import("frontend").Lexer;
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 const Error = tb.Error;
 const Binding = tb.Binding;
 const Sweep = tb.Sweep;
@@ -19,6 +20,11 @@ const AcDynWant = tb.AcDynWant;
 
 /// The directive line prefix. A plain `//` comment is never a directive.
 const marker = "//!";
+comptime {
+    // A plain `//` comment must not read as a directive.
+    assert(marker.len == 3);
+    assert(std.mem.startsWith(u8, marker, "//"));
+}
 
 /// Every keyword a `//!` line may open with, spelled as written. Any other
 /// word is `error.UnknownDirective`, so a typo cannot silently check nothing.
@@ -104,6 +110,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         if (body.len == 0) continue;
 
         const kw_end = std.mem.findAny(u8, body, " \t") orelse body.len;
+        assert(kw_end != 0); // `body` is trimmed and nonempty.
         const kw = std.meta.stringToEnum(Keyword, body[0..kw_end]) orelse return error.UnknownDirective;
         const rest = std.mem.trim(u8, body[kw_end..], " \t");
 
@@ -131,6 +138,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             .temp => d.temp = try number(rest),
             .time => {
                 const times = try parseNumbers(arena, rest);
+                assert(times.len != 0); // `parseNumbers` refuses an empty list.
                 // `dt` is the step from the previous time, and `sim.mixed.run`
                 // requires the order. `!(b > a)` also refuses a NaN.
                 for (times[0 .. times.len - 1], times[1..]) |a, b| if (!(b > a)) return error.BadSyntax;
@@ -344,6 +352,10 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
+    // The cross-line rules above, as the result states them.
+    if (d.reject_run.len != 0) assert(d.expected_exit != 0);
+    if (d.reject.len != 0) assert(d.expected_checks == null);
+    assert(d.times.len != 0);
     return d;
 }
 
@@ -388,6 +400,8 @@ fn validNoiseEntry(s: []const u8) bool {
     // a row with no identity declared.
     const hash = std.mem.findScalarPos(u8, s, open, '#') orelse return false;
     if (hash == 0 or s[hash - 1] != ')') return false;
+    // `s[open]` is `(` and `s[hash - 1]` is `)`, so the branch sits between.
+    assert(hash > open + 1);
     const src = s[hash + 1 ..];
     // ponytail: reuse the nonempty decimal check; source IDs have no numeric bound.
     if (!std.mem.eql(u8, src, "null") and !digits(src)) return false;
@@ -411,6 +425,8 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     const hash = std.mem.findScalar(u8, s, '#') orelse return error.BadSyntax;
     var end = hash + 1;
     while (end < s.len and s[end] != ' ' and s[end] != '\t') end += 1;
+    assert(end > hash);
+    assert(end <= s.len);
     const topo = s[0..end];
     if (!validNoiseEntry(topo)) return error.BadSyntax;
 
@@ -496,6 +512,7 @@ fn parseMetaEntry(arena: Allocator, s: []const u8) Error![]const u8 {
 fn parsePair(s: []const u8) Error!struct { row: []const u8, col: []const u8, rest: []const u8 } {
     if (s.len == 0 or s[0] != '(') return error.BadSyntax;
     const close = std.mem.findScalar(u8, s, ')') orelse return error.BadSyntax;
+    assert(close != 0); // `s[0]` is `(`.
     const inner = s[1..close];
     const comma = std.mem.findScalar(u8, inner, ',') orelse return error.BadSyntax;
     const row = std.mem.trim(u8, inner[0..comma], " \t");
@@ -608,7 +625,10 @@ fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     // Worst case is three bytes out per byte in (`Z` plus two hex digits),
     // plus the one `Z` a Zig-reserved word picks up.
     const buf = try arena.alloc(u8, s.len * 3 + 1);
-    return naming.sanitize(buf, s) catch unreachable;
+    const id = naming.sanitize(buf, s) catch unreachable;
+    assert(id.len >= s.len);
+    assert(std.zig.isValidId(id));
+    return id;
 }
 
 /// Appends the `name = value` pairs in `rest`, split on top-level commas so
@@ -626,6 +646,7 @@ fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding
         },
         else => {},
     };
+    assert(start <= rest.len);
     try oneBinding(arena, rest[start..], out);
 }
 
@@ -668,6 +689,7 @@ fn number(raw: []const u8) Error!f64 {
     const head = std.mem.trim(u8, t[0 .. t.len - 1], " \t");
     if (head.len == 0) return error.BadNumber;
     var buf: [64]u8 = undefined;
+    assert(exp.len < buf.len); // `scaleExp`'s longest is `e-18`.
     if (head.len + exp.len > buf.len) return error.BadNumber;
     @memcpy(buf[0..head.len], head);
     @memcpy(buf[head.len..][0..exp.len], exp);
