@@ -13,6 +13,7 @@ const Input = @import("input.zig").Input;
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
+const assert = std.debug.assert;
 
 /// The §5.4.2/§5.6 branch facts the residual is assembled from.
 pub const Topology = struct {
@@ -34,7 +35,9 @@ pub const Topology = struct {
 
 /// Returns the branch facts for the branch currents `branch_u` (per
 /// contribution, `none_u32` where none); slices are owned by `in.arena`.
+/// Asserts that `branch_u` has one entry per contribution.
 pub fn plan(in: Input, branch_u: []const u32) Error!Topology {
+    assert(branch_u.len == in.lowered.contributions.items.len);
     return .{
         .free_flows = try freeFlows(in, branch_u),
         .cpairs = try collapsePairs(in, branch_u),
@@ -72,11 +75,16 @@ pub fn retention(self: Input, c: Lower.Contribution) Retention {
 /// `contribIndex` dedupes per (access, pair, branch), so there is at most
 /// one. ponytail: O(n) scan per potential entry; contributions per module
 /// are tens, same order as `uIsDriven`'s existing scan.
+/// Asserts that `pi` indexes a contribution.
 pub fn switchFlowOf(self: Input, pi: usize) ?usize {
+    assert(pi < self.lowered.contributions.items.len);
     const p = self.lowered.contributions.items[pi];
     for (self.lowered.contributions.items, 0..) |c, j| {
         if (j == pi or c.kind != .direct or c.access != .flow) continue;
-        if (c.hi == p.hi and c.lo == p.lo and c.br == p.br) return j;
+        if (c.hi == p.hi and c.lo == p.lo and c.br == p.br) {
+            assert(j != pi);
+            return j;
+        }
     }
     return null;
 }
@@ -84,8 +92,9 @@ pub fn switchFlowOf(self: Input, pi: usize) ?usize {
 /// Is flow entry `j` consumed by a RUNTIME-selected potential row over the
 /// same branch? Then its retained value reaches KCL through the branch
 /// unknown (row `I_b − value`, stamps ±I_b), and stamping it here as well
-/// would inject the current twice.
+/// would inject the current twice. Asserts that `j` indexes a contribution.
 pub fn flowIsMerged(self: Input, j: usize) bool {
+    assert(j < self.lowered.contributions.items.len);
     const f = self.lowered.contributions.items[j];
     if (f.kind != .direct or f.access != .flow) return false;
     for (self.lowered.contributions.items) |c| {
@@ -120,7 +129,10 @@ pub fn flowOnlySignalFlowNet(self: Input, c: Lower.Contribution) ?u32 {
         const dname = self.lowered.nodes.items(.disc)[n];
         if (dname.len == 0) continue;
         const d = self.lowered.disciplines.get(dname) orelse continue;
-        if (!d.has_potential and d.has_flow) return n;
+        if (!d.has_potential and d.has_flow) {
+            assert(n < self.lowered.nodes.len);
+            return n;
+        }
     }
     return null;
 }
@@ -176,8 +188,10 @@ pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: M
 pub const FreeFlow = struct { u: u32, hi: u32, lo: u32, sourced: bool };
 
 /// `free_flows`, in unknown-slot order (`flow_unknowns` is a hash map, and
-/// its iteration order is not the emitted order).
+/// its iteration order is not the emitted order). Asserts that `branch_u`
+/// has one entry per contribution.
 pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
+    assert(branch_u.len == self.lowered.contributions.items.len);
     var out: std.ArrayList(FreeFlow) = .empty;
     var it = self.lowered.flow_unknowns.iterator();
     while (it.next()) |e| {
@@ -207,6 +221,7 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
             return x.u < y.u;
         }
     }.lt);
+    assert(out.items.len <= self.lowered.flow_unknowns.count());
     return out.items;
 }
 
@@ -334,7 +349,9 @@ fn unknownProbed(self: Input, u: u32) bool {
 /// setup routines (DIOsetup: `posPrimeNode = posNode` when RS == 0); keeping
 /// the pair apart behind a selected 0 V short costs the host an unknown, a
 /// branch row, and catastrophic cancellation when its LU eliminates the short.
+/// Asserts that `branch_u` has one entry per contribution.
 pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
+    assert(branch_u.len == self.lowered.contributions.items.len);
     var out: std.ArrayList(CollapsePair) = .empty;
     const np: u32 = @intCast(self.lowered.num_ports);
     for (self.lowered.contributions.items, 0..) |c, i| {
@@ -361,8 +378,14 @@ pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
         const target: u32 = if (hi_free and lo_free) @min(c.hi, c.lo) else if (hi_free) c.lo else c.hi;
         if (target == Lower.ground) continue;
         if (target >= victim or target >= fu) continue;
+        // The host aliases in ascending unknown order (above): the target
+        // precedes both movers, and is never the ground.
+        assert(target < victim);
+        assert(target < fu);
+        assert(victim >= np);
         try out.append(self.arena, .{ .victim = victim, .target = target, .flow_u = fu, .flag = ret.runtime, .card = cardOnly(self, ret.runtime) });
     }
+    assert(out.items.len <= self.lowered.contributions.items.len);
     return out.items;
 }
 

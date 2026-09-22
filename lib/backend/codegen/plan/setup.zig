@@ -40,6 +40,7 @@ pub const Sinv = struct {
     /// Asserts `b` is a block of the analysis `plan` ran over.
     pub fn movedTo(s: Sinv, b: u32) []const Mir.Value {
         if (s.moved_off.len == 0) return &.{};
+        assert(b + 1 < s.moved_off.len);
         return s.moved[s.moved_off[b]..s.moved_off[b + 1]];
     }
 };
@@ -80,10 +81,12 @@ pub fn branchCond(in: Input, bi: u32) ?Mir.Value {
 }
 
 fn thenOf(in: Input, bi: u32) u32 {
+    assert(in.mir.instOp(in.an.term[bi]) == .branch);
     return @backingInt(in.mir.instData(in.an.term[bi]).branch.then_block);
 }
 
 fn elseOf(in: Input, bi: u32) u32 {
+    assert(in.mir.instOp(in.an.term[bi]) == .branch);
     return @backingInt(in.mir.instData(in.an.term[bi]).branch.else_block);
 }
 
@@ -152,12 +155,22 @@ pub fn postDominators(in: Input) Error![]u32 {
             _ = dfs.pop();
         }
     }
+    // `exit` roots the walk, so it is numbered last; each block at most once.
+    assert(n_po <= nb + 1);
+    assert(po[n_po - 1] == exit);
 
     const ipdom = try a.alloc(u32, nb + 1);
     @memset(ipdom, none_u32);
     ipdom[exit] = exit;
+    // Bound: the iteration is the dominator dataflow, monotone per block: a
+    // block's ipdom is set once from `none_u32`, then its dominator chain only
+    // shrinks, at most `nb + 1` times. Every round but the last changes one,
+    // so at most `(nb + 1) * (nb + 2) + 1` rounds.
+    const rounds_max = (@as(usize, nb) + 1) * (@as(usize, nb) + 2) + 1;
+    var rounds: usize = 0;
     var changed = true;
-    while (changed) {
+    while (changed) : (rounds += 1) {
+        assert(rounds < rounds_max);
         changed = false;
         var k = n_po;
         while (k > 0) {
@@ -178,13 +191,21 @@ pub fn postDominators(in: Input) Error![]u32 {
             }
         }
     }
+    assert(ipdom[exit] == exit);
     return ipdom;
 }
 
 fn intersect(ipdom: []const u32, num: []const u32, b1: u32, b2: u32) u32 {
+    assert(ipdom.len == num.len);
+    assert(b1 < num.len);
+    assert(b2 < num.len);
     var f1 = b1;
     var f2 = b2;
-    while (f1 != f2) {
+    // Bound: every pass moves at least one finger to a higher postorder
+    // number, and each finger can rise at most `num.len` times.
+    var passes: usize = 0;
+    while (f1 != f2) : (passes += 1) {
+        assert(passes < 2 * num.len);
         while (num[f1] < num[f2]) f1 = ipdom[f1];
         while (num[f2] < num[f1]) f2 = ipdom[f2];
     }
@@ -215,7 +236,11 @@ pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd:
             if (branchCond(in, A) == null) continue;
             for ([_]u32{ thenOf(in, A), elseOf(in, A) }, [_]bool{ true, false }) |s, then| {
                 var r = s;
+                // Bound: a post-dominator chain holds each block once.
+                var hops: usize = 0;
                 while (r != ipdom[A] and r < nb) : (r = ipdom[r]) {
+                    assert(hops < nb);
+                    hops += 1;
                     if (fill) {
                         cd[at[r]] = .{ .a = A, .then = then };
                         at[r] += 1;
@@ -339,16 +364,25 @@ const Scan = struct {
     /// the dominator path it climbs, which every block on it shares: n nested
     /// unplaceable `if`s would otherwise climb O(n) each (#29).
     fn homeOf(s: *const Scan, b0: u32) u32 {
+        const nb = s.in.an.nb;
+        assert(b0 < nb);
         var b = b0;
-        const h = while (true) {
+        // Bound: a dominator path holds each block once, so both climbs take
+        // fewer than `nb` hops.
+        var hops: usize = 0;
+        const h = while (true) : (hops += 1) {
+            assert(hops < nb);
             if (s.home[b] != unknown_home) break s.home[b];
             if (s.plc[b]) break b;
             const up = s.in.an.idom[b];
             if (up == none_u32 or up == b) break none_u32;
             b = up;
         };
+        if (h != none_u32) assert(s.plc[h]);
         b = b0;
-        while (s.home[b] == unknown_home) {
+        hops = 0;
+        while (s.home[b] == unknown_home) : (hops += 1) {
+            assert(hops < nb);
             s.home[b] = h;
             if (b == h) break;
             const up = s.in.an.idom[b];
@@ -486,7 +520,12 @@ fn solve(in: Input, placing: bool) Error!Sinv {
     const reach = try a.alloc(bool, nb);
     // Each block is pushed at most once (its flag is set first).
     var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
-    while (true) {
+    // Bound: optimistic and monotone. Every round but the last lowers at
+    // least one of the `nv` value or `nb` block flags, so at most
+    // `nv + nb + 1` rounds.
+    var rounds: usize = 0;
+    while (true) : (rounds += 1) {
+        assert(rounds <= @as(usize, nv) + nb);
         var changed = false;
         // Loops with a per-eval branch, and everything they can reach.
         @memset(s.varying, false);
@@ -610,8 +649,11 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     const cds = try controlDeps(in, try postDominators(in));
     const vary = try a.alloc(bool, nv);
     @memset(vary, false);
+    // Bound: `vary` only rises; every round but the last sets one of `nv`.
+    var rounds: usize = 0;
     var changed = true;
-    while (changed) {
+    while (changed) : (rounds += 1) {
+        assert(rounds <= nv);
         changed = false;
         for (Mir.Value.first_dynamic..nv) |i| {
             if (vary[i]) continue;
@@ -730,7 +772,15 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
         const next = mir.insts.items(.next);
         var prev: Mir.Inst = .none;
         var cur = mir.blocks.items(.first)[b];
-        while (cur != inst) : (cur = next[@backingInt(cur)]) prev = cur;
+        // The seed is an instruction of block `b`, so the walk meets it
+        // before the chain ends, within the instruction count.
+        var hops: usize = 0;
+        while (cur != inst) : (cur = next[@backingInt(cur)]) {
+            assert(cur != .none);
+            assert(hops < next.len);
+            hops += 1;
+            prev = cur;
+        }
         const after = next[@backingInt(inst)];
         if (prev == .none) mir.blocks.items(.first)[b] = after else next[@backingInt(prev)] = after;
         if (mir.blocks.items(.last)[b] == inst) mir.blocks.items(.last)[b] = prev;
@@ -756,8 +806,11 @@ fn observed(in: Input, s: Sinv, merges: []const Mir.Inst, web: []bool, seed: Mir
     const an = in.an;
     @memset(web, false);
     web[@backingInt(an.rv(seed))] = true;
+    // Bound: `web` only rises; every round but the last adds one merge.
+    var rounds: usize = 0;
     var changed = true;
-    while (changed) {
+    while (changed) : (rounds += 1) {
+        assert(rounds <= merges.len);
         changed = false;
         for (merges) |m| {
             const r = an.rv(mir.instResult(m));

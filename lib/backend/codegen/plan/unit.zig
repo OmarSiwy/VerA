@@ -152,8 +152,12 @@ pub fn init(
 fn markFileDeps(self: *UnitPlan) Error!void {
     self.file_dep = try self.arena.alloc(bool, self.an.nv);
     @memset(self.file_dep, false);
+    // Bound: every round but the last sets at least one of the `nv` flags,
+    // so the loop runs at most `nv + 1` rounds.
+    var rounds: usize = 0;
     var grew = true;
-    while (grew) {
+    while (grew) : (rounds += 1) {
+        assert(rounds <= self.an.nv);
         grew = false;
         for (Mir.Value.first_dynamic..self.an.nv) |i| {
             if (self.file_dep[i]) continue;
@@ -199,6 +203,7 @@ pub inline fn isRoot(self: *const UnitPlan, v: Mir.Value) bool {
 
 /// The block this unit computes `v` in.
 fn homeBlock(self: *const UnitPlan, v: usize) u32 {
+    assert(v < self.an.nv);
     if (self.setup_mode and self.su_home[v] != none_u32) return self.su_home[v];
     return self.an.def_block[v];
 }
@@ -240,17 +245,26 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
 /// A fixpoint: a §5.9 loop the unit must re-run changes the slice, which can
 /// mark further loops. Marking only adds, so it converges.
 ///
-/// Asserts `lo_idx` is wired (one entry per value, `plan/core.zig`), and
+/// Asserts that `lo_idx` is wired (one entry per value, `plan/core.zig`), and
 /// `su_idx` too while `su_on`, and `sinv`/`su_home` while `setup_mode`.
 pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
     assert(self.lo_idx.len == self.an.nv);
-    assert(!self.su_on or self.su_idx.len == self.an.nv);
-    assert(!self.setup_mode or (self.sinv.len == self.an.nv and self.su_home.len == self.an.nv));
+    if (self.su_on) assert(self.su_idx.len == self.an.nv);
+    if (self.setup_mode) assert(self.sinv.len == self.an.nv);
+    if (self.setup_mode) assert(self.su_home.len == self.an.nv);
+    assert(self.loop_recompute.len == self.an.nb);
     self.in_common = in_common;
     @memset(self.loop_recompute, false);
-    while (true) {
+    // Bound: every round but the last sets at least one of the `nb`
+    // `loop_recompute` flags (`markRecomputedLoops`), so at most `nb + 1`.
+    var rounds: usize = 0;
+    while (true) : (rounds += 1) {
+        assert(rounds <= self.an.nb);
         try self.analyzeUnitOnce(target);
-        if (!self.markRecomputedLoops()) return;
+        if (!self.markRecomputedLoops()) {
+            assert(self.n_slots <= self.live.items.len);
+            return;
+        }
     }
 }
 
@@ -312,8 +326,11 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // rebuilding all of it emits empty `if (c) { break :B } else
         // { break :B }` scaffolding. Marking is monotone (a newly live
         // condition only adds work to a block, which can only revive a
-        // branch), so this converges.
-        while (true) {
+        // branch), so this converges. Bound: every round but the last marks
+        // at least one value `needed` that was not, so at most `nv + 1`.
+        var rounds: usize = 0;
+        while (true) : (rounds += 1) {
+            assert(rounds <= self.an.nv);
             self.planDeadBranches();
             var grew = false;
             for (self.an.rpo) |bi| {
@@ -434,6 +451,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
 
 fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!void {
     const v = self.an.rv(v0);
+    assert(@backingInt(v) < self.an.nv);
     if (self.needed[@backingInt(v)]) return;
     self.needed[@backingInt(v)] = true;
     try self.live.append(self.arena, v);
@@ -483,6 +501,7 @@ fn closeSlice(self: *UnitPlan, work: *std.ArrayList(Mir.Value)) Error!void {
         if (def != .inst_result) continue;
         try self.markOperands(work, def.inst_result);
     }
+    assert(work.items.len == 0);
 }
 
 fn ltValue(_: void, lhs: Mir.Value, rhs: Mir.Value) bool {
@@ -568,6 +587,10 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
 
 /// The deepest chain of inlined operands one statement may render.
 const max_inline_depth = 256;
+comptime {
+    // `inl_depth` is a `u16` that saturates; the cut must sit below that.
+    assert(max_inline_depth < std.math.maxInt(u16));
+}
 
 /// The renderer recurses once per inlined operand, so a fused chain as long
 /// as the source (4096 summed contributions) overflows the compiler's stack.
@@ -614,6 +637,7 @@ fn boundInlineDepth(self: *UnitPlan) void {
 /// nothing moves into a loop or past a side effect. Eager uses are not undone:
 /// the expression still runs once, eagerly, a little later.
 fn fuseSingleUse(self: *UnitPlan) void {
+    assert(self.an.stmt_off.len == self.an.nb + 1);
     for (0..self.an.nb) |bi| {
         const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
         if (stmts.len < 2) continue;
@@ -714,6 +738,9 @@ fn isStraightLine(self: *const UnitPlan) bool {
 /// way. The unit then computes the same values and reaches the same place
 /// whichever arm runs, so the condition is unobservable and the `if` goes.
 fn planDeadBranches(self: *UnitPlan) void {
+    assert(self.blk_work.len == self.an.nb);
+    assert(self.blk_phi.len == self.an.nb);
+    assert(self.dead_branch.len == self.an.nb);
     @memset(self.blk_work, false);
     @memset(self.blk_phi, false);
     for (self.live.items) |lv| {
@@ -757,6 +784,8 @@ fn planDeadBranches(self: *UnitPlan) void {
 /// `blk_work`/`blk_phi`/`dead_branch`, so it is valid only inside
 /// `planDeadBranches` or after it.
 fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
+    assert(from0 < self.an.nb);
+    assert(to0 < self.an.nb);
     var from = from0;
     var to = to0;
     var hops: u32 = 0;
