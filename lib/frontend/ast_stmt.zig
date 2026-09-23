@@ -231,8 +231,10 @@ pub const Edge = enum {
 /// declarations are not statements and are not visited. `.none` operands and
 /// children are passed through. `v` is duck-typed (`expr(ExprId, Edge)` and
 /// `stmt(StmtId)`, both returning the same error union); this is the
-/// statement counterpart of `ExprStore.children`. `id` must not be `.none`.
+/// statement counterpart of `ExprStore.children`. Asserts that `id` is not
+/// `.none`: a missing child is the caller's to skip.
 pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
+    std.debug.assert(id != .none);
     switch (self.stmt(id)) {
         .empty, .disable => {},
         .event_trigger => |s| try eventIndexEdges(self, s.target, v),

@@ -154,8 +154,11 @@ fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
 /// `after_name`, with nothing emitted. Fails with E0115 (undefined),
 /// E0116/E0117 (argument list), E0118 (recursion) or E0120 (unbalanced
 /// arguments), with E0150 once the text passes `Options.text_limit`, and
-/// with E0119 when no stack can be reserved for the nesting.
+/// with E0119 when no stack can be reserved for the nesting. Asserts that
+/// `after_name` is past `at`, so the offset returned moves the scan.
 pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const u8) Error!usize {
+    std.debug.assert(after_name > at);
+    std.debug.assert(after_name <= text.len);
     if (!pp.emitting()) return after_name;
     // The whole use, backtick included: `FOO.
     const sp = pp.spanAt(at, after_name);

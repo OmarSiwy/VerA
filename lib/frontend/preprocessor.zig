@@ -959,7 +959,9 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         }
 
         if (c == '`') {
+            const at = i;
             i = try pp_directive.directive(pp, text, i);
+            std.debug.assert(i > at); // every directive and macro use consumes its '`'
             try pp.resync(i);
             continue;
         }

@@ -51,8 +51,12 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     try udps.appendSlice(self.arena, self.file.udps);
     try configs.appendSlice(self.arena, self.file.configs);
 
-    while (true) {
-        const attr_at = self.pos;
+    // Every arm but `.eof` consumes: a description, a directive, or
+    // `recoverTopLevel`'s one token at least. A pass that loops without
+    // moving would loop forever.
+    var attr_at: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > attr_at)) {
+        attr_at = self.pos;
         try self.skipAttributes();
         const before = self.pos;
         try self.refuseAms();
@@ -205,6 +209,8 @@ fn element(self: *Parser, before: u32, list: anytype, parsed: anytype) error{Out
 /// past any `end*` keyword that closes the construct being abandoned.
 /// Always advances at least one token.
 fn recoverTopLevel(self: *Parser, before: u32) void {
+    // The `.eof` arm never fails, so an unmoved cursor is on a real token.
+    if (self.pos == before) std.debug.assert(self.peek() != .eof);
     if (self.pos == before) self.pos += 1;
     while (true) : (self.pos += 1) switch (self.peek()) {
         .eof => return,
@@ -301,7 +307,9 @@ fn parseConfigDecl(self: *Parser, configs: *std.ArrayList(Ast.ConfigDecl)) Error
     while (self.peek() != .semicolon) try design.append(self.arena, try parseLibCell(self));
     self.pos += 1;
     var rules: std.ArrayList(Ast.ConfigRule) = .empty;
-    while (!self.reservedIs(self.pos, "endconfig")) {
+    var rule_at: u32 = undefined;
+    while (!self.reservedIs(self.pos, "endconfig")) : (std.debug.assert(self.pos > rule_at)) {
+        rule_at = self.pos;
         if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
         const rule = try parseConfigRule(self);
         // IEEE 1364-2005 §13.3.1.2: "there cannot be more than one default

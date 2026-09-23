@@ -29,6 +29,7 @@ const Allocator = std.mem.Allocator;
 const token = @import("token.zig");
 const Preprocessor = @import("preprocessor.zig");
 const deep_stack = @import("deep_stack.zig");
+const assert = std.debug.assert;
 
 /// Synthesized prelude text plus the number of module declarations it holds,
 /// which `Ast.SourceFile.netlist_modules` records.
@@ -138,6 +139,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     var r: Reader = .{ .arena = arena, .scratch = scratch, .refusals = &refusals };
     try r.files.append(arena, .{ .name = if (path.len == 0) "<spice netlist>" else path, .text = netlist });
     try r.read(0, null);
+    assert(r.reading.items.len == 0); // every `read` pops what it pushed
 
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(scratch,
@@ -161,6 +163,7 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
     var logical: std.ArrayList(u8) = .empty;
     var first: Card = undefined;
     for (r.lines.items) |line| {
+        assert(line.text.len != 0); // `read` keeps no blank line
         if (line.text[0] == '+') {
             // Joins the card under construction. A `+` with nothing above it has
             // nothing to continue and is dropped.
@@ -199,6 +202,8 @@ pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Alloc
         if (try emitCard(scratch, &out, cards.items[i], body, models.items, &seen, &refusals, &unsupported)) count += 1;
         i += 1 + body.len;
     }
+    // A body is a slice of the cards after its header, so no step overshoots.
+    assert(i == cards.items.len);
 
     const kept = try arena.alloc([]const u8, unsupported.items.len);
     for (unsupported.items, kept) |u, *k| k.* = try arena.dupe(u8, u);
@@ -237,7 +242,9 @@ const Reader = struct {
 
     /// Appends file `fi`'s lines, or with `entry` only those of its `.LIB
     /// entry` block.
+    /// Asserts that `fi` names a file already in `files`.
     fn read(r: *Reader, fi: u32, entry: ?[]const u8) Allocator.Error!void {
+        assert(fi < r.files.items.len);
         try r.reading.append(r.scratch, .{ .key = try std.fs.path.resolve(r.scratch, &.{r.files.items[fi].name}), .entry = entry });
         defer _ = r.reading.pop();
         const text = r.files.items[fi].text;
@@ -331,6 +338,8 @@ const Reader = struct {
 
     /// `name` beside the file `fi` was opened by, or as written when absolute.
     fn resolve(r: *Reader, fi: u32, name: []const u8) Allocator.Error![]const u8 {
+        assert(fi < r.files.items.len);
+        assert(r.files.items[0].name.len != 0); // `synthesize` names the netlist
         if (std.fs.path.isAbsolute(name)) return r.arena.dupe(u8, name);
         const dir = std.fs.path.dirname(r.files.items[fi].name) orelse ".";
         const base = if (fi == 0 and r.files.items[0].name[0] == '<') "." else dir;
@@ -417,6 +426,9 @@ const Tokens = struct {
                 depth -|= 1;
             } else if (depth == 0 and std.mem.findScalar(u8, seps, c) != null) break;
         }
+        // The first byte is no separator, so the field holds one at least.
+        assert(t.i > start);
+        assert(t.i <= t.text.len);
         return t.text[start..t.i];
     }
 };
@@ -439,8 +451,10 @@ fn strip(raw: []const u8) []const u8 {
 
 /// Returns the cards `rest[0]` owns, excluding the terminating `.ENDS`; empty
 /// unless `rest[0]` is a `.SUBCKT` header. E.2 makes a subcircuit a module
-/// definition and E.2.2.2 shows its device cards as its body.
+/// definition and E.2.2.2 shows its device cards as its body. Asserts that
+/// `rest` is not empty.
 fn subcktBody(rest: []const Card) []const Card {
+    assert(rest.len != 0);
     if (!std.mem.startsWith(u8, rest[0].text, ".subckt")) return &.{};
     for (rest[1..], 1..) |card, i| {
         if (std.mem.startsWith(u8, card.text, ".ends")) return rest[1..i];
@@ -779,6 +793,22 @@ const model_cards = [_]struct { letter: u8, nodes: u8, prim: []const u8 }{
     .{ .letter = 'd', .nodes = 2, .prim = "diode" },
 };
 
+// `emitBody` tries `controlled`, then `model_cards`, then `x`, then
+// `device_cards` on a card's first letter: a letter in two of them would make
+// the later row unreachable.
+comptime {
+    for (controlled) |c| {
+        assert(c.letter != 'x');
+        for (model_cards) |m| assert(c.letter != m.letter);
+        for (device_cards) |d| assert(c.letter != d.letter);
+    }
+    for (model_cards) |m| {
+        assert(m.letter != 'x');
+        for (device_cards) |d| assert(m.letter != d.letter);
+    }
+    for (device_cards) |d| assert(d.letter != 'x');
+}
+
 /// A card value: a number, or a `{expr}` as Verilog-AMS text (`expression`),
 /// which elaboration evaluates against the subcircuit's parameters.
 const Value = union(enum) {
@@ -1022,8 +1052,11 @@ fn setOverride(arena: Allocator, list: *std.ArrayList(Override), name: []const u
 }
 
 /// The value `t[eq + 1 ..]` of the parameter assignment `t`: a number, or a
-/// `{expr}` over `scope`; null after recording why it is neither.
+/// `{expr}` over `scope`; null after recording why it is neither. Asserts
+/// that `eq` is the index of an `=` in `t`.
 fn paramValue(arena: Allocator, t: []const u8, eq: usize, inst: []const u8, card: Card, refusals: *Refusals, scope: []const []const u8) Allocator.Error!?Value {
+    assert(eq < t.len);
+    assert(t[eq] == '=');
     const v = t[eq + 1 ..];
     if (eq == 0 or v.len == 0) {
         try refusals.add(card, "`{s}`: `{s}` is not a parameter assignment", .{ inst, t });
@@ -1036,8 +1069,11 @@ fn paramValue(arena: Allocator, t: []const u8, eq: usize, inst: []const u8, card
 }
 
 /// The `{expr}` or `'expr'` field `v` as a `Value`, or null after recording
-/// why `expression` does not read it.
+/// why `expression` does not read it. Asserts that `v` opens with `{` or
+/// `'`, which is how every caller tells an expression from a number.
 fn exprValue(arena: Allocator, v: []const u8, inst: []const u8, card: Card, refusals: *Refusals, scope: []const []const u8) Allocator.Error!?Value {
+    assert(v.len != 0);
+    assert(v[0] == '{' or v[0] == '\'');
     const close: u8 = if (v[0] == '{') '}' else '\'';
     if (v.len < 2 or v[v.len - 1] != close) {
         try refusals.add(card, "`{s}`: the expression value `{s}` does not end in `{c}`", .{ inst, v, close });

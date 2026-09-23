@@ -48,7 +48,12 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
     // the paramset") and `analog_function_statement`, in source order.
     // Elaboration runs them after the module's analog blocks (§6.4.3).
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    while (true) {
+    // Every arm that loops consumed: a declaration, an override, or the
+    // statement `skipParamsetStatement` scanned (which the parse may rewind
+    // into, but `end` is restored after it).
+    var item_at: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > item_at)) {
+        item_at = self.pos;
         const mark = self.attrs.items.len;
         try self.skipAttributes();
         try parse_source.outsideDesignElement(self, "paramset");

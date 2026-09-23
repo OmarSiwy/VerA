@@ -382,6 +382,16 @@ pub const MathFn = enum {
             .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
         };
     }
+
+    /// The most arguments any function takes: `foldContext` folds a call's
+    /// arguments into a buffer this long, and `math` reads `args[0]` always.
+    const arity_max = 2;
+    comptime {
+        for (std.enums.values(MathFn)) |f| {
+            std.debug.assert(f.arity() >= 1);
+            std.debug.assert(f.arity() <= arity_max);
+        }
+    }
 };
 
 /// Folds a §4.3 function over folded arguments, or returns null on a wrong
@@ -504,7 +514,7 @@ fn foldContext(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, comptim
             const f = MathFn.fromName(file.str(ex.strOf(e))) orelse return null;
             const args = ex.args(e);
             if (args.len != f.arity()) return null;
-            var vals: [2]Const = undefined;
+            var vals: [MathFn.arity_max]Const = undefined;
             for (args, 0..) |a, i| vals[i] = fold(file, a, env) orelse return null;
             break :blk math(f, vals[0..args.len]) orelse return null;
         },

@@ -67,8 +67,11 @@ pub const Lexer = struct {
     }
 
     /// Scans the token at `pos` and advances past it (LRM §2.2). Returns `.eof`
-    /// at the end, repeatedly.
+    /// at the end, repeatedly. Asserts that `pos` is within the source, and
+    /// that every other token advanced it by at least one byte: the
+    /// tokenizer's loop ends only because each pass moves.
     pub fn next(self: *Lexer) token.Stored {
+        std.debug.assert(self.pos <= self.src.len);
         // §2.3 white space only separates. The preprocessor strips every §2.4
         // comment (pp/comments.zig), so `//` or `/*` here is two operators, as
         // IEEE 1364 §19.3.1 makes of macro text pasted into one.
@@ -87,6 +90,8 @@ pub const Lexer = struct {
             '`' => self.lexDirective(), // §10.6 (the only directives left here)
             else => self.lexOperator(), // §2.5, §2.9
         };
+        std.debug.assert(self.pos > start);
+        std.debug.assert(self.pos <= self.src.len);
         return .{ .tag = tag, .start = start };
     }
 

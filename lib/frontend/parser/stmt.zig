@@ -234,7 +234,10 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     var events: std.ArrayList(Ast.EventDecl) = .empty;
-    while (true) {
+    // Only a declaration loops, and every one consumes its keyword.
+    var decl_at: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > decl_at)) {
+        decl_at = self.pos;
         const mark = self.markAttributes();
         try self.skipAttributes();
         // A.6.3 `analog_seq_block ::= begin [ : analog_block_identifier
@@ -291,8 +294,10 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     const mark = self.scratch_stmts.items.len;
     defer self.scratch_stmts.shrinkRetainingCapacity(mark);
-    while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
-        const before = self.pos;
+    var before: u32 = undefined;
+    // A statement, or `recoverStatement`'s one token at least.
+    while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) : (std.debug.assert(self.pos > before)) {
+        before = self.pos;
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
         // has no null alternative, so a stray `;` here is E0219. An
         // `analog_event_seq_block`'s `analog_event_statement` has one (A.6.4).
@@ -329,7 +334,9 @@ pub fn parseCase(self: *Parser, kind: Ast.CaseKind, gen: ?*parse_module.Body) Er
     _ = try self.expect(.rparen);
 
     var arms: std.ArrayList(Ast.CaseArm) = .empty;
-    while (self.peek() != .kw_endcase and self.peek() != .eof) {
+    var arm_at: u32 = undefined;
+    while (self.peek() != .kw_endcase and self.peek() != .eof) : (std.debug.assert(self.pos > arm_at)) {
+        arm_at = self.pos;
         try self.skipAttributes();
         const mark = self.scratch_exprs.items.len;
         defer self.scratch_exprs.shrinkRetainingCapacity(mark);

@@ -63,6 +63,8 @@ pub const Map = struct {
                 tie = null;
             } else if (c == best.? and tie == null) tie = l.name;
         }
+        // A tie is only ever recorded against a best match.
+        if (best == null) std.debug.assert(tie == null);
         if (tie) |t| return .{ .ambiguous = .{ lib, t } };
         return .{ .lib = lib };
     }
@@ -99,6 +101,7 @@ pub const Error = error{ MapFailed, OutOfMemory };
 pub fn load(arena: std.mem.Allocator, io: Io, bag: *diag.Bag, paths: []const []const u8) Error!Map {
     var l: Loader = .{ .arena = arena, .io = io, .bag = bag };
     for (paths) |p| try l.read(p, null);
+    std.debug.assert(l.open.items.len == 0); // every `read` pops what it pushed
     const out = try arena.alloc(Library, l.libs.items.len);
     for (l.libs.items, out) |b, *o| o.* = .{ .name = b.name, .specs = b.specs.items };
     return .{ .libraries = out, .incdirs = l.incdirs.items };
@@ -115,8 +118,11 @@ const Loader = struct {
     open: std.ArrayList([]const u8) = .empty,
 
     /// `at` is the `include` that names `path`, for the diagnostic when the
-    /// file cannot be read.
+    /// file cannot be read. Asserts that `at` is null exactly when no map
+    /// file is open: `load` reads the outermost ones, an `include` the rest.
     fn read(l: *Loader, path: []const u8, at: ?Site) Error!void {
+        if (at == null) std.debug.assert(l.open.items.len == 0);
+        if (at != null) std.debug.assert(l.open.items.len != 0);
         const text = Preprocessor.readText(l.io, .cwd(), path, l.arena) catch |e|
             return l.fail(at, "cannot read library map `{s}`: {t}", .{ path, e });
         const real = Io.Dir.cwd().realPathFileAlloc(l.io, path, l.arena) catch |e|
@@ -214,8 +220,11 @@ const Tokens = struct {
     text: []const u8,
     pos: usize = 0,
 
+    /// The next token, never empty, or null at the end. Asserts that the
+    /// cursor is within the text and that a token advanced it.
     fn next(t: *Tokens) ?Token {
         const s = t.text;
+        std.debug.assert(t.pos <= s.len);
         while (t.pos < s.len) {
             if (std.ascii.isWhitespace(s[t.pos])) {
                 t.pos += 1;
@@ -232,6 +241,10 @@ const Tokens = struct {
         } else if (isPunct(s[t.pos .. t.pos + 1])) {
             t.pos += 1;
         } else while (t.pos < s.len and !std.ascii.isWhitespace(s[t.pos]) and s[t.pos] != ',' and s[t.pos] != ';') t.pos += 1;
+        // A word starts on a byte that is neither blank nor punctuation, so
+        // each arm takes one byte at least.
+        std.debug.assert(t.pos > start);
+        std.debug.assert(t.pos <= s.len);
         return .{ .text = s[start..t.pos], .start = @intCast(start) };
     }
 };

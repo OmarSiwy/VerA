@@ -328,11 +328,13 @@ fn nullPortName(self: *Parser, b: *const Body) Error!Ast.StrId {
 /// Parses module items into `b` until `end`, `endmodule` or end of file,
 /// recovering at the next statement after each failed item.
 fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
-    while (true) {
+    // An item, or `recoverStatement`'s one token at least.
+    var before: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > before)) {
         try self.skipAttributes();
         const t = self.peek();
         if (t == end or t == .eof or t == .kw_endmodule) return;
-        const before = self.pos;
+        before = self.pos;
         parseModuleItem(self, b) catch |e| {
             if (e == error.OutOfMemory) return e;
             self.recoverStatement(before);

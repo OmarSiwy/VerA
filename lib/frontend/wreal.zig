@@ -15,7 +15,8 @@ const Ast = @import("ast.zig");
 /// before elaboration, so a violation gets the LRM's reason. `starts` is the
 /// token list's `.start` column and places each diagnostic; a token index
 /// past it is clamped to the last token, so `starts` must not be empty (a
-/// token list always ends with `.eof`).
+/// token list always ends with `.eof`). Asserts that it is not, wherever a
+/// diagnostic is placed.
 /// An ordered connection binds the n-th port of A.1.3's `list_of_ports`, so a
 /// concatenated port (`.p({a, b})`) counts once.
 /// Fails only with `OutOfMemory`, from `bag`.
@@ -42,7 +43,9 @@ pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) s
                 const outer = netKind(m, ex.strOf(conn.expr)) orelse continue;
                 if ((outer == .wreal) == (port.kind == .wreal)) continue;
                 const other = if (outer == .wreal) port.kind else outer;
+                std.debug.assert(other != .wreal); // exactly one side is a wreal
                 if (other == .wire or other == .tri) continue;
+                std.debug.assert(starts.len != 0);
                 const start = starts[@min(conn.main_tok, starts.len - 1)];
                 try bag.add(.lower, .E0919, .{ .start = start, .end = start }, "`{s}` is a {s} and port `{s}` is a {s}", .{
                     file.str(ex.strOf(conn.expr)), @tagName(outer), file.str(port.name), @tagName(port.kind),
@@ -58,6 +61,7 @@ fn wrealDrivers(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag
         if (a.target == .none or file.exprs.tag(a.target) != .ident or file.exprs.strOf(a.target) != name) continue;
         count += 1;
         if (count != 2) continue;
+        std.debug.assert(starts.len != 0);
         const start = starts[@min(a.main_tok, starts.len - 1)];
         try bag.add(.lower, .E0918, .{ .start = start, .end = start }, "`{s}` is already driven", .{file.str(name)});
     }

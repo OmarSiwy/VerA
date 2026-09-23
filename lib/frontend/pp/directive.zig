@@ -30,8 +30,11 @@ const isSpace = Preprocessor.isSpace;
 /// to resume scanning from. Inside an inactive arm only the conditionals act;
 /// every other directive emits its newlines and nothing else. In an active
 /// arm, a '`' followed by no name is E0103; each handler names its own
-/// failures.
+/// failures. Asserts that `text[at]` is the '`'. The offset returned is
+/// past it, so the scan always moves.
 pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
+    std.debug.assert(at < text.len);
+    std.debug.assert(text[at] == '`');
     const name_start = at + 1;
     var j = name_start;
 
@@ -151,6 +154,8 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
 
 /// `ifdef / `ifndef / `elsif / `else / `endif (IEEE 1364 §19.4).
 fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Directive) Error!usize {
+    std.debug.assert(after_name > at); // past the '`' and the word
+    std.debug.assert(after_name <= text.len);
     // The operand, if any, is on the directive's line; the text after it is
     // ordinary source (IEEE 1364 §19.4 Syntax 19-5 has no line break).
     var r: Rest = .{ .s = text[after_name..logicalLineEnd(text, after_name)] };
@@ -206,6 +211,7 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
 /// Returns the end of the logical line at `i`: the next unescaped newline, or EOF.
 /// A `\` before a newline continues the line (§10.4 multi-line macro text).
 fn logicalLineEnd(text: []const u8, i: usize) usize {
+    std.debug.assert(i <= text.len);
     var k = i;
     while (k < text.len) {
         if (text[k] == '\\') {
@@ -230,6 +236,9 @@ fn logicalLineEnd(text: []const u8, i: usize) usize {
 /// E0121-E0124 (the name), E0144 (text after it), E0125 (an include cycle),
 /// E0126 (not found) or E1013 (larger than `Preprocessor.max_text_bytes`).
 pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
+    // The open-includes stack is the cycle check's: it leaves as it came.
+    const depth = pp.includes.items.len;
+    defer std.debug.assert(pp.includes.items.len == depth);
     // The directive word, for the errors that have nothing better to point at.
     const sp = pp.spanAt(at, off);
     var r: Rest = .{ .s = rest };

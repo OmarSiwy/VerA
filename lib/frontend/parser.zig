@@ -647,8 +647,12 @@ pub const Parser = struct {
     }
 
     /// Resynchronize after a bad statement or module item: past the next `;`,
-    /// or up to a keyword that closes the enclosing construct.
+    /// or up to a keyword that closes the enclosing construct. Always moves
+    /// past `before`. Asserts that a failure which consumed nothing did not
+    /// fail on `.eof`: every caller loops only while the item it parses is
+    /// not at the end, and stepping past `.eof` would leave the stream.
     pub inline fn recoverStatement(self: *Parser, before: u32) void {
+        if (self.pos == before) std.debug.assert(self.peek() != .eof);
         if (self.pos == before) self.pos += 1;
         while (true) : (self.pos += 1) switch (self.peek()) {
             .eof,

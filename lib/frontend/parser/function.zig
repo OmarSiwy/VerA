@@ -94,7 +94,11 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     self.in_analog_fn = is_analog;
     defer self.in_analog_fn = saved_in_fn;
 
-    while (true) {
+    // Every arm that loops consumed: a declaration, a statement, or
+    // `recoverStatement`'s one token at least.
+    var item_at: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > item_at)) {
+        item_at = self.pos;
         try self.skipAttributes();
         // A.2.8 block_item_declaration's `reg_declaration`, a digital
         // function's local (A.2.6 `function_item_declaration`).
@@ -293,7 +297,9 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var events: std.ArrayList(Ast.EventDecl) = .empty;
     const end_word = if (is_function) "endfunction" else "endtask";
-    while (true) {
+    var item_at: u32 = undefined;
+    while (true) : (std.debug.assert(self.pos > item_at)) {
+        item_at = self.pos;
         try self.skipAttributes();
         if (parse_net.portDirection(self.peek())) |d| {
             const decl_tok = self.pos;
@@ -330,7 +336,9 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         }
     }
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    while (!(self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) and self.peek() != .eof) {
+    var stmt_at: u32 = undefined;
+    while (!(self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) and self.peek() != .eof) : (std.debug.assert(self.pos > stmt_at)) {
+        stmt_at = self.pos;
         try body.append(self.arena, try parse_stmt.parseStmt(self));
     }
     if (self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) {

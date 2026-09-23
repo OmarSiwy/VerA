@@ -36,7 +36,9 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const first = b.timing_checks.items.len;
     const first_path = b.paths.items.len;
     self.pos += 1; // `specify`
-    while (!self.reservedIs(self.pos, "endspecify")) {
+    var item_at: u32 = undefined;
+    while (!self.reservedIs(self.pos, "endspecify")) : (std.debug.assert(self.pos > item_at)) {
+        item_at = self.pos;
         if (self.peek() == .eof or self.peek() == .kw_endmodule)
             return self.failAt(self.pos, .E0207, "found {s}: no `endspecify` closes the specify block", .{self.found(self.pos)});
         try parseSpecifyItem(self, b);

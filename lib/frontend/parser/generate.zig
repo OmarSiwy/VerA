@@ -170,10 +170,12 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
                 .construct = self.gen_construct,
             });
         }
-        while (self.peek() != .kw_end and self.peek() != .eof) {
+        // An item, or `recoverStatement`'s one token at least.
+        var before: u32 = undefined;
+        while (self.peek() != .kw_end and self.peek() != .eof) : (std.debug.assert(self.pos > before)) {
             try self.skipAttributes();
             if (self.peek() == .kw_end) break;
-            const before = self.pos;
+            before = self.pos;
             parse_module.parseModuleItem(self, &gb) catch |e| {
                 if (e == error.OutOfMemory) return e;
                 self.recoverStatement(before);
