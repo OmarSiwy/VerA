@@ -265,6 +265,77 @@ pub fn path(r: *Run, w: *std.Io.Writer, scope: u32) std.Io.Writer.Error!void {
 }
 
 fn put(r: *Run, f: *File, bytes: []const u8) Error!void {
+    // `f.file` is set only once `tick` has had an `io`.
+    const io = r.io orelse return;
+    writeAt(io, f, bytes) catch return r.fail(0, "cannot write the dump file `{s}`", .{f.name});
+}
+
+/// `checkpoint`'s and `changes`' view of interpreter file `f`: each port's
+/// width from its slot, and its sides from the run's drivers.
+const Dump = struct {
+    r: *Run,
+    f: *File,
+    /// Temporaries; `keep` owns each port's `last`.
+    scratch: std.mem.Allocator,
+    keep: std.mem.Allocator,
+
+    pub fn len(d: Dump) usize {
+        return d.f.ports.len;
+    }
+    pub fn dir(d: Dump, n: usize) Ast.Direction {
+        return d.f.ports[n].dir;
+    }
+    pub fn width(d: Dump, n: usize) u32 {
+        return d.r.values[d.f.ports[n].slot].width;
+    }
+    pub fn last(d: Dump, n: usize) *[]u8 {
+        return &d.f.ports[n].last;
+    }
+    /// Bit `bit` of port `n` as its input side and its output side drive it.
+    pub fn sides(d: Dump, n: usize, bit: u32) [2]Signal {
+        const r = d.r;
+        const p = d.f.ports[n];
+        var in: Signal = .{};
+        var out: Signal = .{};
+        if (p.net) |net| {
+            for (r.netDrivers(net)) |di| {
+                const c = resolution.contribution(r.drivers[di], bit);
+                if (below(r, r.drivers[di].scope, p.inst)) out = out.combine(c) else in = in.combine(c);
+            }
+        } else out = .of(r.values[p.slot].bit(bit), .strong, .strong); // an output declared as a variable
+        return .{ in, out };
+    }
+    pub fn write(d: Dump, bytes: []const u8) Error!void {
+        return put(d.r, d.f, bytes);
+    }
+};
+
+fn dump(r: *Run, a: std.mem.Allocator, f: *File) Dump {
+    return .{ .r = r, .f = f, .scratch = a, .keep = r.arena };
+}
+
+fn checkpoint(r: *Run, a: std.mem.Allocator, f: *File, keyword: []const u8, as_x: bool) Error!void {
+    return writeCheckpoint(dump(r, a, f), keyword, as_x, r.scheduler.now);
+}
+
+fn changes(r: *Run, a: std.mem.Allocator, f: *File) Error!void {
+    return writeChanges(dump(r, a, f), r.scheduler.now);
+}
+
+// ---- the file writer, shared with `rt/evcd.zig` -----------------------------
+//
+// It lives here, beside `portState`, because this is the file `rt/evcd.zig`
+// already imports; the reverse edge would close a file cycle through
+// `rt/root.zig` -> `digital/root.zig`. A dump file `f` is the interpreter's
+// `File` or rt's `Live`: fields `file`, `pos`, `limit`, `limited`,
+// `last_time` and `on`. A dump `d` (`Dump` here, rt's `Dump`) carries `f`,
+// the allocators `scratch` and `keep`, and `len()`, `dir(n)`, `width(n)`,
+// `last(n)`, `sides(n, bit)` and `write(bytes)`: where each port's drivers
+// and last state text are kept is the one thing the two differ in.
+
+/// Writes `bytes` at `f.pos`, or once §18.3.4's limit would be passed, its
+/// comment and nothing after. `error.WriteFailed` is the file system's refusal.
+pub fn writeAt(io: std.Io, f: anytype, bytes: []const u8) error{WriteFailed}!void {
     if (f.limited or bytes.len == 0) return;
     const file = f.file orelse return;
     var out = bytes;
@@ -275,89 +346,90 @@ fn put(r: *Run, f: *File, bytes: []const u8) Error!void {
         out = "$comment $dumpportslimit reached $end\n";
         f.limited = true;
     };
-    file.writePositionalAll(r.io.?, out, f.pos) catch return r.fail(0, "cannot write the dump file `{s}`", .{f.name});
+    file.writePositionalAll(io, out, f.pos) catch return error.WriteFailed;
     f.pos += out.len;
 }
 
-fn time(r: *Run, f: *File, w: *std.Io.Writer) std.Io.Writer.Error!void {
-    if (f.last_time == r.scheduler.now) return;
-    f.last_time = r.scheduler.now;
-    try w.print("#{d}\n", .{r.scheduler.now});
+fn time(f: anytype, w: *std.Io.Writer, at: u64) std.Io.Writer.Error!void {
+    if (f.last_time == at) return;
+    f.last_time = at;
+    try w.print("#{d}\n", .{at});
 }
 
-/// A section of every port (`as_x`: each unknown, for `$dumpportsoff`),
-/// which then counts as written.
-fn checkpoint(r: *Run, a: std.mem.Allocator, f: *File, keyword: []const u8, as_x: bool) Error!void {
-    var w: std.Io.Writer.Allocating = .init(a);
-    try time(r, f, &w.writer);
+/// A section of every port of dump `d` (`as_x`: each unknown, for
+/// `$dumpportsoff`), which then counts as written.
+pub fn writeCheckpoint(d: anytype, keyword: []const u8, as_x: bool, at: u64) !void {
+    var w: std.Io.Writer.Allocating = .init(d.scratch);
+    defer w.deinit();
+    try time(d.f, &w.writer, at);
     try w.writer.print("{s}\n", .{keyword});
-    for (f.ports, 0..) |*p, n| {
-        const text = if (as_x) try unknown(a, r, p.*) else try state(r, a, p.*);
-        try remember(r, p, text);
+    for (0..d.len()) |n| {
+        const text = if (as_x) try unknown(d.scratch, d.dir(n), d.width(n)) else try state(d, n);
+        defer d.scratch.free(text);
+        try remember(d.keep, d.last(n), text);
         try w.writer.print("{s} <{d}\n", .{ text, n });
     }
     try w.writer.writeAll("$end\n");
-    try put(r, f, w.written());
+    try d.write(w.written());
 }
 
-/// `p.last = text`, in place: a port's state text has one length (its
-/// width fixes it), so after the first write no step allocates.
-fn remember(r: *Run, p: *Port, text: []const u8) Error!void {
-    if (p.last.len == text.len) return @memcpy(p.last, text);
-    p.last = try r.arena.dupe(u8, text);
-}
-
-/// The ports whose state is not the one last written.
-fn changes(r: *Run, a: std.mem.Allocator, f: *File) Error!void {
-    if (!f.on) return;
-    var w: std.Io.Writer.Allocating = .init(a);
-    for (f.ports, 0..) |*p, n| {
-        const text = try state(r, a, p.*);
-        if (std.mem.eql(u8, text, p.last)) continue;
-        if (w.written().len == 0) try time(r, f, &w.writer);
-        try remember(r, p, text);
+/// The ports of dump `d` whose state is not the one last written.
+pub fn writeChanges(d: anytype, at: u64) !void {
+    if (!d.f.on) return;
+    var w: std.Io.Writer.Allocating = .init(d.scratch);
+    defer w.deinit();
+    for (0..d.len()) |n| {
+        const text = try state(d, n);
+        defer d.scratch.free(text);
+        if (std.mem.eql(u8, text, d.last(n).*)) continue;
+        if (w.written().len == 0) try time(d.f, &w.writer, at);
+        try remember(d.keep, d.last(n), text);
         try w.writer.print("{s} <{d}\n", .{ text, n });
     }
-    try put(r, f, w.written());
+    try d.write(w.written());
 }
 
-/// §18.4.3 `p<port_value> <0_strength> <1_strength>` of port `p`: per bit,
-/// most significant first, a Table 18-7 state character and its strength
-/// digits.
-fn state(r: *Run, a: std.mem.Allocator, p: Port) Error![]const u8 {
-    const width = r.values[p.slot].width;
-    var chars = try a.alloc(u8, 3 * width);
+/// `last.* = text`, in place: a port's state text has one length (its
+/// width fixes it), so after the first write no step allocates.
+fn remember(keep: std.mem.Allocator, last: *[]u8, text: []const u8) std.mem.Allocator.Error!void {
+    if (last.len == text.len) return @memcpy(last.*, text);
+    keep.free(last.*);
+    last.* = try keep.dupe(u8, text);
+}
+
+/// §18.4.3 `p<port_value> <0_strength> <1_strength>` of port `n` of dump
+/// `d`: per bit, most significant first, a Table 18-7 state character and
+/// its strength digits.
+fn state(d: anytype, n: usize) std.mem.Allocator.Error![]u8 {
+    const width = d.width(n);
+    const chars = try d.scratch.alloc(u8, 3 * width);
+    defer d.scratch.free(chars);
     for (0..width) |i| {
         const bit: u32 = @intCast(width - 1 - i);
-        var in: Signal = .{};
-        var out: Signal = .{};
-        if (p.net) |net| {
-            for (r.netDrivers(net)) |d| {
-                const c = resolution.contribution(r.drivers[d], bit);
-                if (below(r, r.drivers[d].scope, p.inst)) out = out.combine(c) else in = in.combine(c);
-            }
-        } else out = .of(r.values[p.slot].bit(bit), .strong, .strong); // an output declared as a variable
-        const s = portState(p.dir, in, out);
+        const in, const out = d.sides(n, bit);
+        const s = portState(d.dir(n), in, out);
         chars[i] = s.c;
         chars[width + i] = '0' + s.s0;
         chars[2 * width + i] = '0' + s.s1;
     }
-    return a.print("p{s} {s} {s}", .{ chars[0..width], chars[width .. 2 * width], chars[2 * width ..] });
+    return d.scratch.print("p{s} {s} {s}", .{ chars[0..width], chars[width .. 2 * width], chars[2 * width ..] });
 }
 
 /// `$dumpportsoff`'s X: Table 18-7's unknown of the port's direction.
-fn unknown(a: std.mem.Allocator, r: *Run, p: Port) Error![]const u8 {
-    const width = r.values[p.slot].width;
-    const c: u8 = switch (p.dir) {
+fn unknown(a: std.mem.Allocator, dir: Ast.Direction, width: u32) std.mem.Allocator.Error![]u8 {
+    const c: u8 = switch (dir) {
         .input => 'N',
         .output => 'X',
         .inout, .unspecified => '?',
     };
-    const chars = try a.alloc(u8, width);
-    @memset(chars, c);
-    const sixes = try a.alloc(u8, width);
-    @memset(sixes, '6');
-    return a.print("p{s} {s} {s}", .{ chars, sixes, sixes });
+    const out = try a.alloc(u8, 3 * width + 3);
+    out[0] = 'p';
+    @memset(out[1..][0..width], c);
+    out[1 + width] = ' ';
+    @memset(out[2 + width ..][0..width], '6');
+    out[2 + 2 * width] = ' ';
+    @memset(out[3 + 2 * width ..][0..width], '6');
+    return out;
 }
 
 /// Is `scope` the instance `inst` or inside it?

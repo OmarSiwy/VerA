@@ -130,83 +130,56 @@ pub fn close(s: *State, at: u64) Error!void {
 }
 
 fn put(s: *State, f: *Live, file: File, bytes: []const u8) Error!void {
-    if (f.limited or bytes.len == 0) return;
-    const out_file = f.file orelse return;
-    var out = bytes;
-    // §18.3.4: "When this filesize is reached, the dumping stops, and a
-    // comment is inserted into file_pathname indicating the size limit was
-    // attained."
-    if (f.limit) |lim| if (f.pos + bytes.len > lim) {
-        out = "$comment $dumpportslimit reached $end\n";
-        f.limited = true;
-    };
-    out_file.writePositionalAll(s.io, out, f.pos) catch return s.fail("cannot write the dump file `{s}`", .{file.name});
-    f.pos += out.len;
+    devcd.writeAt(s.io, f, bytes) catch return s.fail("cannot write the dump file `{s}`", .{file.name});
 }
 
-fn time(f: *Live, w: *std.Io.Writer, at: u64) std.Io.Writer.Error!void {
-    if (f.last_time == at) return;
-    f.last_time = at;
-    try w.print("#{d}\n", .{at});
-}
+/// `devcd.writeCheckpoint`'s and `devcd.writeChanges`' view of file `f`
+/// (`file` as compiled): each port's sides from `rt.net`'s driver rows,
+/// every text from `s.gpa`.
+const Dump = struct {
+    s: *State,
+    f: *Live,
+    file: File,
+    scratch: std.mem.Allocator,
+    keep: std.mem.Allocator,
 
-/// A section of every port (`as_x`: each unknown, for `$dumpportsoff`),
-/// which then counts as written.
-fn checkpoint(s: *State, f: *Live, file: File, keyword: []const u8, as_x: bool, at: u64) Error!void {
-    var w: std.Io.Writer.Allocating = .init(s.gpa);
-    defer w.deinit();
-    try time(f, &w.writer, at);
-    try w.writer.print("{s}\n", .{keyword});
-    for (file.ports, f.last, 0..) |p, *last, n| {
-        const text = if (as_x) try unknown(s.gpa, p) else try state(s, p);
-        s.gpa.free(last.*);
-        last.* = text;
-        try w.writer.print("{s} <{d}\n", .{ text, n });
+    pub fn len(d: Dump) usize {
+        return d.file.ports.len;
     }
-    try w.writer.writeAll("$end\n");
-    try put(s, f, file, w.written());
-}
-
-/// The ports whose state is not the one last written.
-fn changes(s: *State, f: *Live, file: File, at: u64) Error!void {
-    if (!f.on) return;
-    var w: std.Io.Writer.Allocating = .init(s.gpa);
-    defer w.deinit();
-    for (file.ports, f.last, 0..) |p, *last, n| {
-        const text = try state(s, p);
-        if (std.mem.eql(u8, text, last.*)) {
-            s.gpa.free(text);
-            continue;
-        }
-        if (w.written().len == 0) try time(f, &w.writer, at);
-        s.gpa.free(last.*);
-        last.* = text;
-        try w.writer.print("{s} <{d}\n", .{ text, n });
+    pub fn dir(d: Dump, n: usize) Ast.Direction {
+        return d.file.ports[n].dir;
     }
-    try put(s, f, file, w.written());
-}
-
-/// §18.4.3 `p<port_value> <0_strength> <1_strength>` of port `p`
-/// (`devcd.state`), allocated from `s.gpa`.
-fn state(s: *State, p: Port) Error![]u8 {
-    var chars = try s.gpa.alloc(u8, 3 * p.width);
-    defer s.gpa.free(chars);
-    for (0..p.width) |i| {
-        const bit: u32 = @intCast(p.width - 1 - i);
+    pub fn width(d: Dump, n: usize) u32 {
+        return d.file.ports[n].width;
+    }
+    pub fn last(d: Dump, n: usize) *[]u8 {
+        return &d.f.last[n];
+    }
+    /// Bit `bit` of port `n` as its input side and its output side drive it.
+    pub fn sides(d: Dump, n: usize, bit: u32) [2]Signal {
+        const s = d.s;
+        const p = d.file.ports[n];
         var in: Signal = .{};
         var out: Signal = .{};
         if (p.net) |k| {
-            for (s.nets.nets[k].drivers, p.inside) |d, inside| {
-                const c = net.contribution(&s.nets, d, bit);
+            for (s.nets.nets[k].drivers, p.inside) |di, inside| {
+                const c = net.contribution(&s.nets, di, bit);
                 if (inside) out = out.combine(c) else in = in.combine(c);
             }
         } else out = .of(shown(s, p, bit), .strong, .strong);
-        const st = devcd.portState(p.dir, in, out);
-        chars[i] = st.c;
-        chars[p.width + i] = '0' + st.s0;
-        chars[2 * p.width + i] = '0' + st.s1;
+        return .{ in, out };
     }
-    return s.gpa.print("p{s} {s} {s}", .{ chars[0..p.width], chars[p.width .. 2 * p.width], chars[2 * p.width ..] });
+    pub fn write(d: Dump, bytes: []const u8) Error!void {
+        return put(d.s, d.f, d.file, bytes);
+    }
+};
+
+fn checkpoint(s: *State, f: *Live, file: File, keyword: []const u8, as_x: bool, at: u64) Error!void {
+    return devcd.writeCheckpoint(Dump{ .s = s, .f = f, .file = file, .scratch = s.gpa, .keep = s.gpa }, keyword, as_x, at);
+}
+
+fn changes(s: *State, f: *Live, file: File, at: u64) Error!void {
+    return devcd.writeChanges(Dump{ .s = s, .f = f, .file = file, .scratch = s.gpa, .keep = s.gpa }, at);
 }
 
 fn shown(s: *const State, p: Port, at: u32) @import("frontend").Integer.Bit {
@@ -214,21 +187,4 @@ fn shown(s: *const State, p: Port, at: u32) @import("frontend").Integer.Bit {
     const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
     const x: u2 = if (root.logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
     return @fromBackingInt(@intCast(v | x << 1));
-}
-
-/// `$dumpportsoff`'s X: Table 18-7's unknown of the port's direction.
-fn unknown(gpa: std.mem.Allocator, p: Port) Error![]u8 {
-    const c: u8 = switch (p.dir) {
-        .input => 'N',
-        .output => 'X',
-        .inout, .unspecified => '?',
-    };
-    const out = try gpa.alloc(u8, 3 * p.width + 3);
-    out[0] = 'p';
-    @memset(out[1..][0..p.width], c);
-    out[1 + p.width] = ' ';
-    @memset(out[2 + p.width ..][0..p.width], '6');
-    out[2 + 2 * p.width] = ' ';
-    @memset(out[3 + 2 * p.width ..][0..p.width], '6');
-    return out;
 }
