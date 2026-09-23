@@ -12,7 +12,6 @@
 const std = @import("std");
 const options = @import("suite_options");
 const harness = @import("../harness.zig");
-const bench = @import("../bench.zig");
 const ieee1364 = @import("../ieee1364.zig");
 const native = @import("native.zig");
 const fuzz = @import("fuzz.zig");
@@ -74,7 +73,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
             continue;
         }
         if (std.mem.eql(u8, a, "--fuzz")) {
-            const n = std.fmt.parseInt(u32, args.next() orelse "", 10) catch return bench.usage(init.io, "--fuzz takes a count");
+            const n = std.fmt.parseInt(u32, args.next() orelse "", 10) catch return harness.usage(init.io, "--fuzz takes a count");
             return fuzz.run(init, vera_exe, n);
         }
         filter = a;

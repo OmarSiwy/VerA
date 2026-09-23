@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !u8 {
     defer args.deinit();
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
-    const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
+    const vera_exe = args.next() orelse return harness.usage(init.io, "missing the vera executable path");
     // The other runs of this executable, matched exactly: any other word,
     // including a bare filter, is a benchmark argument.
     const first = args.next();
@@ -87,18 +87,6 @@ pub fn main(init: std.process.Init) !u8 {
         if (std.mem.eql(u8, a, "canary")) return canary.run(init);
     }
     return benchmark(init, vera_exe, first, &args);
-}
-
-/// Prints `why` and the usage line to stderr; returns exit code 2.
-pub fn usage(io: Io, why: []const u8) !u8 {
-    var buf: [256]u8 = undefined;
-    var e = Io.File.stderr().writer(io, &buf);
-    try e.interface.print(
-        "suite: {s}\nusage: <vera-exe> [devices | ieee1364 | vpi | spice | benchmark args]\n",
-        .{why},
-    );
-    try e.interface.flush();
-    return 2;
 }
 
 /// N per fixture, smaller than `harness/sweep.zig`'s `reps` because every fixture is timed. The min

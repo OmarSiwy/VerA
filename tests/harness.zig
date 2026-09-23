@@ -179,6 +179,18 @@ pub fn defaultJobs() usize {
 /// large devices and the other processes on the host.
 const job_ram: u64 = 2 << 30;
 
+/// Prints `why` and the usage line to stderr; returns exit code 2.
+pub fn usage(io: Io, why: []const u8) !u8 {
+    var buf: [256]u8 = undefined;
+    var e = Io.File.stderr().writer(io, &buf);
+    try e.interface.print(
+        "suite: {s}\nusage: <vera-exe> [devices | ieee1364 | vpi | spice | benchmark args]\n",
+        .{why},
+    );
+    try e.interface.flush();
+    return 2;
+}
+
 /// Consumes one argument if it is the suite's; false leaves it to the caller,
 /// which decides whether it is a filter. Exits 2 on a malformed value.
 pub fn takeArg(cfg: *Config, a: []const u8) bool {
