@@ -10,7 +10,7 @@
 // The inherited §17.2.9 rules this file pins:
 //   - the file holds white space, comments and hexadecimal numbers (for
 //     $readmemh);
-//   - loading starts at the LEFT index of the memory's declared address range
+//   - loading starts at the LOWEST index of the memory's declared address range
 //     when no start address is given;
 //   - an `@` followed by a hexadecimal address RELOCATES the load point, and
 //     loading continues upward from there;
@@ -25,7 +25,7 @@
 //     c3
 //     /* a block comment */ d4
 //
-//   declared range is [0:7], left index 0, so the load point starts at 0.
+//   declared range is [0:7], lowest index 0, so the load point starts at 0.
 //     m[0] <- 8'h1a
 //     m[1] <- 8'h2b
 //   `@4` sets the load point to address 4 (hexadecimal 4 = 4).

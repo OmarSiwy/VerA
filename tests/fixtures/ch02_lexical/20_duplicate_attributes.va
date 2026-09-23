@@ -1,9 +1,10 @@
 // §2.9: "If the same attribute name is defined more than once for the same
 // language element, the last attribute value shall be used and a tool can give
 // a warning that a duplicate attribute specification has occurred." So a
-// repeated name is legal, not an error — and since an attribute carries no
-// semantics for the compiler, the declaration it is attached to must come out
-// unchanged. The repeated attribute is put on a parameter as well as on the
+// repeated name is legal, not an error. This fixture does not observe which
+// metadata value wins: unchanged arithmetic cannot distinguish first/last.
+// That obligation remains AMS-ATTR-LAST in docs/rules/ams-attributes.json.
+// The repeated attribute is put on a parameter as well as on the
 // module, so there is a value to read back: `scale` still holds its §3.4
 // default of 2.5, and the module still conducts through it.
 //! lrm 2.9

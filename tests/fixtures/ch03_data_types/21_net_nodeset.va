@@ -11,6 +11,9 @@
 //
 // node sits between p at 3.0 and n at 0.0 and is held at 2.0, so both branch
 // potentials are exact and nonzero, and 5.0 appears nowhere in the answers.
+// This is a prescribed-bias evaluation, not a solved operating point: the
+// imposed node=2.0 does not satisfy this equal-resistor divider's free-node KCL.
+// audit_nodeset_unclamped_solution.va owns the independent solved-node claim.
 //
 //! lrm 3.6.3.2
 //! bias V(p) = 3.0, V(node) = 2.0, V(n) = 0.0

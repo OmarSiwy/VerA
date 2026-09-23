@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.2 nature and discipline objects: a discipline reaches its potential
 // nature via vpiPotentialNature and its flow nature via vpiFlowNature. The
 // language-level fact is Annex D's `electrical`, whose potential nature Voltage
@@ -7,7 +10,6 @@
 // V(p) = 0.75, V(n) = 0.25 (exact in binary) make V(p,n) = 0.5, and the
 // potential of a reversed branch is its negation (§5.4.1), so V(n,p) = -0.5.
 //
-//! lrm 11.6.2
 //! lrm 5.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "disciplines.vams"

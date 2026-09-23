@@ -7,8 +7,8 @@
 // gets wrong, returning -1. Neither row alone fixes the rule. Both are exact
 // integers, so the want is a plain CHECKI.
 //
-// It is a separate file only because VerA cannot compile it: 45 would lose its
-// other four Table 4-6 rows to this one line.
+// This was split from 45 when the negative divisor could not compile. The
+// limitation is historical; this remains a positive behavioral requirement.
 //
 //! lrm 4.2.4
 `include "check.vh"

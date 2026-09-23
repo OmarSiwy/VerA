@@ -22,6 +22,9 @@ tr:nth-child(even) { background: #f3f4f6; }
 nav { background: #1e293b; padding: 1rem; border-radius: 6px; margin-bottom: 2rem; }
 nav a { color: #93c5fd; text-decoration: none; margin-right: 1rem; }
 nav a:hover { text-decoration: underline; }
+.source-diagram { margin: 1rem 0; }
+.source-diagram img { width: 100%; height: auto; }
+.source-diagram figcaption { font-size: .85em; }
 </style>
 </head>
 <body>
@@ -62,7 +65,7 @@ nav a:hover { text-decoration: underline; }
 <h2 id="s11-3">11.3 VPI object classifications</h2>
 <p>VPI objects are classified with data model diagrams. These diagrams provide a graphical representation of those objects within a Verilog-AMS design to which the VPI routines shall provide access. The diagrams shall show the relationships between objects and the properties of each object. Objects with sufficient commonality are placed in groups. Group relationships and properties apply to all the objects in the group.</p>
 <p>As an example, the simplified diagram in Figure 11-1 shows there is a <em>one-to-many relationships</em> from objects of type <code>module</code> to objects of type <code>net</code> and a <em>one-to-one relationship</em> from objects of type <code>net</code> to objects of type <code>module</code>. Objects of type <code>net</code> have properties <strong>vpiName</strong>, <strong>vpiVector</strong>, and <strong>vpiSize</strong>, with the C data types string, Boolean, and integer respectively.</p>
-<div class="note">Figure 11-1: Object relationships &mdash; The figure shows two rounded boxes, "module" and "net", connected by a double-headed arrow (single arrow toward module, double arrow toward net) indicating a one-to-many relationship from module to net and a one-to-one relationship from net to module. The net object lists its properties: -&gt; name (<em>str: vpiName</em>, <em>str: vpiFullName</em>), -&gt; vector (<em>bool: vpiVector</em>), -&gt; size (<em>int: vpiSize</em>).</div>
+<figure class="source-diagram"><a href="figures/ch11-figure-11-1.png"><img src="figures/ch11-figure-11-1.png" alt="Figure 11-1: module-to-net iteration and net-to-module traversal, with net properties."></a><figcaption>Source diagram: VAMS-2023, printed page 275 (PDF page 288). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>The VPI object data diagrams are presented in 11.6.</p>
 
 <h3 id="s11-3-1">11.3.1 Accessing object relationships and properties</h3>
@@ -196,6 +199,7 @@ while (net = vpi_scan(itr) )
 <h2 id="s11-5">11.5 Key to object model diagrams</h2>
 <p>This clause contains the keys to the symbols used in the object model diagrams. Keys are provided for objects and classes, traversing relationships, and accessing properties.</p>
 
+<figure class="source-diagram"><a href="figures/ch11-legend-11-5-1-2.png"><img src="figures/ch11-legend-11-5-1-2.png" alt="Source graphical legend for objects, classes and property types, including source C examples."></a><figcaption>Source diagram: VAMS-2023, printed page 280 (PDF page 293). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <h3 id="s11-5-1">11.5.1 Diagram key for objects and classes</h3>
 <table>
 <tr><th>Symbol</th><th>Meaning</th></tr>
@@ -216,6 +220,7 @@ vpi_get_str(vpiName, obj_h);</code></pre></td></tr>
 <tr><td>object<br>-&gt; complex<br>&nbsp;&nbsp;<em>func1()</em><br>&nbsp;&nbsp;<em>func2()</em></td><td>Complex properties for time and logic value are accessed with the indicated routines. See the descriptions of the routines for usage.</td></tr>
 </table>
 
+<figure class="source-diagram"><a href="figures/ch11-legend-11-5-3.png"><img src="figures/ch11-legend-11-5-3.png" alt="Source graphical legend distinguishing single and double arrowheads, tagged relationships and NULL-reference traversal."></a><figcaption>Source diagram: VAMS-2023, printed page 281 (PDF page 294). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <h3 id="s11-5-3">11.5.3 Diagram key for traversing relationships</h3>
 <table>
 <tr><th>Symbol</th><th>Meaning</th></tr>
@@ -233,62 +238,25 @@ while (obj_h = vpi_scan(itr) )
    /* process 'obj_h' */</code></pre></td></tr>
 </table>
 
+<aside class="note"><strong>Editorial source notes (not normative amendments).</strong> The references to IEEE Verilog section 22 in 11.3.1, 11.3.2 and 11.4 are retained from the source; IEEE 1364-2005 removes the deprecated clauses 21–25. The source example in 11.5.2 spells <code>vpivector</code> and <code>vpi_get_size</code>; these are not normalized into API declarations here. The statement about real arrays in 11.6.10 conflicts with the real-array declarations allowed by 3.2; do not derive a language rejection requirement from it. The intermodule-path diagram in 11.6.15 prints singular <code>vpi_get_delay()</code>/<code>vpi_put_delay()</code>, while the routine definitions use plural names. These source inconsistencies require explicit interpretation, not silent correction.</aside>
 <h2 id="s11-6">11.6 Object data model diagrams</h2>
 <p>Subclauses in 11.6.1 through 11.6.25 contain the data model diagrams that define the accessible objects and groups of objects, along with their relationships and properties.</p>
 
 <h3 id="s11-6-1">11.6.1 Module</h3>
-<div class="note">Data model diagram: The <strong>module</strong> object definition is accessed top-level (one-to-many from NULL). From module there are one-to-many relationships to: <em>scope</em> (tagged <em>vpiInternalScope</em>, with a one-to-one back to module), port, net, reg, <em>variables</em>, memory, named event, <em>process</em>, cont assign, module, <em>primitive</em>, mod path, tchk, parameter, spec param, def param, param assign, io decl, <em>branches</em>, and <em>nodes</em>.
-<br><br>Module properties:
-<br>-&gt; cell &mdash; <em>bool: vpiCellInstance</em>
-<br>-&gt; decay time &mdash; <em>int: vpiDefDecayTime</em>
-<br>-&gt; default net type &mdash; <em>int: vpiDefNetType</em>
-<br>-&gt; definition location &mdash; <em>int: vpiDefLineNo</em>, <em>str: vpiDefFile</em>
-<br>-&gt; definition name &mdash; <em>str: vpiDefName</em>
-<br>-&gt; delay mode &mdash; <em>int: vpiDefDelayMode</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; protected &mdash; <em>bool: vpiProtected</em>
-<br>-&gt; timeprecision &mdash; <em>int: vpiTimePrecision</em>
-<br>-&gt; timeunit &mdash; <em>int: vpiTimeUnit</em>
-<br>-&gt; top module &mdash; <em>bool: vpiTopModule</em>
-<br>-&gt; unconnected drive &mdash; <em>int: vpiUnconnDrive</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-296.png"><img src="figures/ch11-model-page-296.png" alt="Chapter 11 object data model, source printed page 283; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 283 (PDF page 296). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;Top-level modules shall be accessed using <strong>vpi_iterate()</strong> with a <code>NULL</code> reference object.</p>
 <p>2&mdash;Passing a <code>NULL</code> handle to <strong>vpi_get()</strong> with types <strong>vpiTimePrecision</strong> or <strong>vpiTimeUnit</strong> shall return the smallest time precision of all modules in the instantiated design.</p>
 
 <h3 id="s11-6-2">11.6.2 Nature, discipline</h3>
-<div class="note">Data model diagram (discipline): The <strong>discipline</strong> object definition is accessed top-level (one-to-many from NULL). From discipline there is a one-to-many relationship to param assign, and tagged one-to-one relationships to nature via <em>vpiFlowNature</em> and nature via <em>vpiPotentialNature</em>.
-<br>Discipline properties: -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>.
-<br><br>Data model diagram (nature): The <strong>nature</strong> object definition is accessed top-level (one-to-many from NULL). From nature there are one-to-one relationships to discipline, to nature tagged <em>vpiChild</em>, to nature tagged <em>vpiParent</em>, and a one-to-many relationship to param assign.
-<br>Nature properties: -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-297.png"><img src="figures/ch11-model-page-297.png" alt="Chapter 11 object data model, source printed page 284; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 284 (PDF page 297). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-3">11.6.3 Scope, task, function, IO declaration</h3>
-<div class="note">Data model diagram (scope): The <strong><em>scope</em></strong> class definition groups module, <em>taskfunc</em>, and an unnamed class containing named begin and named fork (which have a one-to-one relationship to <em>stmt</em>). From scope there are one-to-many relationships to named event, <em>variables</em>, reg, def param, memory, and <em>scope</em> (tagged <em>vpiInternalScope</em>), with a one-to-one relationship back from these to scope.
-<br>Scope properties: -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>.
-<br><br>Data model diagram (taskfunc/io decl): The <strong><em>taskfunc</em></strong> class definition groups <strong>task</strong> and <strong>function</strong>; module and udp defn have one-to-one relationships back from io decl; parameter and <em>taskfunc</em> are connected by a double-headed one-to-many relationship. From <em>taskfunc</em> there is a one-to-many relationship to <strong>io decl</strong>; io decl has tagged one-to-one relationships to an unnamed class of net, reg, <em>variables</em> via <em>vpiExpr</em>, to <em>expr</em> via <em>vpiLeftRange</em>, and to <em>expr</em> via <em>vpiRightRange</em>.
-<br>Taskfunc properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br>Io decl properties:
-<br>-&gt; direction &mdash; <em>int: vpiDirection</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-298.png"><img src="figures/ch11-model-page-298.png" alt="Chapter 11 object data model, source printed page 285; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 285 (PDF page 298). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;A Verilog-AMS HDL function shall contain an object with the same name, size, and type as the function.</p>
 
 <h3 id="s11-6-4">11.6.4 Ports</h3>
-<div class="note">Data model diagram: The module object has a one-to-many relationship to the <strong><em>ports</em></strong> class (containing the <strong>port</strong> object definition and <strong>port bit</strong> object definition), and ports has a one-to-one relationship back to module. Port has a one-to-many relationship to port bit tagged <em>vpiBit</em>, and port bit has a one-to-one relationship back to port tagged <em>vpiParent</em>. From ports there are tagged one-to-one relationships to <em>expr</em> via <em>vpiHighConn</em> and <em>expr</em> via <em>vpiLowConn</em>, and a one-to-many relationship to <em>nodes</em>.
-<br>Ports properties:
-<br>-&gt; connected by name &mdash; <em>bool: vpiConnByName</em>
-<br>-&gt; delay (mipd) &mdash; <em>vpi_get_delays()</em>, <em>vpi_put_delays()</em>
-<br>-&gt; direction &mdash; <em>int: vpiDirection</em>
-<br>-&gt; explicitly named &mdash; <em>bool: vpiExplicitName</em>
-<br>-&gt; index &mdash; <em>int: vpiPortIndex</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-299.png"><img src="figures/ch11-model-page-299.png" alt="Chapter 11 object data model, source printed page 286; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 286 (PDF page 299). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;<strong>vpiHighConn</strong> shall indicate the hierarchically higher (closer to the top module) port connection.</p>
 <p>2&mdash;<strong>vpiLowConn</strong> shall indicate the lower (further from the top module) port connection.</p>
@@ -298,57 +266,19 @@ while (obj_h = vpi_scan(itr) )
 <p>6&mdash;<strong>vpiPortIndex</strong> can be used to determine the port order.</p>
 
 <h3 id="s11-6-5">11.6.5 Nodes</h3>
-<div class="note">Data model diagram: The module object has a one-to-many relationship to the <strong><em>nodes</em></strong> class (containing the <strong>node</strong> object definition and <strong>node bit</strong> object definition); nodes has a one-to-one relationship back to module. Node has a one-to-many relationship to node bit tagged <em>vpiBit</em>, and node bit a one-to-one back to node tagged <em>vpiParent</em>. <em>branches</em> and <em>nets</em> have double-headed (one-to-many, both directions) relationships with the nodes class. Node bit has a one-to-one relationship to discipline, and a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>. From nodes there are tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>.
-<br>Nodes properties:
-<br>-&gt; implicitly declared &mdash; <em>bool: vpiImplicitDecl</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-300.png"><img src="figures/ch11-model-page-300.png" alt="Chapter 11 object data model, source printed page 287; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 287 (PDF page 300). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;Properties <em>scalar</em> and <em>vector</em> shall indicate if the node is 1 bit or more than 1 bit.</p>
 
 <h3 id="s11-6-6">11.6.6 Branches</h3>
-<div class="note">Data model diagram: The module object has a one-to-many relationship to the <strong><em>branches</em></strong> class (containing the <strong>branch</strong> object definition and a branch bit-level object); branches has a one-to-one relationship back to module. Branch has a one-to-many relationship to the bit-level branch tagged <em>vpiBit</em>, and the bit-level branch a one-to-one back tagged <em>vpiParent</em>. From branches there are tagged one-to-one relationships to <em>nodes</em> via <em>vpiPosNode</em>, <em>nodes</em> via <em>vpiNegNode</em>, and to <em>Discipline</em>. From branches there are tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>. The bit-level branch has tagged one-to-one relationships to <em>expr</em> via <em>vpiIndex</em>, to <em>Quantity</em> via <em>vpiFlow</em>, and to <em>Quantity</em> via <em>vpiPotential</em>.
-<br>Branches properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-301.png"><img src="figures/ch11-model-page-301.png" alt="Chapter 11 object data model, source printed page 288; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 288 (PDF page 301). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;Properties <em>scalar</em> and <em>vector</em> shall indicate if the branch is 1 bit or more than 1 bit.</p>
 
 <h3 id="s11-6-7">11.6.7 Quantities</h3>
-<div class="note">Data model diagram: The <strong><em>Quantities</em></strong> class definition contains the <strong>Quantity</strong> object definition and a bit-level <strong>Quantity</strong> object definition. Quantity has a one-to-many relationship to the bit-level Quantity tagged <em>vpiBit</em>, and the bit-level Quantity a one-to-one back tagged <em>vpiParent</em>. From Quantities there are tagged one-to-one relationships to <em>Branches</em> via <em>vpiBranch</em> and to <em>Nature</em>; a double-headed (one-to-many, both directions) relationship to <em>Contribs</em>; tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>; and the bit-level Quantity has a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>.
-<br>Quantities properties:
-<br>-&gt; implicitly declared &mdash; <em>bool: vpiImplicitDecl</em>
-<br>-&gt; real value &mdash; <em>vpi_get_analog_value()</em>
-<br>-&gt; imaginary value &mdash; <em>vpi_get_analog_value()</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em>
-<br>-&gt; source &mdash; <em>bool: vpiSource</em>
-<br>-&gt; equation target &mdash; <em>bool: vpiEquationTarget</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-302.png"><img src="figures/ch11-model-page-302.png" alt="Chapter 11 object data model, source printed page 289; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 289 (PDF page 302). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-8">11.6.8 Nets</h3>
-<div class="note">Data model diagram: The <strong><em>nets</em></strong> class definition contains the <strong>net</strong> object definition and <strong>net bit</strong> object definition. Net has a one-to-many relationship to net bit tagged <em>vpiBit</em>, and net bit a one-to-one back to net tagged <em>vpiParent</em>. From nets there are tagged one-to-many relationships to <em>ports</em> via <em>vpiPortInst</em>, and tagged one-to-one relationships to <em>ports</em> via <em>vpiHighConn</em> and via <em>vpiLowConn</em>; module has a double-headed relationship with net; a tagged one-to-one relationship to <em>expr</em> via <em>vpiDelay</em>; a one-to-one relationship to <em>node</em>; and net bit has a one-to-one relationship to <strong>discipline</strong> and a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>. From nets there are tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>; tagged one-to-many relationships via <em>vpiLoad</em> to an unnamed class (assign stmt, force, prim term, cont assign, <em>ports</em>) and via <em>vpiDriver</em> to the same unnamed class; and one-to-many relationships to path term and tchk term.
-<br>Nets properties:
-<br>-&gt; delay &mdash; <em>vpi_get_delays()</em>
-<br>-&gt; expanded &mdash; <em>bool: vpiExpanded</em>
-<br>-&gt; implicitly declared &mdash; <em>bool: vpiImplicitDecl</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; net decl assign &mdash; <em>bool: vpiNetDeclAssign</em>
-<br>-&gt; net type &mdash; <em>int: vpiNetType</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; scalared declaration &mdash; <em>bool: vpiExplicitScalared</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; domain &mdash; <em>int vpiDomain</em>
-<br>-&gt; strength &mdash; <em>int: vpiStrength0</em>, <em>int: vpiStrength1</em>, <em>int: vpiChargeStrength</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em>
-<br>-&gt; vectored declaration &mdash; <em>bool: vpiExplicitVectored</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-303.png"><img src="figures/ch11-model-page-303.png" alt="Chapter 11 object data model, source printed page 290; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 290 (PDF page 303). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;For vectors, net bits shall be available regardless of vector expansion.</p>
 <p>2&mdash;Continuous assignments and primitive terminals shall be accessed regardless of hierarchical boundaries.</p>
@@ -360,131 +290,45 @@ while (obj_h = vpi_scan(itr) )
 <p>8&mdash;<strong>vpiDriver</strong> shall also return ports which are driven by objects other than nets and net bits.</p>
 
 <h3 id="s11-6-9">11.6.9 Regs</h3>
-<div class="note">Data model diagram: The <strong><em>regs</em></strong> class definition contains the <strong>reg</strong> object definition and <strong>reg bit</strong> object definition. Reg has a one-to-many relationship to reg bit tagged <em>vpiBit</em>, and reg bit a one-to-one back to reg tagged <em>vpiParent</em>. From regs there are tagged relationships to <em>ports</em> via <em>vpiLowConn</em> (one-to-one), <em>ports</em> via <em>vpiHighConn</em> (one-to-one), and <em>ports</em> via <em>vpiPortInst</em> (one-to-many). <em>scope</em> has a double-headed (one-to-many) relationship with reg. From regs there are tagged one-to-many relationships via <em>vpiDriver</em> to an unnamed class (force, assign stmt, prim term, cont assign) and via <em>vpiLoad</em> to the same class; tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>; a one-to-many relationship to tchk term; and reg bit has a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>.
-<br>Regs properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; scalar &mdash; <em>bool: vpiScalar</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em>
-<br>-&gt; vector &mdash; <em>bool: vpiVector</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-304.png"><img src="figures/ch11-model-page-304.png" alt="Chapter 11 object data model, source printed page 291; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 291 (PDF page 304). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;Continuous assignments and primitive terminals shall be accessed regardless of hierarchical boundaries.</p>
 <p>2&mdash;Continuous assignments and primitive terminals shall only be accessed from scalar regs and bit selects.</p>
 <p>3&mdash;Only active forces and assign statements shall be returned for <strong>vpiLoad</strong> and <strong>vpiDriver</strong>.</p>
 <h3 id="s11-6-10">11.6.10 Variables, named event</h3>
-<div class="note">Data model diagram (variables): The <strong><em>variables</em></strong> class definition contains the object definitions <strong>integer var</strong>, <strong>time var</strong>, and <strong>real var</strong>. From variables there are tagged relationships to <em>ports</em> via <em>vpiLowConn</em> (one-to-one), <em>ports</em> via <em>vpiHighConn</em> (one-to-one), and <em>ports</em> via <em>vpiPortInst</em> (one-to-many). <em>scope</em> has a double-headed (one-to-many) relationship with variables. From variables there are tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>. Integer var and time var have one-to-many relationships to <strong>var select</strong>, which has one-to-one relationships back tagged <em>vpiParent</em>; var select has a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>.
-<br>Variables properties:
-<br>-&gt; array &mdash; <em>bool: vpiArray</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em>
-<br>-&gt; domain &mdash; <em>int: vpiDomain</em>
-<br>Var select properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em>
-<br><br>Data model diagram (named event): <em>scope</em> has a double-headed (one-to-many) relationship with the <strong>named event</strong> object definition.
-<br>Named event properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-305.png"><img src="figures/ch11-model-page-305.png" alt="Chapter 11 object data model, source printed page 292; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 292 (PDF page 305). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;<strong>vpiLeftRange</strong> and <strong>vpiRightRange</strong> shall be invalid for reals, since there can not be arrays of reals.</p>
 
 <h3 id="s11-6-11">11.6.11 Memory</h3>
-<div class="note">Data model diagram: <em>scope</em> has a double-headed (one-to-many) relationship with the <strong>memory</strong> object definition. From memory there are tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>. Memory has a one-to-many relationship to <strong>memory word</strong>, which has a one-to-one relationship back to memory tagged <em>vpiParent</em>. Memory word has a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>, and tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>.
-<br>Memory properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>Memory word properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; size &mdash; <em>int: vpiSize</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-306.png"><img src="figures/ch11-model-page-306.png" alt="Chapter 11 object data model, source printed page 293; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 293 (PDF page 306). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;<strong>vpiSize</strong> for a memory shall return the number of words in the memory.</p>
 <p>2&mdash;<strong>vpiSize</strong> for a memory word shall return the number of bits in the word.</p>
 
 <h3 id="s11-6-12">11.6.12 Parameter, specparam</h3>
-<div class="note">Data model diagram: <em>scope</em> has a double-headed (one-to-many) relationship with the <strong>parameter</strong> object definition, which has a one-to-one relationship to <em>expr</em>. Parameter properties: -&gt; constant type &mdash; <em>int: vpiConstType</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>; -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>; -&gt; value &mdash; <em>vpi_get_value()</em>.
-<br><br>module has a double-headed (one-to-many) relationship with the <strong>spec param</strong> object definition, which has a one-to-one relationship to <em>expr</em>. Spec param properties: -&gt; constant type &mdash; <em>int: vpiConstType</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>; -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>; -&gt; value &mdash; <em>vpi_get_value()</em>.
-<br><br>module has a double-headed (one-to-many) relationship with the <strong>def param</strong> object definition, which has tagged one-to-one relationships to parameter via <em>vpiLhs</em> and <em>expr</em> via <em>vpiRhs</em>. Def param properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>module has a double-headed (one-to-many) relationship with the <strong>param assign</strong> object definition, which has tagged one-to-one relationships to parameter via <em>vpiLhs</em> and <em>expr</em> via <em>vpiRhs</em>. Param assign properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-307.png"><img src="figures/ch11-model-page-307.png" alt="Chapter 11 object data model, source printed page 294; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 294 (PDF page 307). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;Obtaining the value from the object <strong>parameter</strong> shall return the final value of the parameter after all module instantiation overrides and defparams have been resolved.</p>
 <p>2&mdash;<strong>vpiLhs</strong> from a param assign object shall return a handle to the overridden parameter.</p>
 
 <h3 id="s11-6-13">11.6.13 Primitive, prim term</h3>
-<div class="note">Data model diagram: module has a double-headed (one-to-many) relationship with the <strong><em>primitive</em></strong> class definition, which contains the object definitions <strong>gate</strong>, <strong>switch</strong>, <strong>udp</strong>, and <strong>device</strong>. Primitive has a tagged one-to-one relationship to <em>expr</em> via <em>vpiDelay</em>, and a one-to-one relationship from udp to udp defn. Primitive has a double-headed (one-to-many) relationship with the <strong>prim term</strong> object definition, which has a one-to-one relationship to <em>expr</em>.
-<br>Primitive properties:
-<br>-&gt; definition name &mdash; <em>str: vpiDefName</em>
-<br>-&gt; delay &mdash; <em>vpi_get_delays()</em>, <em>vpi_put_delays()</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>
-<br>-&gt; primitive type &mdash; <em>int: vpiPrimType</em>
-<br>-&gt; number of inputs &mdash; <em>int: vpiSize</em>
-<br>-&gt; strength &mdash; <em>int: vpiStrength0</em>, <em>int: vpiStrength1</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>, <em>vpi_put_value()</em>
-<br>-&gt; domain &mdash; <em>int: vpiDomain</em>
-<br>Prim term properties:
-<br>-&gt; direction &mdash; <em>int: vpiDirection</em>
-<br>-&gt; index &mdash; <em>int: vpiTermIndex</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-308.png"><img src="figures/ch11-model-page-308.png" alt="Chapter 11 object data model, source printed page 295; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 295 (PDF page 308). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;<strong>vpiSize</strong> shall return the number of inputs.</p>
 <p>2&mdash;For primitives, <strong>vpi_put_value()</strong> shall only be used with sequential UDP primitives.</p>
 
 <h3 id="s11-6-14">11.6.14 UDP</h3>
-<div class="note">Data model diagram: The <strong>udp defn</strong> object definition is accessed top-level (one-to-one from NULL) and one-to-one from udp. From udp defn there are double-headed (one-to-many) relationships to io decl and <strong>table entry</strong>, and a one-to-one relationship to initial.
-<br>Udp defn properties:
-<br>-&gt; definition name &mdash; <em>str: vpiDefName</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; number of inputs &mdash; <em>int: vpiSize</em>
-<br>-&gt; protected &mdash; <em>bool: vpiProtected</em>
-<br>-&gt; type &mdash; <em>int: vpiPrimType</em>
-<br>Table entry properties:
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; number of symbol entries &mdash; <em>int: vpiSize</em>
-<br>-&gt; value &mdash; <em>vpi_get_value()</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-309.png"><img src="figures/ch11-model-page-309.png" alt="Chapter 11 object data model, source printed page 296; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 296 (PDF page 309). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;Only string (decompilation) and vector (ASCII values) shall be obtained for table entry objects using <strong>vpi_get_value()</strong>. Refer to the definition of <strong>vpi_get_value()</strong> for additional details.</p>
 
 <h3 id="s11-6-15">11.6.15 Module path, timing check, intermodule path</h3>
-<div class="note">Data model diagram (mod path): module has a double-headed (one-to-many) relationship with the <strong>mod path</strong> object definition. Mod path has a tagged one-to-one relationship to <em>expr</em> via <em>vpiDelay</em> and to <em>expr</em> via <em>vpiCondition</em>, and a double-headed (one-to-many) relationship with the <strong>path term</strong> object definition tagged <em>vpiModPathIn</em>, <em>vpiModPathOut</em>, <em>vpiModDataPathIn</em>; path term has a one-to-one relationship to <em>expr</em>.
-<br>Mod path properties:
-<br>-&gt; delay &mdash; <em>vpi_get_delays()</em>, <em>vpi_put_delays()</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; path type &mdash; <em>int: vpiPathType</em>
-<br>-&gt; polarity &mdash; <em>int: vpiPolarity</em>, <em>int: vpiDataPolarity</em>
-<br>-&gt; hasIfNone &mdash; <em>bool: vpiModPathHasIfNone</em>
-<br>Path term properties:
-<br>-&gt; direction &mdash; <em>int: vpiDirection</em>
-<br>-&gt; edge &mdash; <em>int: vpiEdge</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br><br>Data model diagram (inter mod path): The <strong>inter mod path</strong> object definition has a one-to-many relationship to <em>ports</em>. Inter mod path properties: -&gt; delay &mdash; <em>vpi_get_delay()</em>, <em>vpi_put_delay()</em>.
-<br><br>Data model diagram (tchk): module has a double-headed (one-to-many) relationship with the <strong>tchk</strong> object definition. Tchk has a tagged one-to-one relationship to <em>expr</em> via <em>vpiDelay</em>, a double-headed relationship with the <strong>tchk term</strong> object definition tagged <em>vpiTchkRefTerm</em>, <em>vpiTchkDataTerm</em>, and a tagged one-to-one relationship to <em>regs</em> via <em>vpiTchkNotifier</em>. Tchk term has one-to-one relationships to <em>expr</em>, and a tagged one-to-one relationship to <em>expr</em> via <em>vpiCondition</em>.
-<br>Tchk properties:
-<br>-&gt; limit &mdash; <em>vpi_get_delays()</em>, <em>vpi_put_delays()</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; tchk type &mdash; <em>int: vpiTchkType</em>
-<br>Tchk term properties:
-<br>-&gt; edge &mdash; <em>int: vpiEdge</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-310.png"><img src="figures/ch11-model-page-310.png" alt="Chapter 11 object data model, source printed page 297; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 297 (PDF page 310). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;The <strong>vpiTchkRefTerm</strong> is the first terminal for all tchks except <strong>$setup</strong>, where <strong>vpiTchkDataTerm</strong> is the first terminal and <strong>vpiTchkRefTerm</strong> is the second terminal.</p>
 <p>2&mdash;To get to an intermodule path, <strong>vpi_handle_multi(vpiInterModPath, port1, port2)</strong> can be used.</p>
 
 <h3 id="s11-6-16">11.6.16 Task and function call</h3>
-<div class="note">Data model diagram: The <strong><em>tf call</em></strong> class definition contains the object definitions <strong>task call</strong>, <strong>func call</strong>, <strong>sys task call</strong>, and <strong>sys func call</strong> (the latter two in an unnamed inner class). Tf call has a one-to-many relationship to <em>expr</em> tagged <em>vpiArgument</em>. Task call has a one-to-one relationship to task; func call has a one-to-one relationship to function. The sys task call / sys func call class is accessed top-level via a tagged one-to-one relationship <em>vpiSysTfCall</em> (small circle with NULL reference), and has a one-to-one relationship to the <strong>user systf</strong> object definition, which is also accessed top-level (one-to-many from NULL).
-<br>Sys task call / sys func call properties:
-<br>-&gt; user-defined &mdash; <em>bool: vpiUserDefn</em>
-<br>-&gt; value &mdash; <em>vpi_put_value()</em>, <em>vpi_get_value()</em>
-<br>-&gt; sys func type &mdash; <em>int: vpiSysFuncType</em>
-<br>Tf call properties:
-<br>-&gt; tf name &mdash; <em>str: vpiName</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>User systf properties:
-<br>-&gt; systf info &mdash; <em>p_vpi_systf_data: vpi_get_systf_info()</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-311.png"><img src="figures/ch11-model-page-311.png" alt="Chapter 11 object data model, source printed page 298; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 298 (PDF page 311). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;The system task or function which invoked an application shall be accessed with <strong>vpi_handle(vpiSysTfCall, NULL)</strong></p>
 <p>2&mdash;<strong>vpi_get_value()</strong> shall return the current value of the system function.</p>
@@ -492,67 +336,41 @@ while (obj_h = vpi_scan(itr) )
 <p>4&mdash;All user-defined system tasks or functions shall be retrieved using <strong>vpi_iterate()</strong>, with <strong>vpiUserSystf</strong> as the type argument, and a <code>NULL</code> reference argument.</p>
 
 <h3 id="s11-6-17">11.6.17 Continuous assignment</h3>
-<div class="note">Data model diagram: module has a double-headed (one-to-many) relationship with the <strong>cont assign</strong> object definition, which has tagged one-to-one relationships to <em>expr</em> via <em>vpiRhs</em>, <em>expr</em> via <em>vpiLhs</em>, and <em>expr</em> via <em>vpiDelay</em>.
-<br>Cont assign properties:
-<br>-&gt; delay &mdash; <em>vpi_get_delays()</em>
-<br>-&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>
-<br>-&gt; net decl assign &mdash; <em>bool: vpiNetDeclAssign</em>
-<br>-&gt; strength &mdash; <em>int: vpiStrength0</em>, <em>int: vpiStrength1</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-312.png"><img src="figures/ch11-model-page-312.png" alt="Chapter 11 object data model, source printed page 299; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 299 (PDF page 312). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-18">11.6.18 Simple expressions</h3>
-<div class="note">Data model diagram: The <strong><em>simple expr</em></strong> class definition contains <em>nets</em>, <em>regs</em>, <em>variables</em>, parameter, memory, var select, and memory word. Simple expr has a tagged one-to-many relationship <em>vpiUse</em> to an unnamed class containing prim term, path term, tchk term, <em>port</em>, <em>stmt</em>, and <em>cont assign</em>. Var select and memory word have a tagged one-to-one relationship to <em>expr</em> via <em>vpiIndex</em>.
-<br>Simple expr properties: -&gt; name &mdash; <em>str: vpiName</em>, <em>str: vpiFullName</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-313.png"><img src="figures/ch11-model-page-313.png" alt="Chapter 11 object data model, source printed page 300; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 300 (PDF page 313). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;For vectors, the <strong>vpiUse</strong> relationship shall access any use of the vector or part-selects or bit-selects thereof.</p>
 <p>2&mdash;For bit-selects, the <strong>vpiUse</strong> relationship shall access any specific use of that bit, any use of the parent vector, and any part-select which contains that bit.</p>
 
 <h3 id="s11-6-19">11.6.19 Expressions</h3>
-<div class="note">Data model diagram: The <strong><em>expr</em></strong> class definition contains <em>simple expr</em>, and the object definitions <strong>part select</strong>, <strong>operation</strong>, <strong>constant</strong>, func call, sys func call, <strong>analog oper</strong>, and <strong>accessfunc</strong>. Part select has a one-to-one relationship to <em>simple expr</em> tagged <em>vpiParent</em>, and tagged one-to-one relationships to <em>expr</em> via <em>vpiLeftRange</em> and <em>expr</em> via <em>vpiRightRange</em>. Operation has a tagged one-to-many relationship to <em>expr</em> via <em>vpiOperand</em>. Accessfunc has one-to-one relationships to discipline and branches.
-<br>Part select properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br>Operation properties: -&gt; operation type &mdash; <em>int: vpiOpType</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br>Constant properties: -&gt; constant type &mdash; <em>int: vpiConstType</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>.
-<br>Expr properties: -&gt; size &mdash; <em>int: vpiSize</em>; -&gt; value &mdash; <em>vpi_get_value()</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-314.png"><img src="figures/ch11-model-page-314.png" alt="Chapter 11 object data model, source printed page 301; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 301 (PDF page 314). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;For an operator whose type is <strong>vpiMultiConcat</strong>, the first operand shall be the multiplier expression.</p>
 
 <h3 id="s11-6-20">11.6.20 Contribs</h3>
-<div class="note">Data model diagram: The <strong><em>contribs</em></strong> class definition contains an unnamed class grouping <strong>ind flow</strong> and <strong>ind potential</strong>, and an unnamed class grouping <strong>flow</strong> and <strong>potential</strong>. Contribs has a one-to-one relationship to <em>branches</em>. Ind flow and ind potential have tagged one-to-one relationships to <em>expr</em> via <em>vpiLhs</em> and <em>expr</em> via <em>vpiRhs</em>. Flow and potential have a tagged one-to-one relationship to <em>expr</em> via <em>vpiRhs</em>.
-<br>Contribs properties:
-<br>-&gt; value &mdash; <em>vpi_get_value()</em>
-<br>-&gt; direct &mdash; <em>bool: vpiDirect</em>
-<br>-&gt; flow &mdash; <em>bool: vpiFlow</em></div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-315.png"><img src="figures/ch11-model-page-315.png" alt="Chapter 11 object data model, source printed page 302; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 302 (PDF page 315). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-21">11.6.21 Process, block, statement, event statement</h3>
-<div class="note">Data model diagram: module has a one-to-many relationship to the <strong><em>process</em></strong> class definition, which contains the object definitions <strong>initial</strong>, <strong>always</strong>, and <strong>analog</strong>. Process has a double-headed (one-to-one both ways) relationship with the <em>stmt</em> class definition, which contains <em>block</em> and <em>atomic stmt</em>, and stmt has a one-to-one relationship to <em>scope</em>. Process properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong><em>block</em></strong> class definition contains <strong>begin</strong>, <strong>named begin</strong>, <strong>fork</strong>, and <strong>named fork</strong>, and has a one-to-many relationship to <em>stmt</em>. Block properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>event stmt &lsquo;-&gt;&rsquo;</strong> object definition has a one-to-one relationship to named event. Event stmt properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong><em>atomic stmt</em></strong> class definition contains: if, if else, while, repeat, wait, case, for, delay control, event control, event stmt, assignment, assign stmt, deassign, disable, <em>tf call</em>, forever, force, release, null stmt, and <em>contribs</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-316.png"><img src="figures/ch11-model-page-316.png" alt="Chapter 11 object data model, source printed page 303; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 303 (PDF page 316). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-22">11.6.22 Assignment, delay control, event control, repeat control</h3>
-<div class="note">Data model diagram: The <strong>assignment</strong> object definition has tagged one-to-one relationships to <em>expr</em> via <em>vpiLhs</em> and <em>expr</em> via <em>vpiRhs</em>, and one-to-one relationships to delay control, event control, and repeat control. Assignment properties: -&gt; blocking &mdash; <em>bool: vpiBlocking</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>delay control &lsquo;#&rsquo;</strong> object definition has a one-to-one relationship to <em>stmt</em> and a tagged one-to-one relationship to <em>expr</em> via <em>vpiDelay</em>. Delay control properties: -&gt; delay &mdash; <em>vpi_get_delays()</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>event control &lsquo;@&rsquo;</strong> object definition has a tagged one-to-one relationship via <em>vpiCondition</em> to an unnamed class containing <em>expr</em> and named event, and a one-to-one relationship to <em>stmt</em>. Event control properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>repeat control</strong> object definition has one-to-one relationships to <em>expr</em> and event control. Repeat control properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-317.png"><img src="figures/ch11-model-page-317.png" alt="Chapter 11 object data model, source printed page 304; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 304 (PDF page 317). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTE&mdash;For delay control and event control associated with assignment, the statement shall always be <code>NULL</code>.</p>
 <p>While, repeat, wait, for, forever</p>
-<div class="note">Data model diagram: An unnamed class containing <strong>while</strong>, <strong>repeat</strong>, and <strong>wait</strong> has a tagged one-to-one relationship to <em>expr</em> via <em>vpiCondition</em> and a one-to-one relationship to <em>stmt</em>. Properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>for</strong> object definition has tagged one-to-one relationships to <em>stmt</em> via <em>vpiForInitStmt</em>, <em>expr</em> via <em>vpiCondition</em>, and <em>stmt</em> via <em>vpiForIncStmt</em>, and a one-to-one relationship to <em>stmt</em>. For properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>forever</strong> object definition has a one-to-one relationship to <em>stmt</em>. Forever properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-318.png"><img src="figures/ch11-model-page-318.png" alt="Chapter 11 object data model, source printed page 305; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 305 (PDF page 318). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-23">11.6.23 If, if-else, case</h3>
-<div class="note">Data model diagram: An unnamed class containing <strong>if</strong> and <strong>if else</strong> has a tagged one-to-one relationship to <em>expr</em> via <em>vpiCondition</em> and a one-to-one relationship to <em>stmt</em>; if else additionally has a tagged one-to-one relationship to <em>stmt</em> via <em>vpiElseStmt</em>. Properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>case</strong> object definition has a tagged one-to-one relationship to <em>expr</em> via <em>vpiCondition</em> and a one-to-many relationship to the <strong>case item</strong> object definition. Case properties: -&gt; case type &mdash; <em>int: vpiCaseType</em>; -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>. Case item has a one-to-many relationship to <em>expr</em> and a tagged one-to-one relationship to <em>stmt</em> via <em>vpiStmt</em>. Case item properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-319.png"><img src="figures/ch11-model-page-319.png" alt="Chapter 11 object data model, source printed page 306; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 306 (PDF page 319). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;The <em>case item</em> shall group all case conditions which branch to the same statement.</p>
 <p>2&mdash;<strong>vpi_iterate()</strong> shall return <code>NULL</code> for the default case item since there is no expression with the default case.</p>
 
 <h3 id="s11-6-24">11.6.24 Assign statement, deassign, force, release, disable</h3>
-<div class="note">Data model diagram: An unnamed class containing <strong>force</strong> and <strong>assign stmt</strong> has tagged one-to-one relationships to <em>expr</em> via <em>vpiRhs</em> and <em>expr</em> via <em>vpiLhs</em>. Properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>An unnamed class containing <strong>deassign</strong> and <strong>release</strong> has a tagged one-to-one relationship to <em>expr</em> via <em>vpiLhs</em>. Properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.
-<br><br>The <strong>disable</strong> object definition has a tagged one-to-one relationship via <em>vpiScope</em> to an unnamed class containing function, task, named fork, and named begin. Disable properties: -&gt; location &mdash; <em>int: vpiLineNo</em>, <em>str: vpiFile</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-320.png"><img src="figures/ch11-model-page-320.png" alt="Chapter 11 object data model, source printed page 307; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 307 (PDF page 320). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 
 <h3 id="s11-6-25">11.6.25 Callback, time queue</h3>
-<div class="note">Data model diagram: The <strong>callback</strong> object definition is accessed top-level (one-to-many from NULL). Callback has one-to-one relationships to <em>expr</em>, prim term, <em>stmt</em>, and time queue (tagged <em>vpiParent</em>), with a one-to-one relationship back from these to callback. Callback properties: -&gt; cb info &mdash; <em>p_cb_data: vpi_get_cb_info()</em>.
-<br><br>The <strong>time queue</strong> object definition is accessed top-level (one-to-many from NULL). Time queue properties: -&gt; time &mdash; <em>vpi_get_time()</em>.</div>
+<figure class="source-diagram"><a href="figures/ch11-model-page-321.png"><img src="figures/ch11-model-page-321.png" alt="Chapter 11 object data model, source printed page 308; see section heading and transcribed notes."></a><figcaption>Source diagram: VAMS-2023, printed page 308 (PDF page 321). Click for full resolution. Original arrows, class boundaries, properties, and source notes are retained.</figcaption></figure>
 <p>NOTES</p>
 <p>1&mdash;To get information about the callback object, the routine <strong>vpi_get_cb_info()</strong> can be used.</p>
 <p>2&mdash;To get callback objects not related to the above objects, the second argument to <strong>vpi_iterate()</strong> shall be <code>NULL</code>.</p>

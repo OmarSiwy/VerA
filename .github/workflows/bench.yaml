@@ -29,6 +29,15 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseFast install
 
+      # Audit-tool regression checks, not language-conformance evidence. The
+      # IEEE extractor tests use synthetic text; no licensed PDF is uploaded.
+      # Keep the project's existing unit-only gating policy.
+      - name: Source audit tooling self-tests
+        continue-on-error: true
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p 'test_lrm_*.py' 2>&1 | tee /tmp/source-audit.txt
+          exit "${PIPESTATUS[0]}"
+
       # THE GATE. Gate on $?, not on reading the tail of a log — `zig build test
       # 2>&1 | tail` swallows the exit code and this has produced a green report
       # over a failing build before (TODO.md §2.1).
@@ -47,7 +56,7 @@ jobs:
           echo "strict exit: ${PIPESTATUS[0]}" >> /tmp/strict.txt
           tail -1 /tmp/strict.txt
 
-      - name: Clause coverage — two-way evidence
+      - name: Clause citations — static inventory
         continue-on-error: true
         run: zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
 
@@ -94,6 +103,8 @@ jobs:
             echo '```'; cat /tmp/sweep.txt; echo '```'
             echo '## Unit tests'
             echo '```'; tail -20 /tmp/unit.txt; echo '```'
+            echo '## Source audit tooling (not conformance coverage)'
+            echo '```'; cat /tmp/source-audit.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -106,3 +117,4 @@ jobs:
             /tmp/coverage.txt
             /tmp/devices.txt
             /tmp/sweep.txt
+            /tmp/source-audit.txt

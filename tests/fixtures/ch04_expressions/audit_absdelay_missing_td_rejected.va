@@ -1,0 +1,11 @@
+// LRM 4.5.7 and A.8.2 require the td argument before optional maxdelay.
+// Isolate this call from fixture 159's ddt() violation: that earlier error
+// cannot establish the absdelay arity check. 19_absdelay.va is the legal pair.
+//! lrm 4.5.7
+//! lrm A.8.2
+//! reject E0505
+module audit_absdelay_missing_td_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    analog I(p,n) <+ absdelay(V(p,n));
+endmodule

@@ -27,6 +27,13 @@ nav a:hover { text-decoration: underline; }
 <body>
 <nav><a href="index.html">Index</a> <a href="ch3-datatypes.html">&larr; Prev</a> <a href="ch5-analog.html">Next &rarr;</a> </nav>
 <h1>4. Expressions</h1>
+<aside class="note"><strong>Transcription note (editorial, not LRM text):</strong>
+The prose descriptions in boxes labeled Figure 4-3 through Figure 4-14 were
+added by the HTML transcription; they are not the original diagrams or normative
+source prose. Consult the <a href="VAMS-LRM-2023.pdf#page=64">source PDF</a>
+for the figures, equation layout and grammar typography. Their fidelity audit
+is tracked in <a href="conformance-source-review.md">the source-review log</a>.
+</aside>
 <h2 id="s4-1">4.1 Overview</h2>
 <p>This section describes the operators and operands available in the Verilog-AMS HDL, and how to use them to form expressions.</p>
 <p>An <em>expression</em> is a construct which combines <em>operands</em> with <em>operators</em> to produce a result which is a function of the values of the operands and the semantic meaning of the operator. Any legal operand, such as an integer or an indexed element from an array of reals, without a operator is also considered an expression. Wherever a value is needed in a Verilog-AMS HDL statement, an expression can be used.</p>
@@ -106,7 +113,7 @@ nav a:hover { text-decoration: underline; }
 <p>The precedence order of <em>operators</em> is shown in Table 4-3.</p>
 <table>
 <caption><strong>Table 4-3&mdash;Precedence rules for operators</strong></caption>
-<tr><td><code>+ - ! ~ &amp; ~&amp; | ~| ^ ~^ ^~</code> (unary)</td><td rowspan="12">Highest precedence<br>&darr;<br>Lowest precedence</td></tr>
+<tr><td><code>+ - ! ~ &amp; ~&amp; | ~| ^ ~^ ^~</code> (unary)</td><td rowspan="14">Highest precedence<br>&darr;<br>Lowest precedence</td></tr>
 <tr><td><code>**</code></td></tr>
 <tr><td><code>* / %</code></td></tr>
 <tr><td><code>+ -</code> (binary)</td></tr>
@@ -274,7 +281,7 @@ end</code></pre>
 <h3 id="s4-2-12">4.2.12 Conditional operator</h3>
 <p>The <em>conditional operator</em>, also known as <em>ternary operator</em>, is right associative and shall be constructed using three operands separated by two operators, as shown in Syntax 4-1.</p>
 <div class="syntax">conditional_expression ::=                                           // from A.8.3
-        expression1 ? { attribute_instance } expression2 : expression3
+        expression1 <strong>?</strong> { attribute_instance } expression2 <strong>:</strong> expression3
 
 <em>Syntax 4-1&mdash;Syntax for conditional operator</em></div>
 <p>The evaluation of a conditional operator begins with the evaluation of <em>expression1</em>. If <em>expression1</em> evaluates to <em>false</em> (0), then <em>expression3</em> is evaluated and used as the result of the conditional expression. If <em>expression1</em> evaluates to <em>true</em> (any value other than zero (0)), then <em>expression2</em> is evaluated and used as the result.</p>
@@ -318,14 +325,15 @@ result = {y, y, y, y} ;</code></pre>
 <h3 id="s4-2-14">4.2.14 Assignment patterns</h3>
 <p>The assignment pattern <code>'{ }</code>, is the way to specify lists of expressions of particular type in Verilog-AMS during assignments, particularly array assignments. It is a feature imported from the IEEE Std 1800 SystemVerilog language.</p>
 <div class="syntax">assignment_pattern ::=                                               // from A.8.1
-        '{ expression { , expression } }
-      | '{ constant_expression { expression { , expression } } }
+        <b>'{</b> expression { <b>,</b> expression } <b>}</b>
+      | <b>'{</b> constant_expression <b>{</b> expression { <b>,</b> expression } <b>}</b> <b>}</b>
 
 constant_assignment_pattern ::=
-        '{ constant_expression { , constant_expression } }
-      | '{ constant_expression { constant_expression { , constant_expression } } }
+        <b>'{</b> constant_expression { <b>,</b> constant_expression } <b>}</b>
+      | <b>'{</b> constant_expression <b>{</b> constant_expression { <b>,</b> constant_expression } <b>}</b> <b>}</b>
 
 <em>Syntax 4-2&mdash;Syntax for assignment pattern</em></div>
+<p class="note"><strong>Editorial typography key for Syntax 4-2:</strong> Bold punctuation is literal language syntax, corresponding to red terminals in the PDF. Unbold braces delimit grammar repetition. The inner braces immediately following the replication count are literal.</p>
 <p>In the example below, a real array is initialized using an assignment pattern</p>
 <pre><code>parameter real data1[0:4] = '{3.4, 5.6, 2.3, 4.5, 7.1};</code></pre>
 <p>In the example below, a real array variable is initialized using an assignment pattern. The example also uses a replication operator to repeat 0.0 five times so that every element of <code>data2</code> is assigned to 0.0.</p>
@@ -348,6 +356,7 @@ analog begin
 <p>IEEE Std 1800 SystemVerilog has additional uses for the assignment pattern beyond array assignments. IEEE Std 1800 SystemVerilog disallows the usage of the assignment pattern in particular contexts e.g. arguments to system tasks: <code>$my_system_task('{4.2,5.1,6.3} )</code>. Verilog-AMS also adopts these restrictions. IEEE Std 1800 SystemVerilog should be consulted for a more detailed understanding of these restrictions.</p>
 
 <h2 id="s4-3">4.3 Built-in mathematical functions</h2>
+<div class="note">Editorial transcription convention: bold tokens in the syntax displays below reproduce the source's literal terminals; unbold brackets and braces denote optional and repeated syntax. Source inconsistencies are retained and identified in separate notes, not silently corrected.</div>
 <p>Verilog-AMS HDL supports both the standard and transcendental mathematical functions. Both the IEEE Std 1364 Verilog system function syntax style and the traditional Verilog-AMS HDL style are supported. Users are encouraged to adopt the IEEE Std 1364 Verilog system function style when using the mathematical functions but the traditional Verilog-AMS HDL style will continue to be supported for backwards compatibility. The following tables Table 4-14 and Table 4-15 show both syntax styles as well as the equivalent C function.</p>
 
 <h3 id="s4-3-1">4.3.1 Standard mathematical functions</h3>
@@ -374,6 +383,8 @@ analog begin
 <code>abs(x)</code> is equivalent to <code>(x &gt; 0) x : -x</code></p>
 <p>The <strong>ln1p</strong>(<em>x</em>) function returns the natural logarithm of one plus x: <strong>ln</strong>(<em>1+x</em>). For small magnitude values of <code>x</code>, <strong>ln1p</strong>(<em>x</em>) can be more accurate than <strong>ln</strong>(<em>1+x</em>).</p>
 <p>The <strong>expm1</strong>(<em>x</em>) function returns the exponential raised to the power x minus one: e<sup>x</sup>-1. For small magnitude values of <code>x</code>, <strong>expm1</strong>(<em>x</em>) can be more accurate than <strong>exp</strong>(<em>x</em>)<em>-1</em>.</p>
+
+<div class="note">Editorial source note (printed p. 62): the source's displayed <code>abs</code> equivalence omits the conditional <code>?</code>. The incomplete expression is preserved above; the neighboring min/max expressions explicitly include it.</div>
 
 <h3 id="s4-3-2">4.3.2 Transcendental functions</h3>
 <p>The trigonometric and hyperbolic functions supported by Verilog-AMS HDL are shown in Table 4-15. All operands shall be numeric (integer or real) and are converted to real if necessary. Arguments to the trigonometric functions (<strong>sin</strong>, <strong>cos</strong>, <strong>tan</strong>) and return values of the inverse trigonometric functions (<strong>asin</strong>, <strong>acos</strong>, <strong>atan</strong>, <strong>atan2</strong>) are in radians. Input values outside of the valid range for the operator shall report an error.</p>
@@ -426,25 +437,25 @@ analog begin
 <p>One special analog operator is the <strong>limexp()</strong> function, which is a version of the <strong>exp()</strong> function with built-in limits to improve convergence.</p>
 <p>The syntax for the analog operators is shown in Syntax 4-3.</p>
 <div class="syntax">analog_filter_function_call ::=                                      // from A.8.2
-      ddt ( analog_expression [ , abstol_expression ] )
-    | ddx ( analog_expression , branch_probe_function_call )
-    | idt ( analog_expression [ , analog_expression [ , analog_expression [ , abstol_expression ] ] ] )
-    | idtmod ( analog_expression [ , analog_expression [ , analog_expression [ , analog_expression
-        [ , abstol_expression ] ] ] ] )
-    | absdelay ( analog_expression , analog_expression [ , constant_expression ] )
-    | transition ( analog_expression [ , analog_expression [ , analog_expression
-        [ , analog_expression [ , constant_expression ] ] ] ] )
-    | slew ( analog_expression [ , analog_expression [ , analog_expression ] ] )
-    | last_crossing ( analog_expression [ , analog_expression ] )
-    | limexp ( analog_expression )
-    | laplace_filter_name ( analog_expression , [ analog_filter_function_arg ] ,
-        [ analog_filter_function_arg ] [ , constant_expression ] )
-    | zi_filter_name ( analog_expression , [ analog_filter_function_arg ] ,
-        [ analog_filter_function_arg ] , constant_expression
-        [ , analog_expression [ , constant_expression ] ] )
+      <b>ddt</b> <b>(</b> analog_expression [ <b>,</b> abstol_expression ] <b>)</b>
+    | <b>ddx</b> <b>(</b> analog_expression <b>,</b> branch_probe_function_call <b>)</b>
+    | <b>idt</b> <b>(</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> abstol_expression ] ] ] <b>)</b>
+    | <b>idtmod</b> <b>(</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> analog_expression
+        [ <b>,</b> abstol_expression ] ] ] ] <b>)</b>
+    | <b>absdelay</b> <b>(</b> analog_expression <b>,</b> analog_expression [ <b>,</b> constant_expression ] <b>)</b>
+    | <b>transition</b> <b>(</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> analog_expression
+        [ <b>,</b> analog_expression [ <b>,</b> constant_expression ] ] ] ] <b>)</b>
+    | <b>slew</b> <b>(</b> analog_expression [ <b>,</b> analog_expression [ <b>,</b> analog_expression ] ] <b>)</b>
+    | <b>last_crossing</b> <b>(</b> analog_expression [ <b>,</b> analog_expression ] <b>)</b>
+    | <b>limexp</b> <b>(</b> analog_expression <b>)</b>
+    | laplace_filter_name <b>(</b> analog_expression <b>,</b> [ analog_filter_function_arg ] <b>,</b>
+        [ analog_filter_function_arg ] [ <b>,</b> constant_expression ] <b>)</b>
+    | zi_filter_name <b>(</b> analog_expression <b>,</b> [ analog_filter_function_arg ] <b>,</b>
+        [ analog_filter_function_arg ] <b>,</b> constant_expression
+        [ <b>,</b> analog_expression [ <b>,</b> constant_expression ] ] <b>)</b>
 analog_filter_function_arg ::=
       parameter_identifier
-    | parameter_identifier [ msb_constant_expression : lsb_constant_expression ]
+    | parameter_identifier <b>[</b> msb_constant_expression <b>:</b> lsb_constant_expression <b>]</b>
     | constant_assignment_pattern_or_null
 
 <em>Syntax 4-3&mdash;Syntax for the analog operators</em></div>
@@ -506,6 +517,7 @@ endmodule</code></pre>
    end
 endmodule</code></pre>
 <p>The output of this model is shown in Figure 4-3. Notice that in this model the reset occurs instantaneously.</p>
+<figure id="figure-4-3"><a href="VAMS-LRM-2023.pdf#page=81"><img src="figures/lrm-figure-4-3.png" width="690" height="580" style="max-width:100%;height:auto" alt="Original Figure 4-3; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-3, extracted from PDF page 81.</figcaption></figure>
 <div class="note">Figure 4-3: The output from the ramp generator. The figure shows a sawtooth waveform from 0 V to 1 V over a 2 s span: the output ramps linearly from 0 V to 1 V during each 1 s period and instantaneously resets to 0 V at t = 1 s. An inset magnifies the region around t = 1 s (out to about 1.0002 s), showing the reset is instantaneous at the microvolt/microsecond scale.</div>
 
 <h3 id="s4-5-5">4.5.5 Circular integrator operator</h3>
@@ -543,10 +555,12 @@ z = idtmod(expr, ic, modulus, offset);</code></pre>
 V(OUT) &lt;+ sin(2*`M_PI*phase);</code></pre>
 <p>Here, the circular integrator returns a value in the range [0,1].</p>
 
+<div class="note">Editorial source note (printed pp. 68–69): Table 4-19 describes an unspecified initial value as simulator-determined, while the following prose says the omitted initial condition defaults to zero. The example's final <code>[0,1]</code> interval is also printed with a closed upper end, whereas the stated modulus rule above uses a strict upper bound. Both source forms are retained; these discrepancies need resolution before deriving boundary oracles.</div>
+
 <h3 id="s4-5-6">4.5.6 Derivative operator</h3>
 <p><strong>ddx()</strong> provides access to symbolically-computed partial derivatives of expressions in the <strong>analog</strong> block. The analog simulator computes symbolic derivatives of expressions used in contribution statements in order to use Newton-Raphson iteration to solve the system of equations. In many cases in compact modeling, the values of these derivatives are useful quantities for design, such as the trans conductance of a transistor (gm) or the capacitance of a nonlinear charge-storage element such as a varactor. The syntax for this operator is shown in Syntax 4-3.</p>
 <p>The general form for the <strong>ddx()</strong> operator is:</p>
-<div class="syntax">ddx ( expr , unknown_quantity )</div>
+<div class="syntax"><b>ddx</b> <b>(</b> expr <b>,</b> unknown_quantity <b>)</b></div>
 <p>where:</p>
 <ul>
 <li><em>expr</em> is the expression for which the symbolic derivative needs to be calculated.</li>
@@ -603,7 +617,7 @@ endmodule</code></pre>
 
 <h3 id="s4-5-7">4.5.7 Absolute delay operator</h3>
 <p><strong>absdelay()</strong> implements the absolute transport delay for continuous waveforms (use the <strong>transition()</strong> operator to delay discrete-valued waveforms). The general form is</p>
-<div class="syntax">absdelay ( input , td [ , maxdelay ] )</div>
+<div class="syntax"><b>absdelay</b> <b>(</b> input <b>,</b> td [ <b>,</b> maxdelay ] <b>)</b></div>
 <p><em>input</em> is delayed by the amount <em>td</em>. In all cases <em>td</em> shall be a positive number. If the optional <em>maxdelay</em> is specified, then <em>td</em> can vary. If <em>td</em> becomes greater than <em>maxdelay</em>, <em>maxdelay</em> will be used as a substitute for <em>td</em>. If <em>maxdelay</em> is not specified, the value of <em>td</em> when the <strong>absdelay()</strong> is first evaluated shall be used and any future changes to <em>td</em> shall be ignored.</p>
 <p>In DC and operating point analyses, <strong>absdelay()</strong> returns the value of its <em>input</em>. In AC and other small-signal analyses, the <strong>absdelay()</strong> operator phase-shifts the input expression to the output of the delay operator based on the following formula.</p>
 <p><em>Output</em>(&omega;) = <em>Input</em>(&omega;) &middot; e<sup>&minus;j&omega;td</sup></p>
@@ -612,16 +626,21 @@ endmodule</code></pre>
 <p>The transport delay <em>td</em> can be either constant (typical case) or vary as a function of time (when <em>maxdelay</em> is defined). When calculating the output at time <em>t</em>, the <strong>absdelay()</strong> operator will use linear interpolation as needed to determine the input around time:</p>
 <p><em>max</em>(<em>t</em> &minus; td, 0)</p>
 <p>A time-dependent transport delay is shown in Figure 4-4, with a ramp input to the <strong>absdelay</strong> operator for both positive and negative changes in the transport delay <em>td</em> and a maxdelay of 5.</p>
+<figure id="figure-4-4"><a href="VAMS-LRM-2023.pdf#page=85"><img src="figures/lrm-figure-4-4.png" width="874" height="440" style="max-width:100%;height:auto" alt="Figure 4-4: Transport delay example. Solid input ramp, dashed varying delay, and dotted delayed output, including the nonzero initial value and jumps when the delay changes."></a><figcaption>Original Figure 4-4, extracted from PDF page 85.</figcaption></figure>
 <div class="note">Figure 4-4: Transport delay example. The figure plots three curves against time (0 to about 7 s): a linearly rising ramp Input, a piecewise-constant transport delay td (2 s initially, stepping to 4 s at t = 3 s, then dropping to 1 s at t = 5 s), and the resulting Output. The Output stays flat at input(0) until t = 2 s, tracks input(t-2) until t = 3 s, drops back to input(0) and holds until t = 4 s, tracks input from t = 0 again, then at t = 5 s jumps up to input(t-1).</div>
 <p>From time 0 until <code>2s</code>, the output remains at <code>input(0)</code>. With a delay of <code>2s</code>, the output then starts tracking <code>input(t - 2)</code>. At <code>3s</code>, the transport delay changes from <code>2s</code> to <code>4s</code>, switching the output back to <code>input(0)</code>, since <code>input(max(t-td,0))</code> returns 0. The output remains at this level until <code>4s</code> when it once again starts tracking the input from <code>t = 0</code>. At <code>5s</code> the transport delay goes to <code>1s</code> and the output correspondingly jumps from its current value to the value defined by <code>input(t - 1)</code>.</p>
 
+<div class="note">Editorial source note (printed p. 72): the paragraph says <code>input(max(t-td,0))</code> returns zero, but Figure 4-4 draws a nonzero initial input. The formula returns <code>input(0)</code> at that point, not necessarily zero. The original paragraph and diagram are preserved.</div>
+
 <h3 id="s4-5-8">4.5.8 Transition filter</h3>
 <p><strong>transition()</strong> smooths out piecewise constant waveforms. The transition filter is used to imitate transitions and delays on digital signals (for non-piecewise constant signals, see 4.5.9). This function provides controlled transitions between discrete signal levels by setting the rise time and fall time of signal transitions, as shown in Figure 4-5.</p>
+<figure id="figure-4-5"><a href="VAMS-LRM-2023.pdf#page=85"><img src="figures/lrm-figure-4-5.png" width="718" height="274" style="max-width:100%;height:auto" alt="Figure 4-5: Transition filter example. An input pulse becomes a delayed trapezoid; vertical guides mark the delay, rise interval and fall interval."></a><figcaption>Original Figure 4-5, extracted from PDF page 85.</figcaption></figure>
 <div class="note">Figure 4-5: Transition filter example. The figure shows a piecewise constant input_expression(t) pulse starting at t<sub>0</sub>, and the corresponding output_expression(t): after a delay d from t<sub>0</sub>, the output ramps up over rise time t<sub>r</sub>, holds the level, and later ramps down over fall time t<sub>f</sub>, forming a trapezoidal waveform.</div>
 <p><strong>transition()</strong> stretches instantaneous changes in signals over a finite amount of time and can delay the transitions, as shown in Figure 4-6.</p>
+<figure id="figure-4-6"><a href="VAMS-LRM-2023.pdf#page=86"><img src="figures/lrm-figure-4-6.png" width="680" height="260" style="max-width:100%;height:auto" alt="Original Figure 4-6; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-6, extracted from PDF page 86.</figcaption></figure>
 <div class="note">Figure 4-6: Shifting the transition filter. The figure shows a rectangular pulse (input to transition filter) and below it the response of the transition filter with transition times specified: a delayed trapezoid whose corners are marked with time points placed by the simulator at the beginning and end of each ramp.</div>
 <p>The general form of the <strong>transition()</strong> filter is</p>
-<div class="syntax">transition ( expr [ , td [ , rise_time [ , fall_time [ , time_tol ] ] ] ] )</div>
+<div class="syntax"><b>transition</b> <b>(</b> expr [ <b>,</b> td [ <b>,</b> rise_time [ <b>,</b> fall_time [ <b>,</b> time_tol ] ] ] ] <b>)</b></div>
 <p>The input expression is expected to evaluate over time to a piecewise constant waveform. When applied, <strong>transition()</strong> forces all positive transitions of <em>expr</em> to occur over <em>rise_time</em> and all negative transitions to occur in <em>fall_time</em> (after an initial delay of <em>td</em>). Thus, <em>td</em> models transport delay and <em>rise_time</em> and <em>fall_time</em> model inertial delay.</p>
 <p><strong>transition()</strong> returns a real number which describes a piecewise linear function over time. The transition function causes the simulator to place time points at both corners of a transition. If <em>time_tol</em> is not specified, the transition function causes the simulator to assure each transition is adequately resolved.</p>
 <p><em>td, rise_time, fall_time,</em> and <em>time_tol</em> are optional, but if specified shall be non-negative. If <em>td</em> is not specified, it is taken to be zero (<code>0.0</code>). If only a positive <em>rise_time</em> value is specified, the simulator uses it for both rise and fall times. If neither <em>rise_time</em> nor <em>fall_time</em> are specified or are equal to zero (<code>0.0</code>), the rise and fall time default to the value defined by <code>`default_transition</code>.If a time_tol value of zero (0.0) is specified, the simulator shall apply a suitable value.</p>
@@ -638,22 +657,28 @@ analog V(aclk) &lt;+ transition(clk,5.1n,1p);</code></pre>
 <ul>
 <li>If the original transition was rising and the new destination value is below the value at the interruption, then the original transition's destination shall be used to compute the new origin. Referring to Figure 4-7, consider an original transition that rises from (t1,v1) to (t2,v2) with a rise time of tr1=t2-t1, which is interrupted at the point (ti,vi) with a new destination value (v3), where v3 &lt; vi. Then the original transition's destination (v2) shall be used along with the rescheduled transition's actual fall time (tf3), when calculating the slope: (v3-v2)/tf3. This slope will be applied from the point of interruption (ti,vi), and the readjusted transition's expected end time (t3) is then calculated using this slope, now shifted left, along with the time and value level at the point of the interruption: t3 = ti + (v3-vi)/slope. The new origin for the transition is now (t4,v4), which will be used if the transition is interrupted again.</li>
 </ul>
+<figure id="figure-4-7"><a href="VAMS-LRM-2023.pdf#page=87"><img src="figures/lrm-figure-4-7.png" width="620" height="308" style="max-width:100%;height:auto" alt="Original Figure 4-7; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-7, extracted from PDF page 87.</figcaption></figure>
 <div class="note">Figure 4-7: Interrupted rising transition (falling). The figure plots value versus time for a rising transition from (t1,v1) toward the original destination (t2,v2) that is interrupted at (ti,vi). A dashed slope line falls toward the new lower destination (t3,v3); the transition is shifted left to a new origin (t4,v4), with the rise time tr1 and rescheduled fall time tf3 annotated.</div>
 <ul>
 <li>If the original transition was rising and the new destination value is above the value at the interruption, then the original transition's origin shall be used to compute the new origin. Referring to Figure 4-8, consider an original transition that rises from (t1,v1) to (t2,v2) with a rise time of tr1=t2-t1, which is interrupted at the point (ti,vi) with a new destination value (v3), where v3 &gt; vi, and with a new transition time tr3. Then the original transition's origin (v1) shall be used along with the new rise time (tr3), to calculate the slope: (v3-v1)/tr3.<br>
 This slope will be applied from the point of interruption (ti,vi), and the readjusted transition's expected end time (t3) is then calculated using this slope, along with the time and value level at the point of the interruption: t3 = ti + (v3-vi)/slope. The new origin for the transition is now (t4,v4), which will be used if the transition is interrupted again. In Figure 4-8, the transition is shifted left and t4 &lt; t1 because the new rise time is longer (tr3 &gt; tr1). In Figure 4-9 the new rise time is shorter (tr3 &lt; tr1), so the transition is shifted right.</li>
 </ul>
+<figure id="figure-4-8"><a href="VAMS-LRM-2023.pdf#page=88"><img src="figures/lrm-figure-4-8.png" width="620" height="308" style="max-width:100%;height:auto" alt="Original Figure 4-8; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-8, extracted from PDF page 88.</figcaption></figure>
 <div class="note">Figure 4-8: Interrupted rising transition (rising tr3&gt;tr1). The figure shows a rising transition from (t1,v1) interrupted at (ti,vi) with a new higher destination and a longer rise time tr3; the recomputed slope line continues rising to the new destination (t3,v3), and the origin is shifted left to (t4,v4) with t4 &lt; t1.</div>
+<figure id="figure-4-9"><a href="VAMS-LRM-2023.pdf#page=88"><img src="figures/lrm-figure-4-9.png" width="620" height="306" style="max-width:100%;height:auto" alt="Original Figure 4-9; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-9, extracted from PDF page 88.</figcaption></figure>
 <div class="note">Figure 4-9: Interrupted rising transition (rising tr3&lt;tr1). The figure shows the same situation but with a shorter new rise time tr3 &lt; tr1: the recomputed slope is steeper and the transition origin (t4,v4) is shifted right relative to t1 as the transition rises to the new destination (t3,v3).</div>
 <ul>
 <li>If the original transition was falling and the new destination value is below the value at the interruption, then the original transition's origin shall be used to compute the new origin. Referring to Figure 4, consider an original transition that falls from (t1,v1) to (t2,v2) with a fall time of tf1=t2-t1, which is interrupted at the point (ti,vi) with a new destination value (v3), where v3 &lt; vi, and with a new transition time tf3. Then the original transition's origin (v1) shall be used along with the new fall time (tf3), to calculate the slope: (v3-v1)/tf3.<br>
 This slope will be applied from the point of interruption (ti,vi), and the readjusted transition's expected end time (t3) is then calculated using this slope, along with the time and value level at the point of the interruption: t3 = ti + (v3-vi)/slope. The new origin for the transition is now (t4,v4), which will be used if the transition is interrupted again. In Figure 4-10, the transition is shifted left and t4 &lt; t1 because the new fall time is longer (tf3 &gt; tf1). In Figure 4-11, the new fall time is shorter (tf3 &lt; tf1), so the transition is shifted right.</li>
 </ul>
+<figure id="figure-4-10"><a href="VAMS-LRM-2023.pdf#page=89"><img src="figures/lrm-figure-4-10.png" width="620" height="304" style="max-width:100%;height:auto" alt="Original Figure 4-10; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-10, extracted from PDF page 89.</figcaption></figure>
 <div class="note">Figure 4-10: Interrupted falling transition (falling tf3&gt;tf1). The figure shows a falling transition from (t1,v1) interrupted at (ti,vi) with a new lower destination and a longer fall time tf3; the recomputed slope line continues falling to the new destination (t3,v3), and the origin (t4,v4) is shifted left of t1.</div>
+<figure id="figure-4-11"><a href="VAMS-LRM-2023.pdf#page=89"><img src="figures/lrm-figure-4-11.png" width="620" height="300" style="max-width:100%;height:auto" alt="Original Figure 4-11; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-11, extracted from PDF page 89.</figcaption></figure>
 <div class="note">Figure 4-11: Interrupted falling transition (falling tf3&lt;tf1). The figure shows a falling transition interrupted at (ti,vi) with a shorter new fall time tf3 &lt; tf1: the recomputed slope is steeper and the origin (t4,v4) is shifted right as the output falls to the new destination (t3,v3) below the original destination (t2,v2).</div>
 <ul>
 <li>If the original transition was falling and the new destination value is above the value at the interruption, then the original transition's destination shall be used to compute the new origin. Referring to Figure 4-12, consider an original transition that falls from (t1,v1) to (t2,v2) with a fall time of tf1=t2-t1, which is interrupted at the point (ti,vi) with a new destination value (v3), where v3 &gt; vi. Then the original transition's destination (v2) shall be used along with the rescheduled transition's actual rise time (tr3), when calculating the slope: (v3-v2)/tr3. This slope will be applied from the point of interruption (ti,vi), and the readjusted transition's expected end time (t3) is then calculated using this slope, now shifted left, along with the time and value level at the point of the interruption: t3 = ti + (v3-vi)/slope. The new origin for the transition is now (t4,v4), which will be used if the transition is interrupted again.</li>
 </ul>
+<figure id="figure-4-12"><a href="VAMS-LRM-2023.pdf#page=90"><img src="figures/lrm-figure-4-12.png" width="620" height="304" style="max-width:100%;height:auto" alt="Original Figure 4-12; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-12, extracted from PDF page 90.</figcaption></figure>
 <div class="note">Figure 4-12: Interrupted falling transition (rising). The figure shows a falling transition from (t1,v1) toward the original destination (t2,v2), interrupted at (ti,vi) with a new destination above the interruption value: the recomputed slope line rises from the interruption point toward the new destination (t3,v3), with the new origin (t4,v4) shifted left below the original origin.</div>
 <p>Because the transition function can not be linearized in general, it is not possible to accurately represent a transition function in AC analysis. The AC transfer function is approximately modeled as having unity transmission for all frequencies in all situations. Because the transition function is intended to handle discrete-valued signals, the small signals present in AC analysis rarely reach transition functions. As a result, the approximation used is generally sufficient.</p>
 <p>Example 1 &mdash; QAM modulator</p>
@@ -719,15 +744,16 @@ endmodule</code></pre>
 
 <h3 id="s4-5-9">4.5.9 Slew filter</h3>
 <p>The <strong>slew</strong> analog operator bounds the rate of change (slope) of the waveform. A typical use for <strong>slew()</strong> is generating continuous signals from piecewise continuous signals. (For discrete-valued signals, see 4.5.8.) The general form is</p>
-<div class="syntax">slew ( expr [ , max_pos_slew_rate [ , max_neg_slew_rate ] ] )</div>
+<div class="syntax"><b>slew</b> <b>(</b> expr [ <b>,</b> max_pos_slew_rate [ <b>,</b> max_neg_slew_rate ] ] <b>)</b></div>
 <p>When applied, <strong>slew()</strong> forces all transitions of <em>expr</em> faster than <em>max_pos_slew_rate</em> to change at <em>max_pos_slew_rate</em> rate for positive transitions and limits negative transitions to <em>max_neg_slew_rate</em> rate as shown in Figure 4-13.</p>
+<figure id="figure-4-13"><a href="VAMS-LRM-2023.pdf#page=91"><img src="figures/lrm-figure-4-13.png" width="632" height="228" style="max-width:100%;height:auto" alt="Original Figure 4-13; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-13, extracted from PDF page 91.</figcaption></figure>
 <div class="note">Figure 4-13: Slew filter transition. The figure shows an S-shaped output_expression(t) curve with a small triangle marking &Delta;y over &Delta;t on its steepest section, annotated with the constraint &Delta;y/&Delta;t &le; rate<sub>pmax</sub>.</div>
 <p>The two rate values are optional. <em>max_pos_slew_rate</em> shall be greater than zero (<code>0</code>) and <em>max_neg_slew_rate</em> shall be less than zero (<code>0</code>). If the <em>max_neg_slew_rate</em> is not specified, it defaults to the opposite of the <em>max_pos_slew_rate</em>. If no rates are specified, <strong>slew()</strong> passes the signal through unchanged. If the rate of change of <em>expr</em> is less than the specified maximum slew rates, <strong>slew()</strong> returns the value of <em>expr</em>.</p>
 <p>In DC analysis, <strong>slew()</strong> simply passes the value of the destination to its output. In small-signal analyses, the <strong>slew()</strong> function has a transfer function from the first argument to the output of 1.0 when not slewing (e.g. for a small-signal analysis following a dc operating point) and 0.0 when slewing.</p>
 
 <h3 id="s4-5-10">4.5.10 last_crossing function</h3>
 <p>The <strong>last_crossing()</strong> function returns a real value representing the simulation time when a signal expression last crossed zero (<code>0</code>). The general form is</p>
-<div class="syntax">last_crossing ( expr [ , direction ] )</div>
+<div class="syntax"><b>last_crossing</b> <b>(</b> expr [ <b>,</b> direction ] <b>)</b></div>
 <p>The optional <em>direction</em> indicator shall evaluate to an integer expression +1, -1, or 0. If it is set to 0, the <strong>last_crossing()</strong> will return the most recent time the input expression had either a rise or falling edge transition. If direction is +1 (-1), the <strong>last_crossing()</strong> will return the last time the input expression had a rising (falling) edge transition.</p>
 <p>The <strong>last_crossing()</strong> function does not control the timestep to get accurate results; it uses linear interpolation to estimate the time of the last crossing. However, it can be used with the <strong>cross()</strong> or <strong>above()</strong> function for improved accuracy.</p>
 <p>The following example measures the period of its input signal using the <strong>cross()</strong> and <strong>last_crossing()</strong> functions.</p>
@@ -766,21 +792,21 @@ endmodule</code></pre>
 
 <h4 id="s4-5-11-1">4.5.11.1 laplace_zp</h4>
 <p><strong>laplace_zp()</strong> implements the zero-pole form of the Laplace transform filter. The general form is:</p>
-<div class="syntax">laplace_zp ( expr , &zeta; , &rho; [ , &epsilon; ] )</div>
+<div class="syntax"><b>laplace_zp</b> <b>(</b> expr <b>,</b> &zeta; <b>,</b> &rho; [ <b>,</b> &epsilon; ] <b>)</b></div>
 <p>where &zeta; (zeta) is a vector of <em>M</em> pairs of real numbers. Each pair represents a zero, the first number in the pair is the real part of the zero and the second is the imaginary part. Similarly, &rho; (rho) is the vector of <em>N</em> real pairs, one for each pole. The poles are given in the same manner as the zeros. The transfer function is</p>
 <p><em>H</em>(<em>s</em>) = <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> (1 &minus; <em>s</em>/(&zeta;<sub>k</sub><sup>r</sup> + <em>j</em>&zeta;<sub>k</sub><sup>i</sup>)) / <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> (1 &minus; <em>s</em>/(&rho;<sub>k</sub><sup>r</sup> + <em>j</em>&rho;<sub>k</sub><sup>i</sup>))</p>
 <p>where &zeta;<sub>k</sub><sup>r</sup> and &zeta;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> zero (<code>0</code>), while &rho;<sub>k</sub><sup>r</sup> and &rho;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> pole. If a root (a pole or zero) is real, the imaginary part shall be specified as zero (<code>0</code>). If a root is complex, its conjugate shall also be present. If a root is zero, then the term associated with it is implemented as <em>s</em>, rather than (1 &minus; <em>s</em>/<em>r</em>) (where <em>r</em> is the root).</p>
 
 <h4 id="s4-5-11-2">4.5.11.2 laplace_zd</h4>
 <p><strong>laplace_zd()</strong> implements the zero-denominator form of the Laplace transform filter. The general form is:</p>
-<div class="syntax">laplace_zd ( expr , &zeta; , d [ , &epsilon; ] )</div>
+<div class="syntax"><b>laplace_zd</b> <b>(</b> expr <b>,</b> &zeta; <b>,</b> d [ <b>,</b> &epsilon; ] <b>)</b></div>
 <p>where &zeta; (zeta) is a vector of <em>M</em> pairs of real numbers. Each pair represents a zero, the first number in the pair is the real part of the zero and the second is the imaginary part. Similarly, <em>d</em> is the vector of <em>N</em> real numbers containing the coefficients of the denominator. The transfer function is</p>
 <p><em>H</em>(<em>s</em>) = <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> (1 &minus; <em>s</em>/(&zeta;<sub>k</sub><sup>r</sup> + <em>j</em>&zeta;<sub>k</sub><sup>i</sup>)) / <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> <em>d</em><sub>k</sub><em>s</em><sup>k</sup></p>
 <p>where &zeta;<sub>k</sub><sup>r</sup> and &zeta;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> zero, while <em>d</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the denominator. If a zero is real, the imaginary part shall be specified as zero (<code>0</code>). If a zero is complex, its conjugate shall also be present. If a zero is zero (<code>0</code>), then the term associated with it is implemented as <em>s</em>, rather than (1 &minus; <em>s</em>/&zeta;).</p>
 
 <h4 id="s4-5-11-3">4.5.11.3 laplace_np</h4>
 <p><strong>laplace_np()</strong> implements the numerator-pole form of the Laplace transform filter. The general form is</p>
-<div class="syntax">laplace_np ( expr , n , &rho; [ , &epsilon; ] )</div>
+<div class="syntax"><b>laplace_np</b> <b>(</b> expr <b>,</b> n <b>,</b> &rho; [ <b>,</b> &epsilon; ] <b>)</b></div>
 <p>where <em>n</em> is a vector of <em>M</em> real numbers containing the coefficients of the numerator. Similarly, &rho; (rho) is a vector of <em>N</em> pairs of real numbers. Each pair represents a pole, the first number in the pair is the real part of the pole and the second is the imaginary part. The transfer function is</p>
 <p><em>H</em>(<em>s</em>) = <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> <em>n</em><sub>k</sub><em>s</em><sup>k</sup> / <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> (1 &minus; <em>s</em>/(&rho;<sub>k</sub><sup>r</sup> + <em>j</em>&rho;<sub>k</sub><sup>i</sup>))</p>
 <p>where <em>n</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the numerator, while &rho;<sub>k</sub><sup>r</sup> and &rho;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> pole. If a pole is real, the imaginary part shall be specified as zero (<code>0</code>). If a pole is complex, its conjugate shall also be present. If a pole is zero (<code>0</code>), then the term associated with it is implemented as <em>s</em>, rather than (1 &minus; <em>s</em>/&rho;).</p>
@@ -788,7 +814,7 @@ endmodule</code></pre>
 <h4 id="s4-5-11-4">4.5.11.4 laplace_nd</h4>
 <p><strong>laplace_nd()</strong> implements the numerator-denominator form of the Laplace transform filter.</p>
 <p>The general form is:</p>
-<div class="syntax">laplace_nd ( expr , n , d [ , &epsilon; ] )</div>
+<div class="syntax"><b>laplace_nd</b> <b>(</b> expr <b>,</b> n <b>,</b> d [ <b>,</b> &epsilon; ] <b>)</b></div>
 <p>where <em>n</em> is an vector of <em>M</em> real numbers containing the coefficients of the numerator and <em>d</em> is a vector of <em>N</em> real numbers containing the coefficients of the denominator. The transfer function is:</p>
 <p><em>H</em>(<em>s</em>) = <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> <em>n</em><sub>k</sub><em>s</em><sup>k</sup> / <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> <em>d</em><sub>k</sub><em>s</em><sup>k</sup></p>
 <p>where <em>n</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the numerator and <em>d</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the denominator.</p>
@@ -815,36 +841,38 @@ endmodule</code></pre>
 
 <h4 id="s4-5-12-1">4.5.12.1 zi_zp</h4>
 <p><strong>zi_zp()</strong> implements the zero-pole form of the <em>Z</em>-transform filter. The general form is:</p>
-<div class="syntax">zi_zp ( expr , &zeta; , &rho; , T [ , &tau; [ , t<sub>0</sub> ] ] )</div>
+<div class="syntax"><b>zi_zp</b> <b>(</b> expr <b>,</b> &zeta; <b>,</b> &rho; <b>,</b> T [ <b>,</b> &tau; [ <b>,</b> t<sub>0</sub> ] ] <b>)</b></div>
 <p>where &zeta; (zeta) is a vector of <em>M</em> pairs of real numbers. Each pair represents a zero, the first number in the pair is the real part of the zero (<code>0</code>) and the second is the imaginary part. Similarly, &rho; (rho) is the vector of <em>N</em> real pairs, one for each pole. The poles are given in the same manner as the zeros. The transfer function is</p>
 <p><em>H</em>(<em>z</em>) = <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> (1 &minus; <em>z</em><sup>&minus;1</sup>(&zeta;<sub>k</sub><sup>r</sup> + <em>j</em>&zeta;<sub>k</sub><sup>i</sup>)) / <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> (1 &minus; <em>z</em><sup>&minus;1</sup>(&rho;<sub>k</sub><sup>r</sup> + <em>j</em>&rho;<sub>k</sub><sup>i</sup>))</p>
 <p>where &zeta;<sub>k</sub><sup>r</sup> and &zeta;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> zero, while &rho;<sub>k</sub><sup>r</sup> and &rho;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> pole. If a root (a pole or zero) is real, the imaginary part shall be specified as zero. If a root is complex, its conjugate shall also be present. If a root is zero (<code>0</code>), then the term associated with it is implemented as <em>z</em>, rather than (1 &minus; <em>z</em>/<em>r</em>) (where <em>r</em> is the root).</p>
 
 <h4 id="s4-5-12-2">4.5.12.2 zi_zd</h4>
 <p><strong>zi_zd()</strong> implements the zero-denominator form of the <em>Z</em>-transform filter. The form is:</p>
-<div class="syntax">zi_zd ( expr , &zeta; , d , T [ , &tau; [ , t<sub>0</sub> ] ] )</div>
+<div class="syntax"><b>zi_zd</b> <b>(</b> expr <b>,</b> &zeta; <b>,</b> d <b>,</b> T [ <b>,</b> &tau; [ <b>,</b> t<sub>0</sub> ] ] <b>)</b></div>
 <p>where &zeta; (zeta) is a vector of <em>M</em> pairs of real numbers. Each pair represents a zero, the first number in the pair is the real part of the zero and the second is the imaginary part. Similarly, <em>d</em> is the vector of <em>N</em> real numbers containing the coefficients of the denominator. The transfer function is</p>
 <p><em>H</em>(<em>z</em>) = <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> (1 &minus; <em>z</em><sup>&minus;1</sup>(&zeta;<sub>k</sub><sup>r</sup> + <em>j</em>&zeta;<sub>k</sub><sup>i</sup>)) / <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> <em>d</em><sub>k</sub><em>z</em><sup>&minus;k</sup></p>
 <p>where &zeta;<sub>k</sub><sup>r</sup> and &zeta;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> zero, while <em>d</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the denominator. If a zero is real, the imaginary part shall be specified as zero (<code>0</code>). If a zero is complex, its conjugate shall also be present. If a zero is zero (<code>0</code>), then the term associated with it is implemented as <em>z</em>, rather than (1 &minus; <em>z</em>/&zeta;).</p>
 
 <h4 id="s4-5-12-3">4.5.12.3 zi_np</h4>
 <p><strong>zi_np()</strong> implements the numerator-pole form of the <em>Z</em>-transform filter. The general form is:</p>
-<div class="syntax">zi_np ( expr , n , &rho; , T [ , &tau; [ , t<sub>0</sub> ] ] )</div>
+<div class="syntax"><b>zi_np</b> <b>(</b> expr <b>,</b> n <b>,</b> &rho; <b>,</b> T [ <b>,</b> &tau; [ <b>,</b> t<sub>0</sub> ] ] <b>)</b></div>
 <p>where <em>n</em> is a vector of <em>M</em> real numbers containing the coefficients of the numerator. Similarly, &rho; (rho) is a vector of <em>N</em> pairs of real numbers. Each pair represents a pole, the first number in the pair is the real part of the pole and the second is the imaginary part. The transfer function is</p>
 <p><em>H</em>(<em>z</em>) = <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> <em>n</em><sub>k</sub><em>z</em><sup>&minus;k</sup> / <big>&prod;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> (1 &minus; <em>z</em><sup>&minus;1</sup>(&rho;<sub>k</sub><sup>r</sup> + <em>j</em>&rho;<sub>k</sub><sup>i</sup>))</p>
 <p>where <em>n</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the numerator, while &rho;<sub>k</sub><sup>r</sup> and &rho;<sub>k</sub><sup>i</sup> are the real and imaginary parts of the <em>k</em><sup>th</sup> pole. If a pole is real, the imaginary part shall be specified as zero (<code>0</code>). If a pole is complex, its conjugate shall also be present. If a pole is zero (<code>0</code>), then the term associated with it is implemented as <em>z</em>, rather than (1 &minus; <em>z</em>/&rho;).</p>
 
 <h4 id="s4-5-12-4">4.5.12.4 zi_nd</h4>
 <p><strong>zi_nd()</strong> implements the numerator-denominator form of the <em>Z</em>-transform filter. The general form is:</p>
-<div class="syntax">zi_nd ( expr , n , d , T [ , &tau; [ , t<sub>0</sub> ] ] )</div>
+<div class="syntax"><b>zi_nd</b> <b>(</b> expr <b>,</b> n <b>,</b> d <b>,</b> T [ <b>,</b> &tau; [ <b>,</b> t<sub>0</sub> ] ] <b>)</b></div>
 <p>where <em>n</em> is an vector of <em>M</em> real numbers containing the coefficients of the numerator and <em>d</em> is a vector of <em>N</em> real numbers containing the coefficients of the denominator. The transfer function is</p>
 <p><em>H</em>(<em>z</em>) = <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>M</em>&minus;1</sup> <em>n</em><sub>k</sub><em>z</em><sup>&minus;k</sup> / <big>&sum;</big><sub><em>k</em>=0</sub><sup><em>N</em>&minus;1</sup> <em>d</em><sub>k</sub><em>z</em><sup>&minus;k</sup></p>
 <p>where <em>n</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the numerator and <em>d</em><sub>k</sub> is the coefficient of the <em>k</em><sup>th</sup> power of <em>s</em> in the denominator.</p>
 
+<div class="note">Editorial source note (printed pp. 83–84): the Z-filter equations use negative powers of <em>z</em>, but several coefficient descriptions say powers of <em>s</em>. The zero-root prose specifies <em>z</em> and compares it with <code>1-z/r</code>, while the displayed products use <code>1-z<sup>-1</sup>r</code>. These are source inconsistencies, preserved rather than normalized into a new transfer-function specification.</div>
+
 <h3 id="s4-5-13">4.5.13 Limited exponential</h3>
 <p>The <strong>limexp()</strong> function is a special-purpose operator whose purpose is to improve convergence of the analog solver (generally, a Newton-Raphson linear solver) when faced with the strongly nonlinear behavior of the exponential function. The operator has internal state containing information about the argument on previous iterations. It returns a real value which is the exponential of its single real argument; however, it internally limits the change of its output from iteration to iteration in order to improve convergence. It is therefore not useful for any exponential whose argument does not change from iteration to iteration. On any iteration where the change in the output of the <strong>limexp()</strong> function is bounded, the simulator is prevented from terminating the iteration. Thus, the simulator can only converge when the output of <strong>limexp()</strong> equals the exponential of the input.</p>
 <p>The general form is:</p>
-<div class="syntax">limexp ( expr )</div>
+<div class="syntax"><b>limexp</b> <b>(</b> expr <b>)</b></div>
 <p>The apparent behavior of <strong>limexp()</strong> is not distinguishable from <strong>exp()</strong>, except using <strong>limexp()</strong> to model semiconductor junctions generally results in dramatically improved convergence. There are different ways of implementing limiting algorithms for the exponential<sup>1 2</sup>.</p>
 <div class="note"><sup>1</sup>Laurence W. Nagel, "SPICE2: A computer program to simulate semiconductor circuits," Memorandum No. ERL-M520, University of California, Berkeley, California, May 1975.<br><sup>2</sup>W. J. McCalla, <em>Fundamentals of Computer-Aided Circuit Simulation</em>. Kluwer Academic Publishers, 1988.</div>
 <p>Other nonlinearities besides the exponential may be in behavioral models. The <strong>$limit()</strong> system function described in 9.17.3 provides a method to indicate these nonlinearities to the simulator to improve convergence.</p>
@@ -875,6 +903,8 @@ endmodule</code></pre>
 </table>
 <p>If a dynamic expression is passed as an argument which expects a constant expression, the value of the dynamic expression at the start of the analysis defaults to the constant value of the argument. Any further change in value of that expression is ignored during the iterative analysis.</p>
 
+<div class="note">Editorial source note (printed pp. 65, 85–86): Syntax 4-3 labels the final transition argument <code>constant_expression</code>, but Table 4-20 lists <code>time_tol</code> as dynamic. The Z-filter rows print <code>t</code> in the dynamic column where the earlier argument description uses &tau;. The paragraph above explicitly describes sampling dynamic expressions supplied to constant slots; a blanket rejection requirement must not be inferred from the column heading alone.</div>
+
 <h3 id="s4-5-15">4.5.15 Restrictions on analog operators</h3>
 <p>Analog operators are subject to several important restrictions because they maintain their internal state. It is important to ensure that all analog operators are evaluated every iteration of a simulation to ensure that the internal state is maintained. The analog operator <strong>ddx()</strong> is the only exception to this rule as it does not require an internal state to be maintained. All analog operators are considered to have no state history prior to time t == 0.</p>
 <ul>
@@ -891,7 +921,7 @@ endmodule</code></pre>
 
 <h3 id="s4-6-1">4.6.1 Analysis</h3>
 <p>The <strong>analysis()</strong> function takes one or more string arguments and returns one (<code>1</code>) if any argument matches the current analysis type. Otherwise it returns zero (<code>0</code>). The general form is:</p>
-<div class="syntax">analysis ( analysis_list )</div>
+<div class="syntax"><b>analysis</b> <b>(</b> analysis_list <b>)</b></div>
 <p>There is no fixed set of analysis types. Each simulator can support its own set. However, simulators shall use the names listed in Table 4-21 to represent analyses which are similar to those provided by SPICE.</p>
 <table>
 <caption><strong>Table 4-21&mdash;Analysis types</strong></caption>
@@ -931,7 +961,7 @@ else
 
 <h3 id="s4-6-3">4.6.3 AC stimulus</h3>
 <p>A small-signal analysis computes the steady-state response of a system which has been linearized about its operating point and is driven by a small sinusoid. The sinusoidal stimulus is provided using the <strong>ac_stim()</strong> function. The general form is:</p>
-<div class="syntax">ac_stim ( [ analysis_name [ , mag [ , phase ] ] ] )</div>
+<div class="syntax"><b>ac_stim</b> <b>(</b> [ analysis_name [ <b>,</b> mag [ <b>,</b> phase ] ] ] <b>)</b></div>
 <p>The AC stimulus function returns zero (<code>0</code>) during large-signal analyses (such as DC and transient) as well as on all small-signal analyses using names which do not match <em>analysis_name</em>. The name of a small-signal analysis is implementation dependent, although the expected name (of the equivalent of a SPICE AC analysis) is &ldquo;ac&rdquo;, which is the default value of <em>analysis_name</em>. When the name of the small-signal analysis matches <em>analysis_name</em>, the source becomes active and models a source with magnitude <em>mag</em> and phase <em>phase</em>. The default magnitude is one (<code>1</code>) and the default phase is zero (<code>0</code>). <em>phase</em> is given in radians.</p>
 
 <h3 id="s4-6-4">4.6.4 Noise</h3>
@@ -939,16 +969,16 @@ else
 <p>The syntax for noise functions is shown in Syntax 4-4.</p>
 <div class="syntax">analog_small_signal_function_call ::=                                // from A.8.2
       ...
-    | white_noise ( analog_expression [ , string ] )
-    | flicker_noise ( analog_expression , analog_expression [ , string ] )
-    | noise_table ( noise_table_input_arg [ , string ] )
-    | noise_table_log ( noise_table_input_arg [ , string ] )
+    | <b>white_noise</b> <b>(</b> analog_expression [ <b>,</b> string ] <b>)</b>
+    | <b>flicker_noise</b> <b>(</b> analog_expression <b>,</b> analog_expression [ <b>,</b> string ] <b>)</b>
+    | <b>noise_table</b> <b>(</b> noise_table_input_arg [ <b>,</b> string ] <b>)</b>
+    | <b>noise_table_log</b> <b>(</b> noise_table_input_arg [ <b>,</b> string ] <b>)</b>
 
 <em>Syntax 4-4&mdash;Syntax for the noise functions</em></div>
 
 <h4 id="s4-6-4-1">4.6.4.1 white_noise</h4>
 <p>White noise processes are those whose current value is completely uncorrelated with any previous or future values. This implies their spectral density does not depend on frequency. They are modeled using:</p>
-<div class="syntax">white_noise ( pwr [ , name ] )</div>
+<div class="syntax"><b>white_noise</b> <b>(</b> pwr [ <b>,</b> name ] <b>)</b></div>
 <p>which generates white noise with a power of <em>pwr</em>.</p>
 <p>For example, the thermal noise of a resistor could be modeled using:</p>
 <pre><code>I(a,b) &lt;+ V(a,b)/R +
@@ -957,13 +987,13 @@ else
 
 <h4 id="s4-6-4-2">4.6.4.2 flicker_noise</h4>
 <p>The <strong>flicker_noise()</strong> function models flicker noise. The general form is:</p>
-<div class="syntax">flicker_noise ( pwr , exp [ , name ] )</div>
+<div class="syntax"><b>flicker_noise</b> <b>(</b> pwr <b>,</b> exp [ <b>,</b> name ] <b>)</b></div>
 <p>which generates pink noise with a power of <em>pwr</em> at 1Hz which varies in proportion to <em>1/f</em><sup> exp</sup>.</p>
 <p>The optional <em>name</em> argument acts as a label for the noise source used when the simulator outputs the individual contribution of each noise source to the total output noise. The contributions of noise sources with the same <em>name</em> from the same instance of a module are combined in the noise contribution summary.</p>
 
 <h4 id="s4-6-4-3">4.6.4.3 noise_table</h4>
 <p>The <strong>noise_table()</strong> function interpolates a set of values to model a process where the spectral density of the noise varies as a piecewise linear function of frequency. The general form is:</p>
-<div class="syntax">noise_table ( input [ , name ] )</div>
+<div class="syntax"><b>noise_table</b> <b>(</b> input [ <b>,</b> name ] <b>)</b></div>
 <p>The argument <em>input</em> can either be a vector or a string indicating a filename.</p>
 <p>When the <em>input</em> is a vector it contains pairs of real numbers: the first number in each pair is the frequency in Hertz and the second is the power. The vector can either be specified as an array parameter or an array assignment pattern.</p>
 <p>When the <em>input</em> is a file name, the indicated file will contain the frequency / power pairs. The file name argument shall be constant and will be either a string literal or a string parameter. Each frequency / power pair shall be separated by a newline and the numbers in the pair shall be separated by one or more spaces or tabs. To increase the readability of the data file, comments may be inserted before or after any frequency / power pair. Comments begin with &lsquo;#&rsquo; and end with a newline. The input file shall be in text format only and the numbers shall be real or integer.</p>
@@ -986,12 +1016,13 @@ else
 
 <h4 id="s4-6-4-4">4.6.4.4 noise_table_log</h4>
 <p>The <strong>noise_table_log()</strong> function interpolates a set of values to model a process where the spectral density of the noise varies as a piecewise linear function of the base-10 logarithm of frequency. The general form is:</p>
-<div class="syntax">noise_table_log ( input [ , name ] )</div>
+<div class="syntax"><b>noise_table_log</b> <b>(</b> input [ <b>,</b> name ] <b>)</b></div>
 <p>The argument <em>input</em> can either be a vector or a string indicating a filename; in either case, the meaning and restrictions on the input are the same as for <strong>noise_table()</strong>. The difference is that <strong>noise_table_log()</strong> interpolates logarithmically. For a frequency <em>f</em> not specified in the input data, the noise power shall be computed using the two pairs (<em>f1,p1</em>) and (<em>f2,p2</em>) in the input (whether an array or file), where <em>f1</em> is the largest frequency value in the input data less than <em>f</em> and <em>f2</em> is the smallest frequency larger than <em>f</em> (that is, <em>f1 &lt; f &lt; f2</em>); the noise power <em>P</em> is computed as:</p>
 <pre><code>P = pow(10, log(p1) + (log(p2)-log(p1)) * (log(f)-log(f1)) / (log(f2)-log(f1)) )</code></pre>
 <p>As with <strong>noise_table()</strong>, for frequencies lower than the lowest frequency in the value set, <strong>noise_table_log()</strong> returns the power specified for the lowest frequency, and for frequencies higher than the highest frequency, <strong>noise_table_log()</strong> returns the power specified for the highest frequency.</p>
 <p>The optional <em>name</em> argument acts as a label for the noise source used when the simulator outputs the individual contribution of each noise source to the total output noise. The contributions of noise sources with the same <em>name</em> from the same instance of a module are combined in the noise contribution summary.</p>
 <p>The difference between <strong>noise_table()</strong> and <strong>noise_table_log()</strong> is illustrated in Figure 4-14.</p>
+<figure id="figure-4-14"><a href="VAMS-LRM-2023.pdf#page=104"><img src="figures/lrm-figure-4-14.png" width="720" height="704" style="max-width:100%;height:auto" alt="Original Figure 4-14; see the adjacent editorial description for a text explanation."></a><figcaption>Original Figure 4-14, extracted from PDF page 104.</figcaption></figure>
 <div class="note">Figure 4-14: Comparison of noise_table and noise_table_log. The figure is a log-log plot of noise power density (1uV^2/Hz to 1mV^2/Hz) versus frequency (1kHz to 1MHz). The noise_table curve (solid, x markers) forms a series of bowed segments between decade points, while the noise_table_log curve (dashed, + markers) is a straight line on the log-log axes through the same endpoints.</div>
 <p>The <strong>noise_table_log()</strong> function produces a straight line on a log-log plot from just two points:</p>
 <pre><code>V(out) &lt;+ noise_table_log('{1,1, 1e6,1e-6});</code></pre>
@@ -1024,18 +1055,18 @@ I(b,c) &lt;+ Ki*(n2 + n12);</code></pre>
 <h3 id="s4-7-1">4.7.1 Defining an analog user-defined function</h3>
 <p>The syntax for defining an analog user-defined function is shown in Syntax 4-5.</p>
 <div class="syntax">analog_function_declaration ::=                                      // from A.2.6
-        analog function [ analog_function_type ] analog_function_identifier ;
+        <b>analog</b> <b>function</b> [ analog_function_type ] analog_function_identifier <b>;</b>
             analog_function_item_declaration { analog_function_item_declaration }
             analog_function_statement
-        endfunction
-analog_function_type ::= integer | real | string
+        <b>endfunction</b>
+analog_function_type ::= <b>integer</b> | <b>real</b> | <b>string</b>
 analog_function_item_declaration ::=
         analog_block_item_declaration
-      | input_declaration ;
-      | output_declaration ;
-      | inout_declaration ;
+      | input_declaration <b>;</b>
+      | output_declaration <b>;</b>
+      | inout_declaration <b>;</b>
 analog_block_item_declaration ::=                                    // from A.2.8
-        { attribute_instance } parameter_declaration ;
+        { attribute_instance } parameter_declaration <b>;</b>
       | { attribute_instance } integer_declaration
       | { attribute_instance } real_declaration
       | { attribute_instance } string_declaration
@@ -1120,7 +1151,7 @@ end</code></pre>
 <h3 id="s4-7-3">4.7.3 Calling an analog user-defined function</h3>
 <p>An analog user-defined function call is an operand within an expression. Syntax 4-6 shows the analog user-defined function call.</p>
 <div class="syntax">analog_function_call ::=                                             // from A.8.2
-        analog_function_identifier { attribute_instance } ( analog_expression { , analog_expression } )
+        analog_function_identifier { attribute_instance } <b>(</b> analog_expression { <b>,</b> analog_expression } <b>)</b>
 
 <em>Syntax 4-6&mdash;Syntax for function call</em></div>
 <p>The order of evaluation of the arguments to an analog user-defined function call is undefined. The argument expressions are assigned to the declared inputs, outputs, and inouts in the order of their declaration.</p>
@@ -1142,4 +1173,5 @@ end</code></pre>
 y = 3; z = 6;
 dummy = arrayadd(x,'{y,z});</code></pre>
 <p>Here the first and second arguments are both expecting vectors. A vector variable is passed for the first argument and an array assignment pattern of two scalar analog variables has been used for the second argument. Since the first argument is an <strong>inout</strong> argument, the result of calling the <code>arrayinit</code> function will update the vector variable <code>x</code> with values <code>x[0] = 8 and x[1] = 16</code>.</p>
+<div class="note">Editorial source note (printed p. 96): the final example calls <code>arrayadd</code>, but its explanatory sentence names <code>arrayinit</code>. This source naming discrepancy is preserved.</div>
 </body></html>

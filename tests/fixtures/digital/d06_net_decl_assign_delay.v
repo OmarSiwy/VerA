@@ -12,9 +12,10 @@
 // to be added to the event queue". The `delay3` permitted by the production
 // above times that update event.
 //
-// The declaration form is not sugar for a following `assign`: the grammar
-// allows only ONE net declaration assignment per declared name, so this is the
-// only spelling that guarantees a single driver at the point of declaration.
+// IEEE 1364-2005 §6.1.3 makes this delay an assignment delay, not a net delay:
+// `wire y; assign #3 y = ~a;` is the corresponding separate spelling, whereas
+// `wire #3 y; assign y = ~a;` also delays other drivers. Additional separate
+// drivers are not forbidden; this fixture exercises only one driver.
 //
 //! lrm annex A.2.1.3
 //! lrm annex A.2.4

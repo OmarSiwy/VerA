@@ -22,9 +22,9 @@
 //   (* units = 1.0 *)                 not a string
 //   (* op    = 1 *)                   not a string, and not yes/no either
 //
-// All four compile clean under VerA today. A reject fixture stops at its first
-// diagnostic, so they cannot be checked from one module; when the check lands,
-// split the other three into files of their own and cross-reference them here.
+// These comments are not executable coverage. Independent fixtures 69--72
+// now test these four sibling violations, each expecting E0358. This file
+// tests only the invalid string value of op.
 //
 // 11_attributes.va is the positive half: it supplies all four names with
 // in-domain values and proves the decorated parameter is untouched.

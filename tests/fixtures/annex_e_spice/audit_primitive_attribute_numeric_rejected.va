@@ -1,0 +1,10 @@
+// E.3.2.1 requires the analog-primitive port_discipline value to be a string.
+// A numeric value is invalid independently of the resistor's electrical ports.
+//! lrm E.3.2.1
+// Expected future diagnostic: this rule-specific wording is not emitted yet.
+//! reject port_discipline requires a string
+//! xfail analog primitive port_discipline value validation is not implemented
+module audit_e_bad_attribute_number(p,n);
+  inout p,n; electrical p,n;
+  (* port_discipline=23 *) resistor #(.r(1000.0)) r(p,n);
+endmodule

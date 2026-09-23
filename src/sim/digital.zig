@@ -79,10 +79,8 @@ const Delay = struct {
     /// x is "the value is somewhere in here", and it is true from the first
     /// moment any of the three transitions could have begun.
     ///
-    /// ponytail: one delay for the whole vector, taken from bit 0. §7.14's
-    /// delays are per-bit, which matters only for a bus whose bits transition
-    /// to different values in one update; give `Delay` a per-bit loop when a
-    /// vector fixture needs it.
+    /// This selector is scalar. Net-delay vector handling remains separate
+    /// from §6.1.3's whole-vector continuous-assignment rule below.
     fn to(self: Delay, b: Int.Bit) u64 {
         return switch (b) {
             .one => self.rise,
@@ -91,8 +89,43 @@ const Delay = struct {
             .x => @min(self.rise, @min(self.fall, self.off)),
         };
     }
+
+    /// IEEE 1364-2005 §6.1.3: vector assignments use falling delay for
+    /// nonzero-to-zero, turn-off for all-z, and rising for every other case.
+    /// Unlike scalar gates, mixed x/z values do not select a minimum delay.
+    /// The caller supplies the published driver value, not a pending target.
+    fn continuous(self: Delay, from: Int.Literal, value: Int.Literal) u64 {
+        if (value.width == 1) return self.to(value.bit(0));
+        var all_z = true;
+        for (0..value.width) |bit| {
+            if (value.bit(@intCast(bit)) != .z) {
+                all_z = false;
+                break;
+            }
+        }
+        if (all_z) return self.off;
+        if (from.truth() == .one and value.truth() == .zero) return self.fall;
+        return self.rise;
+    }
 };
 const Type = struct { width: u32, signed: bool };
+
+/// IEEE 1364-2005 17.11.1: interpret every operand bit as unsigned, regardless
+/// of declared signedness. The ceiling is the bit length, minus one exactly
+/// for powers of two. Scan all limbs without narrowing or allocating a copy.
+fn integerCeilingLog2(value: Int.Literal) u64 {
+    // Preserve the existing unknown-input policy; this is not a claim that
+    // the source mandates zero for an operand containing x/z.
+    if (value.hasUnknown()) return 0;
+    var length: u64 = 0;
+    var power_of_two = true;
+    for (value.values(), 0..) |word, index| {
+        if (word == 0) continue;
+        if (length != 0 or word & (word - 1) != 0) power_of_two = false;
+        length = @as(u64, @intCast(index)) * 64 + 64 - @clz(word);
+    }
+    return if (length != 0 and power_of_two) length - 1 else length;
+}
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
 const Instruction = union(enum(u4)) {
     statement: Ast.StmtId,
@@ -471,7 +504,7 @@ const MemTokens = struct {
     fn next(self: *MemTokens) ?[]const u8 {
         while (self.at < self.text.len) {
             const c = self.text[self.at];
-            if (c == ' ' or c == '\t' or c == '\r' or c == '\n') {
+            if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '\x0c') {
                 self.at += 1;
                 continue;
             }
@@ -488,7 +521,7 @@ const MemTokens = struct {
             const start = self.at;
             while (self.at < self.text.len) : (self.at += 1) {
                 const d = self.text[self.at];
-                if (d == ' ' or d == '\t' or d == '\r' or d == '\n') break;
+                if (d == ' ' or d == '\t' or d == '\r' or d == '\n' or d == '\x0c') break;
                 // A comment may abut a word: `/* ... */ d4` is one word, and so
                 // is `d4// trailing`.
                 if (d == '/' and self.at + 1 < self.text.len and
@@ -500,11 +533,40 @@ const MemTokens = struct {
     }
 };
 
+const MemDigit = struct { digit: u32 = 0, fill: ?Int.Bit = null };
+
+fn memDigit(character: u8, radix: Radix) !MemDigit {
+    const c = std.ascii.toLower(character);
+    switch (c) {
+        'x' => return .{ .fill = .x },
+        'z', '?' => return .{ .fill = .z },
+        else => {},
+    }
+    const digit: u32 = switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        else => return error.BadDigit,
+    };
+    if (digit >= @intFromEnum(radix)) return error.BadDigit;
+    return .{ .digit = digit };
+}
+
+fn validateMemWord(token: []const u8, radix: Radix) !void {
+    // IEEE3.5/3.5.1: a number starts with a digit, not a separator.
+    if (token.len == 0 or token[0] == '_') return error.BadDigit;
+    for (token) |c| {
+        if (c == '_') continue;
+        _ = try memDigit(c, radix);
+    }
+}
+
 /// One data word, right-justified into the memory's declared width. §17.2.9
 /// says the digits may be `x` or `z` for either task, and an unknown DIGIT is
 /// unknown in every bit it covers — which is why this shares `Radix.perDigit`
 /// with the printer rather than parsing a number and losing the states.
 fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !Int.Literal {
+    // Validation covers discarded high digits independently of stored width.
+    try validateMemWord(token, radix);
     const per = radix.perDigit();
     const value = try filled(a, width, false, .zero);
     var bit: u32 = 0;
@@ -514,22 +576,12 @@ fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !I
         const c = std.ascii.toLower(token[i]);
         // §2.6's readability separator is legal in a data word too.
         if (c == '_') continue;
-        const fill: ?Int.Bit = switch (c) {
-            'x', '?' => .x,
-            'z' => .z,
-            else => null,
-        };
-        const digit: u32 = if (fill != null) 0 else switch (c) {
-            '0'...'9' => c - '0',
-            'a'...'f' => c - 'a' + 10,
-            else => return error.BadDigit,
-        };
-        if (digit >= @intFromEnum(radix)) return error.BadDigit;
+        const decoded = try memDigit(c, radix);
         var k: u32 = 0;
         while (k < per and bit < width) : ({
             k += 1;
             bit += 1;
-        }) setBit(value, bit, fill orelse @enumFromInt(@as(u2, @intCast((digit >> @intCast(k)) & 1))));
+        }) setBit(value, bit, decoded.fill orelse @enumFromInt(@as(u2, @intCast((decoded.digit >> @intCast(k)) & 1))));
     }
     return value;
 }
@@ -1173,15 +1225,7 @@ const Run = struct {
                         },
                         .clog2 => blk: {
                             const n = try self.eval(a, ex.args(e)[0], 0);
-                            // §17.11: "the ceiling of the log base 2", with
-                            // $clog2(0) and $clog2(1) both 0. An unknown
-                            // operand has no log; 1364 leaves it undefined and
-                            // zero is the value every other unknown-input
-                            // reduction here answers with.
-                            if (n.hasUnknown() or n.width > 64) break :blk 0;
-                            const x = n.values()[0];
-                            if (x <= 1) break :blk 0;
-                            break :blk 64 - @clz(x - 1);
+                            break :blk integerCeilingLog2(n);
                         },
                     };
                     const planes = try a.alloc(u64, 2);
@@ -1396,7 +1440,9 @@ const Run = struct {
                         try self.checkExpr(s.event);
                         var watched: std.ArrayList(u32) = .empty;
                         try self.sensitivity(s.event, &watched);
-                        if (watched.items.len == 0) return self.fail(tok, "a `wait` on a constant expression would never be reconsidered", .{});
+                        // IEEE 1364-2005 9.7.6 tests the current level first.
+                        // An empty dependency list is legal: true continues;
+                        // false suspends without registering any future wakeup.
                         _ = try self.append(.{ .wait_level = .{ .cond = s.event, .slots = watched.items } });
                     },
                 }
@@ -1429,8 +1475,8 @@ const Run = struct {
                     },
                     .readmem => {
                         const ex = &self.file.exprs;
-                        if (s.args.len != 2 and s.args.len != 4)
-                            return self.fail(tok, "$readmemb/$readmemh take (file, memory) or (file, memory, start, finish)", .{});
+                        if (s.args.len < 2 or s.args.len > 4)
+                            return self.fail(tok, "$readmemb/$readmemh take (file, memory [, start [, finish]])", .{});
                         if (s.args[0] == .none or ex.tag(s.args[0]) != .str_literal)
                             return self.exprFail(s.args[0], "the memory file name must be a string literal");
                         if (s.args[1] == .none or ex.tag(s.args[1]) != .ident or !self.arrays.contains(try self.slot(s.args[1])))
@@ -1566,8 +1612,7 @@ const Run = struct {
     ///
     /// The clause's four rules, and all four are observable:
     ///   - the file holds white space, comments and numbers in the task's radix;
-    ///   - with no address arguments the load starts at the memory's LEFT
-    ///     declared index and runs toward the right one;
+    ///   - with no address arguments loading goes from lowest to highest index;
     ///   - `@<hex>` relocates the load point, and loading continues from there;
     ///   - an address the file never reaches is LEFT ALONE. The task loads; it
     ///     does not clear, so an unwritten word keeps the X it started at.
@@ -1583,22 +1628,44 @@ const Run = struct {
         const text = self.readSideFile(a, name) catch
             return self.exprFail(args[0], "the memory file cannot be read");
 
-        // §17.2.9: with no bounds the walk is the DECLARED range, left index
-        // first. `Array.low`/`.high` are sorted, so the left index is `low`
-        // for `[0:7]` and the runner has no `[7:0]` memory to distinguish yet.
+        // §17.2.9: default traversal is lowest to highest, independent of
+        // the declaration's direction.
         var at: i64 = arr.low;
         var last: i64 = arr.high;
-        if (args.len == 4) {
+        if (args.len >= 3)
             at = (try self.eval(a, args[2], 0)).asInt() orelse arr.low;
+        if (args.len == 4)
             last = (try self.eval(a, args[3], 0)).asInt() orelse arr.high;
-        }
-        const down = last < at;
+        // With start alone, finish defaults to the highest address and the
+        // walk stays upward, including after a file address specification.
+        const down = args.len == 4 and last < at;
+        const first = at;
+        const range_low = @min(first, last);
+        const range_high = @max(first, last);
+        const expected: u128 = @intCast(@as(i128, range_high) - range_low + 1);
+        var words: u128 = 0;
+        var addressed = false;
+        var exhausted = false;
 
         var it = MemTokens{ .text = text };
         while (it.next()) |token| {
             if (token[0] == '@') {
+                addressed = true;
                 at = std.fmt.parseInt(i64, token[1..], 16) catch
                     return self.exprFail(args[0], "the memory file has a malformed `@` address");
+                if (args.len >= 3 and (at < range_low or at > range_high))
+                    return self.exprFail(args[0], "memory file address is outside the requested load range");
+                exhausted = false;
+                continue;
+            }
+            words += 1;
+            // Continue scanning after the final word: a later address both
+            // suppresses count warnings and may restart loading in the range.
+            if (exhausted) {
+                // Stopping assignments does not legalize malformed file data.
+                // Validate without allocating a destination-sized value.
+                validateMemWord(token, radix) catch
+                    return self.exprFail(args[0], "the memory file has a malformed data word");
                 continue;
             }
             // Outside the declared range the word has nowhere to go. Not an
@@ -1611,12 +1678,15 @@ const Run = struct {
                 try self.store(base + @as(u32, @intCast(at - arr.low)), value.planes);
             }
             if (down) {
-                if (at <= last) break;
-                at -= 1;
+                if (at <= last) exhausted = true else at -= 1;
             } else {
-                if (at >= last) break;
-                at += 1;
+                if (at >= last) exhausted = true else at += 1;
             }
+        }
+        if (!addressed and words != expected) {
+            const tok = ex.mainTok(args[0]);
+            const start = self.starts[@min(tok, self.starts.len - 1)];
+            try self.bag.add(.lower, .W1150, .{ .start = start, .end = start }, "memory file data word count does not match load range: found {d}, expected {d}", .{ words, expected });
         }
     }
 
@@ -2135,7 +2205,7 @@ const Run = struct {
         try self.out.writeAll(text);
     }
 
-    /// IEEE 1364-2005 clause 11's `disable`, which §1.1 makes part of this
+    /// IEEE 1364-2005 §10.3's `disable`, which §1.1 makes part of this
     /// language: it "terminates the activity" of a named block, and "execution
     /// continues with the statement following the block".
     ///
@@ -2151,11 +2221,9 @@ const Run = struct {
     /// lands. It is a write the block completed before it was disabled, not
     /// activity of its own, and no fixture measures the alternative.
     ///
-    /// ponytail: a `disable` of the block CONTAINING it is a no-op here — the
-    /// process doing the disabling is mid-dispatch, so it has no resumption row
-    /// to find. Verilog's loop-break idiom wants that to jump to `end`; it
-    /// needs `execute` to be able to set its own pc from this instruction,
-    /// which is where to put it when a fixture asks.
+    /// The executing process has no queued resumption to retire. Its dispatch
+    /// arm separately jumps past a containing target block (IEEE1364 §10.3);
+    /// this helper handles only suspended activity in that target range.
     fn disableRange(self: *Run, start: u32, end: u32) Error!void {
         var hit = false;
         var i = self.waiters.items.len;
@@ -2312,7 +2380,11 @@ const Run = struct {
                     if (d.delay.present) {
                         if (try self.schedule(d.current, value, &self.drivers[at].transition)) |copy| {
                             const st = self.drivers[at].transition;
-                            try self.enqueue(.{ .drive = .{ .driver = at, .gen = st.gen, .value = copy } }, d.delay.to(copy.bit(0)), false);
+                            const delay = if (d.gate == null and d.bridge == null and d.pull == null)
+                                d.delay.continuous(d.current, copy)
+                            else
+                                d.delay.to(copy.bit(0));
+                            try self.enqueue(.{ .drive = .{ .driver = at, .gen = st.gen, .value = copy } }, delay, false);
                         }
                     } else {
                         @memcpy(d.current.planes, value.planes);
@@ -2323,7 +2395,9 @@ const Run = struct {
                 },
                 .disable_block => |b| {
                     try self.disableRange(b.start, b.end);
-                    pc += 1;
+                    // IEEE1364 §10.3: self/ancestor disable resumes AFTER the
+                    // target block, while a sibling disable continues here.
+                    pc = if (pc >= b.start and pc < b.end) b.end else pc + 1;
                     continue;
                 },
                 .restart => |s| {
@@ -2902,6 +2976,245 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     }
 }
 
+test "continuous vector delay audit_assignment_vector_delay" {
+    try expectRun(
+        \\// IEEE1364-2005 §6.1.3: vector nonzero-to-nonzero uses rising delay,
+        \\// even if one bit falls. Whole-vector transition to zero uses falling delay;
+        \\// all-z uses turnoff. Samples deliberately avoid exact update-time races.
+        \\//! inherited IEEE 1364-2005 6.1.3
+        \\`timescale 1ns/1ns
+        \\module audit_assignment_vector_delay;
+        \\  reg [1:0] a;
+        \\  wire [1:0] y;
+        \\  assign #(2,7,4) y = a;
+        \\  initial begin
+        \\    a = 0;
+        \\    #10 a = 1;
+        \\    #3 $display("nonzero=%b", y);
+        \\    a = 2;
+        \\    #3 $display("nonzero_to_nonzero=%b", y);
+        \\    a = 0;
+        \\    #6 $display("before_fall=%b", y);
+        \\    #2 $display("after_fall=%b", y);
+        \\    a = 2'bzz;
+        \\    #3 $display("before_turnoff=%b", y);
+        \\    #2 $display("after_turnoff=%b", y);
+        \\    $finish(0);
+        \\  end
+        \\endmodule
+    ,
+        \\nonzero=01
+        \\nonzero_to_nonzero=10
+        \\before_fall=10
+        \\after_fall=00
+        \\before_turnoff=00
+        \\after_turnoff=zz
+        \\
+    );
+}
+
+test "continuous vector delay audit_assignment_vector_delay_unknown" {
+    try expectRun(
+        \\// IEEE1364-2005 §6.1.3: vector transitions other than nonzero->zero
+        \\// and all-z use rising delay. Mixed x/z is not all-z; unlike scalar gates,
+        \\// a vector transition to x does not select the minimum delay.
+        \\// #(7,5,2): start00; at10 assign0x -> due17; at19 assign1z -> due26;
+        \\// at28 assignzz -> due30. Samples avoid update instants.
+        \\//! inherited IEEE 1364-2005 6.1.3
+        \\`timescale 1ns/1ns
+        \\module audit_assignment_vector_delay_unknown;
+        \\  reg [1:0] a;
+        \\  wire [1:0] y;
+        \\  assign #(7,5,2) y = a;
+        \\  initial begin
+        \\    a = 0;
+        \\    #10 a = 2'b0x;
+        \\    #3 $display("before_x=%b", y);
+        \\    #5 $display("after_x=%b", y);
+        \\    #1 a = 2'b1z;
+        \\    #3 $display("before_mixed_z=%b", y);
+        \\    #5 $display("after_mixed_z=%b", y);
+        \\    #1 a = 2'bzz;
+        \\    #1 $display("before_all_z=%b", y);
+        \\    #2 $display("after_all_z=%b", y);
+        \\    $finish(0);
+        \\  end
+        \\endmodule
+    ,
+        \\before_x=00
+        \\after_x=0x
+        \\before_mixed_z=0x
+        \\after_mixed_z=1z
+        \\before_all_z=1z
+        \\after_all_z=zz
+        \\
+    );
+}
+
+test "continuous vector delay audit_assignment_pending_same_value" {
+    try expectRun(
+        \\// IEEE1364-2005 §6.1.3(b): cancel pending propagation only if the newly
+        \\// evaluated RHS differs from the pending value. At10 a rises, scheduling1
+        \\// at15. At12 b rises too, but(a|b) is still1: delivery remains15, not17.
+        \\//! inherited IEEE 1364-2005 6.1.3
+        \\`timescale 1ns/1ns
+        \\module audit_assignment_pending_same_value;
+        \\  reg a, b;
+        \\  wire y;
+        \\  assign #5 y = a | b;
+        \\  initial begin
+        \\    a = 0; b = 0;
+        \\    #10 a = 1;
+        \\    #2 b = 1;
+        \\    #2 $display("before=%b", y);
+        \\    #2 $display("original_deadline_passed=%b", y);
+        \\    $finish(0);
+        \\  end
+        \\endmodule
+    ,
+        \\before=0
+        \\original_deadline_passed=1
+        \\
+    );
+}
+
+test "continuous vector delay examines upper limbs and keeps scalar selection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const zero = try filled(arena.allocator(), 129, false, .zero);
+    const high = try filled(arena.allocator(), 129, false, .zero);
+    setBit(high, 128, .one);
+    const off = try filled(arena.allocator(), 129, false, .z);
+    const mixed = try filled(arena.allocator(), 129, false, .z);
+    setBit(mixed, 128, .x);
+    const delay = Delay{ .rise = 7, .fall = 5, .off = 2, .present = true };
+    try std.testing.expectEqual(@as(u64, 7), delay.continuous(zero, high));
+    try std.testing.expectEqual(@as(u64, 5), delay.continuous(high, zero));
+    try std.testing.expectEqual(@as(u64, 2), delay.continuous(high, off));
+    try std.testing.expectEqual(@as(u64, 7), delay.continuous(high, mixed));
+    for ([_]Int.Bit{ .zero, .one, .x, .z }) |bit| {
+        const scalar = try filled(arena.allocator(), 1, false, bit);
+        try std.testing.expectEqual(delay.to(bit), delay.continuous(scalar, scalar));
+    }
+}
+
+test "readmem validates high token characters beyond destination width" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // IEEE17.2.9 forbids length/base prefixes and non-radix digits, even
+    // where all of those characters would be discarded by value truncation.
+    for ([_][]const u8{ "8'h11", "'h11", "g11", ";11" }) |token|
+        try std.testing.expectError(error.BadDigit, memWord(a, token, .hex, 8));
+    for ([_][]const u8{ "8'b00010001", "'b00010001", "200010001", "g00010001" }) |token|
+        try std.testing.expectError(error.BadDigit, memWord(a, token, .binary, 8));
+    // Valid high digits remain legal and truncate; separators still do not
+    // consume bit positions. Validation must not become a width rejection.
+    const hex = try memWord(a, "aB_11", .hex, 8);
+    const bin = try memWord(a, "10_00010001", .binary, 8);
+    try std.testing.expectEqual(@as(?i64, 17), hex.asInt());
+    try std.testing.expectEqual(@as(?i64, 17), bin.asInt());
+}
+
+fn expectMemoryLoad(data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, fails: bool) !void {
+    return expectMemoryLoadTask("$readmemh", data, bounds, expected, warnings, fails);
+}
+
+fn expectMemoryLoadTask(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, fails: bool) !void {
+    return expectMemoryLoadDiagnostic(task, data, bounds, expected, warnings, if (fails) "memory file address is outside the requested load range" else null);
+}
+
+fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []const u8, expected: []const u8, warnings: u32, failure_phrase: ?[]const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "words.hex", .data = data });
+    const file_name = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/test.v", .{tmp.sub_path});
+    const source = try std.fmt.allocPrint(a, "module m; reg [7:0] mem[3:0]; initial begin " ++
+        "mem[0]=8'haa; mem[1]=8'hbb; mem[2]=8'hcc; mem[3]=8'hdd; " ++
+        "{s}(\"words.hex\",mem{s}); " ++
+        "$display(\"%h %h %h %h\",mem[0],mem[1],mem[2],mem[3]); end endmodule", .{ task, bounds });
+    var bag = diag.Bag.init(a);
+    var output = std.Io.Writer.Allocating.init(a);
+    const result = run(a, source, .{ .io = std.testing.io, .file_name = file_name }, &bag, &output.writer);
+    if (failure_phrase) |phrase| {
+        try std.testing.expectError(error.DigitalFailed, result);
+        var messages = std.Io.Writer.Allocating.init(a);
+        try diag.render(&bag, &messages.writer, .{});
+        try std.testing.expect(std.mem.indexOf(u8, messages.written(), phrase) != null);
+    } else try result;
+    try std.testing.expectEqual(warnings, bag.warn_count);
+    try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "readmem count mismatch warns without refusing or clearing memory" {
+    try expectMemoryLoad("// @0 is only a comment\n", "", "aa bb cc dd\n", 1, false);
+    try expectMemoryLoad("11 22 33 44 55", "", "11 22 33 44\n", 1, false);
+    try expectMemoryLoad("11 // 99\n22 /* 88 */", ",0,3", "11 22 cc dd\n", 1, false);
+    try expectMemoryLoad("11 22 33 44", ",0,3", "11 22 33 44\n", 0, false);
+    try expectMemoryLoad("11 22 33 44 55", ",3,0", "44 33 22 11\n", 1, false);
+    try expectMemoryLoad("11 22", ",3,0", "aa bb 22 11\n", 1, false);
+    try expectMemoryLoad("11 22 33 44", ",3,0", "44 33 22 11\n", 0, false);
+}
+
+test "readmem question mark is high impedance in both radices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const hex = try memWord(a, "0?", .hex, 8);
+    const bin = try memWord(a, "0000000?", .binary, 8);
+    for (0..4) |i| try std.testing.expectEqual(Int.Bit.z, hex.bit(@intCast(i)));
+    try std.testing.expectEqual(Int.Bit.z, bin.bit(0));
+}
+
+test "readmem underscore must follow an initial digit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]Radix{ .hex, .binary }) |radix| {
+        for ([_][]const u8{ "_", "__", "_11" }) |token|
+            try std.testing.expectError(error.BadDigit, memWord(arena.allocator(), token, radix, 8));
+    }
+    const legal = try memWord(arena.allocator(), "1__1_", .hex, 8);
+    try std.testing.expectEqual(@as(?i64, 17), legal.asInt());
+}
+
+test "readmem validates discarded excess tokens and still restarts after addresses" {
+    const invalid = "the memory file has a malformed data word";
+    try expectMemoryLoadDiagnostic("$readmemh", "11 ;", ",0,0", "", 0, invalid);
+    try expectMemoryLoadDiagnostic("$readmemb", "1 2", ",0,0", "", 0, invalid);
+    try expectMemoryLoadDiagnostic("$readmemh", "11 _", ",0,0", "", 0, invalid);
+    try expectMemoryLoadDiagnostic("$readmemh", "11 22", ",0,0", "11 bb cc dd\n", 1, null);
+    try expectMemoryLoadDiagnostic("$readmemh", "11 22 @0 33", ",0,0", "33 bb cc dd\n", 0, null);
+}
+
+test "readmem addresses suppress count warning and relocate after range end" {
+    try expectMemoryLoad("@1 11", ",0,3", "aa 11 cc dd\n", 0, false);
+    try expectMemoryLoad("11 22 33 44 55 @2 66", ",0,3", "11 22 66 44\n", 0, false);
+    try expectMemoryLoad("11 22 33 44 @2 66 77", ",3,0", "44 77 66 11\n", 0, false);
+    try expectMemoryLoad("11 22 @0", ",1,2", "", 0, true);
+    try expectMemoryLoad("@3 11", ",2,1", "", 0, true);
+}
+
+test "readmem start-only defaults to highest address and stays upward" {
+    try expectMemoryLoad("11 22", ",2", "aa bb 11 22\n", 0, false);
+    try expectMemoryLoad("11", ",2", "aa bb 11 dd\n", 1, false);
+    try expectMemoryLoad("11 22 33", ",2", "aa bb 11 22\n", 1, false);
+    try expectMemoryLoad("11", ",3", "aa bb cc 11\n", 0, false);
+    try expectMemoryLoad("@3 11 @2 22 33", ",2", "aa bb 22 33\n", 0, false);
+    try expectMemoryLoad("@1 11", ",2", "", 0, true);
+    try expectMemoryLoad("11 22 @4", ",2", "", 0, true);
+}
+
+test "readmem formfeeds delimit words and addresses without adding words" {
+    try expectMemoryLoad("\x0c11\x0c22\x0c33\x0c44\x0c", "", "11 22 33 44\n", 0, false);
+    try expectMemoryLoad("\x0c@2\x0c11\x0c22\x0c", ",2", "aa bb 11 22\n", 0, false);
+    try expectMemoryLoad("/* not words: @0 55 */\x0c11\x0c22", ",2", "aa bb 11 22\n", 0, false);
+    try expectMemoryLoadTask("$readmemb", "\x0c00010001\x0c00100010\x0c", ",2", "aa bb 11 22\n", 0, false);
+    try expectMemoryLoadTask("$readmemb", "@3\x0c1\x0c@2\x0c10\x0c11", ",2", "aa bb 02 03\n", 0, false);
+}
+
 fn expectRun(source: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2914,6 +3227,97 @@ fn expectRun(source: []const u8, expected: []const u8) !void {
         return e;
     };
     try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "wait constant true and constant expression continue immediately" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\initial begin
+        \\  wait (1) $display("literal t=%0d", $time);
+        \\  wait ((2 + 3) == 5) $display("expression t=%0d", $time);
+        \\  wait (1);
+        \\  $display("null body t=%0d", $time);
+        \\end
+        \\endmodule
+    , "literal t=0\nexpression t=0\nnull body t=0\n");
+}
+
+test "wait constant false suspends without blocking other processes" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\initial begin
+        \\  $display("armed");
+        \\  wait (0) $display("wrong literal");
+        \\  $display("wrong continuation");
+        \\end
+        \\initial begin
+        \\  wait (7 == 8) $display("wrong expression");
+        \\end
+        \\initial begin
+        \\  #2 $display("other t=%0d", $time);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "armed\nother t=2\n");
+}
+
+test "wait dependent condition still retests and resumes at true level" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\integer count;
+        \\initial begin
+        \\  count = 0;
+        \\  wait (count == 2) $display("resumed count=%0d t=%0d", count, $time);
+        \\end
+        \\initial begin
+        \\  #1 count = 1;
+        \\  #1 count = 2;
+        \\  #1 $finish(0);
+        \\end
+        \\endmodule
+    , "resumed count=2 t=2\n");
+}
+
+test "clog2 scans arbitrary-width unsigned bit patterns" {
+    try expectRun(
+        \\module m;
+        \\reg [64:0] wide;
+        \\reg [128:0] wider;
+        \\reg signed [128:0] signed_wide;
+        \\reg [256:0] many;
+        \\initial begin
+        \\  wide = 65'd1 << 64;
+        \\  wider = 129'd1 << 128;
+        \\  signed_wide = wider;
+        \\  many = 257'd1 << 256;
+        \\  $display("%0d %0d %0d %0d", $clog2(wide), $clog2(wider), $clog2(signed_wide), $clog2(many));
+        \\  $display("%0d %0d %0d", $clog2(wide + 65'd1), $clog2(wider + 129'd1), $clog2(many + 257'd1));
+        \\  $display("%0d %0d %0d", $clog2(wide - 65'd1), $clog2(wider - 129'd1), $clog2(many - 257'd1));
+        \\  $display("%0d %0d %0d %0d", $clog2(257'd0), $clog2(257'd1), $clog2(257'd2), $clog2(257'd3));
+        \\  $display("%0d %0d %0d", $clog2(32'shffffffff), $clog2(64'h8000000000000001), $clog2(0) - 1);
+        \\end
+        \\endmodule
+    , "64 128 128 256\n65 129 257\n64 128 256\n0 0 1 2\n32 64 -1\n");
+}
+
+test "clog2 limb scan includes every limb and preserves unknown policy" {
+    var planes: [10]u64 = @splat(0);
+    const value: Int.Literal = .{ .width = 257, .signed = false, .sized = true, .planes = &planes };
+    try std.testing.expectEqual(@as(u64, 0), integerCeilingLog2(value));
+    for (0..257) |bit| {
+        @memset(&planes, 0);
+        planes[bit / 64] = @as(u64, 1) << @intCast(bit % 64);
+        try std.testing.expectEqual(@as(u64, @intCast(bit)), integerCeilingLog2(value));
+        if (bit != 0) {
+            planes[0] |= 1;
+            try std.testing.expectEqual(@as(u64, @intCast(bit + 1)), integerCeilingLog2(value));
+        }
+    }
+    planes[5] = 1;
+    try std.testing.expectEqual(@as(u64, 0), integerCeilingLog2(value));
 }
 
 test "§12.4 a downward hierarchical reference reads the named instance's net" {
@@ -3536,7 +3940,7 @@ test "unknown delay is zero and finish discards pending later processes" {
 }
 
 test "disable terminates a named block and resumes after it" {
-    // Both halves of IEEE 1364 clause 11's sentence, and they are separable:
+    // Both halves of IEEE 1364 §10.3's sentence, and they are separable:
     // a `disable` that only cancelled would print 0001, and one that only
     // resumed would let the block's own `#4` write 0010 land first.
     try expectRun(
@@ -3557,6 +3961,71 @@ test "disable terminates a named block and resumes after it" {
         \\end
         \\endmodule
     , "after 0100\n");
+}
+
+test "disable self and ancestor skip the active target remainder" {
+    try expectRun(
+        \\module m;
+        \\integer r;
+        \\initial begin
+        \\  r=0;
+        \\  begin : outer
+        \\    begin : inner
+        \\      r=1; disable inner; r=99;
+        \\    end
+        \\    r=r+2;
+        \\  end
+        \\  $display("inner=%0d",r);
+        \\  begin : ancestor
+        \\    begin : descendant
+        \\      r=1; disable ancestor; r=99;
+        \\    end
+        \\    r=88;
+        \\  end
+        \\  r=r+4; $display("ancestor=%0d",r);
+        \\end
+        \\endmodule
+    , "inner=3\nancestor=5\n");
+}
+
+test "disable loop ancestor after suspension leaves unrelated processes alive" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\integer count,tail,resumed,sibling;
+        \\initial begin
+        \\  count=0; tail=0; resumed=0;
+        \\  begin : stop_loop
+        \\    repeat(3) begin
+        \\      #1; count=count+1;
+        \\      if(count==2) disable stop_loop;
+        \\      tail=tail+1;
+        \\    end
+        \\  end
+        \\  resumed=1;
+        \\end
+        \\initial begin sibling=0; #3; sibling=1; end
+        \\initial begin
+        \\  #4; $display("loop=%0d tail=%0d resumed=%0d sibling=%0d",count,tail,resumed,sibling);
+        \\end
+        \\endmodule
+    , "loop=2 tail=1 resumed=1 sibling=1\n");
+}
+
+test "disable self allows later reentry and inactive sibling stays inactive" {
+    try expectRun(
+        \\module m;
+        \\integer count;
+        \\initial begin
+        \\  count=0;
+        \\  repeat(2) begin : work
+        \\    count=count+1; disable work; count=99;
+        \\  end
+        \\  disable work;
+        \\  $display("reentry=%0d",count);
+        \\end
+        \\endmodule
+    , "reentry=2\n");
 }
 
 test "display retains escaped NUL bytes and unsized integer width" {

@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.21/11.6.22/11.6.23 process, named block, for-loop, if-else and case
 // objects. What the fixture can pin is the §5.2 execution the object model
 // describes: the loop trip count, which arm of the if runs, and which case item
@@ -13,8 +16,6 @@
 // the same three trips gives 1.5 - 1.0 + 3.0 = 3.5. Matching `default` at
 // k = 3 gives 0.0. So 5.5 is reachable only by the intended path.
 //
-//! lrm 11.6.21
-//! lrm 11.6.23
 //! lrm 5.3.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

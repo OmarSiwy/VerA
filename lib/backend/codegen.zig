@@ -219,7 +219,7 @@ pub fn generate(
     mir: *const Mir,
     lower: *const Lower,
     verdict: proof.Verdict,
-    /// Set if any unit collapsed to `@compileError` (see `Gen.any_fatal`).
+    /// Set for any fatal generation failure, including metadata outside units.
     fatal_out: *bool,
     opts: Options,
 ) Error!Output {
@@ -247,7 +247,7 @@ pub fn generate(
     errdefer g.out.deinit(gpa);
     try g.prepare();
     try g.emitFile();
-    fatal_out.* = g.any_fatal;
+    fatal_out.* = g.any_fatal or (if (opts.diags) |bag| bag.failed() else false);
     return .{
         .text = try g.out.toOwnedSlice(gpa),
         .names = g.file_names.items,
@@ -342,8 +342,8 @@ pub const Gen = struct {
     /// system function (W0852): the language defines no value for it, so there
     /// is nothing for 0.0 to contradict — only a host to name out loud.
     fatal: ?[]const u8 = null,
-    /// Sticky: any unit collapsed to `@compileError`. Reported out so callers do
-    /// not have to substring-search the generated file for it.
+    /// Sticky: generation failed, even outside a unit body. Reported out so
+    /// callers do not have to substring-search generated text for a refusal.
     any_fatal: bool = false,
     /// Seeds `fatal` for the NEXT unit, for a gap visible from the unit's
     /// DECLARATION rather than from an instruction in its body (§3.6.2.2
@@ -4588,8 +4588,8 @@ pub const Gen = struct {
                 self.pinLanes(b2);
                 try self.helper2("zAtan2", a, b2);
             },
-            .fmin => try self.method2(a, "min", b2),
-            .fmax => try self.method2(a, "max", b2),
+            .fmin => try self.helper2("zMin", a, b2),
+            .fmax => try self.helper2("zMax", a, b2),
             .pow => {
                 // The scalar interface only has pow(S, f64); a constant exponent
                 // (the overwhelming case) uses it, anything else goes through
@@ -5491,6 +5491,7 @@ pub const Gen = struct {
                 "and arithmetic over them are available where the host evaluates it",
             .{},
         );
+        self.any_fatal = true;
         if (self.fatal == null) self.fatal = "LRM 4.5: an analog operator control argument " ++
             "must be a constant or parameter expression";
         return "0.0";
@@ -5805,6 +5806,7 @@ pub const Gen = struct {
     }
 
     pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+        self.any_fatal = true;
         if (self.fatal == null) self.fatal = try std.fmt.allocPrint(self.arena, fmt, args);
         try self.b("S.con(0.0)", .{});
     }
@@ -6075,11 +6077,9 @@ pub const Gen = struct {
         // picks from the destination's declared type. All four are pure functions
         // of the same two strings, so nothing here has to sequence them.
         //
-        // ponytail: an item the scan never reached reads as zero. C — and
-        // §9.5.4.2, which inherits C's formatter — leaves such a destination
-        // UNTOUCHED, which would need the assignment to become a select on a
-        // per-item `found` flag. Reading a destination past the returned count is
-        // the only way to observe the difference.
+        // Unreached item helpers return default payloads, not assignments.
+        // Lower.lowerScan guards each destination write with count > index,
+        // retaining its incoming SSA value when conversion did not assign it.
         if (eq(u8, name, "$table_model")) return self.emitTable(inst, args); // §9.21
         // §§3.2/5.7 runtime array index — one switch, see `emitIdx`.
         if (array_index_types.get(name)) |ty| return self.emitIdx(args, ty);
@@ -6126,7 +6126,7 @@ pub const Gen = struct {
         }
         if (eq(u8, bare, "abs") and args.len >= 1) return self.method1(args[0], "abs");
         if ((eq(u8, bare, "min") or eq(u8, bare, "max")) and args.len >= 2)
-            return self.method2(args[0], if (bare[1] == 'i') "min" else "max", args[1]);
+            return self.helper2(if (bare[1] == 'i') "zMin" else "zMax", args[0], args[1]);
 
         // Nothing above claimed the name, so it is not a Chapter 9 function, not
         // an Annex D macro and not a §4.5 operator: it is an UNREGISTERED system
@@ -6360,7 +6360,7 @@ pub const Gen = struct {
                 in, n, try self.ctrlEval(args, 1, "0.0"),
             }),
             .idtmod => try self.b("zIdtmod(S, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
-                in,                                 n,
+                in,                                n,
                 try self.ctrlEval(args, 1, "0.0"), try self.ctrlEval(args, 2, "0.0"),
                 try self.ctrlEval(args, 3, "0.0"),
             }),
@@ -8617,6 +8617,13 @@ const header_txt =
 const math_txt =
     \\// ---- §4.3 math, value form (derivative propagates by composition) ----
     \\
+    \\// §4.3.1 defines the derivative at equality using strict comparisons:
+    \\// min(a,b) = (a < b) ? a : b; max(a,b) = (a > b) ? a : b.
+    \\// Compose the contract's masks and winner-derivative selection rather
+    \\// than inheriting a host min/max primitive's possibly different tie rule.
+    \\fn zMin(comptime S: type, a: S, b: S) S { return a.lt(b).sel(a, b); }
+    \\fn zMax(comptime S: type, a: S, b: S) S { return b.lt(a).sel(a, b); }
+    \\
     \\/// Device-routed f64 transcendentals for the SCALAR paths (`R`, the
     \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
     \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
@@ -9896,6 +9903,25 @@ test "codegen: §5.8 control flow reconstructs into structured Zig" {
     try std.testing.expect(std.mem.indexOf(u8, src, "break :B") != null);
 }
 
+test "codegen: minmax tie derivatives use source-defined mask selection" {
+    for ([_][]const u8{ "min", "$min", "max", "$max" }) |name| {
+        const input = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "module m(p,q); inout p,q; electrical p,q; analog I(p) <+ {s}(V(p),V(q)); endmodule",
+            .{name},
+        );
+        defer std.testing.allocator.free(input);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, input, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        const call = if (std.mem.endsWith(u8, name, "min")) "zMin(S, " else "zMax(S, ";
+        try std.testing.expect(std.mem.indexOf(u8, src, call) != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "return a.lt(b).sel(a, b);") != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "return b.lt(a).sel(a, b);") != null);
+    }
+}
+
 test "codegen: if-converted diamond emits an eager mask select in a strict unit" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -10114,10 +10140,8 @@ test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own inter
     // `fmtF64`'s, which is every other constant in the emitted device too.
     const p18 = "0.000000000000000001"; // 1e-18
     const p24 = "0.000000000000000000000001"; // 1e-24
-    try std.testing.expect(std.mem.indexOf(u8, src,
-        ".{ .interp = .linear, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src,
-        ".{ .interp = .log, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .interp = .linear, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .interp = .log, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
     // One exported kind for both clauses, each row naming its own table, and
     // both independent generators (§4.6.4.6: two calls, two sources).
     try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .table, .source = 0, .table = 0 }") != null);
@@ -10158,8 +10182,7 @@ test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a li
     const src = try h.gen(std.testing.allocator);
     // Sorted at compile time on the DEFAULTS, so `noise_tables` keeps the
     // invariant `contract.validate` enforces...
-    try std.testing.expect(std.mem.indexOf(u8, src,
-        ".points = &.{ .{ 1.0, 0.000000000000000001 }, .{ 1000000.0, 0.000000000000000000000001 } }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".points = &.{ .{ 1.0, 0.000000000000000001 }, .{ 1000000.0, 0.000000000000000000000001 } }") != null);
     // ...and the hook returns the same two knots in the same order, reading
     // the card, with the run-time sort a reordering card would need.
     const at = std.mem.indexOf(u8, src, "pub fn noiseTablePoints(model: *const Model) [2][2]f64 {").?;
@@ -11253,6 +11276,34 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     // "unreachable code" at a line of generated code).
     try std.testing.expect(std.mem.indexOf(u8, src, "\n    @compileError(\"LRM 4.5") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
+}
+
+test "codegen: metadata control failure stays fatal with and without diagnostics" {
+    // §4.5.14 permits first-use capture of a nonliteral constant argument.
+    // Dynamic maxdelay is currently unsupported, not invalid source. Whatever
+    // that limitation's diagnostic, callers must never receive a success flag
+    // merely because a later unit reset the per-body `fatal` field.
+    for ([_]bool{ false, true }) |with_diags| {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator,
+            \\module sampled(p, n, c);
+            \\  inout p, n, c;
+            \\  electrical p, n, c;
+            \\  analog I(p,n) <+ absdelay(V(p,n), 1e-9, V(c));
+            \\endmodule
+        , &h);
+        defer h.deinit();
+        const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(!h.bag.failed());
+        const a = h.arena_state.allocator();
+        var fatal = false;
+        _ = try generate(a, a, &h.mir, &h.low, v, &fatal, .{
+            .diags = if (with_diags) &h.bag else null,
+        });
+        try std.testing.expect(fatal);
+        try std.testing.expectEqual(with_diags, h.bag.failed());
+    }
 }
 
 test "codegen: §12.32.3 an unregistered system function is W0852 and a host call, not a refusal" {

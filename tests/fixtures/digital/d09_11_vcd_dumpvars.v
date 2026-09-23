@@ -1,12 +1,10 @@
-// IEEE 1364-2005 §§18.1-18.2, the standard VCD file — the conformance plan's
-// 18.1-18.2 row, and the row docs/CLAUSE-AUDIT.md:357 already records as "There
-// is no VCD code, no VCD fixture, and no VCD rejection fixture". The only
-// occurrence of the string $dumpvars anywhere in the tree is an unrelated
-// doc-comment example at lib/frontend/preprocessor.zig:289. Verilog-AMS does
-// not extend these tasks, so the inherited definition governs in full.
+// IEEE 1364-2005 §§18.1–18.2: four-state VCD artifact witness.
+// The retained golden is an implementation-specific snapshot, not a portable
+// byte-for-byte conformance oracle. See VCD-ORACLE-001 in
+// docs/conformance-vcd-review.md and tools/vcd_semantics.py.
 //
 // The tasks used here:
-//   $dumpfile(name)       names the dump file; one per simulation.
+//   $dumpfile(name)       names the dump file.
 //   $dumpvars(levels, scope)
 //                         selects what to dump. `levels` 0 means the named
 //                         scope and EVERY level below it.
@@ -30,8 +28,8 @@
 //
 //   Value changes. All four steps of the initial block:
 //     t=0  $dumpfile and $dumpvars run, then a <- 0 and v <- 0000. §18.2
-//          emits ONE record per time step, after the step's values have
-//          settled, so the #0 record shows the settled 0 and 0000 and not the
+//          starts dumping at the end of the current time unit (§18.1.3),
+//          so the initial checkpoint observes 0 and 0000 and not the
 //          X the variables held when $dumpvars was called.
 //            #0
 //            $dumpvars
@@ -48,7 +46,7 @@
 //            #2
 //            b1010 "
 //     t=3  a <- 1'bx and v <- 4'bz01x in the same step. Both appear under one
-//          #3 record, in declaration order.
+//          #3 record (declaration order is this snapshot's convention).
 //            #3
 //            x!
 //            bz01x "
@@ -58,10 +56,8 @@
 //          These are the four-state encodings: scalar x is the single
 //          character `x` prefixed to the code with NO separating space, while
 //          a vector always has the `b` prefix and a space before the code.
-//     $finish(0) then runs in that same step. The #3 record must already be
-//     in the file: §18.1 provides $dumpflush precisely so a program can force
-//     an EARLY flush, which would be meaningless if the final one were
-//     optional. So the file ends after `bz01x "` with no further record.
+//     The snapshot ends at #3. The old inference from $dumpflush to a
+//     mandatory exact final line is withdrawn (VCD-ORACLE-001).
 //
 // CONVENTION, stated so a reviewer is not misled. §18.2 does not mandate WHICH
 // printable-ASCII codes a writer picks, nor the exact whitespace inside a
@@ -75,8 +71,13 @@
 //     byte for byte. SPEC.md carries the normaliser itself; it is token-based
 //     rather than line-based, because a line-oriented `sed` range mis-deletes
 //     when `$date … $end` lands on a single line.
-// Everything else in this golden — the record kinds, their order, the value
-// encodings, the timestamps and the one-record-per-step rule — is normative.
+// Arbitrary identifier assignment, independent variable ordering, free-format
+// layout and empty timestamp records must not fail semantic comparison.
+// The old claim that all remaining exact bytes/order were normative is withdrawn.
+// Date/version/comments must be retained for independent metadata checks:
+// §18.2.3.8 requires dumpfile task/expression information, and §18.1.5 requires
+// a size-limit comment when the limit is reached. Deleting those sections is
+// permitted only for the old snapshot comparison, not a conformance check.
 //
 //! lrm inherited IEEE 1364-2005 18.1 ($dumpfile, $dumpvars)
 //! lrm inherited IEEE 1364-2005 18.2 (VCD format, identifier codes, value changes)

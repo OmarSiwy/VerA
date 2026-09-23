@@ -27,7 +27,13 @@ module expressions;
     negative=-1; count=0;
     $display("compound-unsigned-compare %b",((negative>>count)+0)>32'h1);
     count=1;
-    $display("unsigned-arithmetic-shift %b",((negative>>>count)+0)<32'h80000000);
+    // IEEE4.8 permits native integers wider than32. Fix BOTH RHS widths so
+    // unsigned comparison context yields 0x7fffffff after shifting, on every
+    // permitted native integer width. The earlier native-integer operand and
+    // unsized zero could instead yield a value above0x80000000 on wider hosts.
+    // WIDTH-CONTEXT in conformance-ieee-expression-width-review.md tracks this
+    // oracle correction; the required printed result remains1.
+    $display("unsigned-arithmetic-shift %b",((32'shffffffff>>>count)+32'sd0)<32'h80000000);
     $display("signed-arithmetic-shift %b",((negative>>>count)+0)<32'sh80000000);
     wide=(4'hf+4'h1)==4'h0;
     $display("comparison-boundary %b",wide);

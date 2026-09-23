@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.16 system FUNCTION call object. The construct is not the one 05 uses:
 // §2.8.3 Syntax 2-3 separates them,
 //
@@ -37,7 +40,6 @@
 // operand position is what the two checks assert, and both of their wants are
 // unchanged. The contribution is here only to give the device a residual.
 //
-//! lrm 11.6.16
 //! lrm 6.3.6
 //! lrm 2.8.3
 //! lrm 9.18

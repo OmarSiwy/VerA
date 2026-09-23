@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.16 function call object. The Verilog-A rule it models is §4.7.1: an
 // analog user-defined function returns through the implicit variable that shares
 // its name, so `square = x*x` is the return value.
@@ -5,7 +8,6 @@
 // V(p) = 1.5 against n at its default 0 makes x = 1.5, and 1.5*1.5 = 2.25 is
 // exact in binary.
 //
-//! lrm 11.6.16
 //! lrm 4.7.1
 //! bias V(p) = 1.5
 `include "check.vh"

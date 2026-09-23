@@ -1,5 +1,32 @@
 # Annex E coverage
 
+## Source-audit correction (2026-09-23)
+
+The historical census and green/closed assertions below are not a current
+conformance measurement. See [the Annex E/F audit](../../../docs/conformance-annex-ef-review-draft.md)
+for the PDF review, remaining obligations and targeted new results.
+
+In particular, a parsed `.MODEL`/`.SUBCKT` interface is not execution of its
+model parameters or body. E.1.1 is conditional on the supported SPICE flavor,
+but silently dropping a supported subcircuit body does not establish its
+behavior. The supported dialect and its unsupported constructs need a precise
+contract; the existing H04 body/parameter tests remain relevant open evidence.
+
+The rotational parent declarations in the existing primitive attribute fixtures
+can supply the same discipline through E.3.2.2 when the attribute is ignored.
+Those tests establish legal examples, not a discriminating proof of attribute
+precedence. The attribute-only `primitive_segment_scan.va` is stronger and
+remains explicitly limited.
+
+New `audit_attribute_ignored_on_ordinary_instances.va` tests the required
+ignore-on-ordinary-module/connection boundary behaviorally. The three new
+`audit_primitive_attribute_*_rejected.va` cases separately test numeric,
+undeclared and discrete-domain values on analog primitives; each retains an
+XFAIL for the observed missing validation. Each pins a distinct intended future
+diagnostic phrase, not the attribute name alone: echoed source lines can contain
+that name even when an unrelated diagnostic caused rejection. These phrases
+are not claimed to be existing emitted diagnostics.
+
 Source: `docs/annex-e-spice.html`, read section by section.
 
 HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2-1`

@@ -206,8 +206,8 @@ pub const CompileResult = struct {
     /// `device.names`/`unit_lo`/`unit_hi` are the per-unit file map the
     /// orchestrator writes through `writeIfChanged` — see `codegen.Output`.
     device: codegen.Output = .{ .text = "" },
-    /// Whether `device.text` contains an `@compileError` unit. Reported by
-    /// codegen, so no caller has to substring-search a multi-megabyte output.
+    /// Whether codegen refused any construct, including metadata failures
+    /// without an `@compileError` unit. Callers must not consume failed output.
     device_has_compile_error: bool = false,
     /// Knobs that change WHAT stage 6 generates (§9.4 display handling today).
     codegen_opts: codegen.Options = .{},

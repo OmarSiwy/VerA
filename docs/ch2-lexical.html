@@ -58,8 +58,8 @@ nav a:hover { text-decoration: underline; }
 <div class="syntax">comment ::=                                                                // from A.9.2
         one_line_comment
       | block_comment
-one_line_comment ::= // comment_text \n
-block_comment ::= /* comment_text */
+one_line_comment ::= <b>//</b> comment_text \n
+block_comment ::= <b>/*</b> comment_text <b>*/</b>
 comment_text ::= { Any_ASCII_character }
 
 <strong>Syntax 2-1&mdash;Syntax for comments</strong></div>

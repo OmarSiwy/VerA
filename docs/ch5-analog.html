@@ -27,7 +27,7 @@ nav a:hover { text-decoration: underline; }
 figure { margin: 1.5rem 0; text-align: center; }
 figure.split { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: center; text-align: left; }
 figcaption { font-weight: bold; margin-top: 0.5rem; font-size: 0.95em; }
-figure svg { max-width: 100%; height: auto; }
+figure img { max-width: 100%; height: auto; }
 figure .legend { font-style: italic; font-size: 0.9em; text-align: left; margin: 0.5rem 0 0; }
 .tablefoot { font-size: 0.9em; margin: 0.25rem 0; }
 </style>
@@ -35,15 +35,17 @@ figure .legend { font-style: italic; font-size: 0.9em; text-align: left; margin:
 <body>
 <nav><a href="index.html">Index</a> <a href="ch4-expressions.html">&larr; Prev</a> <a href="ch6-hierarchy.html">Next &rarr;</a> </nav>
 <h1>5. Analog behavior</h1>
-<div class="note">Extracted from <a href="VAMS-LRM-2023.pdf#page=110">VAMS-LRM-2023.pdf, physical pages 110&ndash;146</a> (printed pages 97&ndash;133). Prose, examples, BNF productions, section numbers and captions follow the source; running headers, footers and page numbers have been removed. The six figures are redrawn here as inline SVG from the source reproductions &mdash; <a href="VAMS-LRM-2023.pdf#page=113">Figure 5-1</a>, <a href="VAMS-LRM-2023.pdf#page=114">Figure 5-2</a>, <a href="VAMS-LRM-2023.pdf#page=124">Figure 5-3</a>, <a href="VAMS-LRM-2023.pdf#page=125">Figure 5-4</a>, <a href="VAMS-LRM-2023.pdf#page=126">Figure 5-5</a> and <a href="VAMS-LRM-2023.pdf#page=140">Figure 5-6</a> &mdash; and <a href="VAMS-LRM-2023.pdf#page=138">Table 5-1</a> is transcribed as a real table. Consult the PDF for exact typography.</div>
+<div class="note">Extracted from <a href="VAMS-LRM-2023.pdf#page=110">VAMS-LRM-2023.pdf, physical pages 110&ndash;146</a> (printed pages 97&ndash;133). Prose, examples, BNF productions, section numbers and captions follow the source; running headers, footers and page numbers have been removed. The six figures are reproduced as direct PDF crops with their original captions &mdash; <a href="VAMS-LRM-2023.pdf#page=113">Figure 5-1</a>, <a href="VAMS-LRM-2023.pdf#page=114">Figure 5-2</a>, <a href="VAMS-LRM-2023.pdf#page=124">Figure 5-3</a>, <a href="VAMS-LRM-2023.pdf#page=125">Figure 5-4</a>, <a href="VAMS-LRM-2023.pdf#page=126">Figure 5-5</a> and <a href="VAMS-LRM-2023.pdf#page=140">Figure 5-6</a> &mdash; and <a href="VAMS-LRM-2023.pdf#page=138">Table 5-1</a> is transcribed as a real table. Figure image descriptions and the separately labeled code transcripts are editorial accessibility aids, not additional normative prose. Consult the PDF for exact typography.</div>
+
+<p class="note"><strong>Editorial typography key:</strong> Bold text in syntax boxes identifies literal terminals shown in red in the PDF. Unbold brackets, braces, bars and production symbols retain their grammar-notation role. Literal index brackets are bold; optional-argument brackets are not.</p>
 
 <h2 id="s5.1">5.1 Overview</h2>
 <p>The description of an analog behavior consists of setting up contributions for various signals under certain procedural or timing control. This section describes an analog procedural block, analog signals, contribution statements, procedural control statements, and analog timing control functions.</p>
 <h2 id="s5.2">5.2 Analog procedural block</h2>
 <p>Discrete time behavioral definitions within IEEE Std 1364 Verilog are encapsulated within the initial and always procedural blocks. Every initial and always block starts a separate concurrent activity flow. For continuous time simulation, the behavioral description is encapsulated within the analog procedural block. The syntax for analog block is shown in Syntax 5-1.</p>
 <div class="syntax">analog_construct ::=                                                                                  // from A.6.2
-       analog analog_statement
-     | analog initial analog_function_statement
+       <b>analog</b> analog_statement
+     | <b>analog</b> <b>initial</b> analog_function_statement
 analog_statement ::=                                                                                  // from A.6.4
        { attribute_instance } analog_loop_generate_statement
      | { attribute_instance } analog_loop_statement
@@ -57,7 +59,7 @@ analog_statement ::=                                                            
      | { attribute_instance } analog_event_control_statement
 analog_statement_or_null ::=
        analog_statement
-     | { attribute_instance } ;
+     | { attribute_instance } <b>;</b>
 
 
 <em>Syntax 5-1&mdash;Syntax for analog procedural block</em></div>
@@ -78,10 +80,10 @@ analog_statement_or_null ::=
 <h3 id="s5.3.1">5.3.1 Sequential blocks</h3>
 <p>The syntax for sequential blocks is shown in Syntax 5-2.</p>
 <div class="syntax">analog_seq_block ::=                                                                                  // from A.6.3
-       begin [ : analog_block_identifier { analog_block_item_declaration } ]
-           { analog_statement } end
+       <b>begin</b> [ <b>:</b> analog_block_identifier { analog_block_item_declaration } ]
+           { analog_statement } <b>end</b>
 analog_block_item_declaration ::=                                                                     // from A.2.8
-       { attribute_instance } parameter_declaration ;
+       { attribute_instance } parameter_declaration <b>;</b>
      | { attribute_instance } integer_declaration
      | { attribute_instance } real_declaration
 
@@ -124,15 +126,17 @@ analog_block_item_declaration ::=                                               
 <p>— It is also possible to access the flow passing through a port into a module. The name of the access function is derived from the flow nature of the discipline of the port. In this case, (&lt;&gt;) is used to delimit the port name rather than ().</p>
 <p>Example 4 — I(&lt;p1&gt;) is used to access the current flow into the module through the electrical port p1. This capability is discussed further in 5.4.3.</p>
 <h3 id="s5.4.2">5.4.2 Probes and sources</h3>
-<p>An analog component can be represented using a network of probes and controlled sources. The VerilogAMS HDL uses the concept of probes and sources as a means of unambiguously representing a network. The mapping between these representations are defined in following subsections.</p>
+<p>An analog component can be represented using a network of probes and controlled sources. The Verilog-AMS HDL uses the concept of probes and sources as a means of unambiguously representing a network. The mapping between these representations are defined in following subsections.</p>
 <h4 id="s5.4.2.1">5.4.2.1 Probes</h4>
 <p>If no value is specified for either the potential or the flow, the branch is a probe. If the flow of the branch appears in an expression anywhere in the module, the branch is a flow probe, otherwise the branch is a potential probe. Using both the potential and the flow of a probe branch is illegal. The models for probe branches are shown in Figure 5-1.</p>
-<figure><svg viewBox="0 0 560 270" width="560" role="img" aria-label="Figure 5-1: equivalent circuit models for probe branches. Left, a potential probe: a vertical branch wire broken by a plus sign, the italic label p and a minus sign. Right, a flow probe: a vertical branch wire with a downward arrow beside it labelled f."><defs><marker id="mk51" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><rect x="1" y="1" width="558" height="268" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="180" y1="42" x2="180" y2="82" stroke="#1a1a1a" stroke-width="2"/><text x="180" y="122" text-anchor="middle" font-size="26">+</text><text x="180" y="164" text-anchor="middle" font-size="22" font-style="italic">p</text><text x="180" y="208" text-anchor="middle" font-size="26">−</text><line x1="180" y1="220" x2="180" y2="242" stroke="#1a1a1a" stroke-width="2"/><line x1="390" y1="42" x2="390" y2="242" stroke="#1a1a1a" stroke-width="2"/><line x1="418" y1="98" x2="418" y2="166" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk51)"/><text x="440" y="142" font-size="22" font-style="italic">f</text></svg><figcaption>Figure 5-1: Equivalent circuit models for probe branches</figcaption></figure>
+<figure id="figure-5-1"><img src="figures/lrm-figure-5-1.png" alt="Original Figure 5-1: a potential probe with an open gap and a flow probe with a downward current arrow.">
+<figcaption>Figure 5-1: Equivalent circuit models for probe branches</figcaption></figure>
 <p>The branch potential of a flow probe is zero (0). The branch flow of a potential probe is zero (0).</p>
 <h4 id="s5.4.2.2">5.4.2.2 Sources</h4>
 <p>A branch, either named or unnamed, is a source branch if either the potential or the flow of that branch is assigned a value by a contribution statement (see 5.6) anywhere in the module. It is a potential source if the branch potential is specified and is a flow source if the branch flow is specified. A branch cannot simultaneously be both a potential and a flow source, although it can switch between them (a switch branch).</p>
 <p>Both the potential and the flow of a source branch are accessible in expressions anywhere in the module. The models for potential and flow sources are shown in Figure 5-2.</p>
-<figure><svg viewBox="0 0 600 300" width="600" role="img" aria-label="Figure 5-2: equivalent circuit models for source branches. Two identical branch models, each with a flow probe arrow labelled f and a potential probe labelled p with plus and minus signs. The left model has a diamond source symbol containing a plus and a minus (a potential source); the right model has a diamond source symbol containing a downward arrow (a flow source)."><defs><marker id="mk52" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><rect x="1" y="1" width="598" height="298" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="190" y1="20" x2="190" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="120" y1="55" x2="260" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="120" y1="55" x2="120" y2="100" stroke="#1a1a1a" stroke-width="2"/><line x1="260" y1="55" x2="260" y2="240" stroke="#1a1a1a" stroke-width="2"/><line x1="120" y1="240" x2="260" y2="240" stroke="#1a1a1a" stroke-width="2"/><line x1="190" y1="240" x2="190" y2="280" stroke="#1a1a1a" stroke-width="2"/><path d="M120,100 L150,145 L120,190 L90,145 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><text x="120" y="134" text-anchor="middle" font-size="18">+</text><text x="120" y="172" text-anchor="middle" font-size="18">−</text><line x1="175" y1="110" x2="175" y2="162" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk52)"/><text x="200" y="124" font-size="17" font-style="italic">f</text><text x="242" y="126" text-anchor="middle" font-size="18">+</text><text x="242" y="164" text-anchor="middle" font-size="17" font-style="italic">p</text><text x="242" y="202" text-anchor="middle" font-size="18">−</text><line x1="410" y1="20" x2="410" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="340" y1="55" x2="480" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="340" y1="55" x2="340" y2="100" stroke="#1a1a1a" stroke-width="2"/><line x1="480" y1="55" x2="480" y2="240" stroke="#1a1a1a" stroke-width="2"/><line x1="340" y1="240" x2="480" y2="240" stroke="#1a1a1a" stroke-width="2"/><line x1="410" y1="240" x2="410" y2="280" stroke="#1a1a1a" stroke-width="2"/><path d="M340,100 L370,145 L340,190 L310,145 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="340" y1="116" x2="340" y2="166" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk52)"/><line x1="395" y1="110" x2="395" y2="162" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk52)"/><text x="420" y="124" font-size="17" font-style="italic">f</text><text x="462" y="126" text-anchor="middle" font-size="18">+</text><text x="462" y="164" text-anchor="middle" font-size="17" font-style="italic">p</text><text x="462" y="202" text-anchor="middle" font-size="18">−</text></svg><p class="legend"><em>f</em> is a probe which measures the flow through the branch and <em>p</em> is a probe which measures the potential across the branch.</p><figcaption>Figure 5-2: Equivalent circuit models for source branches</figcaption></figure>
+<figure id="figure-5-2"><img src="figures/lrm-figure-5-2.png" alt="Original Figure 5-2: potential and flow sources, each with an open potential-probe gap and a flow-probe arrow.">
+<figcaption>Figure 5-2: Equivalent circuit models for source branches</figcaption></figure>
 <h3 id="s5.4.3">5.4.3 Accessing flow through a port</h3>
 <p>The port access function accesses the flow into a port of a module. The name of the access function is derived from the flow nature of the discipline of the port. However (&lt;&gt;) is used to delimit the port name, e.g., I(&lt;a&gt;) accesses the current through module port a.</p>
 <p>Example 1 — Consider the junction diode below, where the total diode current is monitored and a message is issued if it exceeds a given value.</p>
@@ -182,20 +186,20 @@ analog_block_item_declaration ::=                                               
 <p>Signals on nets and branches can be accessed only by either the access functions of the discipline associated with them or by the generic potential or flow access functions. The name of the net or the branch shall be specified as the argument to the access function. The syntax for analog signal access is shown in Syntax 5-3.</p>
 <div class="syntax">nature_access_function ::=                                                                            // from A.8.2
         nature_attribute_identifier
-      | potential
-      | flow
+      | <b>potential</b>
+      | <b>flow</b>
 branch_probe_function_call ::=
-        nature_access_function ( branch_reference )
-      | nature_access_function ( analog_net_reference [ , analog_net_reference ] )
-port_probe_function_call ::= nature_access_function ( &lt; analog_port_reference &gt; )
+        nature_access_function <b>(</b> branch_reference <b>)</b>
+      | nature_access_function <b>(</b> analog_net_reference [ <b>,</b> analog_net_reference ] <b>)</b>
+port_probe_function_call ::= nature_access_function <b>(</b> <b>&lt;</b> analog_port_reference <b>&gt;</b> <b>)</b>
 branch_reference ::=                                                                                  // from A.8.9
         hierarchical_branch_identifier
-      | hierarchical_branch_identifier [ constant_expression ]
+      | hierarchical_branch_identifier <b>[</b> constant_expression <b>]</b>
       | hierarchical_unnamed_branch_reference
 hierarchical_unnamed_branch_reference ::=
-        hierarchical_inst_identifier.branch ( branch_terminal [ , branch_terminal ] )
-      | hierarchical_inst_identifier.branch ( &lt; port_identifier &gt; )
-      | hierarchical_inst_identifier.branch ( &lt; hierarchical_port_identifier &gt; )
+        hierarchical_inst_identifier<b>.</b><b>branch</b> <b>(</b> branch_terminal [ <b>,</b> branch_terminal ] <b>)</b>
+      | hierarchical_inst_identifier<b>.</b><b>branch</b> <b>(</b> <b>&lt;</b> port_identifier <b>&gt;</b> <b>)</b>
+      | hierarchical_inst_identifier<b>.</b><b>branch</b> <b>(</b> <b>&lt;</b> hierarchical_port_identifier <b>&gt;</b> <b>)</b>
 analog_net_reference ::=
 
 
@@ -204,18 +208,18 @@ analog_net_reference ::=
 
 
        port_identifier
-     | port_identifier [ constant_expression ]
+     | port_identifier <b>[</b> constant_expression <b>]</b>
      | net_identifier
-     | net_identifier [ constant_expression ]
+     | net_identifier <b>[</b> constant_expression <b>]</b>
      | hierarchical_port_identifier
-     | hierarchical_port_identifier [ constant_expression ]
+     | hierarchical_port_identifier <b>[</b> constant_expression <b>]</b>
      | hierarchical_net_identifier
-     | hierarchical_net_identifier [ constant_expression ]
+     | hierarchical_net_identifier <b>[</b> constant_expression <b>]</b>
 analog_port_reference ::=
        port_identifier
-     | port_identifier [ constant_expression ]
+     | port_identifier <b>[</b> constant_expression <b>]</b>
      | hierarchical_port_identifier
-     | hierarchical_port_identifier [ constant_expression ]
+     | hierarchical_port_identifier <b>[</b> constant_expression <b>]</b>
 
 
 <em>Syntax 5-3&mdash;Syntax for analog signal access</em></div>
@@ -330,8 +334,8 @@ analog_port_reference ::=
      endmodule</code></pre>
 <p>The syntax for referencing access attributes is shown in Syntax 5-4. This syntax shall not be used for the access, ddt_nature, or idt_nature attributes of a nature, nor any other attribute whose value is not a constant expression.</p>
 <div class="syntax">nature_attribute_reference ::=                                                                        // from A.8.9
-        net_identifier . potential_or_flow . nature_attribute_identifier
-potential_or_flow ::= potential | flow                                                                // from A.1.7
+        net_identifier <b>.</b> potential_or_flow <b>.</b> nature_attribute_identifier
+potential_or_flow ::= <b>potential</b> | <b>flow</b>                                                                // from A.1.7
 
 
 <em>Syntax 5-4&mdash;Syntax for referencing attributes of a net</em></div>
@@ -398,11 +402,11 @@ potential_or_flow ::= potential | flow                                          
 <p>The branch contribution statement is used in the analog block to describe continuous-time behavior between a module’s analog nets and ports. Contribution statements may be described in direct or indirect form.</p>
 <h3 id="s5.6.1">5.6.1 Direct branch contribution statements</h3>
 <p>The direct contribution statement uses the branch contribution operator &lt;+ to describe the mathematical relationship between one or more analog nets within the module. The mapping is done with contribution statements using the form shown in Syntax 5-5:</p>
-<div class="syntax">contribution_statement ::= branch_lvalue &lt;+ analog_expression ;                                  // from A.6.10
+<div class="syntax">contribution_statement ::= branch_lvalue <b>&lt;+</b> analog_expression <b>;</b>                                  // from A.6.10
 branch_lvalue ::= branch_probe_function_call                                                       // from A.8.5
 branch_probe_function_call ::=                                                                     // from A.8.2
-        nature_access_function ( branch_reference )
-      | nature_access_function ( analog_net_reference [ , analog_net_reference ] )
+        nature_access_function <b>(</b> branch_reference <b>)</b>
+      | nature_access_function <b>(</b> analog_net_reference [ <b>,</b> analog_net_reference ] <b>)</b>
 
 
 <em>Syntax 5-5&mdash;Syntax for branch contribution</em></div>
@@ -541,7 +545,8 @@ branch_probe_function_call ::=                                                  
 <pre><code>         I(out) &lt;+ A * I(in);</code></pre>
 <h3 id="s5.6.3">5.6.3 Resistor and conductor</h3>
 <p>Figure 5-3 shows the model for a linear conductor.</p>
-<figure class="split"><pre><code>             module my_conductor(p,n);
+<p class="note">Editorial accessibility transcript of the model code in the source figure:</p>
+<pre><code>             module my_conductor(p,n);
                 inout p, n;
                 electrical p,n;
                 parameter real G=1;
@@ -549,10 +554,13 @@ branch_probe_function_call ::=                                                  
                 analog begin
                     I(cond) &lt;+ G * V(cond);
                 end
-             endmodule</code></pre><svg viewBox="0 0 440 240" width="440" role="img" aria-label="The equivalent circuit of the my_conductor model: a flow source symbol Gv in parallel with a potential probe labelled v with plus and minus signs; a double-headed arrow shows that it is equivalent to a resistor of value G."><defs><marker id="mk_r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker><marker id="mk53" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><line x1="140" y1="15" x2="140" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="95" y1="55" x2="185" y2="55" stroke="#1a1a1a" stroke-width="2"/><line x1="95" y1="55" x2="95" y2="98" stroke="#1a1a1a" stroke-width="2"/><line x1="185" y1="55" x2="185" y2="180" stroke="#1a1a1a" stroke-width="2"/><line x1="95" y1="180" x2="185" y2="180" stroke="#1a1a1a" stroke-width="2"/><line x1="140" y1="180" x2="140" y2="222" stroke="#1a1a1a" stroke-width="2"/><path d="M95,98 L125,140 L95,182 L65,140 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="95" y1="114" x2="95" y2="164" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk53)"/><text x="204" y="100" text-anchor="middle" font-size="18">+</text><text x="204" y="132" text-anchor="middle" font-size="18" font-style="italic">v</text><text x="204" y="168" text-anchor="middle" font-size="18">−</text><text x="72" y="212" font-size="18" font-style="italic">Gv</text><line x1="215" y1="119" x2="290" y2="119" stroke="#1a1a1a" stroke-width="3" marker-start="url(#mk_r)" marker-end="url(#mk_r)"/><path d="M345,60 L345,76 L360,83 L330,98 L360,113 L330,127 L360,142 L330,157 L345,164 L345,180" fill="none" stroke="#1a1a1a" stroke-width="2"/><text x="377" y="126" font-size="18" font-style="italic">G</text></svg><figcaption>Figure 5-3: Linear conductor model</figcaption></figure>
+             endmodule</code></pre>
+<figure id="figure-5-3"><img src="figures/lrm-figure-5-3.png" alt="Original Figure 5-3: the conductor model and its equivalent controlled current source Gv, open voltage probe, and conductance G.">
+<figcaption>Figure 5-3: Linear conductor model</figcaption></figure>
 <p>The assignment to I(cond) makes cond a current source branch and V(cond) simply accesses the potential probe built into the current source branch.</p>
 <p>Figure 5-4 shows the model for a linear resistor.</p>
-<figure class="split"><pre><code>                module my_resistor(p,n);
+<p class="note">Editorial accessibility transcript of the model code in the source figure:</p>
+<pre><code>                module my_resistor(p,n);
                    inout p,n;
                    electrical p,n;
                    parameter real R=1;
@@ -560,7 +568,9 @@ branch_probe_function_call ::=                                                  
                    analog begin
                       V(res) &lt;+ R * I(res);
                    end
-                endmodule</code></pre><svg viewBox="0 0 440 240" width="440" role="img" aria-label="The equivalent circuit of the my_resistor model: a potential source symbol Ri with plus and minus signs, probed by a flow probe arrow labelled i; a double-headed arrow shows that it is equivalent to a resistor of value R."><defs><marker id="mk_r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker><marker id="mk53" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><line x1="140" y1="15" x2="140" y2="98" stroke="#1a1a1a" stroke-width="2"/><line x1="164" y1="25" x2="164" y2="78" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk53)"/><text x="182" y="48" font-size="18" font-style="italic">i</text><path d="M140,98 L170,140 L140,182 L110,140 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><text x="140" y="136" text-anchor="middle" font-size="18">+</text><text x="140" y="172" text-anchor="middle" font-size="18">−</text><text x="180" y="170" font-size="18" font-style="italic">Ri</text><line x1="140" y1="182" x2="140" y2="222" stroke="#1a1a1a" stroke-width="2"/><line x1="215" y1="119" x2="290" y2="119" stroke="#1a1a1a" stroke-width="3" marker-start="url(#mk_r)" marker-end="url(#mk_r)"/><path d="M345,60 L345,76 L360,83 L330,98 L360,113 L330,127 L360,142 L330,157 L345,164 L345,180" fill="none" stroke="#1a1a1a" stroke-width="2"/><text x="377" y="126" font-size="18" font-style="italic">R</text></svg><figcaption>Figure 5-4: Linear resistor model</figcaption></figure>
+                endmodule</code></pre>
+<figure id="figure-5-4"><img src="figures/lrm-figure-5-4.png" alt="Original Figure 5-4: the resistor model and its equivalent controlled potential source Ri, flow probe, and resistance R.">
+<figcaption>Figure 5-4: Linear resistor model</figcaption></figure>
 <p>The assignment to V(res) makes res a potential source branch and I(res) simply accesses the optional flow probe built into the potential source branch.</p>
 <h3 id="s5.6.4">5.6.4 RLC circuits</h3>
 <p>A series RLC circuit is formulated by summing the voltage across its three components,</p>
@@ -577,7 +587,8 @@ branch_probe_function_call ::=                                                  
 <pre><code>     I(p, n) &lt;+ V(p, n)/R + C*ddt(V(p, n)) + idt(V(p, n))/L;</code></pre>
 <h3 id="s5.6.5">5.6.5 Switch branches</h3>
 <p>Contribution to a branch may be switched between potential and a flow during a simulation. This type of branch is useful when modeling ideal switches and mechanical stops. As a result, contribution statements are allowed within conditional statements but are not allowed within event control statements. Note that the contribution statements shall not use analog operators when the condition can change during the course of a simulation.</p>
-<figure><svg viewBox="0 0 520 320" width="520" role="img" aria-label="Figure 5-5: circuit model for a switched source branch. A branch wire from the top node passes through a switch and then splits into two parallel source symbols, a potential source diamond containing plus and minus signs and a flow source diamond containing a downward arrow. A flow probe arrow labelled f is on the wire above the switch; a potential probe labelled p with plus and minus signs is on the branch to the right."><defs><marker id="mk55" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><rect x="1" y="1" width="518" height="318" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="250" y1="20" x2="250" y2="60" stroke="#1a1a1a" stroke-width="2"/><line x1="205" y1="60" x2="300" y2="60" stroke="#1a1a1a" stroke-width="2"/><line x1="205" y1="60" x2="205" y2="112" stroke="#1a1a1a" stroke-width="2"/><line x1="205" y1="112" x2="186" y2="160" stroke="#1a1a1a" stroke-width="2"/><line x1="150" y1="160" x2="180" y2="160" stroke="#1a1a1a" stroke-width="2"/><line x1="218" y1="160" x2="263" y2="160" stroke="#1a1a1a" stroke-width="2"/><line x1="150" y1="160" x2="150" y2="168" stroke="#1a1a1a" stroke-width="2"/><line x1="263" y1="160" x2="263" y2="168" stroke="#1a1a1a" stroke-width="2"/><path d="M150,168 L176,205 L150,242 L124,205 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><text x="150" y="200" text-anchor="middle" font-size="17">+</text><text x="150" y="234" text-anchor="middle" font-size="17">−</text><path d="M263,168 L289,205 L263,242 L237,205 z" fill="none" stroke="#1a1a1a" stroke-width="2"/><line x1="263" y1="182" x2="263" y2="226" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk55)"/><line x1="150" y1="242" x2="150" y2="280" stroke="#1a1a1a" stroke-width="2"/><line x1="263" y1="242" x2="263" y2="280" stroke="#1a1a1a" stroke-width="2"/><line x1="150" y1="280" x2="300" y2="280" stroke="#1a1a1a" stroke-width="2"/><line x1="263" y1="280" x2="263" y2="310" stroke="#1a1a1a" stroke-width="2"/><line x1="300" y1="60" x2="300" y2="280" stroke="#1a1a1a" stroke-width="2"/><text x="324" y="128" text-anchor="middle" font-size="18">+</text><text x="324" y="176" text-anchor="middle" font-size="17" font-style="italic">p</text><text x="324" y="222" text-anchor="middle" font-size="18">−</text><line x1="232" y1="76" x2="232" y2="126" stroke="#1a1a1a" stroke-width="2" marker-end="url(#mk55)"/><text x="250" y="98" font-size="18" font-style="italic">f</text></svg><p class="legend">Position of the switch depends on whether a potential or flow is assigned to the branch.</p><figcaption>Figure 5-5: Circuit model for a switched source branch</figcaption></figure>
+<figure id="figure-5-5"><img src="figures/lrm-figure-5-5.png" alt="Original Figure 5-5: a switched potential or flow source with a flow probe and an open potential-probe gap.">
+<figcaption>Figure 5-5: Circuit model for a switched source branch</figcaption></figure>
 <p>For example, an ideal relay (a controlled switch) can be implemented using a switch branch as follows:</p>
 <pre><code>    module relay (p, n, cp, cn);
        inout p, n, cp, cn;
@@ -613,20 +624,20 @@ branch_probe_function_call ::=                                                  
 <p>which reads “drive V(out) so that V(in) == 0”. This indicates out is driven with a voltage source and the source voltage needs to be adjusted so that the given equation is satisfied. Any branches referenced in the equation are only probed and not driven. In particular, V(in) acts as a voltage probe.</p>
 <p>The left-hand side of the equality operator must either be an access function, or ddt, idt or idtmod applied to an access function. The tolerance for the equation is taken from the argument on the left side of the equality operator, in this case V(in) as desired. Syntax 5-6 shows the syntax for an indirect assignment statement.</p>
 <div class="syntax">indirect_contribution_statement ::=                                                     // from A.6.10
-        branch_lvalue : indirect_expression == analog_expression ;
+        branch_lvalue <b>:</b> indirect_expression <b>==</b> analog_expression <b>;</b>
 indirect_expression ::=                                                                   // from A.8.3
         branch_probe_function_call
       | port_probe_function_call
-      | ddt ( branch_probe_function_call [ , abstol_expression ] )
-      | ddt ( port_probe_function_call [ , abstol_expression ] )
-      | idt ( branch_probe_function_call [ , analog_expression
-           [ , analog_expression [ , abstol_expression ] ] ] )
-      | idt ( port_probe_function_call [ , analog_expression [ , analog_expression
-           [ , abstol_expression ] ] ] )
-      | idtmod ( branch_probe_function_call [ , analog_expression [ , analog_expression
-           [ , analog_expression [ , abstol_expression ] ] ] ] )
-      | idtmod ( port_probe_function_call [ , analog_expression [ , analog_expression
-           [ , analog_expression [ , abstol_expression ] ] ] ] )
+      | <b>ddt</b> <b>(</b> branch_probe_function_call [ <b>,</b> abstol_expression ] <b>)</b>
+      | <b>ddt</b> <b>(</b> port_probe_function_call [ <b>,</b> abstol_expression ] <b>)</b>
+      | <b>idt</b> <b>(</b> branch_probe_function_call [ <b>,</b> analog_expression
+           [ <b>,</b> analog_expression [ <b>,</b> abstol_expression ] ] ] <b>)</b>
+      | <b>idt</b> <b>(</b> port_probe_function_call [ <b>,</b> analog_expression [ <b>,</b> analog_expression
+           [ <b>,</b> abstol_expression ] ] ] <b>)</b>
+      | <b>idtmod</b> <b>(</b> branch_probe_function_call [ <b>,</b> analog_expression [ <b>,</b> analog_expression
+           [ <b>,</b> analog_expression [ <b>,</b> abstol_expression ] ] ] ] <b>)</b>
+      | <b>idtmod</b> <b>(</b> port_probe_function_call [ <b>,</b> analog_expression [ <b>,</b> analog_expression
+           [ <b>,</b> analog_expression [ <b>,</b> abstol_expression ] ] ] ] <b>)</b>
 
 
 
@@ -635,8 +646,8 @@ indirect_expression ::=                                                         
 
 branch_lvalue ::= branch_probe_function_call                                                          // from A.8.5
 branch_probe_function_call ::=                                                                        // from A.8.2
-       nature_attribute_identifier ( branch_reference )
-     | nature_attribute_identifier ( analog_net_reference [ , analog_net_reference ] )
+       nature_attribute_identifier <b>(</b> branch_reference <b>)</b>
+     | nature_attribute_identifier <b>(</b> analog_net_reference [ <b>,</b> analog_net_reference ] <b>)</b>
 
 
 <em>Syntax 5-6&mdash;Syntax for indirect branch assignment</em></div>
@@ -724,45 +735,54 @@ branch_probe_function_call ::=                                                  
 <p>Hierarchical contributions are not allowed to branches that have been indirectly contributed to (see 5.6.7)</p>
 <h2 id="s5.7">5.7 Analog procedural assignments</h2>
 <p>Analog procedural assignments are used for modifying analog integer, real, and string variables including array variables. The syntax for procedural assignments shown in Syntax 5-7.</p>
-<div class="syntax">analog_procedural_assignment ::= analog_variable_assignment ;                             // from A.6.2
+<div class="syntax">analog_procedural_assignment ::= analog_variable_assignment <b>;</b>                             // from A.6.2
 analog_variable_assignment ::=
         scalar_analog_variable_assignment
       | array_analog_variable_assignment
-scalar_analog_variable_assignment ::= scalar_analog_variable_lvalue = analog_expression
+scalar_analog_variable_assignment ::= scalar_analog_variable_lvalue <b>=</b> analog_expression
 analog_variable_lvalue ::=                                                                // from A.8.5
         variable_identifier
-      | variable_identifier [ analog_expression ] { [ analog_expression ] }
-array_analog_variable_assignment ::= array_analog_variable_lvalue = array_analog_variable_rvalue ;
+      | variable_identifier <b>[</b> analog_expression <b>]</b> { <b>[</b> analog_expression <b>]</b> }
+array_analog_variable_assignment ::= array_analog_variable_lvalue <b>=</b> array_analog_variable_rvalue <b>;</b>
 array_analog_variable_rvalue ::=
         array_variable_identifier
-      | array_ variable_identifier [ analog_expression ] { [ analog_expression ] }
+      | array_ variable_identifier <b>[</b> analog_expression <b>]</b> { <b>[</b> analog_expression <b>]</b> }
       | assignment_pattern
 
 
 <em>Syntax 5-7&mdash;Syntax for procedural assignments</em></div>
+<p class="note"><strong>Editorial source warning:</strong> Syntax 5-7 preserves the PDF’s <code>scalar_analog_variable_lvalue</code> versus <code>analog_variable_lvalue</code> naming, the space in <code>array_ variable_identifier</code>, and the semicolon on the array-assignment production as well as its enclosing procedural-assignment production. These source forms have not been silently repaired; reconcile them with Annex A and the accompanying prose when deriving grammar requirements.</p>
 <p>For scalar variable assignments the following requirements hold;</p>
-<p>— The left-hand side of a procedural assignment shall be scalar, either an integer, real, or string identifier or an element of an integer, real or string array.</p>
-<p>— The right-hand side expression can be any arbitrary expression constituted from legal operands and operators as described in Clause 4 that evaluates to a scalar.</p>
-<p>— A scalar_analog_variable_assignment is defined as a variable assignment whose right-hand side expression is an analog_expression involving analog operators.</p>
-<p>— The following semantic restrictions are applicable to the analog_expression in the scalar_analog_variable_assignment syntax:</p>
-<p>— Concatenation expressions cannot be used as part of the analog_expression (assigning to list of values in the analog context is not allowed).</p>
-<p>— Analog filter functions cannot be used as part of the analog_expression syntax if the statement is conditionally executed during simulation.</p>
-<p>— Hierarchical assignment of a variable from another scope/module is not allowed</p>
+<ul>
+<li>The left-hand side of a procedural assignment shall be scalar, either an integer, real, or string identifier or an element of an integer, real or string array.</li>
+<li>The right-hand side expression can be any arbitrary expression constituted from legal operands and operators as described in Clause 4 that evaluates to a scalar.</li>
+<li>A scalar_analog_variable_assignment is defined as a variable assignment whose right-hand side expression is an analog_expression involving analog operators.</li>
+<li>The following semantic restrictions are applicable to the analog_expression in the scalar_analog_variable_assignment syntax:
+<ul>
+<li>Concatenation expressions cannot be used as part of the analog_expression (assigning to list of values in the analog context is not allowed).</li>
+<li>Analog filter functions cannot be used as part of the analog_expression syntax if the statement is conditionally executed during simulation.</li>
+<li>Hierarchical assignment of a variable from another scope/module is not allowed</li>
+</ul></li>
+</ul>
 <p>Verilog-AMS supports both packed arrays and unpacked arrays of data. The term packed array is used to refer to the dimensions declared before the data identifier name. The term unpacked array is used to refer to the dimensions declared after the data identifier name.</p>
 <p>Examples:</p>
 <pre><code>     wire [7:0] c1; // packed array of scalar wire types
      real u [7:0]; // unpacked array of real types</code></pre>
 <p>The requirements of unpacked array variable assignments are a subset of the requirements of IEEE Std 1800 SystemVerilog.</p>
-<p>— The array on the LHS of the assignment shall be an array variable, a slice of an array variable or an array parameter (when the default value of the parameter is assigned).</p>
-<p>— The arrays on the LHS and the RHS of the assignment must be unpacked.</p>
-<p>— Array assignments shall only be done with arrays that are compatible. An array, or a slice of such an array, shall be assignment compatible with any other such array or slice if all the following conditions are satisfied:</p>
-<p>— The element types of source and target shall be equivalent.</p>
-<p>— Every dimension of the source array shall have the same number of elements as the target array. Example:</p>
+<ul>
+<li>The array on the LHS of the assignment shall be an array variable, a slice of an array variable or an array parameter (when the default value of the parameter is assigned).</li>
+<li>The arrays on the LHS and the RHS of the assignment must be unpacked.</li>
+<li>Array assignments shall only be done with arrays that are compatible. An array, or a slice of such an array, shall be assignment compatible with any other such array or slice if all the following conditions are satisfied:
+<ul>
+<li>The element types of source and target shall be equivalent.</li>
+<li>Every dimension of the source array shall have the same number of elements as the target array. Example:
 <pre><code>                 int A[10:1]; // fixed-size array of 10 elements
                  int B[0:9]; // fixed-size array of 10 elements
                  int C[24:1]; // fixed-size array of 24 elements
                  A = B; // ok. Compatible type and same size
-                 A = C; // type check error: different sizes</code></pre>
+                 A = C; // type check error: different sizes</code></pre></li>
+</ul></li>
+</ul>
 <h2 id="s5.8">5.8 Analog conditional statements</h2>
 <p>There are two types of conditional statement allowed in analog behavior:</p>
 <p>— if-else-if statements</p>
@@ -770,9 +790,9 @@ array_analog_variable_rvalue ::=
 <h3 id="s5.8.1">5.8.1 if-else-if statement</h3>
 <p>The if-else statement is used to determine whether a statement is executed or not. The syntax of an analog conditional statement is shown in Syntax 5-8. If any of the conditionally-executed statements (analog_statement_or_null) contains an analog operator, the conditional expression (analog_expression) shall be a analysis_or_constant_expression. (See the discussion in 4.5.15 regarding restrictions on the usage of analog operators.)</p>
 <div class="syntax">analog_conditional_statement ::=                                                                      // from A.6.6
-       if ( analog_expression ) analog_statement_or_null
-       { else if ( analog_expression ) analog_statement_or_null }
-       [ else analog_statement_or_null ]
+       <b>if</b> <b>(</b> analog_expression <b>)</b> analog_statement_or_null
+       { <b>else</b> <b>if</b> <b>(</b> analog_expression <b>)</b> analog_statement_or_null }
+       [ <b>else</b> analog_statement_or_null ]
 
 
 <em>Syntax 5-8&mdash;Syntax of conditional statement</em></div>
@@ -799,12 +819,12 @@ array_analog_variable_rvalue ::=
 <h3 id="s5.8.3">5.8.3 Case statement</h3>
 <p>The case statement is a multi-way decision statement which tests if an expression matches one of a number of other expressions, and if so, branches accordingly. The case statement has the syntax shown in Syntax 5-9.</p>
 <div class="syntax">analog_case_statement ::=                                                                             // from A.6.7
-       case ( analog_expression ) analog_case_item { analog_case_item } endcase
-     | casex ( analog_expression ) analog_case_item { analog_case_item } endcase
-     | casez ( analog_expression ) analog_case_item { analog_case_item } endcase
+       <b>case</b> <b>(</b> analog_expression <b>)</b> analog_case_item { analog_case_item } <b>endcase</b>
+     | <b>casex</b> <b>(</b> analog_expression <b>)</b> analog_case_item { analog_case_item } <b>endcase</b>
+     | <b>casez</b> <b>(</b> analog_expression <b>)</b> analog_case_item { analog_case_item } <b>endcase</b>
 analog_case_item ::=
-       analog_expression { , analog_expression } : analog_statement_or_null
-     | default [ : ] analog_statement_or_null
+       analog_expression { <b>,</b> analog_expression } <b>:</b> analog_statement_or_null
+     | <b>default</b> [ <b>:</b> ] analog_statement_or_null
 
 
 <em>Syntax 5-9&mdash;Syntax for case statement</em></div>
@@ -827,13 +847,13 @@ analog_case_item ::=
 <p>while() executes a statement until an expression becomes False. If the expression starts out False, the statement is not executed at all.</p>
 <p>The repeat and while expressions shall be evaluated once before the execution of any statement in order to determine the number of times, if any, the statements are executed. The syntax for repeat() and while() statements is shown in Syntax 5-10.</p>
 <div class="syntax">analog_loop_statement ::=                                                                             // from A.6.8
-       repeat ( analog_expression ) analog_statement
+       <b>repeat</b> <b>(</b> analog_expression <b>)</b> analog_statement
 
 
 
 
 
-      | while ( analog_expression ) analog_statement
+      | <b>while</b> <b>(</b> analog_expression <b>)</b> analog_statement
       ...
 
 
@@ -842,7 +862,7 @@ analog_case_item ::=
 <p>The for() statement is a looping construct which controls execution of its associated statement(s) using an index variable. In the case of analog_for statement the control mechanism shall consist of genvar_initialization and genvar_expressions to adhere to the restrictions associated with the use of analog operators. Syntax 5-11 shows the syntax for the looping statements that can be used in analog behavior.</p>
 <div class="syntax">analog_loop_statement ::=                                                              // from A.6.8
      ...
-     | for ( analog_variable_assignment ; analog_expression ; analog_variable_assignment )
+     | <b>for</b> <b>(</b> analog_variable_assignment <b>;</b> analog_expression <b>;</b> analog_variable_assignment <b>)</b>
           analog_statement
 
 
@@ -851,7 +871,7 @@ analog_case_item ::=
 <h3 id="s5.9.3">5.9.3 Analog For Statements</h3>
 <p>The analog_for statements are syntactically equivalent to for() statements except the associated analog statement can contain analog operators. The analog_loop_generate_statement puts the additional restriction upon the procedural assignment and conditional expressions of the for-loop to be statically evaluatable. Verilog-AMS HDL provides genvar-derived expressions for this purpose. Syntax 5-12 shows the syntax for the analog_for statement.</p>
 <div class="syntax">analog_loop_generate_statement ::=                                                                    // from A.4.2
-       for ( genvar_initialization ; genvar_expression ; genvar_iteration )
+       <b>for</b> <b>(</b> genvar_initialization <b>;</b> genvar_expression <b>;</b> genvar_iteration <b>)</b>
           analog_statement
 
 
@@ -886,32 +906,32 @@ analog_case_item ::=
 <p>There are three types of analog events, global events (5.10.2), monitored events (5.10.3), and named events (5.10.4). Null arguments are not allowed in analog events. Analog event detection consist of an event expression followed by a procedural statement, as shown in Syntax 5-13.</p>
 <div class="syntax">analog_event_control_statement ::= analog_event_control analog_event_statement             // from A.6.5
 analog_event_control ::=
-       @ hierarchical_event_identifier
-     | @ ( analog_event_expression )
+       <b>@</b> hierarchical_event_identifier
+     | <b>@</b> <b>(</b> analog_event_expression <b>)</b>
 analog_event_expression ::=
        expression
-     | posedge expression
-     | negedge expression
+     | <b>posedge</b> expression
+     | <b>negedge</b> expression
      | hierarchical_event_identifier
-     | initial_step [ ( " analysis_identifier "{ , " analysis_identifier " } ) ]
-     | final_step [ ( " analysis_identifier " { , " analysis_identifier " } ) ]
+     | <b>initial_step</b> [ <b>(</b> <b>"</b> analysis_identifier <b>"</b>{ <b>,</b> <b>"</b> analysis_identifier <b>"</b> } <b>)</b> ]
+     | <b>final_step</b> [ <b>(</b> <b>"</b> analysis_identifier <b>"</b> { <b>,</b> <b>"</b> analysis_identifier <b>"</b> } <b>)</b> ]
      | analog_event_functions
-     | analog_event_expression or analog_event_expression
-     | analog_event_expression , analog_event_expression
+     | analog_event_expression <b>or</b> analog_event_expression
+     | analog_event_expression <b>,</b> analog_event_expression
 analog_event_functions ::=
-       cross ( analog_expression [ , analog_expression_or_null
-           [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] ] )
-     | above ( analog_expression [ , analog_expression_or_null
-           [ , analog_expression_or_null [ , analog_expression ] ] ] )
-     | timer ( analog_expression [ , analog_expression_or_null
-           [ , analog_expression_or_null [ , analog_expression ] ] ] )
-     | absdelta ( analog_expression , analog_expression
+       <b>cross</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+           [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] ] <b>)</b>
+     | <b>above</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+           [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
+     | <b>timer</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+           [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
+     | <b>absdelta</b> <b>(</b> analog_expression <b>,</b> analog_expression
 
 
 
 
 
-           [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] )
+           [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
 analog_event_statement ::=                                                                 // from A.6.4
        { attribute_instance } analog_loop_statement
      | { attribute_instance } analog_case_statement
@@ -921,7 +941,7 @@ analog_event_statement ::=                                                      
      | { attribute_instance } analog_system_task_enable
      | { attribute_instance } disable_statement
      | { attribute_instance } event_trigger
-     | { attribute_instance } ;
+     | { attribute_instance } <b>;</b>
 
 
 <em>Syntax 5-13&mdash;Syntax for event detection in analog context</em></div>
@@ -934,13 +954,13 @@ analog_event_statement ::=                                                      
 <p>Analog events can also be detected within digital blocks. Syntax 5-14 shows the usage of analog event control statements inside digital to monitor analog values in the digital context. The usage of initial_step and final_step analog events are not allowed in the digital context. Refer 7.3.4 for further details on detecting continuous events in a discrete context.</p>
 <div class="syntax">event_expression ::=                                                                                  // from A.6.5
        expression
-     | posedge expression
-     | negedge expression
+     | <b>posedge</b> expression
+     | <b>negedge</b> expression
      | hierarchical_event_identifier
-     | event_expression or event_expression
-     | event_expression , event_expression
+     | event_expression <b>or</b> event_expression
+     | event_expression <b>,</b> event_expression
      | analog_event_functions
-     | driver_update expression
+     | <b>driver_update</b> expression
      | analog_variable_lvalue
 
 
@@ -961,8 +981,8 @@ analog_event_statement ::=                                                      
 <p>The pre-defined global events are shown in Syntax 5-15.</p>
 <div class="syntax">analog_event_expression ::=                                                                           // from A.6.5
      ...
-     | initial_step [ ( " analysis_identifier "{ , " analysis_identifier " } ) ]
-     | final_step [ ( " analysis_identifier " { , " analysis_identifier " } ) ]
+     | <b>initial_step</b> [ <b>(</b> <b>"</b> analysis_identifier <b>"</b>{ <b>,</b> <b>"</b> analysis_identifier <b>"</b> } <b>)</b> ]
+     | <b>final_step</b> [ <b>(</b> <b>"</b> analysis_identifier <b>"</b> { <b>,</b> <b>"</b> analysis_identifier <b>"</b> } <b>)</b> ]
      ...
 
 
@@ -1046,18 +1066,19 @@ analog_event_statement ::=                                                      
 <h4 id="s5.10.3.1">5.10.3.1 cross function</h4>
 <p>The cross() function is used for generating a monitored analog event to detect threshold crossings in analog signals when the expression crosses zero (0) in the specified direction. In addition, cross() controls the timestep to accurately resolve the crossing.</p>
 <div class="syntax">analog_event_functions ::=                                                                // from A.6.5
-       cross ( analog_expression [ , analog_expression_or_null
-          [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] ] )
+       <b>cross</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+          [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] ] <b>)</b>
      ...
 
 
 <em>Syntax 5-16&mdash;The cross analog event function</em></div>
 <p>The expressions in this syntax have the following meanings:</p>
-<pre><code>           cross ( expr [ , dir [ , time_tol [ , expr_tol [ , enable ] ] ] ] )</code></pre>
+<pre><code>           <b>cross</b> <b>(</b> expr [ <b>,</b> dir [ <b>,</b> time_tol [ <b>,</b> expr_tol [ <b>,</b> enable ] ] ] ] <b>)</b></code></pre>
 <p>where expr is required, and dir, time_tol, expr_tol, and enable are optional. The expr, dir, and enable arguments are specified as analog_expression.The tolerances (time_tol and expr_tol) are specified as analog_expression and shall be non-negative.If a value of zero (0.0) is specified, the simulator shall apply a suitable value. The dir and enable arguments, if specified, shall evaluate to integers. If the tolerances are not specified, then the tool (e.g., the simulator) sets them. If either or both tolerances are defined, then the direction shall also be defined.</p>
 <p>If the direction indicator is set to 0 or is not specified, the event and timestep control occur on both positive and negative crossings of the signal. If dir is +1, the event and timestep control only occur on rising edge transitions of the signal. If dir is –1, the event and timestep control only occur on falling edge transitions of the signal. For any other values of dir, the cross() function does not generate an event and does not act to control the timestep.</p>
 <p>expr_tol and time_tol are absolute tolerances and are defined as shown in Figure 5-6. They represent the maximum allowable error between the true crossing point and when the event triggers. The event shall occur       after the threshold crossing, and while the signal remains in the box defined by actual crossing and expr_tol and time_tol.</p>
-<figure><svg viewBox="0 0 640 340" width="640" role="img" aria-label="Figure 5-6: timing of an event relative to a threshold crossing. A rising signal curve crosses a horizontal threshold line. A dashed tolerance box starts at the actual crossing point and extends one time_tol to the right and one expr_tol above the threshold. A filled dot marks the event where the curve leaves the box; arrows point to the dot (event) and to the crossing (actual crossing)."><defs><marker id="mk56" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs><rect x="1" y="1" width="638" height="338" fill="none" stroke="#1a1a1a" stroke-width="2"/><rect x="285" y="155" width="115" height="95" fill="none" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="6 4"/><line x1="30" y1="250" x2="620" y2="250" stroke="#1a1a1a" stroke-width="1.5"/><text x="30" y="238" font-size="17">threshold</text><path d="M40,320 C 200,300 250,270 300,240 C 400,190 500,150 620,110" fill="none" stroke="#1a1a1a" stroke-width="3"/><circle cx="400" cy="193" r="7" fill="#1a1a1a"/><line x1="285" y1="125" x2="400" y2="125" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#mk56)"/><text x="342" y="112" text-anchor="middle" font-size="17">time_tol</text><line x1="263" y1="250" x2="263" y2="155" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#mk56)"/><text x="253" y="208" text-anchor="end" font-size="17">expr_tol</text><line x1="482" y1="220" x2="412" y2="202" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#mk56)"/><text x="490" y="214" font-size="17">event</text><line x1="352" y1="298" x2="299" y2="263" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#mk56)"/><text x="358" y="308" font-size="17">actual crossing</text></svg><figcaption>Figure 5-6: Timing of event relative to threshold crossing.</figcaption></figure>
+<figure id="figure-5-6"><img src="figures/lrm-figure-5-6.png" alt="Original Figure 5-6: the event occurs after the crossing inside the time_tol and expr_tol box; the dot is not on the box boundary.">
+<figcaption>Figure 5-6: Timing of event relative to threshold crossing.</figcaption></figure>
 <p>If expr_tol is specified, time_tol shall also be specified and both tolerances shall be satisfied at the crossing.</p>
 <p>Specifying a small time_tol ensures a slowly-varying expression triggers an event within a reasonable time from the actual crossing point, and specifying a small expr_tol ensures a rapidly-varying expression triggers an event within a reasonable value of the actual crossing point. However, setting either of these tolerances to unrealistically small values can adversely affect the simulator's performance.</p>
 <p>Although changes to either time_tol or expr_tol during the simulation are permitted, care should be taken to ensure that they do not vary from iteration to iteration. Use of constant tolerances, or changing the tolerances via an event statement, is desirable.</p>
@@ -1097,14 +1118,14 @@ analog_event_statement ::=                                                      
 <p>The above() function is almost identical to the cross() function, except that it also triggers during initialization or dc analysis. It generates a monitored analog event to detect threshold crossings in analog signals when the expression crosses zero (0) from below. As with the cross() function, above() controls the timestep to accurately resolve the crossing during transient analysis.</p>
 <div class="syntax">analog_event_functions ::=                                                                            // from A.6.5
      ...
-     | above ( analog_expression [ , analog_expression_or_null
-          [ , analog_expression_or_null [ , analog_expression ] ] ] )
+     | <b>above</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+          [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
      ...
 
 
 <em>Syntax 5-17&mdash;The above analog event function</em></div>
 <p>The expressions in this syntax have the following meanings:</p>
-<pre><code>       above ( expr [ , time_tol [ , expr_tol [ , enable ] ] ] )</code></pre>
+<pre><code>       <b>above</b> <b>(</b> expr [ <b>,</b> time_tol [ <b>,</b> expr_tol [ <b>,</b> enable ] ] ] <b>)</b></code></pre>
 <p>where expr is required. The tolerances (time_tol and expr_tol) are optional, but if specified shall be non-negative.If a value of zero (0.0) is specified, the simulator shall apply a suitable value. The enable argument, if specified, shall evaluate to an integer, all other arguments are real expressions. If the tolerances are not specified, then the tool (e.g., the simulator) sets them.</p>
 <p>The above() function can generate an event during initialization. If the expression is positive at the conclusion of the initial condition analysis that precedes a transient analysis, the above() function shall generate an event. In contrast, the cross() function can only generate an event after the simulation time has advanced from zero. The cross() function will not generate events for non-transient analyses, such as ac, dc, or noise analyses of SPICE (see 4.6.1), but the above() function can. During a dc sweep, the above() function shall also generate an event when the expression crosses zero from below; however, the step size of the dc sweep is not controlled to accurately resolve the crossing.</p>
 <p>The following example uses the above() function in place of the cross() function in the description of a simplified version of the sample-and-hold module introduced in the previous section. If the voltage on the smpl port is above 2.5V initially (at time=0), then use of the above() function ensures that the input is sampled and passed to the output when solving for the initial state of the circuit. If the voltage on the smpl port never crosses 2.5V in the positive direction, then the cross() function of the previous example would never trigger, even if the voltage on the smpl port is always above 2.5V.</p>
@@ -1126,13 +1147,13 @@ analog_event_statement ::=                                                      
 <p>The timer() function is used to generate analog events to detect specific points in time.</p>
 <div class="syntax">analog_event_functions ::=                                                                            // from A.6.5
      ...
-     | timer ( analog_expression [ , analog_expression_or_null
-          [ , analog_expression_or_null [ , analog_expression ] ] ] )
+     | <b>timer</b> <b>(</b> analog_expression [ <b>,</b> analog_expression_or_null
+          [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
 
 
 <em>Syntax 5-18&mdash;The timer analog event function</em></div>
 <p>The expressions in this syntax have the following meanings:</p>
-<pre><code>       timer ( start_time [ , period [ , time_tol [ , enable ] ] ] )</code></pre>
+<pre><code>       <b>timer</b> <b>(</b> start_time [ <b>,</b> period [ <b>,</b> time_tol [ <b>,</b> enable ] ] ] <b>)</b></code></pre>
 <p>where start_time is required; period, time_tol and enable are optional arguments. The start_time and period arguments are analog_expressions. The tolerance (time_tol) is an analog_expression and shall be non-negative.If a value of zero (0.0) is specified, the simulator shall apply a suitable value. The enable argument, if specified, shall evaluate to an integer.</p>
 <p>The timer() function schedules an event which occurs at an absolute time (start_time). The analog simulator places a time point within time_tol of an event. At that time point, the event evaluates to True.</p>
 <p>If time_tol is not specified, the default time point is at, or just beyond, the time of the event.Although changes to time_tol during the simulation are permitted, care should be taken to ensure that it does not vary from iteration to iteration. Use of a constant time_tol, or changing it via an event statement, is desirable.</p>
@@ -1156,14 +1177,14 @@ analog_event_statement ::=                                                      
 <p>The absdelta() event function enables efficient and accurate sampling of analog signals for use in digital behavioral code. The absdelta() event function is particularly useful for the conversion of analog-owned variables to real-typed digital-owned variables just as the above() event function is particularly useful for the conversion of analog-owned variables to logic-typed digital-owned variables.</p>
 <p>According to criteria you set, the simulator can generate an absdelta event when an analog expression changes more than a specified amount, a capability that is typically used to discretize analog signals. Use the absdelta() function to specify when the simulator generates an absdelta event. This function is only allowed in an initial or always block of a Verilog-AMS module.</p>
 <div class="syntax">analog_event_functions ::=                                                                // from A.6.5
-       absdelta ( analog_expression , analog_expression
-          [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] )
+       <b>absdelta</b> <b>(</b> analog_expression <b>,</b> analog_expression
+          [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression_or_null [ <b>,</b> analog_expression ] ] ] <b>)</b>
      ...
 
 
 <em>Syntax 5-19&mdash;The absdelta analog event function</em></div>
 <p>The expressions in this syntax have the following meanings:</p>
-<pre><code>           absdelta ( expr , delta [ , time_tol [ , expr_tol [ , enable ] ] ] )</code></pre>
+<pre><code>           <b>absdelta</b> <b>(</b> expr <b>,</b> delta [ <b>,</b> time_tol [ <b>,</b> expr_tol [ <b>,</b> enable ] ] ] <b>)</b></code></pre>
 <p>where expr and delta are required; time_tol, expr_tol and enable are optional arguments. The mandatory expr and delta arguments are specified as an analog_expression and delta shall be non-negative. Both the tolerances (time_tol and expr_tol) are specified as an analog_expression and shall be non-negative.If a value of zero (0.0) is specified, the simulator shall apply a suitable value. The enable argument is specified as an analog_expression and shall evaluate to an integer.</p>
 <p>A specified time_tol that is smaller than the time precision is ignored and the time precision is used instead. The expr_tol argument specifies the largest difference in expr that you consider negligible. If the tolerances are not specified, then the tool (e.g., the simulator) sets them.</p>
 <p>The absdelta() function does not force timesteps in the analog solver - it just observes the expr argument and generates events at the appropriate times to meet the requirements above. To avoid forcing analog timesteps just to determine an event time, absdelta() may interpolate the time at which an event occurred if necessary.</p>
@@ -1196,15 +1217,16 @@ analog_event_statement ::=                                                      
 <h3 id="s5.10.4">5.10.4 Named events</h3>
 <p>An identifier declared as an event data type is called a named event. A named event is triggered explicitly and is used in an event expression to control the execution of procedural statements in the same manner as event control described in 5.10. Named events can be triggered from always and initial blocks, or from an analog event statement. This allows control over the enabling of multiple actions in other procedures.</p>
 <p>An event name shall be declared explicitly before it is used. Syntax 5-20 gives the syntax for declaring events.</p>
-<div class="syntax">event_declaration ::= event list_of_event_identifiers ;// from A.2.1.3
-list_of_event_identifiers ::= event_identifier { dimension } { , event_identifier { dimension }// from A.2.3
-dimension ::= [ dimension_constant_expression : dimension_constant_expression ] // from A.2.5
+<div class="syntax">event_declaration ::= <b>event</b> list_of_event_identifiers <b>;</b>// from A.2.1.3
+list_of_event_identifiers ::= event_identifier { dimension } { <b>,</b> event_identifier { dimension }// from A.2.3
+dimension ::= <b>[</b> dimension_constant_expression <b>:</b> dimension_constant_expression <b>]</b> // from A.2.5
 
 
 <em>Syntax 5-20&mdash;Syntax for event declaration</em></div>
+<p class="note"><strong>Editorial source warning:</strong> The PDF’s <code>list_of_event_identifiers</code> production is missing the outer repetition’s closing brace. The transcription preserves that form rather than inserting an unmarked correction.</p>
 <p>A declared event is made to occur by the activation of an event triggering statement with the syntax given in Syntax 5-21. An event is not made to occur by changing the index of an event array in an event control expression.</p>
 <div class="syntax">event_trigger ::=// from A.6.5
-     -&gt; hierarchical_event_identifier { [ expression ] } ;
+     <b>-&gt;</b> hierarchical_event_identifier { <b>[</b> expression <b>]</b> } <b>;</b>
 
 
 <em>Syntax 5-21&mdash;Syntax for event trigger</em></div>
@@ -1225,9 +1247,9 @@ dimension ::= [ dimension_constant_expression : dimension_constant_expression ] 
 <p>To model mixed signal functionality, analog behavior can be made sensitive to digital events, including posedge events, negedge events, state change events, and named events. In the example above it shows how a digital event (dig_event) can be detected within the analog context.</p>
 <h2 id="s5.11">5.11 Jump statements</h2>
 <div class="syntax">jump_statement ::=                                                                                    // from A.6.5
-       return [ expression ] ;
-     | break ;
-     | continue ;
+       <b>return</b> [ expression ] <b>;</b>
+     | <b>break</b> <b>;</b>
+     | <b>continue</b> <b>;</b>
 
 
 <em>Syntax 5-22&mdash;Syntax for jump statements</em></div>
@@ -1241,4 +1263,3 @@ dimension ::= [ dimension_constant_expression : dimension_constant_expression ] 
 <p>In a function returning a value, the return statement shall have an expression of the correct type.</p>
 </body>
 </html>
-

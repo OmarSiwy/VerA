@@ -13,11 +13,11 @@
 // meaningless. 76_nature_compatibility_rules.va is the fixture that depends on
 // it.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one.
+// Pin E0340, verified at the offending attribute, rather than accepting an
+// unrelated failed compilation phase.
 //
 //! lrm 3.6.1.2
 //! lrm 3.11.1
-//! reject DiagnosticsReported
+//! reject E0340
 nature ch3_units_ident; units=Volt; access=UnitsIdentV; abstol=1u; endnature
 module ch3_nature_units_as_identifier; endmodule

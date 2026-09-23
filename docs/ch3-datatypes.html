@@ -38,19 +38,21 @@ nav a:hover { text-decoration: underline; }
 
 <p>The syntax for declaring <code>integer</code> and <code>real</code> is shown in Syntax 3-1.</p>
 
-<div class="syntax">integer_declaration ::= <b>integer</b> list_of_variable_identifiers ;	// from A.2.1.3
-real_declaration ::= <b>real</b> list_of_real_identifiers ;
-list_of_real_identifiers ::= real_type { , real_type }	// from A.2.3
-list_of_variable_identifiers ::= variable_type { , variable_type }
+<div class="syntax">integer_declaration ::= <b>integer</b> list_of_variable_identifiers <b>;</b>	// from A.2.1.3
+real_declaration ::= <b>real</b> list_of_real_identifiers <b>;</b>
+list_of_real_identifiers ::= real_type { <b>,</b> real_type }	// from A.2.3
+list_of_variable_identifiers ::= variable_type { <b>,</b> variable_type }
 real_type ::=	// from A.2.2.1
-	real_identifier { dimension } [ = constant_assignment_pattern ]
-	| real_identifier = constant_expression
+	real_identifier { dimension } [ <b>=</b> constant_assignment_pattern ]
+	| real_identifier <b>=</b> constant_expression
 variable_type ::=
-	variable_identifier { dimension } [ = constant_assignment_pattern ]
-	| variable_identifier = constant_expression
-dimension ::= [ dimension_constant_expression : dimension_constant_expression ]	// from A.2.5
+	variable_identifier { dimension } [ <b>=</b> constant_assignment_pattern ]
+	| variable_identifier <b>=</b> constant_expression
+dimension ::= <b>[</b> dimension_constant_expression <b>:</b> dimension_constant_expression <b>]</b>	// from A.2.5
 
 <i>Syntax 3-1&mdash;Syntax for integer and real declarations</i></div>
+
+<p><strong>Editorial typography note:</strong> Bold tokens preserve the literal-terminal distinction shown by color in <a href="VAMS-LRM-2023.pdf#page=37">physical PDF page 37</a>. In particular, the brackets in <code>dimension</code> are literal source characters, unlike the optional-initializer brackets and repetition braces in the grammar.</p>
 
 <p>An <em>integer</em> declaration declares one or more variables of type integer. These variables can hold values ranging from -2<sup>31</sup> to 2<sup>31</sup>-1. Arrays of integers can be declared using a range which defines the upper and lower indices of the array. Both indices shall be constant expressions and shall evaluate to a positive integer, a negative integer, or zero (<code>0</code>).</p>
 
@@ -100,7 +102,7 @@ real cgs;</code></pre>
 
 <p>The syntax to declare a <code>string</code> is as follows:</p>
 
-<div class="syntax"><b>string</b> variable_name [ = initial_value ] ;</div>
+<div class="syntax"><b>string</b> variable_name [ <b>=</b> initial_value ] <b>;</b></div>
 
 <p>where <em>variable_name</em> is a valid identifier and the optional <em>initial_value</em> can be a string literal, the value <code>""</code> for an empty string, or a string type constant expression, such as a string parameter (see 3.4.6). For example:</p>
 
@@ -175,21 +177,21 @@ b = {"H",""};      // yields "H". "" is the empty string</code></pre>
 parameter_declaration ::=
 	<b>parameter</b> [ <b>signed</b> ] [ range ] list_of_param_assignments
 	| <b>parameter</b> parameter_type list_of_param_assignments
-specparam_declaration ::= <b>specparam</b> [ range ] list_of_specparam_assignments ;
+specparam_declaration ::= <b>specparam</b> [ range ] list_of_specparam_assignments <b>;</b>
 parameter_type ::=
 	<b>integer</b> | <b>real</b> | <b>realtime</b> | <b>time</b> | <b>string</b>
-aliasparam_declaration ::= <b>aliasparam</b> parameter_identifier = parameter_identifier ;
-list_of_param_assignments ::= param_assignment { , param_assignment }	// from A.2.3
+aliasparam_declaration ::= <b>aliasparam</b> parameter_identifier <b>=</b> parameter_identifier <b>;</b>
+list_of_param_assignments ::= param_assignment { <b>,</b> param_assignment }	// from A.2.3
 param_assignment ::=	// from A.2.4
-	parameter_identifier = constant_mintypmax_expression { value_range }
-	| parameter_identifier range = constant_assignment_pattern { value_range }
-range ::= [ msb_constant_expression : lsb_constant_expression ]	// from A.2.5
+	parameter_identifier <b>=</b> constant_mintypmax_expression { value_range }
+	| parameter_identifier range <b>=</b> constant_assignment_pattern { value_range }
+range ::= <b>[</b> msb_constant_expression <b>:</b> lsb_constant_expression <b>]</b>	// from A.2.5
 value_range ::=
-	value_range_type ( value_range_expression : value_range_expression )
-	| value_range_type ( value_range_expression : value_range_expression ]
-	| value_range_type [ value_range_expression : value_range_expression )
-	| value_range_type [ value_range_expression : value_range_expression ]
-	| value_range_type '{ string { , string } }
+	value_range_type <b>(</b> value_range_expression <b>:</b> value_range_expression <b>)</b>
+	| value_range_type <b>(</b> value_range_expression <b>:</b> value_range_expression <b>]</b>
+	| value_range_type <b>[</b> value_range_expression <b>:</b> value_range_expression <b>)</b>
+	| value_range_type <b>[</b> value_range_expression <b>:</b> value_range_expression <b>]</b>
+	| value_range_type <b>'{</b> string { <b>,</b> string } <b>}</b>
 	| <b>exclude</b> constant_expression
 value_range_type ::= <b>from</b> | <b>exclude</b>
 value_range_expression ::= constant_expression | <b>-inf</b> | <b>inf</b>
@@ -276,6 +278,8 @@ parameter real res = 1.0 from [0:inf);</code></pre>
 
 <h3 id="s3-4-4">3.4.4 Parameter arrays</h3>
 
+<p class="note"><strong>Transcription note:</strong> A missing space between <code>types.</code> and <code>Parameter</code> in the PDF is restored below.</p>
+
 <p>Verilog-AMS HDL includes behavioral extensions which utilize arrays. It requires these arrays be initialized in their definitions and allows overriding their values, as with other parameter types. Parameter arrays have the following restrictions. Failure to follow these restrictions shall result in an error.</p>
 <ul>
 <li>A type of a parameter array shall be given in the declaration.</li>
@@ -335,6 +339,8 @@ endmodule</code></pre>
 <pre><code>parameter real dtemp = 0 from [-`P_CELSIUS0:inf);
 aliasparam trise = dtemp;</code></pre>
 
+<p class="note"><strong>Transcription note:</strong> The PDF prints a curly quotation mark before <code>P_CELSIUS0</code>; the example above uses the ASCII backtick macro introducer. This is an editorial character normalization.</p>
+
 <p>Then the following two instantiations of the module are valid:</p>
 
 <pre><code>nmos2 #(.trise(5)) m1(.d(d), .g(g), .s(s), .b(b));
@@ -353,6 +359,8 @@ nmos2 #(.dtemp(5)) m2(.d(d), .g(g), .s(s), .b(b));</code></pre>
 <pre><code>aliasparam m = $mfactor;</code></pre>
 
 <h3 id="s3-4-8">3.4.8 Multidimensional parameter array examples</h3>
+
+<p class="note"><strong>Source-example note (editorial):</strong> The PDF's example tests distortion against <code>0.1</code>, although the variable name and printed heading refer to <code>0.5</code>. Both are preserved below. The incomplete surrounding model (including external <code>gen</code> and <code>sink</code> definitions) is illustrative, not a standalone executable conformance oracle.</p>
 
 <p>The following example demonstrates the usage of a multidimensional real array parameter and various usages of assignment patterns.</p>
 
@@ -433,9 +441,9 @@ endmodule</code></pre>
 <p><em>Genvars</em> are integer-valued variables which compose static expressions for instantiating structure behaviorally such as accessing analog signals within behavioral looping constructs. The syntax for declaring genvar variables is shown in Syntax 3-3.</p>
 
 <div class="syntax">genvar_declaration ::=	// from A.4.2
-	<b>genvar</b> list_of_genvar_identifiers ;
+	<b>genvar</b> list_of_genvar_identifiers <b>;</b>
 list_of_genvar_identifiers ::=
-	genvar_identifier { , genvar_identifier }
+	genvar_identifier { <b>,</b> genvar_identifier }
 
 <i>Syntax 3-3&mdash;Syntax for genvar declaration</i></div>
 
@@ -473,14 +481,14 @@ end</code></pre>
 <p>The syntax for defining a nature is shown in Syntax 3-4.</p>
 
 <div class="syntax">nature_declaration ::=	// from A.1.6
-	<b>nature</b> nature_identifier [ : parent_nature ] [ ; ]
+	<b>nature</b> nature_identifier [ <b>:</b> parent_nature ] [ <b>;</b> ]
 		{ nature_item }
 	<b>endnature</b>
 parent_nature ::=
 	nature_identifier
-	| discipline_identifier . potential_or_flow
+	| discipline_identifier <b>.</b> potential_or_flow
 nature_item ::= nature_attribute
-nature_attribute ::= nature_attribute_identifier = nature_attribute_expression ;
+nature_attribute ::= nature_attribute_identifier <b>=</b> nature_attribute_expression <b>;</b>
 potential_or_flow ::= <b>potential</b> | <b>flow</b>	// from A.1.7
 nature_attribute_identifier ::=	// from A.9.3
 	<b>abstol</b> | <b>access</b> | <b>ddt_nature</b> | <b>idt_nature</b> | <b>units</b> | identifier
@@ -583,18 +591,18 @@ endnature</code></pre>
 <p>The syntax for declaring a discipline is shown in Syntax 3-5.</p>
 
 <div class="syntax">discipline_declaration ::=	// from A.1.7
-	<b>discipline</b> discipline_identifier [ ; ]
+	<b>discipline</b> discipline_identifier [ <b>;</b> ]
 		{ discipline_item }
 	<b>enddiscipline</b>
 discipline_item ::=
 	nature_binding
 	| discipline_domain_binding
 	| nature_attribute_override
-nature_binding ::= potential_or_flow nature_identifier ;
+nature_binding ::= potential_or_flow nature_identifier <b>;</b>
 potential_or_flow ::= <b>potential</b> | <b>flow</b>
-discipline_domain_binding ::= <b>domain</b> discrete_or_continuous ;
+discipline_domain_binding ::= <b>domain</b> discrete_or_continuous <b>;</b>
 discrete_or_continuous ::= <b>discrete</b> | <b>continuous</b>
-nature_attribute_override ::= potential_or_flow . nature_attribute
+nature_attribute_override ::= potential_or_flow <b>.</b> nature_attribute
 
 <i>Syntax 3-5&mdash;Syntax for discipline declaration</i></div>
 
@@ -771,13 +779,13 @@ endnature</code></pre>
 
 <div class="syntax">net_declaration ::=	// from A.2.1.3
 	...
-	| discipline_identifier [ range ] list_of_net_identifiers ;
-	| discipline_identifier [ range ] list_of_net_decl_assignments ;
+	| discipline_identifier [ range ] list_of_net_identifiers <b>;</b>
+	| discipline_identifier [ range ] list_of_net_decl_assignments <b>;</b>
 	...
-range ::= [ msb_constant_expression : lsb_constant_expression ]	// from A.2.5
-list_of_net_decl_assignments ::= net_decl_assignment { , net_decl_assignment }	// from A.2.3
-list_of_net_identifiers ::= ams_net_identifier { , ams_net_identifier }
-net_decl_assignment ::= ams_net_identifier = expression	// from A.2.4
+range ::= <b>[</b> msb_constant_expression <b>:</b> lsb_constant_expression <b>]</b>	// from A.2.5
+list_of_net_decl_assignments ::= net_decl_assignment { <b>,</b> net_decl_assignment }	// from A.2.3
+list_of_net_identifiers ::= ams_net_identifier { <b>,</b> ams_net_identifier }
+net_decl_assignment ::= ams_net_identifier <b>=</b> expression	// from A.2.4
 
 <i>Syntax 3-6&mdash;Syntax for net discipline declaration</i></div>
 
@@ -808,6 +816,8 @@ ddiscrete [10:1] connector1;</code></pre>
 
 <h4 id="s3-6-3-2">3.6.3.2 Net Discipline Initial (Nodeset) Values</h4>
 
+<p class="note"><strong>Audit note (editorial):</strong> The source explicitly permits null bus initializer elements. The general assignment-pattern productions in A.8.1 do not spell out null elements; <code>constant_assignment_pattern_or_null</code> makes an entire pattern optional, not an element inside it. Preserve the nodeset-specific requirement when reconciling the grammar. Nodeset-use evidence and non-clamping evidence are separate; see the <a href="conformance-nodesets.md">nodeset ledger</a>.</p>
+
 <p>Nets with continuous disciplines are allowed to have initializers on their net discipline declarations; however, nets of non-continuous disciplines are not.</p>
 
 <pre><code>electrical a = 5.0;
@@ -826,7 +836,7 @@ mechanical top.foo.w = 250.0;</code></pre>
 
 <div class="syntax">net_declaration ::=	// from A.2.1.3
 	...
-	| <b>ground</b> [ discipline_identifier ] [ range ] list_of_net_identifiers ;
+	| <b>ground</b> [ discipline_identifier ] [ range ] list_of_net_identifiers <b>;</b>
 
 <i>Syntax 3-7&mdash;Syntax for declaring ground</i></div>
 
@@ -875,8 +885,8 @@ endmodule</code></pre>
 
 <div class="syntax">net_declaration ::=	// from A.2.1.3
 	...
-	| <b>wreal</b> [ discipline_identifier ] [ range ] list_of_net_identifiers ;
-	| <b>wreal</b> [ discipline_identifier ] [ range ] list_of_net_decl_assignments ;
+	| <b>wreal</b> [ discipline_identifier ] [ range ] list_of_net_identifiers <b>;</b>
+	| <b>wreal</b> [ discipline_identifier ] [ range ] list_of_net_decl_assignments <b>;</b>
 
 <i>Syntax 3-8&mdash;Syntax for declaring digital nets</i></div>
 
@@ -1031,30 +1041,32 @@ endnature</code></pre>
 <p>Branches can either be explicitly or implicitly declared. Explicitly declared branches are referred to as named branches. The syntax for declaring named branches is shown in Syntax 3-9. Unnamed branches are created by applying an access function (see 4.4 and 5.4.1) to either a net or a pair of nets. If the access function is applied to a single net, then the branch is formed between that net and the global reference node (ground). If it is applied to a pair of nets, the branch is formed between the two nets. There shall be at most one unnamed branch between any two nets or between a net and implicit ground (in addition to any number of named branches).</p>
 
 <div class="syntax">branch_declaration ::=	// from A.2.1.3
-	<b>branch</b> ( branch_terminal [ , branch_terminal ] ) list_of_branch_identifiers ;
+	<b>branch</b> <b>(</b> branch_terminal [ <b>,</b> branch_terminal ] <b>)</b> list_of_branch_identifiers <b>;</b>
 	| port_branch_declaration
 port_branch_declaration ::=
-	<b>branch</b> ( &lt; port_identifier &gt; ) list_of_branch_identifiers ;
-	| <b>branch</b> ( &lt; hierarchical_port_identifier &gt; ) list_of_branch_identifiers ;
+	<b>branch</b> <b>(</b> <b>&lt;</b> port_identifier <b>&gt;</b> <b>)</b> list_of_branch_identifiers <b>;</b>
+	| <b>branch</b> <b>(</b> <b>&lt;</b> hierarchical_port_identifier <b>&gt;</b> <b>)</b> list_of_branch_identifiers <b>;</b>
 branch_terminal ::=
 	net_identifier
-	| net_identifier [ constant_expression ]
-	| net_identifier [ constant_range_expression ]
+	| net_identifier <b>[</b> constant_expression <b>]</b>
+	| net_identifier <b>[</b> constant_range_expression <b>]</b>
 	| hierarchical_net_identifier
-	| hierarchical_net_identifier [ constant_expression ]
-	| hierarchical_net_identifier [ constant_range_expression ]
+	| hierarchical_net_identifier <b>[</b> constant_expression <b>]</b>
+	| hierarchical_net_identifier <b>[</b> constant_range_expression <b>]</b>
 list_of_branch_identifiers ::=	// from A.2.3
-	branch_identifier [ range ] { , branch_identifier [ range ] }
+	branch_identifier [ range ] { <b>,</b> branch_identifier [ range ] }
 
 <i>Syntax 3-9&mdash;Syntax for branch declaration</i></div>
 
 <p>If one of the terminals of a branch is a vector net, then the other terminal shall either be a scalar net or a vector net of the same size. In the latter case, the branch is referred to as a <em>vector branch</em>. When both terminals are vectors, the scalar branches that make up the vector branch connect to the corresponding scalar nets of the vector terminals, as shown in Figure 3-1.</p>
 
-<div class="note">Figure 3-1: Two vector terminals &mdash; The figure shows a vector branch between two vector terminals: each of the scalar branches making up the vector branch connects the corresponding scalar net of one vector terminal to the corresponding scalar net of the other vector terminal, in parallel one-to-one fashion.</div>
+<figure id="figure-3-1"><a href="VAMS-LRM-2023.pdf#page=62"><img src="figures/lrm-figure-3-1.png" width="504" height="308" style="max-width:100%;height:auto" alt="Figure 3-1: Two vector terminals, with each scalar terminal connected to its corresponding terminal through one branch."></a><figcaption>Original Figure 3-1, extracted from PDF page 62.</figcaption></figure>
+<div class="note"><strong>Editorial description:</strong> The figure shows a vector branch between two vector terminals: each of the scalar branches making up the vector branch connects the corresponding scalar net of one vector terminal to the corresponding scalar net of the other vector terminal, in parallel one-to-one fashion.</div>
 
 <p>When one terminal is a vector and the other is a scalar, a singular scalar branch connects to each scalar net in the vector terminal and each terminal of the vector branch connects to the scalar terminal, as shown in Figure 3-2.</p>
 
-<div class="note">Figure 3-2: One vector and one scalar terminal &mdash; The figure shows a vector branch between a vector terminal and a scalar terminal: each scalar branch of the vector branch connects one scalar net of the vector terminal on one side, while all the branches&rsquo; other ends join together at the single scalar terminal.</div>
+<figure id="figure-3-2"><a href="VAMS-LRM-2023.pdf#page=62"><img src="figures/lrm-figure-3-2.png" width="488" height="300" style="max-width:100%;height:auto" alt="Figure 3-2: One vector and one scalar terminal. Separate vector-terminal branches all connect to the same scalar terminal."></a><figcaption>Original Figure 3-2, extracted from PDF page 62.</figcaption></figure>
+<div class="note"><strong>Editorial description:</strong> The figure shows a vector branch between a vector terminal and a scalar terminal: each scalar branch of the vector branch connects one scalar net of the vector terminal on one side, while all the branches&rsquo; other ends join together at the single scalar terminal.</div>
 
 <p>If the range of the <em>vector branch</em> is not specified then the indexing of the <em>vector branch</em> shall start at 0. For example:</p>
 

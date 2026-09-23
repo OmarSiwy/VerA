@@ -18,8 +18,9 @@
 // 2) or through a four-state vector fails on the fractional digits alone, and
 // 1.0/3.0 is included precisely because it is NOT exactly representable: %g
 // prints it to six significant digits, which is the same "0.333333" for the
-// true double and for any implementation that kept full precision, and a
-// different string for one that truncated to float or to fixed point.
+// true double and also for common reduced-precision representations. This
+// six-digit transcript checks fractional value propagation, NOT full binary64
+// precision; a separate discriminator is required for that claim.
 //
 //! lrm 3.7
 //! timescale 1ns/1ns

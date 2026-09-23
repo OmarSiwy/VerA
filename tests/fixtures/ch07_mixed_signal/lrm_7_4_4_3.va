@@ -1,58 +1,31 @@
-// §7.4.4.3, verbatim: "Connect module insertion can be affected by coercion
-// i.e., declaring disciplines for the interconnect in the hierarchy. If an
-// interconnect is assigned a discipline, that discipline shall be used unless
-// the resolveto connect statement overrides the discipline."
+// MIX-LOCAL-001 corrects this fixture's former claim that a parent's declared
+// discipline replaces an explicitly declared child port's accessors.
+// §4.4: "The access function name shall match the discipline declaration for
+// the nets, ports, or branch given in the argument expression list."
+// §6.5.8 permits one analog node to have several locally declared disciplines;
+// §7.4 resolves undeclared segments, not every segment sharing that node.
 //
-// THE COMPILE IS THE TEST, and the numbers are almost incidental. The rule is
-// not a value, it is WHICH DISCIPLINE A NET HAS, and the one thing a source file
-// can say about a net's discipline is which access functions exist on it:
-// §3.6.1.2 binds `access` to the nature and §3.6.2.1 binds the natures to the
-// discipline. So `shared` is declared `ch7443_alt` — a user discipline whose
-// potential nature names its accessor `Va`, not `V` — and every read of it in
-// this file is `Va`. A compiler that let the child's `electrical` PORT coerce
-// the declared interconnect would make the net electrical and answer
-// `error[E0501]: unknown access function: Va` on the first assertion. A
-// compiler that resolved the net by its neighbours instead of its declaration
-// answers the same. The file either compiles or it does not; when it compiles,
-// `Va` exists and the number it returns is 0.5.
+// Parent shared remains ch7443_alt with Va/Ia. Child port remains electrical
+// with V/I. Both access the same physical unknown through their own declarations.
+// The parent's contribution is zero; the child contributes V(port)-0.5.
+// KFL gives 0+(V-0.5)=0, hence both probes must read exactly 0.5.
+// The undeclared plain net inherits electrical from its child and reads 0.25.
+// Four observations are required at the single operating point.
 //
-// COERCION CROSSES THE HIERARCHY PORT, which is why the child reads the net
-// too. `ch7443_child`'s port is declared `electrical`, and §7.4.4.3 says the
-// interconnect's declaration still governs — so the accessor that exists on the
-// child's `port` is the net's `Va`, not the port declaration's `V`. A compiler
-// that let the PORT's own declaration pick the accessor inside the child would
-// refuse `Va(port)`, and the child's assertion is where that is caught.
+// The former child Va/Ia acceptance claim is withdrawn and moves to the
+// MIX-LOCAL-001 invalid-access fixtures, where rejection is required instead.
+// This correction changes the oracle, not the LRM. A failure after correcting
+// the local access names exposes implementation debt rather than invalidating
+// the locally declared discipline. See docs/conformance-mixed-signal.md.
 //
-// THE CONTRAST IS IN THE SAME DESIGN, WHICH IS THE CLAUSE'S OWN CONTRAST. The
-// figure's Case 1 reads "NetB is declared as cmos3 (the others are undeclared)"
-// and its verdict, in BOTH resolution modes, is "NetB stays cmos3" while the
-// others become electrical. `plain` below is undeclared and meets the same
-// `electrical` port, so resolution runs on it and it takes the port's
-// discipline: `V(plain)` is the accessor that exists and it is the one read
-// here. Two nets, one declaration between them, and the declarations disagree —
-// asserted together so that a compiler that resolved nothing at all cannot pass
-// by refusing both.
-//
-// WHY 0.5, AND WHY `//! solve`. The two modules stamp into the SAME node: the
-// top contributes `Ia(shared) <+ 0.0` and the child `Ia(port) <+ Va(port) -
-// 0.5`, and KFL sums them, so 0.0 + (V - 0.5) = 0 and V = 0.5 at every
-// operating point. The equation is linear in the one free unknown, so one Newton
-// step from the harness's seed lands on it exactly and CHECKX is the right
-// comparison. `//! solve` is required and not decoration: the harness can only
-// tie an unknown it can SPELL, and its `//!` grammar knows the built-in
-// accessors — `V(...)`, `I(...)` — so a net of a user discipline has no line
-// that can pin it. It is untied by `//! solve` and fixed by the model instead,
-// which is also the honest order: coercion is a claim about the net the DEVICE
-// was built with, not one a bias line can assert.
-//
-// WHAT THIS FILE DOES NOT REACH. The second half of the rule — "unless the
-// resolveto connect statement overrides the discipline" — is a statement about
-// an INSERTED connect module, and VerA inserts none (the `m03_` family in this
-// directory carries that ceiling as `//! xfail`), so there is no insertion here
-// for a resolveto to steer. Citing it from this file would claim more than the
-// fixture does, so it is named and left where it belongs.
+// The resolveto override half of §7.4.4.3 is untested here. Resolution precedes
+// bridge insertion; absence of insertion does not make that half inapplicable.
 //
 //! lrm 7.4.4.3
+//! lrm 4.4
+//! lrm 6.5.8
+//! checks 4
+//! xfail MIX-LOCAL-001 shared-node discipline replaces the child's local declaration and rejects legal V/I accesses
 //! bias V(plain) = 0.25
 //! solve
 //! print none
@@ -89,19 +62,15 @@ module ch7443_top;
   end
 endmodule
 
-// Both children declare their port `electrical`. The one on `shared` is reached
-// through the DECLARED interconnect, so the accessor that exists on its port is
-// the net's `Va`; the one on `plain` sits where resolution put the port's own
-// discipline, so its accessor is `V`. One module body cannot be written for
-// both — which is the whole content of the clause, spelled as two bodies.
+// Both children preserve their explicit electrical port declarations.
 module ch7443_alt_child(port);
   inout port;
   electrical port;
 
   analog begin
-    `CHECKX("a child reached through an electrical port still sees the declared discipline",
-            Va(port), 0.5);
-    Ia(port) <+ Va(port) - 0.5;
+    `CHECKX("the electrical child uses its own accessor on the shared node",
+            V(port), 0.5);
+    I(port) <+ V(port) - 0.5;
   end
 endmodule
 

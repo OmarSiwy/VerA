@@ -6792,8 +6792,13 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
             .string => "$fscanf$str",
             .real => "$fscanf$real",
         };
-        const v = try self.call(callee, &.{ n, fd, fmt.?, try self.mir.addIntConst(self.arena, item) });
-        try self.builder.writeVariable(slot.place, self.cur, v);
+        const index = try self.mir.addIntConst(self.arena, item);
+        const v = try self.call(callee, &.{ n, fd, fmt.?, index });
+        // Only successful assignments change destinations. Reuse the count
+        // from the sequenced file read; never consume another input window.
+        const old = try self.builder.readVariable(slot.place, self.cur);
+        const assigned = try self.emit(.igt, &.{ n, index });
+        try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ assigned, v, old }));
         item += 1;
     }
     return n;
@@ -7113,6 +7118,9 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
         else => {},
     };
     self.uses_str_tasks = true;
+    // Snapshot the count from the original input/format before any destination
+    // assignment, including destinations aliasing either string argument.
+    const count = try self.call("$sscanf", &.{ src, fmt });
     var item: i64 = 0;
     for (args[2..]) |a| {
         if (a == .none) continue;
@@ -7125,11 +7133,16 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
             .string => "$sscanf$str",
             .real => "$sscanf$real",
         };
-        const v = try self.call(callee, &.{ src, fmt, try self.mir.addIntConst(self.arena, item) });
-        try self.builder.writeVariable(slot.place, self.cur, v);
+        const index = try self.mir.addIntConst(self.arena, item);
+        const v = try self.call(callee, &.{ src, fmt, index });
+        // Read the current SSA value per assignment: if a destination occurs
+        // twice, a failed later conversion retains the earlier successful one.
+        const old = try self.builder.readVariable(slot.place, self.cur);
+        const assigned = try self.emit(.igt, &.{ count, index });
+        try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ assigned, v, old }));
         item += 1;
     }
-    return self.call("$sscanf", &.{ src, fmt });
+    return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -8548,7 +8561,8 @@ const binary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
 /// (§4.3.1: "if both operands are integer the result is integer").
 fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
-    const name = self.file.str(ex.strOf(e));
+    const spelling = self.file.str(ex.strOf(e));
+    const name = if (std.mem.startsWith(u8, spelling, "$")) spelling[1..] else spelling;
     const args = ex.args(e);
 
     if (unaryMathOp(name)) |op| {
@@ -9241,6 +9255,12 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try b.emit();
         return poison;
     }
+    // §4.3.1 Table 4-14 gives these system spellings the same operand-sensitive
+    // result types as their traditional spellings. A generic call's name-only
+    // sysFuncTy cannot express that: it would turn integer division into real
+    // division. Use typed arithmetic opcodes, after the context checks above.
+    if (std.mem.eql(u8, name, "$abs") or std.mem.eql(u8, name, "$min") or
+        std.mem.eql(u8, name, "$max")) return self.lowerBuiltin(e);
     // §3.4.7/§9.18: this module wrote `aliasparam m = $mfactor;`, so the two
     // names denote one location and the location is the parameter the alias
     // declared (`aliasSystemParam`). Both spellings read it — §3.4.7 rule 2 has
@@ -11332,6 +11352,71 @@ const Harness = struct {
     }
 };
 
+test "lower: system math aliases preserve operand-sensitive result types" {
+    const cases = [_]struct { expr: []const u8, op: Mir.Opcode, div: Mir.Opcode }{
+        .{ .expr = "abs(a)", .op = .iabs, .div = .idiv },
+        .{ .expr = "$abs(a)", .op = .iabs, .div = .idiv },
+        .{ .expr = "min(a,b)", .op = .imin, .div = .idiv },
+        .{ .expr = "$min(a,b)", .op = .imin, .div = .idiv },
+        .{ .expr = "max(a,b)", .op = .imax, .div = .idiv },
+        .{ .expr = "$max(a,b)", .op = .imax, .div = .idiv },
+        .{ .expr = "abs(r)", .op = .fabs, .div = .fdiv },
+        .{ .expr = "$abs(r)", .op = .fabs, .div = .fdiv },
+        .{ .expr = "min(a,r)", .op = .fmin, .div = .fdiv },
+        .{ .expr = "$min(a,r)", .op = .fmin, .div = .fdiv },
+        .{ .expr = "$min(r,a)", .op = .fmin, .div = .fdiv },
+        .{ .expr = "max(r,a)", .op = .fmax, .div = .fdiv },
+        .{ .expr = "$max(r,a)", .op = .fmax, .div = .fdiv },
+        .{ .expr = "$max(a,r)", .op = .fmax, .div = .fdiv },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p);
+            \\inout p; electrical p;
+            \\parameter integer a = 3, b = 5;
+            \\parameter real r = 3.0;
+            \\analog I(p) <+ {s}/2;
+            \\endmodule
+        , .{c.expr});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        try h.low.lowerFile();
+        var math_count: usize = 0;
+        var div_count: usize = 0;
+        for (h.mir.insts.items(.op)) |op| {
+            if (op == c.op) math_count += 1;
+            if (op == c.div) div_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), math_count);
+        try std.testing.expectEqual(@as(usize, 1), div_count);
+    }
+}
+
+test "lower: system math aliases reject wrong arity" {
+    for ([_][]const u8{ "$abs()", "$abs(1,2)", "$min(1)", "$min(1,2,3)", "$max(1)", "$max(1,2,3)" }) |expr| {
+        const src = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "module m(p); inout p; electrical p; analog I(p) <+ {s}; endmodule",
+            .{expr},
+        );
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        h.low.lowerFile() catch |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        };
+        var found = false;
+        for (0..h.bag.count()) |i| {
+            if (h.code(i) == .E0506) found = true;
+        }
+        try std.testing.expect(found);
+    }
+}
+
 test "lower: §2.7 a string literal is a base-256 numeral, §3.3 justified right" {
     // §2.7's own sentence, at the natural width: most significant character
     // first, and a plain space is a character like any other.
@@ -11757,6 +11842,53 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         // `p` and `n` are node_order 0 and 1, so the branch is that pair.
         try std.testing.expectEqual(c.unknown, g.low.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
     }
+}
+
+test "lower: scan destinations are guarded by the single assignment count" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module scan(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  integer fd, count, iv; real rv; string sv;
+        \\  analog begin
+        \\    iv = 73; rv = 2.5; sv = "kept";
+        \\    count = $sscanf("12 nope", "%d %f", iv, rv, sv);
+        \\    count = $fscanf(fd, "%d %f", iv, rv, sv);
+        \\    I(p,n) <+ iv + rv + count;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try h.low.lowerFile();
+    try std.testing.expect(h.bag.isEmpty());
+    var string_counts: usize = 0;
+    var file_counts: usize = 0;
+    var guarded: usize = 0;
+    var blocks = h.mir.blockIter();
+    while (blocks.next()) |b| {
+        var it = h.mir.blockInsts(b);
+        while (it.next()) |inst| {
+            if (h.mir.instOp(inst) == .call) {
+                const name = h.mir.instData(inst).call.name;
+                if (std.mem.eql(u8, name, "$sscanf")) string_counts += 1;
+                if (std.mem.eql(u8, name, "$fscanf")) file_counts += 1;
+            }
+            if (h.mir.instOp(inst) != .select) continue;
+            const selection = h.mir.instData(inst).ternary;
+            const condition = h.mir.resolveAlias(selection.cond);
+            const comparison = h.mir.valueDef(condition).inst_result;
+            try std.testing.expectEqual(Mir.Opcode.igt, h.mir.instOp(comparison));
+            const lhs = h.mir.resolveAlias(h.mir.instData(comparison).binary.lhs);
+            const count_inst = h.mir.valueDef(lhs).inst_result;
+            try std.testing.expectEqual(Mir.Opcode.call, h.mir.instOp(count_inst));
+            const name = h.mir.instData(count_inst).call.name;
+            try std.testing.expect(std.mem.eql(u8, name, "$sscanf") or std.mem.eql(u8, name, "$fscanf"));
+            guarded += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), string_counts);
+    try std.testing.expectEqual(@as(usize, 1), file_counts);
+    try std.testing.expectEqual(@as(usize, 6), guarded);
 }
 
 test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditionally" {

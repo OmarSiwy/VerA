@@ -421,10 +421,11 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
 /// opinion — a citation list can only ever be evidence about the questions
 /// somebody already thought to ask.
 ///
-/// A cite also carries a POLARITY, because "is this clause tested?" is two
-/// questions. A `//! reject` fixture proves the compiler refuses what the clause
-/// forbids; every other fixture proves it accepts, runs and computes what the
-/// clause requires. Conforming to a clause by only ever refusing it is the
+/// A cite carries its fixture's declared POLARITY. This is a static inventory:
+/// no compilation or execution happens here. Neither a positive citation nor
+/// a rejection citation proves the cited rule. In particular, an XFAIL still
+/// contributes a citation and a rejection can pin an implementation limitation.
+/// Conforming to a clause by only ever refusing it is the
 /// failure mode a cited/uncited count cannot see, and it is not hypothetical
 /// here — `$simprobe`, the `zi_*` non-zero-tau forms and the whole §9.22 family
 /// are diagnosed and never implemented. So the report separates `+` from `-`
@@ -447,6 +448,12 @@ fn reportCoverage(
     w: *Io.Writer,
 ) !bool {
     const clauses = try lrmClauses(arena, io, docs_root);
+    try w.writeAll(
+        "STATIC CITATION INVENTORY — fixtures are not executed by --coverage.\n" ++
+            "Both polarities cited does not establish passing tests, valid oracles,\n" ++
+            "all rules within a clause, or Verilog-A applicability. XFAIL citations\n" ++
+            "and implementation-limit rejections remain in this inventory.\n\n",
+    );
 
     const Cite = struct { section: []const u8, path: []const u8, reject: bool };
     var cites: std.ArrayList(Cite) = .empty;
@@ -470,9 +477,8 @@ fn reportCoverage(
         }
     }.lt);
 
-    // Which of the two claims a clause has a fixture for: `pos` is a fixture
-    // that must COMPILE, RUN and print `ok=1` — the clause's requirement met —
-    // and `neg` is a `//! reject` — its prohibition diagnosed.
+    // Declared fixture intent only. Results and rule-level evidence are not
+    // inputs to this report, so neither flag can mean a verified obligation.
     const Sides = struct { pos: bool = false, neg: bool = false };
     var cited: std.StringHashMapUnmanaged(Sides) = .empty;
     for (cites.items) |c| {
@@ -487,9 +493,8 @@ fn reportCoverage(
             try w.print("§{s}\n", .{c.section});
             prev = c.section;
         }
-        // `+` accepts and computes, `-` refuses. Per fixture and not per clause,
-        // so the line that answers "which fixture proves the OTHER half?" is
-        // the fixture's own.
+        // `+` declares a positive fixture, `-` declares a rejection fixture.
+        // Show each path so a reviewer can inspect the actual evidence.
         try w.print("  {s} {s}\n", .{ if (c.reject) "-" else "+", c.path });
     }
 
@@ -538,17 +543,16 @@ fn reportCoverage(
 
     if (neg_only.items.len != 0) {
         try w.print(
-            "\nREFUSED ONLY — every fixture citing these is a `//! reject`. The\n" ++
-                "compiler is held to what the clause FORBIDS and to nothing it requires,\n" ++
-                "which a passing score reads exactly like implementing it. Where the\n" ++
-                "clause does require something, this is where the suite is thinnest.\n",
+            "\nREJECTION CITATIONS ONLY — every citing fixture declares `//! reject`.\n" ++
+                "Review whether it pins a normative prohibition, an implementation\n" ++
+                "choice, or a missing feature. No positive behavior is established.\n",
             .{},
         );
         for (neg_only.items) |cl| try w.print("§{s} {s}  ({s})\n", .{ cl.id, cl.title, cl.file });
     }
     if (pos_only.items.len != 0) {
         try w.print(
-            "\nACCEPTED ONLY — no `//! reject` fixture cites these, so nothing pins\n" ++
+            "\nPOSITIVE CITATIONS ONLY — no `//! reject` fixture cites these, so no citation pins\n" ++
                 "what the clause rules OUT. A clause that states no error has nothing to\n" ++
                 "reject and belongs here; one whose text says `shall not` or `is an\n" ++
                 "error` does not.\n",
@@ -564,7 +568,7 @@ fn reportCoverage(
     const n = clauses.count();
     try w.print(
         "\n{d} of {d} LRM clauses cited, by {d} of {d} fixtures\n" ++
-            "  {d} tested both ways · {d} accepted only · {d} refused only · {d} uncited\n",
+            "  {d} cited both ways · {d} positive citations only · {d} rejection citations only · {d} uncited\n",
         .{
             n - uncited.items.len,                                           n,
             citing,                                                          fixtures.len,
@@ -851,7 +855,10 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 ///      with no directives at all. A design a test loads is not a fixture, and
 ///      counting one as `unasserted` would be dishonest in the other direction.
 ///
-/// So: a `.v` joins the walk when it carries a directive and has no golden.
+/// So: a `.v` joins this legacy walk when it carries a directive and has no
+/// golden, unless explicitly opted into the digital-negative runner below.
+/// Legacy negative results are analog compilation results, NOT evidence that
+/// the digital executor diagnosed the intended rule.
 ///
 /// **The whole file is scanned, and the line rule is `tb.parse`'s own** — a
 /// line whose trimmed form starts with `//!`. Neither shortcut works here. A
@@ -871,7 +878,137 @@ fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[
     if (dir.access(io, golden, .{})) |_| return null else |_| {}
 
     const source = dir.readFileAlloc(io, rel, arena, .limited(1 << 20)) catch return null;
+    // Explicit digital negatives belong exclusively to bench's --run runner.
+    // Legacy unmarked .v rejects retain their historical analog compile route.
+    if (digitalNegative(source)) return null;
     return if (hasDirective(source)) ".v" else null;
+}
+
+/// Runner metadata, deliberately not a tb directive: tb.parse describes the
+/// analog harness and must not interpret a digital diagnostic as its evidence.
+pub fn digitalNegative(source: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        if (std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r"), "// digital-runner: reject")) return true;
+    }
+    return false;
+}
+
+pub fn digitalCaseSelected(has_golden: bool, source: []const u8) bool {
+    return has_golden or digitalNegative(source);
+}
+
+/// Match a normal digital diagnostic exit, not a signal, successful program,
+/// empty/bare reject, or unrelated failure. Every declared pattern must match.
+pub fn digitalRejectionMatches(source: []const u8, exit_code: u8, stderr: []const u8) bool {
+    if (exit_code != 1 or std.mem.indexOf(u8, stderr, "error[") == null) return false;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var count: usize = 0;
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, "//!")) continue;
+        var fields = std.mem.tokenizeAny(u8, line[3..], " \t\r");
+        const key = fields.next() orelse continue;
+        // This bounded runner does not implement expected-failure accounting.
+        // Never silently treat an XFAIL-tagged source as an ordinary pass.
+        if (std.mem.eql(u8, key, "xfail")) return false;
+        if (!std.mem.eql(u8, key, "reject")) continue;
+        const pattern = std.mem.trim(u8, fields.rest(), " \t\r");
+        if (pattern.len == 0) return false;
+        var diagnostics = std.mem.splitScalar(u8, stderr, '\n');
+        var found = false;
+        while (diagnostics.next()) |diagnostic_raw| {
+            const diagnostic = std.mem.trim(u8, diagnostic_raw, " \t\r");
+            if (std.mem.startsWith(u8, diagnostic, "error[") and
+                std.mem.indexOf(u8, diagnostic, pattern) != null) found = true;
+        }
+        if (!found) return false;
+        count += 1;
+    }
+    return count != 0;
+}
+
+/// Optional warning obligations on a successful digital transcript. Match
+/// actual diagnostic headers, never source excerpts or arbitrary stderr text.
+/// A positive still needs its exact stdout oracle and a successful exit.
+pub fn digitalWarningsMatch(source: []const u8, stderr: []const u8) bool {
+    var diagnostics = std.mem.splitScalar(u8, stderr, '\n');
+    while (diagnostics.next()) |raw| {
+        if (std.mem.startsWith(u8, std.mem.trim(u8, raw, " \t\r"), "error[")) return false;
+    }
+    const prefix = "// digital-runner: warning";
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        const suffix = line[prefix.len..];
+        if (suffix.len != 0 and suffix[0] != ' ' and suffix[0] != '\t') continue;
+        const pattern = std.mem.trim(u8, suffix, " \t\r");
+        if (pattern.len == 0) return false;
+        diagnostics.reset();
+        var found = false;
+        while (diagnostics.next()) |diagnostic_raw| {
+            const diagnostic = std.mem.trim(u8, diagnostic_raw, " \t\r");
+            if (std.mem.startsWith(u8, diagnostic, "warning[") and
+                std.mem.indexOf(u8, diagnostic, pattern) != null) found = true;
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+test "digital positive warning obligations inspect diagnostic headers" {
+    const source = "// digital-runner: warning W1150\n// digital-runner: warning memory data count\n";
+    const warning = "warning[W1150]: memory data count differs from requested range\n";
+    try std.testing.expect(digitalWarningsMatch(source, warning));
+    try std.testing.expect(!digitalWarningsMatch(source, ""));
+    try std.testing.expect(!digitalWarningsMatch(source, "warning[W1150]: unrelated\n12 | // memory data count\n"));
+    try std.testing.expect(!digitalWarningsMatch(source, "memory data count W1150\n"));
+    try std.testing.expect(!digitalWarningsMatch(source, "error[W1150]: memory data count\n"));
+    try std.testing.expect(!digitalWarningsMatch("// digital-runner: warning\n", warning));
+    try std.testing.expect(digitalWarningsMatch("module ordinary; endmodule", warning));
+    try std.testing.expect(!digitalWarningsMatch("module ordinary; endmodule", "error[E1100]: failure\n"));
+    try std.testing.expect(digitalWarningsMatch("initial $display(\"// digital-runner: warning absent\");", ""));
+    try std.testing.expect(digitalWarningsMatch("// digital-runner: warningish comment", ""));
+}
+
+test "digital negative routing is explicit and diagnostics are specific" {
+    const source = "// digital-runner: reject\n//! reject E1100\n//! reject no arguments\n";
+    try std.testing.expect(digitalNegative(source));
+    try std.testing.expect(!digitalNegative("//! reject E1100\n"));
+    try std.testing.expect(!digitalNegative("initial $display(\"// digital-runner: reject\");"));
+    const diagnostic = "error[E1100]: function takes no arguments";
+    try std.testing.expect(digitalRejectionMatches(source, 1, diagnostic));
+    try std.testing.expect(!digitalRejectionMatches(source, 0, diagnostic));
+    try std.testing.expect(!digitalRejectionMatches(source, 255, diagnostic));
+    try std.testing.expect(!digitalRejectionMatches(source, 1, "error[E1100]: unsupported real"));
+    try std.testing.expect(!digitalRejectionMatches(source, 1, "error[E1100]: unrelated failure\n12 | // no arguments\n"));
+    try std.testing.expect(digitalRejectionMatches(source, 1, "error[E1100]: first failure\nerror[E0001]: no arguments\n"));
+    try std.testing.expect(!digitalRejectionMatches("//! reject\n", 1, diagnostic));
+    try std.testing.expect(!digitalRejectionMatches("//! lrm 9.10\n", 1, diagnostic));
+    try std.testing.expect(!digitalRejectionMatches("//! reject E1100\n//! xfail pending\n", 1, diagnostic));
+    try std.testing.expect(digitalCaseSelected(false, source));
+    try std.testing.expect(digitalCaseSelected(true, "module positive; endmodule"));
+    try std.testing.expect(!digitalCaseSelected(false, "//! reject E1100\n"));
+    try std.testing.expect(!digitalCaseSelected(false, "module support; endmodule"));
+}
+
+test "digital opt-in is excluded from analog fixture collection" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const marked = "// digital-runner: reject\n//! reject no arguments\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "negative.v", .data = marked });
+    try tmp.dir.writeFile(io, .{ .sub_path = "legacy.v", .data = "//! reject E0205\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "analog.va", .data = marked });
+    try tmp.dir.writeFile(io, .{ .sub_path = "positive.v", .data = "//! lrm 9.10\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "positive.expected.txt", .data = "ok\n" });
+    try std.testing.expect(fixtureExt(arena.allocator(), io, tmp.dir, "negative.v") == null);
+    try std.testing.expectEqualStrings(".v", fixtureExt(arena.allocator(), io, tmp.dir, "legacy.v").?);
+    try std.testing.expectEqualStrings(".va", fixtureExt(arena.allocator(), io, tmp.dir, "analog.va").?);
+    try std.testing.expect(fixtureExt(arena.allocator(), io, tmp.dir, "positive.v") == null);
 }
 
 /// Does this source carry a `//!` directive? `tb.parse`'s own line rule, and it

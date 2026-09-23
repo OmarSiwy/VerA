@@ -120,6 +120,13 @@ pub const Directives = struct {
     print_residual: bool = true,
     /// Expected normal process exit status; signals always fail the fixture.
     expected_exit: u8 = 0,
+    /// Optional exact number of runtime verdict columns across the whole run.
+    /// A missing or duplicated check must not pass an exhaustive inventory.
+    expected_checks: ?usize = null,
+    /// Runtime argv entries, in source order. Repeatable `//! plusargs` lines
+    /// split on ASCII space/tab only; no quoting, escaping or shell expansion.
+    /// Each printable-ASCII token starts with '+' and contains another byte.
+    plusargs: []const []const u8 = &.{},
     /// `//! spice <one netlist line>`, one per line, joined with newlines in
     /// source order: SPICE netlist text this fixture is compiled AGAINST.
     ///
@@ -311,6 +318,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var plusargs: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList(NoiseWant) = .empty;
@@ -360,6 +368,23 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
         } else if (std.mem.eql(u8, kw, "exit")) {
             d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
+        } else if (std.mem.eql(u8, kw, "checks")) {
+            if (d.expected_checks != null) return error.BadSyntax;
+            if (!digits(rest)) return error.BadNumber;
+            const count = std.fmt.parseInt(usize, rest, 10) catch return error.BadNumber;
+            if (count == 0) return error.BadNumber;
+            d.expected_checks = count;
+        } else if (std.mem.eql(u8, kw, "plusargs")) {
+            if (rest.len == 0) return error.BadSyntax;
+            var args = std.mem.tokenizeAny(u8, rest, " \t");
+            while (args.next()) |arg| {
+                if (arg.len < 2 or arg[0] != '+') return error.BadSyntax;
+                for (arg) |c| {
+                    if (c < 0x21 or c > 0x7e or c == '\'' or c == '"' or c == '\\')
+                        return error.BadSyntax;
+                }
+                try plusargs.append(arena, try arena.dupe(u8, arg));
+            }
         } else if (std.mem.eql(u8, kw, "reject")) {
             // The whole rest of the line is ONE substring, verbatim: the
             // expectations being migrated are message fragments like
@@ -411,6 +436,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.waves = waves.items;
     d.psweeps = psweeps.items;
     d.reject = reject.items;
+    d.plusargs = plusargs.items;
+    if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
     d.lrm = lrm.items;
     d.noise = noise.items;
     d.acstim = acstim.items;
@@ -1425,10 +1452,11 @@ const runner_body =
     \\        return map(a, std.math.pow(f64, a.v, c), c * std.math.pow(f64, a.v, c - 1.0));
     \\    }
     \\    // §4.3.1 min/max are selections: the derivative is the winner's.
-    \\    pub fn minC(a: T, c: f64) T { return if (a.v <= c) a else con(c); }
-    \\    pub fn maxC(a: T, c: f64) T { return if (a.v >= c) a else con(c); }
-    \\    pub fn min(a: T, b: T) T { return if (a.v <= b.v) a else b; }
-    \\    pub fn max(a: T, b: T) T { return if (a.v >= b.v) a else b; }
+    \\    // §4.3.1: equality selects the second operand and its derivative.
+    \\    pub fn minC(a: T, c: f64) T { return if (a.v < c) a else con(c); }
+    \\    pub fn maxC(a: T, c: f64) T { return if (a.v > c) a else con(c); }
+    \\    pub fn min(a: T, b: T) T { return if (a.v < b.v) a else b; }
+    \\    pub fn max(a: T, b: T) T { return if (a.v > b.v) a else b; }
     \\    // Contract masks and select. A comparison is piecewise constant, so
     \\    // its derivative is zero (`con`); like min/max, `sel` carries the
     \\    // winner's derivative.
@@ -2444,6 +2472,31 @@ test "§4.6.3 `//! acstim` states the exported stimulus table" {
     try testing.expectError(error.BadSyntax, parse(arena, "//! acstim (,b) mag=1\n"));
 }
 
+test "plusargs preserves tokens, duplicate arguments and repeated-line order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try parse(arena, "//! plusargs +HELLO\t+gain=7 +gain=8\r\n//! plusargs +HELLO +empty= +literal=$HOME;*\n");
+    const want = [_][]const u8{ "+HELLO", "+gain=7", "+gain=8", "+HELLO", "+empty=", "+literal=$HOME;*" };
+    try testing.expectEqual(want.len, d.plusargs.len);
+    for (want, d.plusargs) |expected, actual| try testing.expectEqualStrings(expected, actual);
+    // Existing defaults are unaffected; metacharacters above are literal bytes.
+    try testing.expectEqual(0, d.expected_exit);
+    try testing.expectEqual(null, d.expected_checks);
+    try testing.expect(d.print_residual);
+    try testing.expectEqual(0, (try parse(arena, "//! checks 2\n")).plusargs.len);
+}
+
+test "plusargs rejects malformed operands rather than dropping them" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "", "+", "HELLO", "+ok missingplus", "+s=\"hello\"", "+s='hello'", "+s=\\value", "+s=\x00", "+s=\x7f", "+s=\x80", "+a\r+b" }) |bad| {
+        const source = try std.fmt.allocPrint(arena, "//! plusargs {s}\n", .{bad});
+        try testing.expectError(error.BadSyntax, parse(arena, source));
+    }
+}
+
 test "expected process exit status is explicit and bounded" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -2453,6 +2506,20 @@ test "expected process exit status is explicit and bounded" {
     try testing.expectEqual(255, (try parse(arena, "//! exit 255\n")).expected_exit);
     try testing.expectError(error.BadNumber, parse(arena, "//! exit 256\n"));
     try testing.expectError(error.BadNumber, parse(arena, "//! exit -1\n"));
+}
+
+test "expected runtime check count is positive, unique and not a rejection" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqual(null, (try parse(arena, "")).expected_checks);
+    try testing.expectEqual(@as(?usize, 215), (try parse(arena, "//! checks 215\n")).expected_checks);
+    for ([_][]const u8{ "", "0", "-1", "+1", "1.0", "1_0", "two" }) |bad| {
+        const source = try std.fmt.allocPrint(arena, "//! checks {s}\n", .{bad});
+        try testing.expectError(error.BadNumber, parse(arena, source));
+    }
+    try testing.expectError(error.BadSyntax, parse(arena, "//! checks 1\n//! checks 2\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! checks 1\n//! reject E0208\n"));
 }
 
 test "sweep expansion is the cartesian product, last fastest" {

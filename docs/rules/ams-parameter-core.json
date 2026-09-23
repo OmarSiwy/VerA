@@ -1,0 +1,1142 @@
+{
+  "schema_version": 1,
+  "denominator": "uncertified",
+  "completeness_review": "pending",
+  "scope": "Bounded candidate decomposition of AMS 3.4 introduction through 3.4.2, printed 27–29. Range/string/array/override dependencies remain open; not a complete parameter denominator.",
+  "rules": [
+    {
+      "id": "AMS-PARAM-LIST",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "Parameter assignments form a comma-separated list."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Parameter assignments form a comma-separated list.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Syntax 3-2; inherited declaration grammar",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "parameter real a=2,b=a+3;",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Observe a=2 and b=5 from the same declaration.",
+          "derivation": "Parameter assignments form a comma-separated list.",
+          "wrong_implementation": "A parser retaining only the first declarator.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-CONSTANT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "Initializers contain only constant numbers and previously defined parameters."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Initializers contain only constant numbers and previously defined parameters.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Constant-expression rules and permitted constant functions require separate reconciliation.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Prior parameter a=2, b=a+3; contrast a runtime variable or $abstime initializer.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Legal dependency yields 5; nonconstant initializer is invalid.",
+          "derivation": "Initializers contain only constant numbers and previously defined parameters.",
+          "wrong_implementation": "Folding a runtime expression as if it were a constant.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-PREVIOUS",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "The introductory initializer restriction refers to previously defined parameters."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "The introductory initializer restriction refers to previously defined parameters.",
+      "class": "ambiguous",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "IEEE parameter dependency rules; do not silently resolve a possible inherited-rule tension.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Compare a=2 followed by b=a+3 with an isolated forward-reference declaration.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Backward dependency yields 5; forward-reference restriction requires reconciliation with inherited parameter dependency rules before diagnostic credit.",
+          "derivation": "The introductory initializer restriction refers to previously defined parameters.",
+          "wrong_implementation": "Unconditionally permitting all forward references without source reconciliation.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-ARRAY-INIT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "An array parameter initializer is a constant assignment pattern."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "An array parameter initializer is a constant assignment pattern.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.4.4 and 4.2.14: dimensions, matching, overrides remain open.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Explicit integer array initialized with apostrophe-braced 2,5 versus a nonconstant element.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Legal array elements are 2 and 5; nonconstant element violates the initializer restriction.",
+          "derivation": "An array parameter initializer is a constant assignment pattern.",
+          "wrong_implementation": "Accepting arbitrary runtime array initializer expressions.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-IMMUTABLE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "Parameter values cannot be modified at run time."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Parameter values cannot be modified at run time.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Analog statement legality and inherited assignment-target rules.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Read parameter p=3 at distinct analysis points; isolate procedural assignment to p.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Reads remain 3; runtime modification is illegal.",
+          "derivation": "Parameter values cannot be modified at run time.",
+          "wrong_implementation": "Treating a parameter as a mutable variable.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-OVERRIDE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4",
+        "printed_page": 27,
+        "pdf_page": 40,
+        "passage": "Compilation-time customization can replace a parameter default through defparam or module instantiation."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Compilation-time customization can replace a parameter default through defparam or module instantiation.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "6.3; localparam/specparam/aliasparam override restrictions are not generalized by this row.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Two instances with default p=2 and override p=5, separately for each mechanism.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Observe instance-specific 2 and 5 after elaboration.",
+          "derivation": "Compilation-time customization can replace a parameter default through defparam or module instantiation.",
+          "wrong_implementation": "Ignoring overrides or sharing a single value across instances.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-DEFAULT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "A parameter declaration must specify a default value."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "A parameter declaration must specify a default value.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Syntax 3-2; module parameter-port grammar remains an edge.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Compare parameter real p=2 with an isolated declaration lacking an initializer.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Initialized parameter yields 2; missing default violates the declaration rule.",
+          "derivation": "A parameter declaration must specify a default value.",
+          "wrong_implementation": "Accepting an initializer-free parameter.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-INFER",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "An omitted type is derived from the final assigned value after overrides."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "An omitted type is derived from the final assigned value after overrides.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "6.3 override resolution; IEEE type/width inheritance; expression context.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Untyped p=2 overridden by 2.5; compare arithmetic p/2 with explicit integer and real controls.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Untyped overridden p retains real 2.5 and division gives 1.25.",
+          "derivation": "An omitted type is derived from the final assigned value after overrides.",
+          "wrong_implementation": "Inferring integer type permanently from default 2 and truncating the override.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-STRING-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "The type specification is mandatory for string parameters."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "The type specification is mandatory for string parameters.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.3 and 3.4.6; packed string literals are not necessarily string data type.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Explicit string p=\"ok\" versus an omitted-type attempt intended to declare a string parameter.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Explicit string value is preserved; distinguish a packed string literal from an actual string parameter before diagnosing omission.",
+          "derivation": "The type specification is mandatory for string parameters.",
+          "wrong_implementation": "Treating any untyped string literal as a typed string parameter.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-ARRAY-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "The type specification is mandatory for array parameters."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "The type specification is mandatory for array parameters.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.4.4; 4.2.14; separate string-array restrictions.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Explicit integer array versus otherwise matching untyped array declaration.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Explicitly typed array retains its elements; missing required array type is invalid.",
+          "derivation": "The type specification is mandatory for array parameters.",
+          "wrong_implementation": "Inferring array parameter type from its initializer.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-INTEGER-CONVERT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "Explicit integer parameters convert assigned numeric values to integer type."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Explicit integer parameters convert assigned numeric values to integer type.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "4.2.1.1 rounding and width boundaries remain separate open cases.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Explicit integer p=2.25 and a distinct override p=3.25.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Observe 2 and 3 after conversion; these choices avoid rounding ties.",
+          "derivation": "Explicit integer parameters convert assigned numeric values to integer type.",
+          "wrong_implementation": "Retaining real-valued parameters despite explicit integer declaration.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-REAL-CONVERT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "Explicit real parameters convert assigned numeric values to real type."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Explicit real parameters convert assigned numeric values to real type.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "4.2.1.1 and expression-context determination.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "parameter real p=10; observe p/4 in a real-valued expression.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Observe 2.5, not integer-division result 2.",
+          "derivation": "Explicit real parameters convert assigned numeric values to real type.",
+          "wrong_implementation": "Storing explicit real parameters as integers after integer defaults.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-NUMERIC-TO-STRING",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "Assigning a numeric value to a declared string parameter is an error; string conversion is not applied."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Assigning a numeric value to a declared string parameter is an error; string conversion is not applied.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.4.6; override paths require separate witnesses.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Declared string p=\"ok\" legal control and isolated numeric value 7.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Preserve legal string; report numeric-to-string assignment error.",
+          "derivation": "Assigning a numeric value to a declared string parameter is an error; string conversion is not applied.",
+          "wrong_implementation": "Automatically formatting numeric 7 into a string.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-STRING-TO-REAL",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.1",
+        "printed_page": 28,
+        "pdf_page": 41,
+        "passage": "Assigning a string value to an explicit or expression-derived real parameter is an error."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-1",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Assigning a string value to an explicit or expression-derived real parameter is an error.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.3, 3.4.6, 6.3; final-value inference interaction must be resolved per concrete override case.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Explicit real parameter and expression-derived real parameter each assigned a typed string value; numeric neighbors.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Report string-to-real errors in both branches; legal numeric assignments retain their values.",
+          "derivation": "Assigning a string value to an explicit or expression-derived real parameter is an error.",
+          "wrong_implementation": "Parsing numeric-looking strings or covering only explicitly real declarations.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-ENDPOINTS",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "Brackets include endpoints and parentheses exclude endpoints independently."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Brackets include endpoints and parentheses exclude endpoints independently.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Candidate range edge only: conversion order and repeated-range composition remain open.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "All four delimiter combinations with bounds 0 and 2; values 0,1,2 tested in separate instances.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Interior 1 is legal; endpoint legality follows its own delimiter.",
+          "derivation": "Brackets include endpoints and parentheses exclude endpoints independently.",
+          "wrong_implementation": "Treating both endpoints identically for mixed delimiters.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-ORDER",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "The first range bound must be numerically smaller than the second."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "The first range bound must be numerically smaller than the second.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Single-value exclusion has different grammar; bounds evaluation remains an edge.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Compare [0:2], [2:0], and [1:1]; distinguish exclude 1.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Increasing bounds are valid; reversed and equal two-bound ranges violate the rule.",
+          "derivation": "The first range bound must be numerically smaller than the second.",
+          "wrong_implementation": "Accepting equal bounds as a singleton interval.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-MULTIPLE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "Multiple inclusion or exclusion ranges may be specified."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Multiple inclusion or exclusion ranges may be specified.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Arbitrary multiple-inclusion union/intersection interpretation not closed by this example.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Use source pattern from[0:inf) exclude(10:20) exclude(30:40]; sample 0,10,15,20,30,35,40,41.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Legal samples 0,10,20,30,41; excluded samples 15,35,40.",
+          "derivation": "Multiple inclusion or exclusion ranges may be specified.",
+          "wrong_implementation": "Ignoring all but the first exclusion range.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-INFINITY",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "inf denotes positive infinity and -inf negative infinity."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "inf denotes positive infinity and -inf negative infinity.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Do not assume a representable infinite parameter value; finite numeric domains remain open.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Separate from(-inf:0] and from[0:inf) with finite negative, zero, positive samples.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "Negative/zero allowed in first range; zero/positive in second.",
+          "derivation": "inf denotes positive infinity and -inf negative infinity.",
+          "wrong_implementation": "Treating inf as zero or an ordinary unresolved identifier.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-SINGLE-EXCLUDE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "A single parameter value can be excluded."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "A single parameter value can be excluded.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "Value conversion and equality domains remain open.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "parameter real p=1 exclude 0; instantiate with 1 and 0 separately.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "1 is legal; effective value 0 is excluded.",
+          "derivation": "A single parameter value can be excluded.",
+          "wrong_implementation": "Ignoring singleton exclusions or requiring an interval.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-INSTANCE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "Range checking applies to the instance value rather than the device default; only an out-of-range simulation value is an error."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "Range checking applies to the instance value rather than the device default; only an out-of-range simulation value is an error.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "6.3 elaboration, simulation diagnostic timing, uninstantiated definitions remain edges.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Default 0 from[1:2] overridden to 1; separate legal default1 overridden to 0.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "First instance simulates with value1 without range error; second produces range error for effective0.",
+          "derivation": "Range checking applies to the instance value rather than the device default; only an out-of-range simulation value is an error.",
+          "wrong_implementation": "Rejecting an overridden invalid default or checking defaults only.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "AMS-PARAM-RANGE-STRING",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "3.4.2",
+        "printed_page": 29,
+        "pdf_page": 42,
+        "passage": "String range lists use apostrophe-braced comma-separated values with from or exclude."
+      },
+      "html_trace": {
+        "path": "docs/ch3-datatypes.html",
+        "anchor": "s3-4-2",
+        "relation": "direct-text",
+        "limits": "Paragraph correspondence inspected; this link does not certify complete syntax, dependencies, or execution."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Direct Clause 3 parameter rule.",
+          "source": "AMS 3.4.2"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "Annex C.4 includes Clause 3; its listed exceptions do not exclude parameter declarations. Particular digital-only elaboration/test constructs need separate profile review.",
+          "source": "AMS Annex C.4, printed 390; Annex C.7/C.8 dependencies"
+        }
+      },
+      "obligation": "String range lists use apostrophe-braced comma-separated values with from or exclude.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal enclosing declaration and constant expressions except the specifically isolated invalid condition; source-defined type context, not implementation results.",
+      "cross_references": "3.4.6, 3.3 and 4.2.14; candidate dependency row, not string-range closure.",
+      "residuals": "Candidate decomposition only; no fixtures authenticated or executed for this ledger. Concrete cases, invalid-input diagnostic authority, profile-specific harnesses and independent completeness review remain open.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Separate mandatory behavior from invalid-input diagnostic authority before closure; case sketches are not completed diagnostic proofs."
+      },
+      "cases": [
+        {
+          "id": "candidate",
+          "kind": "behavior",
+          "boundary": "Source inclusion list NMOS/PMOS and exclusion list empty string, using explicit string parameters.",
+          "analysis": "Derive declared and final instance values from the cited source before comparing an implementation.",
+          "state_transition": "Declaration then elaboration/override resolution then observation during simulation; invalid variants isolated.",
+          "expected": "NMOS/PMOS pass inclusion; other value fails; nonempty filename passes exclusion and empty fails.",
+          "derivation": "String range lists use apostrophe-braced comma-separated values with from or exclude.",
+          "wrong_implementation": "Using numeric range comparisons or ignoring string exclusion lists.",
+          "mutation_status": "Not run; counterexample mechanism identified only.",
+          "evidence": []
+        }
+      ]
+    }
+  ]
+}

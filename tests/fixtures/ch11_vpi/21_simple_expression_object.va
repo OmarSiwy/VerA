@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.18 simple expressions: the class is the LEAF, name-bearing operands —
 // nets, regs, variables, parameter, memory, var select, memory word — each
 // carrying `-> name` (vpiName, vpiFullName). `gain` is one of them, a
@@ -11,8 +14,6 @@
 // V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V and the current is
 // 3.0 * 1.25 = 3.75 exactly (every value dyadic).
 //
-//! lrm 11.6.18
-//! lrm 11.6.19
 //! lrm 3.4
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

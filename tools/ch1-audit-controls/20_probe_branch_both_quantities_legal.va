@@ -1,0 +1,8 @@
+// Legal control for 20_probe_branch_both_quantities.va; compile acceptance only.
+module ch01_probe_branch_both_quantities(p, n, o, r);
+    inout p, n, o, r;
+    electrical p, n, o, r;
+    branch (p, n) prb;
+
+    analog I(o, r) <+ V(prb);
+endmodule

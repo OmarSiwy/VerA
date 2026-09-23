@@ -178,9 +178,12 @@ typedef struct t_vpi_time {
 } s_vpi_time, *p_vpi_time;
 
 /* Four-state bit encoding, ab: 00=0, 10=1, 11=X, 01=Z. */
+#ifndef VPI_VECVAL
+#define VPI_VECVAL
 typedef struct t_vpi_vecval {
-  PLI_UINT32 aval, bval;
+  PLI_INT32 aval, bval;
 } s_vpi_vecval, *p_vpi_vecval;
+#endif
 
 typedef struct t_vpi_value {
   PLI_INT32 format;             /* vpi[...]Val; P02 defines which are read */
@@ -222,7 +225,7 @@ typedef struct t_vpi_value {
 /* §12.19 one-to-one traversal. */
 extern vpiHandle  vpi_handle(PLI_INT32 type, vpiHandle ref);
 /* §12.21 by name, hierarchical or simple; NULL scope searches from the top. */
-extern vpiHandle  vpi_handle_by_name(const PLI_BYTE8 *name, vpiHandle scope);
+extern vpiHandle  vpi_handle_by_name(PLI_BYTE8 *name, vpiHandle scope);
 /* §12.20 by index within a parent object. */
 extern vpiHandle  vpi_handle_by_index(vpiHandle obj, PLI_INT32 index);
 /* §12.23 one-to-many traversal; NULL when the set is empty. */
@@ -237,7 +240,8 @@ extern PLI_BYTE8 *vpi_get_str(PLI_INT32 prop, vpiHandle obj);
 extern PLI_INT32  vpi_compare_objects(vpiHandle obj1, vpiHandle obj2);
 /* §12.4 free an iterator abandoned before vpi_scan() returned NULL. */
 extern PLI_INT32  vpi_free_object(vpiHandle obj);
-/* IEEE 1364-2005's later spelling of vpi_free_object(), same contract. */
+/* VerA compatibility alias for vpi_free_object(); not an IEEE 1364-2005
+ * Annex G declaration. */
 extern PLI_INT32  vpi_release_handle(vpiHandle obj);
 /* §12.2 the previous call's error, or FALSE. Pass NULL to test only. */
 extern PLI_INT32  vpi_chk_error(p_vpi_error_info error_info_p);

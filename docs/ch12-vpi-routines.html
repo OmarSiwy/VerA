@@ -142,6 +142,8 @@ nav a:hover { text-decoration: underline; }
 
 <h2 id="s12-6">12.6 vpi_get_cb_info()</h2>
 
+<aside class="note" id="editorial-callback-layout"><strong>Editorial source note (not LRM text).</strong> Figure 12-2 (printed page 312) omits the <code>index</code> member that Figure 12-17 (page 340) includes in <code>s_cb_data</code>. Both source listings are preserved. Section 12.31.1 explicitly requires the changed memory-word/variable-select index. An ABI implementation or test must resolve this inconsistency explicitly, not copy the shorter listing unnoticed.</aside>
+
 <table>
 <tr><th colspan="4">vpi_get_cb_info()</th></tr>
 <tr><td><b>Synopsis:</b></td><td colspan="3">Retrieve information about a simulation-related callback.</td></tr>
@@ -784,6 +786,8 @@ vpiHandle net;
 <p>The VPI routine <b><code>vpi_handle_multi()</code></b> is used to access the derivative handles associated with analog system task/functions (see also: <b><code>vpi_register_analog_systf()</code></b>). The first argument is the type <b><code>vpiDerivative</code></b>. The second is the handle for the task/function argument for which a partial derivative is to be declared. The third argument indicates the value with respect to which the derivative being declared shall be calculated. For example, assuming <code>argHandle2</code> and <code>argHandle3</code> are handles to the second and third arguments of an analog system task, then <code>vpi_handle_multi(vpiDerivative, argHandle2, argHandle3)</code> indicates the partial derivative of the returned value with respect to the third argument. For <b><code>vpiDerivative</code></b>, the <b><code>vpi_handle_multi()</code></b> function can only be called for those derivatives allocated during the <i>derivtf</i> phase of execution.</p>
 
 <h3 id="s12-22-2">12.22.2 Examples</h3>
+
+<aside class="note" id="editorial-resistor-source-defects"><strong>Editorial source note (not LRM text).</strong> The resistor listing on printed pages 330–332 is reproduced without repairing its C errors: it reads <code>v_handle</code> before assignment, checks that handle instead of the third argument, uses <code>r_handle</code> outside its declaration scope, and writes <code>derivative_to</code> where §12.32.2 defines <code>derivative_wrt</code>. The analog task constant also differs from §12.32.1. A runnable example requires separately documented corrections; compilation of this literal listing is not a valid conformance oracle.</aside>
 
 <p>The following example illustrates the declaration and use of derivative handles in an analog task <code>$resistor()</code>, which implements a conductance relationship. The task can be used as follows:</p>
 
@@ -1449,6 +1453,8 @@ void setup_report_cpu()
 
 <h3 id="s12-32-3">12.32.3 Examples</h3>
 
+<aside class="note" id="editorial-sampler-source-defects"><strong>Editorial source note (not LRM text).</strong> The sampler listing on printed pages 347–349 is reproduced as printed. Defects include use of <code>sampler</code> before allocation, dot access to pointer-valued <code>time</code>, a missing <code>periodHandle</code> member, inconsistent callback/function names, <code>vpi_set_value</code>, and <code>vpiScaledTme</code>/<code>vpiScaledTime</code>. Its update routine reads into a local value without assigning the held value. These are source-example defects, not required behavior; sample-and-hold behavior needs an independently derived execution oracle.</aside>
+
 <p>The following example illustrates the declaration and use of callbacks in an analog function <code>$sampler()</code> which implements a sample and hold. The task is used as follows:</p>
 
 <pre><code>module sampnhold(out, in);
@@ -1676,6 +1682,8 @@ char *target;
 
 <h3 id="s12-33-2">12.33.2 Initializing VPI system task/function callbacks</h3>
 
+<aside class="note" id="editorial-startup-source-defects"><strong>Editorial source note (not LRM text).</strong> The example on printed page 352 literally contains the character sequences <code>&amp;amp;</code> and <code>-&amp;gt;</code>, as well as a missing comma after <code>0</code> in the task initializer and a missing semicolon after the startup array. These source spellings are preserved below; this listing is not a directly compilable conformance test.</aside>
+
 <p>A means of initializing system task/function callbacks and performing any other desired task just after the simulator is invoked shall be provided by placing routines in a <code>NULL</code>-terminated static array, <b><code>vlog_startup_routines</code></b>. A C function using the array definition shall be provided as follows:</p>
 
 <pre><code>void (*vlog_startup_routines[]) ();</code></pre>
@@ -1708,8 +1716,8 @@ void register_my_systfs()
       {0}
    };
 
-   p_vpi_systf_data systf_data_p = &amp;(systf_data_list[0]);
-while (systf_data_p-&gt;type)
+   p_vpi_systf_data systf_data_p = &amp;amp;(systf_data_list[0]);
+while (systf_data_p-&amp;gt;type)
       vpi_register_systf(systf_data_p++);
 }</code></pre>
 
@@ -1767,6 +1775,8 @@ vpiHandle mod;
 }</code></pre>
 
 <h2 id="s12-36">12.36 vpi_sim_control()</h2>
+
+<aside class="note" id="editorial-control-source-count"><strong>Editorial source note (not LRM text).</strong> Printed page 354 says “three operations” but lists six below. All six entries are preserved; the introductory count must not discard the interactive-scope or analog-control obligations.</aside>
 
 <table>
 <tr><th colspan="4">vpi_sim_control()</th></tr>

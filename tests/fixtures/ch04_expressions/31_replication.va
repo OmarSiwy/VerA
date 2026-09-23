@@ -11,7 +11,7 @@
 // LRM writes it; it was carried as an `xfail` until the parser grew the rule,
 // and it now runs green.
 //
-// Three of 4.2.13's four replication rules, with the widths worked out. A
+// Three replication value cases, with the widths worked out. A
 // concatenation joins BITS, so every count below is the sum of the operand
 // widths and every value is read off the bit string:
 //
@@ -34,13 +34,18 @@
 //     within a concatenation in which at least one of the operands of the
 //     concatenation has a positive size." The 4-bit operand supplies that
 //     positive size, so this form is the legal one, and the result is the
-//     4'b0101 alone = 5. An implementation that gave the zero replication a
-//     width of one, or that treated it as an error here, does not answer 5.
+//     4'b0101 alone = 5. Rejection of this legal form fails the fixture, but an
+//     erroneous extra leading zero bit could still give the same integer value.
+//     The former width-proof claim moves to open EXPR-018 in
+//     docs/conformance-expressions.md; this observes value, not width.
+//     audit_replication_zero_width.va now supplies the middle-bit discriminator.
 //
-// Not pinned here: 4.2.13's fourth rule, "the operands shall be evaluated
+// Not pinned here: 4.2.13's rule, "the operands shall be evaluated
 // exactly once, even if the replication constant is zero" — the LRM's own
 // example needs a function call with an observable evaluation count, which
 // 4.7.1 analog functions cannot express without an output argument.
+// audit_replication_zero_effect.va uses an inout counter and records the
+// current zero-count evaluation defect independently of these value cases.
 //
 //! lrm 4.2.13
 //! bias V(p) = 0.0

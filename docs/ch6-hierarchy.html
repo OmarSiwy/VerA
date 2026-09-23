@@ -30,7 +30,7 @@ nav a:hover { text-decoration: underline; }
 
 <h1>6. Hierarchical structures</h1>
 
-<div class="note">Checked against <a href="VAMS-LRM-2023.pdf#page=147">VAMS-LRM-2023.pdf, physical pages 147&ndash;176</a> (printed pages 134&ndash;163). Section numbers, BNF, tables, and examples follow the 2023 source. Diagrams are not redrawn: each figure callout links to the exact source reproduction.</div>
+<div class="note">Checked against <a href="VAMS-LRM-2023.pdf#page=147">VAMS-LRM-2023.pdf, physical pages 147&ndash;176</a> (printed pages 134&ndash;163). Section numbers, BNF, tables, and examples follow the 2023 source. Figures 6-1 and 6-2 are direct source-PDF crops, not redrawn diagrams. Figure 6-3 remains a labeled text transcription linked to its source.</div>
 
 <!-- 6.1 Overview -->
 <h2 id="s6.1">6.1 Overview</h2>
@@ -43,6 +43,8 @@ nav a:hover { text-decoration: underline; }
 
 <!-- 6.2 Modules -->
 <h2 id="s6.2">6.2 Modules</h2>
+
+<p class="note"><strong>Inherited-rule audit note (editorial):</strong> IEEE 1364-2005 §4.10.1, inherited through AMS §1.1, makes body parameter declarations local when the module parameter header contains parameter assignments. The AMS text below does not restate that restriction. Header-default acceptance alone does not test it; see <a href="conformance-parameters.md">PAR-020 and PARAM-HEADER-001</a> for the open implementation defect and evidence boundaries.</p>
 
 <p>A module definition shall be enclosed between the keywords <code>module</code> and <code>endmodule</code>. The identifier following <code>module</code> shall be the name of the module being defined.</p>
 
@@ -58,34 +60,36 @@ nav a:hover { text-decoration: underline; }
 
 <h4>Syntax 6-1&mdash;Syntax for module</h4>
 
+<aside class="note"><strong>Syntax presentation (editorial):</strong> In this chapter's syntax boxes, <b>bold</b> marks literal keywords and punctuation, preserving the source's terminal/nonterminal distinction. Unbold brackets and braces retain their grammar meanings of optional and repeated material. In particular, literal concatenation braces and select brackets are distinct from those metasyntax delimiters. Syntax 6-1 through 6-9 were visually checked against physical PDF pages 147&ndash;150, 152, 156, 160&ndash;161, 166&ndash;167 and 173. This presentation check does not establish implementation conformance.</aside>
+
 <pre class="syntax">module_declaration ::=
     { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ]
-        list_of_ports ; { module_item }
-    endmodule
+        list_of_ports <b>;</b> { module_item }
+    <b>endmodule</b>
   | { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ]
-        [ list_of_port_declarations ] ; { non_port_module_item }
-    endmodule
+        [ list_of_port_declarations ] <b>;</b> { non_port_module_item }
+    <b>endmodule</b>
 
-module_keyword ::= module | macromodule | connectmodule
+module_keyword ::= <b>module</b> | <b>macromodule</b> | <b>connectmodule</b>
 
 module_parameter_port_list ::=
-    # ( parameter_declaration { , parameter_declaration } )
+    <b>#</b> <b>(</b> parameter_declaration { <b>,</b> parameter_declaration } <b>)</b>
 
-list_of_ports ::= ( port { , port } )
+list_of_ports ::= <b>(</b> port { <b>,</b> port } <b>)</b>
 
 list_of_port_declarations ::=
-    ( port_declaration { , port_declaration } )
+    <b>(</b> port_declaration { <b>,</b> port_declaration } <b>)</b>
 
 port ::=
     [ port_expression ]
-  | . port_identifier ( [ port_expression ] )
+  | <b>.</b> port_identifier <b>(</b> [ port_expression ] <b>)</b>
 
 port_expression ::=
     port_reference
-  | { port_reference { , port_reference } }
+  | <b>{</b> port_reference { <b>,</b> port_reference } <b>}</b>
 
 port_reference ::=
-    port_identifier [ [ constant_range_expression ] ]
+    port_identifier [ <b>[</b> constant_range_expression <b>]</b> ]
 
 port_declaration ::=
     {attribute_instance} inout_declaration
@@ -93,12 +97,12 @@ port_declaration ::=
   | {attribute_instance} output_declaration
 
 module_item ::=
-    port_declaration ;
+    port_declaration <b>;</b>
   | non_port_module_item
 
 module_or_generate_item ::=
     { attribute_instance } module_or_generate_item_declaration
-  | { attribute_instance } local_parameter_declaration ;
+  | { attribute_instance } local_parameter_declaration <b>;</b>
   | { attribute_instance } parameter_override
   | { attribute_instance } continuous_assign
   | { attribute_instance } gate_instantiation
@@ -128,11 +132,11 @@ non_port_module_item ::=
     module_or_generate_item
   | generate_region
   | specify_block
-  | { attribute_instance } parameter_declaration ;
+  | { attribute_instance } parameter_declaration <b>;</b>
   | { attribute_instance } specparam_declaration
   | aliasparam_declaration
 
-parameter_override ::= defparam list_of_defparam_assignments ;</pre>
+parameter_override ::= <b>defparam</b> list_of_defparam_assignments <b>;</b></pre>
 
 <!-- 6.2.1 Top-level modules and $root -->
 <h3 id="s6.2.1">6.2.1 Top-level modules and $root</h3>
@@ -155,31 +159,31 @@ $root.A.B.C     // item C within instance B within top instance A</code></pre>
 
 <pre class="syntax">module_instantiation ::=
     module_or_paramset_identifier [ parameter_value_assignment ]
-        module_instance { , module_instance } ;
+        module_instance { <b>,</b> module_instance } <b>;</b>
 
-parameter_value_assignment ::= # ( list_of_parameter_assignments )
+parameter_value_assignment ::= <b>#</b> <b>(</b> list_of_parameter_assignments <b>)</b>
 
 list_of_parameter_assignments ::=
-    ordered_parameter_assignment { , ordered_parameter_assignment }
-  | named_parameter_assignment { , named_parameter_assignment }
+    ordered_parameter_assignment { <b>,</b> ordered_parameter_assignment }
+  | named_parameter_assignment { <b>,</b> named_parameter_assignment }
 
 ordered_parameter_assignment ::= expression
 
 named_parameter_assignment ::=
-    . parameter_identifier ( [ mintypmax_expression ] )
-  | . system_parameter_identifier ( [ constant_expression ] )
+    <b>.</b> parameter_identifier <b>(</b> [ mintypmax_expression ] <b>)</b>
+  | <b>.</b> system_parameter_identifier <b>(</b> [ constant_expression ] <b>)</b>
 
-module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
+module_instance ::= name_of_module_instance <b>(</b> [ list_of_port_connections ] <b>)</b>
 
 name_of_module_instance ::= module_instance_identifier [ range ]
 
 list_of_port_connections ::=
-    ordered_port_connection { , ordered_port_connection }
-  | named_port_connection { , named_port_connection }
+    ordered_port_connection { <b>,</b> ordered_port_connection }
+  | named_port_connection { <b>,</b> named_port_connection }
 
 ordered_port_connection ::= { attribute_instance } [ expression ]
 
-named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )</pre>
+named_port_connection ::= { attribute_instance } <b>.</b> port_identifier <b>(</b> [ expression ] <b>)</b></pre>
 
 <p>Instantiations of modules can contain a range specification, allowing an array of instances to be created. One or more module instances (identical copies of a module definition) can be specified in a single module instantiation statement.</p>
 
@@ -228,7 +232,10 @@ endmodule</code></pre>
 
 <p>The comparator instance <code>C1</code> and the integrator instance <code>I1</code> in Figure 6-1 use named port connections, whereas the comparator instance <code>C2</code> and the <code>d2a</code> (not described here) instance <code>D1</code> use ordered port connections. Note the integrator instance <code>I1</code> overrides gain parameter positionally, whereas the <code>d2a</code> instance <code>D1</code> overrides width parameter by named association.</p>
 
-<div class="note"><strong>Figure 6-1&mdash;Comparator and integrator modules.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=151">exact source figure on physical PDF page 151 (printed page 138)</a>.</div>
+<figure id="figure-6-1">
+<img src="figures/lrm-figure-6-1.png" width="696" height="396" style="max-width:100%;height:auto" alt="Source Figure 6-1: comparator instances C1 and C2, integrator I1, and D1 connected through in, aa0, aa1, aa2, out, ground, and aref." />
+<figcaption>Figure 6-1&mdash;Comparator and integrator modules. Direct crop of <a href="VAMS-LRM-2023.pdf#page=151">physical PDF page 151 (printed page 138)</a>; original caption retained.</figcaption>
+</figure>
 
 <!-- 6.3 Overriding module parameter values -->
 <h2 id="s6.3">6.3 Overriding module parameter values</h2>
@@ -273,11 +280,11 @@ endgenerate</code></pre>
 
 <h4>Syntax 6-3&mdash;Syntax for defparam</h4>
 
-<pre class="syntax">parameter_override ::= defparam list_of_defparam_assignments ;
+<pre class="syntax">parameter_override ::= <b>defparam</b> list_of_defparam_assignments <b>;</b>
 
-list_of_defparam_assignments ::= defparam_assignment { , defparam_assignment }
+list_of_defparam_assignments ::= defparam_assignment { <b>,</b> defparam_assignment }
 
-defparam_assignment ::= hierarchical_parameter_identifier = constant_mintypmax_expression</pre>
+defparam_assignment ::= hierarchical_parameter_identifier <b>=</b> constant_mintypmax_expression</pre>
 
 <pre><code>module tgate ();
     electrical io1,io2,control,control_bar;
@@ -356,6 +363,8 @@ endmodule</code></pre>
     gate_width = 0.3e-6,
     gate_length = 4.0e-6,
     gate_cap    = gate_length * gate_width * `COX;</code></pre>
+
+<aside class="note"><strong>Transcription normalization (editorial):</strong> The source prints a curly quotation mark before <code>COX</code>. This example uses the ASCII backtick macro introducer; no parameter-dependence rule is changed.</aside>
 
 <!-- 6.3.5 -->
 <h3 id="s6.3.5">6.3.5 Detecting parameter overrides</h3>
@@ -466,22 +475,22 @@ endmodule</code></pre>
 <h4>Syntax 6-4&mdash;Syntax for paramset</h4>
 
 <pre class="syntax">paramset_declaration ::=
-    { attribute_instance } paramset paramset_identifier module_or_paramset_identifier ;
+    { attribute_instance } <b>paramset</b> paramset_identifier module_or_paramset_identifier <b>;</b>
         paramset_item_declaration { paramset_item_declaration }
         paramset_statement { paramset_statement }
-    endparamset
+    <b>endparamset</b>
 
 paramset_item_declaration ::=
-    { attribute_instance } parameter_declaration ;
-  | { attribute_instance } local_parameter_declaration ;
+    { attribute_instance } parameter_declaration <b>;</b>
+  | { attribute_instance } local_parameter_declaration <b>;</b>
   | aliasparam_declaration
   | { attribute_instance } integer_declaration
   | { attribute_instance } real_declaration
 
 paramset_statement ::=
-    .module_parameter_identifier = paramset_constant_expression ;
-  | .module_output_variable_identifier = paramset_constant_expression ;
-  | .system_parameter_identifier = paramset_constant_expression ;
+    <b>.</b>module_parameter_identifier <b>=</b> paramset_constant_expression <b>;</b>
+  | <b>.</b>module_output_variable_identifier <b>=</b> paramset_constant_expression <b>;</b>
+  | <b>.</b>system_parameter_identifier <b>=</b> paramset_constant_expression <b>;</b>
   | analog_function_statement
 
 paramset_constant_expression ::=
@@ -489,7 +498,7 @@ paramset_constant_expression ::=
   | hierarchical_parameter_identifier
   | unary_operator { attribute_instance } constant_primary
   | paramset_constant_expression binary_operator { attribute_instance } paramset_constant_expression
-  | paramset_constant_expression ? { attribute_instance } paramset_constant_expression :
+  | paramset_constant_expression <b>?</b> { attribute_instance } paramset_constant_expression <b>:</b>
         { attribute_instance } paramset_constant_expression</pre>
 
 <p>The following example shows how one might convert a SPICE model card into a Verilog-AMS paramset. Suppose one has the following lines in a SPICE netlist:</p>
@@ -526,7 +535,7 @@ endparamset</code></pre>
 <li>Shall not use named blocks.</li>
 </ul>
 
-<p>The special syntax <code>.module_parameter_identifier = paramset_constant_expression ;</code> is used to assign values to the parameters of the associated module. The right-hand side can be composed of numbers, parameters, and hierarchical out-of-module references to local parameters of a different module. Hierarchical out-of-module references to non-local parameters are disallowed. The expression may also use <code>$arandom</code> (<a href="ch9-system.html#s9.13.1">9.13.1</a>) and <code>$rdist_</code> functions (<a href="ch9-system.html#s9.13.2">9.13.2</a>) with constant arguments.</p>
+<p>The special syntax <code>.module_parameter_identifier = paramset_constant_expression ;</code> is used to assign values to the parameters of the associated module. The right-hand side can be composed of numbers, parameters, and hierarchical out-of-module references to local parameters of a different module. Hierarchical out-of-module references to non-local parameters of a different module are disallowed. The expression may also use <code>$arandom</code> (<a href="ch9-system.html#s9.13.1">9.13.1</a>) and <code>$rdist_</code> functions (<a href="ch9-system.html#s9.13.2">9.13.2</a>) with constant arguments.</p>
 
 <p>Paramset statements may assign values to variables declared in the paramset; the values need not be constant expressions. However, these variables shall not be used to assign values to the module's parameters. Paramset variables may be used to provide output variables (see <a href="#s6.4.3">6.4.3</a>).</p>
 
@@ -570,7 +579,7 @@ endmodule</code></pre>
 <ul>
 <li>All parameters overridden on the instance shall be parameters of the paramset.</li>
 <li>The parameters of the paramset, with overrides and defaults, shall all be within the allowed ranges specified in the paramset parameter declaration.</li>
-<li>The local parameters of the paramset, computed from parameters, shall be within the allowed ranges.</li>
+<li>The local parameters of the paramset, computed from parameters, shall be within the allowed ranges specified in the paramset.</li>
 <li>The underlying module shall have a port declared for each port connected in the instance line.</li>
 </ul>
 
@@ -624,8 +633,12 @@ nch #(.l(3u), .w(5u), .ad(1.2p), .as(1.3p))
 <ul>
 <li>If a paramset output variable has the same name as a module output variable, the paramset's value is reported for instances using the paramset.</li>
 <li>If a paramset variable without a description has the same name as a module output variable, the module output variable shall not be available for instances using the paramset.</li>
-<li>A paramset output variable's value may be computed from module output variables using the syntax <code>.module_output_variable_identifier</code>.</li>
+<li>A paramset output variable's value may be computed from values of any output parameters of the module by using the special syntax <code>.module_output_variable_identifier</code>.</li>
 </ul>
+<aside class="note"><strong>Source terminology (editorial):</strong> The source
+uses “output parameters” in this bullet, while its syntax and surrounding
+example refer to output variables. The wording is retained rather than
+silently normalized; this is not a new parameter category.</aside>
 
 <pre><code>paramset smnpn npn;   // small npn paramset
     (*desc="cut-off frequency"*) real ft;
@@ -635,7 +648,7 @@ nch #(.l(3u), .w(5u), .ad(1.2p), .as(1.3p))
     ft = .gm/(`M_TWO_PI*(.cpi + .cmu));
 endparamset</code></pre>
 
-<div class="note"><strong>Source fidelity:</strong> the source prints <code>.br=10; rb=145; .rc=75</code>; the missing period before <code>rb</code> is a typographical error in the published LRM, and this transcription prints the corrected <code>.rb=145</code>.</div>
+<div class="note"><strong>Transcription normalizations (editorial):</strong> The source prints <code>.br=10; rb=145; .rc=75</code>; this transcription supplies the missing period as <code>.rb=145</code>. The source also prints a curly quotation mark before <code>M_TWO_PI</code>; the example here uses the ASCII backtick macro introducer. These are explicitly identified example corrections, not additional normative rules.</div>
 
 <p>This declares an output variable <code>ft</code> computed from the module's output variables <code>gm</code>, <code>cpi</code>, and <code>cmu</code>. If the module <code>npn</code> had an output variable named <code>ft</code>, the paramset's output variable would replace it.</p>
 
@@ -651,11 +664,11 @@ endparamset</code></pre>
 
 <pre class="syntax">port ::=
     [ port_expression ]
-  | . port_identifier ( [ port_expression ] )
+  | <b>.</b> port_identifier <b>(</b> [ port_expression ] <b>)</b>
 
 port_expression ::=
     port_reference
-  | { port_reference { , port_reference } }</pre>
+  | <b>{</b> port_reference { <b>,</b> port_reference } <b>}</b></pre>
 
 <p>The port expression in the port definition can be one of the following:</p>
 <ul>
@@ -680,17 +693,17 @@ port_expression ::=
 
 <pre class="syntax">net_declaration ::=
     ...
-  | discipline_identifier [ range ] list_of_net_identifiers ;
-  | discipline_identifier [ range ] list_of_net_decl_assignments ;
+  | discipline_identifier [ range ] list_of_net_identifiers <b>;</b>
+  | discipline_identifier [ range ] list_of_net_decl_assignments <b>;</b>
     ...
 
-range ::= [ msb_constant_expression : lsb_constant_expression ]
+range ::= <b>[</b> msb_constant_expression <b>:</b> lsb_constant_expression <b>]</b>
 
-list_of_net_decl_assignments ::= net_decl_assignment { , net_decl_assignment }
+list_of_net_decl_assignments ::= net_decl_assignment { <b>,</b> net_decl_assignment }
 
-list_of_net_identifiers ::= ams_net_identifier { , ams_net_identifier }
+list_of_net_identifiers ::= ams_net_identifier { <b>,</b> ams_net_identifier }
 
-net_decl_assignment ::= ams_net_identifier = expression</pre>
+net_decl_assignment ::= ams_net_identifier <b>=</b> expression</pre>
 
 <h4 id="s6.5.2.2">6.5.2.2 Port direction</h4>
 
@@ -699,19 +712,19 @@ net_decl_assignment ::= ams_net_identifier = expression</pre>
 <h4>Syntax 6-7&mdash;Syntax for port direction declarations</h4>
 
 <pre class="syntax">inout_declaration ::=
-    inout [ discipline_identifier ] [ net_type | wreal ] [ signed ] [ range ]
+    <b>inout</b> [ discipline_identifier ] [ net_type | <b>wreal</b> ] [ <b>signed</b> ] [ range ]
         list_of_port_identifiers
 
 input_declaration ::=
-    input [ discipline_identifier ] [ net_type | wreal ] [ signed ] [ range ]
+    <b>input</b> [ discipline_identifier ] [ net_type | <b>wreal</b> ] [ <b>signed</b> ] [ range ]
         list_of_port_identifiers
 
 output_declaration ::=
-    output [ discipline_identifier ] [ net_type | wreal ] [ signed ] [ range ]
+    <b>output</b> [ discipline_identifier ] [ net_type | <b>wreal</b> ] [ <b>signed</b> ] [ range ]
         list_of_port_identifiers
-  | output [ discipline_identifier ] reg [ signed ] [ range ]
+  | <b>output</b> [ discipline_identifier ] <b>reg</b> [ <b>signed</b> ] [ range ]
         list_of_variable_port_identifiers
-  | output output_variable_type list_of_variable_port_identifiers</pre>
+  | <b>output</b> output_variable_type list_of_variable_port_identifiers</pre>
 
 <p>A port can be declared in both a port type declaration and a port direction declaration. If a port is declared as a vector, the range specification between the two declarations shall be identical.</p>
 
@@ -779,7 +792,7 @@ endmodule</code></pre>
 <!-- 6.5.4 -->
 <h3 id="s6.5.4">6.5.4 Connecting module ports by ordered list</h3>
 
-<p>The ports listed in a module instantiation shall be in the same order as the ports listed in the module definition.</p>
+<p>One way to connect the ports listed in a module instantiation with the ports defined by the instantiated module is via an ordered list—that is, the ports listed for the module instance shall be in the same order as the ports listed in the module definition.</p>
 
 <pre><code>module adc4 (out, rem, in);
     output [3:0] out; output rem;
@@ -904,7 +917,7 @@ endmodule</code></pre>
 
 <pre class="syntax">module_or_generate_item ::=
     { attribute_instance } module_or_generate_item_declaration
-  | { attribute_instance } local_parameter_declaration ;
+  | { attribute_instance } local_parameter_declaration <b>;</b>
   | { attribute_instance } parameter_override
   | { attribute_instance } continuous_assign
   | { attribute_instance } gate_instantiation
@@ -931,33 +944,33 @@ module_or_generate_item_declaration ::=
   | analog_function_declaration
 
 generate_region ::=
-    generate { module_or_generate_item } endgenerate
+    <b>generate</b> { module_or_generate_item } <b>endgenerate</b>
 
 genvar_declaration ::=
-    genvar list_of_genvar_identifiers ;
+    <b>genvar</b> list_of_genvar_identifiers <b>;</b>
 
 list_of_genvar_identifiers ::=
-    genvar_identifier { , genvar_identifier }
+    genvar_identifier { <b>,</b> genvar_identifier }
 
 analog_loop_generate_statement ::=
-    for ( genvar_initialization ; genvar_expression ; genvar_iteration )
+    <b>for</b> <b>(</b> genvar_initialization <b>;</b> genvar_expression <b>;</b> genvar_iteration <b>)</b>
         analog_statement
 
 loop_generate_construct ::=
-    for ( genvar_initialization ; genvar_expression ; genvar_iteration )
+    <b>for</b> <b>(</b> genvar_initialization <b>;</b> genvar_expression <b>;</b> genvar_iteration <b>)</b>
         generate_block
 
 genvar_initialization ::=
-    genvar_identifier = constant_expression
+    genvar_identifier <b>=</b> constant_expression
 
 genvar_expression ::=
     genvar_primary
   | unary_operator { attribute_instance } genvar_primary
   | genvar_expression binary_operator { attribute_instance } genvar_expression
-  | genvar_expression ? { attribute_instance } genvar_expression : genvar_expression
+  | genvar_expression <b>?</b> { attribute_instance } genvar_expression <b>:</b> genvar_expression
 
 genvar_iteration ::=
-    genvar_identifier = genvar_expression
+    genvar_identifier <b>=</b> genvar_expression
 
 genvar_primary ::=
     constant_primary
@@ -968,23 +981,23 @@ conditional_generate_construct ::=
   | case_generate_construct
 
 if_generate_construct ::=
-    if ( constant_expression ) generate_block_or_null
-    [ else generate_block_or_null ]
+    <b>if</b> <b>(</b> constant_expression <b>)</b> generate_block_or_null
+    [ <b>else</b> generate_block_or_null ]
 
 case_generate_construct ::=
-    case ( constant_expression ) case_generate_item { case_generate_item } endcase
+    <b>case</b> <b>(</b> constant_expression <b>)</b> case_generate_item { case_generate_item } <b>endcase</b>
 
 case_generate_item ::=
-    constant_expression { , constant_expression } : generate_block_or_null
-  | default [ : ] generate_block_or_null
+    constant_expression { <b>,</b> constant_expression } <b>:</b> generate_block_or_null
+  | <b>default</b> [ <b>:</b> ] generate_block_or_null
 
 generate_block ::=
     module_or_generate_item
-  | begin [ : generate_block_identifier ] { module_or_generate_item } end
+  | <b>begin</b> [ <b>:</b> generate_block_identifier ] { module_or_generate_item } <b>end</b>
 
 generate_block_or_null ::=
     generate_block
-  | ;</pre>
+  | <b>;</b></pre>
 
 <!-- 6.6.1 -->
 <h3 id="s6.6.1">6.6.1 Loop generate constructs</h3>
@@ -1001,7 +1014,7 @@ generate_block_or_null ::=
 <li>Because this implicit localparam has the same name as the genvar, any reference to this name inside the loop generate block will be a reference to the localparam, not to the genvar. As a consequence, it is not possible to have two nested loop generate constructs that use the same genvar.</li>
 <li>Generate blocks in loop constructs can be named or unnamed, and can consist of only one item (without <code>begin</code>/<code>end</code>). Even if the begin/end keywords are absent, it is still a generate block, which, like all generate blocks, comprises a separate scope and a new level of hierarchy when it is instantiated.</li>
 <li>If the generate block is named, it declares an array of generate block instances. The index values are the genvar values during elaboration. This can be a sparse array because the genvar values do not have to form a contiguous range of integers. The array is considered declared even if no instances result.</li>
-<li>If the generate block is not named, declarations within it cannot be referenced hierarchically from outside.</li>
+<li>If the generate block is not named, the declarations within it cannot be referenced using hierarchical names other than from within the hierarchy instantiated by the generate block itself.</li>
 <li>It shall be an error if a generate block instance array name conflicts with any other declaration, including any other generate block instance array.</li>
 <li>It shall be an error if the loop does not terminate.</li>
 <li>It shall be an error if a genvar value is repeated during evaluation.</li>
@@ -1091,7 +1104,7 @@ endmodule</code></pre>
 <li>Generate blocks can be named or unnamed, and may consist of only one item without <code>begin</code>-<code>end</code> keywords. Even if the <code>begin</code>-<code>end</code> keywords are absent, it is still a generate block, which, like all generate blocks, comprises a separate scope and a new level of hierarchy when it is instantiated.</li>
 <li>It is permissible for more than one block within a single conditional generate construct to have the same name (since at most one is instantiated).</li>
 <li>Named generate blocks may not have the same name as blocks in any other generate construct in the same scope, even if not selected for instantiation.</li>
-<li>Named generate blocks may not have the same name as any other declaration in the same scope.</li>
+<li>Named generate blocks may not have the same name as any other declaration in the same scope, even if that block is not selected for instantiation.</li>
 <li>If the selected generate block is named, its name declares a generate block instance and is the name for the scope it creates. Normal rules for hierarchical naming apply.</li>
 <li>If the generate block selected for instantiation is not named, it still creates a scope; but the declarations within it cannot be referenced using hierarchical names other than from within the hierarchy instantiated by the generate block itself.</li>
 </ul>
@@ -1221,7 +1234,7 @@ endmodule</code></pre>
 <h4>Syntax 6-9&mdash;Syntax for hierarchical path name</h4>
 
 <pre class="syntax">hierarchical_identifier ::=
-    [ $root . ] { identifier [ [ constant_expression ] ] . } identifier</pre>
+    [ <b>$root</b> <b>.</b> ] { identifier [ <b>[</b> constant_expression <b>]</b> ] <b>.</b> } identifier</pre>
 
 <p>Hierarchical names consist of instance names separated by periods, where an instance name can be an array element. The instance name <code>$root</code> refers to the top of the instantiated design and is used to unambiguously gain access to the top of the design.</p>
 
@@ -1259,7 +1272,10 @@ endmodule</code></pre>
 
 <p>Figure 6-2 illustrates the hierarchy implicit in the example code.</p>
 
-<div class="note"><strong>Figure 6-2&mdash;Hierarchy in a model.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=174">exact source figure on physical PDF page 174 (printed page 161)</a>.</div>
+<figure id="figure-6-2">
+<img src="figures/lrm-figure-6-2.png" width="1269" height="330" style="max-width:100%;height:auto" alt="Source Figure 6-2: samplehold is the parent of the two instances op1 and op2." />
+<figcaption>Figure 6-2&mdash;Hierarchy in a model. Direct crop of <a href="VAMS-LRM-2023.pdf#page=174">physical PDF page 174 (printed page 161)</a>; original caption retained.</figcaption>
+</figure>
 
 <p>Figure 6-3 is a list of the hierarchical forms of the names of all the objects defined in the example code.</p>
 
@@ -1339,14 +1355,16 @@ endmodule</code></pre>
 
 <p>The use of paramsets cannot introduce ambiguity as no <code>defparam</code> inside the hierarchy below a paramset instantiation is allowed (see <a href="#s6.3.1">6.3.1</a> and <a href="#s6.4">6.4</a>).</p>
 
-<p>The following algorithm defines the correct order:</p>
+<p>The following algorithm defines an order that produces the correct hierarchy:</p>
 
 <ol>
 <li>A list of starting points is initialized with the list of top-level modules.</li>
 <li>The hierarchy below each starting point is expanded as much as possible without elaborating generate constructs. All parameters encountered during this expansion are given their final values by applying initial values, parameter overrides, <code>defparam</code> statements, and paramset selections.</li>
-<li>Any <code>defparam</code> statement whose target can be resolved within the hierarchy elaborated so far must have its target resolved and its value applied. <code>defparam</code> statements whose target cannot be resolved are deferred until the next iteration. Because no <code>defparam</code> inside the hierarchy below a generate construct is allowed to refer to a parameter outside the generate construct, parameters can get their final values before going to step 3.</li>
+<li>In other words, any <code>defparam</code> statement whose target can be resolved within the hierarchy elaborated so far must have its target resolved and its value applied. <code>defparam</code> statements whose target cannot be resolved are deferred until the next iteration of this step. Because no <code>defparam</code> inside the hierarchy below a generate construct is allowed to refer to a parameter outside the generate construct, it is possible for parameters to get their final values before going to step 3.</li>
 <li>Each generate construct encountered in step 2 is revisited, and the generate scheme is evaluated. The resulting generate block instantiations make up the new list of starting points. If the new list is not empty, go to step 2.</li>
 </ol>
+
+<aside class="note"><strong>Source numbering (editorial):</strong> On <a href="VAMS-LRM-2023.pdf#page=176">physical PDF page 176 (printed page 163)</a>, numbered step 3 itself says “before going to step 3.” That self-reference is retained from the published source. The steps have not been silently renumbered, and this inconsistency does not establish an additional elaboration pass.</aside>
 
 </body>
 </html>

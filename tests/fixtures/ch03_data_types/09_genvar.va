@@ -1,12 +1,13 @@
 // §3.5 genvars: an integer-valued index that "can only be assigned within the
 // for-loop control", which is what makes an analog for loop statically
-// unrollable (§5.7.3 analog_loop_generate_statement). The LRM's own genvar
-// example accumulates into a real inside the loop body, which is what pins the
-// trip count here: the body runs for index 0, 1, 2 and stops, so the sum is
-// 0 + 1 + 2 = 3 and the index that failed the guard is 3.
+// unrollable (§5.9.3 analog_for). This fixture accumulates into a real inside
+// the loop body to observe its trip count: index takes 0, 1, 2 and stops, so
+// the sum is 0 + 1 + 2 = 3. It does not read the genvar after the loop or prove
+// separate analog-operator state for each unrolled instance.
 //
 // An unroll that ran one iteration too few gives 1, one too many gives 6.
 //! lrm 3.5
+//! checks 1
 `include "check.vh"
 module ch03_genvar(p, n);
     inout p, n;

@@ -936,6 +936,9 @@ const Flatten = struct {
                 continue;
             }
             if (self.ctx.file.strings.eql(o.name, "$mfactor")) {
+                // §6.3.3 an empty named association supplies no value. For
+                // §9.18 that leaves the inherited product unchanged (times 1).
+                if (o.value == .none) continue;
                 mfactor = if (mfactor == .none)
                     value
                 else
@@ -970,6 +973,10 @@ const Flatten = struct {
                 });
                 continue;
             }
+            // §6.3.3 / IEEE 12.2.2.2: .name() documents the parameter but
+            // leaves its default, dependencies and $param_given unchanged.
+            // Validate the name/localparam above even when no value is given.
+            if (o.value == .none) continue;
             // §3.4.7: "It shall be an error to specify a value for both the
             // original parameter and its alias in the same module instantiation".
             if (over.contains(target)) {
@@ -1145,6 +1152,7 @@ const Flatten = struct {
     /// directly or through a §3.4.7 alias?
     fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, name: Ast.StrId) bool {
         for (inst.params) |o| {
+            if (o.value == .none) continue;
             if (o.name == name) return true;
             for (ps.aliasparams) |al| if (al.alias == o.name and al.target == name) return true;
         }
@@ -1185,7 +1193,7 @@ const Flatten = struct {
                 // keep the default
             } else if (named) {
                 for (inst.params) |o| {
-                    if (o.name == p.name) value = o.value;
+                    if (o.name == p.name and o.value != .none) value = o.value;
                 }
             } else {
                 if (ord < inst.params.len) value = inst.params[ord].value;
@@ -2832,6 +2840,100 @@ test "§6.3.1 a defparam beats the instance's own override, and an unmatched one
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
     try std.testing.expectEqual(diag.Code.E0907, g.bag.at(0).code);
+}
+
+test "empty named associations retain defaults and do not mark param_given" {
+    for ([_][]const u8{ "g", "ag" }) |name| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+            \\module top(p); inout p; electrical p; kid #( .{s}() ) u(p); endmodule
+            \\module kid(p); inout p; electrical p;
+            \\parameter real g=3.0; aliasparam ag=g;
+            \\analog I(p)<+$param_given(g);
+            \\endmodule
+        , .{name}));
+        const design = try elaborate(f.ctx());
+        const p = design.top.params[0];
+        try std.testing.expect(!p.is_override);
+        try std.testing.expectEqual(@as(f64, 3.0), f.file.exprs.realValue(p.default));
+        const contribution = f.file.stmt(design.top.analog[0].body).contribute;
+        try std.testing.expectEqual(@as(i64, 0), f.file.exprs.intValue(contribution.rhs));
+    }
+}
+
+test "empty named associations still validate parameter and localparam names" {
+    // Unknown names are forbidden by §6.3.3. The localparam case preserves
+    // current implementation behavior only: §3.4.5 forbids modification, but
+    // an empty association modifies nothing. Its normative status is open;
+    // this regression must not count as conformance rejection evidence.
+    for ([_][]const u8{ "absent", "locked" }) |name| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+            \\module top(p); inout p; electrical p; kid #( .{s}() ) u(p); endmodule
+            \\module kid(p); inout p; electrical p;
+            \\localparam real locked=3.0; analog I(p)<+V(p);
+            \\endmodule
+        , .{name}));
+        try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
+        try std.testing.expectEqual(diag.Code.E0907, f.bag.at(0).code);
+    }
+}
+
+test "empty named associations do not suppress defparam override or given state" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module top(p); inout p; electrical p;
+        \\kid #(.g()) u(p); defparam u.g=5.0; endmodule
+        \\module kid(p); inout p; electrical p;
+        \\parameter real g=3.0; analog I(p)<+$param_given(g); endmodule
+    );
+    const design = try elaborate(f.ctx());
+    try std.testing.expect(design.top.params[0].is_override);
+    try std.testing.expectEqual(@as(f64, 5.0), f.file.exprs.realValue(design.top.params[0].default));
+    const contribution = f.file.stmt(design.top.analog[0].body).contribute;
+    try std.testing.expectEqual(@as(i64, 1), f.file.exprs.intValue(contribution.rhs));
+}
+
+test "empty named associations leave the inherited mfactor product unchanged" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module top(p); inout p; electrical p; mid #(.$mfactor(4.0)) u(p); endmodule
+        \\module mid(p); inout p; electrical p; kid #(.$mfactor()) v(p); endmodule
+        \\module kid(p); inout p; electrical p; analog V(p)<+$mfactor; endmodule
+    );
+    const design = try elaborate(f.ctx());
+    const contribution = f.file.stmt(design.top.analog[0].body).contribute;
+    try std.testing.expectEqual(@as(f64, 4.0), f.file.exprs.realValue(contribution.rhs));
+}
+
+test "empty named associations use paramset defaults in admission and tie scores" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module top(p); inout p; electrical p; bin #(.g()) u(p); endmodule
+        \\paramset bin base;
+        \\parameter real g=2.0 from [1.0:3.0]; .k=g;
+        \\endparamset
+        \\paramset bin base;
+        \\parameter real g=0.0 from [1.0:3.0]; .k=99.0;
+        \\endparamset
+        \\module base(p); inout p; electrical p;
+        \\parameter real k=1.0; analog I(p)<+k*V(p);
+        \\endmodule
+    );
+    const design = try elaborate(f.ctx());
+    const ps_value = for (design.top.params) |p| {
+        if (std.mem.eql(u8, f.file.str(p.name), "u.bin.g")) break p;
+    } else unreachable;
+    try std.testing.expectEqual(@as(f64, 2.0), f.file.exprs.realValue(ps_value.default));
+    try std.testing.expect(!ps_value.is_override);
+    const inst = &f.file.modules[0].instances[0];
+    const ps = &f.file.paramsets[0];
+    try std.testing.expect(!Flatten.overridesParam(inst, ps, ps.params[0].name));
 }
 
 test "§6.4.2 the paramset whose range admits the override is selected, and a gap is E0911" {

@@ -9,6 +9,11 @@ NVPTX and AMDGCN.
 
 **Pre V1.0.0, Not yet at Verilog-AMS conformance.**
 
+The [conformance audit](docs/CONFORMANCE.md) defines the full-AMS target,
+source-review process and evidence required for each rule. Its inventory is
+still incomplete; passing the current fixture suite would not establish full
+conformance. `--coverage` reports static clause citations, not verified rules.
+
 ## Install
 
 Needs Zig 0.16.0.

@@ -12,10 +12,9 @@
 // and the THIRD delay of its `delay3` is the charge decay time — the interval
 // after which the stored charge is gone and the net becomes x.
 //
-// The retention half already works (src/sim/digital.zig:785-786 re-reads the
-// net's own bit when a driver goes z). The decay half does not exist: today
-// the charge is held forever, so a trireg is an unconditional latch. This
-// fixture separates the two by SAMPLING AROUND the decay instant.
+// This fixture separates retention from decay by SAMPLING AROUND the decay
+// instant. Current execution results are recorded in the primitive audit;
+// the source-derived expectation does not depend on an implementation snapshot.
 //
 //! lrm annex A.2.1.3
 //! lrm annex A.2.2.2
@@ -29,7 +28,7 @@
 //   t=10   display                                              -> "driven 1"
 //          d=z     -> capacitive state begins at t=10;
 //                     the charge decay is due at 10 + 50 = 60
-//   t=49   9 ns before the decay                                -> 1
+//   t=49   11 ns before the decay                               -> 1
 //   t=59   1 ns before the decay                                -> 1
 //   t=61   1 ns after  the decay                                -> x
 //          d=0     -> driven again; the stored value is replaced and the
@@ -39,12 +38,12 @@
 //   t=72   40 ns before the new decay                           -> 0
 //   t=117  5 ns after it                                        -> x
 //
-// t=59/t=61 bracket the decay to exactly t=60 without asserting anything about
-// the ordering of events WITHIN t=60. The second half proves the countdown
+// t=59/t=61 bracket the specified t=60 decay; they do not prove its exact
+// instant or assert ordering WITHIN t=60. The second half checks the countdown
 // restarts, rather than being armed once per net.
 //
-// Today: this does not parse (`trireg (medium) #(...)`). With the strengths and
-// delay accepted but no decay, every line after "driven 1" reads the stored
+// With the strengths and delay accepted but no decay, every line after
+// "driven 1" would instead read the stored
 // value: 1, 1, 1, 0, 0, 0.
 
 `timescale 1ns/1ns

@@ -10,12 +10,11 @@
 // nothing to derive from once the value is a pattern rather than a scalar.
 // 08_parameter_array.va is the same declaration with the type present.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one.
+// E0346 identifies the missing explicit type, not an arbitrary earlier failure.
 //
 //! lrm 3.4.4
 //! lrm 3.4.1
-//! reject DiagnosticsReported
+//! reject E0346
 module ch3_parameter_array_untyped(p, n);
     inout p, n;
     electrical p, n;

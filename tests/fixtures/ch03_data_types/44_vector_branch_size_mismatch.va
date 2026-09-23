@@ -8,16 +8,12 @@
 // 33_vector_branches.va is the legal side of the same rule: [3:5] against
 // [1:3], both size 3.
 //
-// The pinned substring is deliberately only the phase label, and it stays that
-// way now that the rule is genuinely checked (E0353). A code here would be
-// VerA's, and this file's claim is the LRM's: any conforming compiler must
-// produce SOME diagnostic. It used to carry the same line for the opposite
-// reason — the parser refused the net range itself, at E0208, long before
-// anything compared two terminal sizes — so what changed is only that the
-// weak pin is now weak on purpose rather than by necessity.
+// Pin E0353 at the mismatched declaration. No use of the invalid branch is
+// needed: indexing it produced cascading E0351 errors, which a generic phase
+// pin could mistake for validation of the terminal-size rule.
 //
 //! lrm 3.12
-//! reject DiagnosticsReported
+//! reject E0353
 module ch3_vector_branch_size_mismatch(a, b);
     inout a, b;
     electrical [3:0] a;
@@ -25,6 +21,5 @@ module ch3_vector_branch_size_mismatch(a, b);
     branch (a, b) bad;
 
     analog begin
-        I(bad[0]) <+ V(bad[0]) / 1000.0;
     end
 endmodule

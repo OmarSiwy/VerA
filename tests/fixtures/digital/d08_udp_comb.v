@@ -24,9 +24,10 @@
 // §1.1 makes IEEE Std 1364-2005 clause 8 the normative execution rules.
 //
 // THE UDP UNDER TEST is a 2:1 multiplexer whose table also states what happens
-// when the select is unknown but both data inputs agree — the classic reason to
-// write a UDP instead of a continuous assignment, since `sel ? b : a` gives x
-// there while this table gives the agreed value.
+// when the select is unknown but both data inputs agree. IEEE1364-2005
+// §5.1.13/Table5-21 also preserves matching known bits for `sel ? b : a`;
+// that expression is not a contrasting x-valued oracle. These observations
+// exercise UDP table matching, independently of conditional-expression support.
 //
 // FOUR RULES, AND THE ROW THAT PINS EACH.
 //

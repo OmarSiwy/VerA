@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.20 contrib: the right-hand side of `<+` is an ordinary expression, and
 // its `1k` operand is a real constant in scaled notation — Table 2-1 of §2.6.2
 // makes the symbol k exactly 1e3, so `1k` is 1000.0 and not 1.0 with a stray
@@ -9,7 +12,6 @@
 // nearest 0.00125 — which is what the literal 1.25e-3 parses to. Same bits, so
 // CHECKX and not a tolerance two ulp wide.
 //
-//! lrm 11.6.20
 //! lrm 2.6.2
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

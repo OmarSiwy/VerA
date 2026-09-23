@@ -101,7 +101,7 @@ static PLI_INT32 on_final(p_cb_data cb)
             "Table 12-2 vpiExpStrVal imaginary: got `%s` want `0.000000e+00`", saved_iexp);
 
   /* 12.10, buffer rule 1: a vpi_get_str() call must not disturb it. */
-  mod = vpi_handle_by_name((const PLI_BYTE8 *)"p03_dc_divider.r1", NULL);
+  mod = vpi_handle_by_name((PLI_BYTE8 *)"p03_dc_divider.r1", NULL);
   P03_CHECK(mod != NULL, "no instance p03_dc_divider.r1");
   (void)vpi_get_str(vpiFullName, mod);
   sep_buf = (strcmp((char *)p_analog, "1.250000e+00") == 0);

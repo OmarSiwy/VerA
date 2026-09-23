@@ -1,0 +1,10 @@
+// E.3.2.1 requires the string to identify a valid continuous discipline.
+// This string names no declared discipline; it must not be silently ignored.
+//! lrm E.3.2.1
+// Expected future diagnostic: this rule-specific wording is not emitted yet.
+//! reject port_discipline names an undeclared discipline
+//! xfail analog primitive port_discipline value validation is not implemented
+module audit_e_bad_attribute_unknown(p,n);
+  inout p,n; electrical p,n;
+  (* port_discipline="audit_missing_discipline" *) resistor #(.r(1000.0)) r(p,n);
+endmodule

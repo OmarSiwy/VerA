@@ -12,10 +12,10 @@
 // Every other nature in the chapter writes `access=V;` correctly, so nothing
 // else provokes this.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one.
+// Pin E0340, verified at the offending attribute, rather than accepting an
+// unrelated failed compilation phase.
 //
 //! lrm 3.6.1.2
-//! reject DiagnosticsReported
+//! reject E0340
 nature ch3_access_string; units="V"; access="AccessStr"; abstol=1u; endnature
 module ch3_nature_access_as_string; endmodule

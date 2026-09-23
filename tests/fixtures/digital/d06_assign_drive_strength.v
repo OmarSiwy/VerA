@@ -8,7 +8,7 @@
 //    strength0 ::= supply0 | strong0 | pull0 | weak0
 //    strength1 ::= supply1 | strong1 | pull1 | weak1"
 //
-// The ORDER of those strengths is fixed by §9.22.3 $driver_strength, whose
+// The ORDER of those strengths is fixed by §9.22.4 $driver_strength, whose
 // Figure 9-3 "Strength value mapping" names eight levels per side —
 //   Su 7, St 6, Pu 5, La 4, We 3, Me 2, Sm 1, HiZ 0
 // — encoded, per the sentence above the figure, as "bits 5-3 for strength0 and
@@ -23,7 +23,7 @@
 //
 //! lrm annex A.6.1
 //! lrm annex A.2.2.2
-//! lrm 9.22.3
+//! lrm 9.22.4
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
 //

@@ -1,0 +1,17 @@
+// IEEE 1364-2005 12.8.2: early and fully elaborated targets differ.
+// Initially scope_root.slot.select reaches this child parameter. Setting it
+// to 1 creates a local scope_root whose slot.select instead denotes the leaf.
+// The standard requires an error; this is not a legal late retargeting.
+module scope_root;
+  scope_child slot();
+endmodule
+module scope_child;
+  parameter integer select = 2;
+  defparam scope_root.slot.select = 1;
+  generate if (select == 1) begin : scope_root
+    scope_leaf slot();
+  end endgenerate
+endmodule
+module scope_leaf;
+  parameter integer select = 3;
+endmodule

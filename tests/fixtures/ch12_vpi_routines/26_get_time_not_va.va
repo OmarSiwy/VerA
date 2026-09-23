@@ -1,9 +1,9 @@
+// Source-review evidence boundary: retained HDL test does not execute the VPI
+// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
 //! lrm 4.7
-//! lrm 12.15
 //! reject E0512
 //! reject `vpi_get_time`
 module ch12_atomic_get_time(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_get_time(0);
 endmodule
-

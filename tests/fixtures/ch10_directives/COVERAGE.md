@@ -1,5 +1,15 @@
 # Chapter 10 coverage
 
+Historical inventory: file counts, green statuses and the “EMPTY” XFAIL ledger
+below are not current measurements. The source-led
+[macro audit](../../../docs/conformance-macros.md) records the new inherited
+IEEE §19.3 review, executable cases and known failures. In particular, user
+macros must survive `resetall`, and an existing unit test asserting their
+removal is wrong. The old fixture's deletion did not fix the implementation.
+IEEE clause citations below also contain historical numbering errors:
+`unconnected_drive` is §19.9 and `timescale` is §19.8 in the supplied 2005
+edition, not §§19.10 and 19.9 respectively.
+
 Source: `docs/ch10-directives.html`, read section by section.
 
 HTML section-ID audit: `s10-1` `s10-2` `s10-3` `s10-4` `s10-5` `s10-6` `s10-7`.

@@ -1,5 +1,10 @@
 # Chapter 8 coverage
 
+The [source-led scheduling worklist](../../../docs/conformance-scheduling.md)
+records the current partial review, figure repairs and solved-node oracle.
+Counts and execution claims below are historical, not fresh measurements;
+references to removed documents do not supply current evidence.
+
 Full-AMS status: the digital and mixed-signal rows below are open requirements.
 Historical analog-subset exclusions and passing unsupported-feature rejection
 fixtures do not close them. See `docs/CONFORMANCE-GAPS.md` and the cross-repository

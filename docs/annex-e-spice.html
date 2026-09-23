@@ -76,7 +76,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>This model can be instantiated in a Verilog-AMS HDL module as shown in Figure E.1.</p>
 
-<div class="note"><strong>Figure E.1&mdash;Instantiated module.</strong> The normative schematic is not redrawn here; see <a href="VAMS-LRM-2023.pdf#page=415">physical PDF page 415</a>.</div>
+<figure><a href="figures/annex-e-figure-e-1.png"><img style="max-width:100%;height:auto" src="figures/annex-e-figure-e-1.png" alt="Figure E.1 — Instantiated module; VAMS-2023 printed page 402, PDF page 415"></a><figcaption>Figure E.1 — Instantiated module; VAMS-2023 printed page 402, PDF page 415. Direct source crop; click for full resolution.</figcaption></figure>
 
 <pre><code>module diffPair (c1, b1, e, b2, c2);
    electrical c1, b1, e, b2, c2;
@@ -140,6 +140,12 @@ endmodule</code></pre>
 
 <p><a href="#table-e-1">Table E.1</a> shows the required names for primitives, parameters, and ports which are otherwise unnamed in SPICE. For connection by order instead of by name, the ports and parameters shall be given in the order listed. The default discipline of the ports for these primitives shall be <code>electrical</code> and their descriptions shall be <strong>inout</strong>.</p>
 
+<details><summary>Original Table E.1 source images (including source defects)</summary>
+<figure><a href="figures/annex-e-table-e-1-a.png"><img style="max-width:100%;height:auto" src="figures/annex-e-table-e-1-a.png" alt="Table E.1, printed page 404, PDF page 417"></a><figcaption>Table E.1, printed page 404, PDF page 417. Direct source crop; click for full resolution.</figcaption></figure>
+<figure><a href="figures/annex-e-table-e-1-b.png"><img style="max-width:100%;height:auto" src="figures/annex-e-table-e-1-b.png" alt="Table E.1, printed page 405, PDF page 418"></a><figcaption>Table E.1, printed page 405, PDF page 418. Direct source crop; click for full resolution.</figcaption></figure>
+<figure><a href="figures/annex-e-table-e-1-c.png"><img style="max-width:100%;height:auto" src="figures/annex-e-table-e-1-c.png" alt="Table E.1, printed page 406, PDF page 419"></a><figcaption>Table E.1, printed page 406, PDF page 419. Direct source crop; click for full resolution.</figcaption></figure>
+</details>
+<aside class="note"><strong>Editorial equation warning.</strong> The original sine-source cells have clipped leading glyphs and missing opening grouping parentheses. The searchable transcription below supplies readable grouping; it is not a literal facsimile of those cells. Use the source images above when auditing tokens. The PWL index limits also permit out-of-range subscripts if read literally, and the current/voltage exponential rows differ in their initial expression. Do not silently turn these source ambiguities into numerical conformance oracles.</aside>
 <p id="table-e-1"><strong>Table E.1&mdash;Names for primitives, parameters, and ports in SPICE</strong></p>
 
 <table>

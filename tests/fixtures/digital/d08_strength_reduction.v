@@ -20,18 +20,20 @@
 // consulted is indistinguishable from no strength model at all, so nothing here
 // asserts a strength directly. Each net below is a CONTEST between two drivers
 // whose winner is decided by strength alone, and the contest's outcome is an
-// ordinary %b column. VerA today resolves every driver at one strength
-// (src/sim/digital.zig `wired`, which says so out loud), so `wn` and `wr` must
-// come out identical on a build with no strength lattice — and they differ in
-// row 2 below.
+// ordinary %b column. A build with no strength lattice cannot reproduce the
+// distinct `wn` and `wr` outcomes in row 2 below. Current implementation
+// limitations are recorded in conformance-ieee-primitives-review.md, not
+// inferred from this source-derived expectation.
 //
 // THE LATTICE, eight levels, strongest first:
 //     supply(7) strong(6) pull(5) large(4) weak(3) medium(2) small(1) highz(0)
 // A value read out of a variable is at strong strength; a gate's default output
 // drive is (strong0, strong1); pullup drives pull1 and pulldown drives pull0.
 // A non-resistive switch (nmos, pmos, cmos, tran, tranif) passes the input
-// strength through unchanged. A resistive switch (rnmos, rpmos, rcmos, rtran,
-// rtranif) reduces it one notch or more — strong becomes pull.
+// strength through unchanged EXCEPT supply becomes strong (IEEE 7.11).
+// A resistive switch follows IEEE Table 7-8: supply/strong become pull,
+// pull becomes weak, large/weak become medium, medium becomes small,
+// and small/highz remain unchanged. This fixture exercises strong to pull.
 // Two drivers of DIFFERENT strength: the stronger one's value wins outright.
 // Two drivers of the SAME strength and opposite value: unresolvable, so x.
 //

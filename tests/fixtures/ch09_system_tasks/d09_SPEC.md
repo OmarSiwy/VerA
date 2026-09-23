@@ -1,5 +1,38 @@
 # D09 — Timing constructs and digital system facilities
 
+## VCD source-review correction (2026-09-23)
+
+This correction supersedes this document's old assertion that its line-normalized
+VCD goldens are a portable conformance oracle. IEEE 1364-2005 §§18.1–18.4 were
+read completely (printed pages 325–348); see
+[the VCD review](../../../docs/conformance-vcd-review.md).
+
+The retained goldens and `vcdnorm` recipe below are implementation-specific
+snapshot regressions. Keep them, but do not derive normative declaration order,
+identifier assignment, independent change ordering or exact line layout from
+them. The source uses free-format records and arbitrary printable identifier
+codes for four-state VCD. An empty timestamp is not an emitted value change.
+The old inference from `$dumpflush` to an exact final `$finish` output line is
+withdrawn, not a reason to delete value observations.
+
+`tools/vcd_semantics.py` provides a bounded scalar/vector artifact comparison:
+resolve identifiers to scoped declarations, compare typed/width-aware values
+and checkpoints, and retain date/version/comments separately. Its
+`compare_artifacts` requires nonempty date/version metadata on actual output;
+callers can additionally require the known dumpfile task/expression spelling
+and a size-limit indication. Removing the entire `$version` section loses
+§18.2.3.8 evidence; removing every `$comment` loses §18.1.5 limit evidence.
+The existing normalized goldens intentionally lack these fields and cannot
+themselves pass as complete generated-file headers.
+
+Synthetic tests cover legal ID/ordering/layout variations and missing metadata,
+but the parser is not yet wired to the production digital gate. Real/event and
+extended VCD records fail explicitly as unsupported; complete grammar,
+serialization and simulator behavior remain separate obligations. No VCD
+compiler conformance is credited by passing those Python tests.
+
+## Historical implementation worklist
+
 Pending fixtures for the D09 row of
 `/home/omare/Documents/Projects/Zig/ARPice/docs/verilog-ams-conformance-plan.md`
 (lines 221-258). None of them pass today, and none of them is supposed to — with
@@ -281,10 +314,10 @@ must not split it.
 
 What a fixture must assert:
 
-* The personality is read from a memory with `$readmemb`, so this sub-row is
-  **downstream of fixture 09** here. `$array` takes the personality as a
-  memory; `$plane` takes it as an array of the same shape but with the
-  complementary interpretation of a `0` entry.
+* The personality is a memory. IEEE §17.5.3 permits either file loading or
+  procedural assignment, so direct-initialization cases need not depend on
+  `$readmemb`. `$plane` uses the same shape with a complementary interpretation
+  of a `0` entry and distinct ignore/worst-case encodings.
 * `$and`/`$or` are the AND-plane/OR-plane logic and `$nand`/`$nor` invert the
   output; a fixture needs one personality and all four logic spellings against
   it so the inversion is isolated.
@@ -295,9 +328,11 @@ What a fixture must assert:
 * Four-state inputs: an x on an input that is a don't-care for a given product
   term must not make that term x.
 
-Two fixtures suffice for the row's semantics (one async/one sync, each printing
-all four logic variants over one personality); sixteen would be a combinatorial
-dump.
+No fixed fixture count establishes this family's coverage. The source-derived
+register in `docs/conformance-ieee-pla-review.md` separates representation,
+logic, update timing, four-state behavior, ordering and argument legality.
+The combined analog rejection does not isolate PLA validation: an earlier
+timescale call can produce its expected diagnostic.
 
 ### 17.6 — Stochastic analysis queues (§9.9: AMS "does not extend" them)
 
@@ -319,11 +354,11 @@ What a fixture must assert:
   `max_length` and then adding once more must both set `$q_full` and produce
   the full status from `$q_add`, without silently growing the queue.
 * `$q_exam(q_id, q_stat_code, q_stat_value, status)` reports the statistics
-  (current length, mean inter-arrival time, maximum length, shortest and
-  longest wait, average wait, total queued). The time-based statistics need the
-  simulation clock and therefore compose with fixture 05's `$time` work; the
-  count-based ones (current length, maximum length, total queued) are
-  hand-derivable today and should be fixtured first.
+  (current length, mean inter-arrival time, maximum length, shortest-ever wait,
+  longest wait among jobs still queued, and average wait). IEEE Table17-15
+  defines no "total queued" selector. Time-based population and rounding
+  oracles still need justification; see `docs/conformance-ieee-queue-review.md`.
+  Current and maximum length have bounded count-based witnesses there.
 
 ### 17.10-17.11 — command-line input and math
 

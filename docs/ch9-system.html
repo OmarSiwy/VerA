@@ -308,12 +308,14 @@ nav a:hover { text-decoration: underline; }
 <p>The syntax for these functions are shown in Syntax 9-1.</p>
 
 <pre class="syntax">display_tasks_in_analog_block ::=
-    $strobe ( list_of_arguments ) ;
-  | $display ( list_of_arguments ) ;
-  | $monitor ( list_of_arguments ) ;
-  | $write ( list_of_arguments ) ;
-  | $debug ( list_of_arguments ) ;</pre>
+    <strong>$strobe (</strong> list_of_arguments <strong>) ;</strong>
+  | <strong>$display (</strong> list_of_arguments <strong>) ;</strong>
+  | <strong>$monitor (</strong> list_of_arguments <strong>) ;</strong>
+  | <strong>$write (</strong> list_of_arguments <strong>) ;</strong>
+  | <strong>$debug (</strong> list_of_arguments <strong>) ;</strong></pre>
 <p><em>Syntax 9-1&mdash;Syntax for the display_tasks_in_analog_block</em></p>
+
+<p class="note"><strong>Editorial typography note:</strong> Literal task names and delimiters are bold here, preserving the terminal/nonterminal distinction shown in the colored source syntax on <a href="VAMS-LRM-2023.pdf#page=239">physical PDF page 239</a>.</p>
 
 <p>The following rules apply to these functions.</p>
 <ul>
@@ -337,6 +339,7 @@ nav a:hover { text-decoration: underline; }
 <p>When a <code>$monitor</code> task is invoked with one or more arguments, the simulator sets up a mechanism whereby for each accepted step, if the variable or an expression in the argument list changes value compared with the last accepted step &mdash;with the exception of the <code>$abstime</code> or <code>$realtime</code> system functions&mdash;the entire argument list is displayed at the end of the time step as if reported by the <code>$strobe</code> task. If two or more arguments change value at the same time, only one display is produced that shows the new values.</p>
 
 <h3 id="s9.4.2">9.4.2 Escape Sequences for Special Characters</h3>
+
 
 <p>The escape sequences shown in Table 9-21, when included in a string argument, print special characters.</p>
 
@@ -374,6 +377,8 @@ nav a:hover { text-decoration: underline; }
 
 <p>The format specifications in Table 9-23 are used for real numbers and have the full formatting capabilities available in the C language. For example, the format specification <code>%10.3g</code> sets a minimum field width of 10 with three (3) fractional digits.</p>
 
+<p class="note"><strong>Editorial source discrepancy:</strong> The PDF itself describes <code>%10.3g</code> using fractional digits. C's <code>g</code> precision instead concerns significant digits; see the <a href="conformance-display.md">display-format audit</a> for the primary-source cross-check and remaining interpretation boundary. The published wording above is preserved, not silently corrected.</p>
+
 <h4>Table 9-23 &mdash; Format specifications for real numbers</h4>
 <table>
 <tr><th>Format</th><th>Description</th></tr>
@@ -384,7 +389,7 @@ nav a:hover { text-decoration: underline; }
 </table>
 
 <h3 id="s9.4.4">9.4.4 Hierarchical Name Format</h3>
-<p>The <code>%m</code> format specifier does not accept an argument. It causes the display task to print the hierarchical name of the module, task, function, or named block which invokes the system task containing the format specifier. This is useful when there are many instances of the module which call the system task. One obvious application is timing check messages in a flip-flop or latch module; the <code>%m</code> format specifier pinpoints the module instance responsible for generating the timing check message.</p>
+<p>The <code>%m</code> format specifier does not accept an argument. Instead, it causes the display task to print the hierarchical name of the module, task, function, or named block which invokes the system task containing the format specifier. This is useful when there are many instances of the module which call the system task. One obvious application is timing check messages in a flip-flop or latch module; the <code>%m</code> format specifier pinpoints the module instance responsible for generating the timing check message.</p>
 
 <h3 id="s9.4.5">9.4.5 String Format</h3>
 <p>The <code>%s</code> format specifier is used to print ASCII codes as characters. For each <code>%s</code> specification which appears in a string, a corresponding argument shall follow the string in the argument list. The associated argument is interpreted as a sequence of 8-bit hexadecimal ASCII codes, with each 8 bits representing a single character. If the argument is a variable, its value shall be right-justified so the right-most bit of the value is the least-significant bit of the last character in the string. No termination character or value is required at the end of a string and leading zeros (<code>0</code>) are never printed.</p>
@@ -414,12 +419,12 @@ nav a:hover { text-decoration: underline; }
 <p>The syntax for <code>$fopen</code> and <code>$fclose</code> system tasks is shown in Syntax 9-2.</p>
 
 <pre class="syntax">file_open_function ::=
-    mcd = $fopen ( filename ) ;
-  | fd = $fopen ( filename , type ) ;
+    mcd <strong>= $fopen (</strong> filename <strong>) ;</strong>
+  | fd <strong>= $fopen (</strong> filename <strong>,</strong> type <strong>) ;</strong>
 
 file_close_task ::=
-    $fclose ( multi_channel_descriptor ) ;
-  | $fclose ( fd ) ;</pre>
+    <strong>$fclose (</strong> multi_channel_descriptor <strong>) ;</strong>
+  | <strong>$fclose (</strong> fd <strong>) ;</strong></pre>
 <p><em>Syntax 9-2&mdash;Syntax for $fopen and $fclose system tasks</em></p>
 
 <p>The function <code>$fopen</code> opens the file specified as the <code>filename</code> argument and returns either a 32-bit multichannel descriptor or a 32-bit file descriptor, determined by the absence or presence of the <code>type</code> argument.</p>
@@ -468,10 +473,10 @@ file_close_task ::=
 <p>The syntax for <code>$fdisplay</code>, <code>$fwrite</code>, <code>$fmonitor</code>, <code>$fstrobe</code> and <code>$fdebug</code> system tasks is shown in <em>Syntax 9-3</em>.</p>
 
 <pre class="syntax">file_open_function ::=
-    file_output_task_name ( fd [, list_of_arguments] ) ;
+    file_output_task_name <strong>(</strong> fd [<strong>,</strong> list_of_arguments] <strong>) ;</strong>
 
 file_output_task_name ::=
-    $fdisplay | $fwrite | $fstrobe | $fmonitor | $fdebug</pre>
+    <strong>$fdisplay</strong> | <strong>$fwrite</strong> | <strong>$fstrobe</strong> | <strong>$fmonitor</strong> | <strong>$fdebug</strong></pre>
 <p><em>Syntax 9-3&mdash;Syntax for file output system tasks</em></p>
 <div class="note"><strong>Source fidelity:</strong> the LRM names the first production <code>file_open_function</code> although it describes the file output tasks; this appears to be a typographical error in the published document and is reproduced here as printed.</div>
 
@@ -484,10 +489,10 @@ file_output_task_name ::=
 <p>The syntax for the <code>$swrite</code> family of tasks and for <code>$sformat</code> system task is shown in <em>Syntax 9-4</em>.</p>
 
 <pre class="syntax">string_output_task ::=
-    $swrite ( string_variable , list_of_arguments ) ;
+    <strong>$swrite (</strong> string_variable <strong>,</strong> list_of_arguments <strong>) ;</strong>
 
 variable-format_string_output_task ::=
-    $sformat ( string_variable , format_string , list_of_arguments ) ;</pre>
+    <strong>$sformat (</strong> string_variable <strong>,</strong> format_string <strong>,</strong> list_of_arguments <strong>) ;</strong></pre>
 <p><em>Syntax 9-4&mdash;Syntax for formatting data tasks</em></p>
 
 <p>The <code>$swrite</code> family of tasks is based on the <code>$fwrite</code> family of tasks and accepts the same type of arguments as the tasks upon which it is based, with one exception: The first argument to <code>$swrite</code> shall be a string variable to which the resulting string shall be written, instead of a variable specifying the file to which to write the resulting string.</p>
@@ -504,6 +509,7 @@ variable-format_string_output_task ::=
 <p>Files opened using file descriptors can be read from only if they were opened with either the <code>r</code> or <code>r+</code> type values. See <a href="#s9.5.2">9.5.2</a> for more information about opening files.</p>
 
 <h4 id="s9.5.4.1">9.5.4.1 Reading a Line at a Time</h4>
+<div class="note"><strong>Editorial source note:</strong> the preceding restriction to <code>r</code>/<code>r+</code> and its reference to 9.5.2 are reproduced from the source. Table 9-24 also describes <code>w+</code>/<code>a+</code> as update modes (reading and writing), and opening files is covered by 9.5.1. This apparent inconsistency is not silently resolved into a new mode restriction.</div>
 <p>For example:</p>
 <pre><code>integer code;
 code = $fgets( str, fd );</code></pre>
@@ -631,8 +637,9 @@ code = $feof( fd );</code></pre>
 <p>The syntax for this task is shown in Syntax 9-5.</p>
 
 <pre class="syntax">finish_task ::=
-    $finish [ ( n ) ] ;</pre>
+    <strong>$finish</strong> [ ( n <strong>)</strong> ] <strong>;</strong></pre>
 <p><em>Syntax 9-5&mdash;Syntax for the finish_task</em></p>
+<div class="note"><strong>Editorial typography note:</strong> the source prints the opening parenthesis in Syntax 9-5 in black and the closing parenthesis in red. That asymmetry is preserved here; it does not assert that an opening parenthesis is optional independently of the closing parenthesis.</div>
 
 <p>If <code>$finish</code> is called during an accepted iteration, then the simulator shall exit after the current solution is complete. <code>$finish</code> called during a rejected iteration shall have no effect. As a result of the simulation terminating due to a <code>$finish</code> task, it is expected that all appropriate <code>final_step</code> blocks are also triggered. If <code>$finish</code> is called from an <code>analog initial</code> block, the simulator shall exit without performing the simulation.</p>
 
@@ -653,7 +660,7 @@ code = $feof( fd );</code></pre>
 <p>The syntax for this task is shown in Syntax 9-6.</p>
 
 <pre class="syntax">stop_task ::=
-    $stop [ ( n ) ] ;</pre>
+    <strong>$stop</strong> [ <strong>(</strong> n <strong>)</strong> ] <strong>;</strong></pre>
 <p><em>Syntax 9-6&mdash;Syntax for the stop_task</em></p>
 
 <p>A call to <code>$stop</code> during an accepted iteration causes simulation to be suspended at a converged time point. This task takes an optional expression argument (0, 1, or 2), which determines what type of diagnostic message is printed. The amount of diagnostic messages output increases with the value of <em>n</em>, as shown in Table 9-25. The <code>$stop</code> task shall not be used within an <code>analog initial</code> block.</p>
@@ -669,14 +676,14 @@ code = $feof( fd );</code></pre>
   | nonfatal_message_task
 
 fatal_message_task ::=
-    $fatal [ ( finish_number [ , message_argument { , message_argument } ] ) ] ;
+    <strong>$fatal</strong> [ <strong>(</strong> finish_number [ <strong>,</strong> message_argument { <strong>,</strong> message_argument } ] <strong>)</strong> ] <strong>;</strong>
 
 nonfatal_message_task ::=
-    severity_task [ ( [ message_argument { , message_argument } ] ) ] ;
+    severity_task [ <strong>(</strong> [ message_argument { <strong>,</strong> message_argument } ] <strong>)</strong> ] <strong>;</strong>
 
-severity_task ::= $error | $warning | $info
+severity_task ::= <strong>$error</strong> | <strong>$warning</strong> | <strong>$info</strong>
 
-finish_number ::= 0 | 1 | 2</pre>
+finish_number ::= <strong>0</strong> | <strong>1</strong> | <strong>2</strong></pre>
 <p><em>Syntax 9-7&mdash;Assertion severity tasks</em></p>
 <div class="note"><strong>Source fidelity:</strong> the LRM prints the <code>nonfatal_message_task</code> production with unbalanced brackets: <code>severity_task [ ( [ message_argument { , message_argument] } ] ) ] ;</code>. The balanced form <code>severity_task [ ( [ message_argument { , message_argument } ] ) ] ;</code> is given above as an editorial correction.</div>
 
@@ -744,7 +751,7 @@ finish_number ::= 0 | 1 | 2</pre>
 <p>The syntax for these functions is shown in Syntax 9-8.</p>
 
 <pre class="syntax">random_function ::=
-    $random [ ( random_seed ) ]
+    <b>$random</b> [ <b>(</b> random_seed <b>)</b> ]
 
 random_seed ::=
     integer_variable_identifier
@@ -752,7 +759,7 @@ random_seed ::=
   | time_variable_identifier
 
 analog_random_function ::=
-    $arandom [ ( analog_random_seed [, type_string] ) ]
+    <b>$arandom</b> [ <b>(</b> analog_random_seed [<b>,</b> type_string] <b>)</b> ]
 
 analog_random_seed ::=
     integer_variable_identifier
@@ -762,9 +769,10 @@ analog_random_seed ::=
   | [ sign ] decimal_number
 
 type_string ::=
-    "global"
-  | "instance"</pre>
+    <b>"global"</b>
+  | <b>"instance"</b></pre>
 <p><em>Syntax 9-8&mdash;Syntax for the random_function and analog random function</em></p>
+<p class="editorial-note"><strong>Editorial source note:</strong> The PDF prints the production name as <code>random seed</code> although its reference uses <code>random_seed</code>; this transcription normalizes that name. The following paragraph restores the missing initial T in the PDF’s “he system functions”. The repeated introduction sentence above is retained from the source.</p>
 
 <p>The system functions <code>$random</code> and <code>$arandom</code> provide a mechanism for generating random numbers. The random number returned is a 32-bit signed integer; it can be positive or negative. The two functions differ in the arguments they take. <code>$arandom</code> is upwardly compatible with <code>$random</code> &mdash; <code>$arandom</code> can take the same arguments as <code>$random</code> and has the same behavior.</p>
 
@@ -791,14 +799,14 @@ rand = $random % 60;</code></pre>
 <p>The syntax for these functions are shown in Syntax 9-9.</p>
 
 <pre class="syntax">distribution_functions ::=
-    $digital_dist_functions ( args )
-  | $rdist_uniform ( seed , start_expression , end_expression [, type_string] )
-  | $rdist_normal ( seed , mean_expression , standard_deviation_expression [, type_string] )
-  | $rdist_exponential ( seed , mean_expression [, type_string] )
-  | $rdist_poisson ( seed , mean_expression [, type_string] )
-  | $rdist_chi_square ( seed , degree_of_freedom_expression [, type_string] )
-  | $rdist_t ( seed , degree_of_freedom_expression [, type_string] )
-  | $rdist_erlang ( seed , k_stage_expression , mean_expression [, type_string] )
+    <b>$digital_dist_functions</b> <b>(</b> args <b>)</b>
+  | <b>$rdist_uniform</b> <b>(</b> seed <b>,</b> start_expression <b>,</b> end_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_normal</b> <b>(</b> seed <b>,</b> mean_expression <b>,</b> standard_deviation_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_exponential</b> <b>(</b> seed <b>,</b> mean_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_poisson</b> <b>(</b> seed <b>,</b> mean_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_chi_square</b> <b>(</b> seed <b>,</b> degree_of_freedom_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_t</b> <b>(</b> seed <b>,</b> degree_of_freedom_expression [<b>,</b> type_string] <b>)</b>
+  | <b>$rdist_erlang</b> <b>(</b> seed <b>,</b> k_stage_expression <b>,</b> mean_expression [<b>,</b> type_string] <b>)</b>
 
 seed ::=
     integer_variable_identifier
@@ -806,8 +814,8 @@ seed ::=
   | [ sign ] decimal_number
 
 type_string ::=
-    "global"
-  | "instance"</pre>
+    <b>"global"</b>
+  | <b>"instance"</b></pre>
 <p><em>Syntax 9-9&mdash;Syntax for the probabilistic distribution functions</em></p>
 
 <p>The following rules apply to these functions.</p>
@@ -864,13 +872,14 @@ type_string ::=
 <p>The syntax for these functions are shown in Syntax 9-10.</p>
 
 <pre class="syntax">environment_parameter_functions ::=
-    $temperature
-  | $vt [ ( temperature_expression ) ]
-  | $simparam ( param_name [, expression] )
-  | $simparam$str ( param_name )</pre>
+    <b>$temperature</b>
+  | <b>$vt</b> [ <b>(</b> temperature_expression <b>)</b> ]
+  | <b>$simparam (</b> param_name [<b>,</b> expression] <b>)</b>
+  | <b>$simparam$str (</b> param_name <b>)</b></pre>
 <p><em>Syntax 9-10&mdash;Syntax for the environment parameter functions</em></p>
 
 <p>These functions return information about the current environment parameters as a real value.</p>
+<p class="editorial-note"><strong>Editorial source note:</strong> The preceding general sentence is retained from the PDF; the later paragraph explicitly specifies string-valued results for <code>$simparam$str</code>.</p>
 
 <p><code>$temperature</code> does not take any input arguments and returns the circuit&rsquo;s ambient temperature in Kelvin units.</p>
 
@@ -993,7 +1002,7 @@ endmodule</code></pre>
 
 <p>The general form is</p>
 
-<pre class="syntax">$discontinuity [ ( constant_expression ) ] ;</pre>
+<pre class="syntax"><strong>$discontinuity</strong> [ <strong>(</strong> constant_expression <strong>)</strong> ] <strong>;</strong></pre>
 
 <p>where <em>constant_expression</em> indicates the degree of the discontinuity if the argument to <code>$discontinuity</code> is non-negative, i.e. <code>$discontinuity(i)</code> implies a discontinuity in the <em>i</em>&rsquo;th derivative of the constitutive equation with respect to either a signal value or time where <em>i</em> must be a non-negative integer. Hence, <code>$discontinuity(0)</code> indicates a discontinuity in the equation, <code>$discontinuity(1)</code> indicates a discontinuity in its slope, etc. A special form of the <code>$discontinuity</code> task, <code>$discontinuity(-1)</code>, is used with the <code>$limit()</code> function so -1 is also a valid argument of <code>$discontinuity</code>. See <a href="#s9.17.3">9.17.3</a> for an explanation.</p>
 
@@ -1047,7 +1056,7 @@ endmodule</code></pre>
 
 <p>The general form is</p>
 
-<pre class="syntax">$bound_step ( expression ) ;</pre>
+<pre class="syntax"><b>$bound_step (</b> expression <b>) ;</b></pre>
 
 <p>where <em>expression</em> is a required argument and represents the maximum timestep the simulator can advance. The <em>expression</em> argument shall be non-negative. If the value is less than the simulator&rsquo;s minimum allowable time step, the simulator&rsquo;s minimum time step shall be used instead. Refer to the simulator&rsquo;s documentation for further information regarding limits on step size for time dependent analysis.</p>
 
@@ -1069,9 +1078,9 @@ endmodule</code></pre>
 <p>The <code>$limit()</code> function is a special-purpose system function whose purpose, like that of the <code>limexp()</code> function of <a href="ch4-expressions.html#s4-5-13">4.5.13</a>, is to improve convergence of the analog solver. While <code>limexp()</code> is specifically intended for the exponential function, <code>$limit()</code> may be used for the exponential as well as other nonlinear functions and provides a method to recommend a specific approach for improving the convergence. Syntax 9-12 shows the methods of using the <code>$limit()</code> function.</p>
 
 <pre class="syntax">limit_call ::=
-    $limit ( access_function_reference )
-  | $limit ( access_function_reference , string , arg_list )
-  | $limit ( access_function_reference , analog_function_identifier , arg_list )</pre>
+    <b>$limit (</b> access_function_reference <b>)</b>
+  | <b>$limit (</b> access_function_reference <b>,</b> string , arg_list <b>)</b>
+  | <b>$limit (</b> access_function_reference <b>,</b> analog_function_identifier <b>,</b> arg_list <b>)</b></pre>
 <p><em>Syntax 9-12&mdash;Syntax for $limit()</em></p>
 
 <p>As with <code>limexp()</code>, the <code>$limit()</code> function has internal state containing information about the argument on previous iterations. It returns a real value that is derived from its first argument (the access function reference, such as a branch voltage), but it internally limits the change of the output from iteration to iteration in order to improve convergence. On any iteration where the output value is not the same as the value of the access function (within appropriate tolerances), the simulator is prevented from terminating the iteration. In all cases, the simulator is responsible for determining if limiting should be applied and what the return value is on a given iteration. In particular, the simulator may simply choose to have <code>$limit()</code> return the value of its first argument, if it has other methods for ensuring convergence.</p>
@@ -1145,12 +1154,12 @@ endmodule</code></pre>
 <p>The syntax for these functions are shown in Syntax 9-13.</p>
 
 <pre class="syntax">hierarchical_parameter_system_functions ::=
-    $mfactor
-  | $xposition
-  | $yposition
-  | $angle
-  | $hflip
-  | $vflip</pre>
+    <b>$mfactor</b>
+  | <b>$xposition</b>
+  | <b>$yposition</b>
+  | <b>$angle</b>
+  | <b>$hflip</b>
+  | <b>$vflip</b></pre>
 <p><em>Syntax 9-13&mdash;Syntax for the hierarchical parameter system functions</em></p>
 
 <p>These functions return hierarchical information about the instance of a module or paramset. Subclause <a href="ch6-hierarchy.html#s6.3.6">6.3.6</a> discusses how these parameters are specified for an instance, as well as the automatic rules applied to instances with a non-unity value of <code>$mfactor</code>. The remaining hierarchical system parameters do not have any automatic effect on the simulation.</p>
@@ -1180,7 +1189,8 @@ endmodule</code></pre>
 
 <div class="note">Note that <code>$angle</code> is specified and returned in degrees, but the trigonometric functions of <a href="ch4-expressions.html#s4-3-2">4.3.2</a> operate in radians.</div>
 
-<p>Example ($mfactor):</p>
+<p>Example 1</p>
+<p class="editorial-note"><strong>Editorial source note:</strong> The source comments assume an inherited multiplicity of 3, but no such override appears in the displayed example. The example and its comments are retained; the missing initial setting is not silently supplied.</p>
 <pre><code>module test_module(p, n);
     inout p, n;
     electrical p, n;
@@ -1213,7 +1223,8 @@ endmodule</code></pre>
 
 <p>shows how the effect mfactor of an instance, <code>test_module.A1.B1.C1</code> of a linear resistance is determined.</p>
 
-<p>Example ($xposition):</p>
+<p>Example 2</p>
+<p class="editorial-note"><strong>Editorial source note:</strong> The source comments assume an inherited x-position of 1.1u, but no such override appears in the displayed example. The example and its comments are retained.</p>
 <pre><code>module test_module(p, n);
     inout p, n;
     electrical p, n;
@@ -1254,9 +1265,10 @@ endmodule</code></pre>
 <p>The behavioral code of a module can depend on the way in which it was instantiated. The hierarchy detection functions shown in Syntax 9-14 may be used to determine information about the instantiation.</p>
 
 <pre class="syntax">genvar_system_function ::=
-    $param_given ( module_parameter_identifier )
-  | $port_connected ( port_scalar_expression )</pre>
+    <b>$param_given</b> <b>(</b> module_parameter_identifier <b>)</b>
+  | <b>$port_connected</b> <b>(</b> port_scalar_expression <b>)</b></pre>
 <p><em>Syntax 9-14&mdash;Syntax for the hierarchy detection functions</em></p>
+<p class="note"><strong>Editorial source note:</strong> Bold syntax terminals preserve the PDF’s red literal-function names and parentheses (physical page 264). The example below normalizes the source’s curly macro introducer to an ASCII backtick, and the following prose uses an ASCII apostrophe in <code>clk2's</code>. These punctuation normalizations do not add language rules.</p>
 
 <p>Note that the return values of these functions shall be constant during a simulation; the value is fixed during elaboration. As such, these functions can be used in genvar expressions controlling conditional or looping behavior of the analog operators of <a href="ch4-expressions.html#s4-5">4.5</a>.</p>
 
@@ -1317,13 +1329,13 @@ endmodule</code></pre>
 <p>Verilog-AMS HDL adds system functions that allows a local node to be aliased to a hierarchical node via a string reference. The node alias system functions are shown in Syntax 9-15.</p>
 
 <pre class="syntax">analog_node_alias_system_function ::=
-    $analog_node_alias ( analog_net_reference , hierarchical_reference_string )
-  | $analog_port_alias ( analog_net_reference , hierarchical_reference_string )</pre>
+    <b>$analog_node_alias (</b> analog_net_reference , hierarchical_reference_string <b>)</b>
+  | <b>$analog_port_alias (</b> analog_net_reference , hierarchical_reference_string <b>)</b></pre>
 <p><em>Syntax 9-15&mdash;Syntax for the analog node alias system functions</em></p>
 
 <p>Both system functions take two arguments. The <code>analog_net_reference</code> shall be either a scalar or vector continuous node declared in the module containing the system function call. If the <code>analog_net_reference</code> is a vector node, it shall reference the full vector node, it shall be an error for it to be a bit select or part select of a vector node. It shall be an error for the <code>analog_net_reference</code> to be a port or to be involved in port connections.</p>
 
-<p>The <code>hierarchical_reference_string</code> shall be a constant string value (string literal or string parameter) containing a hierarchical reference to a continuous node. It shall be an error for the <code>hierarchical_reference_string</code> to reference a node that is used as an <code>analog_net_reference</code> in another <code>$analog_node_alias</code> or <code>$analog_port_alias()</code> system function call. The <code>hierarchical_reference_string</code> shall follow the resolution rules for hierarchical references as described in <a href="ch6-hierarchy.html#s6.7">6.7</a>.</p>
+<p>The <code>hierarchical_reference_string</code> shall be a constant string value (string literal or string parameter) containing a hierarchical reference to a continuous node. It shall be an error for the <code>hierarchical_reference_string</code> to reference a node that is used as an <code>analog_net_reference</code> in another <code>$analog_node_alias()</code> or <code>$analog_port_alias()</code> system function call. The <code>hierarchical_reference_string</code> shall follow the resolution rules for hierarchical references as described in <a href="ch6-hierarchy.html#s6.7">6.7</a>.</p>
 
 <p>It shall be an error for the <code>$analog_node_alias()</code> and <code>$analog_port_alias()</code> system functions to be used outside the <code>analog initial</code> block. Along with their enclosing <code>analog initial</code> block scopes, both system functions shall be re-evaluated each sweep point of a dc sweep as needed (see <a href="ch5-analog.html#s5.2.1">5.2.1</a> and <a href="ch8-scheduling.html#s8-2">8.2</a> for details).</p>
 
@@ -1395,7 +1407,7 @@ endmodule</code></pre>
 
 <p>A typical example will help to explain the process. A user may wish to create a data based model of some function <em>f(x,y)</em> over some range of <em>x</em> and <em>y</em> and use that data as the basis of a behavioral model described in Verilog-AMS.</p>
 
-<div class="note">Figure 9-1: Samples on isolines &mdash; a plot of <em>f(x,y)</em> versus <em>x</em>, showing three sampled isolines for <em>y</em>=0.0, <em>y</em>=0.5, and <em>y</em>=1.0.</div>
+<figure id="figure-9-1"><img src="figures/lrm-figure-9-1.png" alt="Source Figure 9-1: three sampled isolines with distinct sample spacing and extents." style="max-width:100%;height:auto"><figcaption>Figure 9-1: Samples on isolines — reproduced from the source PDF.</figcaption></figure>
 
 <p>We can say that <em>f(x,y)</em> is sampled on a set of <em>isolines</em>. An isoline for each value of <em>y</em> is generated when <em>y</em> is held constant and <em>x</em> is varied across a desired range. Each isoline may exist over a different range of <em>x</em> values and the number and spacing of samples may be different on each isoline.</p>
 
@@ -1403,7 +1415,7 @@ endmodule</code></pre>
 
 <p>Understanding that the underlying multidimensional function is sampled on a set of isolines, we can now describe a simple recursive process to interpolate, extrapolate, or perform lookup on this sampled function.</p>
 
-<div class="note">Figure 9-2: Interpolation on isolines &mdash; the same isolines with a lookup at <em>x<sub>1</sub></em>=3.5; the isolines <em>y<sub>h</sub></em> and <em>y<sub>l</sub></em> bracketing <em>y<sub>1</sub></em>=0.25 are interpolated at <em>x<sub>1</sub></em>, producing intermediate points which are then interpolated in <em>y</em> to yield <em>f(x<sub>1</sub>,y<sub>1</sub>)</em>=2.0.</div>
+<figure id="figure-9-2"><img src="figures/lrm-figure-9-2.png" alt="Source Figure 9-2: interpolation on isolines at x1=3.5, followed by interpolation in y at y1=0.25 to obtain 2.0." style="max-width:100%;height:auto"><figcaption>Figure 9-2: Interpolation on isolines — reproduced from the source PDF.</figcaption></figure>
 
 <p>Using the above example let us assume the user requests a value for the lookup pair <em>(x<sub>1</sub>,y<sub>1</sub>)</em>. We first look through the set of isolines in <em>y</em> and find the pair that bracket <em>y<sub>1</sub></em>. Now for each isoline in <em>y</em> we find the two points that bracket <em>x<sub>1</sub></em> and interpolate each isoline to find <em>f(x<sub>1</sub>,y<sub>h</sub>)</em> and <em>f(x<sub>1</sub>,y<sub>l</sub>)</em>. Having thus generated an isoline in <em>y</em> for the point <em>x<sub>1</sub></em> in <em>x</em>, we may interpolate this isoline to find the value <em>f(x<sub>1</sub>,y<sub>1</sub>)</em>. If the lookup point falls off the end of any given isoline then we extrapolate its value on that isoline.</p>
 
@@ -1420,10 +1432,10 @@ endmodule</code></pre>
 <p>The syntax for the <code>$table_model</code> function is shown in Syntax 9-16.</p>
 
 <pre class="syntax">table_model_function ::=
-    $table_model ( table_inputs , table_data_source [, table_control_string] )
+    <b>$table_model</b> <b>(</b> table_inputs <b>,</b> table_data_source [<b>,</b> table_control_string] <b>)</b>
 
 table_inputs ::=
-    expression [, 2nd_dim_expression [, nth_dim_expression]]
+    expression [<b>,</b> 2nd_dim_expression [<b>,</b> nth_dim_expression]]
 
 table_data_source ::=
     file_name | table_model_array
@@ -1432,15 +1444,15 @@ file_name ::=
     string_literal | string_parameter
 
 table_model_array ::=
-    1st_dim_array_identifier [, 2nd_dim_array_identifier [, nth_dim_array_identifier]],
+    1st_dim_array_identifier [<b>,</b> 2nd_dim_array_identifier [<b>,</b> nth_dim_array_identifier]]<b>,</b>
     output_array_identifier
 
 table_control_string ::=
-    "[interp_control[;dependent_selector]]"
+    <b>"</b>[interp_control[<b>;</b>dependent_selector]]<b>"</b>
 
 interp_control ::=
-    1st_dim_table_ctrl_substr_or_null [, 2nd_dim_table_ctrl_substr_or_null
-        [, nth_dim_table_ctrl_substr_or_null]]
+    1st_dim_table_ctrl_substr_or_null [<b>,</b> 2nd_dim_table_ctrl_substr_or_null
+        [<b>,</b> nth_dim_table_ctrl_substr_or_null]]
 
 dependent_selector ::=
     integer
@@ -1449,11 +1461,12 @@ table_ctrl_substr ::=
     [table_interp_char][table_extrap_char [higher_table_extrap_char]]
 
 table_interp_char ::=
-    I | D | 1 | 2 | 3
+    <b>I</b> | <b>D</b> | <b>1</b> | <b>2</b> | <b>3</b>
 
 table_extrap_char ::=
-    C | L | E</pre>
+    <b>C</b> | <b>L</b> | <b>E</b></pre>
 <p><em>Syntax 9-16&mdash;Syntax for table model function</em></p>
+<p class="editorial-note"><strong>Editorial source note:</strong> The PDF’s table_control_string and interp_control production labels omit spacing before ::=; spacing is normalized here. The minimum-data paragraph above prints “2N”, not a superscript exponent; its accompanying product-of-points requirement is retained without silently correcting that notation.</p>
 
 <h3 id="s9.21.1">9.21.1 Table Data Source</h3>
 <p><em>table_data_source</em> specifies the data source, samples of a multidimensional function arranged on isolines. The data is specified as columns in a text file or as a set of arrays (hence the name <em>table</em> model). In either case the layout is conceptually the same.</p>
@@ -1614,33 +1627,35 @@ endmodule</code></pre>
 <h3 id="s9.22.1">9.22.1 $driver_count</h3>
 <p><code>$driver_count</code> returns an integer representing the number of drivers associated with the signal in question. The syntax is shown in Syntax 9-17.</p>
 <pre class="syntax">driver_count_function ::=
-    $driver_count ( signal_name )</pre>
+    <b>$driver_count</b> <b>(</b> signal_name <b>)</b></pre>
 <p><em>Syntax 9-17&mdash;Syntax for $driver_count</em></p>
 <p>The drivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary drivers contributing to the signal value. For example, if this function returns a value 5 then the signal has five drivers numbered from 0 to 4.</p>
 
 <h3 id="s9.22.2">9.22.2 $receiver_count</h3>
 <p><code>$receiver_count</code> returns an integer representing the number of receivers associated with the signal in question. The syntax is shown in Syntax 9-18.</p>
 <pre class="syntax">receiver_count_function ::=
-    $receiver_count ( signal_name )</pre>
+    <b>$receiver_count</b> <b>(</b> signal_name <b>)</b></pre>
 <p><em>Syntax 9-18&mdash;Syntax for $receiver_count</em></p>
 <p>The receivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary receivers being contributed by the signal value. For example, if this function returns a value 5 then the signal has five receivers numbered from 0 to 4.</p>
 
 <h3 id="s9.22.3">9.22.3 $driver_state</h3>
 <p><code>driver_state</code> returns the current value contribution of a specific driver to the state of the signal. The syntax is shown in Syntax 9-19.</p>
 <pre class="syntax">driver_state_function ::=
-    $driver_state ( signal_name , driver_index )</pre>
+    <b>$driver_state</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-19&mdash;Syntax for $driver_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The state value is returned as 0, 1, x, or z.</p>
 
 <h3 id="s9.22.4">9.22.4 $driver_strength</h3>
 <p><code>driver_strength</code> returns the current strength contribution of a specific driver to the strength of the signal. The syntax is shown in Syntax 9-20.</p>
 <pre class="syntax">driver_strength_function ::=
-    $driver_strength ( signal_name , driver_index )</pre>
+    <b>$driver_strength</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-20&mdash;Syntax for $driver_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The strength value is returned as two strengths, bits 5-3 for strength0 and bits 2-0 for strength1 (see IEEE Std 1364-2005 Verilog HDL, subclauses 7.10 and 7.11).</p>
 
 <p>If the value returned is 0 or 1, strength0 returns the high-end of the strength range and strength1 returns the low-end of the strength range. Otherwise, the strengths of both strength0 and strength1 is defined as shown in Figure 9-3 below.</p>
 
+<figure id="figure-9-3"><img src="figures/lrm-figure-9-3.png" alt="Source Figure 9-3: strength0 and strength1 binary encodings, from supply through high impedance." style="max-width:100%;height:auto"><figcaption>Figure 9-3: Strength value mapping — reproduced from the source PDF.</figcaption></figure>
+<details><summary>Editorial accessible transcription of Figure 9-3</summary>
 <table>
 <tr><th colspan="9">strength0</th><th colspan="9">strength1</th></tr>
 <tr><th>Bits</th><th>7<br>Su0</th><th>6<br>St0</th><th>5<br>Pu0</th><th>4<br>La0</th><th>3<br>We0</th><th>2<br>Me0</th><th>1<br>Sm0</th><th>0<br>HiZ0</th><th>0<br>HiZ1</th><th>1<br>Sm1</th><th>2<br>Me1</th><th>3<br>We1</th><th>4<br>La1</th><th>5<br>Pu1</th><th>6<br>St1</th><th>7<br>Su1</th><th>Bits</th></tr>
@@ -1648,7 +1663,7 @@ endmodule</code></pre>
 <tr><td>B4</td><td>1</td><td>1</td><td>0</td><td>0</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>1</td><td>0</td><td>0</td><td>1</td><td>1</td><td>B1</td></tr>
 <tr><td>B3</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>B0</td></tr>
 </table>
-<h4>Figure 9-3: Strength value mapping</h4>
+</details>
 <h3 id="s9.22.5">9.22.5 driver_update</h3>
 <p>The status of drivers for a given signal can be monitored with the event detection keyword <code>driver_update</code>. It can be used in conjunction with the event detection operator <code>@</code> to detect updates to any of the drivers of the signal.</p>
 <pre><code>always @(driver_update clock)
@@ -1670,7 +1685,7 @@ In this case, the digital port of the connect module will drive the receivers wi
 
 <p>Using the example shown in Figure 9-4, a connect module can be created using driver access functions to accurately model the effects of multiple drivers on an interface.</p>
 
-<div class="note">Figure 9-4: Driver-receiver segregation connect module example &mdash; digital inverters <code>d3</code> and <code>d1</code> drive net <code>n1</code>, which feeds digital inverter <code>d2</code>; the connect module <code>c2e</code> connects <code>n1</code> to an analog capacitor <code>c1</code> to ground.</div>
+<figure id="figure-9-4"><img src="figures/lrm-figure-9-4.png" alt="Source Figure 9-4: d3 and d1 drive n1 toward d2, with connectmodule c2e linking n1 to grounded capacitor c1." style="max-width:100%;height:auto"><figcaption>Figure 9-4: Driver-receiver segregation connect module example — reproduced from the source PDF.</figcaption></figure>
 
 <p>The connect module below takes advantage of much of the mixed-signal language including driver access functions. This module effectively adds another parallel resistor from output to ground whenever a digital output connected to the net goes high, and another parallel resistor from output to rail (<em>supply</em>) whenever a digital output connected to the net goes low. If this is used as the connect module in Figure 9-4, not only is the delay from digital outputs to the digital input a function of the value of the capacitor, for a given capacitance it takes approximately half the time (since two gates are driving the signal rather than one).</p>
 
@@ -1744,29 +1759,30 @@ endmodule</code></pre>
 <h3 id="s9.23.1">9.23.1 $driver_delay</h3>
 <p><code>$driver_delay</code> returns the delay, from current simulation time, after which the pending state or strength becomes active. If there is no pending value on a signal, it returns the value minus one (-1.0). The syntax is shown in Syntax 9-21.</p>
 <pre class="syntax">driver_delay_function ::=
-    $driver_delay ( signal_name , driver_index )</pre>
+    <b>$driver_delay</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-21&mdash;Syntax for $driver_delay</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The returned delay value is a real number, which is defined by the <code>`timescale</code> for that module where the call has been made. The fractional part arises from the possibility of a driver being updated by an A2D event off the digital timeticks.</p>
 
 <h3 id="s9.23.2">9.23.2 $driver_next_state</h3>
 <p><code>$driver_next_state</code> returns the pending state of the driver, if there is one. If there is no pending state, it returns the current state. The syntax is shown in Syntax 9-22.</p>
 <pre class="syntax">driver_next_state_function ::=
-    $driver_next_state ( signal_name , driver_index )</pre>
+    <b>$driver_next_state</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-22&mdash;Syntax for $driver_next_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending state value is returned as <code>1'b0</code>, <code>1'b1</code>, <code>1'bx</code>, or <code>1'bz</code>.</p>
 
 <h3 id="s9.23.3">9.23.3 $driver_next_strength</h3>
 <p><code>$driver_next_strength</code> returns the strength associated with the pending state of the driver, if there is one. If there is no pending state, it returns the current strength. The syntax is shown in Syntax 9-23.</p>
 <pre class="syntax">driver_next_strength_function ::=
-    $driver_next_strength ( signal_name , driver_index )</pre>
+    <b>$driver_next_strength</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-23&mdash;Syntax for $driver_next_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending strength value is returned as an integer between <code>0</code> and <code>7</code>.</p>
 
 <h3 id="s9.23.4">9.23.4 $driver_type</h3>
-<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>'DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-24.</p>
+<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>`DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-24.</p>
 <pre class="syntax">driver_type_function ::=
-    $driver_type ( signal_name , driver_index )</pre>
+    <b>$driver_type</b> <b>(</b> signal_name <b>,</b> driver_index <b>)</b></pre>
 <p><em>Syntax 9-24&mdash;Syntax for $driver_type</em></p>
+<p class="editorial-note"><strong>Editorial source note:</strong> Syntax captions 9-23 and 9-24 print “for$ driver_…” in the PDF; spacing is normalized above. The source’s curly macro introducer for DRIVER_UNKNOWN is represented by an ASCII backtick. The 0–7 result range for $driver_next_strength is retained from §9.23.3, distinct from §9.22.4’s two three-bit fields for $driver_strength.</p>
 
 <p>Digital primitives (like nand and nor gates) should always provide data about their scheduled output changes; i.e., a gate with a 5ns delay should provide 5ns of look-ahead. Behavioral code with blocking assigns cannot provide look-ahead, but non-blocking assigns with delays can. However, since the capability is implementation- and configuration-dependent, this function is provided so that the connect module can adapt for a particular instance.</p>
 

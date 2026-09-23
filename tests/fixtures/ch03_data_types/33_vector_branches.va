@@ -6,7 +6,7 @@
 //     branch (a,b) br1; // Branch br1 is of size 3 and can be indexed from 0 to 2
 //
 // So the branch is indexed 0..2 even though NEITHER terminal is, and §3.12
-// pairs the terminals "in a parallel one-to-one fashion": br1[0] is a[3]-b[1],
+// pairs the corresponding scalar terminal nets: br1[0] is a[3]-b[1],
 // br1[1] is a[4]-b[2], br1[2] is a[5]-b[3]. The biases below are chosen so all
 // three differences are distinct and exact in binary:
 //

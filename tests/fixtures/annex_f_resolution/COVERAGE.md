@@ -1,5 +1,25 @@
 # Annex F coverage
 
+## Source-audit correction (2026-09-23)
+
+The historical green/closed statements below are not current execution results.
+See [the Annex E/F audit](../../../docs/conformance-annex-ef-review-draft.md).
+The complete PDF text and all three source pages were reviewed; the HTML keeps
+the two algorithms and all their conditions.
+
+F.1 permits a different implementation algorithm with equivalent semantics.
+Consequently a passing fixture does not prove the internal traversal order,
+and flattening all segments is not evidence that basic and expanded resolution
+are equivalent for every design. Required distinguishing tests must preserve
+hierarchy, digital behavioral use, and converter insertion boundaries.
+
+F.2.2's simulator-option selection is a required host/tool-interface obligation,
+not an exclusion merely because it has no Verilog source spelling. Shared
+step-3/step-4 fixtures do not exercise that option or step 5. The current
+`resolveMultiCandidates` comments explicitly collapse the passes and retain
+a first-arriving discipline in the legal-unknown case; neither implementation
+choice alone closes the corresponding normative state.
+
 Source: `docs/annex-f-resolution.html`, read section by section.
 
 HTML section-ID audit: `sF-1` `sF-2` `sF-2-1` `sF-2-2`. Four sections, and Annex F
@@ -102,8 +122,9 @@ An empty cell above is a real gap, and these are the gaps:
   touches any of it.
 
 Selecting F.2.2 over F.2.1 "shall be controlled by a simulator option" and is not
-Verilog-AMS source syntax. That row is a language boundary, not a debt — but the
-step-5 semantics behind it are a debt, and the two should not be confused.
+Verilog-AMS source syntax. That row is a required host/tool-interface obligation as well as a
+language boundary. Both option selection and the distinguishing step-5 semantics
+need evidence; a missing source spelling excludes neither.
 
 ## Fixtures in this folder that cite Chapter 3, not Annex F
 

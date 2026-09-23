@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.16 system task call object, on the statement side. §2.8.3 Syntax 2-3
 // gives the construct:
 //
@@ -23,7 +26,6 @@
 // the task enable leaves 1 or 0 instead of 3. At V(p)=1.5, V(n)=0.25 the branch
 // potential is 1.25 V — dyadic, hence exact — on both sides of the call.
 //
-//! lrm 11.6.16
 //! lrm 2.8.3
 //! lrm 9.4.1
 //! lrm 5.3.1

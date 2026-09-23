@@ -10,8 +10,8 @@
 // compiler that picks exactly 32 truncates the unsized decimal form to its low
 // 32 bits — zero — and the check would fail for a reason that has nothing to do
 // with $bitstoreal. The sized literal names its own width and removes the
-// question. (063_realtobits.va cannot do this: there the 64-bit pattern is the
-// `want`, and torture.zig requires a want to be a plain numeric literal.)
+// question. 063_realtobits.va now likewise uses sized pattern comparisons,
+// asserting their Boolean result rather than an unsized 64-bit decimal want.
 //
 // The second check is the round trip on a value with a nonzero mantissa
 // (0.75 = 1.1b x 2^-1), which the LRM pins to the last bit because both halves

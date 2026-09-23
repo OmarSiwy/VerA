@@ -18,6 +18,10 @@ th, td { border: 1px solid #d1d5db; padding: 0.5rem 0.75rem; text-align: left; }
 th { background: #2563eb; color: white; }
 tr:nth-child(even) { background: #f3f4f6; }
 .syntax { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; margin: 1rem 0; font-family: monospace; white-space: pre-wrap; }
+.syntax b { color: #c00000; }
+.syntax.extension { color: #2020b0; }
+.lrm-figure { margin: 1.5rem 0; text-align: center; }
+.lrm-figure img { max-width: 100%; height: auto; }
 .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 0.75rem 1rem; margin: 1rem 0; }
 nav { background: #1e293b; padding: 1rem; border-radius: 6px; margin-bottom: 2rem; }
 nav a { color: #93c5fd; text-decoration: none; margin-right: 1rem; }
@@ -63,7 +67,10 @@ nav a:hover { text-decoration: underline; }
 
 <p>Similarly, a <em>port</em> whose connections are both analog is an <em>analog port</em>, a port whose connections are both digital is a <em>digital port</em>, and a port whose connections are both analog and digital is a <em>mixed port</em>. The components connect to <em>nodes</em> through ports and nets to build a hierarchy, as shown in Figure 1-1.</p>
 
-<div class="note">Figure 1-1: Components connect to nodes through ports &mdash; The figure shows three "Module" boxes whose ports (indicated by arrows labeled "Ports") all connect to a single common point labeled "Node", illustrating that components connect to a shared node through their ports.</div>
+<figure class="lrm-figure" id="figure-1-1">
+<img src="figures/lrm-figure-1-1.png" alt="Three module ports meet at a shared node within a containing module.">
+<figcaption>Source Figure 1-1, including its original caption. <a href="VAMS-LRM-2023.pdf#page=15">PDF page 15</a>.</figcaption>
+</figure>
 
 <p>If a signal is analog or mixed, it is associated with a node (see 3.6), while a purely digital signal is not associated with a node. Regardless of the number of analog nets in an analog or mixed signal or how the analog nets in a mixed signal are interspersed with digital nets, the analog portion of an analog or mixed signal is represented by only a single node. This guarantees a mixed or analog signal has only one value which represents its potential with respect to the global reference voltage (<em>ground</em>).</p>
 
@@ -85,7 +92,10 @@ nav a:hover { text-decoration: underline; }
 
 <p>The reference directions for a generic branch are shown in Figure 1-2.</p>
 
-<div class="note">Figure 1-2: Reference directions &mdash; The figure shows a generic branch as a rectangle between two terminals A (left) and B (right). An arrow labeled <em>flow</em> points from terminal A into the branch, and the branch is annotated with a plus sign on the A side and a minus sign on the B side of a label <em>potential</em>, indicating the reference polarity of the branch potential and the reference direction of the flow.</div>
+<figure class="lrm-figure" id="figure-1-2">
+<img src="figures/lrm-figure-1-2.png" alt="Branch A to B: flow enters at A; potential is positive at A and negative at B.">
+<figcaption>Source Figure 1-2, including its original caption. <a href="VAMS-LRM-2023.pdf#page=16">PDF page 16</a>.</figcaption>
+</figure>
 
 <p>The <em>reference direction</em> for a potential is indicated by the plus and minus symbols near each port. Given the chosen reference direction, the branch potential is positive whenever the potential of the port marked with a plus sign (<code>A</code>) is larger than the potential of the port marked with a minus sign (<code>B</code>). Similarly, the flow is positive whenever it moves in the direction of the arrow (in this case from <code>+</code> to <code>-</code>).</p>
 
@@ -107,7 +117,10 @@ nav a:hover { text-decoration: underline; }
 
 <p>These laws imply a node is infinitely small; so there is negligible difference in potential between any two points on the node and a negligible accumulation of flow.</p>
 
-<div class="note">Figure 1-3: Kirchhoff&rsquo;s Flow Law (KFL) and Potential Law (KPL) &mdash; The left half (KFL) shows three branches meeting at a single node, with flows <em>flow<sub>1</sub></em>, <em>flow<sub>2</sub></em>, and <em>flow<sub>3</sub></em> directed out of the node and each branch annotated with its potential polarity; the equation <em>flow<sub>1</sub> + flow<sub>2</sub> + flow<sub>3</sub> = 0</em> is given. The right half (KPL) shows four branches connected in a loop with potentials <em>potential<sub>1</sub></em> through <em>potential<sub>4</sub></em> and their polarity markings; the equation <em>-potential<sub>1</sub> - potential<sub>2</sub> + potential<sub>3</sub> + potential<sub>4</sub> = 0</em> is given.</div>
+<figure class="lrm-figure" id="figure-1-3">
+<img src="figures/lrm-figure-1-3.png" alt="KFL: three outward flows sum to zero. KPL: the signed four-branch potential sum is zero.">
+<figcaption>Source Figure 1-3, including its original caption. <a href="VAMS-LRM-2023.pdf#page=17">PDF page 17</a>.</figcaption>
+</figure>
 
 <h3 id="s1-3-3">1.3.3 Natures, disciplines, and nets</h3>
 
@@ -243,7 +256,7 @@ endmodule</code></pre>
 <li>Boldface red characters denote reserved keywords, operators and punctuation marks as required part of the syntax. For example:
 <div class="syntax"><b>module  =  ;</b></div></li>
 <li>Blue characters are used to denote syntax productions that are Verilog-AMS extensions to IEEE Std 1364 Verilog syntax. For example:
-<div class="syntax">connectrules_declaration ::=
+<div class="syntax extension">connectrules_declaration ::=
    <b>connectrules</b> connectrules_identifier <b>;</b>
      { connectrules_item }
    <b>endconnectrules</b></div></li>
