@@ -301,10 +301,40 @@ pub fn zScanS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
 // mantissa lies in [1, 1000), so 2e-13 is `200f` and never `0.2p`.
 
 /// The flag bits `zCReal` takes, in the order `cg_display.Spec` packs them.
-const zc_left: u8 = 1; // '-' left-justify; C makes it override '0'
-const zc_plus: u8 = 2; // '+' always spell the sign
-const zc_space: u8 = 4; // ' ' a space where the sign would be; '+' wins
-const zc_zero: u8 = 8; // '0' pad with zeros AFTER the sign
+pub const zc_left: u8 = 1; // '-' left-justify; C makes it override '0'
+pub const zc_plus: u8 = 2; // '+' always spell the sign
+pub const zc_space: u8 = 4; // ' ' a space where the sign would be; '+' wins
+pub const zc_zero: u8 = 8; // '0' pad with zeros AFTER the sign
+pub const zc_alt: u8 = 16; // '#' C's alternative form: the point always prints
+
+/// §9.4.3 `%[flags][width][.precision]conv`: C11 7.21.6.1p6's five flag
+/// characters, each as its `zc_*` bit, or null for any other byte. The one
+/// spelling of the flag set: lowering's pairing count (`systask`), the
+/// compile-time translation (`cg_display`) and `zSFormatRt` all read it, so
+/// none of them can take a flag for a conversion letter.
+pub fn zcFlag(c: u8) ?u8 {
+    return switch (c) {
+        '-' => zc_left,
+        '+' => zc_plus,
+        ' ' => zc_space,
+        '0' => zc_zero,
+        '#' => zc_alt,
+        else => null,
+    };
+}
+
+/// Whether '#' is defined on conversion `conv`. C11 7.21.6.1p6 gives the
+/// alternative form to C's own conversions, and §9.4.3 grants "the full
+/// formatting capabilities available in the C language" to Table 9-23's real
+/// conversions only, so it is %e/%f/%g, either case. Table 9-22's rows,
+/// `%m`/`%l` and §2.6.2's `%r` have no '#' form (E0825;
+/// `specification/Vague_Decisions.md` §6).
+pub fn zcAltOk(conv: u8) bool {
+    return switch (conv | 0x20) {
+        'e', 'f', 'g' => true,
+        else => false,
+    };
+}
 
 /// The exact decimal expansion of one finite f64.
 ///
@@ -502,8 +532,9 @@ const ZCOut = struct {
     }
 };
 
-/// C's %f body: the integer part, then exactly `p` fractional digits.
-fn zcFixed(o: *ZCOut, z: *ZCDec, p: usize) void {
+/// C's %f body: the integer part, then exactly `p` fractional digits; `alt`
+/// ('#') prints the point even when no digit follows it.
+fn zcFixed(o: *ZCOut, z: *ZCDec, p: usize, alt: bool) void {
     zcRound(z, z.dp + @as(i32, @intCast(p)));
     if (z.dp <= 0) {
         o.put('0');
@@ -511,7 +542,10 @@ fn zcFixed(o: *ZCOut, z: *ZCDec, p: usize) void {
         var i: i32 = 0;
         while (i < z.dp) : (i += 1) o.put('0' + zcAt(z, i));
     }
-    if (p == 0) return;
+    if (p == 0) {
+        if (alt) o.put('.');
+        return;
+    }
     o.put('.');
     var t: usize = 1;
     while (t <= p) : (t += 1) o.put('0' + zcAt(z, z.dp + @as(i32, @intCast(t)) - 1));
@@ -522,11 +556,12 @@ fn zcFixed(o: *ZCOut, z: *ZCDec, p: usize) void {
 ///
 /// `strip_from` is %g's trailing-zero removal, applied to the MANTISSA before
 /// the exponent is appended — stripping the finished text instead would eat
-/// the `00` of `e+00`.
-fn zcSci(o: *ZCOut, z: *ZCDec, p: usize, upper: bool, strip_from: ?usize) void {
+/// the `00` of `e+00`. `alt` ('#') prints the point even when `p` is 0.
+fn zcSci(o: *ZCOut, z: *ZCDec, p: usize, upper: bool, strip_from: ?usize, alt: bool) void {
     zcRound(z, @intCast(p + 1));
     const x: i32 = if (z.n == 0) 0 else z.dp - 1;
     o.put('0' + zcAt(z, 0));
+    if (p == 0 and alt) o.put('.');
     if (p > 0) {
         o.put('.');
         var t: usize = 1;
@@ -629,7 +664,7 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
             }
         }
         const body = o.n;
-        zcFixed(&o, &z, p);
+        zcFixed(&o, &z, p, false);
         if (prec < 0) zcStrip(&o, body);
         const sym = zcScaleSym(g);
         if (sym != 0) o.put(sym);
@@ -638,8 +673,13 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
         var z: ZCDec = undefined;
         zcFrom(&z, v);
         const body = o.n;
+        // C11 7.21.6.1p6 '#': "the result of converting a floating-point
+        // number always contains a decimal-point character, even if no
+        // digits follow it", and "for g and G conversions, trailing zeros
+        // are not removed from the result".
+        const alt = flags & zc_alt != 0;
         if (c == 'e') {
-            zcSci(&o, &z, if (prec < 0) 6 else @intCast(prec), upper, null);
+            zcSci(&o, &z, if (prec < 0) 6 else @intCast(prec), upper, null, alt);
         } else if (c == 'f' or prec >= 0) {
             // §9.4.3's own worked example — "%10.3g sets a minimum field width
             // of 10 with three (3) fractional digits" — reads a %g precision as
@@ -649,7 +689,7 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
             // that follows the LRM's own example is following the LRM. See
             // tests/fixtures/ch09_system_tasks/s01_01_*.va, which withdraws the
             // explicit-precision rows for exactly this reason.
-            zcFixed(&o, &z, if (prec < 0) 6 else @intCast(prec));
+            zcFixed(&o, &z, if (prec < 0) 6 else @intCast(prec), alt);
         } else {
             // %g with NO precision: there the contradiction cannot arise, and
             // C's rule and Table 9-23's "whichever format results in the
@@ -658,11 +698,11 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
             zcRound(&z, pg);
             const x: i32 = if (z.n == 0) 0 else z.dp - 1;
             if (x < -4 or x >= pg) {
-                zcSci(&o, &z, @intCast(pg - 1), upper, body);
+                zcSci(&o, &z, @intCast(pg - 1), upper, if (alt) null else body, alt);
             } else {
                 // C: style f with precision P - 1 - X, then strip.
-                zcFixed(&o, &z, @intCast(@max(pg - 1 - x, 0)));
-                zcStrip(&o, body);
+                zcFixed(&o, &z, @intCast(@max(pg - 1 - x, 0)), alt);
+                if (!alt) zcStrip(&o, body);
             }
         }
     }
@@ -703,8 +743,9 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 ///
 /// ponytail: a radix conversion shows the 64-bit pattern (no §17.1.1.3
 /// automatic width, which needs the operand's declared width); an unknown
-/// letter is copied through with a warning. Thread the widths in if a model
-/// formats a sized vector through a variable format.
+/// letter, or '#' on a conversion `zcAltOk` refuses, is copied through with
+/// a warning. Thread the widths in if a model formats a sized vector through
+/// a variable format.
 pub fn zSFormatRt(buf: anytype, fmt: []const u8, scope: []const u8, args: anytype) []u8 {
     var o: ZRtOut = .{ .b = buf };
     // A real field's scratch: the row plus `zCReal`'s widest body past a
@@ -727,13 +768,7 @@ pub fn zSFormatRt(buf: anytype, fmt: []const u8, scope: []const u8, args: anytyp
         }
         const at = i - 1;
         var flags: u8 = 0;
-        while (i < fmt.len) : (i += 1) switch (fmt[i]) {
-            '-' => flags |= zc_left,
-            '+' => flags |= zc_plus,
-            ' ' => flags |= zc_space,
-            '0' => flags |= zc_zero,
-            else => break,
-        };
+        while (i < fmt.len) : (i += 1) flags |= zcFlag(fmt[i]) orelse break;
         var width: usize = 0;
         while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) width = width *| 10 +| (fmt[i] - '0');
         var prec: i64 = -1;
@@ -748,6 +783,13 @@ pub fn zSFormatRt(buf: anytype, fmt: []const u8, scope: []const u8, args: anytyp
         }
         const conv = fmt[i];
         i += 1;
+        // '#' on a conversion with no alternative form is the compile-time
+        // path's E0825; known only here, it is the unknown letter's warning.
+        if (flags & zc_alt != 0 and !zcAltOk(conv)) {
+            zstd.debug.print("warning: $sformat: LRM 9.4.3: `{s}` is not a format specification ('#' is defined on %e, %f and %g only); copied as text\n", .{fmt[at..i]});
+            o.str(fmt[at..i]);
+            continue;
+        }
         switch (conv | 0x20) {
             'm' => zRtField(&o, scope, flags, width),
             'l' => {

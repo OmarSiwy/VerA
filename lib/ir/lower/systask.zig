@@ -29,6 +29,7 @@ const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
+const str_k = @import("kernels").str_kernels;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
@@ -664,7 +665,9 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 
     var need: usize = 0;
     var i: usize = 0;
-    while (nextConsumingConv(fmt, &i)) |_| need += 1;
+    while (nextConv(fmt, &i)) |c| {
+        if (consumes(c.letter)) need += 1;
+    }
 
     // A null argument (`,,`) is still an argument — §9.4.1 gives it a
     // rendering — so the supply is the slot count, not the non-empty one.
@@ -673,23 +676,37 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
     try self.err(tok, .E0810, "the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
 }
 
+/// One conversion `nextConv` found: its letter, lowercased, and whether its
+/// flags carried '#'.
+const Conv = struct { letter: u8, alt: bool };
+
 /// §9.4.3 `%[flags][width][.precision]conv`: the next conversion at or after
-/// `i.*` that consumes an argument, lowercased, with `i.*` moved past it; null
-/// when the format ends first. The conversion letter is what decides, so the
-/// flags, width and precision are skipped unread, and `%%`, `%m` and `%l`, the
-/// three that consume nothing, are passed over.
-fn nextConsumingConv(fmt: []const u8, i: *usize) ?u8 {
-    while (std.mem.findScalarPos(u8, fmt, i.*, '%')) |p| {
-        i.* = p + 1;
-        while (i.* < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i.*]) != null or
-            std.ascii.isDigit(fmt[i.*]))) : (i.* += 1)
-        {}
-        if (i.* >= fmt.len) return null;
-        const conv = std.ascii.toLower(fmt[i.*]);
-        i.* += 1;
-        if (conv != '%' and conv != 'm' and conv != 'l') return conv;
+/// `i.*`, `%%` included (letter '%'), with `i.*` moved past it; null when
+/// the format ends first. The flags are `str_kernels.zcFlag`'s set, the one
+/// `cg_display` and `zSFormatRt` read, so a flag is never taken for the
+/// letter (#41); of them only '#' is reported, and the width and precision
+/// are skipped unread.
+fn nextConv(fmt: []const u8, i: *usize) ?Conv {
+    const p = std.mem.findScalarPos(u8, fmt, i.*, '%') orelse return null;
+    i.* = p + 1;
+    var alt = false;
+    while (i.* < fmt.len) : (i.* += 1) {
+        const c = fmt[i.*];
+        if (str_k.zcFlag(c)) |f| {
+            alt = alt or f == str_k.zc_alt;
+        } else if (c != '.' and !std.ascii.isDigit(c)) break;
     }
-    return null;
+    if (i.* >= fmt.len) return null;
+    const letter = std.ascii.toLower(fmt[i.*]);
+    i.* += 1;
+    return .{ .letter = letter, .alt = alt };
+}
+
+/// §9.4.3: "for each % character (except %m, %% and %l) ... a corresponding
+/// expression argument shall be supplied". A `%` that ends a flag run
+/// (`%5%`) consumes nothing either, as `%%` does.
+fn consumes(letter: u8) bool {
+    return letter != '%' and letter != 'm' and letter != 'l';
 }
 
 /// Preserve the source integer width before SSA replaces variables with their
@@ -776,7 +793,12 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
         };
         var next = at + 1;
         var i: usize = 0;
-        while (nextConsumingConv(fmt, &i)) |conv| {
+        while (nextConv(fmt, &i)) |cv| {
+            // §9.4.3 grants C's '#' to Table 9-23's real conversions only.
+            if (cv.alt and !str_k.zcAltOk(cv.letter))
+                try self.err(tok, .E0825, "`%#{c}`: '#' is C's alternative form, which §9.4.3 grants only to %e, %f and %g", .{cv.letter});
+            if (!consumes(cv.letter)) continue;
+            const conv = cv.letter;
             if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
             const ty = tys[next];
             const arg = live[next];
@@ -1346,6 +1368,14 @@ test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neigh
         .{ .src = "analog begin $strobe(\"%d %d\", 1); I(p) <+ V(p); end", .code = .E0810 },
         .{ .src = "analog begin $strobe(\"%d%%\", 1); I(p) <+ V(p); end", .code = null },
         .{ .src = "analog begin $strobe(\"%s\", 1.5); I(p) <+ V(p); end", .code = .E0819 },
+        // #41: '#' is a flag, so `%#g` is still `%g` and a string under it
+        // is E0819; '#' itself is §9.4.3's C form on %e/%f/%g only (E0825).
+        .{ .src = "analog begin $strobe(\"%#g\", sv); I(p) <+ V(p); end", .code = .E0819 },
+        .{ .src = "analog begin $strobe(\"%#e\", sv); I(p) <+ V(p); end", .code = .E0819 },
+        .{ .src = "analog begin $strobe(\"%#g %#e %#10.0f\", 1.5, 2.5, 3.5); I(p) <+ V(p); end", .code = null },
+        .{ .src = "analog begin $strobe(\"%#x\", iv); I(p) <+ V(p); end", .code = .E0825 },
+        .{ .src = "analog begin $strobe(\"%#m%d\", 1); I(p) <+ V(p); end", .code = .E0825 },
+        .{ .src = "analog begin $strobe(\"%#r\", 1.5); I(p) <+ V(p); end", .code = .E0825 },
         // §9.5.3: `$swrite` writes into a string variable.
         .{ .src = "analog begin $swrite(x, \"a\"); I(p) <+ V(p); end", .code = .E0813 },
         // §9.5.4.2's six conversion codes, and nothing else.
@@ -1354,6 +1384,31 @@ test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neigh
         // §9.7.2 "The $stop task shall not be used within an analog initial block."
         .{ .src = "analog initial begin $stop; end\nanalog I(p) <+ V(p);", .code = .E0807 },
     });
+}
+
+test "§9.4.3 nextConv: C11 7.21.6.1's five flags, '#' included, never read as the letter (#41)" {
+    const cases = [_]struct { fmt: []const u8, want: []const Conv }{
+        .{ .fmt = "%g", .want = &.{.{ .letter = 'g', .alt = false }} },
+        .{ .fmt = "%#g", .want = &.{.{ .letter = 'g', .alt = true }} },
+        .{ .fmt = "%-+ 0#12.3E", .want = &.{.{ .letter = 'e', .alt = true }} },
+        .{ .fmt = "a%#xb", .want = &.{.{ .letter = 'x', .alt = true }} },
+        .{ .fmt = "%#m %#l", .want = &.{ .{ .letter = 'm', .alt = true }, .{ .letter = 'l', .alt = true } } },
+        .{ .fmt = "100%% %d", .want = &.{ .{ .letter = '%', .alt = false }, .{ .letter = 'd', .alt = false } } },
+        .{ .fmt = "%#", .want = &.{} }, // the format ends inside the flags
+        .{ .fmt = "", .want = &.{} },
+    };
+    for (cases) |c| {
+        var i: usize = 0;
+        for (c.want) |w| {
+            const got = nextConv(c.fmt, &i) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(w.letter, got.letter);
+            try std.testing.expectEqual(w.alt, got.alt);
+        }
+        try std.testing.expect(nextConv(c.fmt, &i) == null);
+    }
+    // §9.4.3's count: `%#m` and `%#l` consume nothing, `%#g` one argument.
+    try std.testing.expect(!consumes('m') and !consumes('l') and !consumes('%'));
+    try std.testing.expect(consumes('g') and consumes('x'));
 }
 
 test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" {

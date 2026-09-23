@@ -513,6 +513,8 @@ pub const Code = enum(u16) {
     /// LRM 4.5.7: an absdelay history ring that filled while its window was
     /// still needed now keeps older samples at a coarser spacing.
     W1051,
+    /// §9.4.3 the '#' flag on a conversion that has no alternative form.
+    E0825,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -5980,6 +5982,26 @@ fn infoOf(c: Code) Info {
             \\The diagnostic points to the operand before generated code is
             \\compiled. An unsupported pairing is not necessarily illegal
             \\Verilog-AMS; consult the conformance backlog for implementation gaps.
+            ,
+        },
+        .E0825 => .{
+            .title = "'#' flag on a format conversion that has no alternative form",
+            .lrm = "9.4.3",
+            .explain =
+            \\9.4.3: "The format specifications in Table 9-23 are used for real
+            \\numbers and have the full formatting capabilities available in the
+            \\C language." C11 7.21.6.1 gives '#' its alternative form, which for
+            \\%e, %f and %g always prints the decimal point (and for %g keeps the
+            \\trailing zeros): `%#.0f` of 2.0 prints "2.", `%#g` of 1.5 prints
+            \\"1.50000". VerA implements it there.
+            \\
+            \\The grant names Table 9-23 only. Table 9-22's conversions (%h %d %o
+            \\%b %c %s, and %m %l, which take no argument) are Verilog's, sized
+            \\by IEEE 1364-2005 17.1.1.3 rather than by C, and Table 9-23's %r is
+            \\2.6.2's engineering notation, which C does not have; no clause says
+            \\what '#' does to any of them. Rather than guess (C's `0x` prefix on
+            \\an auto-sized %h?), VerA refuses the flag. Drop the '#', or format
+            \\the value with %e, %f or %g.
             ,
         },
         .E0817 => .{

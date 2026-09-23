@@ -28,14 +28,14 @@ extern "c" fn snprintf(buf: [*]u8, n: usize, format: [*:0]const u8, ...) c_int;
 
 const inf = std.math.inf(f64);
 
-/// One conversion, as zCReal takes it: flags 1 '-', 2 '+', 4 ' ', 8 '0';
-/// `prec` -1 for none.
+/// One conversion, as zCReal takes it: flags 1 '-', 2 '+', 4 ' ', 8 '0',
+/// 16 '#' (`str_kernels.zc_*`); `prec` -1 for none.
 const Spec = struct { conv: u8, flags: u8 = 0, width: usize = 0, prec: i64 = -1 };
 
 fn cFormat(buf: []u8, s: Spec) ![:0]u8 {
-    var fl: [4]u8 = undefined;
+    var fl: [5]u8 = undefined;
     var nf: usize = 0;
-    for ("-+ 0", 0..) |c, i| if (s.flags & (@as(u8, 1) << @intCast(i)) != 0) {
+    for ("-+ 0#", 0..) |c, i| if (s.flags & (@as(u8, 1) << @intCast(i)) != 0) {
         fl[nf] = c;
         nf += 1;
     };
@@ -73,11 +73,11 @@ const Tally = struct {
     }
 };
 
-/// Every spec a special value meets: six letters, all 16 flag sets, no
-/// width and a width of 13 (wider than most fields, narrower than the long
-/// ones), and (but for %g) eleven precisions.
+/// Every spec a special value meets: six letters, all 32 flag sets ('#'
+/// included, #41), no width and a width of 13 (wider than most fields,
+/// narrower than the long ones), and (but for %g) eleven precisions.
 fn everySpec(t: *Tally, v: f64) !void {
-    for ("eEfFgG") |conv| for (0..16) |flags| for ([_]usize{ 0, 13 }) |width| {
+    for ("eEfFgG") |conv| for (0..32) |flags| for ([_]usize{ 0, 13 }) |width| {
         const precs: []const i64 = if (conv | 0x20 == 'g') &.{-1} else &.{ -1, 0, 1, 2, 3, 6, 10, 16, 17, 20, 40 };
         for (precs) |prec| try t.see(v, .{ .conv = conv, .flags = @intCast(flags), .width = width, .prec = prec });
     };
@@ -168,7 +168,7 @@ test "§17.1.1.3 zCReal = snprintf on 10^5 seeded random doubles" {
         const conv = "eEfFgG"[r.uintLessThan(usize, 6)];
         try t.see(v, .{
             .conv = conv,
-            .flags = r.uintLessThan(u8, 16),
+            .flags = r.uintLessThan(u8, 32),
             .width = r.uintLessThan(usize, 31),
             .prec = if (conv | 0x20 == 'g') -1 else r.intRangeAtMost(i64, -1, 25),
         });

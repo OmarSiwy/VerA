@@ -348,13 +348,15 @@ fn cPad(w: *std.Io.Writer, sign: []const u8, body: []const u8, f: CSpec, number:
 
 /// `v` (finite, not negative) as C's `%e`, `%f` or `%g` at precision `p`, or
 /// §9.4.3's `%r`: a mantissa in [1, 1000) over a §2.6.2 scale factor (`T G M
-/// K k m u n p f a`; `k` for 1e3, Table 2-1's spelling).
+/// K k m u n p f a`; `k` for 1e3, Table 2-1's spelling). `alt` is C's '#'
+/// on `%e`/`%f`/`%g` (`cPoint`, and `%g` keeps its zeros); lowering refuses
+/// it on `%r` (E0825).
 fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
     const float = std.fmt.float;
     const p = prec orelse 6;
     switch (conv) {
-        'f' => return float.render(buf, v, .{ .mode = .decimal, .precision = p }) catch "?",
-        'e' => return cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?"),
+        'f' => return cPoint(alt, buf, float.render(buf, v, .{ .mode = .decimal, .precision = p }) catch "?"),
+        'e' => return cPoint(alt, buf, cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?")),
         'r' => return cEng(buf, v, prec),
         else => {
             // C11 7.21.6.1 %g: P significant digits; X the exponent %e would
@@ -366,7 +368,7 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
                 cExp(buf, sci)
             else
                 float.render(buf, v, .{ .mode = .decimal, .precision = @intCast(@as(i32, @intCast(sig)) - 1 - x) }) catch return "?";
-            if (alt) return out;
+            if (alt) return cPoint(true, buf, out);
             // Trailing zeros of the fraction go, then a bare point.
             const e_at = std.mem.findScalar(u8, out, 'e') orelse out.len;
             if (std.mem.findScalar(u8, out[0..e_at], '.') == null) return out;
@@ -379,6 +381,18 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
             return out;
         },
     }
+}
+
+/// C11 7.21.6.1p6 '#' on a real conversion: "the result ... always contains
+/// a decimal-point character, even if no digits follow it". `out` is a body
+/// `cReal` wrote at the start of `buf`; one with no point gets it before its
+/// exponent, or at its end (`%#.0f` of 2 is `2.`, `%#.0e` of 1 is `1.e+00`).
+fn cPoint(alt: bool, buf: *[512]u8, out: []const u8) []const u8 {
+    if (!alt or @intFromPtr(out.ptr) != @intFromPtr(buf) or std.mem.findScalar(u8, out, '.') != null) return out;
+    const at = std.mem.findScalar(u8, out, 'e') orelse out.len;
+    @memmove(buf[at + 1 .. out.len + 1], buf[at..out.len]);
+    buf[at] = '.';
+    return buf[0 .. out.len + 1];
 }
 
 // `cReal`'s `%r`, as `str_kernels.zCReal` prints it: the value's shortest
@@ -5368,6 +5382,11 @@ test "formatC: the C11 7.21.6.1 corners a model's format can reach" {
         .{ .fmt = "%g", .args = &.{0.0001}, .want = "0.0001" }, // X = -4: still %f
         .{ .fmt = "%g", .args = &.{0.00001}, .want = "1e-05" }, // X = -5: %e
         .{ .fmt = "%#g", .args = &.{1}, .want = "1.00000" }, // `#` keeps the zeros
+        .{ .fmt = "%#g", .args = &.{100000}, .want = "100000." }, // ...and the point
+        .{ .fmt = "%#.0f", .args = &.{3}, .want = "3." },
+        .{ .fmt = "%#5.0f|", .args = &.{-7}, .want = "  -7.|" },
+        .{ .fmt = "%#.0e", .args = &.{12345}, .want = "1.e+04" },
+        .{ .fmt = "%#.2f", .args = &.{1.5}, .want = "1.50" }, // a point already: unchanged
         .{ .fmt = "%e", .args = &.{-1.5}, .want = "-1.500000e+00" },
         .{ .fmt = "%.0e", .args = &.{12345}, .want = "1e+04" },
         .{ .fmt = "%+g", .args = &.{inf}, .want = "+inf" },

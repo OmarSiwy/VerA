@@ -13,6 +13,7 @@ const Gen = cg.Gen;
 const Error = cg.Error;
 const VTy = Analysis.VTy;
 const strcap = @import("cg_strcap.zig");
+const str_k = @import("kernels").str_kernels;
 
 // -------------------------------------------------------- §9.4 display ----
 //
@@ -35,6 +36,8 @@ pub const Spec = struct {
     space: bool = false,
     /// '0' pad with zeros AFTER the sign.
     zero: bool = false,
+    /// '#' C's alternative form; lowering admits it on %e/%f/%g only (E0825).
+    alt: bool = false,
     /// The field width; 0 = no width given.
     width: usize = 0,
     /// The precision; null = no precision given.
@@ -484,7 +487,7 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
             }
             const start = j;
             j += 1;
-            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.findScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
+            while (j < s.len and (std.ascii.isDigit(s[j]) or s[j] == '.' or str_k.zcFlag(s[j]) != null)) j += 1;
             if (j == s.len) {
                 try fmt.appendSlice(g.arena, s[start..]);
                 break;
@@ -937,12 +940,13 @@ pub fn translateFormat(
         // grants. Parsed into numbers here; `appendConv` decides per
         // conversion whether Zig can spell it or a composed field is needed.
         var spec: Spec = .{};
-        while (i < src.len) : (i += 1) switch (src[i]) {
-            '-' => spec.left = true,
-            '+' => spec.plus = true,
-            ' ' => spec.space = true,
-            '0' => spec.zero = true,
-            else => break,
+        while (i < src.len) : (i += 1) switch (str_k.zcFlag(src[i]) orelse break) {
+            str_k.zc_left => spec.left = true,
+            str_k.zc_plus => spec.plus = true,
+            str_k.zc_space => spec.space = true,
+            str_k.zc_zero => spec.zero = true,
+            str_k.zc_alt => spec.alt = true,
+            else => unreachable, // `zcFlag` returns one of the five bits
         };
         const width_at = i;
         while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
@@ -1209,13 +1213,14 @@ fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             }
         },
         .creal => {
-            // C11 7.21.6.1's flag bits, in `str_kernels.zCReal`'s order:
-            // 1 '-', 2 '+', 4 ' ', 8 '0'. The kernel composes the whole field.
+            // C11 7.21.6.1's flag bits, `str_kernels.zc_*`: 1 '-', 2 '+',
+            // 4 ' ', 8 '0', 16 '#'. The kernel composes the whole field.
             assert(p.conv != 0); // the source's letter: 'e', 'f', 'g' or 'r', either case
-            const flags: u8 = (@as(u8, @intFromBool(p.spec.left))) |
-                (@as(u8, @intFromBool(p.spec.plus)) << 1) |
-                (@as(u8, @intFromBool(p.spec.space)) << 2) |
-                (@as(u8, @intFromBool(p.spec.zero)) << 3);
+            const flags: u8 = (if (p.spec.left) str_k.zc_left else 0) |
+                (if (p.spec.plus) str_k.zc_plus else 0) |
+                (if (p.spec.space) str_k.zc_space else 0) |
+                (if (p.spec.zero) str_k.zc_zero else 0) |
+                (if (p.spec.alt) str_k.zc_alt else 0);
             try g.b("zCReal({s}zb{d}, (", .{ p.amp(), i });
             try g.renderVal(p.v, .real);
             try g.b(").val(), '{c}', {d}, {d}, {d})", .{
@@ -1331,6 +1336,11 @@ test "§9.4.3 Table 9-23: every real conversion routes through the C kernel" {
     const fl = try emitBody(a, "$strobe(\"%+08.1f\", 2.5);");
     try std.testing.expect(has(fl, "'f', 10, 8, 1)"));
 
+    // #41: '#' is the flag 16, never the letter; the 'g' after it is.
+    const alt = try emitBody(a, "$strobe(\"%#g|\", 2.5);");
+    try std.testing.expect(has(alt, "'g', 16, 0, -1)"));
+    try std.testing.expect(has(alt, "\"{s}|\\n\""));
+
     // Table 9-23's `%r` is engineering notation, not a second spelling of
     // `%g`; it reaches the same kernel with its own letter.
     const r = try emitBody(a, "$strobe(\"%r\", 1.5);");
@@ -1355,6 +1365,9 @@ test "§9.4.3/C11 7.21.6.1: zCReal is the conversion the device runs" {
         .{ 2.5, 'f', 0, 0, 0, "2" }, // an exact tie goes to the EVEN digit
         .{ 3.5, 'f', 0, 0, 0, "4" }, // ...which round-half-away gets wrong
         .{ 1.5, 'e', 0, 0, -1, "1.500000e+00" },
+        .{ 2.0, 'e', 16, 0, 0, "2.e+00" }, // '#': the point always prints
+        .{ 2.0, 'f', 16, 0, 0, "2." },
+        .{ 1.5, 'g', 16, 0, -1, "1.50000" }, // ...and %g keeps its zeros
         .{ 0.0015, 'r', 0, 0, -1, "1.5m" },
         .{ 2.0e-13, 'R', 0, 0, -1, "200f" }, // not "0.2p": the mantissa is >= 1
     };
