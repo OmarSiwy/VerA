@@ -9,7 +9,8 @@
 //! (interpreter), evaluate.zig (expressions), net.zig (resolution tables),
 //! resolution.zig (§7.9 resolution), waiters.zig (the write path), driver.zig
 //! (VAMS §9.22 driver access), tchk.zig (§15), display.zig and system.zig
-//! (§17), vcd.zig and evcd.zig (§18), bind.zig (§13), emit.zig (`--emit-exe`).
+//! (§17), vcd.zig and evcd.zig (§18), bind.zig (§13), vpi.zig (a VPI
+//! application's requests), emit.zig (`--emit-exe`).
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -37,6 +38,7 @@ const evaluate = @import("evaluate.zig");
 const waiters = @import("waiters.zig");
 const resolution = @import("resolution.zig");
 const tchk = @import("tchk.zig");
+const vpi = @import("vpi.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
@@ -1021,59 +1023,11 @@ pub const Run = struct {
         return .{ .width = self.values[at].width, .signed = self.values[at].signed };
     }
 
-    /// A value a VPI application reads: a real's double, else the 4-state bits.
-    const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
-
-    /// IEEE 1364-2005 §26.6.19(e): evaluate a retained VPI expression in
-    /// its original scope, when its value is requested. Arguments to user
-    /// systfs can denote non-values (scopes, arrays, named events), so their
-    /// value typing is deferred until this request too. Function bodies
-    /// were compiled during elaboration; `checkExpr` prepares the call and
-    /// its operands without executing them. The result's storage is `a`'s.
-    /// The scope is the one `vpi_expr_scopes` recorded for (`instance`,
-    /// `e`), else `instance`; `scope` is restored on return.
-    pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!VpiValue {
-        const saved = self.scope;
-        defer self.scope = saved;
-        self.scope = self.vpi_expr_scopes.get(.{ instance, @backingInt(e) }) orelse instance;
-        try compile.checkExpr(self, e);
-        if (compile.typeOf(self, e).real) return .{ .real = try evaluate.evalReal(self, a, e) };
-        return .{ .bits = try evaluate.eval(self, a, e, 0) };
-    }
-
-    /// §26.6.11: a constant event select denotes the persistent declared
-    /// element. Canonicalizing it must never evaluate a variable index or an
-    /// application's function (whose value is only requested at run time).
-    pub fn vpiConstantIndex(self: *Run, a: std.mem.Allocator, scope: u32, e: Ast.ExprId) Error!?i64 {
-        const saved = self.scope;
-        defer self.scope = saved;
-        self.scope = scope;
-        if (!compile.constantExpression(self, e)) return null;
-        return switch (try self.vpiEval(a, scope, e)) {
-            .bits => |v| evaluate.indexInt(v),
-            .real => null,
-        };
-    }
-
-    /// IEEE 1364-2005 §27.32 / VAMS §12.30: "Sequential UDPs shall be set to
-    /// the indicated value with no delay regardless of any delay on the
-    /// primitive instance." Driver `at` (a sequential UDP's) takes `bit` as
-    /// its state and output now; a transition its delay held back is
-    /// cancelled, and the net re-resolves.
-    pub fn vpiPutUdp(self: *Run, at: u32, bit: Int.Bit) Error!void {
-        const d = &self.drivers[at];
-        const u = d.source.udp;
-        u.state = bit;
-        u.started = true;
-        if (d.transition != no_transition) {
-            const st = &self.transitions.items[d.transition];
-            if (st.in_flight) |h| try exec.cancel(self, h);
-            st.in_flight = null;
-        }
-        setBit(d.current, u.out_bit orelse 0, bit);
-        d.or_z = false;
-        try resolution.resolve(self, d.net);
-    }
+    /// `vpi.zig`'s requests from a VPI application, called as methods.
+    pub const vpiEval = vpi.vpiEval;
+    pub const vpiConstantIndex = vpi.vpiConstantIndex;
+    pub const vpiPutUdp = vpi.vpiPutUdp;
+    pub const vpiAttributeValue = vpi.vpiAttributeValue;
 
     /// IEEE 1364-2005 §27.31 / VAMS 12.29 vpi_put_delays on the timing check
     /// whose command token is `tok` in instance `scope`: `ticks` are its
@@ -1124,18 +1078,6 @@ pub const Run = struct {
         self.* = fresh;
     }
 
-    /// IEEE §3.8 / AMS §2.9: attribute values are constant expressions in
-    /// the decorated element's lexical scope, after parameter elaboration.
-    pub fn vpiAttributeValue(self: *Run, a: std.mem.Allocator, scope: u32, e: Ast.ExprId) Error!VpiValue {
-        const saved = self.scope;
-        defer self.scope = saved;
-        self.scope = scope;
-        if (!compile.attributeConstantExpression(self, e)) return self.exprFail(e, "§3.8: an attribute value must be a constant expression");
-        const folding = self.folding_constant;
-        self.folding_constant = true;
-        defer self.folding_constant = folding;
-        return self.vpiEval(a, scope, e);
-    }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
     /// scope of the same module, never across an instance boundary.
     pub fn lookup(self: *const Run, scope: u32, str: Ast.StrId) ?u32 {
