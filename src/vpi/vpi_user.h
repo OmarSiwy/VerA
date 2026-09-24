@@ -241,9 +241,8 @@ typedef struct t_vpi_value {
 #define vpiH                    4
 #define vpiL                    5
 
-/* §12.30 vpi_put_value flags. vpiForceFlag and vpiReleaseFlag are declared
- * because an application names them to ask; VerA's digital engine performs no
- * force, so the put is refused with vpiError. */
+/* §12.30 vpi_put_value flags. vpiForceFlag and vpiReleaseFlag perform
+ * IEEE 1364 §9.3.2's force and release, and fire cbForce/cbRelease. */
 #define vpiNoDelay              1
 #define vpiInertialDelay        2
 #define vpiTransportDelay       3

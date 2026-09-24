@@ -487,7 +487,7 @@ var put_buf: std.ArrayList(u64) = .empty;
 /// shall be used to direct the routine to use one of the following delay
 /// modes". Returns a vpiSchedEvent handle when vpiReturnEvent is set AND an
 /// event was scheduled; otherwise NULL, which is not in itself an error.
-pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*const Value, time_p: ?*const Time, flags: c_int) vpiHandle {
+pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Time, flags: c_int) vpiHandle {
     root.clearError();
     const mode = flags & ~vpiReturnEvent;
     if (mode == vpiCancelEvent) {
@@ -508,18 +508,24 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*const Value, time_p: ?*co
         root.fail("BADHANDLE", "vpi_put_value: that handle is not an object", .{});
         return null;
     };
-    if (mode == vpiForceFlag or mode == vpiReleaseFlag) {
-        root.fail("NOFORCE", "vpi_put_value: procedural force and release are not performed by VerA's digital engine", .{});
-        return null;
-    }
     const at = o.slot orelse {
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
         return null;
     };
+    // vpiReleaseFlag: "The value_p shall contain the current value of the
+    // object" — written back, after the release (IEEE 1364 §9.3.2 puts a
+    // net back under its drivers at once).
+    if (mode == vpiReleaseFlag) {
+        exec.release(run.attached().?, at, true) catch return engineFail();
+        if (value_p) |v| read(o, v, &get_store);
+        callback.fireOverride(callback.cbRelease, o);
+        return null;
+    }
     // A net's value is the resolution of its drivers (§7.9); storing into it
     // would last until the next driver update. A put to a net needs a driver
-    // of its own, which the engine does not give an application.
-    if (o.kind == .net or (o.kind == .port and (run.attached().?).net_of.contains(at))) {
+    // of its own, which the engine does not give an application. A force
+    // overrides the drivers, so it is the one put a net takes (§9.3.2).
+    if (mode != vpiForceFlag and (o.kind == .net or (o.kind == .port and (run.attached().?).net_of.contains(at)))) {
         root.fail("NETPUT", "vpi_put_value: `{s}` is a net, whose value its drivers decide", .{o.full});
         return null;
     }
@@ -537,6 +543,12 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*const Value, time_p: ?*co
     const lit: Int.Literal = .{ .width = dest.width, .sized = true, .signed = dest.signed, .planes = put_buf.items };
 
     switch (mode) {
+        // "time_p shall be ignored": a force is immediate.
+        vpiForceFlag => {
+            exec.forceValue(r, at, lit.planes) catch return engineFail();
+            callback.fireOverride(callback.cbForce, o);
+            return null;
+        },
         vpiNoDelay => {
             exec.store(r, at, lit.planes) catch return engineFail();
             return null;
@@ -820,9 +832,58 @@ test "§12.30: vpiNoDelay writes now, the delay modes schedule, and events cance
     v.format = vpiIntVal;
     vpi_get_value(q, &v);
     try std.testing.expectEqual(@as(c_int, 0xCC), v.value.integer);
-    // A force is refused, not faked.
-    try std.testing.expect(vpi_put_value(q, &v, null, vpiForceFlag) == null);
+}
+
+test "§12.30: vpiForceFlag overrides a net's driver, vpiReleaseFlag hands it back" {
+    var h: Harness = undefined;
+    try h.init(
+        \\`timescale 1ns/1ns
+        \\module f;
+        \\  reg [7:0] a;
+        \\  wire [7:0] w;
+        \\  assign w = a + 8'd1;
+        \\  initial begin a = 10; #50 $finish(0); end
+        \\endmodule
+    );
+    defer h.deinit();
+    try run.simulate();
+    const w = root.vpi_handle_by_name("f.w", null);
+    var fmt: Value = std.mem.zeroes(Value);
+    fmt.format = vpiIntVal;
+    for ([_]c_int{ callback.cbForce, callback.cbRelease }) |reason| {
+        const d: callback.CbData = .{ .reason = reason, .cb_rtn = noteOverride, .obj = null, .time = null, .value = &fmt, .index = 0, .user_data = null };
+        try std.testing.expect(callback.vpi_register_cb(&d) != null);
+    }
+    overrides_n = 0;
+    var v: Value = std.mem.zeroes(Value);
+    v.format = vpiIntVal;
+    // A plain put to a net is still refused: its drivers decide it.
+    v.value.integer = 7;
+    try std.testing.expect(vpi_put_value(w, &v, null, vpiNoDelay) == null);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    v.value.integer = 0xF0;
+    try std.testing.expect(vpi_put_value(w, &v, null, vpiForceFlag) == null);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    v.value.integer = 0;
+    vpi_get_value(w, &v);
+    try std.testing.expectEqual(@as(c_int, 0xF0), v.value.integer);
+    // Release: value_p comes back holding the driver's value, a + 1.
+    v.value.integer = -1;
+    _ = vpi_put_value(w, &v, null, vpiReleaseFlag);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 11), v.value.integer);
+    // One cbForce carrying the forced value, one cbRelease the released one,
+    // each naming the object.
+    try std.testing.expectEqualSlices([3]c_int, &.{ .{ callback.cbForce, 0xF0, 1 }, .{ callback.cbRelease, 11, 1 } }, overrides[0..overrides_n]);
+}
+
+var overrides: [4][3]c_int = undefined;
+var overrides_n: usize = 0;
+
+fn noteOverride(d: *callback.CbData) callconv(.c) c_int {
+    overrides[overrides_n] = .{ d.reason, d.value.?.value.integer, @intFromBool(root.asObj(d.obj) != null) };
+    overrides_n += 1;
+    return 0;
 }
 
 test "§12.16: an analog parameter reads the value lowering folded" {
