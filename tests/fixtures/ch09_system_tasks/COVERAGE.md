@@ -4,7 +4,7 @@ Audit checkpoint, 2026-09-23: `docs/conformance-ch9-review.md` supersedes
 blanket conversion and binding claims below. New source-level named, ordered
 and defparam overrides (including equal-to-default values), and nested
 omitted/connected ports, have direct behavioral checks. Invalid variable/net
-argument kinds are wrongly accepted and recorded as BIND-ARG-001/002 XFAILs.
+argument kinds were accepted (BIND-ARG-001/002) and are now refused as E0822.
 Runtime signed conversion passes the new observations; legal constant defaults
 fail as CONV-CONST-001. The 063 bit-pattern oracle now compares explicitly
 sized patterns and checks Boolean results, avoiding unsized-width assumptions.

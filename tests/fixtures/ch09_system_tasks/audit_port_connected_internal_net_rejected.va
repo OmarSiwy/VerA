@@ -2,10 +2,9 @@
 // A declared internal continuous net is not a module port. No undeclared name
 // or inappropriate discipline can mask this distinction.
 // The distinctive rejection phrase below is the intended diagnostic contract,
-// pending implementation; current VerA accepts this source without a diagnostic.
+// carried by E0822 (it used to be accepted without a diagnostic).
 //! lrm 9.19
 //! reject $port_connected requires a port identifier
-//! xfail VerA accepts an internal net as $port_connected's port argument; AMS 9.19 requires a port identifier.
 module audit_port_connected_internal_net_rejected;
   electrical internal_net;
   integer flag;
