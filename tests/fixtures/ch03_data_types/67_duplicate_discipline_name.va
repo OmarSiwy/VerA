@@ -10,12 +10,13 @@
 // nature_declaration and discipline_declaration as different productions, so a
 // compiler can register one kind uniquely and not the other.
 //
-// The pinned substring is only the phase label, for the reason given in
-// 67_duplicate_nature_name.va.
+// E0342 ("nature or discipline is already declared") is the same-kind code; the
+// cross-kind collision is E0336. It replaces the phase label pinned before
+// E0342 existed.
 //
 //! lrm 3.6.2
 //! lrm 3.13.1
-//! reject DiagnosticsReported
+//! reject E0342
 nature ch3_twice_d_p; units="V"; access=TwiceDV; abstol=1u; endnature
 nature ch3_twice_d_f; units="A"; access=TwiceDI; abstol=1p; endnature
 discipline ch3_twice_d; potential ch3_twice_d_p; enddiscipline

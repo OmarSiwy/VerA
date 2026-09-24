@@ -10,12 +10,12 @@
 // 11_discipline_declarations.va declares the three well-formed shapes
 // (conservative, potential-only, flow-only); this is the fourth, illegal, one.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one and stop matching the day the right
-// one lands.
+// E0338 is VerA's code for exactly this rule ("conservative discipline binds
+// one nature to both halves"), so it replaces the phase label this file pinned
+// before the code existed.
 //
 //! lrm 3.6.2.1
-//! reject DiagnosticsReported
+//! reject E0338
 nature ch3_both_n; units="V"; access=Both; abstol=1u; endnature
 discipline ch3_both_d;
     domain continuous;

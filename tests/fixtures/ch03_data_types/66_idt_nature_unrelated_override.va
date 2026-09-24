@@ -14,11 +14,11 @@
 // nature derived from `ch3_idt_target` makes the file conform. That is the whole
 // defect.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one.
+// E0341 ("`idt_nature` does not name a related nature") is VerA's code for this
+// rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 3.6.1.2
-//! reject DiagnosticsReported
+//! reject E0341
 nature ch3_idt_target; units="Wb"; access=TargetPhi; abstol=1u; endnature
 nature ch3_idt_stranger; units="A"; access=StrangerI; abstol=1p; endnature
 nature ch3_idt_parent; units="V"; access=ParentIdtV; abstol=1u; idt_nature=ch3_idt_target; endnature
