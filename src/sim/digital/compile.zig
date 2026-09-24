@@ -271,7 +271,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         // eight bits per character, and §5.2.3.3's "" is one NUL byte.
         .str_literal => .{ .width = stringWidth(self.file.str(ex.strOf(e))), .signed = false },
         .real_literal => real_type,
-        else => self.exprFail(e, "this expression requires digital context typing beyond the implemented leaf operands"),
+        else => self.exprFail(e, "this expression requires digital context typing beyond the implemented leaf operands"), // else: infer calls this for the leaves above only
     };
 }
 
@@ -334,15 +334,16 @@ fn unsizedConcatOperand(self: *Run, e: Ast.ExprId) bool {
         .logic_literal => !ex.logicValue(e).sized,
         .unary => switch (ex.unOp(e)) {
             .plus, .minus, .bit_not => unsizedConcatOperand(self, ex.lhs(e)),
-            else => false,
+            // One-bit results, sized whatever their operand.
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => false,
         },
         .binary => switch (ex.binOp(e)) {
             .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => unsizedConcatOperand(self, ex.lhs(e)) or unsizedConcatOperand(self, ex.rhs(e)),
             .shl, .shr, .ashl, .ashr, .pow => unsizedConcatOperand(self, ex.lhs(e)),
-            else => false,
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => false,
         },
         .ternary => unsizedConcatOperand(self, ex.rhs(e)) or unsizedConcatOperand(self, ex.ternaryElse(e)),
-        else => false,
+        else => false, // else: a name, a select, a call or a concatenation has its own size
     };
 }
 
@@ -562,7 +563,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             try self.replications.put(self.arena, e, count);
             break :blk .{ .width = width, .signed = false };
         },
-        else => return self.exprFail(e, "this digital expression form is not implemented"),
+        else => return self.exprFail(e, "this digital expression form is not implemented"), // else: the analog-only forms (access functions, filters, patterns, events), refused out loud
     };
     entry.* = ty;
     return ty;
@@ -873,7 +874,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             }
             _ = try append(self, .{ .task = .{ .task = task, .args = s.args, .tok = tok } });
         },
-        else => return self.fail(tok, "this digital statement is not implemented", .{}),
+        else => return self.fail(tok, "this digital statement is not implemented", .{}), // else: the analog statements (contribution, indirect, jump), refused out loud
     }
 }
 
@@ -1123,7 +1124,7 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
         // the statement's reads either way.
         .empty, .event_trigger, .disable => {},
         .event_control => |s| try readSlots(self, s.body, out, depth + 1),
-        else => unreachable, // compileStmt admitted only the forms above
+        else => unreachable, // else: compileStmt admitted only the forms above
     }
 }
 
@@ -1174,7 +1175,7 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         },
         .event_posedge, .event_negedge => _ = try self.scalarSlot(ex.lhs(e)),
         .ident => _ = try self.scalarSlot(e),
-        else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"),
+        else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"), // else: every other event term, refused out loud
     }
 }
 

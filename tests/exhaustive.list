@@ -21,30 +21,3 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-src/sim/digital/compile.zig checkEvent Ast.ExprTag
-src/sim/digital/compile.zig compileStmt Ast.Stmt
-src/sim/digital/compile.zig infer Ast.ExprTag
-src/sim/digital/compile.zig leafType Ast.ExprTag
-src/sim/digital/compile.zig readSlots Ast.Stmt
-src/sim/digital/compile.zig unsizedConcatOperand Ast.BinaryOp
-src/sim/digital/compile.zig unsizedConcatOperand Ast.ExprTag
-src/sim/digital/compile.zig unsizedConcatOperand Ast.UnaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.BinaryOp
-src/sim/digital/exec.zig evalContext Ast.ExprTag
-src/sim/digital/exec.zig evalContext Ast.UnaryOp
-src/sim/digital/exec.zig evalContext Ast.UnaryOp
-src/sim/digital/exec.zig evalContext Ast.UnaryOp
-src/sim/digital/exec.zig leaf Ast.ExprTag
-src/sim/digital/exec.zig suspendOn Ast.ExprTag
-src/sim/digital/net.zig netPull Ast.NetKind
-src/sim/digital/net.zig undriven Ast.NetKind
-src/sim/digital/net.zig wired Ast.NetKind
-src/sim/digital/net.zig wiredLogic Ast.NetKind
-src/sim/digital/root.zig declaredDelay Ast.ExprTag

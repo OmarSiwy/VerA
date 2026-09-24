@@ -446,7 +446,7 @@ pub const Run = struct {
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
             .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
-            else => scale.signedDelay((try self.constant(e, tok)).asInt() orelse return self.fail(tok, "a declared delay cannot contain x or z", .{})),
+            else => scale.signedDelay((try self.constant(e, tok)).asInt() orelse return self.fail(tok, "a declared delay cannot contain x or z", .{})), // else: any other form is a constant expression, which `constant` folds or refuses
         } catch self.fail(tok, "digital delay cannot be represented", .{});
     }
 
