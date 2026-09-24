@@ -109,6 +109,8 @@ pub const Code = enum(u16) {
     E0141,
     /// IEEE 1364 §19.9: the operands of `timescale.
     E0142,
+    /// IEEE 1364 §19.3.1: a `define whose name is a Table 10-1 directive.
+    E0143,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1135,6 +1137,21 @@ fn infoOf(c: Code) Info {
             \\tick from them. A directive with no reading cannot supply either,
             \\so it is refused where it is written rather than at the far end
             \\of the compilation.
+            ,
+        },
+
+        .E0143 => .{
+            .title = "a compiler directive cannot be a macro name",
+            .lrm = "10.4",
+            .explain =
+            \\LRM 10.4 takes `define from IEEE Std 1364, whose 19.3.1 says: "All
+            \\compiler directives shall be considered predefined macro names; it
+            \\shall be illegal to redefine a compiler directive as a macro name."
+            \\
+            \\The directives are the ones 10.1 Table 10-1 lists, `__FILE__ and
+            \\`__LINE__ included. After `define include 1, `include would be
+            \\ambiguous between the directive and the macro; the rule removes the
+            \\question. Rename the macro.
             ,
         },
 
