@@ -217,17 +217,23 @@ pub fn emitEdge(self: *Gen, from: u32, to: u32, depth: u32, target: Mir.Value) E
     }
 }
 
-/// SSA-out-of-form on the edge `from → to`. Emitted through temporaries when
-/// `to` has more than one live phi, so a phi reading another phi of the same
-/// block (the swap idiom) cannot lose a copy.
+/// SSA-out-of-form on the edge `from → to`. Emitted through temporaries only
+/// when an incoming value READS a phi of `to` itself (the swap idiom, or a
+/// loop counter's `i + 1`): assigned in sequence, a later copy would then see
+/// an earlier one's new value. Every other group — 309 of bsim4va's 310 — is
+/// written straight into the slots, which is the same values in the same
+/// order without a `{ const cK = ..; slot = cK; }` block per edge.
 pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     const phis = self.an.phi_pool[self.an.phi_off[to]..self.an.phi_off[to + 1]];
     var n: u32 = 0;
+    var reads_own = false;
     for (phis) |inst| {
-        if (slotted(self, inst)) n += 1;
+        if (!slotted(self, inst)) continue;
+        n += 1;
+        if (!reads_own) reads_own = readsPhiOf(self, self.an.phiIn(inst, from), to, 0);
     }
     if (n == 0) return;
-    const par = n > 1;
+    const par = n > 1 and reads_own;
     if (par) {
         try self.ind(depth);
         try self.b("{{\n", .{});
@@ -265,6 +271,31 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     }
     try self.ind(depth);
     try self.b("}}\n", .{});
+}
+
+/// Does rendering `v` read the slot of a phi defined in block `to`? Walks the
+/// INLINE tree `renderVal` would print and stops at anything materialized —
+/// a slot, a cache field or a precompute field is a name, and only a phi slot
+/// of `to` is one the copies on this edge overwrite. Past the depth cap it
+/// answers yes, which keeps the temporaries: the safe side.
+fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
+    if (depth > 64) return true;
+    const v = self.an.rv(v0);
+    const def = self.mir.valueDef(v);
+    if (def != .inst_result) return false;
+    const inst = def.inst_result;
+    if (self.mir.instOp(inst) == .phi) return self.an.def_block[@intFromEnum(v)] == to;
+    if (gen_render.materialized(self, v)) return false;
+    return switch (self.mir.instData(inst)) {
+        .unary => |d| readsPhiOf(self, d.operand, to, depth + 1),
+        .binary => |d| readsPhiOf(self, d.lhs, to, depth + 1) or readsPhiOf(self, d.rhs, to, depth + 1),
+        .ternary => |d| readsPhiOf(self, d.cond, to, depth + 1) or
+            readsPhiOf(self, d.then_val, to, depth + 1) or readsPhiOf(self, d.else_val, to, depth + 1),
+        .call => |d| for (d.args) |a| {
+            if (readsPhiOf(self, a, to, depth + 1)) break true;
+        } else false,
+        .phi, .branch, .jump => true,
+    };
 }
 
 /// A pooled phi this unit actually materializes into a local slot.
