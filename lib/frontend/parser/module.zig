@@ -96,6 +96,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .assigns = b.assigns.items,
         .gates = b.gates.items,
         .pulls = b.pulls.items,
+        .tasks = b.tasks.items,
         // §2.9 — every attr_spec seen since the last module. Attributes
         // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
         // collected by `parseSource` and belong to this module too, which is
@@ -371,6 +372,7 @@ pub const Body = struct {
     assigns: std.ArrayList(Ast.ContAssign) = .empty, // A.6.1
     gates: std.ArrayList(Ast.GateInst) = .empty, // A.3.1
     pulls: std.ArrayList(Ast.PullInst) = .empty, // A.3.1, §7.8
+    tasks: std.ArrayList(Ast.Subroutine) = .empty, // IEEE 1364-2005 §10
     /// §6.6.1/§6.6.2 every named generate block of the module, with the
     /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
     /// is a declaration of a scope nothing downstream can reach yet
@@ -800,7 +802,11 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // `lowerUserCall` now judges (E0436) — a module that merely HAS a
         // digital function is legal and several ch07 fixtures are exactly
         // that shape.
-        .kw_function => try parse_decl.parseFuncDecl(self, b, self.pos, false),
+        //
+        // A digital parse reads the 1364 declaration itself (packed ranges,
+        // `automatic`, `reg` formals), which the analog function grammar
+        // cannot carry.
+        .kw_function => if (self.digital) try parse_decl.parseSubroutine(self, b, true) else try parse_decl.parseFuncDecl(self, b, self.pos, false),
         // A.4.2 generate_region — transparent, per §6.6's "there is no
         // semantic difference": the items inside are plain module items and
         // the region introduces no scope. What it is NOT is re-enterable:
@@ -865,6 +871,9 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
             // `specify_item`. This is the module-item half.
             if (std.mem.eql(u8, w, "specparam")) return parse_specify.parseSpecparamDecl(self, &b.params);
+            // A.2.7 `task_declaration`, IEEE 1364-2005 §10.2 — the digital
+            // engine's; an analog compile has nothing to run a task with.
+            if (self.digital and std.mem.eql(u8, w, "task")) return parse_decl.parseSubroutine(self, b, false);
             // A.3.1's last two arms. They have no tags of their own because
             // A.3.2 gives them a strength set no other gate takes.
             if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))

@@ -123,7 +123,27 @@ pub const Run = struct {
     /// Per scope id: the instance that minted it, its name and its module —
     /// §17.1.1.6's `%m` path and §13.6's `%l` binding. Row 0 is the root,
     /// named after its module.
-    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId }) = .empty,
+    /// `lexical` marks a scope nested INSIDE its parent's module — a task or
+    /// function (§12.7) — whose unresolved names are searched for in the
+    /// parent; an instance is a hierarchy boundary and is searched no further.
+    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId, lexical: bool = false }) = .empty,
+    /// IEEE 1364-2005 §10 the tasks and functions of every instance.
+    subs: std.ArrayList(Sub) = .empty,
+    /// A subroutine by its name in the instance that declares it.
+    sub_by_name: std.AutoHashMapUnmanaged(Name, u32) = .empty,
+    /// Per instance scope, the index of its first `subs` row: a call site is
+    /// typed once per module, so it records a module-relative index
+    /// (`call_subs`) and each instance adds its own base.
+    sub_base: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    call_subs: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
+    /// §10.3 a `disable` of a subroutine with synchronous activations in
+    /// progress: every activation returns at once until the outermost one.
+    unwind: ?u32 = null,
+    sync_depth: u16 = 0,
+    /// Compiling a function body, which §10.4.4 restricts.
+    in_function: bool = false,
+    /// The saved storage of the automatic activations in progress.
+    saved_planes: std.ArrayList(u64) = .empty,
     /// The instruction a system task is running from, so `%m` can name the
     /// §5.3.2 named blocks around it.
     pc: u32 = 0,
@@ -334,7 +354,7 @@ pub const Run = struct {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
-            var scope = self.scope;
+            var scope = self.instanceOf(self.scope);
             for (parts[0 .. parts.len - 1]) |part|
                 scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
                     return self.exprFail(e, "undeclared instance in a hierarchical reference");
@@ -342,7 +362,24 @@ pub const Run = struct {
                 self.exprFail(e, "undeclared digital variable");
         }
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
-        return self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse self.exprFail(e, "undeclared digital variable");
+        return self.lookup(self.scope, ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
+    }
+    /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
+    /// scope of the same module — never across an instance boundary.
+    pub fn lookup(self: *const Run, scope: u32, str: Ast.StrId) ?u32 {
+        var s = scope;
+        while (true) {
+            if (self.names.get(.{ .scope = s, .str = str })) |at| return at;
+            const info = self.scope_info.items[s];
+            if (!info.lexical) return null;
+            s = info.parent;
+        }
+    }
+    /// The instance a (possibly nested) scope belongs to.
+    pub fn instanceOf(self: *const Run, scope: u32) u32 {
+        var s = scope;
+        while (self.scope_info.items[s].lexical) s = self.scope_info.items[s].parent;
+        return s;
     }
     /// A constant expression's value at elaboration (IEEE 1364-2005 §5.2 /
     /// §12.2): literals, parameters, operators and the constant system
@@ -551,40 +588,22 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // ponytail: digital-context `real` (VAMS Table 7-1's real row) is the
         // upgrade — a real lane in the slot space.
         if (r.mixed and (v.ty != .integer or v.init != .none or v.storage == .time)) continue;
-        if (v.ty != .integer) return r.fail(v.main_tok, "only reg, integer and time variables are implemented", .{});
         if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
-        // ponytail: one unpacked dimension. §3.9 admits any number; the second
-        // one needs a row-major address fold this has no consumer for yet.
-        if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
-        // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
-        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
-            .reg => 1,
-            .variable => 32,
-            .time => 64,
-        };
-        const base: u32 = @intCast(e.values.items.len);
-        try r.bind(v.name, base, v.main_tok);
-        if (v.packed_range) |range| try r.vec_ranges.put(arena, base, .{
-            .msb = try r.declaredBound(range.msb, v.main_tok),
-            .lsb = try r.declaredBound(range.lsb, v.main_tok),
-        });
-        var count: u32 = 1;
-        if (v.dims.len == 1) {
-            const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
-            const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
-            const low = @min(lo, hi);
-            const high = @max(lo, hi);
-            if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-            count = @intCast(high - low + 1);
-            try r.arrays.put(arena, base, .{ .count = count, .low = low, .high = high });
-        }
-        if (count > std.math.maxInt(u32) - e.values.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
-        const signed = switch (v.storage) {
-            .reg => v.is_signed,
-            .variable => true,
-            .time => false,
-        };
-        for (0..count) |_| try e.values.append(arena, try filled(arena, width, signed, .x));
+        _ = try mintVar(r, v);
+    }
+    // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
+    // instance holding its formals, its locals and a function's result — the
+    // storage a static subroutine shares between activations (§10.2.3).
+    try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
+    for (m.tasks) |*t| {
+        // A mixed module's real-valued function is the analog side's to call
+        // (VAMS §4.7); this engine holds no real, so it declares none.
+        if (r.mixed and usesReal(t)) continue;
+        const f = try frame(r, t, scope);
+        const entry = try r.sub_by_name.getOrPut(arena, .{ .scope = scope, .str = t.name });
+        if (entry.found_existing) return r.fail(t.main_tok, "duplicate task or function", .{});
+        entry.value_ptr.* = @intCast(r.subs.items.len);
+        try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = f });
     }
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous — the analog solver's.
@@ -768,6 +787,97 @@ fn newScope(r: *Run, tok: u32) Error!u32 {
     r.scopes += 1;
     if (r.scopes == std.math.maxInt(u32)) return r.fail(tok, "too many digital instances", .{});
     return r.scopes;
+}
+
+/// One variable's storage in the current scope — a whole value, or §3.9's
+/// array of them — bound to its name. Works in both passes: an automatic
+/// task inlined at a call site gets fresh storage while pass two compiles it.
+pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
+    const g = r.growing.?;
+    if (v.ty != .integer) return r.fail(v.main_tok, "only reg, integer and time variables are implemented", .{});
+    // ponytail: one unpacked dimension. §3.9 admits any number; the second
+    // one needs a row-major address fold this has no consumer for yet.
+    if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
+    // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
+    const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
+        .reg => 1,
+        .variable => 32,
+        .time => 64,
+    };
+    const base: u32 = @intCast(g.items.len);
+    try r.bind(v.name, base, v.main_tok);
+    if (v.packed_range) |range| try r.vec_ranges.put(r.arena, base, .{
+        .msb = try r.declaredBound(range.msb, v.main_tok),
+        .lsb = try r.declaredBound(range.lsb, v.main_tok),
+    });
+    var count: u32 = 1;
+    if (v.dims.len == 1) {
+        const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
+        const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
+        const low = @min(lo, hi);
+        const high = @max(lo, hi);
+        if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
+        count = @intCast(high - low + 1);
+        try r.arrays.put(r.arena, base, .{ .count = count, .low = low, .high = high });
+    }
+    if (count > std.math.maxInt(u32) - g.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
+    const signed = switch (v.storage) {
+        .reg => v.is_signed,
+        .variable => true,
+        .time => false,
+    };
+    for (0..count) |_| try g.append(r.arena, try filled(r.arena, width, signed, .x));
+    r.values = g.items;
+    return base;
+}
+
+/// §10 one subroutine as the engine runs it: the declaration, the instance
+/// that declared it, and its static frame. `entry` is the pc of its body
+/// compiled for a synchronous call; a task with timing controls has none,
+/// and is inlined at each enable instead (`ranges` are those copies, for
+/// §10.3's `disable`).
+pub const Sub = struct {
+    decl: *const Ast.Subroutine,
+    inst: u32,
+    frame: Frame,
+    entry: u32 = 0,
+    timed: ?bool = null,
+    /// Synchronous activations in progress.
+    active: u32 = 0,
+    /// Being inlined right now, which a timed task reaching itself would be.
+    inlining: bool = false,
+    ranges: std.ArrayList(struct { start: u32, end: u32 }) = .empty,
+};
+
+fn usesReal(t: *const Ast.Subroutine) bool {
+    if (t.is_function and t.result.ty != .integer) return true;
+    for (t.ports) |p| if (p.v.ty != .integer) return true;
+    for (t.vars) |v| if (v.ty != .integer) return true;
+    return false;
+}
+
+/// One activation's storage: a scope, a slot per formal, the result slot of
+/// a function, and the contiguous slot range an automatic activation saves.
+pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u32, count: u32 };
+
+/// A fresh frame for `t` inside instance `inst`: its static one in pass one,
+/// an automatic task's per-call-site one in pass two.
+pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
+    const g = r.growing.?;
+    const scope = try newScope(r, t.main_tok);
+    try r.scope_info.append(r.arena, .{ .parent = inst, .name = t.name, .module = r.scope_info.items[inst].module, .lexical = true });
+    const saved = r.scope;
+    r.scope = scope;
+    defer r.scope = saved;
+    const first: u32 = @intCast(g.items.len);
+    const ports = try r.arena.alloc(u32, t.ports.len);
+    for (t.ports, ports) |p, *slot| slot.* = try mintVar(r, p.v);
+    const result = if (t.is_function) try mintVar(r, t.result) else 0;
+    for (t.vars) |v| {
+        if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
+        _ = try mintVar(r, v);
+    }
+    return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
 }
 
 /// Allocate one net and its slot, and bind `name` to it in the current scope.
@@ -967,10 +1077,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     @memset(r.sys_calls, null);
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, 0);
-    r.growing = null;
     r.values = e.values.items;
-    r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
-    @memset(r.watch, .initEmpty());
     r.nets = e.nets.items;
     // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
@@ -1022,6 +1129,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         if (n.kind == .uwire and g.items.len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
         n.drivers = g.items;
     }
+    // §10 subroutine bodies, each on its own pc range before any process, so
+    // a synchronous call never runs into a process's code.
+    try compile.compileSubs(&r);
     for (e.insts.items) |inst| {
         r.scope = inst.scope;
         // IEEE 1364-2005 §6.2.1: a variable declaration assignment "shall be
@@ -1048,10 +1158,28 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // A.6.5's `disable` names a block that needs no declaration before its use
     // — d04_14's is in the process next door — so the ranges are bound here,
     // once every process has a pc range at all.
-    for (r.disables.items) |d| {
-        const range = r.blocks.get(d.name) orelse return r.fail(d.tok, "undeclared named block", .{});
-        r.code.items[d.at].disable_block = .{ .start = range.start, .end = range.end };
+    // A block is looked for through the enclosing scopes (§12.7); a name
+    // that is no block may be a task (§10.3), which has no single range.
+    disabling: for (r.disables.items) |d| {
+        var s = d.name.scope;
+        while (true) {
+            if (r.blocks.get(.{ .scope = s, .str = d.name.str })) |range| {
+                r.code.items[d.at] = .{ .disable_block = .{ .start = range.start, .end = range.end } };
+                continue :disabling;
+            }
+            if (!r.scope_info.items[s].lexical) break;
+            s = r.scope_info.items[s].parent;
+        }
+        const idx = r.sub_by_name.get(.{ .scope = r.instanceOf(d.name.scope), .str = d.name.str }) orelse
+            return r.fail(d.tok, "undeclared named block or task", .{});
+        r.code.items[d.at] = .{ .disable_task = idx };
     }
+    // Pass two may have minted storage (an automatic task inlined at a call
+    // site), so the slot space is final only now.
+    r.growing = null;
+    r.values = e.values.items;
+    r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
+    @memset(r.watch, .initEmpty());
     return r;
 }
 
@@ -1216,6 +1344,33 @@ test "§19.10 nounconnected_drive leaves an open input port floating" {
         \\initial #0 $display("%b", u.a);
         \\endmodule
     , "z\n");
+}
+
+// §10: an untimed task runs in place, a timed one suspends its caller; a
+// static task's storage outlives its activation and an automatic one's does
+// not; recursion gets a frame per activation; `disable` of a task ends every
+// activation, and the caller resumes after its enable.
+test "§10 tasks and functions: copy in/out, lifetimes, recursion, disable" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg [7:0] a, b, c; integer n, tails;
+        \\function automatic integer fib(input integer k);
+        \\  fib = k < 2 ? k : fib(k - 1) + fib(k - 2);
+        \\endfunction
+        \\function [3:0] low(input [7:0] x); low = x; endfunction
+        \\task count(input clr, output [7:0] o); reg [7:0] kept; begin if (clr) kept = 0; kept = kept + 1; o = kept; end endtask
+        \\task late(input [7:0] i, output [7:0] o); #2 o = i + 1; endtask
+        \\task automatic dive(input integer d); begin if (d == 0) disable dive; else dive(d - 1); tails = tails + 1; end endtask
+        \\initial begin
+        \\  n = fib(10); a = low(8'hab) + 8'h10;
+        \\  count(1'b1, b); count(1'b0, b);
+        \\  tails = 0; dive(3);
+        \\  late(a, c);
+        \\  $display("%0d %h %0d %h %0d %0d", n, a, b, c, tails, $time);
+        \\end
+        \\endmodule
+    , "55 1b 2 1c 0 2\n");
 }
 
 // §6.2.1: the initializer is an initial-block assignment at time 0 — so a

@@ -438,6 +438,10 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
             };
             return normalize(a, value, ty);
         },
+        .call => {
+            const idx = self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?;
+            return normalize(a, try callSync(self, a, idx, ex.args(e)), ty);
+        },
         .multi_concat => {
             const value = try eval(self, a, ex.rhs(e), 0);
             const repeated = value.replicate(a, self.replications.get(e).?) catch |err| switch (err) {
@@ -778,16 +782,97 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
     return true;
 }
 
+// ---- synchronous subroutines (IEEE 1364-2005 §10) ----------------------------
+
+/// Run subroutine `idx` to completion as one activation (§10.2.2, §10.4):
+/// the arguments are evaluated in the caller BEFORE anything of the callee's
+/// changes — a recursive call's argument reads the calling activation — then
+/// copied into the formals, the body runs on a scratch arena of its own, and
+/// the outputs are copied back. An automatic subroutine's whole frame is
+/// saved and set to x first and restored after (§10.2.3, §10.4.2), which is
+/// per-activation storage for a call that cannot suspend. Returns a
+/// function's result, in `a`.
+///
+/// ponytail: `repeat` counters and intra-assignment cells are per SITE, so a
+/// recursive body that suspends in one — impossible here, since only
+/// untimed subroutines run this way — or loops with `repeat` across its own
+/// recursion would share them.
+pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
+    const sub = &self.subs.items[idx];
+    const decl = sub.decl;
+    const f = sub.frame;
+    if (self.sync_depth == 1024) return self.fail(decl.main_tok, "task and function calls nested deeper than 1024 are not implemented", .{});
+    const inputs = try a.alloc(?Int.Literal, args.len);
+    for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
+        in.* = null;
+        if (p.direction == .output) continue;
+        const w = self.values[slot].width;
+        const rhs = try eval(self, a, arg, w);
+        in.* = try normalize(a, rhs, .{ .width = w, .signed = rhs.signed });
+    }
+    const saved_len = self.saved_planes.items.len;
+    if (decl.automatic) for (f.first..f.first + f.count) |s| {
+        const v = self.values[s];
+        try self.saved_planes.appendSlice(self.arena, v.planes);
+        @memcpy(v.planes, (try filled(a, v.width, v.signed, .x)).planes);
+    };
+    for (inputs, f.ports) |in, slot| if (in) |v| @memcpy(self.values[slot].planes, v.planes);
+    const caller_scope = self.scope;
+    const caller_pc = self.pc;
+    self.sync_depth += 1;
+    sub.active += 1;
+    {
+        var body = std.heap.ArenaAllocator.init(self.arena);
+        defer body.deinit();
+        try execute(self, &body, sub.entry);
+    }
+    sub.active -= 1;
+    self.sync_depth -= 1;
+    self.scope = caller_scope;
+    self.pc = caller_pc;
+    const result = if (decl.is_function) try copyLiteral(a, self.values[f.result]) else try filled(a, 1, false, .x);
+    // §10.3: a disabled task's outputs are not copied back.
+    if (self.unwind == null) for (decl.ports, args, f.ports) |p, arg, slot| if (p.direction != .input) try copyOut(self, a, arg, slot);
+    if (decl.automatic) {
+        var at = saved_len;
+        for (f.first..f.first + f.count) |s| {
+            const planes = self.values[s].planes;
+            @memcpy(planes, self.saved_planes.items[at..][0..planes.len]);
+            at += planes.len;
+        }
+        self.saved_planes.shrinkRetainingCapacity(saved_len);
+    }
+    if (self.unwind == idx and sub.active == 0) self.unwind = null;
+    return result;
+}
+
+fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
+    const out = try filled(a, v.width, v.signed, .zero);
+    @memcpy(out.planes, v.planes);
+    return out;
+}
+
+/// §10.2.2 copy-out: formal `slot` assigned to the caller's lvalue `target`,
+/// under the assignment rules (§5.5.3) and in the caller's scope.
+fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
+    const p = (try place(self, a, target)) orelse return;
+    const w = try targetWidth(self, target);
+    const v = self.values[slot];
+    try write(self, a, p, try normalize(a, v, .{ .width = w, .signed = v.signed }));
+}
+
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
 
 pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) Error!void {
     var pc = start;
     var restarted = false;
-    // §6.2.2: every name this body reads is its own instance's. A body
-    // never crosses an instance boundary, so one read at entry covers the
-    // whole dispatch — including a resumption landing mid-body.
-    self.scope = self.code_scope.items[start];
     while (true) {
+        // §10.3: a disabled subroutine's synchronous activations return at
+        // once, each back into its caller, until `callSync` ends the unwind.
+        if (self.unwind != null) return;
+        // §6.2.2 / §12.7: the names an instruction reads are those of the
+        // scope it was compiled in — its instance's, or an inlined task's.
+        self.scope = self.code_scope.items[pc];
         // Each instruction completes its copies/captures before scratch is
         // reused; an untimed loop therefore retains no iteration temporaries.
         _ = scratch_arena.reset(.retain_capacity);
@@ -999,6 +1084,33 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 }
                 for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
                 return;
+            },
+            .call => |s| {
+                _ = try callSync(self, scratch, s.sub, s.args);
+                pc += 1;
+                continue;
+            },
+            .copy_out => |s| {
+                try copyOut(self, scratch, s.target, s.slot);
+                pc += 1;
+                continue;
+            },
+            // §10.3 "disabling such a task shall disable all activations of
+            // the task": every inlined copy (the current one resumes after
+            // itself), and every synchronous activation, which unwind.
+            .disable_task => |idx| {
+                const sub = &self.subs.items[idx];
+                var next = pc + 1;
+                for (sub.ranges.items) |rg| {
+                    try disableRange(self, rg.start, rg.end);
+                    if (pc >= rg.start and pc < rg.end) next = rg.end;
+                }
+                if (sub.active != 0) {
+                    self.unwind = idx;
+                    return;
+                }
+                pc = next;
+                continue;
             },
             .disable_block => |b| {
                 try disableRange(self, b.start, b.end);
