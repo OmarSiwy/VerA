@@ -411,6 +411,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p03-93: start=0 end=0.001 max_step=0.0001 refused_per_call=2 v_b=1\n",
     },
     .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_94_function_partials.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_square_law.va",
+        .stdout = "p03-94: v_q=1.732050808 dfdx=3.464101615 refused_per_call=2\n",
+    },
+    .{
         .c = "tests/fixtures/ch12_vpi_routines/p03_92_reject_analog_callback_times.c",
         .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
         .stdout = "p03-92: control_hits=1 control_t=0.0005 refused=4 errs=4\n",

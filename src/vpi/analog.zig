@@ -148,6 +148,7 @@ pub fn detach() void {
     call_obj = &.{};
     arg_values.clearAndFree(gpa);
     active_call = null;
+    n_derivs = 0;
     gpa.free(rows);
     gpa.free(now_vals);
     gpa.free(prev_react);
@@ -405,6 +406,88 @@ pub fn putResult(o: *const root.Obj, v: f64) bool {
     const d = &root.design.?;
     if (o != &d.objects[st.obj]) return false;
     st.result = v;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// §12.22.1 / §12.32.2 derivative objects
+// ---------------------------------------------------------------------------
+
+/// One derivative handle: the call, and (of, wrt) in §12.32.2's numbering.
+/// Handed out from a fixed array, so a handle is ours iff it points into it.
+pub const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
+var derivs: [64]Deriv = undefined;
+var n_derivs: usize = 0;
+
+pub fn asDeriv(h: vpiHandle) ?*Deriv {
+    const p = @intFromPtr(h orelse return null);
+    const lo = @intFromPtr(&derivs[0]);
+    if (p < lo or p >= lo + n_derivs * @sizeOf(Deriv) or (p - lo) % @sizeOf(Deriv) != 0) return null;
+    return @ptrFromInt(p);
+}
+
+/// Which §12.32.2 position `h` is on call `obj`: 0 for the call itself (the
+/// returned value), 1.. for its arguments, null for neither.
+fn position(obj: u32, h: vpiHandle) ?c_int {
+    const d = &root.design.?;
+    const o = root.asObj(h) orelse return null;
+    if (o == &d.objects[obj]) return 0;
+    for (d.objects[obj].lists) |l| if (l.tag == code.vpiArgument) {
+        for (l.items, 0..) |a, j| if (&d.objects[a] == o) return @intCast(j + 1);
+    };
+    return null;
+}
+
+pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
+    const st = active_call orelse {
+        root.fail("NOCALL", "vpi_handle_multi(vpiDerivative): no analog system task or function call is running", .{});
+        return null;
+    };
+    const of = position(st.obj, ref1) orelse {
+        root.fail("NOTARG", "vpi_handle_multi(vpiDerivative): the first handle is neither the call nor one of its arguments", .{});
+        return null;
+    };
+    const wrt = position(st.obj, ref2) orelse 0;
+    if (wrt == 0) {
+        root.fail("NOTARG", "vpi_handle_multi(vpiDerivative): a derivative is taken with respect to an argument", .{});
+        return null;
+    }
+    for (systf.partialsOf(st.obj)) |p| {
+        if (p.of != of or p.wrt != wrt) continue;
+        for (derivs[0..n_derivs]) |*dv| if (dv.call == st.obj and dv.of == of and dv.wrt == wrt) return @ptrCast(dv);
+        if (n_derivs == derivs.len) {
+            root.fail("NOMEM", "vpi_handle_multi(vpiDerivative): more than {d} derivative objects", .{derivs.len});
+            return null;
+        }
+        derivs[n_derivs] = .{ .call = st.obj, .of = of, .wrt = wrt };
+        n_derivs += 1;
+        return @ptrCast(&derivs[n_derivs - 1]);
+    }
+    root.fail("UNDECLARED", "vpi_handle_multi(vpiDerivative): d({d})/d({d}) was not declared by derivtf", .{ of, wrt });
+    return null;
+}
+
+/// §12.32.2 "values can then be contributed to the derivative using the
+/// vpi_put_value function in the calltf call back". The device carries the
+/// partials of the RETURNED value (its `SystfHost` returns one value), so a
+/// derivative of an output argument has nowhere to go and is refused.
+pub fn putDerivative(dv: *Deriv, v: f64) bool {
+    const st = active_call orelse {
+        root.fail("NOCALL", "vpi_put_value: a derivative takes a value during its call's calltf", .{});
+        return false;
+    };
+    if (dv.call != st.obj) {
+        root.fail("NOCALL", "vpi_put_value: that derivative belongs to another call", .{});
+        return false;
+    }
+    if (dv.of != 0) {
+        root.fail("NOTSUPPORTED", "vpi_put_value: the derivative of an output argument; this device takes the returned value's partials only", .{});
+        return false;
+    }
+    const j: usize = @intCast(dv.wrt - 1);
+    if (j >= st.partials.len) return false;
+    st.partials[j] = v;
+    dv.value = v;
     return true;
 }
 

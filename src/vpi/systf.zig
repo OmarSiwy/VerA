@@ -151,14 +151,37 @@ pub fn buildCalls() void {
             .analog => {
                 var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(&d.objects[i]), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
                 if (reg.analog.compiletf) |f| _ = f(&cb);
-                if (reg.analog.derivtf) |f| _ = f(&cb);
+                // §12.32.2: derivtf "returns a pointer to a t_vpi_stf_partials
+                // data structure" declaring the derivative objects this call
+                // has. Copied: the application's structure is its own.
+                if (reg.analog.derivtf) |f| if (f(&cb)) |p| declarePartials(@intCast(i), p);
             },
         }
     }
 }
 
+/// §12.32.2's declared partials, per call object: (derivative_of,
+/// derivative_wrt), "0 = returned value, 1 = 1st arg, etc.".
+pub const Pair = struct { of: c_int, wrt: c_int };
+var declared: std.AutoHashMapUnmanaged(u32, []const Pair) = .empty;
+
+fn declarePartials(call: u32, p: *const Partials) void {
+    const n: usize = @intCast(@max(p.count, 0));
+    const pairs = gpa.alloc(Pair, n) catch return;
+    for (pairs, 0..) |*q, k| q.* = .{ .of = p.derivative_of[k], .wrt = p.derivative_wrt[k] };
+    declared.put(gpa, call, pairs) catch gpa.free(pairs);
+}
+
+/// The partials derivtf declared for `call`.
+pub fn partialsOf(call: u32) []const Pair {
+    return declared.get(call) orelse &.{};
+}
+
 pub fn reset() void {
     active = null;
+    var dit = declared.valueIterator();
+    while (dit.next()) |v| gpa.free(v.*);
+    declared.clearAndFree(gpa);
     for (regs.items) |s| {
         gpa.free(s.name);
         gpa.destroy(s);
@@ -302,20 +325,17 @@ pub export fn vpi_get_analog_systf_info(obj: vpiHandle, systf_data_p: ?*AnalogSy
     out.* = s.analog;
 }
 
-/// §12.22 / §12.22.1. `vpiDerivative` names the partial of `ref1` with
-/// respect to `ref2`, two ARGUMENTS of the active analog call, and "can only
-/// be called for those derivatives allocated during the derivtf phase". No
-/// call is ever active in this process (see the file header), so no handle can
-/// be an argument of one and every request fails — as does vpiInterModPath,
-/// whose module paths (specify blocks) the model does not hold.
+/// §12.22 / §12.22.1. `vpiDerivative` names the partial of `ref1` — the
+/// returned value (the call itself, §12.32.2's 0) or an argument — with
+/// respect to `ref2`, an argument, of the analog call whose calltf is
+/// running, and "can only be called for those derivatives allocated during
+/// the derivtf phase of execution". Anything else is refused — as is
+/// vpiInterModPath, whose module paths (specify blocks) the model does not
+/// hold.
 pub export fn vpi_handle_multi(obj_type: c_int, ref1: vpiHandle, ref2: vpiHandle, ...) callconv(.c) vpiHandle {
     root.clearError();
     switch (obj_type) {
-        vpiDerivative => root.fail(
-            "NOCALL",
-            "vpi_handle_multi(vpiDerivative): {s} and {s} are not arguments of an active analog system task call",
-            .{ if (ref1 == null) "NULL" else "the first handle", if (ref2 == null) "NULL" else "the second" },
-        ),
+        vpiDerivative => return @import("analog.zig").derivative(ref1, ref2),
         vpiInterModPath => root.fail("NOPATH", "vpi_handle_multi(vpiInterModPath): inter-module paths are not modelled", .{}),
         else => root.fail("NOTRAVERSE", "vpi_handle_multi: {d} is not a many-to-one relationship", .{obj_type}),
     }
