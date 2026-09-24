@@ -190,7 +190,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         self.uses_model = true;
         self.uses_inst = true;
         self.core_wanted = true;
-        if (!self.core_hoisted) try self.b("    const m = core(S, x, model, inst);\n", .{});
+        if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
         try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lower.table_effect)).?});
     }
 
@@ -250,7 +250,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 self.core_wanted = true;
                 if (!self.core_hoisted) {
                     try self.ind(1);
-                    try self.b("const m = core(S, x, model, inst);\n", .{});
+                    try self.b("const m = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
                 }
             }
         }
@@ -484,7 +484,7 @@ pub fn emitFused(self: *Gen) Error!void {
     // for every live row and `uses_model`/`uses_inst` on the same branch
     // that opens the core, so this can never reference a patched-out `_`.
     if (self.core_wanted)
-        try self.out.insertSlice(self.gpa, at_core, "    const m = core(S, x, model, inst);\n");
+        try self.out.insertSlice(self.gpa, at_core, "    const m = @call(.always_inline, core, .{ S, x, model, inst });\n");
 
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);

@@ -256,25 +256,25 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 23866, .defs = 8, .insts = 5 },
-        .{ .device = 24224, .defs = 35, .insts = 26 },
-        .{ .device = 26967, .defs = 258, .insts = 194 },
-        .{ .device = 49332, .defs = 2050, .insts = 1538 },
-        .{ .device = 231629, .defs = 16386, .insts = 12290 },
+        .{ .device = 24107, .defs = 8, .insts = 5 },
+        .{ .device = 24465, .defs = 35, .insts = 26 },
+        .{ .device = 27208, .defs = 258, .insts = 194 },
+        .{ .device = 49573, .defs = 2050, .insts = 1538 },
+        .{ .device = 231870, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 23866, .defs = 8, .insts = 5 },
-        .{ .device = 24048, .defs = 24, .insts = 19 },
-        .{ .device = 25504, .defs = 136, .insts = 131 },
-        .{ .device = 37152, .defs = 1032, .insts = 1027 },
-        .{ .device = 130336, .defs = 8200, .insts = 8195 },
+        .{ .device = 24107, .defs = 8, .insts = 5 },
+        .{ .device = 24289, .defs = 24, .insts = 19 },
+        .{ .device = 25745, .defs = 136, .insts = 131 },
+        .{ .device = 37393, .defs = 1032, .insts = 1027 },
+        .{ .device = 130577, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 23866, .defs = 8, .insts = 5 },
-        .{ .device = 25070, .defs = 50, .insts = 40 },
-        .{ .device = 34918, .defs = 386, .insts = 320 },
-        .{ .device = 115414, .defs = 3074, .insts = 2560 },
-        .{ .device = 772918, .defs = 24578, .insts = 20480 },
+        .{ .device = 24107, .defs = 8, .insts = 5 },
+        .{ .device = 25311, .defs = 50, .insts = 40 },
+        .{ .device = 35159, .defs = 386, .insts = 320 },
+        .{ .device = 115655, .defs = 3074, .insts = 2560 },
+        .{ .device = 773159, .defs = 24578, .insts = 20480 },
     },
 });
 
