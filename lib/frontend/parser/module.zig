@@ -87,6 +87,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .discrete = b.discrete.items,
         .assigns = b.assigns.items,
         .gates = b.gates.items,
+        .pulls = b.pulls.items,
         // §2.9 — every attr_spec seen since the last module. Attributes
         // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
         // collected by `parseSource` and belong to this module too, which is
@@ -361,6 +362,7 @@ pub const Body = struct {
     discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
     assigns: std.ArrayList(Ast.ContAssign) = .empty, // A.6.1
     gates: std.ArrayList(Ast.GateInst) = .empty, // A.3.1
+    pulls: std.ArrayList(Ast.PullInst) = .empty, // A.3.1, §7.8
     /// §6.6.1/§6.6.2 every named generate block of the module, with the
     /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
     /// is a declaration of a scope nothing downstream can reach yet
@@ -852,7 +854,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // A.3.1's last two arms. They have no tags of their own because
             // A.3.2 gives them a strength set no other gate takes.
             if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
-                return parse_specify.parsePullGate(self);
+                return parse_specify.parsePullGate(self, b);
             // A.3.1's cmos/mos/pass-enable switch arms — A.3.4's eight
             // remaining `*_switchtype` spellings, none of which has a tag
             // because `Ast.GateKind` has nothing to put them in. See
