@@ -406,8 +406,8 @@ pub fn parsePortList(self: *Parser, b: *Body) Error!void {
     var range: ?Ast.Dim = null;
     while (true) {
         try self.skipAttributes();
-        if (token.isPortDirection(self.peek())) {
-            dir = portDirection(self.peek());
+        if (portDirection(self.peek())) |d| {
+            dir = d;
             self.pos += 1;
             disc = try optDiscipline(self);
             // A.1.3 `inout [ range ] port_identifier {, port_identifier}` —
@@ -447,11 +447,13 @@ pub fn parsePortList(self: *Parser, b: *Body) Error!void {
     _ = try self.expect(.rparen);
 }
 
-pub fn portDirection(tag: token.Tag) Ast.Direction {
+/// A.2.1.2 port direction keyword -> `Ast.Direction`, null for any other token.
+pub fn portDirection(tag: token.Tag) ?Ast.Direction {
     return switch (tag) {
         .kw_input => .input,
         .kw_output => .output,
-        else => .inout,
+        .kw_inout => .inout,
+        else => null,
     };
 }
 
@@ -463,7 +465,7 @@ pub fn portDirection(tag: token.Tag) Ast.Direction {
 /// For the callers that have somewhere to put the net type — `Ast.Port`
 /// does now, see `Port.kind` — `optPortType` reports it. `wreal` is a
 /// separate alternative in A.2.1.2's brackets rather than a `net_type`
-/// (A.2.2.1 does not list it), and `token.isNetType` follows the annex, so
+/// (A.2.2.1 does not list it), and `netKind` follows the annex, so
 /// the extra spelling is tested here.
 pub fn optDiscipline(self: *Parser) Error!Ast.StrId {
     var kind: Ast.NetKind = .wire;
@@ -476,8 +478,8 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind) Error!Ast.StrId {
         disc = try self.internTok(self.pos);
         self.pos += 1;
     }
-    if (token.isNetType(self.peek())) {
-        kind.* = parse_generate.netKind(self.peek());
+    if (parse_generate.netKind(self.peek())) |k| {
+        kind.* = k;
         self.pos += 1;
     } else if (self.digital and reservedIs(self, self.pos, "wreal")) {
         // Annex C.4 bullet 2: "From 3.7, Real net declarations: the wreal
@@ -659,7 +661,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_supply0,
         .kw_supply1,
         => {
-            const kind = parse_generate.netKind(self.peek());
+            const kind = parse_generate.netKind(self.peek()).?;
             self.pos += 1;
             // A.2.1.3: `charge_strength` sits right after the net type, and
             // only `trireg`'s alternatives have one. §3.8's default for a

@@ -15,6 +15,7 @@ const parse_expr = @import("expr.zig");
 const parse_module = @import("module.zig");
 const parse_stmt = @import("stmt.zig");
 const Ast = @import("../ast.zig");
+const token = @import("../token.zig");
 const Error = parser.Error;
 const found = Parser.found;
 
@@ -30,12 +31,9 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
     const is_local = self.peek() == .kw_localparam;
     self.pos += 1;
     _ = self.eat(.kw_signed);
-    const ty: Ast.Type = switch (self.peek()) {
-        .kw_integer, .kw_time => .integer, // §3.4.1: time folds to integer
-        .kw_real, .kw_realtime => .real,
-        .kw_string => .string,
-        else => .unspecified, // §3.4.1 — inferred from the default by lowering
-    };
+    // §3.4.1: no type keyword is `.unspecified`, inferred from the default
+    // by lowering.
+    const ty = varType(self.peek()) orelse .unspecified;
     if (ty != .unspecified) self.pos += 1;
     // A.2.1.1's FIRST arm, the `[ range ]` slot between `[ signed ]` and the
     // assignment list:
@@ -175,15 +173,24 @@ pub fn parseValueRangeExpr(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }
 
+/// A.2.1.3 / A.2.7 variable type keyword -> `Ast.Type`, null for any other
+/// token. `time` folds to integer and `realtime` to real (§3.4.1). An analog
+/// function's RETURN type is narrower (`integer | real | string`, A.2.6), so
+/// `parseFuncDecl` does not use this.
+pub fn varType(tag: token.Tag) ?Ast.Type {
+    return switch (tag) {
+        .kw_integer, .kw_time => .integer,
+        .kw_real, .kw_realtime => .real,
+        .kw_string => .string,
+        else => null,
+    };
+}
+
 /// A.2.1.3 integer/real/string declaration (§3.2, §3.3). One VarDecl per
 /// name; `variable_type ::= id { dimension } [ = expr ]` (A.2.2.1).
 pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
     const storage: @FieldType(Ast.VarDecl, "storage") = if (self.peek() == .kw_time) .time else .variable;
-    const ty: Ast.Type = switch (self.peek()) {
-        .kw_integer, .kw_time => .integer,
-        .kw_string => .string,
-        else => .real, // real, realtime
-    };
+    const ty = varType(self.peek()).?;
     self.pos += 1;
     while (true) {
         const tok = self.pos;
@@ -291,18 +298,13 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
         while (self.peek() != .rparen and self.peek() != .eof) {
             const dir = switch (self.peek()) {
                 .kw_input, .kw_output, .kw_inout => blk: {
-                    const d = parse_module.portDirection(self.peek());
+                    const d = parse_module.portDirection(self.peek()).?;
                     self.pos += 1;
                     break :blk d;
                 },
                 else => Ast.Direction.input, // A.2.7 defaults to `input`
             };
-            const ty: Ast.Type = switch (self.peek()) {
-                .kw_integer, .kw_time => .integer,
-                .kw_real, .kw_realtime => .real,
-                .kw_string => .string,
-                else => .unspecified,
-            };
+            const ty = varType(self.peek()) orelse .unspecified;
             if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
             const dims = try parseDims(self);
             const at = self.pos;
@@ -337,15 +339,10 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
         switch (self.peek()) {
             .eof, .kw_endfunction => break,
             .kw_input, .kw_output, .kw_inout => {
-                const dir = parse_module.portDirection(self.peek());
+                const dir = parse_module.portDirection(self.peek()).?;
                 self.pos += 1;
                 // `input real x;` (A.2.7 task_port_type) or bare `input x;`
-                const ty: Ast.Type = switch (self.peek()) {
-                    .kw_integer, .kw_time => .integer,
-                    .kw_real, .kw_realtime => .real,
-                    .kw_string => .string,
-                    else => .unspecified,
-                };
+                const ty = varType(self.peek()) orelse .unspecified;
                 if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
                 // A.2.6 `input_declaration ::= input [ range ] list_of_ports`
                 // — one range, BEFORE the names, shared by all of them.
