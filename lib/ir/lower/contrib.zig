@@ -641,6 +641,16 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         try b.emit();
         return null;
     };
+    // §5.5.1's measure1 note: "V cannot be used as an access function because
+    // there is a parameter called V declared in the module." A module-scope
+    // name hides the access-function name, and a value cannot be called.
+    if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name)) {
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
+        b.msg("`{s}` is not an access function here: this module declares `{s}`, which hides it (§5.5.1)", .{ name, name });
+        b.help("use the generic spelling, `{s}(...)`", .{if (access == .potential) generic_potential else generic_flow});
+        try b.emit();
+        return null;
+    }
     // §5.4.3 "The port access function shall not be used on the left side of a
     // contribution operator <+", and §3.12.1 makes a named port branch the same
     // function under another name. `lowerBranchAccess` — the READ path, the one
