@@ -533,8 +533,14 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
     while (true) {
         const tok = self.pos;
         // A.3.1 makes `name_of_gate_instance` optional; `(` after the name
-        // tells the two apart, as in `parsePassSwitch`.
-        if (self.identLike(self.pos)) self.pos += 1;
+        // tells the two apart, as in `parsePassSwitch`. A.3.1's
+        // `name_of_gate_instance ::= gate_instance_identifier [ range ]` is
+        // §7.1.5's instance array.
+        var range: ?Ast.Dim = null;
+        if (self.identLike(self.pos)) {
+            self.pos += 1;
+            if (self.peek() == .lbracket) range = try parse_decl.parseDim(self);
+        }
         _ = try self.expect(.lparen);
         var terms: std.ArrayList(Ast.ExprId) = .empty;
         while (true) {
@@ -555,12 +561,12 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
                         const one = try self.arena.alloc(Ast.ExprId, 1);
                         one[0] = input;
                         break :input_only one;
-                    }, .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                    }, .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
             },
             // A.3.1 `( output_terminal , input_terminal , enable_terminal )`
             .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
                 if (terms.items.len != 3) return self.failAt(tok, .E0209, "an enable gate takes an output, a data input and an enable", .{});
-                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
             },
             // A.3.1 `( output_terminal , input_terminal { , input_terminal } )`
             // — one input is enough, and IEEE 1364-2005 §7.2 says so in words:
@@ -568,7 +574,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
             // inputs."
             .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => {
                 if (terms.items.len < 2) return self.failAt(tok, .E0209, "an n-input gate takes an output and at least one input", .{});
-                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
+                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
             },
         }
         if (!self.eat(.comma)) break;

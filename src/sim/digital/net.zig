@@ -129,7 +129,11 @@ pub const Slice = struct { lo: u32, total: u32 };
 
 /// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
 /// the type and the input terminals in source order.
-pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId };
+///
+/// One member of a §7.1.5 instance array is lane `lane` of `lanes`: an input
+/// as wide as the array gives it its bit `lane` (§7.1.6), a scalar one is
+/// broadcast, and it drives bit `out_bit` of a vector output net.
+pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId, lane: ?u32 = null, lanes: u32 = 1, out_bit: ?u32 = null };
 
 /// §7.8.5: "a gate transmits a logic value, not a connection" — every primitive
 /// but the MOS switches reads a z input as x. This is the one place the gate
@@ -818,6 +822,20 @@ test "§7.10 strength ranges combine the way Figures 7-9 through 7-19 draw them"
     try std.testing.expectEqual(Int.Bit.zero, S.of(.one, .strong, .weak).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.x, S.of(.one, .strong, .pull).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.z, S.of(.one, .strong, .highz).collapse());
+}
+
+// §7.1.6: a vector terminal as wide as the array is split one bit per gate,
+// a scalar one is shared, and each gate drives only its own output bit.
+test "§7.1.5 a gate instance array splits vector terminals and shares scalars" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg [2:0] a, b; reg e; wire [2:0] y; wire [2:0] z;
+        \\and g[2:0](y, a, b);
+        \\bufif0 f[0:2](z, a, e);
+        \\initial begin a = 3'b110; b = 3'b011; e = 1; #1 $write("%b %b ", y, z); e = 0; #1 $display("%b", z); end
+        \\endmodule
+    , "010 zzz 110\n");
 }
 
 // §8: a rising-edge toggle built from Table 8-1's letters, behind an
