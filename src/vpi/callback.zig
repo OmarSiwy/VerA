@@ -184,7 +184,7 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 root.fail("BADHANDLE", "vpi_register_cb: cbValueChange needs an object handle in obj", .{});
                 return null;
             };
-            if (o.slot == null) {
+            if (o.slot == null and (o.members.len == 0 or root.design.?.objects[o.members[0]].slot == null)) {
                 root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
                 return null;
             }
@@ -409,9 +409,48 @@ pub fn fireSlot(slot: u32) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != cbValueChange) continue;
         const target = root.asObj(cb.obj) orelse continue;
-        if (target.slot == slot) call(cb, cb.index);
+        if (target.slot == slot) {
+            call(cb, cb.index);
+            continue;
+        }
+        // §12.31.1: a callback on an array hears each element's change, with
+        // that element's value and "the index of the memory word or variable
+        // select which changed value".
+        const d = &root.design.?;
+        for (target.members) |m| {
+            const word = &d.objects[m];
+            if (word.slot != slot) continue;
+            callElement(cb, word, @intCast(d.objects[word.index.?].value.?.int));
+        }
     }
     sweep();
+}
+
+fn callElement(cb: *Cb, word: *const root.Obj, index: c_int) void {
+    var t: Time = std.mem.zeroes(Time);
+    var data: CbData = .{
+        .reason = cb.reason,
+        .cb_rtn = cb.rtn,
+        .obj = cb.obj,
+        .time = null,
+        .value = null,
+        .index = index,
+        .user_data = cb.user_data,
+    };
+    if (cb.time_type != vpiSuppressTime) {
+        t.type = cb.time_type;
+        root.run.timeNow(cb.obj, &t);
+        data.time = &t;
+    }
+    var v: Value = std.mem.zeroes(Value);
+    if (cb.value_format != vpiSuppressVal) {
+        v.format = cb.value_format;
+        value.read(word, &v, &value.cb_store);
+        data.value = &v;
+    }
+    depth += 1;
+    defer depth -= 1;
+    _ = cb.rtn(&data);
 }
 
 fn retire(cb: *Cb) void {
