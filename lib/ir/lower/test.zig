@@ -104,7 +104,7 @@ test "lower: system math aliases preserve operand-sensitive result types" {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        try h.low.lowerFile();
+        _ = try h.low.lowerFile();
         var math_count: usize = 0;
         var div_count: usize = 0;
         for (h.mir.insts.items(.op)) |op| {
@@ -127,10 +127,10 @@ test "lower: system math aliases reject wrong arity" {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        h.low.lowerFile() catch |e| switch (e) {
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
             else => return e,
-        };
+        }
         var found = false;
         for (0..h.bag.count()) |i| {
             if (h.code(i) == .E0506) found = true;
@@ -229,10 +229,10 @@ test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        h.low.lowerFile() catch |e| switch (e) {
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
             else => return e,
-        };
+        }
         var seen: ?diag.Code = null;
         for (0..h.bag.count()) |i| {
             if (h.code(i) == .E0357 or h.code(i) == .E0358) seen = h.code(i);
@@ -262,7 +262,7 @@ test "lower: contribution splits into resistive and reactive parts" {
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
 
     // §6.5 ports first, in header order — this is the host's terminal order.
     try std.testing.expectEqual(@as(usize, 2), h.low.num_ports);
@@ -307,7 +307,7 @@ test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement"
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
 
     // §5.6.7.1 several indirect contributions are legal, and each is its own
     // equation — NEVER accumulated the way §5.6.1.3 accumulates `<+`.
@@ -394,7 +394,7 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
         \\endmodule
     , &ok);
     defer ok.deinit();
-    try ok.low.lowerFile();
+    _ = try ok.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 1), ok.low.contributions.items.len);
     try std.testing.expectEqual(Kind.indirect, ok.low.contributions.items[0].kind);
 }
@@ -427,7 +427,7 @@ test "lower: genvar loops unroll, procedural loops do not" {
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     // §6.6.1: three unrolled bodies accumulate into one target, and the loop
     // left no CFG behind (entry only).
     try std.testing.expectEqual(@as(usize, 1), h.low.contributions.items.len);
@@ -482,7 +482,7 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
 
     try std.testing.expectEqual(@as(usize, 2), h.low.num_ports);
     try std.testing.expectEqual(@as(usize, 2), h.low.port_probes.items.len);
@@ -519,7 +519,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
 
     // Two entries — the pair received both kinds — but only ONE survives with a
     // value. `emitResidual` skips a contribution whose value folds to `.f_zero`,
@@ -560,7 +560,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         defer std.testing.allocator.free(src);
         try Harness.run(std.testing.allocator, src, &g);
         defer g.deinit();
-        try g.low.lowerFile();
+        _ = try g.low.lowerFile();
         // `p` and `n` are node_order 0 and 1, so the branch is that pair.
         try std.testing.expectEqual(c.unknown, g.low.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
     }
@@ -581,7 +581,7 @@ test "lower: scan destinations are guarded by the single assignment count" {
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
     var string_counts: usize = 0;
     var file_counts: usize = 0;
@@ -626,7 +626,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
 
     // Exactly ONE synthetic call, and its argument is a phi: the guarded
@@ -660,7 +660,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
     try std.testing.expectEqual(Mir.Value.one, h.low.reject_iteration);
     // Iteration rejection must not become a timestep discontinuity.
@@ -679,7 +679,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
         \\endmodule
     , &h2);
     defer h2.deinit();
-    try h2.low.lowerFile();
+    _ = try h2.low.lowerFile();
     try std.testing.expect(h2.bag.isEmpty());
     try std.testing.expect(h2.low.disc_place != null);
 }
@@ -795,7 +795,7 @@ test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never 
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
 
     // The LRM's own example: `{ "hello", " ", "world" }` == `"hello world"`.
@@ -855,10 +855,10 @@ test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        h.low.lowerFile() catch |e| switch (e) {
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
             else => return e,
-        };
+        }
 
         var seen = false;
         for (0..h.bag.count()) |i| {
@@ -908,7 +908,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
         \\endmodule
     , &h2);
     defer h2.deinit();
-    try h2.low.lowerFile();
+    _ = try h2.low.lowerFile();
     try std.testing.expect(h2.bag.isEmpty());
 
     // `ddx` (§4.5.6) and `limexp` (§4.5.13) read no previous timestep, so a
@@ -929,7 +929,7 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
         \\endmodule
     , &h3);
     defer h3.deinit();
-    try h3.low.lowerFile();
+    _ = try h3.low.lowerFile();
     try std.testing.expect(h3.bag.isEmpty());
 }
 
@@ -960,10 +960,10 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        h.low.lowerFile() catch |e| switch (e) {
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
             else => return e,
-        };
+        }
 
         var seen = false;
         for (0..h.bag.count()) |i| {
@@ -1004,10 +1004,10 @@ test "lower: A.6.1 an assign target is judged by declaration kind, then by domai
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        h.low.lowerFile() catch |e| switch (e) {
+        if (h.low.lowerFile()) |_| {} else |e| switch (e) {
             error.DiagnosticsReported => {},
             else => return e,
-        };
+        }
         var first: ?diag.Code = null;
         for (0..h.bag.count()) |i| {
             if (h.code(i) == .E0438 or h.code(i) == .E0435) first = first orelse h.code(i);
@@ -1084,7 +1084,7 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
         \\endmodule
     , &h);
     defer h.deinit();
-    try h.low.lowerFile();
+    _ = try h.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 0), h.bag.count());
     // Last assignment wins: the body is sequential.
     try std.testing.expectEqual(@as(usize, 2), h.low.initial_state.count());

@@ -372,7 +372,7 @@ fn compileInArena(
     {
         // SSA maps its matrix directly; the compilation arena cannot free it.
         defer lower.builder.deinit();
-        lower.lowerFile() catch |err| switch (err) {
+        _ = lower.lowerFile() catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoModule => {
                 try bag.add(.lower, .E1001, .{}, "", .{});

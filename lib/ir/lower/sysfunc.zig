@@ -20,6 +20,7 @@ const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
 const Lexer = @import("frontend").Lexer;
+const Preprocessor = @import("frontend").Preprocessor;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
@@ -349,11 +350,17 @@ pub fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
 /// `simparamIsRuntime` instead — a constant is the wrong answer for those, not
 /// a missing one.
 pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
+    return simparamValueIn(&self.directives, name);
+}
+
+/// `simparamValue` over the one input it reads, so `Lowered` answers the same
+/// table after `Lower` is gone.
+pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const u8) ?f64 {
     const eq = std.mem.eql;
     // The two rows that come out of the SOURCE. Unknown when no `timescale was
     // given, which is exactly what "as specified in `timescale" means.
-    if (eq(u8, name, "timeUnit")) return if (self.directives.timescale()) |t| t.unit else null;
-    if (eq(u8, name, "timePrecision")) return if (self.directives.timescale()) |t| t.precision else null;
+    if (eq(u8, name, "timeUnit")) return if (directives.timescale()) |t| t.unit else null;
+    if (eq(u8, name, "timePrecision")) return if (directives.timescale()) |t| t.precision else null;
     if (eq(u8, name, "gmin")) return 1e-12;
     // Table 9-27 gives `tnom` in DEGREES CELSIUS ("Default value of temperature
     // at which model parameters were extracted"), so the conforming default is
