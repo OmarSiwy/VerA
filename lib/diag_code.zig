@@ -620,6 +620,9 @@ pub const Code = enum(u16) {
     W0950,
     /// §9.17.1 the only permitted negative discontinuity degree is -1.
     E0820,
+    /// §9.2 a task or function whose digital-context cell is No, called from
+    /// an `initial` or `always` block.
+    E0821,
     /// §6.5.3 a real-valued (`wreal`) net has a second driver.
     E0918,
     /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
@@ -4379,6 +4382,21 @@ fn infoOf(c: Code) Info {
             .title = "$discontinuity degree must be nonnegative or -1",
             .lrm = "9.17.1",
             .explain = "Nonnegative degrees describe a discontinuity in a derivative of the constitutive equation. The special degree -1 requests another Newton iteration; smaller degrees have no defined meaning.",
+        },
+        .E0821 => .{
+            .title = "system task is not supported in the digital context",
+            .lrm = "9.2",
+            .explain =
+            \\Every 9.2 table has two columns, "Supported in digital context"
+            \\and "Supported in analog context". This name's digital cell is No.
+            \\9.7 says it of the severity tasks in prose: "Verilog AMS HDL also
+            \\supports three new simulation control tasks in the analog context
+            \\only; $fatal, $error, $warning" (Table 9-4 adds $info).
+            \\
+            \\An `initial` or `always` block is the digital context (7.2.2).
+            \\Move the call into the analog block, or use a task both columns
+            \\allow, such as $display or $finish.
+            ,
         },
         .E0806 => .{
             .title = "system task is not supported in the analog context",
