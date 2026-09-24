@@ -44,7 +44,7 @@ export fn main(argc: c_int, argv: [*]const [*:0]const u8) c_int {
 }
 
 fn host(design: ?[]const u8) !u8 {
-    if (design) |path| return digitalHost(path);
+    if (design) |path| return if (std.mem.endsWith(u8, path, ".va")) analogHost(path) else digitalHost(path);
 
     // The design is compiled at `.lint`: P01 models DECLARATIONS, so nothing
     // below stage 5 is needed and no `zig` child has to be spawned to run the
@@ -60,6 +60,29 @@ fn host(design: ?[]const u8) !u8 {
 
     // §12.33.2. Everything the acceptance test asserts happens inside this
     // call, because that is where a VPI application's code runs.
+    vpi.runStartupRoutines();
+    vpi.callback.endOfCompile();
+    return 0;
+}
+
+/// An analog design, modelled as `vpi.open` models it: declarations and
+/// folded parameters, no run — the device that would run it is compiled for
+/// a host process this is not. Its include path is the design's directory and
+/// the one above it, which is where tests/fixtures keeps `check.vh`.
+fn analogHost(path: []const u8) !u8 {
+    const io = Io.Threaded.global_single_threaded.io();
+    const gpa = std.heap.page_allocator;
+    const source = try Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(16 * 1024 * 1024));
+    defer gpa.free(source);
+    const dir = std.fs.path.dirname(path) orelse ".";
+    const up = std.fs.path.dirname(dir) orelse ".";
+    var res = vera.compileSourceOpts(gpa, source, .lint, .{ .file_name = path, .include_dirs = &.{ dir, up } }) catch |e| {
+        std.debug.print("vpi_host: `{s}` did not compile: {t}\n", .{ path, e });
+        return 1;
+    };
+    defer res.deinit();
+    try vpi.open(gpa, res.lower);
+    defer vpi.close();
     vpi.runStartupRoutines();
     vpi.callback.endOfCompile();
     return 0;

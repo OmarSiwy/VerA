@@ -19,7 +19,12 @@
  * MOVED ALREADY, and now src/vpi/vpi_user.h's: s_cb_data/p_cb_data (Figure
  * 12-17, unchanged), cbEndOfCompile/cbStartOfSimulation/cbEndOfSimulation,
  * vpi_register_cb, vpi_remove_cb, vpi_get_cb_info; the Table 12-4 value
- * formats and the §12.30 delay modes, with vpi_get_value and vpi_put_value.
+ * formats and the §12.30 delay modes, with vpi_get_value and vpi_put_value;
+ * the §12.32 registration types, constants and routines (vpiIntFunc,
+ * vpiRealFunc and vpiSysTfCall now carry Annex G's numbers, 1, 2 and 85, not
+ * this file's 742, 743 and 750), t_vpi_stf_partials, and vpi_handle_multi —
+ * Annex G's variadic prototype. The unused vpiCallbackObj is gone; §11.6.25's
+ * callback type is Annex G's vpiCallback (107).
  * Declaring them here as
  * well would be a C redefinition, not a harmless repeat.
  *
@@ -99,24 +104,6 @@ extern "C" {
 #define vpiPosNode            724   /* §11.6.6 */
 #define vpiNegNode            725   /* §11.6.6 */
 
-/* §12.22.1's first argument to vpi_handle_multi(). */
-#define vpiDerivative         730
-
-/* §12.32's s_vpi_analog_systf_data.type and .sysfunctype. §12.32.1: "The type
- * field value shall be an integer constant of vpiAnalogSysTask or
- * vpiAnalogSysFunction" — §12.22.2's own listing writes the task spelling as
- * `vpiSysAnalogTask`. Both spellings are given the same value here so either
- * listing compiles; new code should use the §12.32.1 spelling. */
-#define vpiAnalogSysTask      740
-#define vpiAnalogSysFunc      741
-#define vpiAnalogSysFunction  741
-#define vpiSysAnalogTask      740
-#define vpiIntFunc            742
-#define vpiRealFunc           743
-
-/* §12.32.3 retrieves the call this callback is for. */
-#define vpiSysTfCall          750
-#define vpiCallbackObj        751   /* §11.6.25's callback object, as vpi_get(vpiType, cb) */
 
 /* ==========================================================================
  * Structures.
@@ -129,27 +116,6 @@ typedef struct t_vpi_analog_value {
   union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } real;
   union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } imaginary;
 } s_vpi_analog_value, *p_vpi_analog_value;
-
-/* §12.32.2. `derivative_of` uses 0 for the returned value and k for the k-th
- * argument; `derivative_wrt` uses k for the k-th argument and has no 0 case,
- * because nothing is differentiated with respect to a return value. */
-typedef struct t_vpi_stf_partials {
-  PLI_INT32  count;
-  PLI_INT32 *derivative_of;
-  PLI_INT32 *derivative_wrt;
-} s_vpi_stf_partials, *p_vpi_stf_partials;
-
-/* Figure 12-18, field for field. */
-typedef struct t_vpi_analog_systf_data {
-  PLI_INT32            type;        /* vpiAnalogSysTask, vpiAnalogSysFunc */
-  PLI_INT32            sysfunctype; /* vpiIntFunc, vpiRealFunc */
-  PLI_BYTE8           *tfname;      /* §12.32: "first character shall be `$`" */
-  PLI_INT32          (*calltf)(struct t_cb_data *);
-  PLI_INT32          (*compiletf)(struct t_cb_data *);
-  PLI_INT32          (*sizetf)(struct t_cb_data *);
-  p_vpi_stf_partials (*derivtf)(struct t_cb_data *);
-  PLI_BYTE8           *user_data;
-} s_vpi_analog_systf_data, *p_vpi_analog_systf_data;
 
 /* ==========================================================================
  * Routines.
@@ -165,14 +131,6 @@ extern double    vpi_get_analog_time(void);
  * string buffer is the routine's, is overwritten by the next call, and §12.10
  * requires it to be a DIFFERENT buffer from vpi_get_str()'s. */
 extern void      vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
-
-/* §12.32/§12.13. */
-extern vpiHandle vpi_register_analog_systf(p_vpi_analog_systf_data systf_data_p);
-extern void      vpi_get_analog_systf_info(vpiHandle obj, p_vpi_analog_systf_data systf_data_p);
-
-/* §12.22/§12.22.1. The derivative form is
- * vpi_handle_multi(vpiDerivative, of_arg, wrt_arg). */
-extern vpiHandle vpi_handle_multi(PLI_INT32 type, vpiHandle ref1, vpiHandle ref2);
 
 /* §12.28. */
 extern PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...);
