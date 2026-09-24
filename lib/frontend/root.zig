@@ -27,6 +27,10 @@ pub const constfold = @import("constfold.zig");
 /// synthesize without running the preprocessor.
 pub const spice_cards = @import("spice_cards.zig");
 
+/// §3.7/§6.5.3 the wreal STRUCTURE rules over a parsed file (E0918, E0919):
+/// one owner for the device compile and the digital runner.
+pub const wreal_rules = @import("wreal_rules.zig");
+
 test {
     _ = Integer;
     _ = token;
@@ -36,4 +40,5 @@ test {
     _ = Parser;
     _ = constfold;
     _ = spice_cards;
+    _ = wreal_rules;
 }
