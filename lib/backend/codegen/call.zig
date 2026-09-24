@@ -801,7 +801,7 @@ pub fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: 
     // §9.5.1 says a descriptor is: `const t0: i64 = S.con(0.0);`, `--emit-zig`
     // exit 0, and the failure deferred to whoever compiled the device.
     if (Lower.isFileCall(name)) {
-        if (!self.emitting_display) return emitFileCallDropped(self, name, args);
+        if (!self.emitting_display) return emitFileCallDropped(self, name, args, @intFromEnum(inst));
         return cg_display.emitFileCall(self, name, args, @intFromEnum(inst));
     }
     // §9.10 environment.
@@ -1189,8 +1189,14 @@ pub fn emitSystfTable(self: *Gen) Error!void {
 /// there, which agrees the other way round: no slot is declared, and there is
 /// nothing to consume. What matters in both modes is the TYPE below — the
 /// caller's slot is `Analysis.callTy`'s, and §9.5's descriptors are integers.
-pub fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+pub fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
     _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
+    // A printing artifact HAS a file table: the display unit performed this
+    // call and latched its integer result (`file_kernels.zFRes`), so a
+    // descriptor assigned in the analog block reads back as the descriptor.
+    // A device (`.drop`) never performs one and keeps the zero below.
+    if (self.display == .emit and Analysis.callTy(name) == .int)
+        return self.b("zFRes({d}).*", .{site});
     // §9.5.1 reserves 0 for `$fopen`'s failure, §9.5.4.1 for "an error occurs
     // reading", §9.5.8 for "no EOF has been detected" and §9.5.7 for "the most
     // recent operation did not result in an error" — so zero is the right

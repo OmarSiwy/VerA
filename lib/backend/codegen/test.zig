@@ -1441,9 +1441,12 @@ test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the e
     // `display == .emit`, and a call to `zFOpen` here would not resolve.
     try std.testing.expect(std.mem.indexOf(u8, dev, "zFOpen") == null);
 
-    // The printing artifact is unchanged — it still opens the file for real.
+    // The printing artifact opens the file for real, in the display unit, and
+    // latches the descriptor; the core's `fd` — the one the residual and
+    // `updateState` see — is that latch, not the device's zero.
     const exe = try h.genDisplay(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, exe, "zFOpen") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exe, "zFKeep(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exe, ": i64 = zFRes(") != null);
 }
 
 test "codegen: §9.4 a display unit that reads an operator input opens the cache" {
