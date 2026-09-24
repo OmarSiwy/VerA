@@ -1,0 +1,32 @@
+// §10.7: "`__FILE__ expands to the name of the current input file, in the form
+// of a string literal. This is the path by which a tool opened the file, NOT
+// THE SHORT NAME SPECIFIED IN `include or as a tool's input file name
+// argument. The format of this path name may be implementation dependent."
+// And: "An `include directive changes the expansions of `__FILE__ and
+// `__LINE__ to correspond to the included file."
+//
+// d10_file_macro_probe.vh is included below by its short name and found
+// through an include directory (the harness passes this fixture's directory
+// with -I), so the path the tool opened it by is that directory joined with
+// the name — whatever its format, it is not the short name. The header
+// compares its own `__FILE__ against the short name as two string literals
+// (literal equality is §4.2's, as audit_string_literal_equality.va uses it),
+// so `file_is_short_name` must be 0, exact.
+//
+// No digits of the path itself are asserted: §10.7 leaves the format to the
+// implementation, and 21_file_macro.va records why no fixture can read it.
+// This one pins only the part the clause does fix — which name it is not.
+//
+// VerA used to expand the short name ("d10_file_macro_probe.vh") and read 1.
+//
+//! lrm 10.7
+`include "check.vh"
+module d10_11_file_macro_is_the_opened_path(p, n);
+  inout p, n; electrical p, n;
+  integer file_is_short_name;
+  analog begin
+`include "d10_file_macro_probe.vh"
+    `CHECKI("`__FILE__ in an include is not the `include short name", file_is_short_name, 0);
+    I(p, n) <+ V(p, n);
+  end
+endmodule
