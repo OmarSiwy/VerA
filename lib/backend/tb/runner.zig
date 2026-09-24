@@ -318,6 +318,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .xz = lowered.discrete_xz.keys(),
         .events = lowered.discrete_events.values(),
         .inserts = lowered.inserts,
+        .reads = lowered.discrete_reads.keys(),
+        .held = lowered.held_vars.items,
     };
 }
 
@@ -367,6 +369,9 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    n: *usize,
         \\    slots: [input_ports.len]u32,
         \\    snap_slots: [snap_ports.len]u32,
+        \\    /// §7.3.6.4 the digital slots `a2d_ports` are copied into.
+        \\    dig: *sim.digital.Run,
+        \\    a2d_slots: [a2d_ports.len]u32,
         \\    /// §8.5.3.6 the region-1b values of the last explicit D2A event.
         \\    snaps: [snap_ports.len]f64 = @splat(0),
         \\    t: f64 = 0.0,
@@ -420,6 +425,11 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        a.flush();
         \\        point(a.n.*, a.x, a.t, a.model, a.inst);
         \\        stepPost(a.model, a.inst, a.x, a.state, a.solved);
+        \\        // §7.3.6.4: what the accepted solution left in each held variable.
+        \\        inline for (a2d_ports, 0..) |p, i| {
+        \\            const v = @field(a.inst, p.field);
+        \\            try a.dig.a2dWrite(a.a2d_slots[i], if (@TypeOf(v) == f64) v else @as(f64, @floatFromInt(v)));
+        \\        }
         \\        a.n.* += 1;
         \\        a.x_prev = a.x.*;
         \\        a.t_prev = a.t;
@@ -477,7 +487,20 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
             try print(&out, arena, " .{s} = \"{f}\",", .{ f.name, std.zig.fmtString(@field(row, f.name)) });
         try out.appendSlice(arena, " },");
     }
-    try out.appendSlice(arena, " };\n\n");
+    try out.appendSlice(arena, " };\n");
+    // VAMS §7.3.6.4 each analog variable a digital expression reads, beside
+    // the §5.10 held `Instance` field (`plan/names.zig`'s spelling) its value
+    // is copied from. One that is not held — assigned outside an analog event
+    // statement — is left out, and the digital half refuses the read.
+    try out.appendSlice(arena, "const a2d_ports = [_]Port{");
+    var mod_buf: [256]u8 = undefined;
+    const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
+    for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
+        const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
+        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
+        break;
+    };
+    try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
 
     // --- main ---------------------------------------------------------------
     try out.appendSlice(arena,

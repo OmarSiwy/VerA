@@ -82,6 +82,10 @@ pub const Mixed = struct {
     /// VAMS §7.8.4 the connect modules the analog compile inserted: they are
     /// in its flattened design and not in `source`'s hierarchy.
     inserts: []const Insert = &.{},
+    /// VAMS §7.3.6.4 / §7.3.1: the root's analog variables a digital
+    /// expression reads. Each is declared here anyway, and the coordinator
+    /// writes it (`a2dWrite`) after every accepted analog solution.
+    reads: []const []const u8 = &.{},
 };
 
 /// One port VAMS §7.8.4 re-pointed at an inserted connect module, as the
@@ -334,6 +338,8 @@ pub const Run = struct {
     has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
     mixed: bool = false,
+    /// `Mixed.reads`: the analog variables declared here for `a2dWrite`.
+    a2d_reads: []const []const u8 = &.{},
     /// `Mixed.inserts`, and each row's segment as an identifier expression
     /// (minted before pass one, while the expression tables can still grow).
     inserts: []const Insert = &.{},
@@ -378,6 +384,20 @@ pub const Run = struct {
     /// `.analog` at region 3b of the tick it happened in.
     pub fn watchAnalog(r: *Run, at: u32) void {
         r.watch[at].insert(.analog);
+    }
+
+    /// VAMS §7.3.6.4: an analog variable a digital expression reads takes the
+    /// value the analog block left it, as a write at the current tick — so a
+    /// continuous assign over it re-evaluates like over any other operand.
+    /// Table 7-1 in reverse: a real "with no conversion", an integer as itself.
+    pub fn a2dWrite(r: *Run, at: u32, v: f64) Error!void {
+        const cur = r.values[at];
+        const lit = if (r.reals.contains(at)) try exec.realLiteral(r.arena, v) else blk: {
+            const w = try filled(r.arena, 64, true, .zero);
+            w.values()[0] = @bitCast(std.math.lossyCast(i64, v));
+            break :blk try exec.normalize(r.arena, w, .{ .width = cur.width, .signed = cur.signed });
+        };
+        try exec.store(r, at, lit.planes);
     }
 
     /// VAMS §7.3.4 / §8.5: an analog event control waits on `edge` of `slot`
@@ -876,6 +896,16 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     }
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
+        // VAMS §7.3.6.4: an analog variable a digital expression reads is
+        // declared, uninitialized, for the coordinator to write.
+        if (r.mixed and scope == 0) if (for (r.a2d_reads) |n| {
+            if (std.mem.eql(u8, n, r.file.str(v.name))) break true;
+        } else false) {
+            var read = v;
+            read.init = .none;
+            _ = try mintVar(r, read);
+            continue;
+        };
         // A mixed module's initialized variables, and its reals no discrete
         // process writes, are the ANALOG block's (§7.2.2: "the domain of a
         // variable is that of the context from which its value is assigned");
@@ -1790,7 +1820,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try wrealRules(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null };
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{} };
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
@@ -2531,6 +2561,18 @@ fn testConcatRunAllocation(allocator: std.mem.Allocator) !void {
     var output = std.Io.Writer.Allocating.init(arena.allocator());
     try run(arena.allocator(), "module m; reg [7:0] a; initial begin a={{0{$signed(65'bz)}},{(1+1){4'b10xz}}}; $display(\"%b\",a); end endmodule", .{}, &bag, &output.writer);
     try std.testing.expectEqualStrings("10xz10xz\n", output.written());
+}
+
+test "VAMS §7.3.6.4 an analog variable a continuous assign reads is declared and written by the coordinator" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var out = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(), "module m; real level; wire hi; assign hi = level > 0.5; endmodule\n", .{ .mixed = .{ .top = "m", .timescale = null, .reads = &.{"level"} } }, &bag, &out.writer);
+    _ = try r.runUntil(0);
+    try r.a2dWrite(r.slotOf("level").?, 0.75);
+    _ = try r.runUntil(0);
+    try std.testing.expectEqual(@as(?i64, 1), r.values[r.slotOf("hi").?].asInt());
 }
 
 test "source concat allocation failures clean up preflight and execution arenas" {
