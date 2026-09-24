@@ -1425,10 +1425,6 @@ const lower_event = @import("lower/event.zig");
 
 // §4.2 expressions, §4.3 math functions, §4.4 signal access, lower/expr.zig
 const lower_expr = @import("lower/expr.zig");
-/// Returns the MIR opcode of a one-argument Table 4-14/4-15 function, or null.
-pub const unaryMathOp = lower_expr.unaryMathOp;
-/// Returns the MIR opcode of a two-argument Table 4-14 function, or null.
-pub const binaryMathOp = lower_expr.binaryMathOp;
 
 // §4.5 analog operators and filters, lower/analog_op.zig
 const lower_analog_op = @import("lower/analog_op.zig");
