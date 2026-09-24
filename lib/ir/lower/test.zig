@@ -976,6 +976,49 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
     }
 }
 
+test "lower: A.6.1 an assign target is judged by declaration kind, then by domain" {
+    // IEEE 1364-2005 §6.1 (via VAMS §1.1): a continuous assignment drives a
+    // NET, so a variable is E0438. Among nets, §7.3's "write operations ... are
+    // only allowed from the context of their domain" refuses a continuous one
+    // (E0435) and admits a discrete one — `ddiscrete` (§3.6.2.2 `domain
+    // discrete`) exactly as an undisciplined `wire`. Pinned here because the
+    // positive fixture (ch07/ddiscrete_net_continuously_assigned) is xfail on the
+    // digital runner, which would hide a return of the old E0438.
+    const cases = [_]struct { decl: []const u8, code: ?diag.Code }{
+        .{ .decl = "integer t;", .code = .E0438 },
+        .{ .decl = "electrical t;", .code = .E0435 },
+        .{ .decl = "ddiscrete t;", .code = null },
+        .{ .decl = "wire t;", .code = null },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p);
+            \\  inout p; electrical p;
+            \\  {s}
+            \\  assign t = 1'b1;
+            \\  analog I(p) <+ V(p) + t;
+            \\endmodule
+        , .{c.decl});
+        defer std.testing.allocator.free(src);
+
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        h.low.lowerFile() catch |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        };
+        var first: ?diag.Code = null;
+        for (0..h.bag.count()) |i| {
+            if (h.code(i) == .E0438 or h.code(i) == .E0435) first = first orelse h.code(i);
+        }
+        std.testing.expectEqual(c.code, first) catch |e| {
+            std.debug.print("declaration: {s}\n", .{c.decl});
+            return e;
+        };
+    }
+}
+
 test "lower: A.6.2 an initial block of constant assignments lowers; anything else is E0433" {
     // The accepting side is six fixtures (ch07/digital_initial_accepted,
     // discrete_bus_narrow, discrete_bus_31, discrete_real_from_analog,
