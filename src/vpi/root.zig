@@ -23,11 +23,12 @@
 //!     reachable by the name the source wrote.
 //!
 //! So the scope tree here is not a second elaboration. It is the instance tree
-//! read back out: the SHAPE comes from the module definitions' `instances`,
-//! which is where the definition name lives — §11.6.1's `vpiDefName`, the one
-//! fact flattening erases — and the CONTENTS of each scope come from the
-//! elaborated module, split at the last `Elaborate.sep`. What exists is the
-//! elaborated design's answer; what it is called is the instance tree's.
+//! read back out: the SHAPE is `Lower.unit_paths`, the row elaboration
+//! publishes per inlined instance together with the definition it came from —
+//! §11.6.1's `vpiDefName`, the one fact flattening erases — and the CONTENTS
+//! of each scope come from the elaborated module, split at the last
+//! `Elaborate.sep`. Both halves are elaboration's answer; nothing here decides
+//! which module an instance names.
 //!
 //! HANDLES. §12.3 says handle equivalence "can not be determined with a C `==`
 //! comparison", which licenses an implementation to hand out a fresh pointer
@@ -376,14 +377,17 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
     const top_name = try arena.dupe(u8, file.str(flat.name));
 
     // --- the scope tree ----------------------------------------------------
-    // §11.6.1's `vpiInternalScope`, walked from the DEFINITIONS. The elaborated
-    // module cannot supply it: flattening keeps `u.v.r` the path it always was
-    // but drops which module `v` was an instance OF, and that is `vpiDefName`.
-    //
-    // The definition the flat top came from is found by name. `pickTop` chose
-    // it and elaboration kept the name, so a lookup gives the same answer
-    // without a second copy of the choosing rule. A design with no hierarchy
-    // takes the `orelse`: `Elaborate` returns the parsed module by pointer.
+    // §11.6.1's `vpiInternalScope`, READ from elaboration rather than walked
+    // again. `Lower.unit_paths` is one row per inlined instance, depth first in
+    // source order, and each row carries the definition it was inlined from —
+    // `vpiDefName`, the one fact flattening erases. Instance arrays, §6.4.2
+    // paramset selection and chains, and Annex E.2.1's netlist match were all
+    // decided there, once; a second walk here was a second set of rules, and
+    // it drifted. A tree of one publishes no rows (`Elaborate` hands the parsed
+    // module over by pointer), so it is its own single row.
+    const units = if (lower.unit_paths.len != 0) lower.unit_paths else &[_]Elaborate.UnitPath{
+        .{ .module = top_name, .path = "", .decl = flat },
+    };
     var scopes: std.ArrayList(Building) = .empty;
     defer {
         for (scopes.items) |*s| {
@@ -395,19 +399,25 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
         }
         scopes.deinit(gpa);
     }
-    try scopes.append(gpa, .{
-        .decl = findModule(file, flat.name) orelse flat,
-        .def_name = top_name,
-        .path = "",
-        .parent = null,
-    });
-    try walkInstances(gpa, arena, file, 0, &scopes);
-
-    // A path → scope index table, so bucketing the flattened declarations costs
-    // a lookup per declaration rather than a walk per declaration.
+    // A path → scope index table: a unit finds its parent by it, and bucketing
+    // the flattened declarations costs a lookup per declaration.
     var by_path: std.StringHashMapUnmanaged(u32) = .empty;
     defer by_path.deinit(gpa);
-    for (scopes.items, 0..) |s, i| try by_path.put(gpa, s.path, @intCast(i));
+    for (units, 0..) |u, i| {
+        const path = try arena.dupe(u8, std.mem.trimEnd(u8, u.path, &.{Elaborate.sep}));
+        const at: u32 = @intCast(i);
+        // Rows come parent first, so the parent is already in the table. Unit 0
+        // is the top, whose path is "".
+        const parent: ?u32 = if (i == 0) null else by_path.get(path[0 .. std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse 0]).?;
+        try scopes.append(gpa, .{
+            .decl = u.decl,
+            .def_name = try arena.dupe(u8, u.module),
+            .path = path,
+            .parent = parent,
+        });
+        if (parent) |p| try scopes.items[p].children.append(gpa, at);
+        try by_path.put(gpa, path, at);
+    }
 
     // --- the objects -------------------------------------------------------
     var objects: std.ArrayList(Obj) = .empty;
@@ -524,60 +534,6 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
 
     for (d.objects, 0..) |o, i| try d.by_name.put(gpa, o.full, @intCast(i));
     return d;
-}
-
-/// §6.2.2 the instance tree, depth-first in source order. `at` is the scope
-/// being expanded; each child is appended to `scopes` and recorded on it.
-fn walkInstances(
-    gpa: std.mem.Allocator,
-    arena: std.mem.Allocator,
-    file: *const Ast.SourceFile,
-    at: u32,
-    scopes: *std.ArrayList(Building),
-) Error!void {
-    // `instances` and `path` are borrowed from the AST and from the arena, so
-    // neither moves when `scopes` grows underneath the recursion.
-    const insts = scopes.items[at].decl.instances;
-    const path = scopes.items[at].path;
-    for (insts) |inst| {
-        // §6.2.2's `name_of_module_instance [ range ]` — an instance ARRAY is
-        // several instances under bracketed names, and `elaborate.zig` does not
-        // flatten one (ch06_hierarchy/instance_array_unsupported.va). One scope
-        // for the array would be a scope the elaborated design has no
-        // declaration in, so the array contributes none.
-        if (inst.range != null) continue;
-        const decl = resolveInstance(file, inst.module) orelse continue;
-        const child: u32 = @intCast(scopes.items.len);
-        try scopes.append(gpa, .{
-            .decl = decl,
-            .def_name = try arena.dupe(u8, file.str(decl.name)),
-            .path = try joinPath(arena, path, try arena.dupe(u8, file.str(inst.name))),
-            .parent = at,
-        });
-        try scopes.items[at].children.append(gpa, child);
-        try walkInstances(gpa, arena, file, child, scopes);
-    }
-}
-
-/// §6.2.2 `module_or_paramset_identifier`: a name that resolves to a module, or
-/// to a §6.4 paramset, in which case the instance is an instance of the module
-/// that paramset specializes. The same indirection `Elaborate.pickTop` counts
-/// as an instantiation edge.
-fn resolveInstance(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
-    if (findModule(file, name)) |m| return m;
-    for (file.paramsets) |ps| {
-        if (ps.name == name) return findModule(file, ps.target);
-    }
-    return null;
-}
-
-fn findModule(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
-    // Annex E.3.3: "a module or paramset defined in the Verilog-AMS will always
-    // be selected in favor of a SPICE primitive ... using exactly the same
-    // name", so the user's declarations are searched first.
-    for (file.userModules()) |*m| if (m.name == name) return m;
-    for (file.modules) |*m| if (m.name == name) return m;
-    return null;
 }
 
 /// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`
@@ -1503,4 +1459,153 @@ test "no design open is an error on every routine" {
     try std.testing.expect(vpi_get_str(vpiName, null) == null);
     try std.testing.expectEqual(@as(c_int, 0), vpi_compare_objects(null, null));
     try std.testing.expectEqual(@as(c_int, 0), vpi_release_handle(null));
+}
+
+// ---- the scope tree is elaboration's, read and not re-derived --------------
+
+/// The `Scope` whose §6.7 path is `path`, or a test failure.
+fn scopeAt(path: []const u8) !*const Scope {
+    for (design.?.scopes) |*s| if (std.mem.eql(u8, s.path, path)) return s;
+    std.debug.print("no scope at `{s}`\n", .{path});
+    return error.TestExpectedEqual;
+}
+
+test "an instance array is one scope per element (§6.2.2, §6.7)" {
+    // §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`,
+    // and §6.7 addresses each element as `u[1].inner`. Elaboration inlines one
+    // unit per element, so the VPI has one module per element.
+    var res = try openSource(
+        \\module top(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  sub u[1:0](p, n);
+        \\endmodule
+        \\module sub(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  electrical inner;
+        \\  analog I(a,b) <+ V(a,b);
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+
+    try std.testing.expectEqual(@as(usize, 3), design.?.scopes.len);
+    try std.testing.expectEqualStrings("sub", (try scopeAt("u[0]")).def_name);
+    try std.testing.expectEqualStrings("sub", (try scopeAt("u[1]")).def_name);
+    const net = vpi_handle_by_name("top.u[1].inner", null);
+    try std.testing.expect(net != null);
+    try std.testing.expectEqual(vpiNet, vpi_get(vpiType, net));
+    try std.testing.expect(vpi_handle_by_name("top.u[0].a", null) != null);
+}
+
+test "a paramset instance is an instance of the module §6.4.2 selected, through the chain" {
+    // §6.4 "A chain of paramsets may be defined, but the last paramset in the
+    // chain shall reference a module": `c` names `outer`, which names `mid`,
+    // which names `leaf`. §6.4.2 selects between the two `pick`s by the range
+    // that admits "PMOS", so `s` is a `pmod` and not the first `pick`'s `nmod`.
+    // §12.12's example reads that module back as `vpiDefName`.
+    var res = try openSource(
+        \\module top(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  outer c(p, n);
+        \\  pick #(.t("PMOS")) s(p, n);
+        \\endmodule
+        \\paramset outer mid;
+        \\  real tag;
+        \\  tag = 1.0;
+        \\endparamset
+        \\paramset mid leaf;
+        \\  .j = 2.0;
+        \\endparamset
+        \\paramset pick nmod;
+        \\  parameter string t = "NMOS" from '{ "NMOS" };
+        \\  .sign = 1.0;
+        \\endparamset
+        \\paramset pick pmod;
+        \\  parameter string t = "PMOS" from '{ "PMOS" };
+        \\  .sign = -1.0;
+        \\endparamset
+        \\module leaf(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  parameter real j = 0.0;
+        \\  analog I(a,b) <+ j*V(a,b);
+        \\endmodule
+        \\module nmod(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  parameter real sign = 0.0;
+        \\  analog I(a,b) <+ sign*V(a,b);
+        \\endmodule
+        \\module pmod(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  parameter real sign = 0.0;
+        \\  analog I(a,b) <+ sign*V(a,b);
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+
+    try std.testing.expectEqualStrings("leaf", (try scopeAt("c")).def_name);
+    try std.testing.expectEqualStrings("pmod", (try scopeAt("s")).def_name);
+    try std.testing.expect(vpi_handle_by_name("top.c.j", null) != null);
+}
+
+test "an instance resolved by Annex E.2.1's case-insensitive netlist match has its scope" {
+    // E.2.1 "if no exact match is found, the mixed-case name shall match the
+    // same name defined within SPICE regardless of the case". That rule is
+    // about which MODULE an instance names, and elaboration owns it.
+    //
+    // It is NOT a rule about `vpi_handle_by_name`: §12.21 searches "using the
+    // scope search rules defined by the Verilog-AMS HDL", and §2.7 makes those
+    // case-sensitive. So `TOP.Q` still finds nothing.
+    var res = try vera.compileSourceOpts(std.testing.allocator,
+        \\module top(c, b, e);
+        \\  inout c, b, e; electrical c, b, e;
+        \\  VeRtNpN q(c, b, e);
+        \\endmodule
+    , .lint, .{ .spice_netlist = ".MODEL VERTNPN NPN BF=80 IS=1E-18\n" });
+    defer res.deinit();
+    try open(std.testing.allocator, res.lower);
+    defer close();
+
+    const q = try scopeAt("q");
+    try std.testing.expect(std.ascii.eqlIgnoreCase("vertnpn", q.def_name));
+    // The card synthesizes `module vertnpn(c, b, e, s)`: its ports are
+    // the definition's, so the scope has all four.
+    try std.testing.expectEqual(@as(usize, 4), q.ports.len);
+    try std.testing.expect(vpi_handle_by_name("top.q", null) != null);
+    try std.testing.expect(vpi_handle_by_name("TOP.Q", null) == null);
+}
+
+test "the scopes are elaboration's units, one for one" {
+    // One owner per fact: `Elaborate.Design.units` is the instance tree the
+    // flatten built. Every unit is a scope with its path and module, in the
+    // same depth-first source order, and there is no other scope.
+    var res = try openSource(
+        \\module top(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  sub u[0:1](p, n);
+        \\  ps w(p, n);
+        \\endmodule
+        \\paramset ps sub;
+        \\  .k = 2.0;
+        \\endparamset
+        \\module sub(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  parameter real k = 1.0;
+        \\  leaf v(a, b);
+        \\endmodule
+        \\module leaf(x, y);
+        \\  inout x, y; electrical x, y;
+        \\  analog I(x,y) <+ V(x,y);
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+
+    const units = res.lower.unit_paths;
+    try std.testing.expectEqual(@as(usize, 7), units.len);
+    try std.testing.expectEqual(units.len, design.?.scopes.len);
+    for (units, design.?.scopes) |u, s| {
+        try std.testing.expectEqualStrings(u.module, s.def_name);
+        try std.testing.expectEqualStrings(std.mem.trimEnd(u8, u.path, &.{Elaborate.sep}), s.path);
+    }
 }
