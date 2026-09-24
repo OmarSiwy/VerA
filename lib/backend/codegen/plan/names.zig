@@ -16,6 +16,7 @@ const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lowered = @import("ir").Lowered;
 const naming = @import("../../naming.zig");
+const Input = @import("input.zig").Input;
 
 pub const Error = std.mem.Allocator.Error || error{NameTooLong};
 const none_u32 = std.math.maxInt(u32);
@@ -43,13 +44,11 @@ pub const Names = struct {
 /// `n_unit_modes` is `Verdict.unit_modes.len`: the canonical-order contract
 /// `unitMode` depends on is checked here, where all three tables are in hand
 /// for the only time.
-pub fn plan(
-    a: std.mem.Allocator,
-    mir: *const Mir,
-    an: *const Analysis,
-    lowered: *const Lowered,
-    n_unit_modes: usize,
-) Error!Names {
+pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
+    const a = in.arena;
+    const mir = in.mir;
+    const an = in.an;
+    const lowered = in.lowered;
     var self: Names = .{};
     self.units = naming.enumerateUnits(a, mir, lowered) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -206,7 +205,7 @@ test "a potential source gets a branch current; two on one branch get two" {
     try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
     const an = try f.analysis();
 
-    const n = try plan(a, &f.mir, &an, &f.lowered, 4);
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 4);
     try std.testing.expectEqual(@as(u32, 5), n.n_u);
     try std.testing.expectEqualSlices(u32, &.{ none_u32, 2, 3, 4 }, n.branch_u);
     // The second current on (a,b) takes the first free `#k`, sanitized.

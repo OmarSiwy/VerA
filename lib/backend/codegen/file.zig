@@ -9,6 +9,7 @@
 //! directly, `gen_file.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
 const gen_kernel_text = @import("kernel_text.zig");
 const Gen = codegen.Gen;
@@ -119,10 +120,9 @@ pub fn emitFile(self: *Gen) Error!void {
     // same way, so it opens `R` too — and so does §4.6.4 `noisePsd`, which
     // is `updateState`'s shape exactly: one value-only core sweep at a
     // state vector the caller hands in.
-    // Before `emitDispatchers`: `emitSwitchRow` splits exactly these
-    // branches, so the list has to exist before any residual is emitted.
-    self.cpairs = try gen_state.collapsePairs(self);
-    const cpairs = self.cpairs;
+    // `emitSwitchRow` splits exactly these branches; `prepare` planned them
+    // (`plan/topology.zig`) before any residual is emitted.
+    const cpairs = self.topo.cpairs;
     if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
         self.hp_vals.len != 0 or self.noise_rows.len != 0 or try gen_dispatch.acUsesCore(self))
     {
@@ -310,7 +310,7 @@ pub fn emitTopology(self: *Gen) Error!void {
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
     try self.w("pub const U = enum(u8) {{\n", .{});
     for (self.names.u_names, 0..) |n, i| {
-        const kindc: []const u8 = if (i < self.lowered.num_ports) "port" else if (isFlowUnknown(self, @intCast(i))) "branch flow" else "internal";
+        const kindc: []const u8 = if (i < self.lowered.num_ports) "port" else if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) "branch flow" else "internal";
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
     try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
@@ -334,12 +334,12 @@ pub fn emitTopology(self: *Gen) Error!void {
 
     var any_current = false;
     for (0..self.names.n_u) |i| {
-        if (isFlowUnknown(self, @intCast(i))) any_current = true;
+        if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) any_current = true;
     }
     if (any_current) {
         try self.w("pub const u_kinds = [n_u]contract.UnknownKind{{\n", .{});
         for (0..self.names.n_u) |i| {
-            try self.w("    .{s},\n", .{if (isFlowUnknown(self, @intCast(i))) "current" else "voltage"});
+            try self.w("    .{s},\n", .{if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) "current" else "voltage"});
         }
         try self.w("}};\n\n", .{});
     }
@@ -402,61 +402,6 @@ pub fn emitNodesets(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// §1.3.4/§3.6.2.2. Returns the name of the contribution's net when that
-/// net is a SIGNAL-FLOW PORT: a directional (`input`/`output`, §6.5.2.2)
-/// port whose discipline binds only one nature. That combination is the
-/// LRM's unambiguous signal-flow port, and it has no conserved pair for a
-/// nodal device to stamp.
-///
-/// A single-nature discipline on an `inout` port is NOT caught here, and no
-/// longer can be: §1.3.4.1/§1.3.4.2 forbid that binding outright and
-/// lower.zig rejects it at the declaration (E0132). An internal net is not
-/// caught either — it is a conservative-shaped declaration whose net simply
-/// has one tolerance, which the device stamps as usual (§3.9).
-///
-/// §1.3.4.2's flow-only net is the one case the ordinary nodal stamp gets
-/// WRONG. On such a net there is no potential (§1.3.4: "Potential for such
-/// a node is not defined"), so the node's single unknown carries the FLOW,
-/// and `I(out) <+ e` is the equation `x[out] − e = 0`, not a KCL injection
-/// into a conservation law the net does not obey. §1.3.4.1's potential-only
-/// net needs nothing special: the ordinary branch relation already reduces
-/// to it — the KCL row at the net is `ib = 0` (a signal-flow net has no
-/// flow to conserve, and zero is what the clause says it is), which leaves
-/// the branch row `V(out) − e = 0` to fix the potential.
-pub fn flowOnlySignalFlowNet(self: *const Gen, c: Lower.Contribution) ?u16 {
-    if (c.access != .flow or c.kind != .direct) return null;
-    for ([_]u16{ c.hi, c.lo }) |n| {
-        if (n >= self.lowered.nodes.len) continue; // ground
-        switch (self.lowered.nodes.items(.dir)[n]) {
-            .input, .output => {},
-            .unspecified, .inout => continue,
-        }
-        const dname = self.lowered.nodes.items(.disc)[n];
-        if (dname.len == 0) continue;
-        const d = self.lowered.disciplines.get(dname) orelse continue;
-        if (!d.has_potential and d.has_flow) return n;
-    }
-    return null;
-}
-
-pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
-    if (i >= self.lowered.nodes.len) return true; // codegen-added branch current
-    // §5.4.2/§5.4.3. An array read: lowering records the kind where it
-    // creates the slot. It used to be `startsWith("flow(")`, which §2.8.1
-    // makes a lie — a net declared `\flow(p,n)` IS the identifier
-    // `flow(p,n)` and was classified as a current.
-    if (self.lowered.nodes.items(.kind)[i] != .net) return true;
-    // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
-    // a node is not defined"), so its ONE unknown is a flow even though it
-    // is a plain node with a plain name. Everything that asks this question
-    // — the host's `u_kinds`, the §3.6.1.2 tolerance, §4.5.15's refusal to
-    // `$limit` a current — wants the quantity, not the spelling.
-    const dname = self.lowered.nodes.items(.disc)[i];
-    if (dname.len == 0) return false;
-    const d = self.lowered.disciplines.get(dname) orelse return false;
-    return d.has_flow and !d.has_potential;
-}
-
 /// §3.6.1.2 the `abstol` of the nature this unknown's quantity belongs to,
 /// after §3.6.2.3's per-discipline override — which is why it is read off
 /// `DisciplineInfo` and not off the nature table.
@@ -476,7 +421,7 @@ pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
 /// unknown whose net never got a discipline — a §3.5 implicit net in a file
 /// with no `default_discipline`, which cannot be contributed to anyway.
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
-    const flow = isFlowUnknown(self, i);
+    const flow = plan_topo.isFlowUnknown(self.input(), i);
     var idx: u16 = @intCast(i);
     if (i < self.lowered.nodes.len) switch (self.lowered.nodes.items(.kind)[i]) {
         .net => {},
