@@ -63,6 +63,12 @@
  *           with the routine vpi_handle()"; module -> port is a double arrow,
  *           so vpi_handle(vpiPort, module) has no one object to give.
  *
+ * 12.1's conventions: "All arguments shall be considered mandatory unless
+ * specifically noted ... Optional: Arguments tagged as optional can have
+ * default values" — vpi_chk_error()'s structure is the one argument here
+ * 12.2 notes as optional ("If the error information is not needed, a NULL
+ * can be passed"), and vpi_chk_error(NULL) answers the level all the same.
+ *
  * The application runs from cbReadWriteSynch at t=0 and NOT cbReadOnlySynch:
  * 12.31.2 forbids writing in the read-only region, so a put refused there
  * would be refused for that reason and would say nothing about parameters.
@@ -80,6 +86,7 @@
 //! lrm-reject 11.6.10
 //! lrm-reject 11.6.11
 //! lrm-reject 11.6.12
+//! lrm 12.1
 //! lrm 12.2
 //! lrm-reject 12.2
 //! lrm-reject 12.3

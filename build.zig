@@ -434,7 +434,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p04_01_object_traversal.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_01_object_traversal checks=89\n",
+        .stdout = "p02: p04_01_object_traversal checks=98\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p04_02_object_refusals.c",

@@ -33,12 +33,18 @@
  *          NULL format is no format.
  *   12.28  the same sentence, for vpi_printf(NULL).
  *
+ * 12.1: "All arguments shall be considered mandatory unless specifically
+ * noted in the definition of the PLI routine." vpi_get_value's value_p,
+ * vpi_get_time's time_p and vpi_mcd_open's file name are noted nowhere as
+ * optional, so a NULL for any of them is refused, not defaulted.
+ *
  * EOF is C's, from <stdio.h>. The refusals run from cbReadWriteSynch at t=0,
  * where 12.31.2 allows writing, so a refused put is refused for its own
  * reason and not for the read-only region's.
  */
 
 //! lrm-reject 11.3.2
+//! lrm-reject 12.1
 //! lrm-reject 12.15
 //! lrm-reject 12.16
 //! lrm-reject 12.26
