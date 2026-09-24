@@ -335,6 +335,13 @@ pub const Run = struct {
                     try display.monitorPrint(r, scratch.allocator());
                 },
                 .vcd_tick => try @import("vcd.zig").tick(r, scratch.allocator()),
+                .tran_switch => |at| {
+                    const t = &r.trans[at];
+                    t.pending = null;
+                    t.state = t.target;
+                    try exec.resolve(r, t.a);
+                    try exec.resolve(r, t.b);
+                },
                 // §6.1.3: a cancelled transition never gets here — the scheduler
                 // dropped it — so what arrives is the one still in flight.
                 .drive => |at| {
@@ -813,28 +820,20 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // with what it passes, as a gate does; a CMOS switch is an n-type and a
     // p-type sharing data and output. A pass switch joins its two nets into
     // one resolution while it conducts.
-    // ponytail: scalar terminals, no delay on a pass switch, and a resistive
-    // pass switch does not reduce what it carries.
+    // ponytail: a MOS or CMOS switch's terminals are scalar nets.
     for (m.switches) |sw| {
         const resistive = switch (sw.kind) {
             .rcmos, .rnmos, .rpmos, .rtran, .rtranif0, .rtranif1 => true,
             .cmos, .nmos, .pmos, .tran, .tranif0, .tranif1 => false,
         };
-        var nets: [2]u32 = undefined;
-        const outs: usize = switch (sw.kind) {
-            .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => 2,
-            .cmos, .rcmos, .nmos, .pmos, .rnmos, .rpmos => 1,
-        };
-        for (sw.terms[0..outs], nets[0..outs]) |t, *n| {
-            n.* = r.net_of.get(try r.scalarSlot(t)) orelse return r.fail(sw.main_tok, "a switch's output and inout terminals are nets", .{});
-            if (e.nets.items[n.*].resolved.width != 1) return r.fail(sw.main_tok, "only scalar switch terminals are implemented", .{});
-        }
         switch (sw.kind) {
             .nmos, .pmos, .rnmos, .rpmos, .cmos, .rcmos => {
+                const out = r.net_of.get(try r.scalarSlot(sw.terms[0])) orelse return r.fail(sw.main_tok, "a switch's output and inout terminals are nets", .{});
+                if (e.nets.items[out].resolved.width != 1) return r.fail(sw.main_tok, "only scalar MOS switch terminals are implemented", .{});
                 const cmos = sw.kind == .cmos or sw.kind == .rcmos;
                 const n_type = sw.kind == .nmos or sw.kind == .rnmos;
                 for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(arena, .{
-                    .net = nets[0],
+                    .net = out,
                     .scope = scope,
                     .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive },
                     .delay = sw.delay,
@@ -842,15 +841,24 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 });
             },
             .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => {
-                if (sw.delay.any()) return r.fail(sw.main_tok, "a pass switch delay is not implemented", .{});
                 const gated = sw.kind != .tran and sw.kind != .rtran;
+                // §7.6: the controlled ones take "zero, one, or two delays"
+                // (the grammar already refuses any on tran and rtran).
+                if (sw.delay.off != .none) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
+                const ta = try switchTerminal(r, e, sw.terms[0], sw.main_tok);
+                const tb = try switchTerminal(r, e, sw.terms[1], sw.main_tok);
                 try e.trans.append(arena, .{
                     .tran = .{
-                        .a = nets[0],
-                        .b = nets[1],
+                        .a = ta.net,
+                        .b = tb.net,
+                        .a_bit = ta.bit,
+                        .b_bit = tb.bit,
                         .ctrl = if (gated) sw.terms[2] else .none,
                         .on = if (sw.kind == .tranif0 or sw.kind == .rtranif0) .zero else .one,
                         .state = if (gated) .unknown else .on,
+                        .target = if (gated) .unknown else .on,
+                        .resistive = resistive,
+                        .delay = try r.declaredDelay3(sw.delay, sw.main_tok),
                     },
                     .scope = scope,
                     .tok = sw.main_tok,
@@ -867,6 +875,27 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     }
     for (m.instances) |*inst| try instantiate(r, e, scope, inst, depth);
     if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
+}
+
+/// §7.6 "the bidirectional terminals of all six devices shall be connected
+/// only to scalar nets or bit-selects of vector nets": the net, and the bit
+/// position a constant select names against its declared range.
+fn switchTerminal(r: *Run, e: *Elab, t: Ast.ExprId, tok: u32) Error!struct { net: u32, bit: u32 } {
+    const ex = &r.file.exprs;
+    if (ex.tag(t) != .index) {
+        const net = r.net_of.get(try r.scalarSlot(t)) orelse return r.fail(tok, "a switch's output and inout terminals are nets", .{});
+        if (e.nets.items[net].resolved.width != 1) return r.fail(tok, "§7.6: a pass switch terminal is a scalar net or a bit-select of a vector net", .{});
+        return .{ .net = net, .bit = 0 };
+    }
+    if (ex.tag(ex.rhs(t)) == .range) return r.fail(tok, "§7.6: a pass switch terminal is a scalar net or a bit-select of a vector net", .{});
+    const at = try r.scalarSlot(ex.lhs(t));
+    const net = r.net_of.get(at) orelse return r.fail(tok, "a switch's output and inout terminals are nets", .{});
+    const index = try r.declaredBound(ex.rhs(t), tok);
+    const width: i64 = e.nets.items[net].resolved.width;
+    const range = r.vec_ranges.get(at) orelse VecRange{ .msb = width - 1, .lsb = 0 };
+    const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
+    if (pos < 0 or pos >= width) return r.fail(tok, "a pass switch terminal selects a bit outside its net", .{});
+    return .{ .net = net, .bit = @intCast(pos) };
 }
 
 /// IEEE 1364-2005 §12.4 a generate construct as a digital parse leaves it:
