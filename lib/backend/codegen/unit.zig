@@ -16,6 +16,7 @@ const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
+const gen_setup = @import("setup.zig");
 const gen_render = @import("render.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
@@ -406,11 +407,14 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
     self.sc_open.clearRetainingCapacity();
 
     const at = self.out.items.len;
+    self.su.exits = 0;
+    self.su.store_bytes = 0;
     self.probing = true;
     try scopeOpen(self); // the function body itself
-    try gen_cfg.emitTree(self, 0, 1, target);
+    try gen_setup.emitRoot(self, target);
     scopeClose(self, self.out.items.len);
     self.probing = false;
+    self.su.lines = std.mem.count(u8, self.out.items[at..], "\n");
     self.out.shrinkRetainingCapacity(at);
 
     for (self.place.items) |*p| {
@@ -497,6 +501,10 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // contribution accumulator with `.f_zero`.
     // Pinned by tests/fixtures/exhaustive/069_conditional_operator_state.va.
     try probeBody(self, target);
+    if (gen_setup.mergePays(self)) {
+        self.su.merge = true;
+        try probeBody(self, target);
+    }
     const ret = self.an.rv(target);
 
     // One array per type instead of one `var` per slot. Two passes: assign
@@ -537,5 +545,5 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try writeSlotRef(self, v);
         try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
     }
-    try gen_cfg.emitTree(self, 0, 1, target);
+    try gen_setup.emitRoot(self, target);
 }

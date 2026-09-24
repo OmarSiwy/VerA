@@ -3222,6 +3222,45 @@ test "codegen: §5.10.2 a held variable written only by @(initial_step) is compu
     try std.testing.expect(std.mem.indexOf(u8, body, "log") == null);
 }
 
+/// `setup`'s body, up to its closing brace.
+fn setupBody(src: []const u8) []const u8 {
+    const su = src[std.mem.indexOf(u8, src, "pub fn setup(").?..];
+    return su[0..std.mem.indexOf(u8, su, "\n}\n").?];
+}
+
+test "codegen: setup's live exits share one copy of the root stores" {
+    // An invariant branch reaches the per-eval loop's stop on one arm and the
+    // function exit on the other: two live exits, which leave `zs_done` and
+    // store the six roots once after it (7bfc2fc7 stored them at both). The
+    // DEAD half — an exit only a false `zs_stop` reaches stores nothing — is
+    // pinned by the ARPice models (hisimhv_va: 155 such exits), whose nested
+    // per-eval loops a small module does not reproduce.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module zm(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real r = 2.0;
+        \\  real s, a1, a2, a3, a4, a5, a6;
+        \\  analog begin
+        \\    s = 0.0;
+        \\    if (r > 1.0) begin
+        \\      while (V(p, n) > s) s = s + 0.1;
+        \\    end else begin
+        \\      a1 = ln(r + 1.0); a2 = ln(r + 2.0); a3 = ln(r + 3.0);
+        \\      a4 = ln(r + 4.0); a5 = ln(r + 5.0); a6 = ln(r + 6.0);
+        \\      if (V(p, n) > 1.0) s = a1 * V(p, n); else s = a2;
+        \\    end
+        \\    I(p, n) <+ s + (((((a1 * V(p, n) + a2) * V(p, n) + a3) * V(p, n) + a4) * V(p, n) + a5) * V(p, n) + a6) * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const su = setupBody(src);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, su, "inst.su.r[0] = "));
+    try std.testing.expect(std.mem.indexOf(u8, su, "if (zs_stop) break :zs_done;") != null);
+}
+
 test "codegen: §5.6.5 a collapsible short's flow column leaves deriv_reads behind a guarded jac_const" {
     // `rs` alone decides the 0 V arm, so the retention flag is a function of
     // the card: `derive` publishes it as a Model field, the ±1 KCL stamps of
