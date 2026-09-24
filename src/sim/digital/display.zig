@@ -378,9 +378,37 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                     if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0));
                     continue;
                 },
+                // §17.1.1.6 `%m` and §13.6 `%l` consume no argument: they
+                // print where the display is, not a value.
+                'm', 'M' => {
+                    if (allocator != null) try emitScope(self);
+                    continue;
+                },
+                'l', 'L' => {
+                    if (allocator != null) try self.out.print("work.{s}", .{self.file.str(self.scope_info.items[self.scope].module)});
+                    continue;
+                },
+                // §17.1.1.7 `%s` (the operand as 8-bit ASCII codes) and
+                // `%c` (its low eight bits as one character).
+                's', 'S', 'c', 'C' => {
+                    arg += 1;
+                    if (arg == args.len) return self.exprFail(e, "missing display argument");
+                    try compile.checkExpr(self, args[arg]);
+                    if (allocator) |a| {
+                        const v = try exec.eval(self, a, args[arg], 0);
+                        var buf: [1024]u8 = undefined;
+                        const text = if (format[i] == 'c' or format[i] == 'C') blk: {
+                            buf[0] = byteAt(v, 0);
+                            break :blk buf[0..1];
+                        } else asciiText(&buf, v);
+                        if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
+                        try self.out.writeAll(text);
+                    }
+                    continue;
+                },
                 else => return self.exprFail(
                     e,
-                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g and %%) are implemented",
+                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g and %%) and %c %s %m %l %t are implemented",
                 ),
             };
             arg += 1;
@@ -402,6 +430,70 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
         }
     }
     if (allocator != null and show.newline) try self.out.writeByte('\n');
+}
+
+/// Byte `n` of `v` counting from the least significant, unknown bits read as 0.
+fn byteAt(v: Int.Literal, n: u32) u8 {
+    var c: u8 = 0;
+    for (0..8) |k| {
+        const at = n * 8 + @as(u32, @intCast(k));
+        if (at < v.width and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(k);
+    }
+    return c;
+}
+
+/// §17.1.1.7: "each 8 bits representing a single character ... right-
+/// justified so that the rightmost bit of the value is the least significant
+/// bit of the last character", and "leading zeros are never printed".
+/// ponytail: 1024 characters; a wider operand prints its low 1024.
+fn asciiText(buf: *[1024]u8, v: Int.Literal) []const u8 {
+    const bytes = @min((v.width + 7) / 8, buf.len);
+    var out: usize = 0;
+    var n = bytes;
+    while (n != 0) {
+        n -= 1;
+        const c = byteAt(v, n);
+        if (c == 0 and out == 0) continue;
+        buf[out] = c;
+        out += 1;
+    }
+    return buf[0..out];
+}
+
+/// §17.1.1.6 `%m`: the hierarchical name of the scope the display runs in —
+/// the instance path from the root, then every §5.3.2 named block around the
+/// running instruction, outermost first.
+fn emitScope(self: *Run) Error!void {
+    var chain: [64]u32 = undefined;
+    var depth: usize = 0;
+    var s = self.scope;
+    while (true) {
+        chain[depth] = s;
+        depth += 1;
+        if (s == 0 or depth == chain.len) break;
+        s = self.scope_info.items[s].parent;
+    }
+    while (depth != 0) {
+        depth -= 1;
+        try self.out.writeAll(self.file.str(self.scope_info.items[chain[depth]].name));
+        if (depth != 0) try self.out.writeByte('.');
+    }
+    // The named blocks enclosing `pc` in this scope nest, so sorting them by
+    // statement depth is the outermost-first order.
+    var found: [64]struct { depth: u16, name: Ast.StrId } = undefined;
+    var count: usize = 0;
+    var it = self.blocks.iterator();
+    while (it.next()) |b| {
+        if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end or count == found.len) continue;
+        found[count] = .{ .depth = b.value_ptr.depth, .name = b.key_ptr.str };
+        count += 1;
+    }
+    std.mem.sort(@TypeOf(found[0]), found[0..count], {}, struct {
+        fn lt(_: void, a: @TypeOf(found[0]), b: @TypeOf(found[0])) bool {
+            return a.depth < b.depth;
+        }
+    }.lt);
+    for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
 }
 
 /// The real half of the display surface, which is `$realtime` and nothing
@@ -572,6 +664,7 @@ pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     // §17.1.3 the monitor renders in the instance that installed it; the
     // `.monitor` region runs outside any process's dispatch.
     self.scope = m.scope;
+    self.pc = m.pc;
     try display(self, m.args, a, m.show);
 }
 
