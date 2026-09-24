@@ -147,10 +147,6 @@ pub const Domain = enum {
     pow_sign, // pow(x,y) sign rules                          §4.3.1 Table 4-14
 };
 
-/// Map an Opcode to its LRM domain obligation. `.all` ⇒ nothing to prove.
-/// For the binary members the obligation is on the SECOND operand
-/// (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else constrains the
-/// single unary operand.
 /// Is this value a 0/1 predicate (§4.2.5/§4.2.8)? Shared with ifconv.zig's
 /// `peelToBool`: what peels there must be exactly what `condFacts` can mine
 /// here, or a peel silently un-guards `b != 0 ? a/b : 0`.
@@ -163,6 +159,10 @@ pub fn isPredicateValue(mir: *const Mir, v: Mir.Value) bool {
     };
 }
 
+/// Map an Opcode to its LRM domain obligation. `.all` ⇒ nothing to prove.
+/// For the binary members the obligation is on the SECOND operand
+/// (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else constrains the
+/// single unary operand.
 pub fn domainOf(op: Mir.Opcode) Domain {
     return switch (op) {
         .ln, .log10 => .positive,
