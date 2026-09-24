@@ -878,6 +878,18 @@ pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty
                         const bytes = self.mir.valueDef(vals[next - 1]).str_const;
                         vals[next - 1] = try self.mir.addStrConst(self.arena, std.mem.trimStart(u8, bytes, &.{0}));
                     }
+                } else if ((conv == 'h' or conv == 'x' or conv == 'o' or conv == 'b') and ty == .integer) {
+                    // A radix conversion shows the operand's bit pattern at
+                    // its own width (1364-2005 §17.1.1.2), and §3.2 makes an
+                    // `integer` 32 bits: -5 is fffffffb. Only a width this
+                    // knows is recorded, and only a narrower one than the
+                    // 64-bit carrier — an unknown width keeps the carrier's
+                    // pattern instead of becoming `%s`'s E0819 refusal.
+                    if (formatBits(self, arg)) |bits| {
+                        if (bits < 64) vals[next - 1] = try self.call("$display$width", &.{
+                            vals[next - 1], try self.mir.addIntConst(self.arena, bits),
+                        });
+                    }
                 }
                 continue;
             }
