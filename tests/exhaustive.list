@@ -1,0 +1,204 @@
+// The exhaustiveness RATCHET for tests/exhaustive.zig. Read that file's header.
+//
+// One line per unannotated `else =>` over a boundary enum that existed when
+// the guard landed: `<file> <enclosing fn> <enum>`, repeated once per site in
+// that function. Keyed by function and never by line, so moving code within or
+// between the files of a split directory does not churn it. Sorted (LC_ALL=C).
+//
+// The test fails on a site NOT listed here and on a line here whose site is
+// gone. This list only ever SHRINKS: never add a line. A new site gets its
+// prongs written out, or `// else: <reason>` on its else line.
+//
+// Shrinking it one site at a time is the slow way. The stage-boundary
+// exhaustiveness audit (run at bb2acd8; not checked in), section 4.2
+// "STRUCTURAL TOTALS", names four changes that each delete a class of lines:
+//   1. Ast.ExprStore.children(): one exhaustive switch stating every node's
+//      child edges, so the ~10 expression walkers stop copying them by hand.
+//      A sibling stmtWrites() does the same for the lvalues a statement writes.
+//   2. std.EnumArray(Mir.Opcode, OpInfo), the pattern op.zig already uses,
+//      replacing the opClass/opIsInteger/predicate switches with columns.
+//   3. One constant folder shared by elaborate, proof, lower, analysis,
+//      codegen and sim, replacing six of the seven that disagree today.
+//   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
+//      switches this guard can then see.
+lib/backend/cg_display.zig finishLevel Mir.DefKind
+lib/backend/cg_limit.zig algOf Mir.DefKind
+lib/backend/cg_limit.zig probePair Mir.DefKind
+lib/backend/cg_limit.zig scValue Ast.ExprTag
+lib/backend/cg_limit.zig scValue Mir.Opcode
+lib/backend/cg_limit.zig spell Mir.DefKind
+lib/backend/codegen.zig devSafe Mir.Opcode
+lib/backend/codegen.zig dynCtrlArgs op.OpKind
+lib/backend/codegen/call.zig emitCall op.OpKind
+lib/backend/codegen/call.zig f64Const Ast.ExprTag
+lib/backend/codegen/call.zig f64Const Mir.DefKind
+lib/backend/codegen/call.zig f64Const Mir.Opcode
+lib/backend/codegen/call.zig f64Const Mir.Opcode
+lib/backend/codegen/call.zig i64Const Mir.DefKind
+lib/backend/codegen/call.zig i64Const Mir.Opcode
+lib/backend/codegen/call.zig i64Const Mir.Opcode
+lib/backend/codegen/call.zig i64Const Mir.Opcode
+lib/backend/codegen/call.zig i64Const Mir.Opcode
+lib/backend/codegen/call.zig i64Const Mir.Opcode
+lib/backend/codegen/call.zig strConst Mir.DefKind
+lib/backend/codegen/dispatch.zig psdConst Mir.DefKind
+lib/backend/codegen/file.zig emitInstance op.OpKind
+lib/backend/codegen/file.zig emitInstance op.OpKind
+lib/backend/codegen/file.zig emitStateCtl op.OpKind
+lib/backend/codegen/file.zig emitStateCtl op.OpKind
+lib/backend/codegen/file.zig flowOnlySignalFlowNet Ast.Direction
+lib/backend/codegen/file.zig fsmStateCtl op.OpKind
+lib/backend/codegen/file.zig paramDefault Ast.Type
+lib/backend/codegen/hoist.zig hpPureInst Ast.ExprTag
+lib/backend/codegen/hoist.zig hpPureInst Mir.Opcode
+lib/backend/codegen/hoist.zig libmClass Mir.Opcode
+lib/backend/codegen/hoist.zig pcClass Ast.ExprTag
+lib/backend/codegen/hoist.zig pcClass Mir.Opcode
+lib/backend/codegen/outline.zig emitTerm Mir.Opcode
+lib/backend/codegen/render.zig foldHidesSlot Ast.ExprTag
+lib/backend/codegen/render.zig maskCmp Mir.Opcode
+lib/backend/codegen/render.zig renderInst Mir.Opcode
+lib/backend/codegen/render.zig renderOp Mir.Opcode
+lib/backend/codegen/render.zig renderOp Mir.Opcode
+lib/backend/codegen/render.zig renderVal Mir.DefKind
+lib/backend/codegen/unit.zig buildJobs op.OpKind
+lib/backend/codegen/unit.zig retention Mir.DefKind
+lib/backend/unit_plan.zig eagerlyUses Ast.ExprTag
+lib/backend/unit_plan.zig fuseSingleUse Ast.ExprTag
+lib/frontend/parser/generate.zig constIndex Ast.BinaryOp
+lib/frontend/parser/generate.zig constIndex Ast.ExprTag
+lib/frontend/parser/generate.zig constIndex Ast.UnaryOp
+lib/frontend/parser/specify.zig parseGates Ast.GateKind
+lib/ir/analysis.zig buildCfg Mir.Opcode
+lib/ir/analysis.zig buildValueTypes Mir.Opcode
+lib/ir/analysis.zig foldConst Ast.ExprTag
+lib/ir/analysis.zig foldConst Mir.DefKind
+lib/ir/analysis.zig foldConst Mir.Opcode
+lib/ir/analysis.zig foldConst Mir.Opcode
+lib/ir/analysis.zig liveStmt Mir.Opcode
+lib/ir/elaborate/clone.zig constIntLit Ast.ExprTag
+lib/ir/elaborate/clone.zig constIntLit Ast.UnaryOp
+lib/ir/elaborate/names.zig constInt Ast.BinaryOp
+lib/ir/elaborate/names.zig constInt Ast.ExprTag
+lib/ir/elaborate/names.zig constInt Ast.UnaryOp
+lib/ir/elaborate/paramset.zig constReal Ast.BinaryOp
+lib/ir/elaborate/paramset.zig constReal Ast.ExprTag
+lib/ir/elaborate/paramset.zig constReal Ast.UnaryOp
+lib/ir/ifconv.zig countPreds Mir.Opcode
+lib/ir/lower.zig strLitBytes Ast.ExprTag
+lib/ir/lower.zig strNum Mir.DefKind
+lib/ir/lower/analog_op.zig appendVectorArg Ast.ExprTag
+lib/ir/lower/analog_op.zig noiseCoeff Ast.ExprTag
+lib/ir/lower/analog_op.zig noiseCoeff Mir.DefKind
+lib/ir/lower/analog_op.zig noiseCoeff Mir.Opcode
+lib/ir/lower/constfold.zig foldBinary Ast.BinaryOp
+lib/ir/lower/constfold.zig foldExpr Ast.ExprTag
+lib/ir/lower/constfold.zig foldExpr Ast.UnaryOp
+lib/ir/lower/constfold.zig foldStrBinary Ast.BinaryOp
+lib/ir/lower/constfold.zig integerSourceSigned Ast.BinaryOp
+lib/ir/lower/constfold.zig integerSourceSigned Ast.ExprTag
+lib/ir/lower/constfold.zig integerSourceSigned Ast.UnaryOp
+lib/ir/lower/constfold.zig isShiftOperand Ast.ExprTag
+lib/ir/lower/constfold.zig mixedShiftComparison Ast.BinaryOp
+lib/ir/lower/context.zig collectInitialStmt Ast.Stmt
+lib/ir/lower/context.zig scanContextExpr Ast.ExprTag
+lib/ir/lower/context.zig scanContextExpr Ast.ExprTag
+lib/ir/lower/contrib.zig branchKey Ast.ExprTag
+lib/ir/lower/contrib.zig coeffIsConst Mir.DefKind
+lib/ir/lower/contrib.zig containsDdt Ast.ExprTag
+lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
+lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
+lib/ir/lower/contrib.zig isMfactorRead Ast.ExprTag
+lib/ir/lower/contrib.zig lowerReactive Ast.BinaryOp
+lib/ir/lower/contrib.zig lowerReactive Ast.ExprTag
+lib/ir/lower/contrib.zig lowerReactive Ast.UnaryOp
+lib/ir/lower/contrib.zig noiseSrcsOf Ast.ExprTag
+lib/ir/lower/contrib.zig scalesByMfactor Ast.BinaryOp
+lib/ir/lower/contrib.zig scalesByMfactor Ast.ExprTag
+lib/ir/lower/contrib.zig scalesByMfactor Ast.UnaryOp
+lib/ir/lower/contrib.zig scanFinite Ast.ExprTag
+lib/ir/lower/contrib.zig scanFinite Mir.DefKind
+lib/ir/lower/contrib.zig scanFinite Mir.Opcode
+lib/ir/lower/contrib.zig scanFinite Mir.Opcode
+lib/ir/lower/contrib.zig splitTerm Ast.BinaryOp
+lib/ir/lower/contrib.zig splitTerm Ast.ExprTag
+lib/ir/lower/contrib.zig splitTerm Ast.UnaryOp
+lib/ir/lower/control.zig isAnalysisOrConst Ast.ExprTag
+lib/ir/lower/event.zig containsFlowRead Ast.ExprTag
+lib/ir/lower/event.zig formatBits Ast.BinaryOp
+lib/ir/lower/event.zig formatBits Ast.ExprTag
+lib/ir/lower/event.zig formatBits Ast.UnaryOp
+lib/ir/lower/event.zig lowerEventExpr Ast.ExprTag
+lib/ir/lower/expr.zig cmp Ast.BinaryOp
+lib/ir/lower/expr.zig hasStatefulOp Ast.ExprTag
+lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
+lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
+lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
+lib/ir/lower/expr.zig lowerConcat Mir.DefKind
+lib/ir/lower/expr.zig lowerConcat Mir.DefKind
+lib/ir/lower/expr.zig lowerUnary Mir.DefKind
+lib/ir/lower/func.zig funcArrayIn Ast.ExprTag
+lib/ir/lower/func.zig funcArrayOut Ast.ExprTag
+lib/ir/lower/func.zig scanCallSites Ast.Stmt
+lib/ir/lower/func.zig scanCallSitesExpr Ast.ExprTag
+lib/ir/lower/hier_name.zig checkAliasCall Ast.ExprTag
+lib/ir/lower/node.zig nodeOf Ast.ExprTag
+lib/ir/lower/param.zig rangeBound Ast.ExprTag
+lib/ir/lower/param.zig scanHeld Ast.Stmt
+lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
+lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
+lib/ir/lower/stmt.zig arrayRef Ast.ExprTag
+lib/ir/lower/stmt.zig resolveLvalue Ast.ExprTag
+lib/ir/lower/table_model.zig isTableArray Ast.ExprTag
+lib/ir/mir.zig emit Ast.ExprTag
+lib/ir/mir.zig opClass Mir.Opcode
+lib/ir/mir.zig opIsInteger Mir.Opcode
+lib/ir/proof/lattice.zig domainOf Mir.Opcode
+lib/ir/proof/lattice.zig isPredicateValue Mir.Opcode
+lib/ir/proof/prover.zig binaryTransfer Mir.Opcode
+lib/ir/proof/prover.zig condFacts Ast.ExprTag
+lib/ir/proof/prover.zig condFacts Mir.Opcode
+lib/ir/proof/prover.zig condFacts Mir.Opcode
+lib/ir/proof/prover.zig describe Mir.DefKind
+lib/ir/proof/prover.zig foldBound Ast.BinaryOp
+lib/ir/proof/prover.zig foldBound Ast.ExprTag
+lib/ir/proof/prover.zig foldBound Ast.UnaryOp
+lib/ir/proof/prover.zig integerIv Mir.Opcode
+lib/ir/proof/prover.zig literalNumber Mir.DefKind
+lib/ir/proof/prover.zig opLabel Mir.Opcode
+lib/ir/proof/prover.zig provablyInteger Mir.DefKind
+lib/ir/proof/prover.zig unaryTransfer Mir.Opcode
+lib/ir/proof/prover.zig unaryTransfer Mir.Opcode
+lib/ir/proof/prover.zig unboundedLeaf Mir.DefKind
+lib/ir/proof/prover.zig valueSpan Mir.DefKind
+lib/ir/proof/prover.zig warnNotFinite Mir.DefKind
+src/sim/digital/compile.zig checkEvent Ast.ExprTag
+src/sim/digital/compile.zig compileStmt Ast.Stmt
+src/sim/digital/compile.zig constantExpression Ast.ExprTag
+src/sim/digital/compile.zig infer Ast.ExprTag
+src/sim/digital/compile.zig leafType Ast.ExprTag
+src/sim/digital/compile.zig readSlots Ast.Stmt
+src/sim/digital/compile.zig sensitivity Ast.ExprTag
+src/sim/digital/compile.zig unsizedConcatOperand Ast.BinaryOp
+src/sim/digital/compile.zig unsizedConcatOperand Ast.ExprTag
+src/sim/digital/compile.zig unsizedConcatOperand Ast.UnaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.BinaryOp
+src/sim/digital/exec.zig evalContext Ast.ExprTag
+src/sim/digital/exec.zig evalContext Ast.UnaryOp
+src/sim/digital/exec.zig evalContext Ast.UnaryOp
+src/sim/digital/exec.zig evalContext Ast.UnaryOp
+src/sim/digital/exec.zig execute Ast.Stmt
+src/sim/digital/exec.zig leaf Ast.ExprTag
+src/sim/digital/exec.zig suspendOn Ast.ExprTag
+src/sim/digital/net.zig netPull Ast.NetKind
+src/sim/digital/net.zig undriven Ast.NetKind
+src/sim/digital/net.zig wired Ast.NetKind
+src/sim/digital/net.zig wiredLogic Ast.NetKind
+src/sim/digital/root.zig declaredDelay Ast.ExprTag

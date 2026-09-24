@@ -6,8 +6,9 @@
 //! nearly everything, and this file does not duplicate it.
 //!
 //! What lands HERE is the residue: a claim that spans two modules which neither
-//! of them can make, because neither imports the other. There is exactly one
-//! today, below.
+//! of them can make, because neither imports the other. There are two today:
+//! the contract check below, and `exhaustive.zig`, which reads the source of
+//! every module against enums from `frontend` and `ir` at once.
 //!
 //! `refAllDecls` over every module is the second job. Zig analyses lazily, so a
 //! `pub` decl nothing references is never type-checked: without this, `zig build
@@ -24,6 +25,9 @@ pub const backend = @import("backend");
 pub const sim = @import("sim");
 pub const vera = @import("vera");
 pub const vpi = @import("vpi");
+
+/// The stage-boundary exhaustiveness guard and its ratchet list.
+pub const exhaustive = @import("exhaustive.zig");
 
 test {
     std.testing.refAllDecls(@This());

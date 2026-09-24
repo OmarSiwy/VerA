@@ -102,12 +102,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(testRun(b, "cli", cli_mod, runner));
     // `tests/test_all.zig` is the one compilation that has every module at once,
     // and it owns the claims that span two of them.
-    test_step.dependOn(testRun(b, "test_all", b.createModule(.{
+    const all_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_all.zig"),
         .target = target,
         .optimize = optimize,
         .imports = mods,
-    }), runner));
+    });
+    // ONE PATH, because the exhaustiveness guard (`tests/exhaustive.zig`) reads
+    // `lib/` and `src/` as SOURCE at test time and the test's cwd is wherever
+    // `zig build` was typed. It is absolute for the reason `fixture_root` is.
+    const repo = b.addOptions();
+    repo.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+    all_mod.addOptions("repo_options", repo);
+    test_step.dependOn(testRun(b, "test_all", all_mod, runner));
 
     // The suite runner's options are the FOUR PATHS it cannot compute itself,
     // and nothing else. Every one is absolute and so needs `b.pathFromRoot` or
