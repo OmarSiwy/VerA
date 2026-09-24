@@ -459,7 +459,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p04_06_analog_objects.c",
         .design = "tests/fixtures/ch11_vpi/p04_analog.va",
-        .stdout = "p02: p04_06_analog_objects checks=125\n",
+        .stdout = "p02: p04_06_analog_objects checks=136\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p04_07_behaviour_objects.c",

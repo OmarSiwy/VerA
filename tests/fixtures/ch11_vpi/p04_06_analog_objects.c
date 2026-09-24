@@ -57,7 +57,11 @@
  *
  * This is a compile of the design and not an analysis, so nothing here reads
  * a value; §11.6.7's "real value / imaginary value" are vpi_get_analog_value(),
- * which needs a solution this process does not compute.
+ * which needs a solution this process does not compute. What 12.10 does fix
+ * without one is what the routine accepts: "the simulation value of VPI
+ * analog vpiFlow or vpiPotential (node or branch) quantity objects ...
+ * placed in an s_vpi_analog_value structure, which has been allocated by
+ * the user" — so a net, NULL, and a quantity with no structure are refused.
  */
 
 //! lrm 11.6.2
@@ -68,6 +72,7 @@
 //! lrm-reject 11.6.6
 //! lrm 11.6.7
 //! lrm-reject 11.6.7
+//! lrm-reject 12.10
 //! lrm 12.19
 //! lrm 12.23
 //! lrm 12.33.2
@@ -251,6 +256,18 @@ static void nodes_and_branches(void)
   expect_error("vpi_get_str(vpiName, quantity)");
   CHECK(vpi_handle(vpiModule, qf) == NULL, "11.6.7: no module arrow leaves a quantity");
   expect_error("vpi_handle(vpiModule, quantity)");
+
+  /* 12.10 */
+  {
+    s_vpi_analog_value av;
+    av.format = vpiRealVal;
+    vpi_get_analog_value(p02_by_name("p04_analog.mid"), &av);
+    expect_error("vpi_get_analog_value(net)");
+    vpi_get_analog_value(NULL, &av);
+    expect_error("vpi_get_analog_value(NULL)");
+    vpi_get_analog_value(qp, NULL);
+    expect_error("vpi_get_analog_value(quantity, NULL)");
+  }
 }
 
 static void startup(void)
