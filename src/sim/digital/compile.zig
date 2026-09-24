@@ -859,6 +859,12 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     }
                 },
                 .dump => |op| try @import("vcd.zig").check(self, op, s.args, tok),
+                // §17.2.2: the descriptor, then `$display`'s own arguments.
+                .fshow => |sh| {
+                    if (s.args.len == 0 or s.args[0] == .none) return self.fail(tok, "a §17.2.2 file output task's first argument is a descriptor", .{});
+                    try checkExpr(self, s.args[0]);
+                    try display.display(self, s.args[1..], null, sh);
+                },
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);
