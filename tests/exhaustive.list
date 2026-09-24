@@ -68,13 +68,10 @@ lib/frontend/parser/generate.zig constIndex Ast.BinaryOp
 lib/frontend/parser/generate.zig constIndex Ast.ExprTag
 lib/frontend/parser/generate.zig constIndex Ast.UnaryOp
 lib/frontend/parser/specify.zig parseGates Ast.GateKind
-lib/ir/analysis.zig buildCfg Mir.Opcode
-lib/ir/analysis.zig buildValueTypes Mir.Opcode
 lib/ir/analysis.zig foldConst Ast.ExprTag
 lib/ir/analysis.zig foldConst Mir.DefKind
 lib/ir/analysis.zig foldConst Mir.Opcode
 lib/ir/analysis.zig foldConst Mir.Opcode
-lib/ir/analysis.zig liveStmt Mir.Opcode
 lib/ir/elaborate/clone.zig constIntLit Ast.ExprTag
 lib/ir/elaborate/clone.zig constIntLit Ast.UnaryOp
 lib/ir/elaborate/names.zig constInt Ast.BinaryOp
@@ -131,10 +128,6 @@ lib/ir/lower/stmt.zig arrayRef Ast.ExprTag
 lib/ir/lower/stmt.zig resolveLvalue Ast.ExprTag
 lib/ir/lower/table_model.zig isTableArray Ast.ExprTag
 lib/ir/mir.zig emit Ast.ExprTag
-lib/ir/mir.zig opClass Mir.Opcode
-lib/ir/mir.zig opIsInteger Mir.Opcode
-lib/ir/proof/lattice.zig domainOf Mir.Opcode
-lib/ir/proof/lattice.zig isPredicateValue Mir.Opcode
 lib/ir/proof/prover.zig binaryTransfer Mir.Opcode
 lib/ir/proof/prover.zig condFacts Ast.ExprTag
 lib/ir/proof/prover.zig condFacts Mir.Opcode
@@ -143,9 +136,7 @@ lib/ir/proof/prover.zig describe Mir.DefKind
 lib/ir/proof/prover.zig foldBound Ast.BinaryOp
 lib/ir/proof/prover.zig foldBound Ast.ExprTag
 lib/ir/proof/prover.zig foldBound Ast.UnaryOp
-lib/ir/proof/prover.zig integerIv Mir.Opcode
 lib/ir/proof/prover.zig literalNumber Mir.DefKind
-lib/ir/proof/prover.zig opLabel Mir.Opcode
 lib/ir/proof/prover.zig provablyInteger Mir.DefKind
 lib/ir/proof/prover.zig unaryTransfer Mir.Opcode
 lib/ir/proof/prover.zig unaryTransfer Mir.Opcode

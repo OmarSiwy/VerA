@@ -26,6 +26,8 @@
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const assert = std.debug.assert;
+/// The per-opcode fact table (class, type, domain, …).
+pub const opcode = @import("opcode.zig");
 
 const Mir = @This();
 
@@ -59,11 +61,13 @@ pub const Block = enum(u32) { entry = 0, _ };
 pub const StrId = Ast.StrId;
 
 /// Opcode set. LRM §4.2 (arith/rel/logic/bit/shift), §4.3 (math), casts.
-/// Closed enum → switch in hot loops (no vtable). Smallest tag.
+/// Closed enum → switch in hot loops (no vtable). Smallest tag. Every opcode
+/// has a row of IR facts in `opcode.zig`; adding one here is a compile error
+/// there until the row exists.
 ///
-/// Naming convention (load-bearing, `opIsInteger` relies on it): a leading `f`
-/// is the real-valued form, a leading `i` the integer form. Math functions
-/// (§4.3) are always real-valued and carry the bare LRM name.
+/// Naming convention: a leading `f` is the real-valued form, a leading `i` the
+/// integer form. Math functions (§4.3) are always real-valued and carry the
+/// bare LRM name.
 pub const Opcode = enum(u8) {
     // --- arithmetic §4.2.4 (+ unary §4.2.3, modulus §4.2.4) ---
     fadd,
@@ -176,90 +180,13 @@ pub const OpClass = enum(u8) { unary, binary, ternary, phi, branch, jump, call }
 
 /// Operand shape of an opcode. Drives `instData` decoding.
 pub fn opClass(op: Opcode) OpClass {
-    return switch (op) {
-        .fneg,
-        .ineg,
-        .lognot,
-        .bitnot,
-        .sqrt,
-        .exp,
-        .expm1,
-        .ln,
-        .ln1p,
-        .log10,
-        .floor,
-        .ceil,
-        .fabs,
-        .iabs,
-        .sin,
-        .cos,
-        .tan,
-        .asin,
-        .acos,
-        .atan,
-        .sinh,
-        .cosh,
-        .tanh,
-        .asinh,
-        .acosh,
-        .atanh,
-        .fi_cast,
-        .if_cast,
-        .opt_barrier,
-        .path_prev,
-        .path_acc,
-        => .unary,
-        .select => .ternary,
-        .phi => .phi,
-        .branch => .branch,
-        .jump => .jump,
-        .call => .call,
-        // everything else is a two-operand op
-        else => .binary,
-    };
+    return opcode.get(op).class;
 }
 
 /// Does `op` produce an integer (LRM §3.2 integer) rather than a real?
 /// Relational/equality/logical operators yield integer 0/1 (§4.2.5, §4.2.8).
-/// Shared here so proof.zig and codegen.zig do not each carry the switch.
 pub fn opIsInteger(op: Opcode) bool {
-    return switch (op) {
-        .iadd,
-        .isub,
-        .imul,
-        .idiv,
-        .imod,
-        .ineg,
-        .flt,
-        .fgt,
-        .fle,
-        .fge,
-        .feq,
-        .fne,
-        .ilt,
-        .igt,
-        .ile,
-        .ige,
-        .ieq,
-        .ine,
-        .logand,
-        .logor,
-        .lognot,
-        .bitand,
-        .bitor,
-        .bitxor,
-        .bitxnor,
-        .bitnot,
-        .shl,
-        .shr,
-        .iabs,
-        .imin,
-        .imax,
-        .ipow,
-        .fi_cast,
-        => true,
-        else => false,
-    };
+    return opcode.get(op).int;
 }
 
 /// One instruction row. Fixed width; operands are Value/Block/StrId handles

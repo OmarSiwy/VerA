@@ -719,10 +719,8 @@ pub const Prover = struct {
     /// Integer results (§3.2): clamp to the i64 range so an integer expression
     /// can never make a unit `.strict`. Relational/logical results are 0/1.
     fn integerIv(op: Mir.Opcode) proof_lattice.Interval {
-        return switch (op) {
-            .flt, .fgt, .fle, .fge, .feq, .fne, .ilt, .igt, .ile, .ige, .ieq, .ine, .logand, .logor, .lognot => .{ .lo = 0, .hi = 1 },
-            else => .{ .lo = -9.223372036854776e18, .hi = 9.223372036854776e18 },
-        };
+        if (Mir.opcode.get(op).bool01) return .{ .lo = 0, .hi = 1 };
+        return .{ .lo = -9.223372036854776e18, .hi = 9.223372036854776e18 };
     }
 
     fn unaryTransfer(op: Mir.Opcode, a: proof_lattice.Interval, af: bool) Abstract {
@@ -1339,23 +1337,8 @@ pub fn callAbstract(name: []const u8) Prover.Abstract {
     return .{ .iv = .top, .finite = false };
 }
 
-/// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics. `log10` is
-/// Verilog-A's `log` (mir.zig naming note).
-pub fn opLabel(op: Mir.Opcode) []const u8 {
-    return switch (op) {
-        .ln => "ln()",
-        .log10 => "log()",
-        .ln1p => "ln1p()",
-        .sqrt => "sqrt()",
-        .asin => "asin()",
-        .acos => "acos()",
-        .atanh => "atanh()",
-        .acosh => "acosh()",
-        .tan => "tan()",
-        .pow => "pow()",
-        else => @tagName(op),
-    };
-}
+/// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics.
+pub const opLabel = Mir.opcode.label;
 
 // --- endpoint arithmetic: NaN (inf-inf) folds to the wide side. A UNARY NaN
 // endpoint is never folded any more: it means "operand straddles the domain
