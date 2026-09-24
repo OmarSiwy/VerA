@@ -239,6 +239,10 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // not skip a misspelled connect module or discipline in one.
     try f.checkConnectRules();
     try f.checkNetDisciplines(); // A.2.1.3, every module: see there
+    // §7.4.2 "the real-value nets shall obey the rules imposed by 3.7": the
+    // same structural check the digital runner makes (E0918/E0919).
+    try @import("frontend").wreal.check(ctx.file, ctx.tok_starts, ctx.bag);
+    if (ctx.bag.failed()) f.had_error = true;
 
     // The tree of one. Returned BY POINTER, so a module with no children is
     // handed to lowering as the parser built it — same ids, same order, same
@@ -543,7 +547,10 @@ pub const Flatten = struct {
     /// "the DECLARATION's token" convention `resolveDiscipline`'s addNet
     /// states).
     const Segs = struct {
+        /// `.none` for an undeclared port: see `resolveDiscipline`.
         discs: std.ArrayList(Ast.StrId) = .empty,
+        /// Each arrival's instance path, parallel to `discs`.
+        paths: std.ArrayList([]const u8) = .empty,
         tok: u32,
     };
 

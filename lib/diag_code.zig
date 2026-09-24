@@ -670,6 +670,9 @@ pub const Code = enum(u16) {
     /// A.3.3 a switch terminal the grammar makes a `net_lvalue` names a
     /// variable (§8.5.3.5).
     E0483,
+    /// §8.5.1 a digital event control waits on an analog probe that no
+    /// analog event function monitors.
+    E0484,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5558,6 +5561,25 @@ fn infoOf(c: Code) Info {
             \\has no drivers to resolve.
             \\
             \\Declare the terminal as a `wire`.
+            ,
+        },
+        .E0484 => .{
+            .title = "an A2D event must be an analog event control",
+            .lrm = "8.5.1",
+            .explain =
+            \\LRM 8.5.1: "Note that A2D events must be analog event controlled
+            \\statements ( e.g., @cross, @timer). These are scheduled just like
+            \\other event controlled statements in Verilog-HDL (e.g., @posedge)."
+            \\
+            \\A continuous value changes continuously; the discrete context sees a
+            \\change of one only through a monitored analog event (7.3.5, Syntax
+            \\7-3's analog_event_functions), which the analog solver locates in
+            \\time. `@(V(a))` or `@(posedge V(a) > 1)` in an `always` block asks
+            \\the digital engine to wake on a probe no analog event function
+            \\monitors.
+            \\
+            \\Write the threshold as an event: `@(cross(V(a) - 1, 1))` or
+            \\`@(above(V(a) - 1))`.
             ,
         },
 
