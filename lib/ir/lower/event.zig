@@ -651,7 +651,7 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
                 continue;
             }
             const v = try self.call(if (gets) "$fgets$str" else "$ferror$str", &.{ n, fd });
-            try self.builder.writeVariable(slot.place, self.cur, v);
+            try lower_stmt.writeLvalue(self, slot, v);
             continue;
         }
         const callee: []const u8 = switch (slot.ty) {
@@ -663,9 +663,9 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
         const v = try self.call(callee, &.{ n, fd, fmt.?, index });
         // Only successful assignments change destinations. Reuse the count
         // from the sequenced file read; never consume another input window.
-        const old = try self.builder.readVariable(slot.place, self.cur);
+        const old = try lower_stmt.readLvalue(self, slot);
         const assigned = try self.emit(.igt, &.{ n, index });
-        try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ assigned, v, old }));
+        try lower_stmt.writeLvalue(self, slot, try self.emit(.select, &.{ assigned, v, old }));
         item += 1;
     }
     return n;
@@ -982,7 +982,7 @@ pub fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const 
     try prepareFormatArgs(self, live.items, tys.items, vals.items);
     self.out.uses.insert(.str_tasks);
     const v = try self.call("$sformat", vals.items);
-    try self.builder.writeVariable(slot.place, self.cur, v);
+    try lower_stmt.writeLvalue(self, slot, v);
 }
 
 /// §9.5.4.2 `code = $sscanf( str, format, args )`. One source call becomes one
@@ -1029,9 +1029,9 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
         const v = try self.call(callee, &.{ src, fmt, index });
         // Read the current SSA value per assignment: if a destination occurs
         // twice, a failed later conversion retains the earlier successful one.
-        const old = try self.builder.readVariable(slot.place, self.cur);
+        const old = try lower_stmt.readLvalue(self, slot);
         const assigned = try self.emit(.igt, &.{ count, index });
-        try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ assigned, v, old }));
+        try lower_stmt.writeLvalue(self, slot, try self.emit(.select, &.{ assigned, v, old }));
         item += 1;
     }
     return count;
@@ -1055,9 +1055,9 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
     };
     const zero = try self.mir.addIntConst(self.arena, 0);
     const v = try self.call(callee, &.{ try self.call("$plusarg$str", &.{user}), user, zero });
-    const old = try self.builder.readVariable(slot.place, self.cur);
+    const old = try lower_stmt.readLvalue(self, slot);
     const hit = try self.emit(.igt, &.{ found, zero });
-    try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ hit, v, old }));
+    try lower_stmt.writeLvalue(self, slot, try self.emit(.select, &.{ hit, v, old }));
     return found;
 }
 

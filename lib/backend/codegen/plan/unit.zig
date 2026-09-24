@@ -219,7 +219,9 @@ fn markFileDeps(self: *UnitPlan) Error!void {
                         if (self.fileDep(self.mir.phiPair(inst, k).value)) break :blk true;
                     break :blk false;
                 },
-                .branch, .jump => false,
+                .branch, .jump, .anew => false,
+                .load => |d| self.fileDep(d.arr) or self.fileDep(d.index),
+                .store => |d| self.fileDep(d.arr) or self.fileDep(d.index) or self.fileDep(d.value),
             };
             if (hit) {
                 self.file_dep[i] = true;
@@ -393,8 +395,14 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         if (def != .inst_result) continue;
         const op = self.mir.instOp(def.inst_result);
         // A `call` is never inlined: §4.5 operators and ch9 functions are
-        // evaluated once per step regardless of which arm is taken.
+        // evaluated once per step regardless of which arm is taken. Nor is
+        // §3.2.2 array storage: a load must run where it stands, before any
+        // later store to the same storage (`Mir.Opcode.store`).
         if (op == .call or op == .phi) continue;
+        switch (Mir.opClass(op)) {
+            .anew, .load, .store => continue,
+            .unary, .binary, .ternary, .phi, .branch, .jump, .call => {},
+        }
         self.inlined[v] = true;
         // ponytail: addUses already moves eager operands into lazy-arm counts.
         self.addUses(def.inst_result, true);
@@ -418,6 +426,10 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
             self.uses_cache = true;
             continue;
         }
+        // §3.2.2 an array version is its storage, not a value: `anew` and
+        // `store` are statements without a slot, and an array phi is the
+        // same storage on every edge.
+        if (self.an.arrOf(lv) != null) continue;
         const def = self.mir.valueDef(lv);
         if (def != .inst_result) continue;
         // §4.5 an operator's INPUT is not a `mark`ed operand — `callArgIsValue`
@@ -478,7 +490,16 @@ fn markOperands(self: *UnitPlan, work: *std.ArrayList(Mir.Value), inst: Mir.Inst
             while (i < d.count) : (i += 1) try self.mark(work, self.mir.phiPair(inst, i).value);
         },
         .branch => |d| try self.mark(work, d.cond),
-        .jump => {},
+        .jump, .anew => {},
+        .load => |d| {
+            try self.mark(work, d.arr);
+            try self.mark(work, d.index);
+        },
+        .store => |d| {
+            try self.mark(work, d.arr);
+            try self.mark(work, d.index);
+            try self.mark(work, d.value);
+        },
     }
 }
 
@@ -558,7 +579,16 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
             var i: u32 = 0;
             while (i < d.count) : (i += 1) bump(self, self.mir.phiPair(inst, i).value, false, undo);
         },
-        .branch, .jump => {},
+        .branch, .jump, .anew => {},
+        .load => |d| {
+            bump(self, d.arr, false, undo);
+            bump(self, d.index, false, undo);
+        },
+        .store => |d| {
+            bump(self, d.arr, false, undo);
+            bump(self, d.index, false, undo);
+            bump(self, d.value, false, undo);
+        },
     }
 }
 
@@ -604,6 +634,8 @@ fn fuseSingleUse(self: *UnitPlan) void {
             // `call` is an operator/function evaluated once per step (§4.5),
             // `phi` is materialised as a `var` — neither is an expression.
             if (op == .call or op == .phi) continue;
+            // §3.2.2 a load may move later only past what cannot store.
+            const is_load = Mir.opClass(op) == .load;
             // The user may sit further down the SAME block as long as every
             // statement in between is a pure expression (unary/binary/
             // ternary): a pure op reads only SSA values, so sliding another
@@ -621,7 +653,10 @@ fn fuseSingleUse(self: *UnitPlan) void {
                 const nop = self.mir.instOp(next);
                 if (nop == .call or nop == .phi) break;
                 switch (Mir.opClass(nop)) {
-                    .unary, .binary, .ternary => {},
+                    .unary, .binary, .ternary, .load => {},
+                    // A pure op reads no storage, so it slides past a store;
+                    // a load does not.
+                    .anew, .store => if (is_load) break,
                     .phi, .branch, .jump, .call => break,
                 }
             }
@@ -643,7 +678,9 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
         .call => |d| for (d.args, 0..) |a, i| {
             if (cg.callArgIsValue(d.callee, i, self.dispHere()) and self.an.rv(a) == v) break true;
         } else false,
-        .phi, .branch, .jump => false,
+        .phi, .branch, .jump, .anew => false,
+        .load => |d| self.an.rv(d.index) == v,
+        .store => |d| self.an.rv(d.index) == v or self.an.rv(d.value) == v,
     };
 }
 

@@ -79,7 +79,7 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
                     preds[@intFromEnum(d.else_block)] += 1;
                 },
                 .jump => |d| preds[@intFromEnum(d.target)] += 1,
-                .unary, .binary, .ternary, .phi, .call => {},
+                .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
             }
         }
     }
@@ -97,7 +97,12 @@ fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32
         if (join != null) return null; // an inst after the terminator (live phi rows land here)
         switch (mir.instData(inst)) {
             .unary => |u| if (u.op == .opt_barrier) return null,
-            .binary, .ternary => {},
+            // §3.2.2 a load is a pure read of the version it names, so it may
+            // move into X. A store may not: both arms' versions would be live
+            // at the join, and a `select` of two versions of ONE storage has
+            // nothing to select between (`Mir.Opcode.store`).
+            .binary, .ternary, .load => {},
+            .anew, .store => return null,
             .jump => |d| join = d.target,
             // A collapsed phi row is dead (alias IS the rewrite — ssa.zig
             // contract 1); a live one in a single-pred block cannot exist
@@ -222,7 +227,7 @@ fn terminator(mir: *const Mir, b: Mir.Block) ?Mir.Inst {
     var it = mir.blockInsts(b);
     while (it.next()) |inst| switch (Mir.opClass(mir.instOp(inst))) {
         .branch, .jump => return inst,
-        .unary, .binary, .ternary, .phi, .call => {},
+        .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
     };
     return null;
 }

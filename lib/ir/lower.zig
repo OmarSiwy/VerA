@@ -598,6 +598,25 @@ pub const HeldVar = struct {
     /// The variable's value at the END of the analog block; `updateState`
     /// stores it back on the accepted solution. Filled by `finishHeldVars`.
     final: Mir.Value = .undef,
+    /// §3.2.2 a held memory-backed array: its `out.mem_arrays` index, and
+    /// `seed`/`final` are array VERSIONS. `none_u32` for a scalar.
+    array: u32 = none_u32,
+    /// The array's declared initializer, one Value per element (`init` is
+    /// the element type's zero). Empty: every element starts at zero.
+    inits: []const Mir.Value = &.{},
+};
+
+/// §3.2.2 one memory-backed array (`Lowered.mem_arrays`).
+pub const MemArray = struct {
+    /// Source spelling, for a comment and a diagnostic; never an identity.
+    name: []const u8,
+    /// Element count over every dimension.
+    len: u32,
+    /// `.real` or `.integer` (a string array stays scalarized).
+    ty: Ty,
+    /// The `out.held_vars` row it is, or `none_u32`: a §5.10 held array starts
+    /// every evaluation from its `Instance` field instead of zero.
+    held: u32 = none_u32,
 };
 
 /// §9.17.3 one `$limit(access, user_function, …)` STATE SLOT.
@@ -658,12 +677,19 @@ pub const Display = struct {
 };
 
 pub const VarSlot = struct { place: Ssa.Place, ty: Ty };
+pub const none_u32 = std.math.maxInt(u32);
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
     dims: []const lower_param.Bounds,
     ty: Ty,
+    /// §3.2.2 set for an array some subscript indexes at run time: its one
+    /// SSA place holds the current array VERSION (`Mir.Opcode.anew`/`store`)
+    /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
+    /// element under `elemName`. See `lower_param.declareVarDecl`.
+    mem: ?Mem = null,
+    pub const Mem = struct { place: Ssa.Place, id: u32 };
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
@@ -1389,6 +1415,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // variable needs a persistent slot is decided at its declaration, not at
     // the assignment that reveals it — see `holdSlot`.
     try lower_param.markHeldVars(self, module);
+    try lower_param.markMemArrays(self, module);
     try lower_param.checkOneItemPerScope(self, module.vars);
     // A.6.2 the digital `initial` block, for the same reason and at the same
     // point as the §5.10 scan above: what a variable holds at the top of every

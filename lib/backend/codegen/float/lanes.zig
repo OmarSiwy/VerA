@@ -72,7 +72,10 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
         .ternary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or
             eagerCostly(self, @enumFromInt(row.b), depth + 1) or
             eagerCostly(self, @enumFromInt(row.c), depth + 1),
-        .phi, .branch, .jump, .call => false,
+        // §3.2.2 a load is one bounds-checked memory read; its index is the
+        // only inline operand.
+        .load => eagerCostly(self, @enumFromInt(row.b), depth + 1),
+        .phi, .branch, .jump, .call, .anew, .store => false,
     };
 }
 
@@ -94,7 +97,9 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
         .ternary => eagerSafe(self, @enumFromInt(row.a), depth + 1) and
             eagerSafe(self, @enumFromInt(row.b), depth + 1) and
             eagerSafe(self, @enumFromInt(row.c), depth + 1),
-        .branch, .jump, .call => false,
+        // §3.2.2 total: an index outside the array reads zero.
+        .load => eagerSafe(self, @enumFromInt(row.b), depth + 1),
+        .branch, .jump, .call, .anew, .store => false,
     };
 }
 

@@ -434,6 +434,46 @@ test "lower: genvar loops unroll, procedural loops do not" {
     try std.testing.expectEqual(@as(u32, 1), h.mir.blockCount());
 }
 
+test "lower: §3.2.2 a runtime-indexed array is one storage, a constant-indexed one is scalars" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(a, b);
+        \\  inout a, b;
+        \\  electrical a, b;
+        \\  genvar g;
+        \\  real h[0:7], c[0:1][0:2];
+        \\  integer k, i;
+        \\  analog begin
+        \\    @(initial_step) k = 0;
+        \\    for (g = 0; g < 2; g = g + 1) c[g][1] = V(a,b);
+        \\    for (i = 0; i < 8; i = i + 1) h[i] = c[1][1] * i;
+        \\    h[k] = 2.0 * h[k];
+        \\    I(a,b) <+ h[3] + c[0][1];
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expect(!h.bag.failed());
+    // `h` is read and written at `i` and `k`: one storage of 8. `c` is only
+    // ever indexed by constants and a genvar, so it stays six places.
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.mem_arrays.items.len);
+    try std.testing.expectEqualStrings("h", h.low.out.mem_arrays.items[0].name);
+    try std.testing.expectEqual(@as(u32, 8), h.low.out.mem_arrays.items[0].len);
+    var n = [_]u32{0} ** 3; // anew, load, store
+    for (h.mir.insts.items(.op)) |op| switch (op) {
+        .anew => n[0] += 1,
+        .fload => n[1] += 1,
+        .store => n[2] += 1,
+        else => {}, // else: only the array ops are counted
+    };
+    // One declaration; `h[k]` and `h[3]` read; the loop body and `h[k] =` write.
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2, 2 }, &n);
+    // Row-major, each dimension from its left bound, so `[1:0]` counts down.
+    try std.testing.expectEqual(@as(i64, 3), lower_param.flatIndex(&.{ .{ .lo = 0, .hi = 1 }, .{ .lo = 0, .hi = 2 } }, &.{ 1, 0 }));
+    try std.testing.expectEqual(@as(i64, 1), lower_param.flatIndex(&.{.{ .lo = 0, .hi = 1, .descending = true }}, &.{0}));
+}
+
 test "lower: §5.4.3 port access — what is rejected, and what the unknown is" {
     const cases = [_]struct { src: []const u8, want: diag.Code, msg: []const u8 = "" }{
         // "The expression V(<a>) is invalid for ports and nets, where V is a

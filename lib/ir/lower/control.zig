@@ -261,6 +261,15 @@ fn staticWalk(
             return true;
         },
         .branch, .jump => return false,
+        // §3.2.2 a fresh local array is static; a held one is dynamic, as a
+        // held variable is. An element is static when its version and its
+        // index are, and a version when everything stored into it is.
+        .anew => |a| return self.out.mem_arrays.items[a.array].held == Lower.none_u32,
+        .load => |l| return try staticWalk(self, l.arr, seen, blocks) and
+            try staticWalk(self, l.index, seen, blocks),
+        .store => |st| return try staticWalk(self, st.arr, seen, blocks) and
+            try staticWalk(self, st.index, seen, blocks) and
+            try staticWalk(self, st.value, seen, blocks),
     }
 }
 

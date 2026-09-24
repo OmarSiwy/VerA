@@ -291,6 +291,18 @@ pub const Prover = struct {
             .call => |c| c.args,
             // phi operands are (block, value) pairs — callers use `phiPair`.
             .phi => buf[0..0],
+            .anew => buf[0..0],
+            .load => |l| blk: {
+                buf[0] = l.arr;
+                buf[1] = l.index;
+                break :blk buf[0..2];
+            },
+            .store => |st| blk: {
+                buf[0] = st.arr;
+                buf[1] = st.index;
+                buf[2] = st.value;
+                break :blk buf[0..3];
+            },
         };
     }
 
@@ -309,7 +321,9 @@ pub const Prover = struct {
         for (0..self.mir.insts.len) |i| {
             const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
             const op = self.mir.instOp(inst);
-            if (op == .phi or op == .call or op == .opt_barrier) continue;
+            // §3.2.2 two `anew`s of one array, or two equal stores, are two
+            // versions of one storage at two times — not one value.
+            if (op == .phi or op == .call or op == .opt_barrier or op == .anew or op == .store) continue;
             const result = self.mir.instResult(inst);
             if (result == .undef) continue;
             var buf: [3]Mir.Value = undefined;
@@ -543,7 +557,7 @@ pub const Prover = struct {
                 }
                 return buf[0..2];
             },
-            .ternary, .phi, .branch, .jump, .call => {},
+            .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => {},
         }
         return buf[0..0];
     }
@@ -705,6 +719,23 @@ pub const Prover = struct {
             // spec-given range, everything else is ⊤.
             .call => |c| return self.callTransfer(c.callee, c.args),
             .branch, .jump => return .{ .iv = .top, .finite = false },
+            // §3.2.2 an array version's interval covers every element. A
+            // fresh local array is all zero (§3.2); a held one holds what the
+            // last accepted evaluation stored, which nothing here bounds —
+            // the `$held_real` seed's ⊤. A store widens by what it stores.
+            .anew => |a| return if (self.lowered.mem_arrays.items[a.array].held == Lower.none_u32)
+                .{ .iv = proof_lattice.Interval.point(0), .finite = true }
+            else
+                .{ .iv = .top, .finite = false },
+            .store => |st| return .{
+                .iv = self.ivOf(st.arr).join(self.ivOf(st.value)),
+                .finite = self.isFinite(st.arr) and self.isFinite(st.value),
+            },
+            // An element, or the zero an index outside the array reads.
+            .load => |l| return .{
+                .iv = self.ivOf(l.arr).join(proof_lattice.Interval.point(0)),
+                .finite = self.isFinite(l.arr),
+            },
         }
     }
 

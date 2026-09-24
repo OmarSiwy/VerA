@@ -380,7 +380,7 @@ pub fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?Co
                 if (!accuses(bn.op)) break :blk null;
                 break :blk Mir.opcode.fold(bn.op, &.{ a orelse break :blk null, b orelse break :blk null });
             },
-            .ternary, .phi, .branch, .jump, .call => null,
+            .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => null,
         },
         .undef, .str_const, .param_ref, .block_param => null,
     };

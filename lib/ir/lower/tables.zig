@@ -175,6 +175,11 @@ contributions: std.ArrayList(Lower.Contribution) = .empty, // §5.6
 /// declaration at the top of every evaluation. Each entry gets a persistent
 /// `Instance` slot instead; codegen reads it directly.
 held_vars: std.ArrayList(Lower.HeldVar) = .empty,
+/// §3.2.2 the arrays some subscript indexes at run time. Each is ONE storage
+/// of `len` elements (dimensions flattened in declaration order), reached
+/// through `Mir.Opcode.anew`/`fload`/`iload`/`store` instead of one SSA place
+/// per element; `anew` names its array by index into this list.
+mem_arrays: std.ArrayList(Lower.MemArray) = .empty,
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(Lower.LimitSlot) = .empty,

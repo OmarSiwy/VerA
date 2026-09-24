@@ -515,6 +515,37 @@ pub const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limi
 pub const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
     @embedFile("../filter_kernels.zig");
 
+/// §3.2.2 memory-backed arrays (`Lowered.mem_arrays`): one storage per array,
+/// indexed at run time. Only devices with one carry these.
+pub const arr_txt =
+    \\// ---- §3.2.2 memory-backed arrays ----
+    \\
+    \\/// Element `i` of `a`, or `z` for an index outside it: §3.2.2 names no
+    \\/// element there, and the read gives the element type's zero. The load is
+    \\/// clamped into bounds and the pick is a select, so it never branches.
+    \\fn zArrLd(comptime T: type, a: []const T, i: i64, z: T) T {
+    \\    const k: u64 = @bitCast(i);
+    \\    const v = a[@intCast(@min(k, a.len - 1))];
+    \\    return if (k < a.len) v else z;
+    \\}
+    \\
+    \\/// Store `v` at `i`; an index outside the array writes nothing.
+    \\fn zArrSt(comptime T: type, a: []T, i: i64, v: T) void {
+    \\    const k: u64 = @bitCast(i);
+    \\    if (k < a.len) a[@intCast(k)] = v;
+    \\}
+    \\
+    \\/// The values of an `S` array: what a held array's `f64` `Instance`
+    \\/// field keeps.
+    \\fn zArrVal(comptime S: type, comptime n: usize, a: *const [n]S) [n]f64 {
+    \\    var o: [n]f64 = undefined;
+    \\    for (&o, a) |*d, s| d.* = s.val();
+    \\    return o;
+    \\}
+    \\
+    \\
+;
+
 pub const hist_txt =
     \\/// §4.5.7 the delayed value, as the residual sees it: Output(t) = Input(t − td).
     \\///
@@ -692,6 +723,7 @@ pub fn aliasesOf(comptime src: []const u8) []const u8 {
 pub const prelude_math_txt = aliasesOf(math_txt ++ ops_txt);
 pub const prelude_timer_txt = aliasesOf(timer_txt);
 pub const prelude_hist_txt = aliasesOf(hist_txt);
+pub const prelude_arr_txt = aliasesOf(arr_txt);
 pub const prelude_filt_txt = aliasesOf(filt_txt);
 
 /// §9.4.3 `%<width>d`. Aliased whenever `display_txt` is emitted, which is a

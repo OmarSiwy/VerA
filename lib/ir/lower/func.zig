@@ -316,6 +316,14 @@ pub fn inlineUserFuncPre(
             // is what makes `arrayadd(x, '{y,z})` (§4.7.3) legal — the two
             // actuals have different shapes and the same size.
             const dims = try lower_param.dimsBounds(self, formal.dims, formal.main_tok, fname) orelse continue;
+            // §3.2.2 a formal some subscript in the body indexes at run time:
+            // one storage, filled element by element from the actual.
+            if (lower_param.isMemArray(self, formal.name, ty)) {
+                const place = try lower_param.declareMemArray(self, fname, dims, ty, true);
+                for (vals, 0..) |v, k| try lower_param.storeElem(self, place, try self.mir.addIntConst(self.arena, @intCast(k)), v);
+                try arg_slots.append(self.arena, &.{});
+                continue;
+            }
             try lower_param.declareArray(self, fname, .{ .dims = dims, .ty = ty });
             const slots = try self.arena.alloc(VarSlot, vals.len);
             var sub: [lower_param.max_stack_dims]i64 = undefined;
@@ -353,6 +361,18 @@ pub fn inlineUserFuncPre(
     defer writeback.deinit(self.arena);
     for (fd.args, arg_slots.items) |formal, slots| {
         if (formal.direction != .output and formal.direction != .inout) continue;
+        // A memory-backed formal has no per-element slots; read its cells.
+        if (self.arrays.get(self.file.str(formal.name))) |info| if (info.mem != null) {
+            const vals = try self.arena.alloc(Mir.Value, lower_param.shapeCells(info.dims));
+            var sub: [lower_param.max_stack_dims]i64 = undefined;
+            const idx = try lower_param.subscriptBuf(self, &sub, info.dims.len);
+            for (vals, 0..) |*v, k| {
+                lower_param.shapeSubscripts(info.dims, k, idx);
+                v.* = (try lower_expr.arrayElemValue(self, self.file.str(formal.name), idx)).?.v;
+            }
+            try writeback.append(self.arena, vals);
+            continue;
+        };
         const vals = try self.arena.alloc(Mir.Value, slots.len);
         for (slots, vals) |slot, *v| v.* = try self.builder.readVariable(slot.place, self.cur);
         try writeback.append(self.arena, vals);
@@ -402,7 +422,7 @@ pub fn inlineUserFuncPre(
         // was refusing one with E0311.
         if (try lower_stmt.writeRuntimeIndex(self, actual, actual, .{ .v = vals[0], .ty = astTy(formal.ty) })) continue;
         const slot = try lower_stmt.resolveLvalue(self, actual) orelse continue;
-        try self.builder.writeVariable(slot.place, self.cur, vals[0]);
+        try lower_stmt.writeLvalue(self, slot, vals[0]);
     }
     return result;
 }
@@ -471,14 +491,14 @@ pub fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) O
             const idx = try lower_param.subscriptBuf(self, &sub, info.dims.len);
             for (vals, 0..) |v, k| {
                 lower_param.shapeSubscripts(info.dims, k, idx);
-                const slot = self.vars.get(try lower_param.elemKey(self, &key_buf, aname, idx)) orelse continue;
-                try self.builder.writeVariable(slot.place, self.cur, v);
+                if (info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, aname, idx))) continue;
+                try lower_param.writeElem(self, aname, info, idx, v);
             }
         },
         .assign_pattern, .concat => {
             for (try lower_param.patternElems(self, actual), vals) |e, v| {
                 const slot = try lower_stmt.resolveLvalue(self, e) orelse continue;
-                try self.builder.writeVariable(slot.place, self.cur, v);
+                try lower_stmt.writeLvalue(self, slot, v);
             }
         },
         else => unreachable, // else: the call refused any other shape (`arrayActualCells`, `funcArrayIn`)

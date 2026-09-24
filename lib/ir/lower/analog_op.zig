@@ -723,6 +723,10 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
                 .branch,
                 .jump,
                 .call,
+                .anew,
+                .fload,
+                .iload,
+                .store,
                 => unreachable,
             }
         },
@@ -786,6 +790,15 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
         },
         // Terminators define no value, so no Value resolves to one.
         .branch, .jump => unreachable,
+        // §3.2.2 a generator stored into an array is no longer an amplitude
+        // scaled by a factor of this expression: like a call's argument, it
+        // can only be detected, not differentiated through the storage.
+        .anew => return .absent,
+        .load => |l| return if (try coeffAt(self, l.arr, gen, depth + 1, path) == .absent and
+            try coeffAt(self, l.index, gen, depth + 1, path) == .absent) .absent else .nonlinear,
+        .store => |st| return if (try coeffAt(self, st.arr, gen, depth + 1, path) == .absent and
+            try coeffAt(self, st.index, gen, depth + 1, path) == .absent and
+            try coeffAt(self, st.value, gen, depth + 1, path) == .absent) .absent else .nonlinear,
     }
 }
 

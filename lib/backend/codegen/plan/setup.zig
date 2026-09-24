@@ -333,6 +333,11 @@ const Scan = struct {
                 .binary => s.sv(@enumFromInt(row.a)) and s.sv(@enumFromInt(row.b)),
                 .ternary => s.sv(@enumFromInt(row.a)) and s.sv(@enumFromInt(row.b)) and s.sv(@enumFromInt(row.c)),
                 .phi, .branch, .jump, .call => false,
+                // §3.2.2 array storage is per evaluation: a setup root is one
+                // `Setup` scalar, and an array version is not one.
+                // ponytail: an invariant array (an `analog initial` table)
+                // is recomputed per eval; the upgrade is a `[N]f64` Setup field.
+                .anew, .load, .store => false,
             },
         }
     }

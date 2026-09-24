@@ -153,6 +153,10 @@ alias: []Mir.Value = &.{},
 /// `unknownDeps` answers "all bits", which is the dense fallback.
 deps: []u64 = &.{},
 deps_folded: bool = false,
+/// §3.2.2 per Value: the `Lowered.mem_arrays` row an array VERSION belongs to
+/// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
+/// Its `vty` is the ELEMENT type. Every version of one array is one storage.
+arr_of: []u32 = &.{},
 
 /// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
 /// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
@@ -269,7 +273,7 @@ fn buildCfg(self: *Analysis) Error!void {
                 s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
                 ns = 1;
             },
-            .unary, .binary, .ternary, .phi, .call => {},
+            .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
         };
         self.succs[bi] = try a.dupe(u32, s[0..ns]);
     }
@@ -542,9 +546,14 @@ fn buildValueTypes(self: *Analysis) Error!void {
     // Cost, MEASURED with callgrind over the same corpus (lint + codegen,
     // ReleaseFast): this whole function is ~0.04% of pipeline instructions;
     // analysis.zig + proof.zig + mir.zig together are 1.08%.
+    try self.buildArrOf();
     var v: u32 = 0;
     while (v < self.nv) : (v += 1) {
         const val: Mir.Value = @enumFromInt(v);
+        if (self.arr_of[v] != none_u32) {
+            self.vty[v] = if (self.lowered.mem_arrays.items[self.arr_of[v]].ty == .integer) .int else .real;
+            continue;
+        }
         self.vty[v] = switch (self.mir.valueDef(val)) {
             .undef => .real,
             .float_const => .real,
@@ -583,10 +592,52 @@ fn buildValueTypes(self: *Analysis) Error!void {
                     if (first == .undef) continue;
                     self.vty[v] = self.vty[@intFromEnum(first)];
                 },
-                .unary, .binary, .branch, .jump, .call => {},
+                .unary, .binary, .branch, .jump, .call, .anew, .load, .store => {},
             }
         }
     }
+}
+
+/// Fill `arr_of`. An `anew` names its array and a `store` inherits its
+/// operand's; a phi takes any operand's (lowering joins only versions of one
+/// place, so they agree). A fixpoint because a loop phi reads a store defined
+/// after it; marking only ever adds, so it converges.
+fn buildArrOf(self: *Analysis) Error!void {
+    self.arr_of = try self.arena.alloc(u32, self.nv);
+    @memset(self.arr_of, none_u32);
+    if (self.lowered.mem_arrays.items.len == 0) return;
+    var grew = true;
+    while (grew) {
+        grew = false;
+        for (Mir.Value.first_dynamic..self.nv) |i| {
+            if (self.arr_of[i] != none_u32) continue;
+            const def = self.mir.valueDef(@enumFromInt(i));
+            if (def != .inst_result) continue;
+            const inst = def.inst_result;
+            const id: u32 = switch (self.mir.instData(inst)) {
+                .anew => |d| d.array,
+                .store => |d| self.arr_of[@intFromEnum(self.rv(d.arr))],
+                .phi => |d| blk: {
+                    var k: u32 = 0;
+                    while (k < d.count) : (k += 1) {
+                        const a = self.arr_of[@intFromEnum(self.rv(self.mir.phiPair(inst, k).value))];
+                        if (a != none_u32) break :blk a;
+                    }
+                    break :blk none_u32;
+                },
+                .unary, .binary, .ternary, .branch, .jump, .call, .load => none_u32,
+            };
+            if (id == none_u32) continue;
+            self.arr_of[i] = id;
+            grew = true;
+        }
+    }
+}
+
+/// §3.2.2 the array a Value is a version of, or null for a scalar.
+pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
+    const a = self.arr_of[@intFromEnum(self.rv(v))];
+    return if (a == none_u32) null else a;
 }
 
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
@@ -669,6 +720,15 @@ fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
                 // — and `S.sel` lets the taken arm's derivative ride through.
                 .ternary => return self.depsOf(@enumFromInt(row.b)) |
                     self.depsOf(@enumFromInt(row.c)),
+                // §3.2.2 an array version carries the union of what was stored
+                // into it; a fresh one (zero, or the held `Instance` copy) is
+                // constant. The INDEX does not enter, for `select`'s reason:
+                // it picks an element, and the picked element's derivative is
+                // what rides through.
+                .anew => return 0,
+                .load => return self.depsOf(@enumFromInt(row.a)),
+                .store => return self.depsOf(@enumFromInt(row.a)) |
+                    self.depsOf(@enumFromInt(row.c)),
                 .phi => {
                     const d = self.mir.instData(inst).phi;
                     var acc: u64 = 0;
@@ -733,7 +793,7 @@ pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
 pub fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
     switch (Mir.opClass(self.i_op[@intFromEnum(inst)])) {
         .phi, .branch, .jump => return false,
-        .unary, .binary, .ternary, .call => {},
+        .unary, .binary, .ternary, .call, .anew, .load, .store => {},
     }
     const r = self.i_res[@intFromEnum(inst)];
     return r != .undef and self.rv(r) == r;
@@ -833,7 +893,8 @@ fn foldValue(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: b
                 if (Lower.simparamHostField(arg.str_const) == null) return null;
                 return .{ .real = self.lowered.simparamValue(arg.str_const) orelse return null };
             },
-            .phi, .branch, .jump => return null,
+            // §3.2.2 an array element is not a constant expression.
+            .phi, .branch, .jump, .anew, .load, .store => return null,
         },
         .undef, .str_const, .block_param => return null,
     }
