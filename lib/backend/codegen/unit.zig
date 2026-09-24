@@ -39,7 +39,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     // form (this alias) and the split form (the alias in `Output.prelude`,
     // which is an `@import`). It sits in the prologue, ahead of the first
     // recorded unit range, so the ranges still tile.
-    if (self.common_name.len != 0) try self.w("const core = {s};\n\n", .{self.common_name});
+    if (self.core.name.len != 0) try self.w("const core = {s};\n\n", .{self.core.name});
     try emitCommon(self);
     // §4.5.11/§4.5.12 the coefficient reader is DERIVED from the operator's
     // unit name (like the old `<unit>__q`), not a Unit of its own, so the
@@ -82,7 +82,7 @@ pub fn emitUnits(self: *Gen) Error!void {
 /// rejects. Zig infers the anonymous type at both ends, so the units never
 /// have to name it.
 pub fn emitCommon(self: *Gen) Error!void {
-    if (self.lo_vals.len == 0) return;
+    if (self.core.lo_vals.len == 0) return;
     self.emitting_common = true;
     defer self.emitting_common = false;
 
@@ -125,26 +125,26 @@ pub fn emitCommon(self: *Gen) Error!void {
         \\
     , .{ self.jobs.list.len, self.jobs.list.len });
     const at_fn = self.out.items.len;
-    try self.w("fn {s}(comptime S: type, ", .{self.common_name});
+    try self.w("fn {s}(comptime S: type, ", .{self.core.name});
     const at_x = self.out.items.len;
     try self.w("x: [n_u]S, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
     try self.w("inst: InstancePtr) struct {{\n", .{});
-    for (self.lo_vals, 0..) |v, k| {
+    for (self.core.lo_vals, 0..) |v, k| {
         try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
     }
     for (self.hp_vals, 0..) |v, j| {
         try self.w("    f{d}: {s}, // hoisted prefix\n", .{
-            self.lo_vals.len + j, zigTy(self.an.vty[@intFromEnum(v)]),
+            self.core.lo_vals.len + j, zigTy(self.an.vty[@intFromEnum(v)]),
         });
     }
     try self.w("}} {{\n", .{});
     // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
     // explains why the join has to absorb `.strict`.
-    try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
-    self.cur_strict = self.common_mode == .strict;
+    try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
+    self.cur_strict = self.core.mode == .strict;
 
     // Off the slice, not the text: every call the core computes is in
     // `plan.live`, and `gen_call.readsSimState` is the one list of which of
@@ -171,7 +171,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
     try self.w("}}\n\n", .{});
-    try gen_file.recordUnitFile(self, self.common_name, lo, at_fn);
+    try gen_file.recordUnitFile(self, self.core.name, lo, at_fn);
 }
 
 /// The unit enumerated from operator `call` `inst`, or `none_u32`.
@@ -190,7 +190,7 @@ pub fn unitOfInst(self: *const Gen, inst: Mir.Inst) u32 {
 pub fn opInputIdx(self: *const Gen, i: u32) u32 {
     const args = self.names.opArgs(self.mir, i);
     if (args.len == 0) return none_u32;
-    return self.lo_idx[@intFromEnum(self.an.rv(args[0]))];
+    return self.core.lo_idx[@intFromEnum(self.an.rv(args[0]))];
 }
 
 /// Emit one source-unit function. LRM §5.6/§4.7/§5.3.
@@ -515,7 +515,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         const ty = @intFromEnum(self.an.vty[v]);
         self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
-        const returned = if (self.emitting_common) self.lo_idx[v] != none_u32 else lv == ret;
+        const returned = if (self.emitting_common) self.core.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
     }
     for ([_]VTy{ .real, .int, .str }) |ty| {

@@ -184,7 +184,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // stamps, and adding them twice would double every coefficient.
     @memset(self.lin[@intFromBool(react)], 0);
     // ONE core evaluation per residual, not one per contribution. LLVM does
-    // not recover this by itself — measured, see `planCommon`'s header — so
+    // not recover this by itself — measured, see `plan_core.plan`'s header — so
     // the number of times the model runs is decided here, in the emitter.
     var opened = false;
     if (self.lowered.table_effect != .f_zero) {
@@ -262,11 +262,11 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         try self.b("{{\n", .{});
         try self.ind(2);
         // `.f_zero` is rendered inline, never planned into `core` (see
-        // `planCommon`), so there is no `m.f<k>` to read for it.
+        // `plan_core.plan`), so there is no `m.f<k>` to read for it.
         if (val == .f_zero)
             try self.b("const c = S.con(0.0);\n", .{})
         else
-            try self.b("const c = m.f{d};\n", .{self.lo_idx[@intFromEnum(val)]});
+            try self.b("const c = m.f{d};\n", .{self.core.lo_idx[@intFromEnum(val)]});
         if (c.kind == .indirect) {
             // §5.6.7 nullor: `out` is driven by a source whose current is
             // the unknown `ib`, and the row is the CONSTRAINT alone —
@@ -431,7 +431,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
 /// `eval` and `q` are each correct alone and each opens its own `core`, so
 /// a host that needs both — every transient step does — ran the entire
 /// model twice. That is an artifact of the API shape, not of the physics:
-/// `planCommon` already put every shared subexpression in one core whose
+/// `plan_core.plan` already put every shared subexpression in one core whose
 /// returned struct carries BOTH halves' targets (see its header), and the
 /// two dispatchers just read different fields of it. Measured on a host
 /// SPICE: `<module>__common__core` appeared twice per instance evaluation
@@ -671,10 +671,10 @@ pub fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
 }
 
 /// One value as the residual reads it: a core field, or the inline zero
-/// `planCommon` never plans (`.f_zero` has no `m.f<k>`).
+/// `plan_core.plan` never plans (`.f_zero` has no `m.f<k>`).
 pub fn coreRef(self: *Gen, v: Mir.Value) Error!void {
     if (v == .f_zero) return self.b("S.con(0.0)", .{});
-    try self.b("m.f{d}", .{self.lo_idx[@intFromEnum(v)]});
+    try self.b("m.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
 }
 
 /// `col` names the unknown when `val` is exactly `x[col]` — a ±1 term whose
@@ -1160,7 +1160,7 @@ pub fn acUsesCore(self: *Gen) Error!bool {
 /// instead of exporting a wrong number.
 pub fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
     if (try gen_call.f64Const(self, v, 0, false)) |s| return s;
-    const k = self.lo_idx[@intFromEnum(v)];
+    const k = self.core.lo_idx[@intFromEnum(v)];
     if (k == none_u32) return null;
     uses_core.* = true;
     return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
@@ -1194,10 +1194,10 @@ pub fn contractNoiseKind(k: Lower.NoiseKind) []const u8 {
 }
 
 /// The core field holding `v`, or null when `v` is rendered inline —
-/// structurally zero, or a constant `planCommon` never had to carry.
+/// structurally zero, or a constant `plan_core.plan` never had to carry.
 pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
     if (v == .f_zero) return null;
-    const k = self.lo_idx[@intFromEnum(v)];
+    const k = self.core.lo_idx[@intFromEnum(v)];
     return if (k == none_u32) null else k;
 }
 
@@ -1207,7 +1207,7 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
 pub fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
     if (v == .f_zero) return "0";
     if (is_exp) if (plan_noise.psdConst(self.mir, v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
-    const k = self.lo_idx[@intFromEnum(v)];
+    const k = self.core.lo_idx[@intFromEnum(v)];
     // A live-out the planner dropped cannot happen (`buildJobs` queued it),
     // but a zero is the one answer that cannot invent noise.
     if (k == none_u32) return "0";

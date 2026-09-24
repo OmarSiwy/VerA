@@ -57,6 +57,7 @@ const plan_topo = @import("codegen/plan/topology.zig");
 const plan_limit = @import("codegen/plan/limit.zig");
 const plan_noise = @import("codegen/plan/noise.zig");
 const plan_jobs = @import("codegen/plan/jobs.zig");
+const plan_core = @import("codegen/plan/core.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -355,26 +356,8 @@ pub const Gen = struct {
     noise: plan_noise.Noise = .{},
     /// Every unit target the core returns, in insert-tolerant order — `plan/jobs.zig`.
     jobs: plan_jobs.Jobs = .{},
-    /// Position of this Value in the core's returned struct, or `none_u32`.
-    /// Only the unit TARGETS cross the declaration boundary; every one of the
-    /// ~22 000 subexpressions behind them stays a local of the core.
-    lo_idx: []u32 = &.{},
-    /// The returned values, in job order — `lo_idx` is the index into this.
-    lo_vals: []Mir.Value = &.{},
-    /// §5.6.1.2 path-integrated reactive latches: rv-resolved operand of
-    /// every `path_prev`/`path_acc`, each family deduplicated (CSE-shared
-    /// sites share a latch — same committed value). `*_lo[k]` is the
-    /// operand's slot in `lo_vals`. `path_prev` renders `S.con(inst.pb__k)`
-    /// (operand at the last accepted solve), `path_acc` renders
-    /// `S.con(inst.pq__k)` (sum of committed operands — the charge base).
-    /// `updateState` STAGES both operands into `wb__/wq__` once per Newton
-    /// iterate; `stateCtl(.commit)` — operating-point exit and transient
-    /// accepted step — latches `pb = wb`, `pq += wq` and zeroes `wq` so a
-    /// stray double commit adds 0, not a doubled increment.
-    prev_vals: []Mir.Value = &.{},
-    prev_lo: []u32 = &.{},
-    acc_vals: []Mir.Value = &.{},
-    acc_lo: []u32 = &.{},
+    /// The shared core's live-outs, latches, name and float mode — `plan/core.zig`.
+    core: plan_core.Core = .{},
     /// Temperature/parameter-only hoist (ngspice's `<dev>temp` phase, done
     /// once instead of per eval): value → `Instance.pc__<k>` field index or
     /// `none_u32`, and the mapped roots in field order. Filled by
@@ -400,15 +383,12 @@ pub const Gen = struct {
     /// This is the whole boundary Ruling B asks for. A §9.5 call OPENS a file,
     /// MOVES a read position or APPENDS bytes, and `eval` has to stay a pure
     /// function of x or the host's Newton iteration cannot converge — so the
-    /// kernels run in the one unit `planCommon` deliberately keeps out of the
+    /// kernels run in the one unit `plan_core.plan` deliberately keeps out of the
     /// shared core, and in every other unit the family keeps the constant it has
     /// always had. §9.5.9 states the same rule normatively: "if a file is being
     /// written to during an iterative solve, then the file write operations shall
     /// not be performed unless the iteration is accepted."
     emitting_display: bool = false,
-    /// `<module>__common__core`, or empty for a model with no targets at all.
-    common_name: []const u8 = "",
-    common_mode: proof.FloatMode = .optimized,
     /// Does the core read a host-published sim-state `Instance` field? Set by
     /// `emitCommon` from the core's slice (`gen_call.readsSimState`), emitted
     /// as `core_reads_simstate`.
@@ -490,9 +470,6 @@ pub const Gen = struct {
     /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
     /// Empty above 64 unknowns, where neither decl is emitted.
     lin: [2][]f64 = .{ &.{}, &.{} },
-    /// Core field index holding each held variable's end-of-block value, or
-    /// `none_u32` when it folded to `.f_zero`. Filled by `planCommon`.
-    held_idx: []u32 = &.{},
     /// §4.5.15 the honoured and declined `$limit` sites — `plan/limit.zig`.
     limits: plan_limit.Limits = .{},
     /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for
@@ -614,12 +591,12 @@ pub const Gen = struct {
             .noise = &self.noise,
             .emit_display = self.display == .emit,
         }, DynCtrl{ .g = self });
-        try gen_common.planCommon(self);
+        self.core = try plan_core.plan(self.input(), self.jobs.list);
         try gen_hoist.planPrecompute(self);
         // After the two planners, which are what fill them. Stable for the
         // rest of the compilation; `cached`/`pcHoisted` read them per unit.
-        self.plan.lo_idx = self.lo_idx;
-        self.plan.lo_vals = self.lo_vals;
+        self.plan.lo_idx = self.core.lo_idx;
+        self.plan.lo_vals = self.core.lo_vals;
         self.plan.pc_idx = self.pc_idx;
         self.plan.pc_on = self.pc_vals.len != 0;
         // LAST: §4.5.15 the clamp-argument hoist needs `lo_idx` filled, to name
@@ -631,9 +608,6 @@ pub const Gen = struct {
         // are both written above the core and both need the region's width.
         if (self.lowered.table_samples.items.len == 0) try gen_hoist.planHoistPrefix(self);
     }
-
-    // The shared core: values several units read, computed once per eval — codegen/common.zig
-    const gen_common = @import("codegen/common.zig");
 
     // Hoisting: the temperature hoist and the hoisted core prefix — codegen/hoist.zig
     const gen_hoist = @import("codegen/hoist.zig");
@@ -877,7 +851,7 @@ test {
     _ = plan_limit;
     _ = plan_noise;
     _ = plan_jobs;
-    _ = Gen.gen_common;
+    _ = plan_core;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;

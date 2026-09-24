@@ -112,7 +112,7 @@ display_unit: bool = false,
 /// has to see the descriptor the open just returned, not the core's copy of
 /// it. Empty under `.drop`, where no unit performs a file call at all.
 file_dep: []bool = &.{},
-/// The shared core's dedup index, from `planCommon`. Stable for the whole
+/// The shared core's dedup index, from `plan/core.zig`. Stable for the whole
 /// compilation; a value with an entry here is read out of the core rather than
 /// recomputed, unless this unit re-runs the loop that defines it.
 lo_idx: []const u32 = &.{},

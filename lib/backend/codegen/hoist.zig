@@ -360,7 +360,7 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     self.hp_vals = &.{};
     self.hp_real = 0;
     // No shared core to cut.
-    if (self.lo_vals.len == 0) return;
+    if (self.core.lo_vals.len == 0) return;
     for (self.jobs.list) |job| {
         if (job.kind != .display and job.pre_fatal != null) return;
     }
@@ -371,7 +371,7 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
         self.cur_strict = save_strict;
     }
     self.emitting_common = true;
-    self.cur_strict = self.common_mode == .strict;
+    self.cur_strict = self.core.mode == .strict;
     self.plan.display_unit = false;
     try self.plan.analyze(.undef, true);
     // Straight-line: no phi to strand, so `pc__` already took everything

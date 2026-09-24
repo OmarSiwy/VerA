@@ -197,8 +197,8 @@ pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: b
     // rather than the structural key so that the core's OWN file — which
     // gets this same prologue — does not redeclare its own name. A file
     // importing itself is legal and, unreferenced, never analysed.
-    if (self.common_name.len != 0)
-        try p.print(self.arena, "const core = @import(\"{0s}.zig\").{0s};\n", .{self.common_name});
+    if (self.core.name.len != 0)
+        try p.print(self.arena, "const core = @import(\"{0s}.zig\").{0s};\n", .{self.core.name});
     try p.appendSlice(self.arena, "\n");
     self.prelude = p.items;
 
@@ -842,10 +842,10 @@ pub fn emitInstance(self: *Gen) Error!void {
     // iterate's values (updateState); stateCtl(.commit) latches them.
     // Zero defaults make the first committed increment A·(B−0) = A·B —
     // exactly ngspice MODEINITTRAN's qgs = capgs·vgs product seeding.
-    for (0..self.prev_lo.len) |k| {
+    for (0..self.core.prev_lo.len) |k| {
         try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n    wb__{d}: f64 = 0.0, // staged\n", .{ k, k });
     }
-    for (0..self.acc_lo.len) |k| {
+    for (0..self.core.acc_lo.len) |k| {
         try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n    wq__{d}: f64 = 0.0, // staged\n", .{ k, k });
     }
     // §5.10 event-assigned variables. LAST, so a model that gains one does
@@ -985,9 +985,9 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     try self.w("pub fn precompute(inst: *Instance, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model) void {{\n", .{});
-    try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
+    try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
     if (has_pc) try self.w("    const S = P;\n", .{});
-    self.cur_strict = self.common_mode == .strict;
+    self.cur_strict = self.core.mode == .strict;
     // BEFORE the core call below, and not merely for tidiness: `precompute`
     // runs again on every parameter write and every `setTemp`, and a stale
     // `hp_ok` would make that call reload the OLD card's values and store
@@ -1035,7 +1035,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
             \\
         , .{});
         for (self.hp_vals, 0..) |v, j| {
-            const f = self.lo_vals.len + j;
+            const f = self.core.lo_vals.len + j;
             if (self.an.vty[@intFromEnum(v)] == .int)
                 try self.w("    inst.hpi[{d}] = mh.f{d};\n", .{ j - self.hp_real, f })
             else
@@ -1076,7 +1076,7 @@ pub fn fsmStateCtl(self: *const Gen) bool {
 /// tests this, not `acc_lo`, so a `$prev`-only model still gets its
 /// updateState staging and commit advance.
 pub fn pathLatches(self: *const Gen) bool {
-    return self.acc_lo.len != 0 or self.prev_lo.len != 0;
+    return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
 /// §5.6.1.2 path-integrated reactive sites also ride `stateCtl`: the
@@ -1125,8 +1125,8 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        state.newton_iteration = inst.newton_iteration;\n",
         .{},
     );
-    for (0..self.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
-    for (0..self.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
+    for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
+    for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
     for (self.names.units, 0..) |u, i| {
         if (!fsm) break;
