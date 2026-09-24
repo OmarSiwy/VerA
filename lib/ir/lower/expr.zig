@@ -380,6 +380,11 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
 /// through an access function (§4.4).
 /// §6.7 hierarchical reads pass the dotted path joined by `flatName`.
 pub fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
+    // §8.5.3.6 a digital read under an explicit D2A event is the region-1b value.
+    if (self.in_d2a_body and self.out.discrete_snaps.contains(name)) {
+        const idx = self.param_index.get(try std.fmt.allocPrint(self.arena, "{s}__1b", .{name})).?;
+        return .{ .v = self.param_values.items[idx], .ty = .integer };
+    }
     if (self.vars.get(name)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the

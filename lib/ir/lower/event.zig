@@ -113,13 +113,26 @@ pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!
     const prev = self.in_event_stmt;
     self.in_event_stmt = true;
     defer self.in_event_stmt = prev;
+    const prev_d2a = self.in_d2a_body;
+    defer self.in_d2a_body = prev_d2a;
+    if (hasD2aTerm(self, event)) self.in_d2a_body = true;
     // §5.10 an event's `hit` flag changes during the solve, so it is never static.
     try lower_control.lowerBranchStmt(self, cond, body, .none, false);
+}
+
+fn hasD2aTerm(self: *Lower, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .event_or) return hasD2aTerm(self, ex.lhs(e)) or hasD2aTerm(self, ex.rhs(e));
+    return self.out.discrete_events.contains(e);
 }
 
 /// §5.10.1 or-lists, §5.10.2 initial_step/final_step, §5.10.3 cross/above/timer.
 pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     const ex = &self.file.exprs;
+    // §7.3.4 / §7.3.6.2 a digital event term: the explicit D2A flag the host
+    // raises for the solve at the tick the event occurred in (§8.5.3.6).
+    if (self.out.discrete_events.get(e)) |site|
+        return self.param_values.items[self.param_index.get(site.param).?];
     switch (ex.tag(e)) {
         // §5.10.1 `@(a or b)` — active when either is.
         .event_or => {

@@ -494,6 +494,9 @@ cur_unit: u32 = 0,
 /// nested `analog_event_control_statement` are legal only when it is clear
 /// (§5.10 states the last three as prose restrictions as well).
 in_event_stmt: bool = false,
+/// Lowering the body of an explicit-D2A event control (§8.5.3.6): a digital
+/// read there takes the region-1b snapshot (`Lowered.discrete_snaps`).
+in_d2a_body: bool = false,
 /// §5.6.7 "Indirect branch contributions shall not be used in conditional or
 /// looping statements, unless the conditional expression is a constant
 /// expression". Incremented only on the paths that actually emit a branch —

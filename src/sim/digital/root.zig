@@ -104,13 +104,21 @@ pub const VecRange = struct { msb: i64, lsb: i64 };
 /// and a change calls `Run.vpi_change` (see `store`).
 /// `vcd` is IEEE 1364-2005 §18's value change dump: the slot is dumped, so a
 /// change asks for the end-of-step section (`vcd.zig`).
-pub const Watcher = enum { monitor, analog, vpi, vcd };
+/// `d2a` is VAMS §8.5's explicit D2A: the slot is the operand of a digital
+/// event term in an analog event control (see `watchEvent`).
+pub const Watcher = enum { monitor, analog, vpi, vcd, d2a };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
 /// run, and an analog-read value changed. The caller solves NOW and calls
 /// `runUntil` again, which resumes the same tick at its monitor region.
-pub const Stop = enum { idle, analog };
+/// `explicit_d2a` is region 1b (§8.5.3.6): region 1 of the tick is done, and
+/// `d2a_fired` names the analog event terms that occurred. The caller takes the
+/// values the guarded statements read NOW; the tick's region-3b stop follows.
+pub const Stop = enum { idle, analog, explicit_d2a };
+
+/// One digital event term of an analog event control (`Run.watchEvent`).
+pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
 
 /// The scheduler payload of the one analog macro-process. Not a `pending`
 /// row: the event carries no data, and the scheduler coalesces repeats of it
@@ -271,6 +279,11 @@ pub const Run = struct {
     /// One region-3b event per tick however many analog-read values moved,
     /// the same coalescing `monitor_pending` does for region 4.
     analog_pending: bool = false,
+    /// §8.5 the explicit D2A terms, the ones that occurred this tick (bit =
+    /// `D2aSite.site`), and the one region-1b event that reports them.
+    d2a_sites: std.ArrayList(D2aSite) = .empty,
+    d2a_fired: u64 = 0,
+    d2a_pending: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
     mixed: bool = false,
     /// §3.3 the declared `[msb:lsb]` of every packed vector, by slot, so a
@@ -313,6 +326,15 @@ pub const Run = struct {
         r.watch[at].insert(.analog);
     }
 
+    /// VAMS §7.3.4 / §8.5: an analog event control waits on `edge` of `slot`
+    /// (a variable, net or named event), as term `site` < 64. From now on the
+    /// event makes `runUntil` stop with `.explicit_d2a` at region 1b of its
+    /// tick, with bit `site` set in `d2a_fired`.
+    pub fn watchEvent(r: *Run, at: u32, edge: exec.Edge, site: u6) Error!void {
+        r.watch[at].insert(.d2a);
+        try r.d2a_sites.append(r.arena, .{ .slot = at, .edge = edge, .site = site });
+    }
+
     /// Dispatch every event at a time <= `limit` (IEEE 1364 §11.4's loop,
     /// VAMS §8.5.1's regions), then return with the queue holding only later
     /// work. `limit = maxInt` is the whole simulation, which is `run`. Calling
@@ -326,6 +348,13 @@ pub const Run = struct {
             if (event.region == .analog) {
                 r.analog_pending = false;
                 return .analog;
+            }
+            // §8.4.7 "Digital to analog events shall cause an analog solution
+            // of the time where they occur": 1b is always followed by 3b.
+            if (event.region == .explicit_d2a) {
+                r.d2a_pending = false;
+                try exec.requestAnalog(r);
+                return .explicit_d2a;
             }
             const item = r.pending.items[event.payload].item;
             switch (item) {
