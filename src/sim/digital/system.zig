@@ -1,5 +1,6 @@
-//! IEEE 1364-2005 §17 system tasks that keep state of their own: §17.5's
-//! programmable logic arrays and §17.6's stochastic queues.
+//! IEEE 1364-2005 §17 system tasks that keep state of their own: §17.2's
+//! file input, §17.5's programmable logic arrays and §17.6's stochastic
+//! queues.
 //!
 //! In: a task's argument expressions and the `Run`. Out: values written to
 //! the task's output arguments, and (queues) `Run.queues`.
@@ -127,6 +128,200 @@ pub fn queueFull(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Err
     return @intFromBool(found.jobs.items.len >= found.max);
 }
 
+// ---- §17.2 file input -------------------------------------------------------
+
+/// One file opened for reading (§17.2.1): its whole text, the read position,
+/// the characters `$ungetc` pushed back (read first, last pushed first), and
+/// the end-of-file indicator a read past the end sets (§17.2.8).
+pub const File = struct {
+    data: []const u8,
+    pos: usize = 0,
+    pushed: std.ArrayList(u8) = .empty,
+    eof: bool = false,
+};
+
+/// §17.2.1: a file descriptor has its most significant bit set, and the three
+/// lowest are the standard streams; the files this engine opens follow them.
+const first_fd: u32 = 0x8000_0003;
+
+/// The §17.2 functions an expression can call.
+pub const FileFn = enum { fopen, fgetc, ungetc, ftell, fseek, rewind, feof, sscanf };
+
+/// The characters an operand holds (§17.1.1.7's reading: 8 bits each, leading
+/// NULs dropped), or null when any bit is x or z.
+fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
+    if (v.hasUnknown()) return null;
+    const bytes = (v.width + 7) / 8;
+    var out: std.ArrayList(u8) = .empty;
+    var n = bytes;
+    while (n != 0) {
+        n -= 1;
+        var c: u8 = 0;
+        for (0..8) |k| {
+            const at = n * 8 + @as(u32, @intCast(k));
+            if (at < v.width and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(k);
+        }
+        if (c == 0 and out.items.len == 0) continue;
+        try out.append(a, c);
+    }
+    return out.items;
+}
+
+fn file(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?*File {
+    const fd = (try int(self, a, e)) orelse return null;
+    if (fd < first_fd or fd >= first_fd + self.files.items.len) return null;
+    return if (self.files.items[@intCast(fd - first_fd)]) |*f| f else null;
+}
+
+/// One §17.2 function call; every one of them returns an integer.
+pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, tok: u32) Error!i64 {
+    const eof: i64 = -1;
+    switch (f) {
+        // §17.2.1: 0 when the file cannot be opened.
+        .fopen => {
+            const name = (try text(a, try exec.eval(self, a, args[0], 0))) orelse return 0;
+            const mode = if (args.len > 1) (try text(a, try exec.eval(self, a, args[1], 0))) orelse return 0 else "w";
+            // ponytail: files are read; writing one needs an output stream
+            // per descriptor, which no fixture asks for yet.
+            if (mode.len == 0 or mode[0] != 'r' or std.mem.indexOfScalar(u8, mode, '+') != null)
+                return self.fail(tok, "$fopen for writing is not implemented; only read modes are", .{});
+            const data = @import("display.zig").readSideFile(self, self.arena, name) catch return 0;
+            try self.files.append(self.arena, .{ .data = data });
+            return first_fd + @as(i64, @intCast(self.files.items.len - 1));
+        },
+        // §17.2.4.1 / §17.2.5 / §17.2.8, C's semantics: a pushed-back
+        // character is read first and moves the position back one.
+        .fgetc => {
+            const fp = (try file(self, a, args[0])) orelse return eof;
+            if (fp.pushed.pop()) |c| {
+                fp.pos += 1;
+                return c;
+            }
+            if (fp.pos >= fp.data.len) {
+                fp.eof = true;
+                return eof;
+            }
+            fp.pos += 1;
+            return fp.data[fp.pos - 1];
+        },
+        .ungetc => {
+            const c = (try int(self, a, args[0])) orelse return eof;
+            const fp = (try file(self, a, args[1])) orelse return eof;
+            if (fp.pos == 0) return eof;
+            try fp.pushed.append(self.arena, @truncate(@as(u64, @bitCast(c))));
+            fp.pos -= 1;
+            fp.eof = false;
+            return 0;
+        },
+        .ftell => {
+            const fp = (try file(self, a, args[0])) orelse return eof;
+            return @intCast(fp.pos);
+        },
+        // §17.2.5: whence 0 from the start, 1 from here, 2 from the end; a
+        // seek drops what `$ungetc` pushed and clears end-of-file.
+        .fseek, .rewind => {
+            const fp = (try file(self, a, args[0])) orelse return eof;
+            const offset = if (f == .rewind) 0 else (try int(self, a, args[1])) orelse return eof;
+            const whence = if (f == .rewind) 0 else (try int(self, a, args[2])) orelse return eof;
+            const from: i64 = switch (whence) {
+                0 => 0,
+                1 => @intCast(fp.pos),
+                2 => @intCast(fp.data.len),
+                else => return eof,
+            };
+            const to = from + offset;
+            if (to < 0) return eof;
+            fp.pos = @intCast(to);
+            fp.pushed.clearRetainingCapacity();
+            fp.eof = false;
+            return 0;
+        },
+        .feof => {
+            const fp = (try file(self, a, args[0])) orelse return 1;
+            return @intFromBool(fp.eof);
+        },
+        .sscanf => return scan(self, a, args),
+    }
+}
+
+/// §17.2.7 `$fclose`.
+pub fn fclose(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!void {
+    const fd = (try int(self, a, args[0])) orelse return;
+    if (fd >= first_fd and fd < first_fd + self.files.items.len) self.files.items[@intCast(fd - first_fd)] = null;
+}
+
+/// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters
+/// of `str`, returning how many arguments were assigned, or EOF (-1) when the
+/// input ends before the first conversion — and, the clause's own rule, when
+/// either `str` or `format` has an x or z bit.
+/// ponytail: the integral conversions %d %h %x %o %b, %c and %s.
+fn scan(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
+    const input = (try text(a, try exec.eval(self, a, args[0], 0))) orelse return -1;
+    const format = (try text(a, try exec.eval(self, a, args[1], 0))) orelse return -1;
+    var at: usize = 0;
+    var assigned: i64 = 0;
+    var next: usize = 2;
+    var i: usize = 0;
+    while (i < format.len) : (i += 1) {
+        const c = format[i];
+        if (std.ascii.isWhitespace(c)) {
+            while (at < input.len and std.ascii.isWhitespace(input[at])) at += 1;
+            continue;
+        }
+        if (c != '%' or i + 1 == format.len) {
+            if (at >= input.len) return if (assigned == 0) -1 else assigned;
+            if (input[at] != c) return assigned;
+            at += 1;
+            continue;
+        }
+        i += 1;
+        const conv = std.ascii.toLower(format[i]);
+        if (conv == '%') {
+            if (at >= input.len or input[at] != '%') return assigned;
+            at += 1;
+            continue;
+        }
+        if (conv != 'c') while (at < input.len and std.ascii.isWhitespace(input[at])) : (at += 1) {};
+        if (at >= input.len) return if (assigned == 0) -1 else assigned;
+        if (next >= args.len) return assigned;
+        switch (conv) {
+            'c' => {
+                try exec.assignInt(self, a, args[next], input[at]);
+                at += 1;
+            },
+            's' => {
+                const start = at;
+                while (at < input.len and !std.ascii.isWhitespace(input[at])) at += 1;
+                const word = input[start..at];
+                const v = try filled(a, @intCast(@max(1, word.len) * 8), false, .zero);
+                for (word, 0..) |ch, k| setBitsOfByte(v, @intCast((word.len - 1 - k) * 8), ch);
+                try exec.assign(self, a, args[next], v);
+            },
+            'd', 'h', 'x', 'o', 'b' => {
+                const radix: u8 = switch (conv) {
+                    'd' => 10,
+                    'o' => 8,
+                    'b' => 2,
+                    else => 16,
+                };
+                const start = at;
+                if (conv == 'd' and (input[at] == '-' or input[at] == '+')) at += 1;
+                while (at < input.len and (std.fmt.charToDigit(input[at], radix) catch null) != null) at += 1;
+                const value = std.fmt.parseInt(i64, input[start..at], radix) catch return assigned;
+                try exec.assignInt(self, a, args[next], value);
+            },
+            else => return assigned,
+        }
+        next += 1;
+        assigned += 1;
+    }
+    return assigned;
+}
+
+fn setBitsOfByte(v: Int.Literal, lo: u32, byte: u8) void {
+    for (0..8) |k| if (byte & (@as(u8, 1) << @intCast(k)) != 0) setBit(v, lo + @as(u32, @intCast(k)), .one);
+}
+
 // ---- §17.5 programmable logic arrays ----------------------------------------
 
 /// One of §17.5's sixteen PLA tasks: `$async$and$array` and the rest. The
@@ -197,6 +392,19 @@ pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) E
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test "§17.2.4.3 $sscanf: conversions, a mismatch stops, unknown input is EOF" {
+    try expectRun(
+        \\module m;
+        \\integer n, a, b; reg [15:0] w;
+        \\initial begin
+        \\  n = $sscanf("12 ff z", "%d %h %s", a, b, w); $write("%0d %0d %0d %s ", n, a, b, w);
+        \\  n = $sscanf("7-8", "%d+%d", a, b); $write("%0d %0d ", n, a);
+        \\  n = $sscanf(16'h31xx, "%d", a); $display("%0d", n);
+        \\end
+        \\endmodule
+    , "3 12 255 z 1 7 -1\n");
+}
 
 test "§17.6 queues: FIFO and LIFO order, capacity and the status codes" {
     try expectRun(

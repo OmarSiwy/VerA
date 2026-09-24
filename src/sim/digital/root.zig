@@ -281,6 +281,9 @@ pub const Run = struct {
     reals: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// §17.6 the stochastic queues, by `q_id`.
     queues: std.AutoHashMapUnmanaged(i64, @import("system.zig").Queue) = .empty,
+    /// §17.2 the files opened for reading, by descriptor order; a closed one
+    /// is null.
+    files: std.ArrayList(?@import("system.zig").File) = .empty,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
     part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
 
