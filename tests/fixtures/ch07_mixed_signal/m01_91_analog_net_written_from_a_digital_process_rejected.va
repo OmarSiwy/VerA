@@ -29,7 +29,7 @@
 // WHAT USED TO FAIL, and why it was not a pass: `error[E0205]: unsupported
 // module item: found `always``. VerA refused the block, so it never judged the
 // contribution inside it — the same masking that makes
-// `tests/fixtures/ch07_mixed_signal/digital_probe_unsupported.va` uncredited
+// `digital_probe_unsupported.va` (since withdrawn to m01_08) uncredited
 // for §7.3.3. As of 2026-09-21 the contribution is judged on its own terms
 // (E0435) and the clause is pinned whether or not the block is executable —
 // which is the point, because §7.3 holds in a compiler that supports `always`

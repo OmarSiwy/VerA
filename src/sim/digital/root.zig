@@ -117,6 +117,9 @@ pub const Watcher = enum { monitor, analog, vpi, vcd, d2a };
 /// values the guarded statements read NOW; the tick's region-3b stop follows.
 pub const Stop = enum { idle, analog, explicit_d2a };
 
+/// One analog event a digital event control waits on (`Run.registerMonitor`).
+pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32 };
+
 /// One digital event term of an analog event control (`Run.watchEvent`).
 pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
 
@@ -284,6 +287,17 @@ pub const Run = struct {
     d2a_sites: std.ArrayList(D2aSite) = .empty,
     d2a_fired: u64 = 0,
     d2a_pending: bool = false,
+    /// VAMS §7.3.5 the analog events digital event controls wait on
+    /// (`registerMonitor`). The mixed-signal kernel evaluates each against the
+    /// analog solution and delivers its A2D events (`deliverA2d`).
+    monitors: std.ArrayList(Monitor) = .empty,
+    /// VAMS §7.3.3 / §7.3.6.3: the potential `V(a)` / `V(a, b)` of the analog
+    /// solution at the current digital time. Set by the mixed-signal kernel;
+    /// a digital process that probes without it fails.
+    probe: ?*const fn (ctx: *anyopaque, a: []const u8, b: ?[]const u8) Error!f64 = null,
+    probe_ctx: *anyopaque = undefined,
+    /// Some digital expression probes the analog solution (`probe`).
+    has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
     mixed: bool = false,
     /// §3.3 the declared `[msb:lsb]` of every packed vector, by slot, so a
@@ -335,6 +349,49 @@ pub const Run = struct {
         try r.d2a_sites.append(r.arena, .{ .slot = at, .edge = edge, .site = site });
     }
 
+    /// VAMS §7.3.5: `cross`/`above` as a term of a digital event control.
+    /// The process waits on a slot no variable owns (counted down from the
+    /// top of the slot space), which `deliverA2d` wakes.
+    pub fn registerMonitor(r: *Run, e: Ast.ExprId) Error!void {
+        const ex = &r.file.exprs;
+        const name = r.file.str(ex.strOf(e));
+        if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above")))
+            return r.exprFail(e, "only cross() and above() are monitored in a digital event control");
+        const args = ex.args(e);
+        if (args.len == 0 or args[0] == .none) return r.exprFail(e, "an analog event needs its expression");
+        for (args) |arg| if (arg != .none) try compile.checkExpr(r, arg);
+        const scope = r.instanceOf(r.scope);
+        if (r.monitorSlot(e, scope) != null) return;
+        try r.monitors.append(r.arena, .{ .expr = e, .scope = scope, .slot = std.math.maxInt(u32) - 1 - @as(u32, @intCast(r.monitors.items.len)) });
+    }
+
+    pub fn monitorSlot(r: *const Run, e: Ast.ExprId, scope: u32) ?u32 {
+        for (r.monitors.items) |m| if (m.expr == e and m.scope == scope) return m.slot;
+        return null;
+    }
+
+    /// Argument `k` of monitor `m`, evaluated as a real in the monitor's scope
+    /// (`k` = 0 is the monitored expression), or null when absent.
+    pub fn monitorArg(r: *Run, m: usize, k: usize) Error!?f64 {
+        const mon = r.monitors.items[m];
+        const args = r.file.exprs.args(mon.expr);
+        if (k >= args.len or args[k] == .none) return null;
+        const saved = r.scope;
+        defer r.scope = saved;
+        r.scope = mon.scope;
+        var scratch = std.heap.ArenaAllocator.init(r.arena);
+        defer scratch.deinit();
+        return try exec.evalReal(r, scratch.allocator(), args[k]);
+    }
+
+    /// VAMS §7.3.6.1: monitor `m`'s event occurred; wake its waiters "at the
+    /// nearest digital time tick to the time of the analog event", but "not
+    /// ... earlier than the last or current digital event".
+    pub fn deliverA2d(r: *Run, m: usize, tick: Tick) Error!void {
+        const now = r.scheduler.now;
+        _ = try exec.enqueue(r, .{ .a2d = r.monitors.items[m].slot }, if (tick > now) tick - now else null, false);
+    }
+
     /// Dispatch every event at a time <= `limit` (IEEE 1364 §11.4's loop,
     /// VAMS §8.5.1's regions), then return with the queue holding only later
     /// work. `limit = maxInt` is the whole simulation, which is `run`. Calling
@@ -367,6 +424,7 @@ pub const Run = struct {
                     try exec.makeResident(r, x.ctx);
                     try exec.execute(r, &scratch, x.pc);
                 },
+                .a2d => |at| try exec.wakeA2d(r, at),
                 .write => |w| try exec.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
                 .strobe => |s| {
                     r.scope = s.scope;
@@ -704,12 +762,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try e.values.append(arena, try filled(arena, 1, false, .x));
         try r.events.put(arena, at, {});
     }
+    const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
-        // A mixed module's real and initialized variables are the ANALOG
-        // block's (§7.2.2); a digital process naming one is an undeclared name.
-        // ponytail: digital-context `real` (VAMS Table 7-1's real row) is the
-        // upgrade — a real lane in the slot space.
-        if (r.mixed and (v.ty != .integer or v.init != .none or v.storage == .time)) continue;
+        // A mixed module's initialized variables, and its reals no discrete
+        // process writes, are the ANALOG block's (§7.2.2: "the domain of a
+        // variable is that of the context from which its value is assigned");
+        // a digital process naming one is an undeclared name.
+        if (r.mixed and (v.init != .none or v.storage == .time or (v.ty != .integer and !written.contains(v.name)))) continue;
         if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
         _ = try mintVar(r, v);
     }
@@ -1130,6 +1189,31 @@ fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: 
         try declare(r, e, child, child_scope, binds_out, depth + 1);
         r.scope = scope;
     }
+}
+
+/// VAMS §7.2.2: the variables a discrete process of `m` writes — the ones
+/// whose domain is digital.
+fn digitalWrites(r: *Run, m: *const Ast.ModuleDecl) Error!std.AutoHashMapUnmanaged(Ast.StrId, void) {
+    var out: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    const W = struct {
+        r: *Run,
+        m: *const Ast.ModuleDecl,
+        out: *std.AutoHashMapUnmanaged(Ast.StrId, void),
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
+        pub fn stmt(w: @This(), s: Ast.StmtId) Error!void {
+            if (s == .none) return;
+            var writes: std.ArrayList(Ast.ExprId) = .empty;
+            try w.r.file.stmtWrites(w.m.functions, s, w.r.arena, &writes);
+            for (writes.items) |x| {
+                const t = w.r.file.lvalueBase(x);
+                if (t != .none) try w.out.put(w.r.arena, w.r.file.exprs.strOf(t), {});
+            }
+            try w.r.file.stmtEdges(s, w);
+        }
+    };
+    const w: W = .{ .r = r, .m = m, .out = &out };
+    for (m.discrete) |blk| try w.stmt(blk.body);
+    return out;
 }
 
 /// VAMS §3.6.2.2: is `name` a CONTINUOUS discipline — the analog solver's —

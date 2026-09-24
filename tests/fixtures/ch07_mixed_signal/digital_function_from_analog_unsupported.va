@@ -17,8 +17,8 @@
 // x`. Both had to start parsing for either to be judged.
 //
 // The other direction was already unmasked — analog_function_from_digital_
-// rejected.va reaches E0430 — and cross_domain_function_unsupported.va is
-// still masked, by an `always` block rather than by the function.
+// rejected.va reaches E0430 — and cross_domain_function_unsupported.va, now
+// withdrawn to m01_08, was masked by an `always` block, not by the function.
 //
 //! lrm 7.3.7
 //! lrm C.7

@@ -785,11 +785,24 @@ pub const mixed_body =
     \\/// the continuous context as an integer. §7.3.2: "It is an error if these
     \\/// operands return x or z bit values when solved" — and a solve is exactly
     \\/// where this is read, so an x or z bit fails the run by name.
-    \\fn mixedInput(dig: *sim.digital.Run, slot: u32, name: []const u8) i64 {
-    \\    return dig.values[slot].asInt() orelse {
+    \\fn mixedInput(dig: *sim.digital.Run, slot: u32, name: []const u8) f64 {
+    \\    // Table 7-1's real row: "no conversion".
+    \\    if (dig.reals.contains(slot)) return @bitCast(dig.values[slot].values()[0]);
+    \\    const v = dig.values[slot].asInt() orelse {
     \\        std.debug.print("{s}: FAIL §7.3.2: the discrete input `{s}` holds an x or z bit when the analog block reads it\n", .{ title, name });
     \\        std.process.exit(1);
     \\    };
+    \\    return @floatFromInt(v);
+    \\}
+    \\
+    \\/// The potential of node `n1` (minus `n2`) in `x`; a name that is no
+    \\/// unknown of the device is ground.
+    \\fn potential(x: *const [n_u]f64, n1: []const u8, n2: ?[]const u8) !f64 {
+    \\    return nodeValue(x, n1) - if (n2) |b| nodeValue(x, b) else 0.0;
+    \\}
+    \\fn nodeValue(x: *const [n_u]f64, name: []const u8) f64 {
+    \\    for (u_names, 0..) |u, i| if (std.mem.eql(u8, u, name)) return x[i];
+    \\    return 0.0;
     \\}
     \\
     \\/// A `//! wave`, piecewise linear over the declared `//! time`s. At a

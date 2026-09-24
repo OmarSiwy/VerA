@@ -65,7 +65,7 @@ coverage of the clause its construct belongs to.
 | `s8-4-3` | mixed-signal transient | the clause's first sentence, "Analog processes that share conservative nodes are 'solved' jointly", is `shared_conservative_node.va` (`//! lrm 8.4.3`): two instances, one node, two contributions whose sum fixes it at 1.25 with each contribution asserted separately. The rest of the sentence is either the implementation's choice ("single matrix, multiple matrices or uses other techniques") or the node-tolerance rule, which no expression reports. The clause as a *mixed-signal transient* remains an open full-AMS integration requirement |
 | `s8-4-3-1` | concurrency without shared-memory reordering | `multiple_analog_blocks.va` (`//! lrm 8.4.3.1`): the earlier block's write is visible to the later one |
 | `s8-4-3-2` | early self-wakeup by timer; sensitivity limited by event guards | `timer_wakeup.va` (`//! lrm 8.4.3.2`, `//! analysis tran`, fires at `start_time` and only there), `explicit_guard.va` (`//! lrm 8.4.3.2`, guarded probe does not leak) |
-| `s8-4-3-3` | A/D time quantization and the zero-delay round trip | — `digital_boundary_unsupported.va` says in its own header that it pins nothing here: the `always` item is refused before the `cross()` threshold or the rounding is read |
+| `s8-4-3-3` | A/D time quantization and the zero-delay round trip | ch07 `m02_04_a2d_tick_quantization.va` (green): a 5.2 ns crossing rounds to tick 5 and a 7.6 ns one to tick 8, while the analog kernel keeps 5.2 ns to 1 ps; `m02_05` (green): the zero-delay D2A returns at 5.2 ns, not at the tick (Figure 8-4); `m02_06` (green): a `#1` lands on 6.0 ns exactly. `digital_boundary_unsupported.va` (E0437) is withdrawn to m02_04 |
 | `s8-4-4` | synchronization loop, wake-up scheduling, event cancellation | — open host integration; scheduler cancellation tests alone do not establish synchronization |
 | `s8-4-5` | synchronization and communication algorithm | — open host integration requirement |
 | `s8-4-6` | `absdelta()` interpolated A2D events | — no fixture here. 5.10.3.4 allows `absdelta()` only in an `initial`/`always` block. Legal digital use remains open; `ch05_analog_behavior/absdelta_digital_only.va` rejects misuse in an analog block |
@@ -137,5 +137,5 @@ Sections 8.4.4–8.4.7 and 8.5 require the mixed-signal and digital engines. The
 are implementation debts against the full Verilog-AMS target, even though the
 analog-subset runner cannot execute them. The one row that was
 a debt disguised as a boundary is `s8-4-3-3`: A/D boundary timing is AMS-only by
-C.10, but `digital_boundary_unsupported.va` was previously credited with covering
+C.10, but `digital_boundary_unsupported.va` (withdrawn; see s8-4-3-3) was previously credited with covering
 it, which it never did.

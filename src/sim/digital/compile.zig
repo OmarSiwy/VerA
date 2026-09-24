@@ -567,6 +567,15 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             try self.replications.put(self.arena, e, count);
             break :blk .{ .width = width, .signed = false };
         },
+        // VAMS §7.3.3 / §7.3.6.3 a potential probe of a continuous net, read
+        // from the analog solution through the mixed-signal kernel's hook.
+        .branch_access => blk: {
+            if (!self.mixed or !std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
+                (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
+                return self.exprFail(e, "only a V(net) or V(net, net) probe of the analog solution is implemented in a digital expression");
+            self.has_probes = true;
+            break :blk real_type;
+        },
         else => return self.exprFail(e, "this digital expression form is not implemented"), // else: the analog-only forms (access functions, filters, patterns, events), refused out loud
     };
     entry.* = ty;
@@ -1212,6 +1221,9 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         },
         .event_posedge, .event_negedge => _ = try self.scalarSlot(ex.lhs(e)),
         .ident => _ = try self.scalarSlot(e),
+        // VAMS §7.3.5 an analog event in a discrete event control: the
+        // mixed-signal kernel monitors it and delivers an A2D event.
+        .event_function => try self.registerMonitor(e),
         else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"), // else: every other event term, refused out loud
     }
 }

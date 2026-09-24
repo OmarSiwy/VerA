@@ -167,25 +167,32 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     }
     for (owned.items) |t| {
         const name = self.file.str(ex.strOf(t));
-        if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
-            // §8.5.3.6: the guarded read's region-1b snapshot, typed as below.
-            try self.out.discrete_snaps.put(self.arena, name, ex.mainTok(t));
-            const snap = try std.fmt.allocPrint(self.arena, "{s}__1b", .{name});
-            try lower_param.addParam(self, snap, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
-        }
-        if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
+        if (!reads.guarded.contains(name) and !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
             if (v.name == ex.strOf(t)) break v.ty;
         } else if (netOf(module, ex.strOf(t)) != null) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
-        if (ty != .integer) {
-            // VAMS Table 7-1's `real` row: a digital `real` is read as a real.
-            // The digital engine holds four-state bits only.
-            try self.err(ex.mainTok(t), .E0437, "`{s}` is a digital `real`, and the digital engine holds no real-valued variable yet", .{name});
-            continue;
+        // VAMS Table 7-1: a bit grouping, a net and an `integer` read as an
+        // integer, a `real` "with no conversion".
+        const real = switch (ty) {
+            .integer => false,
+            .real => true,
+            else => { // else: Table 7-1 has no row for any other type
+                try self.err(ex.mainTok(t), .E0437, "`{s}` is a digital `{t}`, and Table 7-1 converts only integer, bit and real values", .{ name, ty });
+                continue;
+            },
+        };
+        const zero = if (real) try self.mir.addFloatConst(self.arena, 0) else try self.mir.addIntConst(self.arena, 0);
+        const folded: Lower.Const = if (real) .{ .real = 0 } else .{ .int = 0 };
+        if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
+            // §8.5.3.6: the guarded read's region-1b snapshot.
+            try self.out.discrete_snaps.put(self.arena, name, ex.mainTok(t));
+            const snap = try std.fmt.allocPrint(self.arena, "{s}__1b", .{name});
+            try lower_param.addParam(self, snap, ty, zero, folded, &.{}, false, ex.mainTok(t));
         }
+        if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
         try self.out.discrete_inputs.put(self.arena, name, ex.mainTok(t));
-        try lower_param.addParam(self, name, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
-        if (reads.fourStateOnly(name)) {
+        try lower_param.addParam(self, name, ty, zero, folded, &.{}, false, ex.mainTok(t));
+        if (!real and reads.fourStateOnly(name)) {
             // §7.3.2 the unknown plane, for `===`/`!==`/`case` (`lower_expr.fourState`).
             // A name also read any other way keeps the x/z error at every
             // solve (the runner's `mixedInput`), and compares two-state.
@@ -671,10 +678,19 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
             try self.err(ex.mainTok(e), .E0821, "`{s}` in {s}", .{ self.file.str(ex.strOf(e)), ctx.where });
         // What the mixed-signal kernel cannot do yet, named by the clause that
         // asks for it. Both are legal Verilog-AMS (§7.3.3/§7.3.5).
+        // `cross`/`above` are monitored (§7.3.5) and `V(a)`/`V(a, b)` probed
+        // (§7.3.6.3) by the mixed-signal kernel.
         if (ctx.mixed) switch (tag) {
-            .event_function => try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel has no analog-event monitor yet", .{ self.file.str(ex.strOf(e)), ctx.where }),
-            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel has no analog-event monitor yet", .{ctx.where}),
-            .branch_access, .port_access => try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, which the kernel does not do yet", .{ctx.where}),
+            .event_function => {
+                const name = self.file.str(ex.strOf(e));
+                if (!std.mem.eql(u8, name, "cross") and !std.mem.eql(u8, name, "above"))
+                    try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross() and above()", .{ name, ctx.where });
+            },
+            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross() and above()", .{ctx.where}),
+            .branch_access => if (!std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
+                (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
+                try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
+            .port_access => try self.err(ex.mainTok(e), .E0437, "a port flow probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
             else => {}, // else: every other tag is executable or judged elsewhere
         };
         if (tag == .call) {
