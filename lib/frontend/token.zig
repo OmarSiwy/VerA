@@ -436,7 +436,7 @@ pub const Stored = struct {
 /// NOT O(1), and not a hash map: read `std/static_string_map.zig`. It buckets
 /// the keys by LENGTH (`len_indexes[str.len]`, and a `min_len`/`max_len`
 /// prefilter before that) and then LINEARLY SCANS the bucket, comparing
-/// byte-at-a-time. With 217 keywords the five-byte bucket holds 39 of them, so
+/// byte-at-a-time. With 215 keywords the five-byte bucket holds 39 of them, so
 /// an ordinary five-byte identifier is compared against all 39 before the miss
 /// is known. So this is the DEFINITION and the reference; `lookupKeyword` is
 /// what the lexer calls, and it reaches the same keys through their first byte.
@@ -447,12 +447,12 @@ pub const keyword_map = std.StaticStringMap(Tag).initComptime(keyword_kvs);
 /// whole implementation.
 const kw_lanes = std.simd.suggestVectorLength(u8);
 
-/// The FIRST BYTE of each keyword, in `keyword_map.keys()` order — 217 bytes,
+/// The FIRST BYTE of each keyword, in `keyword_map.keys()` order — 215 bytes,
 /// four cache lines, against the 3,472 bytes of `[]const u8` headers the map's
 /// own scan walks to read the same information.
 ///
-/// MEASURED from the table itself: 217 keywords, lengths 2..19, 23 distinct
-/// first bytes, 118 of the 23×18 (first byte, length) pairs occupied, at most 6
+/// MEASURED from the table itself: 215 keywords, lengths 2..19, 23 distinct
+/// first bytes, 117 of the 23×18 (first byte, length) pairs occupied, at most 6
 /// keywords in any one pair. `StaticStringMap` already buckets by length, so
 /// the first byte is the dimension it is missing and this is the whole of it.
 ///
@@ -839,7 +839,7 @@ const reserved_keywords = [_][]const u8{
     // (`kw_wait`) — §10.6 membership is keyed by spelling, so it is still
     // reserved everywhere it was, through `kw_1364_1995`.
     "tranif0",            "tranif1",
-    "weak0",              "weak1",         "xnor",         "xor",
+    "weak0",              "weak1",
     // configuration / library (IEEE 1364 clause 13)
     "cell",               "config",        "design",       "endconfig",
     "incdir",             "include",       "instance",     "liblist",
@@ -919,6 +919,10 @@ const intro_kvs = kvs: {
     break :kvs out;
 };
 
+/// One entry per spelling. A spelling listed twice (a tagged keyword left in
+/// `reserved_keywords`) would make `lookupKeyword`'s answer depend on the
+/// order `StaticStringMap`'s UNSTABLE sort leaves the two in, so it is a
+/// compile error here.
 const keyword_kvs = kvs: {
     @setEvalBranchQuota(20_000);
     const fields = @typeInfo(Tag).@"enum".fields[@intFromEnum(Tag.first_keyword)..@intFromEnum(Tag.kw_reserved)];
@@ -933,6 +937,12 @@ const keyword_kvs = kvs: {
     for (reserved_keywords) |name| {
         out[i] = .{ name, .kw_reserved };
         i += 1;
+    }
+    // Tag names are unique by construction, so a duplicate is a reserved
+    // spelling that also has a tag, or one listed twice.
+    for (reserved_keywords, 0..) |name, j| {
+        if (@hasField(Tag, "kw_" ++ name)) @compileError("keyword spelled twice: " ++ name);
+        for (reserved_keywords[0..j]) |b| if (std.mem.eql(u8, name, b)) @compileError("keyword spelled twice: " ++ name);
     }
     break :kvs out;
 };

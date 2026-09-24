@@ -18,7 +18,7 @@
 //! enough to change that would still be scanned four bytes at a time.
 //!
 //! Where a vector DID pay is `token.lookupKeyword`, and the difference is what
-//! N is: there it is the KEYWORD TABLE — 217 entries, up to 39 of them sharing a
+//! N is: there it is the KEYWORD TABLE — 215 entries, up to 39 of them sharing a
 //! length — walked once per identifier, not the source text. Its comment carries
 //! the measurement. The vector width that matters to a Verilog-A *user* is still
 //! the DEVICE's evaluation loop, and that loop is the host's code, compiled from
