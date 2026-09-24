@@ -591,6 +591,22 @@ pub const UpdateResult = union(enum) {
     request_reject_at: f64,
 };
 
+/// What a device carries across accepted points, declared as `state_class` so
+/// a host's GPU gate reads one decl instead of inferring it from field shapes.
+///   none       — no `State`/`updateState` at all.
+///   path_latch — only the §5.6.1.2 path latches: `updateState` stages
+///                `wb`/`wq`, `stateCtl(.commit)` latches them; no operator
+///                history, no held FSM, no §9.13.1 seed.
+///   history    — anything else `updateState` advances.
+/// A device without the decl is `history` when it has `updateState` and `none`
+/// otherwise — the safe reading for a host that predates it.
+pub const StateClass = enum { none, path_latch, history };
+
+pub fn stateClass(comptime D: type) StateClass {
+    if (@hasDecl(D, "state_class")) return D.state_class;
+    return if (@hasDecl(D, "updateState")) .history else .none;
+}
+
 /// Accepted-state bookkeeping for FSM devices (switches). The transient
 /// loop uses this to reject/retry a timestep whose converged solution flipped
 /// a device state, so the discontinuity lands sharp at the crossing:
@@ -1245,6 +1261,15 @@ pub fn validate(comptime D: type) void {
         if (@hasDecl(D, "stateCtl"))
             expectFn(D, "stateCtl", fn (*const D.Model, *D.Instance, *D.State, StateCtlOp) bool);
     }
+    if (@hasDecl(D, "state_class")) {
+        if (@TypeOf(D.state_class) != StateClass)
+            @compileError(name ++ ".state_class must be a contract.StateClass");
+        if ((D.state_class == .none) == @hasDecl(D, "updateState"))
+            @compileError(name ++ ".state_class: `.none` exactly when there is no updateState");
+        // `path_latch` promises the commit that latches the staged values.
+        if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
+            @compileError(name ++ ".state_class = .path_latch requires stateCtl");
+    }
 
     if (@hasDecl(D, "beginSolve")) expectFn(D, "beginSolve", fn (*D.Instance) void);
     // §9.15/§9.17.3 iteration state is separate from accepted-time history.
@@ -1531,6 +1556,8 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "beginSolve", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
+    // What `State` carries (`StateClass`); checked in `validate`.
+    .{ "state_class", {} },
     // Single-precision-Jacobian permission — checked inline in `validate` (the
     // "`jac_f32` must be a bool" guard); the S note in the header is the story.
     // Optional; absent means f64, which is the default a host must assume.
@@ -2090,6 +2117,7 @@ const MockAll = struct {
         s.flips += 1;
         return .ok;
     }
+    pub const state_class: StateClass = .history;
     pub fn beginSolve(_: *Instance) void {}
 
     pub fn advanceIteration(_: *const Model, _: *Instance, _: [n_u]f64) void {}

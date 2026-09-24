@@ -188,6 +188,42 @@ test "codegen: core_reads_simstate counts `analog initial` and the Newton iterat
     }
 }
 
+test "codegen: State.t_prev exists only for a reader, and state_class is declared" {
+    // A constant-td `absdelay` pushes its ring on `inst.abstime` and never
+    // reads `t_prev`; `idt` integrates over `dt = abstime - t_prev`. A
+    // nonlinear `ddt` lowers to the §5.6.1.2 path latches alone.
+    const cases = [_]struct { src: []const u8, t_prev: bool, class: []const u8 }{
+        .{ .src =
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9);
+        \\endmodule
+        , .t_prev = false, .class = ".history" },
+        .{ .src =
+        \\module l(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ idt(V(p, n), 0.0);
+        \\endmodule
+        , .t_prev = true, .class = ".history" },
+        .{ .src =
+        \\module c(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ V(p, n) * ddt(V(p, n));
+        \\endmodule
+        , .t_prev = false, .class = ".path_latch" },
+    };
+    for (cases) |c| {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, c.src, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "t_prev: f64") != null);
+        try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "state.t_prev = inst.abstime;") != null);
+        const decl = try std.fmt.allocPrint(h.arena_state.allocator(), "pub const state_class: contract.StateClass = {s};", .{c.class});
+        try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
+    }
+}
+
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);
