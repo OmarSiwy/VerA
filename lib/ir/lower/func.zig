@@ -224,10 +224,14 @@ pub fn inlineUserFuncPre(
             const vals = try self.arena.alloc(Mir.Value, n);
             // §4.7.2.3: "All output arguments ... are initialized, zero (0) if
             // numeric, which in turn means that the argument passed to it is
-            // reset to zero." An `inout` is NOT (§4.7.2.4 copies in).
-            if (formal.direction == .output) {
+            // reset to zero." An `inout` is NOT (§4.7.2.4 copies in). The
+            // shape rule binds an `output` all the same: nothing is copied in,
+            // but `funcArrayOut` copies n values back into the actual.
+            const shaped = if (formal.direction == .output) blk: {
                 @memset(vals, lower_param.zeroOf(ty));
-            } else if (!try funcArrayIn(self, actual, ty, vals)) {
+                break :blk try arrayActualCells(self, actual) == n;
+            } else try funcArrayIn(self, actual, ty, vals);
+            if (!shaped) {
                 try self.err(self.file.exprs.mainTok(actual), .E0511, "`{s}()` argument `{s}` needs {d} elements", .{
                     name, self.file.str(formal.name), n,
                 });
@@ -403,6 +407,18 @@ pub fn inlineUserFuncPre(
     return result;
 }
 
+/// The cell count of an array actual in one of §4.7.2.3's two shapes, "an
+/// analog variable or an array assignment pattern of analog variables", or null
+/// for anything else.
+fn arrayActualCells(self: *Lower, actual: Ast.ExprId) Oom!?usize {
+    const ex = &self.file.exprs;
+    return switch (ex.tag(actual)) {
+        .ident => if (self.arrays.get(self.file.str(ex.strOf(actual)))) |info| lower_param.shapeCells(info.dims) else null,
+        .assign_pattern, .concat => (try lower_param.patternElems(self, actual)).len,
+        else => null, // else: §4.7.2.3 admits no third shape
+    };
+}
+
 /// §4.7.2.3: "the argument passed into the function must be an analog variable
 /// or an array assignment pattern of analog variables of equivalent size."
 /// Copy IN — one Value per element of the formal. False when the actual has the
@@ -465,6 +481,6 @@ pub fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) O
                 try self.builder.writeVariable(slot.place, self.cur, v);
             }
         },
-        else => {},
+        else => unreachable, // else: the call refused any other shape (`arrayActualCells`, `funcArrayIn`)
     }
 }
