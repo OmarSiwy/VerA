@@ -188,6 +188,17 @@ pub const Directives = struct {
     /// Whether any `//! acstim` line was written. Same split as
     /// `asserts_noise`: `//! acstim none` is a claim and silence is not.
     asserts_acstim: bool = false,
+    /// `//! qsite <row><sign>... lte|nolte`, one per expected §5.6.1.2 charge
+    /// site in slot order; `//! qsite none` asserts the device has none.
+    ///
+    /// The charge-site layout (`contract.QStamp`) is what a host tapes and
+    /// truncation-checks, and this testbench steps fixed Euler with no LTE of
+    /// its own, so the published table is the observable: which rows each
+    /// site stamps with which sign (`g+ s-`: +1 into g, −1 into s; any other
+    /// weight prints as `g*0.5`), and whether `q_lte` checks it. Printed and
+    /// judged as `got=/want= ok=` lines, like `noise`.
+    qsites: []const []const u8 = &.{},
+    asserts_qsite: bool = false,
     /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
     /// fixture: it must NOT compile, and every substring here must appear
     /// somewhere in the resulting diagnostic. A fixture that cannot run states

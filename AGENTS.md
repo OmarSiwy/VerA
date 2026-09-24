@@ -234,6 +234,18 @@ carries the machine-readable tags:
 //! xfail <reason>   <- "the fixture is right and VerA is not". FAILs on XPASS.
 ```
 
+Device-table directives assert what a device PUBLISHES to a host, as
+`got=/want= ok=` lines: `//! noise`, `//! acstim`, and `//! qsite` (one line
+per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order).
+
+**Vendor attributes.** VerA reads exactly one §2.9 attribute, `vera_lte`: a
+prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)
+or a suffix on a `ddt` name (`ddt (* vera_lte = 0 *) (q)`, a slot A.8.2 gives
+only analog functions and VerA extends). It leaves those charge sites out of
+the host's truncation-error check (`q_lte`, `contract.QStamp`). Innermost
+wins; the value must fold without the model card (E0523). Every other
+attribute is parsed and ignored.
+
 `check.vh` gives you `CHECK` (absolute tol), `CHECKR` (relative), `CHECKX`
 (exact), `CHECKI` (integer), `CHECKEQ` (two VerA expressions against each
 other). **When the LRM states an identity with no digits, assert the identity

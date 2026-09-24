@@ -361,6 +361,16 @@ pub const Parser = struct {
         };
     }
 
+    /// The last `vera_lte` spec in `self.attrs[mark..]` (§2.9: "the last
+    /// attribute value shall be used"), as the value and its token.
+    pub fn lteSince(self: *const Parser, mark: usize) ?Ast.NatureAttr {
+        var out: ?Ast.NatureAttr = null;
+        for (self.attrs.items[mark..]) |a| {
+            if (std.mem.eql(u8, self.file.str(a.name), "vera_lte")) out = a;
+        }
+        return out;
+    }
+
     fn parseAttributes(self: *Parser) Error!void {
         while (self.peek() == .attr_open) {
             // §2.9: "Nesting of attribute instances is disallowed. It shall be

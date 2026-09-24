@@ -39,6 +39,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList(NoiseWant) = .empty;
+    var qsites: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -123,6 +124,12 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try acstim.append(arena, try parseAcEntry(arena, rest));
             }
             d.asserts_acstim = true;
+        } else if (std.mem.eql(u8, kw, "qsite")) {
+            // §5.6.1.2 one expected charge site, in slot order, in the form
+            // the runner prints (`tb.Directives.qsites`). `none`: no site.
+            if (rest.len == 0) return error.BadSyntax;
+            if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
+            d.asserts_qsite = true;
         } else if (std.mem.eql(u8, kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
@@ -164,6 +171,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
     d.lrm = lrm.items;
     d.noise = noise.items;
+    d.qsites = qsites.items;
     d.acstim = acstim.items;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.

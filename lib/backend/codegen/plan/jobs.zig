@@ -47,6 +47,9 @@ pub const From = struct {
     noise: *const plan_noise.Noise,
     /// `Options.display == .emit`: the §9.4 tasks become a unit of their own.
     emit_display: bool,
+    /// `plan/qsite.zig` `QSites.sites`: the `Lowered.charge_sites` that get a
+    /// `q` slot, in slot order. Each one's charge is a core live-out.
+    q_sites: []const u32 = &.{},
 };
 
 /// One emitted unit function, resolved BEFORE anything is written.
@@ -76,7 +79,7 @@ pub const Job = struct {
     pub const Kind = enum {
         /// §5.6 a contribution's resistive target.
         resist,
-        /// §5.6.1.2 a contribution's reactive target.
+        /// §5.6.1.2 a charge site's charge (`plan/qsite.zig`).
         react,
         /// §4.5 an analog operator's input, or a §9.17 request.
         op_input,
@@ -113,19 +116,23 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     for (self.lowered.contributions.items, 0..) |c, i| {
         const mode = unitMode(from.unit_modes, i);
         const resist = self.an.rv(c.resist_val);
-        const react = self.an.rv(c.react_val);
         if (resist != .f_zero) try jobs.append(self.arena, .{
             .kind = .resist,
             .target = resist,
             .mode = mode,
             .comment = unitComment(c, false),
         });
-        if (react != .f_zero) try jobs.append(self.arena, .{
-            .kind = .react,
-            .target = react,
-            .mode = mode,
-            .comment = unitComment(c, true),
-        });
+        // §5.6.1.2 its charges, one per site, beside it.
+        for (from.q_sites) |k| {
+            const s = self.lowered.charge_sites.items[k];
+            if (s.contrib != i) continue;
+            try jobs.append(self.arena, .{
+                .kind = .react,
+                .target = self.an.rv(s.final),
+                .mode = mode,
+                .comment = unitComment(c, true),
+            });
+        }
     }
     for (from.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
@@ -391,6 +398,7 @@ test "jobs queue in insert-tolerant order: contributions, operator inputs, held 
     const q = try f.call("ddt", &.{va}); // an operator unit, input V(a)
     // I(a,b) <+ V(b) + ddt(V(a)): a resistive and a reactive target.
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .resist_val = vb, .react_val = q });
+    try f.lowered.charge_sites.append(a, .{ .contrib = 0, .sign = 1, .final = q });
     try f.lowered.held_vars.append(a, .{ .name = "h", .ty = .real, .init = .f_zero, .seed = .f_zero, .final = vb });
     const an = try f.analysis();
     const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
@@ -408,6 +416,7 @@ test "jobs queue in insert-tolerant order: contributions, operator inputs, held 
         .limits = &.{},
         .noise = &noise,
         .emit_display = false,
+        .q_sites = &.{0},
     }, never);
     const kinds = try a.alloc(Job.Kind, jobs.list.len);
     for (jobs.list, kinds) |j, *k| k.* = j.kind;

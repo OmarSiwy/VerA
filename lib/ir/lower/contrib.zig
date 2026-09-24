@@ -151,6 +151,9 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         const old = try self.builder.readVariable(acc.react, self.cur);
         try self.builder.writeVariable(acc.react, self.cur, try self.emit(.fadd, &.{ old, v }));
     }
+    // §5.6.1.2 each reactive term is also a charge SITE of its own, so the
+    // host can tape it apart from the others on the same row.
+    for (split.sites.items) |ps| try addSite(self, idx, ps, target.neg);
     // §5.6.1.3 this statement RETAINS a value for its quantity on every path
     // that executes it — even `<+ 0.0`, whose retained zero is §5.6.5's closed
     // switch and not an absent source. A constant write: no MIR instruction,
@@ -862,7 +865,7 @@ pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// flow source, neither → §5.6.1.3's open circuit).
 pub fn discardOpposite(self: *Lower, t: Target) Oom!void {
     const other: Access = if (t.access == .potential) .flow else .potential;
-    for (self.out.contributions.items, self.accum.items) |c, acc| {
+    for (self.out.contributions.items, self.accum.items, 0..) |c, acc, ci| {
         if (c.kind != .direct or c.access != other or c.hi != t.hi or c.lo != t.lo) continue;
         // §5.6.1.3 is stated of "a branch", so only the OTHER quantity of THIS
         // branch is discarded. A parallel named branch over the same pair is a
@@ -877,10 +880,23 @@ pub fn discardOpposite(self: *Lower, t: Target) Oom!void {
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
         try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
+        // The discarded charge goes with its sites.
+        for (self.out.charge_sites.items, self.site_places.items) |s, p| {
+            if (s.contrib == ci) try self.builder.writeVariable(p, self.cur, .f_zero);
+        }
     }
 }
 
-pub const Split = struct { resist: ?Mir.Value, react: ?Mir.Value };
+pub const Split = struct {
+    resist: ?Mir.Value,
+    react: ?Mir.Value,
+    /// §5.6.1.2 the charge sites `react` sums, in term order (`ChargeSite`).
+    sites: std.ArrayList(PendingSite) = .empty,
+};
+
+/// One reactive term of a right-hand side, before `lowerContribute` knows its
+/// accumulator: the charge, its sign in the sum, and its `vera_lte` verdict.
+pub const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok: u32 };
 
 /// LRM §5.6.1.2 — separate the ddt terms (§4.5.3) into the reactive part.
 ///
@@ -925,7 +941,15 @@ pub fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!voi
 
     if (containsDdt(self, e)) {
         const t = try lowerReactive(self, e) orelse return;
-        try accumulate(self, &out.react, try finishReactive(self, t), negate);
+        const q = try finishReactive(self, t);
+        try accumulate(self, &out.react, q, negate);
+        const d = firstDdt(self, e);
+        try out.sites.append(self.arena, .{
+            .charge = q,
+            .negate = negate,
+            .lte = try siteLte(self, e),
+            .tok = if (d != .none) self.file.exprs.mainTok(d) else Mir.no_tok,
+        });
     } else {
         const v = try self.toReal(try lower_expr.lowerExpr(self, e));
         try accumulate(self, &out.resist, v, negate);
@@ -938,6 +962,70 @@ pub fn accumulate(self: *Lower, slot: *?Mir.Value, v: Mir.Value, negate: bool) O
     } else {
         slot.* = if (negate) try self.emit(.fneg, &.{v}) else v;
     }
+}
+
+/// Record reactive term `ps` of the statement accumulating into contribution
+/// `idx` as a charge site of its own (`Lower.ChargeSite`). Its SSA place is
+/// seeded zero in the entry block, so a path that does not execute the site
+/// — or that §5.6.1.3 discards (`discardOpposite`) — reads a zero charge.
+fn addSite(self: *Lower, idx: u32, ps: PendingSite, neg: bool) Oom!void {
+    const p = self.builder.newPlace();
+    try self.builder.writeVariable(p, .entry, .f_zero);
+    try self.builder.writeVariable(p, self.cur, ps.charge);
+    try self.site_places.append(self.arena, p);
+    try self.out.charge_sites.append(self.arena, .{
+        .contrib = idx,
+        .sign = if (ps.negate != neg) -1.0 else 1.0,
+        .lte = ps.lte,
+        .tok = ps.tok,
+    });
+}
+
+/// The first `ddt` call in `e`, or `.none`.
+fn firstDdt(self: *const Lower, e: Ast.ExprId) Ast.ExprId {
+    if (e == .none) return .none;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) return e;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| {
+        const d = firstDdt(self, c);
+        if (d != .none) return d;
+    }
+    return .none;
+}
+
+/// Does the charge site `e` join the host's truncation check? The innermost
+/// `vera_lte` wins: one suffixed to a `ddt` in the term (`ddt (* vera_lte = 0
+/// *) (q)`), then the nearest enclosing statement's (`lte_stack`), then the
+/// default, yes. A term holding two `ddt`s under one factor is one site, and
+/// the first suffixed one decides it.
+fn siteLte(self: *Lower, e: Ast.ExprId) Oom!bool {
+    if (lteSuffix(self, e)) |a| return lteValue(self, a);
+    return if (self.lte_stack.items.len != 0) self.lte_stack.items[self.lte_stack.items.len - 1] else true;
+}
+
+fn lteSuffix(self: *const Lower, e: Ast.ExprId) ?Ast.LteAttr {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) {
+        if (self.file.exprLte(e)) |a| return a;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (lteSuffix(self, c)) |a| return a;
+    return null;
+}
+
+/// A `vera_lte` value: §2.9's default 1 when absent, otherwise a constant
+/// expression that must fold WITHOUT the model card — the mask is a
+/// compile-time table (`contract.QSites`), so a parameter cannot decide it.
+/// E0523 otherwise, and the site keeps the default.
+pub fn lteValue(self: *Lower, a: Ast.LteAttr) Oom!bool {
+    if (a.value == .none) return true;
+    const c = lower_constfold.foldExpr(self, a.value, false) orelse {
+        try self.err(a.main_tok, .E0523, "", .{});
+        return true;
+    };
+    return c.isTrue();
 }
 
 /// Does this subtree contain a `ddt` (§4.5.3)? Every child edge is searched

@@ -559,6 +559,12 @@ held_places: std.ArrayList(Ssa.Place) = .empty,
 /// read back at the end of the block — so a site under an `if` that does not
 /// run leaves the slot holding what it held, and never an undefined SSA value.
 limit_places: std.ArrayList(Ssa.Place) = .empty,
+/// Parallel to `out.charge_sites`: the site's charge during this evaluation,
+/// seeded `.f_zero` in the entry block and read back into `ChargeSite.final`.
+site_places: std.ArrayList(Ssa.Place) = .empty,
+/// The `vera_lte` values of the enclosing statements, innermost last
+/// (`lower_stmt.lowerStmt` pushes and pops). A `ddt`'s own suffix wins.
+lte_stack: std.ArrayList(bool) = .empty,
 /// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
 /// `fadd`-chained directly: a call inside an `if` arm does not dominate the
 /// chain root at the end of the block. An SSA place does — seeded `.f_zero` in
@@ -688,6 +694,30 @@ pub const LimitSlot = struct {
     /// The slot's value at the END of the analog block. `updateState` stages
     /// it; the next iterate's `updateState` promotes it into the read field.
     final: Mir.Value = .undef,
+};
+
+/// §5.6.1.2 one charge SITE: one reactive term a contribution's right-hand
+/// side splits into (`lower_contrib.splitTerm`) — a `ddt` with the factors of
+/// its multiplicative spine, whose charge is the term with the `ddt` stripped.
+/// Static by §4.5.15 (no analog operator in a user function, a runtime loop
+/// or a runtime conditional), so a site is one source occurrence after genvar
+/// unrolling and flattening. `Contribution.react_val` is exactly the sum of
+/// its sites' `sign * final`, which is what lets the host tape charges per
+/// site and still stamp the same rows (`contract.QStamp`).
+pub const ChargeSite = struct {
+    /// The `contributions` entry this site accumulates into.
+    contrib: u32,
+    /// ±1: the site's sign inside that entry's reactive accumulator — the
+    /// term's own sign in the sum, times the §1.3.1.2 reversed-branch flip.
+    sign: f64,
+    /// VerA's `vera_lte` attribute (`Ast.LteAttr`): does this charge join the
+    /// host's local-truncation-error check? Default true.
+    lte: bool = true,
+    /// The `ddt` token, for diagnostics and the emitted comment.
+    tok: u32 = Mir.no_tok,
+    /// The site's charge at the END of the analog block: zero on every path
+    /// that did not execute it or that §5.6.1.3 discarded.
+    final: Mir.Value = .f_zero,
 };
 
 /// §3.4.7 one `aliasparam`: the alias's spelling and the `params` index it names.
@@ -1566,6 +1596,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
     for (self.out.held_vars.items, self.held_places.items) |*h, p| h.final = try self.builder.readVariable(p, self.cur);
+    // §5.6.1.2 and the same for every charge site.
+    for (self.out.charge_sites.items, self.site_places.items) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
     // §9.17.3 and the same again for every `$limit` state slot: the value the
     // last site on that access function returned this evaluation, or — if none
     // of them ran — the `$limit$old` seed, unchanged.

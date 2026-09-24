@@ -46,7 +46,18 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 /// they are not analog statements. `casex`/`casez` ARE dispatched, to
 /// `parseCase`: §7.3.2 makes them analog statements in Verilog-AMS.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
+    const mark = self.attrs.items.len;
     try self.skipAttributes();
+    // A.6.4 `{ attribute_instance } <statement>`: VerA's `vera_lte` is the one
+    // attribute a statement keeps (`Ast.SourceFile.lte_attrs`). Read BEFORE
+    // the body, whose own nested statements append their attributes after.
+    const lte = self.lteSince(mark);
+    const id = try parseStmtBody(self);
+    if (lte) |a| try self.file.lte_attrs.append(self.arena, .{ .stmt = id, .value = a.value, .main_tok = a.main_tok });
+    return id;
+}
+
+fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     if (self.discreteGrammar() and self.eat(.hash)) {
         const delay = if (self.eat(.lparen)) blk: {
@@ -188,6 +199,8 @@ pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     while (true) {
+        const before_attrs = self.pos;
+        const attr_mark = self.attrs.items.len;
         try self.skipAttributes();
         switch (self.peek()) {
             .kw_parameter, .kw_localparam => {
@@ -198,7 +211,14 @@ pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
             },
-            else => break, // else: not a declaration: the block's statements start here
+            else => { // else: not a declaration: the block's statements start here
+                // Not a declaration: the block's statements start here, and
+                // the attributes just read prefix the first of them (A.6.4),
+                // so they are handed back for `parseStmt` to read again.
+                self.pos = before_attrs;
+                self.attrs.shrinkRetainingCapacity(attr_mark);
+                break;
+            },
         }
     }
 

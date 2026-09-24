@@ -156,23 +156,15 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     const at_x = self.out.items.len;
     try self.w("x: [n_u]S, ", .{});
     const at_model = self.out.items.len;
-    try self.w("model: *const Model, inst: *Instance, {s}: *State) [n_u]S {{\n", .{
+    try self.w("model: *const Model, inst: *Instance, {s}: *State) [n_q]S {{\n", .{
         if (acc.reads_t_prev) "state" else "_",
     });
     const at_core = self.out.items.len;
-    try self.ind(1);
-    try self.b("const qq = blk: {{\n", .{});
-    try self.ind(2);
-    const at_mut = self.out.items.len;
-    try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
-    self.ind_base = 1;
-    const stamps = try gen_dispatch.emitStamps(self, true);
-    self.ind_base = 0;
-    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
-    try self.ind(2);
-    try self.b("break :blk res;\n", .{});
-    try self.ind(1);
-    try self.b("}};\n", .{});
+    // §5.6.1.2 the charges, one per site (`q`'s layout).
+    self.core_wanted = true;
+    try self.b("    const qq = ", .{});
+    try gen_dispatch.writeSites(self);
+    try self.b(";\n", .{});
     try emitAcceptBody(self, acc, ".val()");
     try self.w("    return qq;\n}}\n\n", .{});
     if (self.core_wanted or acc.uses_core) {

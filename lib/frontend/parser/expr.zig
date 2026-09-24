@@ -389,8 +389,17 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
 
     const name = try self.file.intern(self.arena, token.Tag.lexeme(t).?);
     self.pos += 1;
+    // §2.9: an attribute_instance "can appear as a suffix to ... a
+    // Verilog-AMS function name in an expression". A.8.2 draws that slot only
+    // for `analog_function_call`; VerA extends it to these keyword-named
+    // calls so `ddt (* vera_lte = 0 *) (q)` can name one charge site.
+    const mark = self.attrs.items.len;
+    if (self.peek() == .attr_open) try self.skipAttributes();
+    const lte = self.lteSince(mark);
     const args = try parseCallArgs(self);
-    return addCall(self, call_tag, tok, name, args);
+    const id = try addCall(self, call_tag, tok, name, args);
+    if (lte) |a| try self.file.lte_attrs.append(self.arena, .{ .expr = id, .value = a.value, .main_tok = a.main_tok });
+    return id;
 }
 
 pub inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
