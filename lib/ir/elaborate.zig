@@ -1770,6 +1770,7 @@ test "Annex F.2 a leaf's discipline reaches the top segment it is bound to" {
     defer f.deinit();
 
     try parse(&f,
+        \\discipline annex_f_y; enddiscipline
         \\module top(a); inout a;
         \\  mid m(a);
         \\  annex_f_y m.l.p;
