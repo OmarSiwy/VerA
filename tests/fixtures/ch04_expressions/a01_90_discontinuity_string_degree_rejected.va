@@ -23,27 +23,16 @@
 // constness (E0805 already covers a non-constant degree in
 // tests/fixtures/ch09_system_tasks/139_discontinuity_nonconstant_rejected.va).
 //
-// WHAT HAPPENS TODAY: it compiles, silently, as degree 0. `Const.asInt`
-// (`lib/ir/lower.zig:800`) has the arm
-//
-//   .str => 0,
-//
-// and `lowerKernelCtl` takes that 0 as the announced degree. A model that names
-// its discontinuity degree through a mistyped parameter therefore gets the most
-// severe announcement there is, with no warning, and the author never learns
-// the argument was ignored. Reproduced: `vera --emit-zig` exits 0 and emits a
-// device.
-//
-// THE TAG. It used to be `//! reject $discontinuity`, which any diagnostic
-// quoting this module's one statement satisfies. The refusal owed is §9.17.1's
-// degree rule, which already has a code: E0820 "$discontinuity degree must be
-// nonnegative or -1". A string is not a nonnegative integer.
+// WHAT USED TO HAPPEN: it compiled, silently, as degree 0 — `Const.asIntExact`
+// has the arm `.str => 0`, and `lowerKernelCtl` took that 0 as the announced
+// degree, the most severe announcement there is. It is now E0820, the clause's
+// own "degree must be nonnegative or -1" verdict, naming the string. (The
+// literal spelling now reads as its packed bytes instead of 0.)
 //
 //! lrm 9.17.1
 //! lrm 3.3
 //! lrm 3.4.6
 //! reject E0820
-//! xfail VerA accepts a `string` parameter as the degree of $discontinuity and lowers it to 0 (Const.asInt has a `.str => 0` arm), so §9.17.1's "i must be a non-negative integer" and §3.3's "A string cannot be assigned to an integral type" are both unchecked and the model gets the most severe announcement there is, silently
 module a01_discontinuity_string_degree_rejected(p, n);
   inout p, n;
   electrical p, n;

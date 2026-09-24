@@ -1345,6 +1345,18 @@ pub fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const As
                 try self.err(self.file.exprs.mainTok(real_args[0]), .E0805, "", .{});
                 return true;
             };
+            // §9.17.1 "i must be a non-negative integer", and §3.3 "A string
+            // cannot be assigned to an integral type": a `string` PARAMETER has
+            // no integer to be. A string LITERAL does: §3.3 lets it be
+            // assigned to an integral type, as its packed bytes (§2.7), which
+            // `Const.asIntExact`'s `.str => 0` is not.
+            if (c == .str) {
+                if (self.file.exprs.tag(real_args[0]) != .str_literal) {
+                    try self.err(self.file.exprs.mainTok(real_args[0]), .E0820, "got a `string` value, \"{s}\", which is not an integer", .{c.str});
+                    return true;
+                }
+                degree = Lower.strToInt(c.str, 32);
+            } else
             // Same hole as the subscript path: §4.2.1.1 gives an infinity no
             // nearest integer, so there is no degree here to compare against
             // -1. E0820 is the clause's own verdict for a degree it cannot
