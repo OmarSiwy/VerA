@@ -53,6 +53,11 @@ const usage_text =
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
     \\  --zig PATH              zig executable to drive (default: zig)
     \\  -I DIR                  add an `include search directory
+    \\  --param NAME=VALUE      compile with the top module's parameter NAME set
+    \\                          to VALUE (LRM 3.4). A parameter that sizes an
+    \\                          array, vector or replication is fixed at VALUE and
+    \\                          the device refuses a card that moves it
+    \\                          (`checkShape`); any other stays a card value
     \\  --spice PATH            read a SPICE netlist alongside the source; Annex
     \\                          E.2's .MODEL and .SUBCKT cards in it become
     \\                          module definitions the .va can instantiate
@@ -83,6 +88,9 @@ pub fn main(init: std.process.Init) !u8 {
 
     var include_dirs: std.ArrayList([]const u8) = .empty;
     defer include_dirs.deinit(gpa);
+
+    var overrides: std.ArrayList(vera.ParamOverride) = .empty;
+    defer overrides.deinit(gpa);
 
     var path: ?[]const u8 = null;
     var emit_zig = false;
@@ -156,6 +164,14 @@ pub fn main(init: std.process.Init) !u8 {
             jac_f32_host = true;
         } else if (std.mem.eql(u8, arg, "--contract")) {
             contract_path = args.next() orelse return missing(err, "--contract", "a path");
+        } else if (std.mem.eql(u8, arg, "--param")) {
+            const kv = args.next() orelse return missing(err, "--param", "NAME=VALUE");
+            const eq = std.mem.indexOfScalar(u8, kv, '=') orelse return missing(err, "--param", "NAME=VALUE");
+            const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch {
+                try err.print("error: --param {s}: `{s}` is not a number\n", .{ kv, kv[eq + 1 ..] });
+                return 2;
+            };
+            try overrides.append(gpa, .{ .name = kv[0..eq], .value = value });
         } else if (std.mem.eql(u8, arg, "--dyn")) {
             dyn_path = args.next() orelse return missing(err, "--dyn", "a path");
         } else if (std.mem.eql(u8, arg, "--work-dir")) {
@@ -309,7 +325,18 @@ pub fn main(init: std.process.Init) !u8 {
         "";
     defer if (spice_path != null) gpa.free(netlist);
 
-    var result = vera.compileSourceOpts(gpa, source, if (codegen_flag == null) .lint else .release_fast, .{
+    // --emit-exe's `//!` directives, read up front: a `//! param` card value
+    // for a SHAPE parameter is a compile-time value (below). The directive
+    // tables and the runner text are a web of small slices with one lifetime;
+    // an arena is the whole memory management here.
+    var tb_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer tb_arena.deinit();
+    const directives: vera.tb.Directives = if (exe_flag == null) .{} else vera.tb.parse(tb_arena.allocator(), source) catch |e| {
+        try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
+        return 2;
+    };
+
+    var opts: vera.Options = .{
         .file_name = in_path,
         .include_dirs = include_dirs.items,
         .spice_netlist = netlist,
@@ -320,17 +347,39 @@ pub fn main(init: std.process.Init) !u8 {
         .display = display,
         .jac_f32 = jac_f32,
         .jac_f32_host = jac_f32_host,
-    }) catch |e| {
-        try report(&bag, err, json, use_color);
-        // A diagnosed failure has already said everything useful; the Zig error
-        // name would only add noise.
-        switch (e) {
-            error.CompileFailed, error.NoModule => {},
-            else => try err.print("error: {t}\n", .{e}),
-        }
-        return 1;
+        .param_overrides = overrides.items,
     };
+    const target: vera.Target = if (codegen_flag == null) .lint else .release_fast;
+    var result = vera.compileSourceOpts(gpa, source, target, opts) catch |e| return compileFailed(&bag, err, json, use_color, e);
     defer result.deinit();
+
+    // §3.4 the testbench's card values for shape parameters are compile-time
+    // values (`tb.shapeOverrides`); a `--param` of the same name wins.
+    const cli_overrides = overrides.items.len;
+    for (try vera.tb.shapeOverrides(tb_arena.allocator(), directives, result.lowered)) |card| {
+        for (overrides.items) |o| {
+            if (std.mem.eql(u8, o.name, card.name)) break;
+        } else try overrides.append(gpa, card);
+    }
+    if (overrides.items.len != cli_overrides) {
+        bag.deinit(gpa); // the first pass's; the second says it all again
+        bag = .init(gpa);
+        opts.param_overrides = overrides.items;
+        const again = vera.compileSourceOpts(gpa, source, target, opts) catch |e| return compileFailed(&bag, err, json, use_color, e);
+        result.deinit();
+        result = again;
+    }
+
+    // `--param` names a parameter a card could set: a top-module, non-local,
+    // numeric scalar. A misspelling would otherwise compile the default shape.
+    for (overrides.items[0..cli_overrides]) |o| {
+        for (result.lowered.params.items) |p| {
+            if (std.mem.eql(u8, p.name, o.name) and !p.is_local and p.ty != .string) break;
+        } else {
+            try err.print("error: --param {s}: `{s}` declares no numeric parameter `{s}` that a card may set\n", .{ o.name, result.mir.name, o.name });
+            return 2;
+        }
+    }
 
     // Diagnostics on a SUCCESSFUL compile — W0650 is the reason this path
     // exists. DEFERRED, because codegen is a diagnostic-producing stage too
@@ -403,15 +452,7 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         };
         const wd = work_dir orelse ".zig-cache/vera-tb";
-        // The directive tables and the runner text are a web of small slices
-        // with one lifetime; an arena is the whole memory management here.
-        var tb_arena: std.heap.ArenaAllocator = .init(gpa);
-        defer tb_arena.deinit();
-        const d = vera.tb.parse(tb_arena.allocator(), source) catch |e| {
-            try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
-            return 2;
-        };
-        var dm = d;
+        var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm);
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
@@ -498,6 +539,18 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     return 0;
+}
+
+/// A compilation that failed: its diagnostics, then exit 1. A diagnosed
+/// failure has already said everything useful; the Zig error name would only
+/// add noise.
+fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e: anyerror) !u8 {
+    try report(bag, err, json, use_color);
+    switch (e) {
+        error.CompileFailed, error.NoModule => {},
+        else => try err.print("error: {t}\n", .{e}),
+    }
+    return 1;
 }
 
 fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {

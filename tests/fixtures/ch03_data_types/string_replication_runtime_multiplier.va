@@ -19,7 +19,16 @@
 //
 //! lrm 3.3
 //! bias V(p) = 1.0
-//! xfail E0328: a compiled device has no run-time string buffer, so {i{"Hi"}} with i known only at run time is refused
+// WHY IT STAYS AN XFAIL (re-read 2026-09-24). The fixture is right: Table 3-3
+// makes a nonconstant multiplier legal, and `i` here is an analog VARIABLE set
+// from a probe, so no compile-time value exists to fold. A PARAMETER multiplier
+// is a different case — a shape parameter, fixed at compilation (§3.4) — and
+// passes in string_replication_parameter_multiplier.va. What this row needs is
+// a string value built while the device runs; the emitted device carries only
+// compile-time strings (a `str_const`), so that is an implementation limit, not
+// a reading of the LRM, and no cap on `i` would be one the clause states.
+//
+//! xfail E0328: implementation limit — a compiled device has no run-time string value, so {i{"Hi"}} with i a probe-dependent variable is refused
 `include "check.vh"
 module ch3_string_replication_runtime_multiplier(p);
     inout p;

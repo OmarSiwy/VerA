@@ -37,6 +37,11 @@ pub const Harness = struct {
     bag: diag.Bag,
 
     fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
+        return runOver(gpa, src, &.{}, out);
+    }
+
+    /// `run` with §3.4 `--param` compile-time overrides.
+    fn runOver(gpa: std.mem.Allocator, src: []const u8, over: []const Lower.ParamOverride, out: *Harness) !void {
         out.* = .{
             .arena_state = std.heap.ArenaAllocator.init(gpa),
             .file = .empty,
@@ -56,6 +61,7 @@ pub const Harness = struct {
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
+        out.low.param_overrides = over;
         out.lowered = try out.low.lowerFile();
     }
 
@@ -2196,6 +2202,37 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
     // And `warm` is the derived half of the claim: initializer 0.0, `derive`
     // writing the §6.3.4 value over it.
     try std.testing.expect(std.mem.indexOf(u8, src, "model.warm = (2.0) * (model.base);") != null);
+}
+
+test "codegen: §3.4 a shape parameter is compiled in and a card that moves it is refused" {
+    const src =
+        \\module sh(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer N = 3;
+        \\  parameter real g = 1.0;
+        \\  real b[0:N];
+        \\  analog begin
+        \\    b[0] = g;
+        \\    I(p, n) <+ b[0] * V(p, n);
+        \\  end
+        \\endmodule
+    ;
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator, src, &h);
+    defer h.deinit();
+    const text = try h.gen(std.testing.allocator);
+    // The bound read `N`, so `N` is checked; `g` shapes nothing and is not.
+    try std.testing.expect(std.mem.indexOf(u8, text, "    if (model.N != 3) return \"N\";\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "model.g !=") == null);
+
+    // `--param N=5`: the field initializer AND the check are the compiled value.
+    var o: Harness = undefined;
+    try Harness.runOver(std.testing.allocator, src, &.{.{ .name = "N", .value = 5 }}, &o);
+    defer o.deinit();
+    const over = try o.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, over, "N: i64 = 5,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, over, "    if (model.N != 5) return \"N\";\n") != null);
 }
 
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {

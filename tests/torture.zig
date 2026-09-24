@@ -378,19 +378,34 @@ fn runAndCheck(
     defer levels.deinit(gpa);
     try levels.set(gpa, .W0650, .allow);
 
-    var result = vera.compileSourceOpts(gpa, source, .release_fast, .{
+    var opts: vera.Options = .{
         .file_name = f.path,
         .include_dirs = &.{ f.dir, f.root },
         .diags = &diags,
         .lint = levels,
         .display = .emit,
         .spice_netlist = d.spice,
-    }) catch |err| {
+    };
+    var result = vera.compileSourceOpts(gpa, source, .release_fast, opts) catch |err| {
         try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
         vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
         return .unmet;
     };
     defer result.deinit();
+    // §3.4 a `//! param` card value for a shape parameter is a compile-time
+    // value: compile again for it, as `vera --emit-exe` does.
+    opts.param_overrides = try vera.tb.shapeOverrides(arena, d, result.lowered);
+    if (opts.param_overrides.len != 0) {
+        diags.deinit(gpa);
+        diags = .init(gpa);
+        const again = vera.compileSourceOpts(gpa, source, .release_fast, opts) catch |err| {
+            try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
+            vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
+            return .unmet;
+        };
+        result.deinit();
+        result = again;
+    }
 
     const device = result.generateDevice() catch |err| {
         try w.print("FAIL {s}: codegen failed: {t}\n", .{ f.path, err });

@@ -42,7 +42,7 @@ landed. PLAN §6's warning about that hazard earned its place twice over.
 The eight stragglers, each with its diagnosis already recorded:
 
   ch03 a08_nodeset_02_nodeset_bus_null_element
-  ch04 a01_03_parameterized_dimension_override   §3.2 array dims elaborated from the DECLARED default while the index reads `model.N`; fixture is right (§3.4.4), needs card-sized array storage — not a refusal
+  ch04 a01_03_parameterized_dimension_override   CLOSED 2026-09-24 by the user's decision: §3.4 compile-time SHAPE parameters (`--param`, `checkShape`) — a card that moves one is refused
   ch05 a02_10_node_alias_reevaluated_when_a_parameter_changes  `bindAlias` edits `node_voltages` while LOWERING, so the last-lowered `if` arm wins whatever `sel` is — wrong even at the default; needs card-selected topology
   ch06 h01_10_string_derived_parameter           `hostConditionalExpr` cannot render a string compare; cheaper route is the `!p.is_local` guard at codegen.zig:1982
   ch09 a05_08_file_loaded_on_first_executed_call `readTableFile` is eager at lowering

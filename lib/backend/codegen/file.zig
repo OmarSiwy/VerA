@@ -144,6 +144,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitTopology(self);
     try emitModel(self);
     try emitDerive(self);
+    try emitShapeCheck(self);
     try gen_setup.emitSetupDecl(self);
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
@@ -597,6 +598,40 @@ pub fn emitDerive(self: *Gen) Error!void {
     try deriveFlags(self);
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("}}\n\n", .{});
+}
+
+/// §3.2/§3.4 — refuse a card that moves a SHAPE parameter (`ParamInfo.shape`).
+///
+/// §3.4: parameters "can be modified at compilation time"; an array bound or a
+/// replication count is where the device takes one at that time, because the
+/// storage it sizes is laid out in the generated text. A card is still written
+/// at run time, so the one honest answer to a card that disagrees with the
+/// compiled shape is to name the parameter and refuse it — the alternative was
+/// a folded shape and a card-read index silently disagreeing. The host calls
+/// this after `derive` (a localparam over a card value is final only then);
+/// null is "the card fits". Integer and f64 compares, no allocation, no print:
+/// cheap, and safe in a GPU build. Absent when nothing is shaped by a
+/// parameter — the common case, and the contract's default.
+pub fn emitShapeCheck(self: *Gen) Error!void {
+    const at = self.out.items.len;
+    try self.w(
+        \\/// §3.4 the shape parameters this device was compiled for: the name of
+        \\/// the first one the card (after `derive`) sets to another value, or null.
+        \\pub fn checkShape(model: *const Model) ?[]const u8 {{
+        \\
+    , .{});
+    const body = self.out.items.len;
+    for (self.lowered.params.items, 0..) |p, i| {
+        if (!p.shape) continue;
+        const ty = Analysis.tyOfParam(p.ty);
+        if (ty == .str) continue; // a string shapes nothing
+        // `derive` rewrites a localparam from its default; one that reads no
+        // parameter is that constant every time and cannot disagree.
+        if (p.is_local and self.an.foldConst(p.default, 0, false) != null) continue;
+        try self.w("    if (model.{s} != {s}) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) });
+    }
+    if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
+    try self.w("    return null;\n}}\n\n", .{});
 }
 
 /// §5.6.5 `derive`'s tail: every card-only retention flag, into the `Model`

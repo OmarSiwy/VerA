@@ -72,6 +72,15 @@ pub const runner_body =
     \\/// knots out of `noiseTablePoints`, not the declared defaults that reach
     \\/// `noise_tables`. See `emitNoiseTopology`'s `points=` comparison.
     \\pub const noise_table_points = true;
+    \\/// §3.4 this host refuses a card that moves a shape parameter: `shapeCheck`
+    \\/// runs after every `derive`.
+    \\pub const shape_check = true;
+    \\fn shapeCheck(m: *const D.Model) void {
+    \\    if (comptime !@hasDecl(D, "checkShape")) return;
+    \\    const name = D.checkShape(m) orelse return;
+    \\    std.debug.print("error: LRM 3.4: the model card sets shape parameter `{s}` to a value this device was not compiled for\n", .{name});
+    \\    std.process.exit(1);
+    \\}
     \\pub fn systf(_: *const D.Model) ?*const contract.SystfHost {
     \\    return &no_vpi_app;
     \\}

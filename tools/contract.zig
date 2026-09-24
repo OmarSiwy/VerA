@@ -1538,6 +1538,15 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "derive"))
         expectFn(D, "derive", fn (*D.Model) void);
 
+    // §3.4 SHAPE parameters: parameters "modified at compilation time", folded
+    // into an array bound or replication count, so the device holds one value
+    // of each. `checkShape` names the first one a card (after `derive`) sets to
+    // anything else, or null. Absent — the default — means no parameter shapes
+    // this device and every card fits. `validateHost` makes calling it the
+    // host's obligation when it is present.
+    if (@hasDecl(D, "checkShape"))
+        expectFn(D, "checkShape", fn (*const D.Model) ?[]const u8);
+
     // precompute: instance-mutating parameter prep before solve.
     if (@hasDecl(D, "precompute"))
         expectFn(D, "precompute", fn (*D.Instance, *const D.Model) void);
@@ -1608,6 +1617,17 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
                 " has a 4.6.4.3 noise table whose knots are model parameters, and " ++
                 "`noise_tables` carries only their declared defaults. Declare " ++
                 "noise_table_points = true once the host reads the hook.");
+    }
+    // §3.4 a device compiled for one value of a shape parameter answers a card
+    // that moves it with a wrong-sized array, silently. Only the host sees the
+    // card, so only the host can refuse it; opting in is how it says it calls
+    // `checkShape` after `derive` and rejects a non-null answer.
+    if (@hasDecl(D, "checkShape")) {
+        if (!@hasDecl(H, "shape_check") or !H.shape_check)
+            @compileError(@typeName(H) ++ " must call `checkShape`: " ++ @typeName(D) ++
+                " was compiled for fixed values of its shape parameters (3.4), and a card " ++
+                "that moves one must be refused. Declare shape_check = true once the host " ++
+                "calls it after `derive`.");
     }
     if (!@hasDecl(D, "systf_calls") or D.systf_calls.len == 0) return;
     const d = @typeName(D);
@@ -1749,6 +1769,8 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "systf_calls", {} },
     .{ "mc_param", {} },
     .{ "derive", {} },
+    // §3.4 the card check for shape parameters; see `validate`.
+    .{ "checkShape", {} },
     .{ "precompute", {} },
     .{ "constant", {} },
     .{ "nextBreakpoint", {} },
@@ -2301,6 +2323,9 @@ const MockAll = struct {
         return .{.{ .mag = 1, .phase = 0 }};
     }
     pub fn derive(_: *Model) void {}
+    pub fn checkShape(m: *const Model) ?[]const u8 {
+        return if (m.g != 1e-3) "g" else null;
+    }
     pub fn precompute(_: *Instance, _: *const Model) void {}
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {
         return null;
@@ -2537,6 +2562,8 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
         // linking it must say it reads `noiseTablePoints` rather than the
         // declared defaults in `noise_tables`.
         pub const noise_table_points = true;
+        // ...and MockAll has a shape parameter, so the host calls `checkShape`.
+        pub const shape_check = true;
         var app: SystfHost = .{ .ctx = undefined, .call = zero };
         fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
             @memset(partials, 0);
