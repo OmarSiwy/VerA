@@ -160,3 +160,28 @@ the list — `lrm_5_5_5.va` reads a child's named branch through the instance
 path (see its row) — and §5.6.8.2 no longer sits behind anything: hierarchical
 contribution works, so what is missing there is its error conditions, which
 are fixtures nobody has written.
+
+## 2026-09-24 — two-way evidence pass (measure C)
+
+Rows above that predate this pass are unchanged; where they disagree with this
+section, this section is newer. Every clause below is now cited by at least one
+fixture that runs and asserts and at least one `//! reject`, unless it is listed
+in `CLAUSES.tsv` (examples, definitions and permissions, each with the quoted
+sentence and the positive fixture that stands behind it).
+
+| LRM section | New or re-tagged fixtures |
+|---|---|
+| 5.3 | `block_statement_missing_end_rejected.va` (a `begin` never closed) |
+| 5.4 | `analog_signals_nets_branches_contributions.va` (run); `contribution_to_discrete_net_rejected.va` (E0501, `V(d) <+` on a `logic` net) |
+| 5.4.1 | `access_function_not_of_the_branch_discipline_rejected.va` (E0501, `Temp` on a named electrical branch) |
+| 5.4.2, 5.4.2.2 | `source_both_potential_and_flow_rejected.va` (E0409, flow indirectly + potential directly on one pair — the mirror of `indirect_and_direct.va`) |
+| 5.5 | `analog_signals_nets_branches_contributions.va`, `hierarchical_net_reference_probes_solve.va` (run); CLAUSES.tsv |
+| 5.5.4 | `hierarchical_net_reference_probes_solve.va` (all three probe shapes asserted on a solved point); `hierarchical_reference_to_a_variable_rejected.va` (E0901) |
+| 5.6 | `analog_signals_nets_branches_contributions.va` (direct and indirect, both change the solution); `contribution_to_discrete_net_rejected.va` |
+| 5.6.2, 5.6.2.1 | `controlled_sources.va` re-tagged (it asserts all four controlled sources); CLAUSES.tsv |
+| 5.6.7.2 | `indirect_and_direct_on_different_pairs.va` (run: the permission side of the pair rule) |
+| 5.6.8, 5.6.8.1 | `hierarchical_contribution_voltage_loop_rejected.va`, `hierarchical_contribution_closes_a_source_triangle_rejected.va` (E0477, new — compiler fix: the parallel source used to be MERGED and summed); `a02_07` re-tagged 5.6.8 |
+| 5.9.1 | `contribution_in_while_rejected.va`, `contribution_in_repeat_rejected.va` (E0426) |
+| 5.10.1 | `event_or_is_not_bitwise_or_rejected.va` (`|` is not an event OR) |
+| 5.10.3 | `monitored_event_timer_used_as_a_value_rejected.va` (E0701) |
+| 5.1, 5.4.4, 5.5, 5.6.1.1, 5.6.1.3, 5.6.2, 5.6.2.1, 5.6.3, 5.6.4, 5.6.6, 5.6.7.1, 5.8, 5.8.2 | classified in `CLAUSES.tsv` |
