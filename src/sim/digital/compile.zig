@@ -179,10 +179,15 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     return ty;
 }
 
-fn constantExpression(self: *Run, e: Ast.ExprId) bool {
+pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal => return true,
+        // §12.2: a parameter is a constant; every other name is not.
+        .ident => {
+            const at = self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse return false;
+            return self.params.contains(at);
+        },
         .unary, .binary, .multi_concat, .ternary, .concat => {},
         // §17.7: a call that reads the clock is never constant, however
         // constant its (absent) arguments are. Without this `$time`
@@ -698,8 +703,10 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         if (typeOf(self, ex.rhs(e)).width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
         return;
     }
-    if (self.net_of.contains(try self.scalarSlot(e)))
+    const at = try self.scalarSlot(e);
+    if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
+    if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
 }
 
 /// §9.7.1 a delay is a "delay_value", and A.8.3 makes that
