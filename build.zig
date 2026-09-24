@@ -431,6 +431,26 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
         .stdout = "vpi-event-handles=ok\n",
     },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_01_object_traversal.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_01_object_traversal checks=89\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_02_object_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_02_object_refusals checks=108\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_03_value_time_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_03_value_time_refusals checks=70\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_04_callback_systf_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_04_callback_systf_refusals checks=83\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
