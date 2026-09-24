@@ -20,7 +20,7 @@
 
 pub const naming = @import("naming.zig");
 pub const codegen = @import("codegen.zig");
-pub const UnitPlan = @import("unit_plan.zig");
+pub const UnitPlan = @import("codegen/plan/unit.zig");
 pub const cg_display = @import("cg_display.zig");
 pub const cg_filters = @import("cg_filters.zig");
 pub const cg_limit = @import("cg_limit.zig");

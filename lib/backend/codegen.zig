@@ -41,7 +41,7 @@ const Mir = @import("ir").Mir;
 /// eleven locals in this file are already called `op` (a `Mir.Opcode`).
 const opdb = @import("ir").op;
 const Analysis = @import("ir").Analysis;
-const UnitPlan = @import("unit_plan.zig");
+const UnitPlan = @import("codegen/plan/unit.zig");
 const cg_display = @import("cg_display.zig");
 const cg_filters = @import("cg_filters.zig");
 const cg_limit = @import("cg_limit.zig");
@@ -603,25 +603,7 @@ pub fn mathOpByName(name: []const u8) ?Mir.Opcode {
 
 pub const callArgIsValue = plan_args.callArgIsValue;
 
-/// §9.5 the descriptor family — `Lower.isFileCall` over the callee, held equal
-/// to it for every tag by the test below.
-pub fn isFileCall(c: Mir.Callee) bool {
-    return switch (c) {
-        .@"$fopen", .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe",
-        .@"$fmonitor", .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek",
-        .@"$rewind", .@"$ferror", .@"$feof", .@"$fgets$str", .@"$ferror$str",
-        .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str",
-        => true,
-        else => false, // else: `Lower.isFileCall` is this set; the test holds them equal over every tag
-    };
-}
-
-test "isFileCall is Lower.isFileCall over every callee" {
-    for (std.meta.tags(Mir.Callee)) |c| {
-        const want = c != .systf and Lower.isFileCall(@tagName(c));
-        try std.testing.expectEqual(want, isFileCall(c));
-    }
-}
+pub const isFileCall = plan_args.isFileCall;
 
 pub fn isAnalysisName(s: []const u8) bool {
     const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
@@ -686,15 +668,7 @@ pub fn devSafe(op: Mir.Opcode) bool {
 pub const OpKind = opdb.OpKind;
 pub const opHasState = opdb.hasState;
 
-/// Does this operator's kernel read the CURRENT input? The pure-history ones
-/// answer from `Instance` alone, and rendering an input they never emit would
-/// leave the unit claiming a parameter (or a cache) nothing references.
-/// `emitOperator` renders `in` exactly for these; `planSlots` has to agree,
-/// which is why the set lives in the table and not in either of them.
-pub fn opNeedsInput(k: OpKind) bool {
-    return opdb.get(k).needs_input;
-}
-
+pub const opNeedsInput = plan_args.opNeedsInput;
 pub const enableArgIdx = plan_args.enableArgIdx;
 
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9) — codegen/kernel_text.zig
@@ -713,6 +687,7 @@ test {
     _ = plan_args;
     _ = plan_hoist;
     _ = plan_jac;
+    _ = UnitPlan;
     _ = float_mode;
     _ = float_lanes;
     _ = Gen.gen_hoist;
