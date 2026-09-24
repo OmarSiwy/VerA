@@ -1197,13 +1197,36 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
     }
 }
 
-/// §6.2.2 one module or UDP instance, declared in `scope`.
+/// §6.2.2 one module or UDP instance, declared in `scope` — or IEEE 1364
+/// §12.1.2's array of them, one instance per element from the lower index
+/// up, each a scope named `u[k]` (the same order the analog elaborator uses).
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
+    r.scope = scope;
+    if (inst.params.len != 0)
+        return r.fail(inst.main_tok, "parameter overrides are not implemented by digital execution", .{});
+    const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
+    if (findUdp(r.file, inst.module) != null)
+        return r.fail(inst.main_tok, "§12.1.2: arrays of UDP instances are not implemented by digital execution", .{});
+    const msb = try r.declaredBound(range.msb, inst.main_tok);
+    const lsb = try r.declaredBound(range.lsb, inst.main_tok);
+    var k = @min(msb, lsb);
+    while (k <= @max(msb, lsb)) : (k += 1) try instantiateOne(r, e, scope, inst, depth, k);
+}
+
+/// §12.1.2: "If the bit length of a port expression is the same as the
+/// port's, the expression is connected to each instance". A wider one is
+/// split across the elements, which is refused rather than truncated.
+// ponytail: only a whole identifier is sized here; splitting and general
+// expressions wait for a design that needs them.
+fn arrayConn(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn) Error!void {
+    if (r.file.exprs.tag(conn.expr) == .ident and e.values.items[try r.scalarSlot(conn.expr)].width == try portWidth(r, port)) return;
+    return r.fail(conn.main_tok, "§12.1.2: only a whole net or variable as wide as the port is connected across an instance array by digital execution", .{});
+}
+
+fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16, index: ?i64) Error!void {
     const arena = r.arena;
     r.scope = scope;
     {
-        if (inst.range != null or inst.params.len != 0)
-            return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
         if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
         const child = try findModule(r, inst.module, inst.main_tok);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
@@ -1217,6 +1240,7 @@ fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: 
                 const first = for (child.ports, 0..) |p, k| {
                     if (p.external_name == conn.name) break k;
                 } else return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
+                if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
                 var total: u32 = 0;
                 var last = first;
                 while (last < child.ports.len and child.ports[last].external_name == conn.name) : (last += 1)
@@ -1238,13 +1262,15 @@ fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: 
             // so a mixed design's digital half connects nothing through it —
             // the same skip the child's own port loop makes.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
+            if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
-        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name });
+        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name, .index = index });
         // §12.4's path is walked by NAME, so the instance's own identifier has
-        // to outlive the recursion that consumes it.
-        if (inst.name != .none) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
+        // to outlive the recursion that consumes it. An array element's path
+        // carries its index, which that walk does not read: not registered.
+        if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
         try declare(r, e, child, child_scope, binds_out, depth + 1);
         r.scope = scope;
     }
@@ -1981,6 +2007,34 @@ test "§12.4 a hierarchical path descends one instance per part" {
         \\initial begin r = 1'b1; #0 $display("%b", u.d.a); end
         \\endmodule
     , "1\n");
+}
+
+// IEEE 1364 §12.1.2: `u[1:0]` is two instances, each named with its index,
+// and a port expression as wide as the port reaches every one of them. One
+// twice as wide would be split across them, which is refused, not truncated.
+test "§12.1.2 an instance array is one instance per element, each connected" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module leaf(a);
+        \\input a;
+        \\wire a;
+        \\initial #1 $display("%m %b", a);
+        \\endmodule
+        \\module top;
+        \\reg r;
+        \\leaf u[1:0](r);
+        \\initial r = 1'b1;
+        \\endmodule
+    , "top.u[0] 1\ntop.u[1] 1\n");
+    try expectRejected(
+        \\module leaf(a);
+        \\input a;
+        \\endmodule
+        \\module top;
+        \\reg [1:0] r;
+        \\leaf u[1:0](r);
+        \\endmodule
+    , "across an instance array");
 }
 
 // IEEE 1364 §19.10. The directive drives at PULL strength, so the level it

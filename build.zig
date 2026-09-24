@@ -337,8 +337,6 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 ///   p03_*   analog callbacks and values — needs an analog solver here
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
-///   audit_module_array, audit_vpi_value_formats — the engine refuses their
-///           .v (an instance array, `small` as a name)
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.c",
@@ -406,6 +404,12 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_array_object_kinds.v",
         .stdout = "",
         .stderr = "pli-array-kinds reg-words=2 real-selects=2\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_module_array.c",
+        .design = "tests/fixtures/ieee_pli/audit_module_array.v",
+        .stdout = "",
+        .stderr = "pli-module-array members=2 indices=0,1\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/audit_vpi_value_formats.c",

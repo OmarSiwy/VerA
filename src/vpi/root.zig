@@ -874,7 +874,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         for (scopes.items) |*s| s.deinit(gpa);
         scopes.deinit(gpa);
     }
-    try walkDigital(gpa, arena, file, &scopes, top, null, "");
+    try walkDigital(gpa, arena, r, &scopes, top, null, "");
 
     var objects: std.ArrayList(Obj) = .empty;
     defer objects.deinit(gpa);
@@ -922,6 +922,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
         }
     }
+    try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
     try freeze(&d, objects.items, scopes.items);
     return d;
 }
@@ -953,12 +954,13 @@ fn digitalObj(
 fn walkDigital(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
-    file: *const Ast.SourceFile,
+    r: *const sim.digital.Run,
     scopes: *std.ArrayList(Building),
     m: *const Ast.ModuleDecl,
     parent: ?u32,
     path: []const u8,
 ) Error!void {
+    const file = r.file;
     const at: u32 = @intCast(scopes.items.len);
     try scopes.append(gpa, .{
         .decl = m,
@@ -969,8 +971,18 @@ fn walkDigital(
     if (parent) |p| try scopes.items[p].children.append(gpa, at);
     for (m.instances) |inst| {
         const child = digitalModule(file, inst.module) orelse return error.NotElaborated;
-        const child_path = try joinPath(arena, path, file.str(inst.name));
-        try walkDigital(gpa, arena, file, scopes, child, at, child_path);
+        const name = file.str(inst.name);
+        if (inst.range == null) {
+            try walkDigital(gpa, arena, r, scopes, child, at, try joinPath(arena, path, name));
+            continue;
+        }
+        // IEEE 1364 §12.1.2: the elements the engine minted for the array,
+        // in its order; `addModuleArrays` groups the `u[k]` siblings.
+        for (r.scope_info.items) |info| {
+            if (info.parent != at or info.lexical or info.name != inst.name) continue;
+            const k = info.index orelse continue;
+            try walkDigital(gpa, arena, r, scopes, child, at, try joinPath(arena, path, try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k })));
+        }
     }
 }
 
