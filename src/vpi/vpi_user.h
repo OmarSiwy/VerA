@@ -364,6 +364,18 @@ extern PLI_INT32  vpi_release_handle(vpiHandle obj);
 /* §12.2 the previous call's error, or FALSE. Pass NULL to test only. */
 extern PLI_INT32  vpi_chk_error(p_vpi_error_info error_info_p);
 
+/* §12.17 Figure 12-12. argc/argv are the product's own invocation (the
+ * host's `main`), product is "VerA"; the strings are VerA's, not the
+ * application's to free or modify. TRUE on success, FALSE for a NULL
+ * vlog_info_p. */
+typedef struct t_vpi_vlog_info {
+  PLI_INT32   argc;
+  PLI_BYTE8 **argv;
+  PLI_BYTE8  *product;
+  PLI_BYTE8  *version;
+} s_vpi_vlog_info, *p_vpi_vlog_info;
+extern PLI_INT32  vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p);
+
 /* §12.24–§12.28 printing and multichannel descriptors. Channel N is bit N-1
  * of an mcd; channels 1 (stdout), 2 (stderr) and 3 (the product log) are
  * predefined and cannot be closed. VerA keeps no product log, so channel 3
