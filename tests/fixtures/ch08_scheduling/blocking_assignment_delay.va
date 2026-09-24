@@ -21,22 +21,27 @@
 // process resumes are used to determine the TARGET(s)", not the value. The
 // target is `y`; the value being assigned was fixed at t = 0.
 //
-// WHY THE GUARD. The assignment has not resumed at t = 0, and `y` is an
-// `integer` no statement has written yet, so the t = 0 row asserts the constant
-// that is true whatever the scheduler did with the pending process — this is
-// not slack for the rule, it is the statement that the rule is about t = 5 and
-// later. `($abstime > 5.0)` selects those rows, and the one literal below is
-// what they must read: 1, the value x held when the right-hand side was
-// sampled, not 2.
+// WHY THE GUARD. The assignment has not resumed at t = 0, so the t = 0 row
+// asserts the constant that is true whatever the scheduler did with the
+// pending process — this is not slack for the rule, it is the statement that
+// the rule is about t = 5 and later. `($abstime > 5.0)` selects those rows, and
+// the one literal below is what they must read: 1, the value x held when the
+// right-hand side was sampled, not 2.
 //
-// WHY THIS IS `//! xfail` AND NOT `//! reject`. The statement parses now and
-// the module runs on the mixed-signal kernel, but the source gives no
-// `timescale, and VerA's digital engine takes no default time unit for `#5`
-// (it refuses the delay, E1100, at testbench start). The file keeps the LRM's
-// number; it XPASSes the day the default is decided.
+// WHY `y = 0` FIRST. A digital-context `integer` starts at x (§3.2), and §7.3.2
+// says "It will be an error if the value of the digital variable being accessed
+// in the analog context goes either to x or z". `y` IS accessed in the analog
+// block, so an earlier revision, which left `y` at x until t = 5 and relied on
+// the unselected `?:` arm not counting as an access, could be refused by a
+// conforming tool at t = 0. §8.4.1 runs the digital initial block for time zero
+// before the DC analysis, so `y = 0` is what the analog block reads until the
+// delayed assignment lands. It does not touch the rule: `y` is still written
+// at t = 5, from the x sampled at t = 0.
+//
+// The xfail this row used to carry (E1100, no default time unit for `#5`) went
+// stale when the delay started compiling; what then stopped it was the x above.
 //
 //! lrm 8.5.3.3
-//! xfail the source gives no `timescale and VerA's digital engine takes no default time unit, so `#5` is refused (E1100) and no transcript exists to read `y` from
 //! analysis tran
 //! time 0, 25
 `include "check.vh"
@@ -47,6 +52,7 @@ module ch8_blocking_delay(p);
   integer x, y;
 
   initial begin
+    y = 0;
     x = 1;
     y = #5 x;
     x = 2;

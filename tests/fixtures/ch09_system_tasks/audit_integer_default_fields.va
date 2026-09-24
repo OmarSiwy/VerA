@@ -8,6 +8,15 @@
 // width is three digits: 12'd10 -> 00a. %0d overrides automatic sizing -> 10.
 // The leading/trailing bare-operand cases retain claims withdrawn from 170;
 // argument-run separation there now uses explicit minimal-width conversions.
+// Those two cases use `$swrite`, not `$sformat`. §9.5.3: "$sformat always
+// interprets its second argument, and only its second argument, as a format
+// string ... No other arguments are interpreted as format strings", and a
+// surplus argument only draws a warning. So `$sformat(text, 12'd7, " then
+// %0d", 3)` takes a NUMBER as its format and `$sformat(text, "v:", 12'd42)`
+// drops 42; an earlier revision asserted the $display-family reading of both
+// and a conforming tool fails it. `$swrite` "is based on the $fwrite family"
+// (§9.5.3), whose bare operand takes the default decimal format (§9.4.3) and
+// whose later string literal is a format again.
 //! lrm 9.4.3
 //! lrm 9.5.3
 //! print none
@@ -20,9 +29,9 @@ module audit_integer_default_fields(p, n);
   analog begin
     $sformat(text, "[%d]", 12'd7);
     `CHECKI("decimal field is sized for all 12-bit values", text == "[   7]", 1);
-    $sformat(text, 12'd7, " then %0d", 3);
+    $swrite(text, 12'd7, " then %0d", 3);
     `CHECKI("leading bare operand uses default decimal field", text == "   7 then 3", 1);
-    $sformat(text, "v:", 12'd42);
+    $swrite(text, "v:", 12'd42);
     `CHECKI("unconsumed operand retains default field", text == "v:  42", 1);
     $sformat(text, "%h", 12'd10);
     `CHECKI("hexadecimal field retains leading zero digits", text == "00a", 1);

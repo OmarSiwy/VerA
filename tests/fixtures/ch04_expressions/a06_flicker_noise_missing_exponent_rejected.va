@@ -39,11 +39,13 @@
 // the code is not assigned yet" (48 files use it): it holds only if the failure
 // carries at least one vera diagnostic. Today VerA emits none here — it accepts
 // the call and seeds `exp` with 1 — so the fixture is red for its own reason.
-// Replace this with the code once Syntax 4-4's arity rule is given one.
+// But any vera diagnostic at all satisfies it, so the tag is now the rule's own
+// phrase, "flicker_noise requires an exponent", which the refusal's message has
+// to carry. Replace it with the code once Syntax 4-4's arity rule is given one.
 //
 //! lrm 4.6.4.2
 //! lrm A.8.2
-//! reject DiagnosticsReported
+//! reject flicker_noise requires an exponent
 //! xfail VerA accepts the one-argument call and seeds the exponent with 1, exporting a flicker row with .ef = 1; Syntax 4-4 brackets only the name — `flicker_noise ( analog_expression , analog_expression [ , string ] )` — so the exponent is mandatory and there is no default to invent
 module a06_flicker_noise_missing_exponent_rejected(p, n);
     inout p, n;

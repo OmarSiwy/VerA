@@ -39,12 +39,15 @@
 // `DiagnosticsReported` is the repo's convention for "a refusal is required,
 // the code is not assigned yet" (48 files use it) and is the right demand here:
 // it holds only if the failure carries at least one vera diagnostic, so a
-// generated-Zig compile failure that emits none does NOT satisfy it. When
-// A.8.2's string-literal rule is given a code, replace this with that code.
+// generated-Zig compile failure that emits none does NOT satisfy it. It is
+// still too weak: ANY vera diagnostic satisfies it, including one about
+// something else in the file. So the tag is now the rule's own phrase, "analysis
+// name must be a string literal", which the refusal's message has to carry; when
+// A.8.2's string-literal rule is given a code, replace the phrase with the code.
 //
 //! lrm 4.6.3
 //! lrm A.8.2
-//! reject DiagnosticsReported
+//! reject analysis name must be a string literal
 //! xfail VerA accepts a string PARAMETER where A.8.2's production writes a quoted terminal — `ac_stim ( [ " analysis_identifier " ... ] )` — and emits a device with no diagnostic; §4.6.4.3 is the clause that does allow a string parameter, for a noise table file name, so the two are not interchangeable
 module a06_ac_stim_name_not_literal_rejected(p, n);
     inout p, n;
