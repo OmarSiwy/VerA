@@ -366,7 +366,8 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // The value-change hook: every watcher of this slot hears it here.
     if (self.watch[target].contains(.monitor)) try requestMonitor(self);
     if (self.watch[target].contains(.analog)) try requestAnalog(self);
-    return wake(self, target, before, dest.bit(0));
+    try wake(self, target, before, dest.bit(0));
+    if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
 }
 
 /// VAMS §8.5: "the implicit D2A event ... is created when a digital variable to

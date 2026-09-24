@@ -330,11 +330,57 @@ fn vpiApp(
 /// early reaches fewer checks and still exits 0.
 const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
 
+/// NOT here, each for a reason outside the routine it exercises:
+///   p02_04  force/release — the digital engine performs no force
+///   p02_06  a memory's words (§11.6.10) — see the array family
+///   p02_10  a $systf call in digital code — the engine has no user-systf call
+///   p02_11  an analog $systf — needs an analog solver in this process
+///   p02_12  runs against p02_analog.va, an analog design, and asserts
+///           registration only — see the systf family
+///   p02_13  p02_scales.v — the engine refuses a second `timescale
+///   p03_*   analog callbacks and values — needs an analog solver here
+///   audit_* whose .v the engine refuses (a `real` array, an instance array,
+///           no `timescale, `small` as a name, a function call argument)
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
         .design = "tests/fixtures/digital/p02_design.v",
         .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=27\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_01_get_value_formats.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 01_get_value_formats checks=48\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_02_get_value_unknown.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 02_get_value_unknown checks=21\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_03_put_value_delays.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 03_put_value_delays checks=64\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_05_cb_time_regions.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 05_cb_time_regions checks=76\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_07_cb_remove_and_info.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 07_cb_remove_and_info checks=38\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_08_cb_action_sim_control.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 08_cb_action_sim_control checks=24\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_vpi_event_handles.c",
+        .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
+        .stdout = "vpi-event-handles=ok\n",
     },
 };
 

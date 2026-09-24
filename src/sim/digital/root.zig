@@ -24,7 +24,10 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+/// Public for the VPI (src/vpi/value.zig), which writes a value the way a
+/// process does — `exec.store` now, `exec.enqueue` of a `.write` later — so a
+/// §12.30 put wakes waiters and value-change watchers like any other write.
+pub const exec = @import("exec.zig");
 const display = @import("display.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
@@ -88,7 +91,9 @@ pub const VecRange = struct { msb: i64, lsb: i64 };
 /// Who is told when a slot's value changes. `analog` is VAMS §8.5's implicit
 /// D2A: the slot is read by an analog block, so a change posts a region-3b
 /// macro-process event (see `watchAnalog`).
-pub const Watcher = enum { monitor, analog };
+/// `vpi` is VAMS §12.31.1's cbValueChange: an application watches the slot,
+/// and a change calls `Run.vpi_change` (see `store`).
+pub const Watcher = enum { monitor, analog, vpi };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -210,6 +215,9 @@ pub const Run = struct {
     /// bit-select can name its bit (IEEE 1364-2005 §5.2.1). A slot absent from
     /// here is `[width-1:0]`.
     vec_ranges: std.AutoHashMapUnmanaged(u32, VecRange) = .empty,
+    /// Called after a `.vpi`-watched slot changed value and its waiters were
+    /// woken. The VPI installs it; nothing else in the engine reads it.
+    vpi_change: ?*const fn (r: *Run, slot: u32) void = null,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an

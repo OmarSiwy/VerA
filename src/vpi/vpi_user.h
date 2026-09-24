@@ -156,14 +156,7 @@ typedef struct t_vpi_error_info {
 } s_vpi_error_info, *p_vpi_error_info;
 
 /* --------------------------------------------------------------------------
- * §12.16/§12.30 value and time carriers.
- *
- * Declared, not yet consumed: no routine in this header takes one. They are
- * here because they are half the vocabulary of the interface — an application
- * declaring its own callback data or a systf `sizetf` writes these types — and
- * because P02 adds vpi_get_value()/vpi_put_value() against exactly these
- * layouts. Keeping the layout fixed now means P02 adds routines rather than
- * changing the ABI under an already-compiled application.
+ * §12.16/§12.30 value and time carriers, Figures 12-8 to 12-11.
  * -------------------------------------------------------------------------- */
 
 /* s_vpi_time.type — §12.15. */
@@ -185,18 +178,67 @@ typedef struct t_vpi_vecval {
 } s_vpi_vecval, *p_vpi_vecval;
 #endif
 
+/* Figure 12-11. Declared because it is a member of s_vpi_value's union; no
+ * routine here reads or writes a strength (vpiStrengthVal is absent). */
+typedef struct t_vpi_strengthval {
+  PLI_INT32 logic;              /* vpi[0,1,X,Z] */
+  PLI_INT32 s0, s1;
+} s_vpi_strengthval, *p_vpi_strengthval;
+
 typedef struct t_vpi_value {
-  PLI_INT32 format;             /* vpi[...]Val; P02 defines which are read */
+  PLI_INT32 format;             /* vpi[...]Val below */
   union {
-    PLI_BYTE8           *str;
-    PLI_INT32            scalar;
-    PLI_INT32            integer;
-    double               real;
-    struct t_vpi_time   *time;
-    struct t_vpi_vecval *vector;
-    PLI_BYTE8           *misc;
+    PLI_BYTE8                *str;
+    PLI_INT32                 scalar;
+    PLI_INT32                 integer;
+    double                    real;
+    struct t_vpi_time        *time;
+    struct t_vpi_vecval      *vector;
+    struct t_vpi_strengthval *strength;
+    PLI_BYTE8                *misc;
   } value;
 } s_vpi_value, *p_vpi_value;
+
+/* s_vpi_value.format — Table 12-4. vpi_get_value reads every one of these
+ * from a digital object (and the ones a constant has from an analog
+ * parameter); vpi_put_value writes all but vpiObjTypeVal and vpiSuppressVal.
+ * Octal and hex print `x`/`z` for an all-unknown digit, `X`/`Z` for a partly
+ * unknown one. */
+#define vpiBinStrVal            1
+#define vpiOctStrVal            2
+#define vpiDecStrVal            3
+#define vpiHexStrVal            4
+#define vpiScalarVal            5
+#define vpiIntVal               6
+#define vpiRealVal              7
+#define vpiStringVal            8
+#define vpiVectorVal            9
+#define vpiTimeVal             11
+#define vpiObjTypeVal          12
+#define vpiSuppressVal         13
+
+/* vpiScalarVal values. */
+#define vpi0                    0
+#define vpi1                    1
+#define vpiZ                    2
+#define vpiX                    3
+#define vpiH                    4
+#define vpiL                    5
+
+/* §12.30 vpi_put_value flags. vpiForceFlag and vpiReleaseFlag are declared
+ * because an application names them to ask; VerA's digital engine performs no
+ * force, so the put is refused with vpiError. */
+#define vpiNoDelay              1
+#define vpiInertialDelay        2
+#define vpiTransportDelay       3
+#define vpiPureTransportDelay   4
+#define vpiForceFlag            5
+#define vpiReleaseFlag          6
+#define vpiCancelEvent          7
+#define vpiReturnEvent     0x1000
+
+#define vpiSchedEvent          53   /* §12.30 the handle vpiReturnEvent returns */
+#define vpiScheduled           46   /* bool: that event has not yet happened */
 
 /* --------------------------------------------------------------------------
  * §12.31 simulation callbacks — Figure 12-17, field for field (Figure 12-2 in
@@ -306,6 +348,15 @@ extern PLI_UINT32 vpi_mcd_close(PLI_UINT32 mcd);
 extern PLI_BYTE8 *vpi_mcd_name(PLI_UINT32 cd);
 extern PLI_INT32  vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...);
 extern PLI_INT32  vpi_printf(const PLI_BYTE8 *format, ...);
+
+/* §12.16 read a value: from a digital net, reg, integer or memory word of a
+ * running design, or from an analog parameter's folded constant. String,
+ * vector and time storage is this routine's until its next call. */
+extern void       vpi_get_value(vpiHandle expr, p_vpi_value value_p);
+/* §12.30 write one: to a reg, integer or memory word (a net's value is its
+ * drivers'). Refused inside cbReadOnlySynch. */
+extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
+                                p_vpi_time time_p, PLI_INT32 flags);
 
 /* §12.15 the current time — or, for a vpiTimeQueue handle, that queue's
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
