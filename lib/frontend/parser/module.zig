@@ -99,6 +99,8 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .pulls = b.pulls.items,
         .tasks = b.tasks.items,
         .switches = b.switches.items,
+        .paths = b.paths.items,
+        .timing_checks = b.timing_checks.items,
         // §2.9 — every attr_spec seen since the last module. Attributes
         // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
         // collected by `parseSource` and belong to this module too, which is
@@ -407,6 +409,8 @@ pub const Body = struct {
     pulls: std.ArrayList(Ast.PullInst) = .empty, // A.3.1, §7.8
     tasks: std.ArrayList(Ast.Subroutine) = .empty, // IEEE 1364-2005 §10
     switches: std.ArrayList(Ast.SwitchInst) = .empty, // A.3.1, §7.6
+    paths: std.ArrayList(Ast.SpecPath) = .empty, // A.7.2
+    timing_checks: std.ArrayList(Ast.TimingCheck) = .empty, // A.7.5
     /// §6.6.1/§6.6.2 every named generate block of the module, with the
     /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
     /// is a declaration of a scope nothing downstream can reach yet
@@ -915,7 +919,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // dispatch, and the two below are the ones with a production here.
         .kw_reserved => {
             const w = parse_expr.tokenText(self, self.pos);
-            if (std.mem.eql(u8, w, "specify")) return parse_specify.parseSpecifyBlock(self);
+            if (std.mem.eql(u8, w, "specify")) return parse_specify.parseSpecifyBlock(self, b);
             // A.2.1.1 `specparam_declaration ::= specparam [ range ]
             // list_of_specparam_assignments ;`, reached BOTH as a module
             // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1

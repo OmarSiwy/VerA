@@ -729,6 +729,51 @@ extern void       vpi_get_analog_systf_info(vpiHandle obj, p_vpi_analog_systf_da
 /* §12.22 many-to-one. vpiDerivative needs two arguments of an active analog
  * call; see above for why there never is one here. */
 extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHandle refHandle2, ...);
+/* --------------------------------------------------------------------------
+ * §11.6.15 module paths, timing checks and inter-module paths, over a
+ * module's `specify` blocks (IEEE 1364 Annex G numbering). The objects are
+ * the model's: no simulation here applies a path delay or checks a timing
+ * limit (W0251). vpi_get_delays() and vpi_put_delays() take a path's 1, 2, 3,
+ * 6 or 12 delays (IEEE 1364 §14.3.1 derives the rest) and a timing check's
+ * limits. vpi_handle_multi(vpiInterModPath, port, port) is always NULL: an
+ * inter-module path is an SDF interconnect annotation, and none is read.
+ * -------------------------------------------------------------------------- */
+#define vpiInterModPath        26
+#define vpiModPath             31
+#define vpiPathTerm            43
+#define vpiTchk                61
+#define vpiTchkTerm            62
+#define vpiTchkDataTerm        86
+#define vpiTchkNotifier        87
+#define vpiTchkRefTerm         88
+#define vpiModPathIn           95
+#define vpiModPathOut          96
+#define vpiEdge                36
+#define vpiNoEdge              0x00
+#define vpiPosedge             0x0D
+#define vpiNegedge             0x32
+#define vpiAnyEdge             0x3F
+#define vpiPathType            37
+#define vpiPathFull             1
+#define vpiPathParallel         2
+#define vpiPolarity            38
+#define vpiDataPolarity        39
+#define vpiPositive             1
+#define vpiNegative             2
+#define vpiUnknown              3
+#define vpiTchkType            40
+#define vpiSetup                1
+#define vpiHold                 2
+#define vpiPeriod               3
+#define vpiWidth                4
+#define vpiSkew                 5
+#define vpiRecovery             6
+#define vpiNoChange             7
+#define vpiSetupHold            8
+#define vpiFullskew             9
+#define vpiRecrem              10
+#define vpiRemoval             11
+#define vpiTimeskew            12
 
 /* §12.36 simulation control. vpiFinish (one int: the $finish diagnostic
  * level) ends the run when the calling routine returns, at the current time.

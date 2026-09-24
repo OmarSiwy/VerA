@@ -359,6 +359,11 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 ///           as p02_10
 const vpi_runs = [_]VpiRun{
     .{
+        .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
+        .stdout = "p02: p06_01_specify_objects checks=59\n",
+    },
+    .{
         .c = "tests/fixtures/ch11_vpi/p05_01_put_delays.c",
         .design = "tests/fixtures/ch11_vpi/p05_delays.v",
         .stdout = "p05-01: w=2/12/32 y=3/11/33\np02: p05_01_put_delays checks=27\n",
