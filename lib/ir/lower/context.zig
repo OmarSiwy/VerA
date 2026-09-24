@@ -169,6 +169,36 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     }
 }
 
+/// Marks, in `marks` (indexed by `Ast.ExprId`), every expression §7.2.2's
+/// discrete context owns in a MIXED module (`isMixed`): the bodies of its
+/// `initial`/`always` blocks and its continuous assignments. Those run on the
+/// mixed-signal kernel, which is four-state, so an x or z literal there is
+/// ordinary IEEE 1364 and not the analog backend's to refuse. A non-mixed
+/// module's `initial` is not marked: `collectInitialState` folds it into the
+/// analog variables' initial values, where an x has nowhere to live.
+pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
+    const Mark = struct {
+        file: *const Ast.SourceFile,
+        marks: []bool,
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
+            if (e == .none) return;
+            w.marks[@intFromEnum(e)] = true;
+            var buf: [3]Ast.ExprId = undefined;
+            for (w.file.exprs.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (s != .none) try w.file.stmtEdges(s, w);
+        }
+    };
+    const w: Mark = .{ .file = file, .marks = marks };
+    for (file.modules) |*m| {
+        if (!isMixed(file, m)) continue;
+        for (m.discrete) |blk| w.stmt(blk.body) catch unreachable;
+        for (m.assigns) |a| for ([_]Ast.ExprId{ a.target, a.value, a.delay.rise, a.delay.fall, a.delay.off }) |e|
+            w.expr(e, .read) catch unreachable;
+    }
+}
+
 /// Every identifier an analog statement tree reads.
 const Reads = struct {
     l: *Lower,
