@@ -167,7 +167,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
             for (srcs.items) |*s| {
                 if (s.nonlinear) continue;
                 const g = self.noise_val.get(s.id) orelse continue;
-                switch (try lower_analog_op.noiseCoeff(self, v0, g, 0)) {
+                switch (try lower_analog_op.noiseCoeff(self, v0, g)) {
                     .absent => {},
                     // No factor describes this use. Fall back to 1, which is
                     // what the export carried before coefficients existed, and

@@ -593,6 +593,40 @@ pub fn blockInsts(self: *const Mir, block: Block) InstIterator {
     };
 }
 
+/// The last instruction linked into `block`, or `.none` when it is empty.
+pub fn blockLast(self: *const Mir, block: Block) Inst {
+    return self.blocks.items(.last)[@intFromEnum(block)];
+}
+
+/// Unlink every instruction of `from` after `after` (all of them when `after`
+/// is `.none`) and relink them, in order, in front of `to`'s terminator. For a
+/// value computed after a join that one incoming edge has to carry: the
+/// operands must already be available at the end of `to`. True when there is
+/// nothing to move; moves nothing and returns false when `to` has no
+/// terminator yet or is `from`.
+pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
+    const next = self.insts.items(.next);
+    const first = self.blocks.items(.first);
+    const last = self.blocks.items(.last);
+    const head = if (after == .none) first[@intFromEnum(from)] else next[@intFromEnum(after)];
+    if (head == .none) return true;
+    if (from == to) return false;
+    var prev: Inst = .none;
+    var term = first[@intFromEnum(to)];
+    while (term != .none) : (term = next[@intFromEnum(term)]) {
+        switch (opClass(self.instOp(term))) {
+            .branch, .jump => break,
+            .unary, .binary, .ternary, .phi, .call => prev = term,
+        }
+    } else return false;
+    const tail = last[@intFromEnum(from)];
+    if (after == .none) first[@intFromEnum(from)] = .none else next[@intFromEnum(after)] = .none;
+    last[@intFromEnum(from)] = after;
+    next[@intFromEnum(tail)] = term;
+    if (prev == .none) first[@intFromEnum(to)] = head else next[@intFromEnum(prev)] = head;
+    return true;
+}
+
 // ---------------------------------------------------------- instructions ----
 
 /// Append `row` to the end of `block` and link it in. Caller sets row.result

@@ -563,26 +563,34 @@ pub fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
     return self.emit(.fmul, &.{ a, b });
 }
 
-pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value, depth: u16) Oom!Coeff {
+pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
+    return coeffAt(self, v, self.mir.resolveAlias(n), 0, null);
+}
+
+/// The phis the walk is inside, innermost first. A loop-header phi reaches
+/// itself again through its back edge; meeting one already on the path is a
+/// generator fed back into itself, which no single factor describes.
+const PhiPath = struct { inst: Mir.Inst, up: ?*const PhiPath };
+
+fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const PhiPath) Oom!Coeff {
     if (depth == 64) return .nonlinear;
     const value = self.mir.resolveAlias(v);
-    const gen = self.mir.resolveAlias(n);
     if (value == gen) return .{ .value = .f_one };
     const inst = switch (self.mir.valueDef(value)) {
         .inst_result => |i| i,
         // A constant, a parameter or a probe cannot contain the generator.
-        else => return .absent,
+        .undef, .float_const, .int_const, .str_const, .param_ref, .block_param => return .absent,
     };
     switch (self.mir.instData(inst)) {
         .unary => |u| {
-            const d = try noiseCoeff(self, u.operand, gen, depth + 1);
+            const d = try coeffAt(self, u.operand, gen, depth + 1, path);
             if (d == .absent) return .absent;
             if (u.op != .fneg or d == .nonlinear) return .nonlinear;
             return .{ .value = try coeffNeg(self, d.value) };
         },
         .binary => |b| {
-            const da = try noiseCoeff(self, b.lhs, gen, depth + 1);
-            const db = try noiseCoeff(self, b.rhs, gen, depth + 1);
+            const da = try coeffAt(self, b.lhs, gen, depth + 1, path);
+            const db = try coeffAt(self, b.rhs, gen, depth + 1, path);
             if (da == .absent and db == .absent) return .absent;
             if (da == .nonlinear or db == .nonlinear) return .nonlinear;
             switch (b.op) {
@@ -607,14 +615,89 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value, depth: u16) Oom!Coef
                     if (db != .absent) return .nonlinear;
                     return .{ .value = try self.emit(.fdiv, &.{ da.value, b.rhs }) };
                 },
-                else => return .nonlinear,
+                // The rest of the two-operand ops: a generator under any of them
+                // is no longer an amplitude scaled by a factor (an integer op
+                // would have to round it, a comparison or a min/max selects on
+                // it, pow/hypot/atan2/fmod are not linear in it).
+                .fmod,
+                .iadd,
+                .isub,
+                .imul,
+                .idiv,
+                .imod,
+                .flt,
+                .fgt,
+                .fle,
+                .fge,
+                .feq,
+                .fne,
+                .ilt,
+                .igt,
+                .ile,
+                .ige,
+                .ieq,
+                .ine,
+                .logand,
+                .logor,
+                .bitand,
+                .bitor,
+                .bitxor,
+                .bitxnor,
+                .shl,
+                .shr,
+                .pow,
+                .hypot,
+                .fmin,
+                .fmax,
+                .imin,
+                .imax,
+                .atan2,
+                => return .nonlinear,
+                // `instData` decodes `.binary` only for `opClass(op) == .binary`.
+                .fneg,
+                .ineg,
+                .lognot,
+                .bitnot,
+                .sqrt,
+                .exp,
+                .expm1,
+                .ln,
+                .ln1p,
+                .log10,
+                .floor,
+                .ceil,
+                .fabs,
+                .iabs,
+                .sin,
+                .cos,
+                .tan,
+                .asin,
+                .acos,
+                .atan,
+                .sinh,
+                .cosh,
+                .tanh,
+                .asinh,
+                .acosh,
+                .atanh,
+                .fi_cast,
+                .if_cast,
+                .opt_barrier,
+                .path_prev,
+                .path_acc,
+                .select,
+                .phi,
+                .branch,
+                .jump,
+                .call,
+                => unreachable,
             }
         },
         // §4.2.12 `?:` — either arm may carry the generator, and which arm runs
         // is a solve-time question, so the coefficient is the same conditional.
         .ternary => |t| {
-            const dy = try noiseCoeff(self, t.then_val, gen, depth + 1);
-            const dn = try noiseCoeff(self, t.else_val, gen, depth + 1);
+            const dy = try coeffAt(self, t.then_val, gen, depth + 1, path);
+            const dn = try coeffAt(self, t.else_val, gen, depth + 1, path);
             if (dy == .absent and dn == .absent) return .absent;
             if (dy == .nonlinear or dn == .nonlinear) return .nonlinear;
             return .{ .value = try self.emit(.select, &.{
@@ -623,12 +706,63 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value, depth: u16) Oom!Coef
                 if (dn == .absent) .f_zero else dn.value,
             }) };
         },
+        // §5.8 `if` and §4.2.12 `?:` BOTH arrive here: `lowerTernary` builds a
+        // CFG diamond and ifconv only turns it into a `.select` later. So this
+        // is the same answer as `.ternary`'s, spelled per incoming edge: the
+        // coefficient of a phi is the phi of the incoming coefficients.
+        .phi => |p| {
+            // An unsealed loop header's phi has no operands yet, so nothing is
+            // known about what it carries.
+            if (p.count == 0) return .nonlinear;
+            var up = path;
+            while (up) |f| : (up = f.up) if (f.inst == inst) return .nonlinear;
+            const here: PhiPath = .{ .inst = inst, .up = path };
+            const coeffs = try self.arena.alloc(Mir.PhiPair, p.count);
+            var any = false;
+            var same = true;
+            for (coeffs, 0..) |*c, k| {
+                const pair = self.mir.phiPair(inst, @intCast(k));
+                const before = self.mir.blockLast(self.cur);
+                const d = try coeffAt(self, pair.value, gen, depth + 1, &here);
+                // What that walk EMITTED (`x/r` has coefficient `1/r`) landed in
+                // `self.cur`, after the join, where the edge from `pair.block`
+                // cannot carry it. Its operands are sub-terms of `pair.value`,
+                // so they exist at the end of that block: compute it there.
+                if (!self.mir.moveTailBefore(self.cur, before, pair.block)) return .nonlinear;
+                const cv: Mir.Value = switch (d) {
+                    .absent => .f_zero,
+                    .nonlinear => return .nonlinear,
+                    .value => |x| blk: {
+                        any = true;
+                        break :blk x;
+                    },
+                };
+                c.* = .{ .block = pair.block, .value = cv };
+                if (cv != coeffs[0].value) same = false;
+            }
+            if (!any) return .absent;
+            // One value on every edge is available at the join already.
+            if (same) return .{ .value = coeffs[0].value };
+            return .{ .value = try self.mir.emitPhi(self.arena, blockOf(self, inst), coeffs) };
+        },
         // A call's arguments are reachable, so "does the generator occur in
         // here at all" is answerable even though the derivative is not.
         .call => |c| {
-            for (c.args) |arg| if (try noiseCoeff(self, arg, gen, depth + 1) != .absent) return .nonlinear;
+            for (c.args) |arg| if (try coeffAt(self, arg, gen, depth + 1, path) != .absent) return .nonlinear;
             return .absent;
         },
-        else => return .nonlinear,
+        // Terminators define no value, so no Value resolves to one.
+        .branch, .jump => unreachable,
     }
+}
+
+/// The block `inst` was appended to. A linear scan — the coefficient phi is
+/// the one caller, and it runs once per differing-arm noise use.
+fn blockOf(self: *Lower, inst: Mir.Inst) Mir.Block {
+    for (0..self.mir.blockCount()) |b| {
+        const blk: Mir.Block = @enumFromInt(@as(u32, @intCast(b)));
+        var it = self.mir.blockInsts(blk);
+        while (it.next()) |i| if (i == inst) return blk;
+    }
+    unreachable; // every instruction is linked into exactly one block
 }
