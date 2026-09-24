@@ -8,12 +8,11 @@
 // an underivable first terminal on the gate. `and g1(o, a, b)` compiles
 // (probed).
 //
-// VerA accepts this file (with W0252, "gate primitive accepted, and it
-// computes nothing", which it gives every gate primitive).
+// VerA refuses the terminal with E0207 "a gate's output terminal is a
+// net_lvalue (A.3.3)".
 //
 //! lrm A.3.3
 //! reject net_lvalue
-//! xfail VerA accepts `and g1(1'b0, a, b)` with a constant as the output terminal; A.3.3 says "output_terminal ::= net_lvalue", and a constant is not one
 module annex_a_constant_output_terminal(o, a, b);
   output o;
   input a, b;

@@ -8,12 +8,11 @@
 // a variable; the constant `5` does not. `$setup(a, posedge clk, 1, ntfr)` with
 // `reg ntfr;` is accepted (probed).
 //
-// VerA accepts this file (W0251: the specify block is read and nothing in it
-// is modelled).
+// VerA refuses the argument with E0207 "the notifier argument of `$setup`
+// names a variable".
 //
 //! lrm A.7.5.2
 //! reject notifier
-//! xfail VerA accepts `$setup(a, posedge clk, 1, 5)` with a constant notifier; A.7.5.2 says "notifier ::= variable_identifier"
 module annex_a_numeric_notifier(o, a, clk);
   output o;
   input a, clk;
