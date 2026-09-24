@@ -40,16 +40,17 @@ mixed-signal simulation cycle from 8.2 is only applicable to Verilog-AMS HDL"). 
 states the Verilog-A SUBSET; VerA targets Verilog-AMS, so a verdict resting on it was
 demanding a diagnostic a conforming AMS compiler must not emit. `reg` and a constant
 `initial` block are accepted now, `analog_digital_initial_order.va` has been re-verdicted
-into a positive fixture, and the five procedural/timing files
-(`procedural_{assign,deassign,force,release}_unsupported.va`; `blocking_timing_unsupported.va` is withdrawn — its timed `initial` runs on the mixed-signal kernel now, see ch07 m01_11)
-pin E0209 — the parser has no production for `force`, `assign`, `deassign`, `release` or a
-`#` delay — instead of the substring `reg`, which came only from E0205's own message prose.
+into a positive fixture, and the procedural/timing files that pinned E0209 are withdrawn:
+`blocking_timing_unsupported.va` to ch07 m01_11 (its timed `initial` runs on the
+mixed-signal kernel), and `procedural_{assign,deassign,force,release,continuous}_unsupported.va`
+to the two positive §8.5.3.2 fixtures below, since the discrete context now parses the
+four procedural continuous statements (2026-09-24).
 An `always` block stays E0205 for a reason that is not dialect: it re-runs on an event, so
 its value is a function of §8.5's simulation cycle. None of the ten is credited below as
 coverage of the clause its construct belongs to.
 
-33 `.va` files: 10 carry a `//! reject` arm, 21 run and assert, and 2 are `//! xfail`
-(grep-measured over this directory).
+27 `.va` files: 1 carries a `//! reject` arm, 25 run and assert, and 1 is `//! xfail`
+(grep-measured over this directory, 2026-09-24).
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
@@ -75,7 +76,7 @@ coverage of the clause its construct belongs to.
 | `s8-5-2` | digital reference-model loop | partial: queue tests and source initial-process execution check re-entry, cancellation, time advance and termination; general processes and mixed-signal integration remain open |
 | `s8-5-3` | scheduling implication of assignments | — lead-in sentence, "Assignments are translated into processes and events as follows"; every rule it announces is in 8.5.3.1–8.5.3.7 below |
 | `s8-5-3-1` | continuous assignment lands in the active region | — `digital_assignment_unsupported.va` refuses the `assign` module item |
-| `s8-5-3-2` | procedural continuous assign/deassign/force/release | the two sentences of the clause are `procedural_continuous_semantics.va` (`//! lrm 8.5.3.2`, **`//! xfail`**): the force is a process sensitive to its source, and the release deactivates it. Its literals separate a compiler whose release works from one whose release does nothing. Still refused as source forms: `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va` — rejection does not exercise the scheduling, and none of the five was credited here |
+| `s8-5-3-2` | procedural continuous assign/deassign/force/release | the two sentences of the clause are `procedural_continuous_semantics.va` (`//! lrm 8.5.3.2`, green): the force is a process sensitive to its source, and the release deactivates it; its literals separate a compiler whose release works from one whose release does nothing. `procedural_assign_deassign_semantics.va` (green) is the assign/deassign half: the assign follows its source over a procedural write, and the deassign leaves the value in place. The five `procedural_*_unsupported.va` E0209 pins are withdrawn to these two. The invalid-input half is `annex_a_syntax/30_force_in_analog_rejected.va` (E0209: no procedural continuous assignment in an analog block) |
 | `s8-5-3-3` | blocking assignment delay and event control timing | the clause's first sentence, "computes the right-hand side value using the current values", is `blocking_assignment_delay.va` (`//! lrm 8.5.3.3`, green): `y = #5 x;` followed by `x = 2;` leaves y at 1, so a compiler that samples the right-hand side at resume time reads 2 and fails it. Also partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open |
 | `s8-5-3-4` | nonblocking update region | partial: queue and source tests check NBA order, captured RHS values and inactive-before-NBA behavior. the region-3-before-3b rule is ch07 `m02_10_macro_process_runs_after_nba.va` (green; `nonblocking_unsupported.va` is withdrawn to it) |
 | `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing remains an open full-AMS requirement; syntax acceptance does not establish its behavior |
@@ -84,23 +85,13 @@ coverage of the clause its construct belongs to.
 
 ## The xfail ledger
 
-One, §8.5.3.2's `procedural_continuous_semantics.va`. It states the clause's own
-rule with the literal a conforming compiler prints, and says on its `//! xfail`
-line that VerA refuses the block instead — there is no statement production for
-`force`, so the parser lands where an expression was expected (E0209) and no
-transcript exists to read. `procedural_release_unsupported.va` pins
-that same refusal as a `//! reject`; the pair is deliberate, because a fixture
-that only demands the diagnostic goes stale the day the diagnostic stops being
-the answer, while the xfail XPASSes into a real claim on that day.
-`blocking_assignment_delay.va` (§8.5.3.3) was the second; it is green since its
-`y` stopped being x while the analog block reads it (§7.3.2; see its header).
-
-A caveat worth recording with them: the two fixtures need a digital schedule
-BEFORE the assertion can run at all, and the harness that decides the `ok=`
-columns has no event queue — it walks time points and evaluates the device. So
-the day VerA parses `#` these may still fail on the host rather than on the
-compiler, and the `//! xfail` reason would then need rewriting from "refused" to
-"unscheduled". They are xfail either way; the reason is what to check.
+Empty. §8.5.3.2's `procedural_continuous_semantics.va` was the last entry: it
+carried `//! xfail` while the parser had no statement production for `force`
+(E0209), and `procedural_release_unsupported.va` pinned that refusal beside it.
+It is green since the discrete context parses the procedural continuous
+statements, and the pin is withdrawn to it. `blocking_assignment_delay.va`
+(§8.5.3.3) was the other; it is green since its `y` stopped being x while the
+analog block reads it (§7.3.2; see its header).
 
 The rest of this ledger is the record. `switch_primitive_*.va` used to
 sit here and does not any more: A.4.1's `pass_switchtype` parses, and a `tran`

@@ -877,9 +877,17 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
             // `specify_item`. This is the module-item half.
             if (std.mem.eql(u8, w, "specparam")) return parse_specify.parseSpecparamDecl(self, &b.params);
-            // A.2.7 `task_declaration`, IEEE 1364-2005 §10.2 — the digital
-            // engine's; an analog compile has nothing to run a task with.
-            if (self.digital and std.mem.eql(u8, w, "task")) return parse_decl.parseSubroutine(self, b, false);
+            // A.2.7 `task_declaration`, IEEE 1364-2005 §10.2: a module item
+            // of every module (A.1.4), enabled only from §7.2.2's discrete
+            // context (A.6.4 has no analog `task_enable`), so its body is
+            // parsed with that context's statement forms. The mixed-signal
+            // kernel runs it; the analog compile only reads what it writes.
+            if (std.mem.eql(u8, w, "task")) {
+                const saved = self.in_discrete;
+                self.in_discrete = true;
+                defer self.in_discrete = saved;
+                return parse_decl.parseSubroutine(self, b, false);
+            }
             // A.3.1's last two arms. They have no tags of their own because
             // A.3.2 gives them a strength set no other gate takes.
             if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))

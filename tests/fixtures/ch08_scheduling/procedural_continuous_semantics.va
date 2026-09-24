@@ -36,16 +36,12 @@
 // one value that is true whatever the interleaving was — this is not slack for
 // the rule, it is the statement that the rule is about t = 20 and later.
 //
-// WHY THIS IS `//! xfail` AND NOT `//! reject`. The sentences above are the
-// LRM's, not VerA's ceiling, and a conforming compiler runs this block and
-// prints 0. VerA refuses the block instead, so the file has to carry the rule
-// it cannot reach, exactly as procedural_release_unsupported.va carries the
-// refusal of the same keyword. The two are not duplicates: that file pins the
-// diagnostic, this one pins the behaviour, and this one XPASSes the day the
-// diagnostic stops being the answer.
+// This file carried `//! xfail` while VerA's parser had no statement
+// production for `force`; procedural_release_unsupported.va pinned that E0209
+// and is withdrawn to this file. procedural_assign_deassign_semantics.va is
+// the assign/deassign half of the same clause.
 //
 //! lrm 8.5.3.2
-//! xfail VerA has no statement production for `force` or for a `#` delay in an initial block (E0209, lib/frontend/parser.zig), so the block is refused and no transcript exists to read `target` from
 //! analysis tran
 //! time 0, 25
 `include "check.vh"
