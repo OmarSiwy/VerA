@@ -18,6 +18,8 @@ const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
 const Job = @import("jobs.zig").Job;
 const float_mode = @import("../float/mode.zig");
+const plan_setup = @import("setup.zig");
+const callee = Mir.callee;
 
 pub const Error = std.mem.Allocator.Error || error{NameTooLong};
 const none_u32 = std.math.maxInt(u32);
@@ -50,6 +52,12 @@ pub const Core = struct {
     name: []const u8 = "",
     /// §4.3 the STRICTEST mode of every job the core serves — `float/mode.zig`.
     mode: proof.FloatMode = .optimized,
+    /// §5.10 per Value: a store into a held array that nothing `eval`/`q`
+    /// returns can observe — `heldOnly`. Empty when none.
+    held_only: []bool = &.{},
+    /// Per Value: something `eval`/`q` returns reads it (`heldOnly`'s
+    /// marking). Empty when the device stores into no held array.
+    eval_need: []bool = &.{},
 };
 
 // ---------------------------------------------------- the shared core ----
@@ -174,6 +182,7 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
         self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
     }
     if (self.lo_vals.len == 0) return self;
+    try heldOnly(in, jobs, &self);
 
     var buf: [naming.max_name_len]u8 = undefined;
     const n = naming.unitName(&buf, in.mir.name, .{
@@ -186,6 +195,139 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     self.name = try a.dupe(u8, n);
     return self;
 }
+
+/// §5.10 the stores into a held array that nothing `eval`/`q` returns can
+/// observe — true per store result Value, empty when there is none. Those
+/// callers read the contributions, the charges, the retention flags and the
+/// table captures (`evalRoot`); the held arrays' end-of-block values are
+/// `updateState`'s and `acceptQ`'s. So their instantiation of the core skips
+/// the stores (`held = false`), and a copy-on-write held array
+/// (`render.cow`) is then never copied: coupled_ltra's and ltra's
+/// accepted-point history append made every Newton iterate copy 147 KB and
+/// 327 KB of history in.
+///
+/// Aggressive dead-code marking (Cytron et al.): a value is needed when an
+/// eval root, an argument of a call that is not a §4.5/§5.10 operator (those
+/// take effect only through their result), or an operand of a needed
+/// instruction reads it — an array load reading its version and every
+/// version before it — and so is the condition of every branch a needed
+/// instruction or phi edge is control-dependent on. A store nothing needed
+/// reads is skippable.
+fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
+    const a = in.arena;
+    const n: u32 = @intCast(in.mir.insts.len);
+    var any = false;
+    for (0..n) |ii| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        if (in.mir.instOp(inst) != .store) continue;
+        const id = in.an.arrOf(in.mir.instResult(inst)) orelse continue;
+        if (in.lowered.mem_arrays.items[id].held != none_u32) any = true;
+    }
+    if (!any) return;
+
+    const cds = try plan_setup.controlDeps(in, try plan_setup.postDominators(in));
+    var m: Mark = .{ .in = in, .cds = .{ .off = cds.off, .cd = cds.cd }, .need = try a.alloc(bool, in.an.nv), .blk = try a.alloc(bool, in.an.nb) };
+    @memset(m.need, false);
+    @memset(m.blk, false);
+    for (jobs) |job| if (evalRoot(job.kind)) try m.mark(job.target);
+    for (0..n) |ii| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        if (in.mir.instOp(inst) != .call) continue;
+        const d = in.mir.instData(inst).call;
+        if (callee.opKind(d.callee) != .none) continue;
+        for (d.args) |x| try m.mark(x);
+    }
+    while (m.work.pop()) |v| try m.visit(v);
+
+    const skip = try a.alloc(bool, in.an.nv);
+    @memset(skip, false);
+    var some = false;
+    for (0..n) |ii| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        if (in.mir.instOp(inst) != .store) continue;
+        const r = in.an.rv(in.mir.instResult(inst));
+        const id = in.an.arrOf(r) orelse continue;
+        if (in.lowered.mem_arrays.items[id].held == none_u32 or m.need[@intFromEnum(r)]) continue;
+        skip[@intFromEnum(r)] = true;
+        some = true;
+    }
+    out.eval_need = m.need;
+    if (some) out.held_only = skip;
+}
+
+/// The jobs `eval`, `q` and `evalQ` read out of the core (`dispatch.zig`).
+fn evalRoot(k: Job.Kind) bool {
+    return switch (k) {
+        .resist, .react, .retained, .table_effect => true,
+        // `updateState`/`acceptQ`, `limit`, `seed`, `checkConvergence`,
+        // `noisePsd`, `acStim`, the schedule and §9.4 display read these.
+        .op_input, .ctrl, .held, .limit_arg, .limit_old, .reject_iteration, .noise, .ac_stim, .timer_period, .display => false,
+    };
+}
+
+const Mark = struct {
+    in: Input,
+    cds: struct { off: []const u32, cd: []const plan_setup.Cd },
+    need: []bool,
+    blk: []bool,
+    work: std.ArrayList(Mir.Value) = .empty,
+
+    fn mark(m: *Mark, v0: Mir.Value) Error!void {
+        const v = m.in.an.rv(v0);
+        if (m.need[@intFromEnum(v)]) return;
+        m.need[@intFromEnum(v)] = true;
+        try m.work.append(m.in.arena, v);
+    }
+
+    /// Block `b` runs only as the branches it is control-dependent on say.
+    fn block(m: *Mark, b: u32) Error!void {
+        if (b >= m.blk.len or m.blk[b]) return;
+        m.blk[b] = true;
+        for (m.cds.cd[m.cds.off[b]..m.cds.off[b + 1]]) |c| {
+            try m.mark(plan_setup.branchCond(m.in, c.a).?);
+            try m.block(c.a);
+        }
+    }
+
+    fn visit(m: *Mark, v: Mir.Value) Error!void {
+        const def = m.in.mir.valueDef(v);
+        if (def != .inst_result) return;
+        const inst = def.inst_result;
+        try m.block(m.in.an.def_block[@intFromEnum(v)]);
+        switch (m.in.mir.instData(inst)) {
+            .unary => |d| try m.mark(d.operand),
+            .binary => |d| {
+                try m.mark(d.lhs);
+                try m.mark(d.rhs);
+            },
+            .ternary => |d| {
+                try m.mark(d.cond);
+                try m.mark(d.then_val);
+                try m.mark(d.else_val);
+            },
+            .call => |d| for (d.args) |x| try m.mark(x),
+            .load => |d| {
+                try m.mark(d.arr);
+                try m.mark(d.index);
+            },
+            .store => |d| {
+                try m.mark(d.arr);
+                try m.mark(d.index);
+                try m.mark(d.value);
+            },
+            // A phi's value is its operand on the edge taken, and the edge
+            // taken is its predecessor's branch.
+            .phi => |d| for (0..d.count) |j| {
+                const p = m.in.mir.phiPair(inst, @intCast(j));
+                try m.mark(p.value);
+                const pb: u32 = @intFromEnum(p.block);
+                try m.block(pb);
+                if (plan_setup.branchCond(m.in, pb)) |c| try m.mark(c);
+            },
+            .anew, .branch, .jump => {},
+        }
+    }
+};
 
 const Fixture = @import("fixture.zig").Fixture;
 

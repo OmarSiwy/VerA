@@ -226,9 +226,9 @@ pub fn emit(g: *Gen) Error!void {
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
         \\    for (cur, 0..) |xv, i| xr[i] = R.con(xv);
-        \\    const m = core(R, xr, model, {s});
+        \\    const m = core(R, xr, model, {s}{s});
         \\
-    , .{probe_inst});
+    , .{ probe_inst, g.heldArg(true) });
     try g.w("    var x = cur;\n", .{});
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
@@ -501,9 +501,9 @@ fn emitSeed(g: *Gen) Error!void {
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
         \\    for (&xr) |*p| p.* = R.con(0.0);
-        \\    const m = core(R, xr, model, {s});
+        \\    const m = core(R, xr, model, {s}{s});
         \\
-    , .{probe_inst});
+    , .{ probe_inst, g.heldArg(true) });
     try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
     for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;

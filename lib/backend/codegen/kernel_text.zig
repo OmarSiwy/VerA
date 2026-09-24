@@ -540,6 +540,16 @@ pub const arr_txt =
     \\    if (k < a.len) a[@intCast(k)] = v;
     \\}
     \\
+    \\/// §5.10 the storage a held array's store writes: `a`, holding what `p`
+    \\/// read until now — the `Instance` field, copied in by the first store.
+    \\fn zArrW(comptime T: type, comptime n: usize, a: *[n]T, p: **const [n]T) *[n]T {
+    \\    if (p.* != a) {
+    \\        a.* = p.*.*;
+    \\        p.* = a;
+    \\    }
+    \\    return a;
+    \\}
+    \\
     \\/// The values of an `S` array: what a held array's `f64` `Instance`
     \\/// field keeps.
     \\fn zArrVal(comptime S: type, comptime n: usize, a: *const [n]S) [n]f64 {

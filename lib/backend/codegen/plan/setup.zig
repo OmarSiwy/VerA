@@ -72,7 +72,7 @@ pub const Sinv = struct {
 
 /// One control dependence: block B depends on the branch at `a` through its
 /// `then` edge (`then == true`) or its `else` edge.
-const Cd = struct { a: u32, then: bool };
+pub const Cd = struct { a: u32, then: bool };
 
 /// §5.10.2 `initial_step` with no analysis list, or §5.2.1 `analog initial`:
 /// the condition `setup` treats as TRUE. A qualified `initial_step("tran")`
@@ -88,7 +88,7 @@ fn initCond(in: Input, cond: Mir.Value) bool {
     };
 }
 
-fn branchCond(in: Input, bi: u32) ?Mir.Value {
+pub fn branchCond(in: Input, bi: u32) ?Mir.Value {
     const t = in.an.term[bi];
     if (t == .none or in.mir.instOp(t) != .branch) return null;
     return in.mir.instData(t).branch.cond;
@@ -105,7 +105,7 @@ fn elseOf(in: Input, bi: u32) u32 {
 /// Immediate post-dominators, with a virtual exit `nb` that every return
 /// block — and every block that cannot reach one — flows to. Cooper, Harvey
 /// and Kennedy's iteration over the reverse CFG, in its reverse postorder.
-fn postDominators(in: Input) Error![]u32 {
+pub fn postDominators(in: Input) Error![]u32 {
     const a = in.arena;
     const nb = in.an.nb;
     const exit = nb;
@@ -205,7 +205,7 @@ fn intersect(ipdom: []const u32, num: []const u32, b1: u32, b2: u32) u32 {
 }
 
 /// Per-block control dependences, flat: `cd[off[b]..off[b + 1]]`.
-fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd: []Cd } {
+pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd: []Cd } {
     const a = in.arena;
     const nb = in.an.nb;
     var lists = try a.alloc(std.ArrayList(Cd), nb);

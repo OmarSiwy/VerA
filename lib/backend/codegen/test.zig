@@ -253,6 +253,40 @@ test "codegen: acceptQ is q and updateState off ONE core evaluation" {
     try std.testing.expect(std.mem.indexOf(u8, body, "return qq;") != null);
 }
 
+test "codegen: §5.10 eval skips a held-array store only updateState reads, and never copies the array" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module hh(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  real hist[0:3]; integer k, nh;
+        \\  analog begin
+        \\    @(initial_step) begin
+        \\      nh = 0;
+        \\      for (k = 0; k < 4; k = k + 1) hist[k] = 0.0;
+        \\    end
+        \\    I(p, n) <+ V(p, n) * hist[0];
+        \\    if (nh < 4) begin
+        \\      hist[nh] = V(p, n);
+        \\      hist[0] = hist[nh] * 2.0;
+        \\      nh = nh + 1;
+        \\    end
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst: InstancePtr, comptime held: bool) struct {") != null);
+    // The append and the store that reads it back are skippable; the
+    // initial-step zeroing is read by the residual in the same evaluation.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "if (held) zArrSt("));
+    try std.testing.expect(std.mem.indexOf(u8, src, "p0 = &inst.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core, .{ S, x, model, inst, false })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core(R, xr, model, inst, true)") != null);
+    // The read-back carries V's derivative, but into nothing eval returns,
+    // so the storage stays plain.
+    try std.testing.expect(std.mem.indexOf(u8, src, "var a0: [4]f64 = undefined;") != null);
+}
+
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);

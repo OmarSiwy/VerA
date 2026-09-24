@@ -288,10 +288,22 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
 // reads a derivative a store put there (`Gen.arr_s`); otherwise the storage
 // is plain `f64`/`i64` and a store keeps the value alone. A version read out
 // of the core's cache (the held final value) is the core's plain field.
+//
+// §5.10 a PLAIN held array is copy-on-write (`cow`): its loads read through
+// `p<id>`, which starts at the `Instance` field, and the first store copies
+// the field into `a<id>` and repoints `p<id>` there (`zArrW`). So an
+// evaluation that stores nothing copies nothing — and `eval`, whose core
+// skips the stores only the end-of-block value observes
+// (`plan_core.heldOnly`, the `held` flag), mostly stores nothing.
 
 /// Is array `id`'s storage plain `f64`/`i64` rather than `S`?
 fn arrPlain(self: *const Gen, id: u32) bool {
     return self.lowered.mem_arrays.items[id].ty == .integer or !self.arr_s[id];
+}
+
+/// Is array `id` read in place from its `Instance` field until first written?
+pub fn cow(self: *const Gen, id: u32) bool {
+    return self.lowered.mem_arrays.items[id].held != none_u32 and arrPlain(self, id);
 }
 
 /// The element type array `id` is stored as.
@@ -300,16 +312,16 @@ pub fn arrElemTy(self: *const Gen, id: u32) []const u8 {
     return if (self.arr_s[id]) "S" else "f64";
 }
 
-/// Write the storage array version `v` lives in; true when it holds plain
-/// values (a cached version always does).
+/// Write a pointer to the storage array version `v` is read from; true when
+/// it holds plain values (a cached version always does).
 fn arrRef(self: *Gen, v0: Mir.Value) Error!bool {
     const v = self.an.rv(v0);
     if (self.plan.cached(v)) {
-        try self.b("c.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
+        try self.b("&c.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
         return true;
     }
     const id = self.an.arrOf(v).?;
-    try self.b("a{d}", .{id});
+    try self.b("{s}{d}", .{ if (cow(self, id)) "p" else "&a", id });
     return arrPlain(self, id);
 }
 
@@ -317,19 +329,19 @@ fn arrRef(self: *Gen, v0: Mir.Value) Error!bool {
 pub fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
     const d = self.mir.instData(inst).load;
     if (d.op == .iload) {
-        try self.b("zArrLd(i64, &", .{});
+        try self.b("zArrLd(i64, ", .{});
         _ = try arrRef(self, d.arr);
         try self.b(", ", .{});
         try renderVal(self, d.index, .int);
         return self.b(", 0)", .{});
     }
     const at = self.out.items.len;
-    try self.b("zArrLd(S, &", .{});
+    try self.b("zArrLd(S, ", .{});
     if (try arrRef(self, d.arr)) {
         // Plain storage: re-spell the head, the index follows either way.
-        const name = try self.arena.dupe(u8, self.out.items[at + "zArrLd(S, &".len ..]);
+        const name = try self.arena.dupe(u8, self.out.items[at + "zArrLd(S, ".len ..]);
         self.out.shrinkRetainingCapacity(at);
-        try self.b("S.con(zArrLd(f64, &{s}, ", .{name});
+        try self.b("S.con(zArrLd(f64, {s}, ", .{name});
         try renderVal(self, d.index, .int);
         return self.b(", 0.0))", .{});
     }
@@ -353,15 +365,32 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             // evaluation left in its `Instance` field.
             self.uses_inst = true;
             const f = self.names.held_names[m.held];
-            if (plain) return self.b("a{d} = inst.{s};\n", .{ d.array, f });
+            if (plain) return self.b("p{d} = &inst.{s};\n", .{ d.array, f });
             return self.b("for (&a{d}, inst.{s}) |*zd, zs| zd.* = S.con(zs);\n", .{ d.array, f });
         },
         .store => |d| {
             const id = self.an.arrOf(d.arr).?;
-            try self.b("zArrSt({s}, &a{d}, ", .{ arrElemTy(self, id), id });
+            const m = self.lowered.mem_arrays.items[id];
+            const r = self.an.rv(self.mir.instResult(inst));
+            if (self.emitting_common and self.core.held_only.len != 0 and self.core.held_only[@intFromEnum(r)]) {
+                self.uses_held = true;
+                try self.b("if (held) ", .{});
+            }
+            const ty = arrElemTy(self, id);
+            // A store made from another store's version writes storage that
+            // one has already copied in; the seed, or a join that may be it,
+            // goes through `zArrW`.
+            const after_store = switch (self.mir.valueDef(self.an.rv(d.arr))) {
+                .inst_result => |di| self.mir.instOp(di) == .store,
+                else => false, // else: an array version is an instruction result
+            };
+            if (cow(self, id) and !after_store)
+                try self.b("zArrSt({s}, zArrW({s}, {d}, &a{d}, &p{d}), ", .{ ty, ty, m.len, id, id })
+            else
+                try self.b("zArrSt({s}, &a{d}, ", .{ ty, id });
             try renderVal(self, d.index, .int);
             try self.b(", ", .{});
-            if (self.lowered.mem_arrays.items[id].ty == .integer) {
+            if (m.ty == .integer) {
                 try renderVal(self, d.value, .int);
             } else if (arrPlain(self, id)) {
                 // No load reads this element's derivative, so the value alone
@@ -380,6 +409,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
 /// A held array's end-of-block version as the core's plain `[len]f64`/`i64`.
 pub fn renderArrayOut(self: *Gen, v: Mir.Value) Error!void {
     const id = self.an.arrOf(v).?;
+    if (cow(self, id)) return self.b("p{d}.*", .{id});
     if (arrPlain(self, id)) return self.b("a{d}", .{id});
     try self.b("zArrVal(S, {d}, &a{d})", .{ self.lowered.mem_arrays.items[id].len, id });
 }

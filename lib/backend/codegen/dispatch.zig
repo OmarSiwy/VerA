@@ -93,9 +93,9 @@ fn emitQ(self: *Gen) Error!void {
         \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
         \\/// the host differentiates each and stamps it into its rows.
         \\pub fn q(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_q]S {{
-        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst }});
+        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});
         \\
-    , .{});
+    , .{self.heldArg(false)});
     try self.w("    return ", .{});
     try writeSites(self);
     try self.w(";\n}}\n\n", .{});
@@ -264,7 +264,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         self.uses_model = true;
         self.uses_inst = true;
         self.core_wanted = true;
-        if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
+        if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)});
         try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lowered.table_effect)).?});
     }
 
@@ -324,7 +324,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 self.core_wanted = true;
                 if (!self.core_hoisted) {
                     try self.ind(1);
-                    try self.b("const m = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
+                    try self.b("const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)});
                 }
             }
         }
@@ -563,7 +563,7 @@ pub fn emitFused(self: *Gen) Error!void {
     // for every live row and `uses_model`/`uses_inst` on the same branch
     // that opens the core, so this can never reference a patched-out `_`.
     if (self.core_wanted)
-        try self.out.insertSlice(self.gpa, at_core, "    const m = @call(.always_inline, core, .{ S, x, model, inst });\n");
+        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)}));
 
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
@@ -1069,7 +1069,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     if (uses_core) {
         try self.w("    var xr: [n_u]R = undefined;\n", .{});
         try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
+        try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
     } else {
         gen_unit.patchParam(self, at_x, "x".len);
         gen_unit.patchParam(self, at_model, "model".len);
@@ -1258,7 +1258,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
     if (uses_core) {
         try self.w("    var xr: [n_u]R = undefined;\n", .{});
         try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
+        try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
     }
     try self.w("    return .{{\n", .{});
     for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });

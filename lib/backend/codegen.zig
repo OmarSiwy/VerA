@@ -302,6 +302,9 @@ pub const Gen = struct {
     uses_x: bool = false,
     uses_model: bool = false,
     uses_inst: bool = false,
+    /// The core read its `held` flag (`plan_core.heldOnly`): a skippable
+    /// store was emitted. Patched to `_` otherwise, as the three above.
+    uses_held: bool = false,
     /// §2.8.3/§12.32: the `$name`s nothing in this backend resolved, in first-
     /// call order, which becomes `systf_calls` and therefore the host's binding
     /// indices. Deduplicated by NAME because that is what
@@ -517,6 +520,14 @@ pub const Gen = struct {
     /// One `appendNTimes` rather than a loop of `appendSlice`: the value is
     /// comptime-known, so this lowers to a memset (see `ArrayList.appendNTimes`,
     /// which is `inline` for exactly that reason).
+    /// §5.10 the trailing argument of a core call: nothing for a core without
+    /// held-only stores, else whether this caller keeps the held arrays'
+    /// end-of-block values (`updateState`, `acceptQ`) or not (`eval`/`q`).
+    pub fn heldArg(self: *const Gen, held: bool) []const u8 {
+        if (self.core.held_only.len == 0) return "";
+        return if (held) ", true" else ", false";
+    }
+
     pub fn ind(self: *Gen, n: u32) Error!void {
         try self.out.appendNTimes(self.gpa, ' ', (n + self.ind_base) * 4);
     }
@@ -568,6 +579,19 @@ pub const Gen = struct {
             .q_sites = self.qs.sites,
         }, DynCtrl{ .g = self });
         self.core = try plan_core.plan(self.input(), self.jobs.list);
+        // §5.10 a held array's storage carries a derivative only for a load
+        // `eval`/`q` returns something from: the rest are read by the value-
+        // only consumers (`updateState` is `R`; `acceptQ` keeps `.val()`), so
+        // the lanes such a load would carry are never observed.
+        if (self.core.eval_need.len != 0) for (self.arr_s, 0..) |*s, id| {
+            if (!s.* or self.lowered.mem_arrays.items[id].held == none_u32) continue;
+            s.* = for (self.an.i_op, 0..) |op, ii| {
+                if (op != .fload) continue;
+                const arr: Mir.Value = @enumFromInt(self.mir.insts.items(.a)[ii]);
+                if (self.an.arrOf(arr).? != id or self.an.dFree(arr)) continue;
+                if (self.core.eval_need[@intFromEnum(self.an.rv(self.an.i_res[ii]))]) break true;
+            } else false;
+        };
         // After the core planner, which is what fills them. Stable for the
         // rest of the compilation; `cached` reads them per unit.
         self.plan.lo_idx = self.core.lo_idx;

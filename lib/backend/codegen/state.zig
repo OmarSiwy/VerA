@@ -104,7 +104,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     // the inputs are fields of the same struct, so the accepted-step sweep
     // costs exactly one model evaluation however many operators there are.
     // `model` is always live because that call reads it. `dt` is not.
-    if (uses_core) try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
+    if (uses_core) try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
     try emitAcceptBody(self, acc, ".v");
     try self.w(
         \\    return .ok;
@@ -170,7 +170,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (self.core_wanted or acc.uses_core) {
         self.uses_x = true;
         self.uses_model = true;
-        try self.out.insertSlice(self.gpa, at_core, "    const m = @call(.always_inline, core, .{ S, x, model, inst });\n");
+        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(true)}));
     }
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
@@ -459,8 +459,8 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
         if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_",
     });
     if (uses_core) try self.w(
-        "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s});\n",
-        .{try gen_setup.probeInstance(self)},
+        "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s}{s});\n",
+        .{ try gen_setup.probeInstance(self), self.heldArg(true) },
     );
     for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
@@ -474,7 +474,7 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
         try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
         const probe_inst = try gen_setup.probeInstance(self);
         try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
-            "    return core(R, xr, model, {s}).f{d} == 0;\n}}\n\n", .{ probe_inst, gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
+            "    return core(R, xr, model, {s}{s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
 }
 
@@ -551,7 +551,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\    // on garbage. `setup` is a pure function of (model, instance), so
         \\    // computing it here is the answer the batch will compute later,
         \\    // and the copy keeps the caller's Instance untouched.
-        \\{s}    const m = core(R, xr, model, {s});
+        \\{s}    const m = core(R, xr, model, {s}{s});
         \\    var parent: [n_u]u8 = undefined;
         \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
         \\
@@ -563,6 +563,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         else
             "",
         if (self.su.vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
+        self.heldArg(true),
     });
     for (pairs, 0..) |p, pi| {
         const fi = @intFromEnum(self.an.rv(p.flag));
