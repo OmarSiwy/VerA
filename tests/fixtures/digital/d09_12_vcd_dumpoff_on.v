@@ -55,8 +55,8 @@
 // token-based normaliser in SPEC.md (a line-oriented `sed` range mis-deletes
 // when `$date … $end` lands on a single line).
 //
-//! lrm inherited IEEE 1364-2005 18.1 ($dumpoff, $dumpon, $dumpall)
-//! lrm inherited IEEE 1364-2005 18.2 (checkpoint records)
+//! inherited IEEE 1364-2005 18.1 ($dumpoff, $dumpon, $dumpall)
+//! inherited IEEE 1364-2005 18.2 (checkpoint records)
 //! expect vcd d09_vcd_off.vcd == 12_vcd_dumpoff_on.expected.vcd
 `timescale 1ns/1ns
 module d09_vcd_off;
