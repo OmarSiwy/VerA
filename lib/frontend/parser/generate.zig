@@ -80,6 +80,10 @@ pub fn parseGenerate(self: *Parser, b: *parse_module.Body, comptime kind: token.
 pub inline fn parseFor(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
     self.pos += 1; // 'for'
     _ = try self.expect(.lparen);
+    // A.4.2 `genvar_initialization ::= genvar_identifier = constant_expression`:
+    // checked against the module's genvars by `checkGenBlockNames`.
+    if (@TypeOf(gen) != @TypeOf(null) and self.identLike(self.pos))
+        try gen.gen_loops.append(self.arena, .{ .name = try self.internTok(self.pos), .tok = self.pos, .construct = self.gen_construct });
     const init_s = try parse_stmt.parseAssignNoSemi(self);
     _ = try self.expect(.semicolon);
     const cond = try parse_expr.parseExpr(self);
@@ -238,6 +242,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // direct-nesting permission work: `construct` already says which
     // construct each came from.
     try b.gen_blocks.appendSlice(self.arena, gb.gen_blocks.items);
+    try b.gen_loops.appendSlice(self.arena, gb.gen_loops.items);
     return self.file.addStmt(self.arena, .{ .block = blk }, tok);
 }
 
@@ -267,6 +272,10 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
 /// rather than its root the day a fixture asks; that needs generate blocks to
 /// be real scope objects, which is also what §6.6.3 hierarchical names want.
 pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
+    // A.4.2 `genvar_initialization ::= genvar_identifier = constant_expression`,
+    // and a genvar_identifier is what a `genvar_declaration` introduces.
+    for (b.gen_loops.items) |l| if (std.mem.indexOfScalar(Ast.StrId, b.genvars.items, l.name) == null)
+        try self.report(l.tok, .E0238, "`{s}`", .{self.file.strings.get(l.name)});
     for (b.gen_blocks.items, 0..) |g, i| {
         // Every ordinary declaration space of the module. A port is listed
         // as well as a net: §6.5's header names are declarations too.

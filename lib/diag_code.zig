@@ -200,6 +200,8 @@ pub const Code = enum(u16) {
     /// §6.4.1: an access function, contribution, event control or named
     /// block among a paramset's statements.
     E0237,
+    /// A.4.2 / §6.6.1: a loop generate whose index is not a declared genvar.
+    E0238,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1851,6 +1853,23 @@ fn infoOf(c: Code) Info {
             \\
             \\    begin : blk  t = rr; end     // illegal
             \\    begin        t = rr; end     // legal
+            ,
+        },
+        .E0238 => .{
+            .title = "a loop generate's index is not a genvar",
+            .lrm = "A.4.2",
+            .explain =
+            \\A.4.2: `loop_generate_construct ::= for ( genvar_initialization ;
+            \\genvar_expression ; genvar_iteration ) generate_block`, with
+            \\`genvar_initialization ::= genvar_identifier =
+            \\constant_expression`. The index is a genvar, the name a
+            \\`genvar_declaration` introduces: an integer that exists only
+            \\while the loop is unrolled at elaboration, never at run time.
+            \\An `integer` or `real` variable is not one, even with the same
+            \\name.
+            \\
+            \\    genvar i;
+            \\    for (i = 0; i < 2; i = i + 1) begin : g ... end
             ,
         },
         .E0234 => .{

@@ -397,6 +397,10 @@ pub const Body = struct {
     /// (§6.6.3 hierarchical names are unimplemented), so its only consumer
     /// is `checkGenBlockNames`.
     gen_blocks: std.ArrayList(GenBlock) = .empty,
+    /// A.4.2 every loop generate's index variable, for the check that it is
+    /// a genvar — made at the end of the module, when every `genvar`
+    /// declaration (hoisted out of nested blocks) is in `genvars`.
+    gen_loops: std.ArrayList(GenBlock) = .empty,
 };
 
 /// One `begin : name` produced by the `generate_block` production — which
