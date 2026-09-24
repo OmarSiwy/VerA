@@ -56,6 +56,16 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
+
+// The routine families that live in their own files. Referenced here so their
+// `export fn`s are emitted and their tests run with this module's.
+const print = @import("print.zig");
+comptime {
+    _ = print;
+}
+test {
+    _ = print;
+}
 const Lower = @import("ir").Lower;
 const Elaborate = @import("ir").Elaborate;
 
@@ -626,7 +636,7 @@ var err_len: usize = 0;
 /// Figure 12-1's `product`. Static, NUL-terminated, never rewritten.
 var product_name = "VerA".*;
 
-fn clearError() void {
+pub fn clearError() void {
     err_level = 0;
     err_len = 0;
     err_code = "";
@@ -642,7 +652,7 @@ fn clearError() void {
 /// text; an application being told it passed an invalid handle needs the code
 /// and the first clause far more than the last few words, and a heap allocation
 /// on the error path is a second thing that can fail while reporting a failure.
-fn fail(code: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
+pub fn fail(code: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
     err_level = vpiError;
     err_code = code;
     const written = std.fmt.bufPrint(err_buf[0 .. err_buf.len - 1], fmt, args) catch
@@ -797,7 +807,7 @@ export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
 /// that overflows simply fails that one scope's attempt and the walk continues,
 /// so the ceiling costs a lookup rather than correctness. Upgrade path: `open`
 /// already sees every `vpiFullName`, so it could size this from the longest.
-const name_buf_len = 4096;
+pub const name_buf_len = 4096;
 
 // ---------------------------------------------------------------------------
 // §12.20 vpi_handle_by_index
@@ -1138,7 +1148,7 @@ export fn vpi_release_handle(obj: vpiHandle) c_int {
 /// idempotent: an application may call it twice and get the same answer.
 /// "If the error information is not needed, a NULL can be passed to the
 /// routine."
-export fn vpi_chk_error(error_info_p: ?*ErrorInfo) c_int {
+pub export fn vpi_chk_error(error_info_p: ?*ErrorInfo) c_int {
     if (error_info_p) |info| {
         info.* = .{
             // Table 12-1's companion field. Every error VerA raises is raised

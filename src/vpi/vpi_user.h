@@ -246,6 +246,19 @@ extern PLI_INT32  vpi_release_handle(vpiHandle obj);
 /* §12.2 the previous call's error, or FALSE. Pass NULL to test only. */
 extern PLI_INT32  vpi_chk_error(p_vpi_error_info error_info_p);
 
+/* §12.24–§12.28 printing and multichannel descriptors. Channel N is bit N-1
+ * of an mcd; channels 1 (stdout), 2 (stderr) and 3 (the product log) are
+ * predefined and cannot be closed. VerA keeps no product log, so channel 3
+ * accepts output and discards it, and vpi_printf() writes stdout only.
+ * vpi_printf's format is `const` here where Annex G's is not: the routine
+ * never writes through it, and an application passing a string literal must
+ * not need a cast. */
+extern PLI_UINT32 vpi_mcd_open(PLI_BYTE8 *fileName);
+extern PLI_UINT32 vpi_mcd_close(PLI_UINT32 mcd);
+extern PLI_BYTE8 *vpi_mcd_name(PLI_UINT32 cd);
+extern PLI_INT32  vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...);
+extern PLI_INT32  vpi_printf(const PLI_BYTE8 *format, ...);
+
 /* §12.33.2. The APPLICATION defines this array and terminates it with 0; VerA
  * calls each entry in order, once, after the design is elaborated and the
  * object model above is walkable. Registering system tasks from it is P03 —
