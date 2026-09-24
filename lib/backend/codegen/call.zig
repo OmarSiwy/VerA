@@ -12,7 +12,7 @@ const std = @import("std");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_file = @import("file.zig");
-const gen_outline = @import("outline.zig");
+const gen_cfg = @import("cfg.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
@@ -593,7 +593,7 @@ pub fn enableTest(self: *Gen, name: []const u8, args: []const Mir.Value) Error![
     const i = enableArgIdx(name) orelse return "true";
     if (i >= args.len) return "true";
     const at = self.out.items.len;
-    try gen_outline.renderCond(self, args[i]);
+    try gen_cfg.renderCond(self, args[i]);
     const s = try self.arena.dupe(u8, self.out.items[at..]);
     self.out.shrinkRetainingCapacity(at);
     return s;

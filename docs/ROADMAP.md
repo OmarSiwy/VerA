@@ -510,7 +510,7 @@ already elaborates a two-instance hierarchy and solves.
 **Exit.** The 13 `m03_*` XFAILs lose their markers.
 
 ### v0.6.1 — `ARCHITECTURE.md §6` phase 4
-**Scope.** `codegen/plan/` — hoist, outline and common extracted as pure
+**Scope.** `codegen/plan/` — hoist and common extracted as pure
 functions. `Gen` 91 → ~55 fields. Before `emit/`, so emission has a `Plan` to
 read.
 **Does not do.** Phase 5. One phase = one branch = one PR; never two in flight in
@@ -551,7 +551,7 @@ in the tree. The three existing `@Vector` uses are the right three and are not
 touched: `frontend/token.zig`'s accumulator over the fixed keyword table,
 `frontend/preprocessor.zig`'s single-needle byte scan, and `backend/tb.zig`'s
 `@Vector(NL, f64)` — the last in **generated** code, and the real one. The
-hardware knobs stay: `--unknown-bound=`, `--outline-chunk=N`, `jac_f32` and the
+hardware knobs stay: `--unknown-bound=`, `jac_f32` and the
 `abstol` table are physical-world tuning.
 **Exit.** Goldens `diff -r` clean.
 

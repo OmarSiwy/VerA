@@ -172,25 +172,6 @@ pub const Options = struct {
     /// runs. This is the caller's bag, and it is alive for as long as the
     /// `CompileResult` is.
     diags: ?*diag.Bag = null,
-    /// Outline a huge body into `noinline` chunk functions of ~this many
-    /// statements each (0 = never, the default). See `emitUnitBody`.
-    ///
-    /// MEASURED 2026-09-23 (zig 0.16 / LLVM 21, -OReleaseFast, one bsim4va
-    /// `evalQ` over the host's Dual(18); scratch harness, not in the tree):
-    ///   - The GPU blowup this knob was added for (2 min, 1.2 GB) is DWARF,
-    ///     not code size: nvptx64 unchunked is 123 s / 1.56 GB RSS with debug
-    ///     info and 3.7 s / 232 MB stripped. Stripped is how GPU roots build.
-    ///   - Chunked GPU code is WORSE: local memory per thread 14 KB -> 178 KB,
-    ///     ld/st.local 644 -> 5204. Host runtime 3.4 -> 9.5 us per eval.
-    ///   - LLVM goes superlinear past ~5-10k Dual ops in ONE function; only
-    ///     hisimhv-sized cores are near that. A chunk that helps there is
-    ///     ~2500 ops, not 300.
-    ///
-    /// So: OFF by default and for GPU roots that strip. Use it for a debug-info
-    /// build of a very large model, with a size in the thousands. Emitted
-    /// values are the same statements either way (f, q and all partials were
-    /// verified bit-identical when this landed).
-    outline_chunk: u32 = 0,
 };
 
 /// Emit the whole device.zig. LRM §5/§8.3.
@@ -237,7 +218,6 @@ pub fn generate(
         .jac_f32 = opts.jac_f32 or opts.jac_f32_host,
         .jac_f32_host = opts.jac_f32_host,
         .diags = opts.diags,
-        .outline = opts.outline_chunk,
     };
     errdefer g.out.deinit(gpa);
     try g.prepare();
@@ -566,7 +546,7 @@ pub const Gen = struct {
 
     // ---- the core's hoisted PREFIX (see `planHoistPrefix`) ----------------
     /// This body is a prefix-cache candidate: the common core, tree-shaped,
-    /// unchunked, no fatal. Cleared again if planning finds no region.
+    /// no fatal. Cleared again if planning finds no region.
     hp_on: bool = false,
     /// Values the cached region defines and the rest of the core reads —
     /// reals first, so `hp_vals[j]` is `Instance.hp[j]` while `j < hp_real`
@@ -586,52 +566,9 @@ pub const Gen = struct {
     /// test in `planHoistPrefix`.
     hp_insts: u32 = 0,
 
-    // ---- outlining (`Options.outline_chunk`) — all per-unit transient ----
-    /// Statements per chunk (the option). 0 disables.
-    outline: u32 = 0,
-    /// Chunking is on for the body being emitted (size gate passed, shape ok).
-    oc_on: bool = false,
-    /// Real pass is inside `emitChunkFns` — `maybeCut` closes/opens chunk fns.
-    oc_real: bool = false,
-    /// Probe saw a shape the driver layout cannot host: more than one return,
-    /// none, or executable text after it (see `probeBody`'s trailing check).
-    oc_bad: bool = false,
-    oc_returns: u32 = 0,
-    /// Probe text offset just past the first emitted return.
-    oc_ret_at: usize = 0,
-    /// Rendering the return right now — every slot it names must be readable
-    /// from the driver, so `probeUse` pins it into a hoist array.
-    oc_in_ret: bool = false,
-    /// Probe-text offset where each chunk's content starts, plus a terminal
-    /// entry at the return. A hoisted slot whose whole life
-    /// [def_off, max(max_use, max_def)] sits inside ONE such interval is
-    /// declared as that chunk's own `var` instead of in the shared arrays —
-    /// LLVM then promotes it exactly like the monolith's locals, which is
-    /// most of the outlining runtime cost (bsim4va: 799 of 1368 h slots).
-    oc_bounds: std.ArrayList(u32) = .empty,
-    /// (chunk, slot, type) rows for those chunk-local vars, in live order.
-    oc_local_chunk: std.ArrayList(u32) = .empty,
-    oc_local_slot: std.ArrayList(u32) = .empty,
-    oc_local_ty: std.ArrayList(VTy) = .empty,
-    /// Statements emitted since the open chunk began — the cut trigger.
-    oc_insts: u32 = 0,
-    /// Cuts fired so far == index of the OPEN chunk. Probe and real pass must
-    /// agree (asserted in `emitChunkFns`); both count the same walk.
-    oc_cuts: u32 = 0,
-    /// Chunk count the probe settled on; the driver call list is emitted from
-    /// this before the chunk bodies exist.
-    oc_total: u32 = 0,
-    /// Unit name + float mode for the chunk headers (`{name}__c{k}`).
-    oc_name: []const u8 = "",
-    oc_mode: []const u8 = "",
-    /// Parameter-name patch offsets of the OPEN chunk header:
-    /// x, model, inst, h, hi, hs — same trick as `emitUnit`'s signature.
-    oc_at: [6]usize = @splat(0),
-    /// Did the open chunk touch each hoist array? (x/model/inst ride the
-    /// existing `uses_*` flags.)
-    oc_use: [3]bool = @splat(false),
-    /// Hoist array lengths by VTy (0 = absent from signatures and calls).
-    oc_n: [3]u32 = @splat(0),
+    /// Statements emitted so far in the body being walked; `hpBoundary`
+    /// snapshots it as the prefix region's size.
+    stmt_count: u32 = 0,
 
     // ---- the writer: every emitted byte goes through these three ----
 
@@ -877,8 +814,8 @@ pub const Gen = struct {
     // Units: one function per source unit, and the body each one computes — codegen/unit.zig
     const gen_unit = @import("codegen/unit.zig");
 
-    // Outlining (`--outline-chunk=N`): cutting a long body into noinline chunks — codegen/outline.zig
-    const gen_outline = @import("codegen/outline.zig");
+    // Control-flow reconstruction: MIR CFG -> structured Zig (the relooper) — codegen/cfg.zig
+    const gen_cfg = @import("codegen/cfg.zig");
 
     // Value and instruction rendering: MIR value → Zig expression text (§4.2.1 conversions) — codegen/render.zig
     const gen_render = @import("codegen/render.zig");
@@ -1073,7 +1010,7 @@ test {
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;
-    _ = Gen.gen_outline;
+    _ = Gen.gen_cfg;
     _ = Gen.gen_render;
     _ = Gen.gen_call;
     _ = Gen.gen_dispatch;

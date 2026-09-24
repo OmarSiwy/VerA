@@ -241,59 +241,6 @@ test "codegen: one declaration even for a single contribution" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= core(S, x, model, inst);"));
 }
 
-test "codegen: --outline-chunk splits the core into noinline chunk fns; off by default" {
-    // ~20 slotted statements (each gN is used twice, so it keeps a slot);
-    // chunked at 6 the core must come out as a DRIVER (hoist arrays, one
-    // `@call(.never_inline, ...)` per chunk, the one return) plus sibling
-    // chunk fns. Bit-level equivalence of chunked output is pinned outside
-    // the unit tests (bsim4va/hisimhv/bsimsoi f/q/partials, commit message);
-    // here we pin the SHAPE and that the default emits none of it.
-    var h: Harness = undefined;
-    try Harness.run(std.testing.allocator,
-        \\module oc(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  real g1, g2, g3, g4, g5, g6, g7, g8, g9, g10, acc;
-        \\  analog begin
-        \\    g1 = exp(V(p, n) * 1.0); g2 = exp(V(p, n) * 2.0);
-        \\    g3 = exp(V(p, n) * 3.0); g4 = exp(V(p, n) * 4.0);
-        \\    g5 = exp(V(p, n) * 5.0); g6 = exp(V(p, n) * 6.0);
-        \\    g7 = exp(V(p, n) * 7.0); g8 = exp(V(p, n) * 8.0);
-        \\    g9 = exp(V(p, n) * 9.0); g10 = exp(V(p, n) * 10.0);
-        \\    acc = g1*g1 + g2*g2 + g3*g3 + g4*g4 + g5*g5
-        \\        + g6*g6 + g7*g7 + g8*g8 + g9*g9 + g10*g10;
-        \\    I(p, n) <+ acc;
-        \\  end
-        \\endmodule
-    , &h);
-    defer h.deinit();
-
-    const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
-    defer v.deinit(std.testing.allocator);
-    var fatal = false;
-    const a = h.arena_state.allocator();
-    const off = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{})).text;
-    const off0 = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .outline_chunk = 0 })).text;
-    const on = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .outline_chunk = 6 })).text;
-
-    // Default IS off: measured 1.8-3x slower host eval, so a host opts in
-    // per artifact (GPU kernels) rather than paying it everywhere.
-    try std.testing.expectEqualStrings(off, off0);
-    try std.testing.expect(std.mem.indexOf(u8, off, "__c0(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, off, "@call(.never_inline") == null);
-
-    // Chunked shape: driver calls every chunk in order, threading the hoist
-    // arrays; the value return stays in the driver; chunks are siblings so
-    // `writeTree`'s `pub ` splice publishes only the driver.
-    try std.testing.expect(std.mem.indexOf(u8, on, "fn oc__common__core__c0(comptime S: type, ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, on, "fn oc__common__core__c1(") != null);
-    const n_chunks = std.mem.count(u8, on, "fn oc__common__core__c");
-    try std.testing.expectEqual(n_chunks, std.mem.count(u8, on, "@call(.never_inline, oc__common__core__c"));
-    try std.testing.expect(std.mem.indexOf(u8, on, "var h: [") != null);
-    // Every chunk repeats the unit's float mode — @setFloatMode is per-fn.
-    try std.testing.expect(std.mem.count(u8, on, "@setFloatMode(") >= n_chunks);
-}
-
 test "codegen: the unit ranges tile the emission and each names its own decl" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,

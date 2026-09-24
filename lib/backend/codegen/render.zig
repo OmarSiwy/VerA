@@ -14,7 +14,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_file = @import("file.zig");
 const gen_hoist = @import("hoist.zig");
-const gen_outline = @import("outline.zig");
+const gen_cfg = @import("cfg.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
@@ -326,7 +326,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
             return;
         }
         try self.b("(if (", .{});
-        try gen_outline.renderCond(self, a);
+        try gen_cfg.renderCond(self, a);
         try self.b(") ", .{});
         try renderVal(self, b2, want);
         try self.b(" else ", .{});
