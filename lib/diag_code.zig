@@ -468,6 +468,8 @@ pub const Code = enum(u16) {
     /// §4.6.4 + §1.3.1.1 a noise generator on a ground-ground branch, which has
     /// no row and no column to name — codegen.zig.
     E0520,
+    /// §4.6.3/A.8.2 an `ac_stim` analysis name that is not a string literal.
+    E0521,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -3939,6 +3941,23 @@ fn infoOf(c: Code) Info {
             \\
             \\Contribute the source to a real branch: give the generator a node
             \\that is an unknown of the system, even if the other end is ground.
+            ,
+        },
+        .E0521 => .{
+            .title = "ac_stim analysis name is not a string literal",
+            .lrm = "A.8.2",
+            .explain =
+            \\A.8.2 writes the quotation marks into the production:
+            \\
+            \\    ac_stim ( [ " analysis_identifier " [ , analog_expression
+            \\                                        [ , analog_expression ] ] ] )
+            \\
+            \\so the analysis name is a string literal. 4.6.3 makes it select
+            \\the small-signal analysis the source is active in, which the
+            \\simulator resolves before it solves. A string parameter is allowed
+            \\where the LRM says so (4.6.4.3's noise table file name), not here.
+            \\
+            \\    I(p, n) <+ ac_stim("ac", 2.0, 0.0);
             ,
         },
 

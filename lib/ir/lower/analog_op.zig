@@ -458,6 +458,17 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
 pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
+    // A.8.2 `ac_stim ( [ " analysis_identifier " [ , analog_expression ...` —
+    // the quotation marks are in the production, so the analysis name is a
+    // string LITERAL and nothing else (a string parameter is §4.6.4.3's
+    // allowance for a noise table's file name, not this one's).
+    if (std.mem.eql(u8, name, "ac_stim")) if (ex.args(e).len != 0) {
+        const a0 = ex.args(e)[0];
+        if (a0 != .none and ex.tag(a0) != .str_literal) {
+            try self.err(ex.mainTok(a0), .E0521, "", .{});
+            return poison;
+        }
+    };
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     // §4.6.4 the PSD arguments, positionally: arg 0 is the power, arg 1 of
