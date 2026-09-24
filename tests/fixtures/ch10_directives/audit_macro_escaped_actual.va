@@ -7,11 +7,10 @@
 // the actual's lexical boundary must survive expansion. A simple actual is
 // the legal control case. Both independent assignments use exactly 7.0.
 // The assertion macro sees only plain identifiers, isolating AUDIT_ID.
-// KEY-MACRO-001: current actual-argument trimming destroys that boundary.
+// KEY-MACRO-001 (closed): actual-argument trimming used to destroy that boundary.
 //! lrm 10.4
 //! lrm 2.8.1
 //! checks 2
-//! xfail KEY-MACRO-001: macro actual trimming loses escaped-identifier terminator
 `include "check.vh"
 `include "disciplines.vams"
 `define AUDIT_ID(ARG) (ARG)

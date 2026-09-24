@@ -386,10 +386,33 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             const word = body[start..i];
             const idx = indexOfString(params, word);
             try out.appendSlice(pp.arena, if (idx) |k| args[k] else word);
+            // IEEE 1364 §19.3.1 substitutes each actual "literally", and an
+            // escaped identifier's terminating white space (§2.8.1) is part of
+            // it — `macroArgs` trimmed that space off with the rest. Put one
+            // back, or `(ARG)` turns `\a.b ` into the identifier `\a.b)`.
+            if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.arena, ' ');
             continue;
         }
         try out.append(pp.arena, c);
         i += 1;
     }
     return out.items;
+}
+
+/// Does `text` end inside a §2.8.1 escaped identifier, i.e. with no white
+/// space after its last `\`-started run? String literals are skipped, so the
+/// `\` of an escape sequence does not count.
+fn endsInEscapedIdent(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '"' => i = stringStop(text, i),
+            '\\' => {
+                while (i < text.len and !isSpace(text[i])) i += 1;
+                if (i == text.len) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
