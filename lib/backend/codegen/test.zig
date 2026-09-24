@@ -2854,3 +2854,22 @@ test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset tab
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "u_nodeset") == null);
 }
+
+test "codegen: the hoisted prefix is latched through P, the host's value chain" {
+    // eval reads the latch back as `S.con(inst.hp[k])`, so it must hold what
+    // the host's S would have computed: `P`'s a*(1/b), not `R`'s a/b. Filled
+    // through R, mos3 had 2 of 512 residuals 1 ulp off the un-latched Dual.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module pg(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real gain = 1.0;
+        \\  analog I(p,n) <+ ($param_given(gain) ? gain : 0.0) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst.hp_ok = 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const mh = core(P, xp, model, inst);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const P = struct {") != null);
+}

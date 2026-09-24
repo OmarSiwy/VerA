@@ -1030,7 +1030,9 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     // …and so does the core's hoisted prefix, off the same core call.
     const has_hp = self.hp_vals.len != 0;
     if (!has_pc and !has_lp and !has_hp) return;
-    if (has_pc) try self.out.appendSlice(self.gpa, pscalar_txt);
+    // `P`, not `R`, fills the hp latch below: eval reads those fields as
+    // `S.con(...)`, so they must carry the HOST's value chain (see pscalar_txt).
+    if (has_pc or has_hp) try self.out.appendSlice(self.gpa, pscalar_txt);
 
     // Plan the pc slice through the common-mode path: targets = pc_vals.
     // Skipped wholesale when there are none: `analyze` would clear the
@@ -1100,22 +1102,25 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     // must not fire once it has been emitted.
     try cg_limit.emitPrep(self);
     if (has_hp) {
-        // `emitPrep` already evaluated the core at x = 0 and called it `m`;
-        // without it, the same two lines. Either way this is the ONE
-        // evaluation of the prefix per model card, and `hp_ok` is still 0
-        // for it — which is what makes the region run rather than reload.
-        if (!has_lp) try self.w(
-            \\    var xr: [n_u]R = undefined;
-            \\    for (&xr) |*p| p.* = R.con(0.0);
-            \\    const m = core(R, xr, model, inst);
+        // The ONE evaluation of the prefix per model card; `hp_ok` is still 0
+        // for it, which is what makes the region run rather than reload.
+        // Through `P`, not `emitPrep`'s `R`: eval reads these fields back as
+        // `S.con(...)`, so they must carry the host's value chain bit for bit
+        // (`R` divides as a/b and routes exp/log through zDev*; the host's S
+        // divides as a*(1/b)). The `$limit` latch stays on `R`: only `limit`,
+        // which evaluates with `R` itself, reads it.
+        try self.w(
+            \\    var xp: [n_u]P = undefined;
+            \\    for (&xp) |*p| p.* = P.con(0.0);
+            \\    const mh = core(P, xp, model, inst);
             \\
         , .{});
         for (self.hp_vals, 0..) |v, j| {
             const f = self.lo_vals.len + j;
             if (self.an.vty[@intFromEnum(v)] == .int)
-                try self.w("    inst.hpi[{d}] = m.f{d};\n", .{ j - self.hp_real, f })
+                try self.w("    inst.hpi[{d}] = mh.f{d};\n", .{ j - self.hp_real, f })
             else
-                try self.w("    inst.hp[{d}] = m.f{d}.v;\n", .{ j, f });
+                try self.w("    inst.hp[{d}] = mh.f{d}.v;\n", .{ j, f });
         }
         try self.w("    inst.hp_ok = 1;\n", .{});
     }
