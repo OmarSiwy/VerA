@@ -142,6 +142,18 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
         .lparen => {
             self.pos += 1;
             const e = try parseExpr(self);
+            // IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
+            // | expression : expression : expression`, legal wherever an
+            // expression is (a digital parse). The tool chooses one member of
+            // each triple; this one takes the typical, the middle, whose
+            // compound expressions then all read their middle members.
+            if (self.digital and self.eat(.colon)) {
+                const typ = try parseExpr(self);
+                _ = try self.expect(.colon);
+                _ = try parseExpr(self);
+                _ = try self.expect(.rparen);
+                return typ;
+            }
             _ = try self.expect(.rparen);
             return e;
         },
