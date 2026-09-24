@@ -40,16 +40,15 @@
 // file and reading its transcript; the half the fixture adds is the `initial`
 // block, and it adds no number.
 //
-// WHY IT CARRIES `xfail`. Neither half of the sharing exists. The `initial`
-// block's statement is refused by E0433 before the descriptor is ever typed —
-// "statement in an initial block is not a constant assignment: `fd` is assigned
-// a value that is not constant", §7.2.2's ceiling on `initial` blocks, the same
-// one ch07_mixed_signal/digital_initial_accepted.va documents — so
-// `fd = $fopen(...)` is not a call site that can be
-// reached, let alone one whose context could be judged. And behind that, the
-// digital engine's file table (src/sim/digital/system.zig) is its own: it and
-// the device's number descriptors from the same 3, so neither context can name
-// the other's file (2026-09-24). The gap is VerA's and not the LRM's.
+// HOW VerA RUNS IT. The `initial` block calls a §9.5 file function, so it has
+// no constant reading (§7.2.2's E0433 shape) and runs on the digital kernel as
+// the module's discrete half (lib/ir/lower/context.zig `usesFiles`); `fd` is
+// then a digital-owned integer the analog block reads, a §7.3.1 discrete input.
+// The simulation has ONE descriptor table: the mixed runner routes the digital
+// kernel's file tasks through the device's own (`contract.FileIo`), so the
+// descriptor the digital `$fopen` returns is a channel of the table the analog
+// `$fwrite` writes through. A tool with two tables fails here: the analog write
+// names no open channel, the file stays empty, and `code` is 0.
 //
 // ONE WRITE, NOT ONE PER ITERATION. The analog block runs on every Newton
 // iteration, and an earlier revision wrote and CLOSED `fd` on each of them, so
@@ -58,14 +57,9 @@
 // active on the first point of the analysis); the read-back opens and closes
 // its own descriptor each time, as 046_fgets.va does.
 //
-// WHEN IT GOES GREEN. A `--std=verilog-ams` compiler with a discrete kernel and
-// a file table can run this file as written; the assertions are then a claim
-// about the sharing rather than about acceptance.
-//
 //! lrm 9.5.1.2
 //! lrm 9.5.1
 //! lrm 9.5.4.1
-//! xfail `fd = $fopen(...)` in an initial block is refused by §7.2.2's constant-assignment model (E0433) instead of running on the digital kernel, and the kernel's own $fopen table (src/sim/digital/system.zig) and the device's (lib/backend/file_kernels.zig) number descriptors from the same 3 and share none, so a descriptor opened in one context names nothing, or another file, in the other
 `include "check.vh"
 module ch09_file_descriptor_shared_across_contexts(p, n);
   inout p, n; electrical p, n;

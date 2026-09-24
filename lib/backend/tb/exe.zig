@@ -112,7 +112,7 @@ pub fn buildExe(
                 return std.fmt.allocPrint(a, "-M{s}={s}", .{ name, try std.fs.path.join(a, &.{ r, rel }) });
             }
         };
-        try argv.appendSlice(arena, &.{ "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
+        try argv.appendSlice(arena, &.{ "--dep", "contract", "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
         try argv.append(arena, try src.m(arena, root, "diag", "lib/diag.zig"));
         try argv.appendSlice(arena, &.{ "--dep", "diag", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
         try argv.append(arena, try src.m(arena, root, "kernels", "lib/backend/kernels.zig"));

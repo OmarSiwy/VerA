@@ -381,9 +381,11 @@ pub const Run = struct {
     reals: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// §17.6 the stochastic queues, by `q_id`.
     queues: std.AutoHashMapUnmanaged(i64, @import("system.zig").Queue) = .empty,
-    /// §17.2 the files opened for reading, by descriptor order; a closed one
-    /// is null.
-    files: std.ArrayList(?@import("system.zig").File) = .empty,
+    /// VAMS §9.5.1.2 the host's descriptor table, when the simulation shares
+    /// one between this engine and an analog device (the mixed runner
+    /// installs the device's `file_io`); null, this engine's own
+    /// (`system.table`).
+    file_io: ?@import("contract").FileIo = null,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
     part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
     /// §18 the value change dump.

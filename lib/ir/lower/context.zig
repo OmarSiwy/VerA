@@ -80,8 +80,37 @@ pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool 
     for (module.nets) |n| if (n.kind == .wreal) return true;
     // §8.5.3.5 a switch on a discrete net is processed in the discrete cycle.
     for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(file, module, t) != null) return true;
-    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body) or writesFourState(file, blk.body)) return true;
+    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body)) return true;
     return false;
+}
+
+/// VAMS §9.5.1.2 a descriptor either context opens is usable in the other,
+/// so a discrete block's file task or function runs on the kernel, against
+/// the simulation's one descriptor table — it has no constant reading.
+fn usesFiles(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
+    const Walk = struct {
+        file: *const Ast.SourceFile,
+        hit: *bool,
+        fn isFile(name: []const u8) bool {
+            return lower_event.isFileCall(name) or std.mem.eql(u8, name, "$ungetc") or
+                (std.mem.startsWith(u8, name, "$f") and lower_event.isDigitalOnlySysFunc(name));
+        }
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
+            if (e == .none) return;
+            const ex = &w.file.exprs;
+            if (ex.tag(e) == .sys_call and isFile(w.file.str(ex.strOf(e)))) w.hit.* = true;
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (s == .none) return;
+            if (w.file.stmt(s) == .sys_task and isFile(w.file.str(w.file.stmt(s).sys_task.name))) w.hit.* = true;
+            try w.file.stmtEdges(s, w);
+        }
+    };
+    var hit = false;
+    (Walk{ .file = file, .hit = &hit }).stmt(id) catch unreachable;
+    return hit;
 }
 
 /// C.3/§7.3.2: an x or z a discrete block writes is a value only the

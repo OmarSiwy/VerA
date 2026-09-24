@@ -54,8 +54,10 @@ const module_specs = [_]ModuleSpec{
     // src/ — what runs AFTER compilation. `sim` takes only the frontend: it is
     // an interpreter over the shared AST, not a consumer of the pipeline. It
     // takes `kernels` (std-only leaves) for the §9.4.3 C real conversion the
-    // analog devices already run, so both engines print one way.
-    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "diag", "frontend", "kernels" } },
+    // analog devices already run, so both engines print one way — and its
+    // §17.2 files go through `file_kernels` too, or through the device's own
+    // table when a mixed simulation shares one (`contract.FileIo`, VAMS §9.5.1.2).
+    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "diag", "frontend", "kernels" } },
     .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" } },
 };
 
