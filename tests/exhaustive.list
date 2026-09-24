@@ -21,37 +21,6 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-lib/ir/lower/context.zig collectInitialStmt Ast.Stmt
-lib/ir/lower/contrib.zig branchKey Ast.ExprTag
-lib/ir/lower/contrib.zig coeffIsConst Mir.DefKind
-lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
-lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
-lib/ir/lower/contrib.zig isMfactorRead Ast.ExprTag
-lib/ir/lower/contrib.zig lowerReactive Ast.ExprTag
-lib/ir/lower/contrib.zig lowerReactive Ast.UnaryOp
-lib/ir/lower/contrib.zig scalesByMfactor Ast.BinaryOp
-lib/ir/lower/contrib.zig scalesByMfactor Ast.ExprTag
-lib/ir/lower/contrib.zig scalesByMfactor Ast.UnaryOp
-lib/ir/lower/contrib.zig splitTerm Ast.BinaryOp
-lib/ir/lower/contrib.zig splitTerm Ast.ExprTag
-lib/ir/lower/contrib.zig splitTerm Ast.UnaryOp
-lib/ir/lower/event.zig formatBits Ast.BinaryOp
-lib/ir/lower/event.zig formatBits Ast.ExprTag
-lib/ir/lower/event.zig formatBits Ast.UnaryOp
-lib/ir/lower/event.zig lowerEventExpr Ast.ExprTag
-lib/ir/lower/expr.zig cmp Ast.BinaryOp
-lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
-lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
-lib/ir/lower/expr.zig lowerConcat Mir.DefKind
-lib/ir/lower/expr.zig lowerConcat Mir.DefKind
-lib/ir/lower/expr.zig lowerUnary Mir.DefKind
-lib/ir/lower/func.zig funcArrayIn Ast.ExprTag
-lib/ir/lower/hier_name.zig checkAliasCall Ast.ExprTag
-lib/ir/lower/node.zig nodeOf Ast.ExprTag
-lib/ir/lower/param.zig rangeBound Ast.ExprTag
-lib/ir/lower/stmt.zig arrayRef Ast.ExprTag
-lib/ir/lower/stmt.zig resolveLvalue Ast.ExprTag
-lib/ir/lower/table_model.zig isTableArray Ast.ExprTag
 lib/ir/proof/prover.zig binaryTransfer Mir.Opcode
 lib/ir/proof/prover.zig condFacts Ast.ExprTag
 lib/ir/proof/prover.zig condFacts Mir.Opcode

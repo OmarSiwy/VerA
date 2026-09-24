@@ -243,7 +243,7 @@ pub fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
     return switch (ex.tag(a)) {
         .assign_pattern, .concat => true,
         .ident => if (self.arrays.get(self.file.str(ex.strOf(a)))) |info| info.dims.len == 1 else false,
-        else => false,
+        else => false, // else: neither §9.21.1 array shape
     };
 }
 

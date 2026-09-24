@@ -264,13 +264,13 @@ pub fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
         .binary => switch (ex.binOp(e)) {
             .mul, .div => isMfactorRead(self, ex.lhs(e)) or isMfactorRead(self, ex.rhs(e)) or
                 scalesByMfactor(self, ex.lhs(e)) or scalesByMfactor(self, ex.rhs(e)),
-            else => false,
+            else => false, // else: only `*` and `/` scale; the doc above says why the spine stops there
         },
         .unary => switch (ex.unOp(e)) {
             .plus, .minus => scalesByMfactor(self, ex.lhs(e)),
-            else => false,
+            else => false, // else: only a sign keeps the spine
         },
-        else => false,
+        else => false, // else: not on the multiplicative spine
     };
 }
 
@@ -286,7 +286,7 @@ pub fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
             self.param_index.get(self.file.str(ex.strOf(e))) == pi
         else
             false,
-        else => false,
+        else => false, // else: neither of `$mfactor`'s two spellings
     };
 }
 
@@ -534,7 +534,7 @@ pub fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
     switch (ex.tag(e)) {
         .branch_access, .port_access => return true,
         .filter_call => {},
-        else => return false,
+        else => return false, // else: not A.8.3 `indirect_expression`
     }
     const name = self.file.str(ex.strOf(e));
     const is_op = std.mem.eql(u8, name, "ddt") or
@@ -545,7 +545,7 @@ pub fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
     if (args.len == 0) return false;
     return switch (ex.tag(args[0])) {
         .branch_access, .port_access => true,
-        else => false,
+        else => false, // else: A.8.3 takes the operator OF a probe only
     };
 }
 
@@ -609,7 +609,7 @@ pub fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId
             const i = lower_constfold.constEval(self, ex.rhs(e)) orelse break :blk null;
             break :blk try lower_param.elemKey(self, buf, self.file.str(ex.strOf(base)), &.{i.asInt()});
         },
-        else => null,
+        else => null, // else: names no branch; `nodeOf` reads it as a net reference and reports it
     };
 }
 
@@ -903,14 +903,14 @@ pub fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!voi
                 try splitTerm(self, ex.rhs(e), !negate, out);
                 return;
             },
-            else => {},
+            else => {}, // else: not a sum, so one term, lowered whole below
         },
         .unary => switch (ex.unOp(e)) {
             .plus => return splitTerm(self, ex.lhs(e), negate, out),
             .minus => return splitTerm(self, ex.lhs(e), !negate, out),
-            else => {},
+            else => {}, // else: not a sign, so one term, lowered whole below
         },
-        else => {},
+        else => {}, // else: not a sum or a sign, so one term, lowered whole below
     }
 
     if (containsDdt(self, e)) {
@@ -950,7 +950,7 @@ pub const ReactiveTerm = struct { b: Mir.Value, coeff: ?Mir.Value = null, coeff_
 pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
     return switch (self.mir.valueKind(v)) {
         .float_const, .int_const, .undef, .param_ref => true,
-        else => false,
+        .str_const, .block_param, .inst_result => false,
     };
 }
 
@@ -1029,7 +1029,7 @@ pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 t.coeff = if (t.coeff) |old| try self.emit(.fneg, &.{old}) else try self.mir.addFloatConst(self.arena, -1.0);
                 return t;
             },
-            else => {},
+            else => {}, // else: no other unary operator keeps a ddt on a linear spine: E0503 below
         },
         .binary => switch (ex.binOp(e)) {
             .mul => {
@@ -1091,7 +1091,7 @@ pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
             .ashr,
             => {},
         },
-        else => {},
+        else => {}, // else: no other node keeps a ddt on a linear spine: E0503 below
     }
     var b = self.errWith(self.file.exprs.mainTok(e), .E0503);
     b.help("assign the derivative to a variable, then use that variable in the contribution", .{});

@@ -251,7 +251,7 @@ pub fn rangeBound(self: *Lower, e: Ast.ExprId) ?f64 {
     return switch (self.file.exprs.tag(e)) {
         .pos_inf => std.math.inf(f64),
         .neg_inf => -std.math.inf(f64),
-        else => blk: {
+        else => blk: { // else: every other bound is a constant_expression, `constEval`'s to judge
             const c = lower_constfold.constEval(self, e) orelse break :blk null;
             break :blk if (c == .str) null else c.asReal();
         },

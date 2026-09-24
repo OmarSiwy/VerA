@@ -468,7 +468,7 @@ pub fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[lower_param.max_stack_dims]A
             if (chain.subs.len >= info.dims.len) return null; // a cell, not a slice
             return .{ .name = name, .info = info, .subs = chain.subs };
         },
-        else => return null,
+        else => return null, // else: only a name or a select can name an array
     }
 }
 
@@ -685,7 +685,7 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
             try self.err(self.file.exprs.mainTok(e), .E0317, "", .{});
             return null;
         },
-        else => {
+        else => { // else: not an lvalue: E0316
             try self.err(self.file.exprs.mainTok(e), .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
             return null;
         },

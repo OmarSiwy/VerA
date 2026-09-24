@@ -269,7 +269,7 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // A multiplier that survives to the residual has no width and no
             // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
             // knowable, not because the device could build a string at runtime.
-            else => {
+            .undef, .float_const, .str_const, .param_ref, .block_param, .inst_result => {
                 try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E0328, "", .{});
                 return poison;
             },
@@ -290,7 +290,7 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
         switch (self.mir.valueDef(tv.v)) {
             .str_const => |s| try out.appendSlice(self.arena, s),
-            else => {
+            .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => {
                 try self.err(self.file.exprs.mainTok(e), .E0328, "", .{});
                 return poison;
             },
@@ -425,7 +425,7 @@ pub fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 .int_const => |x| if (x != std.math.minInt(i64))
                     return .{ .v = try self.mir.addIntConst(self.arena, -x), .ty = a.ty },
                 .float_const => |x| return .{ .v = try self.mir.addFloatConst(self.arena, -x), .ty = a.ty },
-                else => {},
+                .undef, .str_const, .param_ref, .block_param, .inst_result => {},
             }
             return .{
                 .v = try self.emit(if (a.ty == .real) .fneg else .ineg, &.{a.v}),
@@ -518,7 +518,8 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 .sub => if (real) .fsub else .isub,
                 .mul => if (real) .fmul else .imul,
                 .div => if (real) .fdiv else .idiv,
-                else => if (real) .fmod else .imod,
+                .mod => if (real) .fmod else .imod,
+                else => unreachable, // else: the enclosing prong admits only these five
             };
             const lv = if (real) try self.toReal(a) else a.v;
             const rv = if (real) try self.toReal(b) else b.v;
@@ -568,7 +569,8 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 .bit_xor => .bitxor,
                 .bit_xnor => .bitxnor,
                 .shl => .shl,
-                else => .shr,
+                .shr => .shr,
+                else => unreachable, // else: the enclosing prong admits only these six
             };
             return .{ .v = try self.emit(opc, &.{ a.v, b.v }), .ty = .integer };
         },
@@ -594,7 +596,8 @@ pub fn cmp(self: *Lower, op: Ast.BinaryOp, a: TypedValue, b: TypedValue) Oom!Mir
         .lt => if (real) .flt else .ilt,
         .le => if (real) .fle else .ile,
         .gt => if (real) .fgt else .igt,
-        else => if (real) .fge else .ige,
+        .ge => if (real) .fge else .ige,
+        else => unreachable, // else: both callers pass a relational or `==`/`!=` operator
     };
     const lv = if (real) try self.toReal(a) else a.v;
     const rv = if (real) try self.toReal(b) else b.v;
