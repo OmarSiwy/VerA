@@ -221,7 +221,7 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
     // top.gnd"). Probing an aliased-to-ground net then yields the literal 0,
     // which is what the reference node is.
     if (hit.idx != ground) {
-        if (lower_discipline.disciplineConflict(
+        if (lower_discipline.nodeDisciplineConflict(
             self,
             self.node_disciplines.items[local],
             self.node_disciplines.items[hit.idx],
