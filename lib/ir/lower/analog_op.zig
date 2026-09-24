@@ -449,7 +449,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
             }
             return true;
         },
-        else => return false,
+        else => return false, // else: not one of §4.5.11's two vector shapes; the ordinary path lowers or reports it
     }
 }
 

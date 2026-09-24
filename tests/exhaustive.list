@@ -21,13 +21,6 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-lib/frontend/parser/specify.zig parseGates Ast.GateKind
-lib/ir/elaborate/clone.zig constIntLit Ast.ExprTag
-lib/ir/elaborate/clone.zig constIntLit Ast.UnaryOp
-lib/ir/ifconv.zig countPreds Mir.Opcode
-lib/ir/lower.zig strLitBytes Ast.ExprTag
-lib/ir/lower.zig strNum Mir.DefKind
-lib/ir/lower/analog_op.zig appendVectorArg Ast.ExprTag
 lib/ir/lower/constfold.zig integerSourceSigned Ast.BinaryOp
 lib/ir/lower/constfold.zig integerSourceSigned Ast.ExprTag
 lib/ir/lower/constfold.zig integerSourceSigned Ast.UnaryOp
@@ -65,7 +58,6 @@ lib/ir/lower/param.zig rangeBound Ast.ExprTag
 lib/ir/lower/stmt.zig arrayRef Ast.ExprTag
 lib/ir/lower/stmt.zig resolveLvalue Ast.ExprTag
 lib/ir/lower/table_model.zig isTableArray Ast.ExprTag
-lib/ir/mir.zig emit Ast.ExprTag
 lib/ir/proof/prover.zig binaryTransfer Mir.Opcode
 lib/ir/proof/prover.zig condFacts Ast.ExprTag
 lib/ir/proof/prover.zig condFacts Mir.Opcode

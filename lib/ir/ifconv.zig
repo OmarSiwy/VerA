@@ -79,7 +79,7 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
                     preds[@intFromEnum(d.else_block)] += 1;
                 },
                 .jump => |d| preds[@intFromEnum(d.target)] += 1,
-                else => {},
+                .unary, .binary, .ternary, .phi, .call => {},
             }
         }
     }

@@ -596,7 +596,7 @@ pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: [
         .unary => ops.len == 1,
         .binary => ops.len == 2,
         .ternary => ops.len == 3,
-        else => false, // phi/branch/jump/call have dedicated builders
+        .phi, .branch, .jump, .call => false, // dedicated builders
     });
     const result = try self.addValue(gpa, .inst_result, 0);
     const inst = try self.addInst(gpa, block, .{

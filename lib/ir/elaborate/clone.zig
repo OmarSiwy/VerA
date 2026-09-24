@@ -487,9 +487,9 @@ pub fn constIntLit(x: *const Ast.ExprStore, e: Ast.ExprId) ?i64 {
         .unary => switch (x.unOp(e)) {
             .plus => constIntLit(x, x.lhs(e)),
             .minus => if (constIntLit(x, x.lhs(e))) |v| -v else null,
-            else => null,
+            else => null, // else: the production's `[ sign ]` is `+` or `-` and nothing else
         },
-        else => null,
+        else => null, // else: not `[ sign ] decimal_number`, so not the literal seed form
     };
 }
 

@@ -563,7 +563,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
                 try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
             },
             // A.3.1 `( output_terminal , input_terminal { , input_terminal } )`
-            else => {
+            .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => {
                 if (terms.items.len < 3) return self.failAt(tok, .E0209, "an n-input gate takes an output and at least two inputs", .{});
                 try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
             },
