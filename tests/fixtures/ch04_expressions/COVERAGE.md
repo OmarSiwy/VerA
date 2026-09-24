@@ -18,7 +18,7 @@ ledger). The xor fixture's erroneous C.5 citation is withdrawn; its rule is
 §4.2.10. This is stronger invalid-input evidence, not digital positive coverage.
 Replication follow-up adds `audit_replication_zero_width.va` (a discriminating
 middle-bit width observation) and `audit_replication_zero_effect.va`
-(REPL-EVAL-001: XFAIL because the operand's side effect is erased). These
+(REPL-EVAL-001, closed 2026-09-24: the zero-count operand is evaluated once). These
 separate a passing value/width case from the unmet exactly-once obligation.
 
 Source: `docs/ch4-expressions.html`, read in full through Section 4.7.3.

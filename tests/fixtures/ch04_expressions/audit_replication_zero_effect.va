@@ -8,7 +8,6 @@
 // Binding the result before CHECK avoids textual macro re-evaluation.
 //! lrm 4.2.13
 //! checks 2
-//! xfail REPL-EVAL-001 analog parser erases the zero-count operand before its side effects can be evaluated
 `include "check.vh"
 module audit_replication_zero_effect(p, n);
     inout p, n;

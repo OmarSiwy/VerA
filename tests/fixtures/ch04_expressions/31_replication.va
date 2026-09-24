@@ -45,7 +45,7 @@
 // example needs a function call with an observable evaluation count, which
 // 4.7.1 analog functions cannot express without an output argument.
 // audit_replication_zero_effect.va uses an inout counter and records the
-// current zero-count evaluation defect independently of these value cases.
+// zero-count evaluation independently of these value cases.
 //
 //! lrm 4.2.13
 //! bias V(p) = 0.0

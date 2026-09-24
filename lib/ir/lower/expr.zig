@@ -260,6 +260,20 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.err(self.file.exprs.mainTok(e), .E0326, "", .{});
         return poison;
     }
+    // §4.2.13 "the operands shall be evaluated exactly once, even if the
+    // replication constant is zero": `foldBitConcat`'s shape — zero groups,
+    // then the sized value their width-zero operands left untouched.
+    const last = elems[elems.len - 1];
+    if (!repl and elems.len > 1 and ex.tag(last) == .int_literal and ex.intLiteral(last).width != 0) {
+        for (elems[0 .. elems.len - 1]) |g| {
+            if (ex.tag(g) != .multi_concat) break;
+        } else {
+            for (elems[0 .. elems.len - 1]) |g| for (ex.args(ex.rhs(g))) |op| {
+                _ = try lowerExpr(self, op);
+            };
+            return lowerExpr(self, last);
+        }
+    }
     var copies: i64 = 1;
     if (repl) {
         const count = ex.lhs(e);
