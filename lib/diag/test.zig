@@ -61,8 +61,8 @@ test "lint levels" {
     try levels.set(gpa, .W0651, .forbid);
     try std.testing.expectError(error.Forbidden, levels.set(gpa, .W0651, .allow));
 
-    try std.testing.expect(try levels.parseFlag(gpa, "deny=W0652"));
-    try std.testing.expectEqual(Level.deny, levels.get(.W0652));
+    try std.testing.expect(try levels.parseFlag(gpa, "deny=W0650"));
+    try std.testing.expectEqual(Level.deny, levels.get(.W0650));
     try std.testing.expect(!try levels.parseFlag(gpa, "not-a-flag"));
 }
 

@@ -127,7 +127,7 @@ pub const Levels = struct {
         };
     }
 
-    /// Parse `allow=W0650` / `deny=W0650`. Returns null if the text is not a
+    /// Parse `allow=W0650` / `deny=W0650`. Returns false if the text is not a
     /// level directive at all, so a caller can fall through to other flags.
     pub fn parseFlag(self: *Levels, gpa: Allocator, text: []const u8) SetError!bool {
         const eq = std.mem.indexOfScalar(u8, text, '=') orelse return false;

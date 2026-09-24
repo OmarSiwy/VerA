@@ -21,7 +21,7 @@
 //!             → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR
 //!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
-//!             → orchestrator.zig  (§8.3 ABI) device.zig → .so (+ GPU kernels)
+//!             → orchestrator.zig  (§8.3 ABI) device.zig → .so
 //!
 //! The pipeline ENDS at the .so, and `lib/` is now exactly that pipeline. §8.3's
 //! simulation cycle — assemble, factor, iterate — belongs to the host that
@@ -38,28 +38,9 @@
 //! reading it, is a sibling file rather than a rewrite: `ir/` never imports
 //! `backend/`, and the compiler enforces that because there is no such import.
 //!
-//! No file is reachable by neither import graph. The six kernel files
-//! (`backend/{filter,str,rng,table,file,limit}_kernels.zig`) reach a device by
-//! `@embedFile` rather than by import, so they must stay ADJACENT to codegen —
-//! but each is also `@import`ed by a codegen test, which is the whole point of
-//! their being real files: what the tests check is byte-for-byte what runs in
-//! the device. `filter_kernels.zig` was registered here as the one exception
-//! until wave 10 gave `zBilin` its test.
-//!
-//! `backend/kernels.zig` is no longer registered here: it is a MODULE ROOT now
-//! (source_guards walks one root per module), and the six kernel files are
-//! reachable from it. It is both the dependency door — `ir` folds §9.13 calls
-//! with the same rng the device runs — and the test root that runs them without
-//! compiling codegen.
-//!
-//! That register is THIS block, it is machine-read, and it is EMPTY. An
-//! exception is one `//! ORPHAN: <path under src/> — <why>` line;
-//! `tools/source_guards.zig` parses them as the allowlist for its "every
-//! `lib/backend/*.zig` is reachable from a root" test, and fails the build on a
-//! backend file that is neither reachable nor listed. Do not add a line to
-//! silence it without the `<why>`: an orphan that stayed silent is how
-//! `eval_batch.zig` reached 702 lines nothing could call, and wave 12 deleted
-//! it for exactly that.
+//! The six kernel files (`backend/*_kernels.zig`) reach a device by
+//! `@embedFile`, so they stay adjacent to codegen; each is also `@import`ed by
+//! a test, so what the tests check is byte-for-byte what runs in the device.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
@@ -115,7 +96,7 @@ pub const Target = enum {
     /// Self-hosted backend, incremental (resident `zig --listen` + -fincremental),
     /// strict float mode, CPU .so only. Fast edit→run loop.
     debug,
-    /// LLVM backend, no incremental, per-unit float mode, CPU .so + GPU kernels.
+    /// LLVM backend, no incremental, per-unit float mode, CPU .so.
     release_fast,
 };
 
@@ -514,21 +495,6 @@ fn freeArena(gpa: Allocator, a: *std.heap.ArenaAllocator) void {
 // Tests
 // ---------------------------------------------------------------------------
 
-test {
-    // One test root: pull in every stage so `zig build test` runs their tests.
-    // `frontend` is a MODULE now — token/Preprocessor/Lexer/Ast/Parser live
-    // across a boundary, so listing them here contributes zero. `test-frontend`
-    // runs their 72 tests.
-    // `ir` is a MODULE now — Mir/Analysis/Ssa/Elaborate/Lower/proof are across
-    // a boundary and contribute zero from here. `test-ir` runs their 66.
-    // `backend` is a MODULE now — naming/codegen/UnitPlan/cg_*/orchestrator/tb
-    // are across a boundary and contribute zero from here. `test-backend` runs
-    // their 90.
-    // `diag` is a MODULE now: a cross-module `_ = @import(...)` contributes
-    // zero tests, so listing it here would quietly drop 20. `test-diag` runs
-    // them.
-}
-
 const test_resistor =
     \\module res(p, n);
     \\  inout p, n;
@@ -682,7 +648,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
     try std.testing.expectEqualStrings(try a.generateDevice(), try b.generateDevice());
 }
 
-// The static lib exports no symbol and Zig analyses lazily, so nothing in the
+// Zig analyses lazily, so nothing in the
 // pipeline is type-checked unless something references it. This test is the
 // integration guard: it forces semantic analysis of every top-level pub decl of
 // every stage, so `zig build` (which depends on compiling the test roots) means

@@ -1,7 +1,7 @@
 //! Build orchestration & artifact contract. LRM §8.3 device-side ABI only; the
 //! rest is engine machinery (no LRM section).
 //!
-//! Transformation: device.zig → lib<name>.so (+ GPU kernels) + layout hash +
+//! Transformation: device.zig → lib<name>.so + layout hash +
 //! rebuilt signal.
 //!
 //! CRATE BOUNDARY (do not cross it): VerA PRODUCES the artifact. The host
@@ -13,7 +13,7 @@
 //!               -fincremental. Build ONLY on demand (not --watch).
 //!               Cross-process -fincremental is unimplemented on ELF 0.16, so the
 //!               child MUST stay resident to keep incremental state warm.
-//!   - Release → LLVM, cold build, per-unit float mode, + GPU kernels.
+//!   - Release → LLVM, cold build, per-unit float mode.
 //!
 //! NOT THE BUILD-RUNNER PROTOCOL, verified on this toolchain (zig 0.16.0).
 //! The obvious resident child is `zig build --listen=-` speaking to the build
@@ -548,7 +548,7 @@ pub const ResidentChild = struct {
 };
 
 /// ReleaseFast: cold, one-shot build. LLVM, per-unit float mode (already baked
-/// into device.zig by codegen.zig), GPU kernels.
+/// into device.zig by codegen.zig).
 ///
 /// Same machinery as the resident path — the only differences are in `o`
 /// (`.llvm` ⇒ no `-fincremental`, LLVM cannot patch in place) and that the
