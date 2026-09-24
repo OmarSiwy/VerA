@@ -88,8 +88,11 @@ const Env = struct {
     }
 };
 
-/// Only provenance present in the AST/declarations is evidence of signedness.
-/// This is a refusal guard, not general expression context/type propagation.
+/// The signedness of an INTEGER expression, from what the source states: a
+/// literal's base, a declaration's type, and IEEE 1364-2005 §5.5.1's rules for
+/// the operators over them (VAMS §4.2.9 leaves expression signedness to 1364).
+/// Null is "no evidence", never a guess: a real, a string, or a name whose type
+/// only the host decides.
 pub fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
     if (e == .none or depth > 32) return null;
     const ex = &self.file.exprs;
@@ -117,15 +120,37 @@ pub fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool 
         },
         .unary => switch (ex.unOp(e)) {
             .plus, .minus, .bit_not => integerSourceSigned(self, ex.lhs(e), depth + 1),
-            else => null,
+            // §4.2.10 keeps the reductions out of the analog block, and §5.5.1
+            // states no sign for `!`.
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => null,
         },
         .binary => switch (ex.binOp(e)) {
-            .shl, .shr => integerSourceSigned(self, ex.lhs(e), depth + 1),
-            else => null,
+            // §4.2.11: the right operand "has no effect on the signedness of the
+            // result"; 1364 §5.1.5: `**`'s second operand is self-determined.
+            .shl, .shr, .ashl, .ashr, .pow => integerSourceSigned(self, ex.lhs(e), depth + 1),
+            // §5.5.1, nonself-determined operands: "If any operand is unsigned,
+            // the result is unsigned, regardless of the operator."
+            .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => operandsSigned(self, ex.lhs(e), ex.rhs(e), depth + 1),
+            // §5.5.1: "Comparison results (1, 0) are unsigned, regardless of the
+            // operands."
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => false,
+            // §5.5.1 states no sign for the logical operators.
+            .logical_and, .logical_or => null,
         },
+        // §4.2.12's two value arms are nonself-determined: the same §5.5.1 rule.
+        .ternary => operandsSigned(self, ex.rhs(e), ex.ternaryElse(e), depth + 1),
         .index => integerSourceSigned(self, ex.lhs(e), depth + 1),
-        else => null,
+        else => null, // else: no declared integer provenance, so no evidence
     };
+}
+
+/// §5.5.1 over two nonself-determined operands: unsigned when either is, signed
+/// when both are. Only when BOTH are known integers — "If any operand is real,
+/// the result is real", and a null operand may be one.
+fn operandsSigned(self: *const Lower, a: Ast.ExprId, b: Ast.ExprId, depth: u32) ?bool {
+    const sa = integerSourceSigned(self, a, depth) orelse return null;
+    const sb = integerSourceSigned(self, b, depth) orelse return null;
+    return sa and sb;
 }
 
 /// §4.2.9, the rule that makes signedness a property of the COMPARISON and not
@@ -177,7 +202,7 @@ pub fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
     return switch (ex.tag(e)) {
         .binary => ex.binOp(e) == .shl or ex.binOp(e) == .shr,
         .unary => isShiftOperand(self, ex.lhs(e), depth + 1),
-        else => false,
+        else => false, // else: neither a shift nor a sign/complement over one
     };
 }
 
@@ -185,7 +210,7 @@ pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.binOp(e)) {
         .eq, .neq, .lt, .le, .gt, .ge => {},
-        else => return false,
+        else => return false, // else: not a relational or equality comparison
     }
     const a = ex.lhs(e);
     const b = ex.rhs(e);

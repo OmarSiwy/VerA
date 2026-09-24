@@ -21,11 +21,6 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-lib/ir/lower/constfold.zig integerSourceSigned Ast.BinaryOp
-lib/ir/lower/constfold.zig integerSourceSigned Ast.ExprTag
-lib/ir/lower/constfold.zig integerSourceSigned Ast.UnaryOp
-lib/ir/lower/constfold.zig isShiftOperand Ast.ExprTag
-lib/ir/lower/constfold.zig mixedShiftComparison Ast.BinaryOp
 lib/ir/lower/context.zig collectInitialStmt Ast.Stmt
 lib/ir/lower/contrib.zig branchKey Ast.ExprTag
 lib/ir/lower/contrib.zig coeffIsConst Mir.DefKind
