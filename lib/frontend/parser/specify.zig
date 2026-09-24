@@ -734,36 +734,29 @@ pub const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
 /// arms. §1.1 ("Verilog-AMS HDL consists of the complete IEEE Std 1364
 /// Verilog specification") is what makes the grammar VerA's to read.
 ///
-/// WHAT IT IS REFUSED BY INSTEAD, unchanged from `tran`'s two verdicts:
-///
-///   - outside a digital run, W0250 — §8.5.3.5 puts switch processing in
-///     the discrete simulation cycle, so a switch propagates LOGIC values
-///     and strengths between its terminals and there is no equation for a
-///     compiled analog device to stamp. `--deny=W0250` is the refusal.
-///   - under `--run`, E1100 — the discrete engine has no switch, and
-///     `Ast.GateKind` is not the place to put one: §7.10's strength
-///     REDUCTION (a `r`-prefixed switch drops its input one level) and
-///     §7.9's bidirectional conduction are neither of them a function of
-///     the input bits, which is what `digital.gateBit` is.
-// ponytail: nothing is recorded, for `parseUdpDecl`'s reason — `Body` has
-// no switch list because nothing would read one, and `Ast.GateKind` is
-// closed by an exhaustive switch in `src/sim/digital.zig`, another agent's
-// column. The upgrade is that file's conduction model and a `Body.switches`
-// beside it, landed together.
-pub fn parseSwitch(self: *Parser) Error!void {
+/// Outside a digital run, W0250 — §8.5.3.5 puts switch processing in the
+/// discrete simulation cycle, so a switch propagates LOGIC values and
+/// strengths between its terminals and there is no equation for a compiled
+/// analog device to stamp. `--deny=W0250` is the refusal. Under `--run` each
+/// instance is recorded (`ModuleDecl.switches`) and the digital engine runs
+/// it — not as an `Ast.GateKind`: §7.12's strength REDUCTION and §7.6's
+/// bidirectional conduction are neither of them a function of input bits.
+pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
-    const arm = switch_arms.get(parse_expr.tokenText(self, main_tok)).?; // the caller dispatched on exactly these
-    if (self.digital) return self.failAt(main_tok, .E1100, "switch primitives are not implemented by digital execution", .{});
+    const spelling = parse_expr.tokenText(self, main_tok);
+    const arm = switch_arms.get(spelling).?; // the caller dispatched on exactly these
+    const kind = std.meta.stringToEnum(Ast.SwitchKind, spelling).?;
     self.pos += 1;
-    try self.bag.add(
+    if (!self.digital) try self.bag.add(
         .parse,
         .W0250,
         lexer.tokenSpan(self.src, self.starts, main_tok),
         "{s} switch primitive",
         .{self.found(main_tok)},
     );
-    if (arm.delay and self.peek() == .hash) _ = try parse_generate.parseDelay3(self);
+    const delay: Ast.Delay3 = if (arm.delay and self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
     while (true) {
+        const inst_tok = self.pos;
         // A.3.1 makes `name_of_gate_instance ::= gate_instance_identifier
         // [ range ]` optional, and the fixture's `tran (a, b);` uses that
         // arm. `(` after the name tells the two apart, as in `parseGates`.
@@ -772,16 +765,18 @@ pub fn parseSwitch(self: *Parser) Error!void {
             if (self.peek() == .lbracket) _ = try parse_decl.parseDim(self);
         }
         _ = try self.expect(.lparen);
-        for (0..arm.terminals) |i| {
+        const terms = try self.arena.alloc(Ast.ExprId, arm.terminals);
+        for (terms, 0..) |*t, i| {
             if (i != 0) _ = try self.expect(.comma);
             // A.3.3: `output_terminal` and `inout_terminal` are
             // `net_lvalue`s and lead; `input_terminal`, `enable_terminal`,
             // `ncontrol_terminal` and `pcontrol_terminal` are all
             // `expression`, so `cmos (o, d, ~g, g)` is derivable and
             // `cmos (~o, d, ng, g)` is not.
-            _ = if (i < arm.lvalues) try parse_expr.parseNetRef(self) else try parse_expr.parseExpr(self);
+            t.* = if (i < arm.lvalues) try parse_expr.parseNetRef(self) else try parse_expr.parseExpr(self);
         }
         _ = try self.expect(.rparen);
+        if (self.digital) try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .main_tok = inst_tok });
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);

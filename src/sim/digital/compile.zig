@@ -104,6 +104,9 @@ pub const Instruction = union(enum(u5)) {
     override_eval: struct { slot: u32, value: Ast.ExprId, force: bool },
     // §9.3 `deassign` / `release`.
     override_off: struct { slot: u32, force: bool },
+    // §7.6 a controlled pass switch: read the control, re-resolve both
+    // sides, and wait on the control's operands.
+    switch_ctrl: struct { tran: u32, slots: []const u32 },
     stop,
 };
 
@@ -1230,7 +1233,7 @@ test "§5.3 a min:typ:max expression reads its typical member everywhere" {
 
 test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"before\"); initial forever ; endmodule", "error");
-    try expectRejected("module m; tran(a,b); initial $display(\"before\"); endmodule", "switch primitives");
+    try expectRejected("module m; wire [1:0] a, b; tran(a,b); initial $display(\"before\"); endmodule", "only scalar switch terminals");
     try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");

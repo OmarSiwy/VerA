@@ -117,7 +117,41 @@ pub const Net = struct {
     capacitive: bool = false,
     /// The §3.8 decay countdown in flight, cancelled on leaving the state.
     decay_event: ?Handle = null,
+    /// Per bit, the §7.10 signal the last resolution found — its strength is
+    /// what a MOS switch reading this net passes on (§7.12).
+    signal: []Signal = &.{},
+    /// The §7.6 pass switches with this net as a terminal.
+    trans: []const u32 = &.{},
 };
+
+/// §7.6 one MOS switch (half of a CMOS one, §7.7): it passes `data` — value
+/// and strength — to its output while `gate` holds the conducting value (1
+/// for an n-type, 0 for a p-type), and is off otherwise.
+pub const Mos = struct { data: Ast.ExprId, gate: Ast.ExprId, n_type: bool, resistive: bool };
+
+/// §7.6 one pass switch between nets `a` and `b`: always on (`tran`), or on
+/// while `ctrl` equals `on` (`tranif1`: 1, `tranif0`: 0) and of unknown
+/// conduction while it is x or z.
+pub const Tran = struct {
+    a: u32,
+    b: u32,
+    ctrl: Ast.ExprId = .none,
+    on: Int.Bit = .one,
+    state: enum { on, off, unknown } = .on,
+};
+
+/// IEEE 1364-2005 §7.12 Table 7-8: what a resistive switch makes of the
+/// strength it passes; a non-resistive one only turns supply into strong.
+pub fn reduce(s: Ast.Strength, resistive: bool) Ast.Strength {
+    if (!resistive) return if (s == .supply) .strong else s;
+    return switch (s) {
+        .supply, .strong => .pull,
+        .pull => .weak,
+        .large, .weak => .medium,
+        .medium, .small => .small,
+        .highz => .highz,
+    };
+}
 
 /// One gate evaluation: §7.8.5's output bit, and whether it is §7.10.2's H/L
 /// — `bit` or high impedance — rather than `bit` itself.
@@ -233,6 +267,9 @@ pub const Driver = struct {
     /// `value` is read `total` bits wide and this driver asserts the bits
     /// from `lo` up — one internal port of a §12.3.6 concatenated port.
     slice: ?Slice = null,
+    /// Set instead of `value` for a §7.6 MOS switch, whose `s0`/`s1` are the
+    /// strengths it passes, set at each evaluation.
+    mos: ?Mos = null,
     /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
     /// directive pulls an unconnected input port to a logic level THROUGH A
     /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
@@ -822,6 +859,26 @@ test "§7.10 strength ranges combine the way Figures 7-9 through 7-19 draw them"
     try std.testing.expectEqual(Int.Bit.zero, S.of(.one, .strong, .weak).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.x, S.of(.one, .strong, .pull).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.z, S.of(.one, .strong, .highz).collapse());
+}
+
+// §7.6/§7.12: a MOS switch passes its data at the data's strength (reduced by
+// an `r` switch), a tran joins two nets into one resolution, and a tranif
+// whose control is x lets the far side's value arrive only as "or z".
+test "§7.6 MOS strength pass-through and reduction, tran and tranif joins" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg d, g, c; wire n, rn, p, q, s, t;
+        \\pullup (n); pullup (rn);
+        \\nmos (n, d, g); rnmos (rn, d, g);
+        \\assign p = d; tran (p, q);
+        \\buf (s, 1'b1); tranif1 (s, t, c);
+        \\initial begin
+        \\  d = 0; g = 1; c = 1'bx; #1 $write("%b%b %b%b %b%b ", n, rn, p, q, s, t);
+        \\  c = 1; #1 $write("%b ", t); c = 0; #1 $display("%b", t);
+        \\end
+        \\endmodule
+    , "0x 00 1x 1 z\n");
 }
 
 // §7.1.6: a vector terminal as wide as the array is split one bit per gate,

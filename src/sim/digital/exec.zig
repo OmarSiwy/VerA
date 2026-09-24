@@ -747,6 +747,7 @@ fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
 /// `@(posedge w)` resume on a net.
 pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
+    if (n.trans.len != 0) return resolveJoined(self, net);
     // VAMS §3.7: a wreal has at most one driver and is that driver's value
     // — no four-state resolution, no strength — and 0.0 with none.
     if (n.kind == .wreal) {
@@ -784,8 +785,11 @@ pub fn resolve(self: *Run, net: u32) Error!void {
                 acc = .of(current.bit(at), n.charge, n.charge);
                 floating += 1;
             }
-            bit = acc.combine(netPull(n.kind)).collapse();
+            acc = acc.combine(netPull(n.kind));
+            n.signal[at] = acc;
+            bit = acc.collapse();
         }
+        if (tables) n.signal[at] = .of(bit, .strong, .strong);
         setBit(n.resolved, at, bit);
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
@@ -799,6 +803,78 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         return;
     }
     try store(self, n.slot, n.resolved.planes);
+}
+
+/// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
+/// devices in a bidirectional switch-connected net before it can determine
+/// the appropriate value for any node": the nets joined through conducting
+/// pass switches resolve as one, from every driver of every one of them.
+/// Across a switch of unknown conduction a driver may or may not arrive, so
+/// what it asserts there is widened to include high impedance (§7.10.2).
+/// ponytail: scalar nets, and no trireg charge or net delay inside a joined
+/// group; the group is found afresh on every resolution, which is fine for
+/// the handful of switches a digital fixture wires up.
+fn resolveJoined(self: *Run, start: u32) Error!void {
+    var scratch = std.heap.ArenaAllocator.init(self.arena);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const group = try reach(self, a, start, true);
+    for (group) |y| {
+        const sure = try reach(self, a, y, false);
+        var acc: Signal = .{};
+        for (group) |z| {
+            const definite = std.mem.indexOfScalar(u32, sure, z) != null;
+            const n = self.nets[z];
+            var own = netPull(n.kind);
+            for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], 0));
+            acc = acc.combine(if (definite or own.none()) own else .{ .lo = @min(own.lo, 0), .hi = @max(own.hi, 0) });
+        }
+        const n = self.nets[y];
+        n.signal[0] = acc;
+        setBit(n.resolved, 0, acc.collapse());
+        try store(self, n.slot, n.resolved.planes);
+    }
+}
+
+/// The nets joined to `from` through pass switches that conduct — or, with
+/// `maybe`, that may conduct.
+fn reach(self: *Run, a: std.mem.Allocator, from: u32, maybe: bool) Error![]const u32 {
+    var seen: std.ArrayList(u32) = .empty;
+    try seen.append(a, from);
+    var i: usize = 0;
+    while (i < seen.items.len) : (i += 1) {
+        for (self.nets[seen.items[i]].trans) |ti| {
+            const t = self.trans[ti];
+            if (t.state == .off or (t.state == .unknown and !maybe)) continue;
+            const other = if (t.a == seen.items[i]) t.b else t.a;
+            if (std.mem.indexOfScalar(u32, seen.items, other) == null) try seen.append(a, other);
+        }
+    }
+    return seen.items;
+}
+
+/// §7.6 what a MOS switch drives: its data's value, at the data's strength
+/// reduced by §7.12 (the resolved strength of a net, strong for anything
+/// else), when its gate conducts; z when it does not; §7.10.2's H or L when
+/// the gate is x or z. A z on the data is z whatever the gate — "a switch
+/// transmits the z through" (d08_switch_mos) — which is where a switch parts
+/// company with a bufif.
+fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig").Mos, or_z: *bool) Error!Int.Literal {
+    const ex = &self.file.exprs;
+    const g = (try eval(self, scratch, m.gate, 1)).bit(0);
+    var sig: Signal = .of((try eval(self, scratch, m.data, 1)).bit(0), .strong, .strong);
+    if (ex.tag(m.data) == .ident) if (self.net_of.get(try self.slot(m.data))) |net| {
+        sig = self.nets[net].signal[0];
+    };
+    const reduce = @import("net.zig").reduce;
+    const d = &self.drivers[at];
+    d.s0 = reduce(if (sig.lo < 0) @enumFromInt(@as(u8, @intCast(-sig.lo))) else .highz, m.resistive);
+    d.s1 = reduce(if (sig.hi > 0) @enumFromInt(@as(u8, @intCast(sig.hi))) else .highz, m.resistive);
+    const value = sig.collapse();
+    const on: Int.Bit = if (m.n_type) .one else .zero;
+    const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
+    or_z.* = out != .z and g != on;
+    return filled(scratch, 1, false, out);
 }
 
 /// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
@@ -1314,6 +1390,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     try gateValue(self, scratch, g, d.current.width, &or_z)
                 else if (d.udp) |u|
                     try udpValue(self, scratch, u)
+                else if (d.mos) |mo|
+                    try mosValue(self, scratch, at, mo, &or_z)
                 else if (d.pull) |b|
                     try filled(scratch, d.current.width, false, b)
                 else blk: {
@@ -1335,7 +1413,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
                     if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
-                        const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null)
+                        const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null and d.mos == null)
                             d.delay.continuous(d.current, st.target)
                         else
                             d.delay.to(st.target.bit(if (d.gate) |g| g.out_bit orelse 0 else 0));
@@ -1351,6 +1429,15 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
             // waits on its inputs and personality, forever.
+            .switch_ctrl => |s| {
+                const t = &self.trans[s.tran];
+                const c = (try eval(self, scratch, t.ctrl, 1)).bit(0);
+                t.state = if (c == t.on) .on else if (c == .zero or c == .one) .off else .unknown;
+                try resolve(self, t.a);
+                try resolve(self, t.b);
+                for (s.slots) |slot| try self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = pc });
+                return;
+            },
             .override_on => |o| {
                 const entry = try self.overrides.getOrPut(self.arena, o.slot);
                 if (!entry.found_existing) entry.value_ptr.* = .{};
