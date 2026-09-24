@@ -383,22 +383,7 @@ pub const Prover = struct {
     /// x <= 0 and this guard is a lie.
     pub fn markSelectArms(self: *Prover) !void {
         // Use counts first: the single-use test is what scopes an arm.
-        for (0..self.mir.insts.len) |i| {
-            const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
-            if (self.mir.instOp(inst) == .phi) {
-                const ph = self.mir.instData(inst).phi;
-                for (0..ph.count) |k| self.uses[self.idxOf(self.mir.phiPair(inst, @intCast(k)).value)] += 1;
-                continue;
-            }
-            var buf: [3]Mir.Value = undefined;
-            for (self.operands(inst, &buf)) |v| self.uses[self.idxOf(v)] += 1;
-        }
-        // Contribution roots count as uses so a root is never mistaken for an
-        // exclusively-owned select arm.
-        for (self.lower.contributions.items) |c| {
-            self.uses[self.idxOf(c.resist_val)] += 1;
-            self.uses[self.idxOf(c.react_val)] += 1;
-        }
+        self.countUses();
 
         for (0..self.mir.insts.len) |i| {
             const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
@@ -406,6 +391,36 @@ pub const Prover = struct {
             const t = self.mir.instData(inst).ternary;
             try self.markArm(t.then_val, t.cond, true);
             try self.markArm(t.else_val, t.cond, false);
+        }
+    }
+
+    /// How often each Value is read, alias-resolved. It walks block CHAINS: a
+    /// row in no chain (the branch and jumps if-conversion orphans) is not a
+    /// use. And it skips a collapsed phi's operands (ssa.zig contract 1): such
+    /// a phi is aliased to the one value its operands resolve to, and its
+    /// users already count that value through the alias. Counting both — as
+    /// this pass did over `0..insts.len` — made single-use arm values look
+    /// shared, and a shared value stops the guard walk. Contribution roots
+    /// count once each, so a root is never mistaken for an exclusively-owned
+    /// select arm.
+    fn countUses(self: *Prover) void {
+        const mir = self.mir;
+        for (self.lower.contributions.items) |c| {
+            self.uses[self.idxOf(c.resist_val)] += 1;
+            self.uses[self.idxOf(c.react_val)] += 1;
+        }
+        for (0..mir.blockCount()) |b| {
+            var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(b))));
+            while (it.next()) |inst| {
+                if (mir.instOp(inst) == .phi) {
+                    if (mir.hasAlias(mir.instResult(inst))) continue;
+                    const ph = mir.instData(inst).phi;
+                    for (0..ph.count) |k| self.uses[self.idxOf(mir.phiPair(inst, @intCast(k)).value)] += 1;
+                    continue;
+                }
+                var buf: [3]Mir.Value = undefined;
+                for (self.operands(inst, &buf)) |v| self.uses[self.idxOf(v)] += 1;
+            }
         }
     }
 
