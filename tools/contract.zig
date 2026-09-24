@@ -489,7 +489,7 @@ fn cExp(buf: *[512]u8, sci: []const u8) []const u8 {
     const neg = exp.len != 0 and exp[0] == '-';
     if (neg) exp = exp[1..];
     var tmp: [64]u8 = undefined;
-    const t = std.fmt.bufPrint(&tmp, "{s}e{c}{s}{s}", .{ sci[0..e], @as(u8, if (neg) '-' else '+'), if (exp.len < 2) "0" else "", exp }) catch return "?";
+    const t = std.mem.print(&tmp, "{s}e{c}{s}{s}", .{ sci[0..e], @as(u8, if (neg) '-' else '+'), if (exp.len < 2) "0" else "", exp }) catch return "?";
     @memcpy(buf[0..t.len], t);
     return buf[0..t.len];
 }
