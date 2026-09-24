@@ -9,6 +9,7 @@
 //! directly, `gen_dispatch.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_jac = @import("plan/jac.zig");
 const plan_noise = @import("plan/noise.zig");
 const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
@@ -765,9 +766,7 @@ fn linDynamic(self: *Gen, row: u32) void {
 /// Omitted above 64 unknowns, like `jac_pattern`: the defaults — every lane,
 /// no table — are correct.
 pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
-    if (self.names.n_u > 64) return;
-    const mask = self.deriv_reads | self.ddx_reads | limit_writes;
-    const n = self.names.n_u;
+    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.deriv_reads, self.ddx_reads, limit_writes, .{ self.lin[0], self.lin[1] }) orelse return;
     try self.w(
         \\/// Unknowns whose derivative lane `eval`/`q` read. Every other
         \\/// column's partials are constants, listed in `jac_const`; see
@@ -782,16 +781,12 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
         \\/// `g` of `eval`, `c` of `q`. Sorted by (row, col); absent is 0.
         \\pub const jac_const = [_]contract.JacConst(U){{
         \\
-    , .{ mask, self.ddx_reads });
-    for (0..n) |r| for (0..n) |c| {
-        if ((mask >> @intCast(c)) & 1 != 0) continue;
-        const g = self.lin[0][r * n + c];
-        const q = self.lin[1][r * n + c];
-        if (g == 0 and q == 0) continue;
+    , .{ jc.mask, self.ddx_reads });
+    for (jc.entries) |e| {
         try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s} }},\n", .{
-            self.names.u_names[r], self.names.u_names[c], try gen_file.fmtF64(self, g), try gen_file.fmtF64(self, q),
+            self.names.u_names[e.row], self.names.u_names[e.col], try gen_file.fmtF64(self, e.g), try gen_file.fmtF64(self, e.c),
         });
-    };
+    }
     try self.w("}};\n\n", .{});
 }
 
