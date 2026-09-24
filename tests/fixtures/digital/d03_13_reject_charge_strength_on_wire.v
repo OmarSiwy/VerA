@@ -28,10 +28,14 @@
 // `src/sim/digital.zig:1392-1429`. No E-code is named: none is allocated for
 // this rule yet.
 //
+// ROUTE. This is a digital rule, so the file runs under the digital runner
+// (`vera --run`). On the legacy analog compile route `assign` is itself
+// E0205, which says nothing about the rule above.
+// digital-runner: reject
 //! reject charge strength is only legal on a trireg
-//! lrm annex A.2.2.1
-//! lrm annex A.2.1.3
-//! lrm annex A.2.2.2
+//! lrm A.2.2.1
+//! lrm A.2.1.3
+//! lrm A.2.2.2
 
 module d03_reject_charge_strength_on_wire;
   reg a;

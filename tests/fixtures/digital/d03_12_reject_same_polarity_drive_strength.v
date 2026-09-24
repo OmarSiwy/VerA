@@ -29,9 +29,13 @@
 // single driver"). No E-code is named: none is allocated for this rule, and
 // inventing one would be worse than naming the reason.
 //
+// ROUTE. This is a digital rule, so the file runs under the digital runner
+// (`vera --run`). On the legacy analog compile route `assign` is itself
+// E0205, which says nothing about the rule above.
+// digital-runner: reject
 //! reject drive strength pairs one 0-side with one 1-side
-//! lrm annex A.2.2.2
-//! lrm annex A.6.1
+//! lrm A.2.2.2
+//! lrm A.6.1
 
 module d03_reject_same_polarity_drive_strength;
   reg a;
