@@ -617,7 +617,6 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
         const text = gluedNumberText(self, tok);
         const lit = @import("../integer.zig").parse(self.arena, text) catch |e| return switch (e) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FourStateDigit => self.failAt(tok, .E0130, "invalid mixed decimal digits in `{s}`", .{text}),
             error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),
             error.MissingDigits => self.failAt(tok, .E0132, "`{s}`", .{text}),
             else => self.failAt(tok, .E0133, "`{s}`", .{text}),
@@ -684,7 +683,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
             if (!lexer.isBasedDigit(c, 16)) return text;
         },
         // Only an apostrophe: a stray backtick is the preprocessor's, and
-        // gluing it would decode as a four-state digit and say so (E0130).
+        // gluing it would decode as a bad digit and say so (E0133).
         .invalid => if (self.src[next] != '\'') return text,
         else => return text,
     }
