@@ -274,7 +274,7 @@ pub const Parser = struct {
         return switch (self.tags[j]) {
             .identifier, .escaped_identifier => true,
             // Default set ⇒ every keyword is reserved: no text to fetch.
-            else => |t| self.kw_set != token.default_keyword_set and
+            else => |t| self.kw_set != token.default_keyword_set and // else: a keyword is an identifier only when the keyword set frees it
                 token.isKeyword(t) and
                 !token.isReserved(parse_expr.tokenText(self, j), self.kw_set),
         };
@@ -356,7 +356,7 @@ pub const Parser = struct {
                     self.pos += 1;
                     return;
                 },
-                else => {},
+                else => {}, // else: any other token is inside the attribute being skipped
             };
         };
     }
@@ -422,7 +422,7 @@ pub const Parser = struct {
                 self.pos += 1;
                 return;
             },
-            else => {},
+            else => {}, // else: any other token is inside the statement being skipped
         };
     }
 
@@ -495,7 +495,7 @@ pub const Parser = struct {
             .string_literal,
             .kw_reserved,
             => parse_expr.tokenText(self, i),
-            else => |t| tagDesc(t),
+            else => |t| tagDesc(t), // else: every other tag implies its own text
         };
     }
 };
@@ -517,7 +517,7 @@ fn tagDesc(t: token.Tag) []const u8 {
         .real_literal => "a real literal",
         .string_literal => "a string literal",
         .kw_reserved => "a reserved keyword",
-        else => token.Tag.quoted(t) orelse @tagName(t),
+        else => token.Tag.quoted(t) orelse @tagName(t), // else: every other tag implies its own text
     };
 }
 
@@ -527,7 +527,7 @@ fn tagDesc(t: token.Tag) []const u8 {
 fn isTerminator(t: token.Tag) bool {
     return switch (t) {
         .semicolon, .comma, .rparen, .rbracket, .rbrace => true,
-        else => false,
+        else => false, // else: not a list or statement terminator
     };
 }
 

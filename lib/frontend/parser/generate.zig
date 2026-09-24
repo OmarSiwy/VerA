@@ -60,7 +60,7 @@ pub fn parseGenerate(self: *Parser, b: *parse_module.Body, comptime kind: token.
         .kw_for => try parseFor(self, b, tok),
         .kw_if => try parseIf(self, b, tok),
         .kw_case => try parse_stmt.parseCase(self, .normal, b),
-        else => unreachable,
+        else => unreachable, // else: the caller dispatched on exactly these three
     };
     try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
 }
@@ -331,7 +331,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         .kw_integer => .variable, // A.2.2.1 output_variable_type
         .kw_time => .time, // …its other alternative
         .kw_reg => .reg, // A.2.1.2's second arm
-        else => null,
+        else => null, // else: not a variable-storage keyword
     };
     if (var_storage != null) {
         if (dir != .output) return self.failAt(
@@ -495,7 +495,7 @@ pub fn netKind(tag: token.Tag) ?Ast.NetKind {
         .kw_uwire => .uwire,
         .kw_supply0 => .supply0,
         .kw_supply1 => .supply1,
-        else => null,
+        else => null, // else: not a net_type keyword
     };
 }
 
@@ -531,7 +531,7 @@ pub const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
 pub fn strengthWord(self: *const Parser, i: u32) ?StrengthWord {
     return switch (self.tags[i]) {
         .kw_reserved, .kw_supply0, .kw_supply1 => strength_words.get(parse_expr.tokenText(self, i)),
-        else => null,
+        else => null, // else: no other tag can spell a strength
     };
 }
 

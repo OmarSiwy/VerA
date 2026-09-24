@@ -90,7 +90,7 @@ pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
         // cannot start an operand, so the subset check was never reached.
         .caret => .reduce_xor,
         .tilde_caret, .caret_tilde => .reduce_xnor,
-        else => return parsePostfix(self),
+        else => return parsePostfix(self), // else: not a unary operator, so a postfix/primary operand
     };
     self.pos += 1;
     try self.skipAttributes(); // A.8.3 `unary_operator { attribute_instance }`
@@ -265,7 +265,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                             self.pos += 1;
                             break :blk s;
                         },
-                        else => try self.expectIdent(),
+                        else => try self.expectIdent(), // else: not a nature attribute keyword; `expectIdent` takes it or refuses it
                     };
                     try parts.append(self.arena, part);
                 }
@@ -355,7 +355,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             self.pos += 1;
             return self.file.exprs.add(self.arena, .{ .tag = .pos_inf, .main_tok = tok });
         },
-        else => {},
+        else => {}, // else: not one of the keyword primaries above; the identifier path follows
     }
 
     // Keyword-named calls. The four groups are disjoint by construction
@@ -605,7 +605,7 @@ pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
         .gt_gt => .shr,
         .lt_lt_lt => .ashl,
         .gt_gt_gt => .ashr,
-        else => null,
+        else => null, // else: not a binary operator token
     };
 }
 
@@ -692,7 +692,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
         // Only an apostrophe: a stray backtick is the preprocessor's, and
         // gluing it would decode as a bad digit and say so (E0133).
         .invalid => if (self.src[next] != '\'') return text,
-        else => return text,
+        else => return text, // else: nothing else can be the glued remainder of a based number
     }
     return self.src[start .. next + tokenText(self, tok + 1).len];
 }
