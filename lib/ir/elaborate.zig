@@ -1122,7 +1122,7 @@ test "the top is the module nothing instantiates, whatever the source order" {
 fn parseWithPrelude(out: *Fixture, text: []const u8) !void {
     const arena = out.arena.allocator();
     out.bag = diag.Bag.init(arena);
-    out.src = try Preprocessor.process(arena, text, .{ .bag = &out.bag });
+    out.src = (try Preprocessor.process(arena, text, .{ .bag = &out.bag })).text;
     var toks = try Lexer.Lexer.tokenize(arena, out.src);
     out.starts = toks.items(.start);
     var p = Parser.Parser.init(arena, out.src, toks.items(.tag), out.starts, &out.bag);

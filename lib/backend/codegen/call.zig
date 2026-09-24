@@ -21,6 +21,7 @@ const Analysis = @import("ir").Analysis;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
+const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -1512,16 +1513,11 @@ pub fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []con
 /// the `updateState` loop before either asks for the times, so both sides
 /// of the operator resolve the same directive.
 pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
-    const list = self.lower.default_transitions;
+    const list = self.lower.directives.transitions;
     if (list.len == 0) return null;
     if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lower.tok_starts.len) return null;
-    const at = self.lower.tok_starts[self.ctrl_tok];
-    var i = list.len;
-    while (i > 0) {
-        i -= 1;
-        if (list[i].at <= at) return try gen_file.fmtF64(self, list[i].time);
-    }
-    return null;
+    const t = Preprocessor.DefaultTransition.inForce(list, self.lower.tok_starts[self.ctrl_tok], null) orelse return null;
+    return try gen_file.fmtF64(self, t);
 }
 
 /// §4.5.9's two rate limits, for the two places that emit a `zSlew` call.

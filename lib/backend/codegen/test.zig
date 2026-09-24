@@ -45,7 +45,7 @@ pub const Harness = struct {
         const arena = out.arena_state.allocator();
         // One diagnostic bag threaded through every stage (diag.zig).
         out.bag = diag.Bag.init(arena);
-        const text = try Preprocessor.process(arena, src, .{ .bag = &out.bag });
+        const text = (try Preprocessor.process(arena, src, .{ .bag = &out.bag })).text;
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
         out.file = try p.parseSourceFile();

@@ -353,8 +353,8 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
     const eq = std.mem.eql;
     // The two rows that come out of the SOURCE. Unknown when no `timescale was
     // given, which is exactly what "as specified in `timescale" means.
-    if (eq(u8, name, "timeUnit")) return if (self.timescale) |t| t.unit else null;
-    if (eq(u8, name, "timePrecision")) return if (self.timescale) |t| t.precision else null;
+    if (eq(u8, name, "timeUnit")) return if (self.directives.timescale()) |t| t.unit else null;
+    if (eq(u8, name, "timePrecision")) return if (self.directives.timescale()) |t| t.precision else null;
     if (eq(u8, name, "gmin")) return 1e-12;
     // Table 9-27 gives `tnom` in DEGREES CELSIUS ("Default value of temperature
     // at which model parameters were extracted"), so the conforming default is

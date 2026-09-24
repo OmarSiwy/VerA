@@ -624,12 +624,13 @@ fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
 /// Callers own the run arena and diagnostic source lifetime. No analog lowering,
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
-    var times: []const Front.Preprocessor.TimescaleEvent = &.{};
-    var drives: []const Front.Preprocessor.DriveRegion = &.{};
-    const text = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .timescale_events = &times, .drives = &drives, .bag = bag }) catch |e| return switch (e) {
+    const pp = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .bag = bag }) catch |e| return switch (e) {
         error.OutOfMemory => error.OutOfMemory,
         error.PreprocessFailed => error.DigitalFailed,
     };
+    const text = pp.text;
+    const times = pp.directives.timescales;
+    const drives = pp.directives.drives;
     var tokens = try Front.Lexer.Lexer.tokenize(arena, text);
     var parser = Front.Parser.Parser.init(arena, text, tokens.items(.tag), tokens.items(.start), bag);
     parser.digital = true;
@@ -655,7 +656,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         // longer reaches here at all: the preprocessor refuses it where it is
         // written (E0142), which is a better place to hear about it than a
         // consumer three stages away.
-        const t = event.scale orelse return r.fail(m.main_tok, "a resetall timing state is not supported by digital execution", .{});
+        const t = event.value orelse return r.fail(m.main_tok, "a resetall timing state is not supported by digital execution", .{});
         const unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
         const precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
         r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
