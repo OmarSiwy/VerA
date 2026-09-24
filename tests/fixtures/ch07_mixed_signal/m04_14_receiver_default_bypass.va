@@ -52,6 +52,10 @@
 //! lrm 9.22.6
 //! lrm 9.22.1
 //! lrm 7.9
+//! analysis tran
+//! time 0, 50n
+//! checks 4
+//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, no receiver
 // assignment in the connect module, so `d_receivers = d_drivers` throughout.
@@ -80,13 +84,24 @@
 //   and which this row's SPEC.md explicitly does not cover. The residual
 //   window is disclosed rather than papered over.
 //
-// The `got=` column is an `integer` printed with %b, which IEEE Std 1364 prints
-// at the SIZE OF THE EXPRESSION — 32 digits for §3.2's 32-bit integer (see
-// 10_driver_count_excludes_connectmodule.va). `ok=%b` is an `==` result,
-// self-determined at one bit.
+// HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital
+// `initial`, and `//! checks 4` makes the count exact: a tool that never runs
+// one of the asserting processes (in a connect module it did not insert, say)
+// FAILs on the count rather than passing on silence.
+// CHECKI is a $strobe, which prints at the END of its time step (IEEE 1364
+// §17.1), so each `$finish` is one tick after the last sample — a same-tick
+// `$finish` would end the run before that strobe. The transient runs to 50 ns
+// so the digital half reaches it. The t=5 sample asserts x itself, so it is
+// written `i === 1'bx` against 1: `==` against x is x, and fails, whatever `i`
+// is. This file used to assert through
+// `$display` and a `.expected.txt` transcript, which the `.va` harness never
+// reads (tests/harness.zig `fixtureExt`: a golden is honoured for `.v` only), so
+// it asserted nothing. How `%b` spells a 32-bit integer is a digital display
+// rule and is no longer claimed here.
 
 `timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 
 connectrules m04_byp_rules;
   connect m04_byp_c2e merged input ddiscrete, output electrical;
@@ -106,8 +121,7 @@ connectmodule m04_byp_c2e(d, a);
   initial begin
     #1;
     n = $driver_count(d);
-    $display("connect_module_is_inserted_and_sees_the_ordinary_driver got=%b ok=%b",
-             n, n == 1);
+    `CHECKI("connect_module_is_inserted_and_sees_the_ordinary_driver", n, 1);
   end
 
   analog V(a) <+ 0.0;
@@ -127,10 +141,10 @@ module m04_byp_ear(i);
   input i;
   ddiscrete i;
   initial begin
-    #5  $display("default_receiver_reads_the_unassigned_driver %b", i);
-    #15 $display("default_receiver_reads_a_one_driver %b", i);
-    #20 $display("default_receiver_reads_a_zero_driver %b", i);
-    $finish(0);
+    #5  `CHECKI("default_receiver_reads_the_unassigned_driver", (i === 1'bx), 1);
+    #15 `CHECKI("default_receiver_reads_a_one_driver", i, 1);
+    #20 `CHECKI("default_receiver_reads_a_zero_driver", i, 0);
+    #1 $finish(0);
   end
 endmodule
 

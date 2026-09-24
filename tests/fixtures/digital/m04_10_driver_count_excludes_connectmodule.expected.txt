@@ -1,2 +1,0 @@
-connect_module_driver_is_not_counted got=00000000000000000000000000000010 ok=1
-count_is_elaboration_time_not_activity got=00000000000000000000000000000010 ok=1
