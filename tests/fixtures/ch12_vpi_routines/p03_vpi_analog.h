@@ -16,6 +16,11 @@
  * different meaning on the way: the structures are copied from Figures 12-3,
  * 12-17 and 12-18 and from §12.32.2, field for field and in order.
  *
+ * MOVED ALREADY, and now src/vpi/vpi_user.h's: s_cb_data/p_cb_data (Figure
+ * 12-17, unchanged), cbEndOfCompile/cbStartOfSimulation/cbEndOfSimulation,
+ * vpi_register_cb, vpi_remove_cb, vpi_get_cb_info. Declaring them here as
+ * well would be a C redefinition, not a harmless repeat.
+ *
  * TWO INCONSISTENCIES IN THE LRM'S OWN TEXT, resolved here in favour of the
  * normative structure definitions rather than the illustrative code:
  *
@@ -86,13 +91,6 @@ extern "C" {
 #define vpiReleaseFlag          6
 #define vpiCancelEvent          7
 
-/* Callback reasons that are 1364's — §12.31.1/§12.31.2/§12.31.4. Only the ones
- * a fixture here uses are declared, per src/vpi/vpi_user.h's absent-not-stubbed
- * rule. §12.32.3's sampler_compiletf() registers cbEndOfCompile. */
-#define cbEndOfCompile         10
-#define cbStartOfSimulation    11
-#define cbEndOfSimulation      12
-
 /* ==========================================================================
  * VerA ALLOCATION — names Verilog-AMS defines and gives no number to.
  *
@@ -148,17 +146,6 @@ extern "C" {
  * Structures.
  * ========================================================================== */
 
-/* Figure 12-17, field for field. */
-typedef struct t_cb_data {
-  PLI_INT32   reason;
-  PLI_INT32 (*cb_rtn)(struct t_cb_data *);
-  vpiHandle   obj;
-  p_vpi_time  time;             /* Figure 12-17: a POINTER — see the banner */
-  p_vpi_value value;
-  PLI_INT32   index;
-  PLI_BYTE8  *user_data;
-} s_cb_data, *p_cb_data;
-
 /* Figure 12-3. The two unions are separate storage: §12.10 says "the value for
  * real and imaginary unions", so a complex small-signal value arrives whole. */
 typedef struct t_vpi_analog_value {
@@ -207,11 +194,6 @@ extern void      vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p)
 extern void      vpi_get_value(vpiHandle obj, p_vpi_value value_p);
 extern vpiHandle vpi_put_value(vpiHandle obj, p_vpi_value value_p,
                                p_vpi_time time_p, PLI_INT32 flags);
-
-/* §12.31/§12.34/§12.6. */
-extern vpiHandle vpi_register_cb(p_cb_data cb_data_p);
-extern PLI_INT32 vpi_remove_cb(vpiHandle cb_obj);
-extern void      vpi_get_cb_info(vpiHandle obj, p_cb_data cb_data_p);
 
 /* §12.32/§12.13. */
 extern vpiHandle vpi_register_analog_systf(p_vpi_analog_systf_data systf_data_p);

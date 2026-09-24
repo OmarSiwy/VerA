@@ -48,7 +48,7 @@ var name_buf: [root.name_buf_len]u8 = undefined;
 /// §12.26 "shall open a file for writing and return a corresponding
 /// multichannel descriptor number ... shall return a zero (0) on error. If the
 /// file is already opened, vpi_mcd_open() shall return the descriptor number."
-export fn vpi_mcd_open(file: [*c]const u8) c_uint {
+pub export fn vpi_mcd_open(file: [*c]const u8) c_uint {
     root.clearError();
     if (file == null) {
         root.fail("BADNAME", "vpi_mcd_open: the file name is NULL", .{});
@@ -85,7 +85,7 @@ fn bit(i: usize) c_uint {
 /// mcd value of the unclosed channels." The predefined three "can not be
 /// closed", and a channel that is not open cannot be closed either — both come
 /// back in the return value, and both are an error.
-export fn vpi_mcd_close(mcd: c_uint) c_uint {
+pub export fn vpi_mcd_close(mcd: c_uint) c_uint {
     root.clearError();
     var unclosed: c_uint = 0;
     for (0..channel_count) |i| {
@@ -108,7 +108,7 @@ export fn vpi_mcd_close(mcd: c_uint) c_uint {
 
 /// §12.25 "the name of a file represented by a single-channel descriptor ...
 /// On error, the routine shall return NULL."
-export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
+pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
     root.clearError();
     if (cd == 0 or cd & (cd - 1) != 0) {
         root.fail("BADMCD", "vpi_mcd_name: 0x{x} is not a single-channel descriptor", .{cd});
@@ -132,7 +132,7 @@ export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
 
 /// §12.28 "shall write to both stdout and the current product log file ...
 /// shall return the number of characters printed or EOF if an error occurred."
-export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
+pub export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
     root.clearError();
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
@@ -143,7 +143,7 @@ export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
 /// many channels receive it: "the number of characters printed" is a property
 /// of the format and its arguments, and a count multiplied by the channel set
 /// would change with a bit of the mcd that has nothing to do with the text.
-export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c) c_int {
+pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c) c_int {
     root.clearError();
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
