@@ -838,16 +838,20 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // range BEFORE the name list (`electrical [0:3] bus;`, which is
             // the `lbracket` case one line below), never after it, so no net
             // declaration reaches a `[` in that position.
-            if (self.peekAt(1) == .hash or
+            //
+            // `#` followed by anything but `(` is A.5.4's `delay2` (`#5`),
+            // which A.4.1's `parameter_value_assignment ::= # ( … )` never is.
+            if ((self.peekAt(1) == .hash and self.peekAt(2) == .lparen) or
                 (self.identLike(self.pos + 1) and
                     (self.peekAt(2) == .lparen or self.peekAt(2) == .lbracket)))
                 return parse_specify.parseInstantiation(self, b);
+            if (self.peekAt(1) == .hash) return parse_source.parseUdpInst(self, b);
             // A.5.4 `udp_instantiation`, whose `udp_instance` makes
             // `name_of_udp_instance` OPTIONAL where A.4.1's `module_instance
             // ::= name_of_module_instance ( … )` does not. So an identifier
             // followed directly by `(` derives from A.5.4 and from nothing
             // else at module scope, and one token settles it.
-            if (self.peekAt(1) == .lparen) return parse_source.parseUdpInst(self);
+            if (self.peekAt(1) == .lparen) return parse_source.parseUdpInst(self, b);
             // `discipline [range] names ;` — a vector net's range is
             // rejected by the name list ("expected identifier"), which is
             // the wording the fixtures pin.

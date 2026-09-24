@@ -220,6 +220,8 @@ pub const Driver = struct {
     /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
     /// which no operator does.
     gate: ?Gate = null,
+    /// Set instead of `value` for an IEEE 1364-2005 §8 UDP instance.
+    udp: ?*Udp = null,
     /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
     /// directive pulls an unconnected input port to a logic level THROUGH A
     /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
@@ -386,6 +388,126 @@ pub fn undriven(kind: Ast.NetKind) Int.Bit {
         .trireg => .x,
         else => .z,
     };
+}
+
+// ---- user-defined primitives (IEEE 1364-2005 §8, A.5) -----------------------
+
+/// One A.5.3 input field: a level symbol (`0 1 x ? b`), a parenthesized edge
+/// `(vw)`, or one of Table 8-1's edge letters (`r f p n *`).
+pub const UdpSym = union(enum) { level: u8, pair: [2]u8, letter: u8 };
+
+/// One table entry, split into fields. `edge_at` is the input its edge is on,
+/// null for a level entry; `state` is 0 in a combinational table.
+pub const UdpRow = struct { ins: []const UdpSym, state: u8, out: u8, edge_at: ?u32 };
+
+/// §8 one UDP instance as a driver: its table, its input terminals, and what
+/// a sequential one carries between events — the input values the table last
+/// saw (an event is a change FROM these) and its state, the output reg.
+pub const Udp = struct {
+    rows: []const UdpRow,
+    sequential: bool,
+    ins: []const Ast.ExprId,
+    prev: []Int.Bit,
+    state: Int.Bit,
+    /// Whether the driver has published once; §8.5's initial value is
+    /// published at time 0 whatever the instance delay.
+    started: bool = false,
+};
+
+/// Split A.5.3's input characters into one field per input, or null when an
+/// entry has the wrong number of them (A.5.3 gives each input exactly one).
+pub fn udpRows(a: std.mem.Allocator, decl: *const Ast.UdpDecl) Error!?[]const UdpRow {
+    const inputs = decl.ports.len - 1;
+    const rows = try a.alloc(UdpRow, decl.rows.len);
+    for (decl.rows, rows) |src, *row| {
+        var syms: std.ArrayList(UdpSym) = .empty;
+        var edge_at: ?u32 = null;
+        var i: usize = 0;
+        while (i < src.inputs.len) : (i += 1) {
+            const c = src.inputs[i];
+            const sym: UdpSym = switch (c) {
+                '(' => blk: {
+                    if (i + 3 >= src.inputs.len or src.inputs[i + 3] != ')') return null;
+                    const pair: [2]u8 = .{ std.ascii.toLower(src.inputs[i + 1]), std.ascii.toLower(src.inputs[i + 2]) };
+                    i += 3;
+                    break :blk .{ .pair = pair };
+                },
+                'r', 'R', 'f', 'F', 'p', 'P', 'n', 'N', '*' => .{ .letter = std.ascii.toLower(c) },
+                else => .{ .level = std.ascii.toLower(c) },
+            };
+            if (sym != .level) edge_at = @intCast(syms.items.len);
+            try syms.append(a, sym);
+        }
+        if (syms.items.len != inputs) return null;
+        row.* = .{ .ins = syms.items, .state = std.ascii.toLower(src.state), .out = std.ascii.toLower(src.output), .edge_at = edge_at };
+    }
+    return rows;
+}
+
+/// Table 8-1's level symbols against a value the table reads (§8.1.6: a z
+/// input has already been read as x).
+fn udpLevel(sym: u8, b: Int.Bit) bool {
+    return switch (sym) {
+        '0' => b == .zero,
+        '1' => b == .one,
+        'x' => b == .x,
+        '?' => true,
+        'b' => b == .zero or b == .one,
+        else => false,
+    };
+}
+
+/// Table 8-1's edges: `(vw)` is v then w; r is (01), f (10), p any of (01)
+/// (0x) (x1), n any of (10) (1x) (x0), and * any change at all.
+fn udpEdge(sym: UdpSym, from: Int.Bit, to: Int.Bit) bool {
+    if (from == to) return false;
+    return switch (sym) {
+        .level => false,
+        .pair => |p| udpLevel(p[0], from) and udpLevel(p[1], to),
+        .letter => |l| switch (l) {
+            'r' => from == .zero and to == .one,
+            'f' => from == .one and to == .zero,
+            'p' => (from == .zero and to != .zero) or (from == .x and to == .one),
+            'n' => (from == .one and to != .one) or (from == .x and to == .zero),
+            else => true, // `*`
+        },
+    };
+}
+
+fn udpOut(sym: u8, state: Int.Bit) Int.Bit {
+    return switch (sym) {
+        '0' => .zero,
+        '1' => .one,
+        '-' => state,
+        else => .x,
+    };
+}
+
+/// §8.6/§8.7 one evaluation. With `changed == null` only level entries can
+/// match (a combinational table, or a sequential one re-read without an
+/// event); otherwise `changed` went from `from` to `ins[changed]`, and an
+/// edge entry on that input matches too — after every level entry, since
+/// §8.8 makes level-sensitive entries dominate edge-sensitive ones. Nothing
+/// matching is x (§8.1.6: "a combination of input values not specified ...
+/// results in x").
+pub fn udpEval(rows: []const UdpRow, sequential: bool, ins: []const Int.Bit, state: Int.Bit, changed: ?u32, from: Int.Bit) Int.Bit {
+    for (rows) |row| {
+        if (row.edge_at != null) continue;
+        if (sequential and !udpLevel(row.state, state)) continue;
+        for (row.ins, ins) |sym, b| {
+            if (!udpLevel(sym.level, b)) break;
+        } else return udpOut(row.out, state);
+    }
+    const k = changed orelse return .x;
+    for (rows) |row| {
+        if (row.edge_at != k or !udpLevel(row.state, state)) continue;
+        for (row.ins, ins, 0..) |sym, b, i| {
+            if (i == k) {
+                if (!udpEdge(sym, from, b)) break;
+            } else if (sym != .level or !udpLevel(sym.level, b)) break;
+        } else return udpOut(row.out, state);
+    }
+    return .x;
 }
 
 // ---- four-state storage (§3.7) ----------------------------------------------
@@ -689,4 +811,26 @@ test "§7.10 strength ranges combine the way Figures 7-9 through 7-19 draw them"
     try std.testing.expectEqual(Int.Bit.zero, S.of(.one, .strong, .weak).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.x, S.of(.one, .strong, .pull).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.z, S.of(.one, .strong, .highz).collapse());
+}
+
+// §8: a rising-edge toggle built from Table 8-1's letters, behind an
+// instance delay — the initial state is out at time 0, a falling edge holds,
+// each rising edge flips the state and lands 2 units later.
+test "§8 a sequential UDP with edge letters, an initial state and an instance delay" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\primitive tog(q, c);
+        \\  output q; reg q; input c;
+        \\  initial q = 1;
+        \\  table r : 0 : 1; r : 1 : 0; f : ? : -; (?x) : ? : -; (x?) : ? : -; endtable
+        \\endprimitive
+        \\module m;
+        \\reg c; wire q;
+        \\tog #2 t(q, c);
+        \\initial begin
+        \\  #1 $write("%b", q); c = 0; #1 c = 1; #1 $write("%b", q); #1 $write("%b", q);
+        \\  c = 0; #3 c = 1; #3 $display("%b", q);
+        \\end
+        \\endmodule
+    , "1101\n");
 }

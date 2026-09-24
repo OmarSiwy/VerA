@@ -37,6 +37,7 @@ const Delay = @import("net.zig").Delay;
 const Bridge = @import("net.zig").Bridge;
 const Net = @import("net.zig").Net;
 const Gate = @import("net.zig").Gate;
+const Udp = @import("net.zig").Udp;
 const Driver = @import("net.zig").Driver;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
@@ -493,6 +494,7 @@ const Wire = struct {
     value: Ast.ExprId = .none,
     bridge: ?Bridge = null,
     gate: ?Gate = null,
+    udp: ?*Udp = null,
     /// Set instead of `value` for IEEE 1364 §19.10's pull — see `Driver.pull`.
     pull: ?Int.Bit = null,
     s0: Ast.Strength = .strong,
@@ -750,6 +752,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.instances) |inst| {
         if (inst.range != null or inst.params.len != 0)
             return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
+        if (findUdp(r.file, inst.module)) |u| {
+            try declareUdp(r, e, scope, &inst, u);
+            continue;
+        }
         const child = try findModule(r, inst.module, inst.main_tok);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
@@ -908,6 +914,39 @@ fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name:
     try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, width, false, .z), .tok = tok });
     try r.net_of.put(r.arena, slot, at);
     return at;
+}
+
+fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
+    for (file.udps) |*u| if (u.name == name) return u;
+    return null;
+}
+
+/// IEEE 1364-2005 §8 one UDP instance: one more driver of its output net, as
+/// a gate is (§8.1: "UDPs are instantiated exactly the same way as gate
+/// primitives"), whose value is its table's. §8.5: a sequential UDP's state
+/// starts at its `initial` value — or x — and that value is on the output at
+/// time 0 whatever the instance delay.
+fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
+    const net_mod = @import("net.zig");
+    if (inst.ports.len != u.ports.len) return r.fail(inst.main_tok, "§8: a UDP instance connects its output and every input, in order", .{});
+    for (inst.ports) |c| if (c.name != .none or c.expr == .none)
+        return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
+    const net = r.net_of.get(try r.scalarSlot(inst.ports[0].expr)) orelse return r.fail(inst.main_tok, "a UDP's output terminal must be a net", .{});
+    if (e.nets.items[net].resolved.width != 1) return r.fail(inst.main_tok, "only scalar UDP terminals are implemented", .{});
+    const rows = (try net_mod.udpRows(r.arena, u)) orelse return r.fail(u.main_tok, "a UDP table entry needs one field per input", .{});
+    const ins = try r.arena.alloc(Ast.ExprId, u.ports.len - 1);
+    for (inst.ports[1..], ins) |c, *in| in.* = c.expr;
+    const prev = try r.arena.alloc(Int.Bit, ins.len);
+    @memset(prev, .x);
+    const ex = &r.file.exprs;
+    const state: Int.Bit = if (u.init == .none) .x else switch (ex.tag(u.init)) {
+        .int_literal => if (ex.intValue(u.init) == 0) .zero else .one,
+        .logic_literal => ex.logicValue(u.init).bit(0),
+        else => return r.exprFail(u.init, "a UDP initial value is 0, 1 or x"), // else: A.5.3 init_val is a literal
+    };
+    const udp = try r.arena.create(Udp);
+    udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
+    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .udp = udp, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
@@ -1119,6 +1158,12 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
                 if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar gate terminals are implemented");
                 try compile.sensitivity(&r, in, &watched);
             }
+        } else if (a.udp) |u| {
+            for (u.ins) |in| {
+                try compile.checkExpr(&r, in);
+                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar UDP terminals are implemented");
+                try compile.sensitivity(&r, in, &watched);
+            }
         } else if (a.pull == null) {
             try compile.checkExpr(&r, a.value);
             try compile.sensitivity(&r, a.value, &watched);
@@ -1129,9 +1174,11 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .scope = a.scope,
             .bridge = a.bridge,
             .gate = a.gate,
+            .udp = a.udp,
             .pull = a.pull,
             .sensitivity = watched.items,
-            .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
+            // A sequential UDP's output is its state from the start (§8.5).
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, if (a.udp) |u| (if (u.sequential) u.state else .z) else .z),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),

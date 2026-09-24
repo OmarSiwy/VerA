@@ -944,6 +944,12 @@ pub const Instance = struct {
     range: ?Dim = null,
     params: []const ParamOverride = &.{}, // §6.3
     ports: []const PortConn = &.{}, // §6.2.2
+    /// A.5.4 `udp_instantiation ::= udp_identifier [ drive_strength ]
+    /// [ delay2 ] udp_instance …` — a UDP instance's own brackets, which only
+    /// a digital parse records (an analog one warns W0252 and keeps nothing).
+    delay: Delay3 = .{},
+    strength0: Strength = .strong,
+    strength1: Strength = .strong,
     main_tok: u32 = 0,
 };
 

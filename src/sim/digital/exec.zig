@@ -658,6 +658,29 @@ fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, or_z: *bool) Error
     return out;
 }
 
+/// What a UDP driver contributes (IEEE 1364-2005 §8). Its inputs are read with
+/// z as x (§8.1.6). A combinational table is simply consulted; a sequential
+/// one takes each input that changed since the last evaluation as one event,
+/// in terminal order, and its state follows the entries matched (§8.6).
+fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) Error!Int.Literal {
+    const net_mod = @import("net.zig");
+    const bits = try scratch.alloc(Int.Bit, u.ins.len);
+    for (u.ins, bits) |in, *b| {
+        const v = (try eval(self, scratch, in, 1)).bit(0);
+        b.* = if (v == .z) .x else v;
+    }
+    const out = if (!u.sequential) net_mod.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
+        for (bits, 0..) |b, k| {
+            if (b == u.prev[k]) continue;
+            const from = u.prev[k];
+            u.prev[k] = b;
+            u.state = net_mod.udpEval(u.rows, true, u.prev, u.state, @intCast(k), from);
+        }
+        break :blk u.state;
+    };
+    return filled(scratch, 1, false, out);
+}
+
 /// What a `Bridge` driver contributes: its window, z everywhere else.
 fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
     const out = try filled(scratch, width, false, .z);
@@ -1072,6 +1095,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     try window(self, scratch, b, d.current.width)
                 else if (d.gate) |g|
                     try gateValue(self, scratch, g, &or_z)
+                else if (d.udp) |u|
+                    try udpValue(self, scratch, u)
                 else if (d.pull) |b|
                     try filled(scratch, d.current.width, false, b)
                 else blk: {
@@ -1081,10 +1106,14 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
                 // not what the net shows: the other drivers are unaffected
                 // and the net re-resolves when the delayed value lands.
-                if (d.delay.present) {
+                // §8.5: a UDP's initial output is published at time 0; only
+                // later transitions wait for the instance delay.
+                const first_udp = if (d.udp) |u| !u.started else false;
+                if (d.udp) |u| u.started = true;
+                if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
                     if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
-                        const delay = if (d.gate == null and d.bridge == null and d.pull == null)
+                        const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null)
                             d.delay.continuous(d.current, st.target)
                         else
                             d.delay.to(st.target.bit(0));
