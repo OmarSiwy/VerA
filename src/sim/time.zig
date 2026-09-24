@@ -1,10 +1,8 @@
 //! Exact decimal timescale factors and integer digital delay counts.
-//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1, 14.3.1 and 19.8.
+//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1 and 19.8.
 const std = @import("std");
 
 pub const Error = error{
-    InvalidMagnitude,
-    InvalidUnit,
     InvalidQuantum,
     PrecisionTooCoarse,
     GlobalPrecisionTooCoarse,
@@ -33,20 +31,6 @@ pub const Quantum = enum(i5) {
     s = 0,
     ten_s = 1,
     hundred_s = 2,
-
-    pub fn fromParts(magnitude: u8, unit: []const u8) Error!Quantum {
-        const offset: i5 = switch (magnitude) {
-            1 => 0,
-            10 => 1,
-            100 => 2,
-            else => return error.InvalidMagnitude,
-        };
-        const units = std.StaticStringMap(i5).initComptime(.{
-            .{ "s", 0 },   .{ "ms", -3 },  .{ "us", -6 },
-            .{ "ns", -9 }, .{ "ps", -12 }, .{ "fs", -15 },
-        });
-        return @enumFromInt((units.get(unit) orelse return error.InvalidUnit) + offset);
-    }
 
     /// Bridge for the existing preprocessor's canonical binary64 constants.
     /// No tolerance, ratio, logarithm, or computed floating-point exponent.
@@ -92,21 +76,11 @@ pub const Scale = struct {
     }
 
     /// Scale the evaluated binary64 value and round to local precision, then scale
-    /// exactly to global ticks. See docs/digital-time.md for the numeric contract.
+    /// exactly to global ticks.
     pub fn realDelay(self: Scale, value: f64) Error!u64 {
         if (!std.math.isFinite(value)) return error.NonFiniteDelay;
         if (value < 0) return error.NegativeRealDelay;
         return self.globalTicks(try roundedLocal(value, self.local_per_unit));
-    }
-
-    /// Specify-path negative delays are zero (§14.3.1), unlike procedural delays.
-    pub fn pathSignedDelay(self: Scale, value: i64) Error!u64 {
-        return self.unsignedDelay(@intCast(@max(value, 0)));
-    }
-
-    pub fn pathRealDelay(self: Scale, value: f64) Error!u64 {
-        if (!std.math.isFinite(value)) return error.NonFiniteDelay;
-        return self.realDelay(@max(value, 0));
     }
 
     /// The inverse direction, which `$time` and `$realtime` are the only
@@ -158,21 +132,6 @@ fn roundedLocal(value: f64, factor: u57) Error!u64 {
 }
 
 const testing = std.testing;
-
-test "all legal timescale magnitudes and suffixes map to exact decades" {
-    const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
-    for (units, 0..) |suffix, i| {
-        for ([_]u8{ 1, 10, 100 }, 0..) |mag, j| {
-            const q = try Quantum.fromParts(mag, suffix);
-            try testing.expectEqual(@as(i6, @intCast(i * 3 + j)) - 15, @as(i6, @intFromEnum(q)));
-        }
-    }
-    try testing.expectError(error.InvalidMagnitude, Quantum.fromParts(2, "ns"));
-    try testing.expectError(error.InvalidMagnitude, Quantum.fromParts(0, "s"));
-    try testing.expectError(error.InvalidUnit, Quantum.fromParts(1, "NS"));
-    try testing.expectError(error.InvalidUnit, Quantum.fromParts(1, "sec"));
-    try testing.expectError(error.InvalidUnit, Quantum.fromParts(1, "as"));
-}
 
 test "preprocessor seconds bridge rejects noncanonical floating values" {
     try testing.expectEqual(Quantum.fs, try Quantum.fromSeconds(1e-15));
@@ -242,15 +201,13 @@ test "binary64 scaling interpretation preserves conventional decimal-half roundi
     try testing.expectError(error.DelayOverflow, global.realDelay(1000));
 }
 
-test "negative procedural integers and negative path delays have different rules" {
+test "negative procedural integers are unsigned times; negative reals are refused" {
     const scale = try Scale.init(.ns, .ns, .ns);
     try testing.expectEqual(std.math.maxInt(u64), try scale.signedDelay(-1));
     try testing.expectEqual(@as(u64, 1) << 63, try scale.signedDelay(std.math.minInt(i64)));
     try testing.expectEqual(@as(u64, 2), try scale.signedDelay(2));
-    try testing.expectEqual(@as(u64, 0), try scale.pathSignedDelay(-1));
-    try testing.expectEqual(@as(u64, 0), try scale.pathRealDelay(-0.5));
     try testing.expectError(error.NegativeRealDelay, scale.realDelay(-0.5));
-    try testing.expectError(error.NonFiniteDelay, scale.pathRealDelay(-std.math.inf(f64)));
+    try testing.expectError(error.NonFiniteDelay, scale.realDelay(-std.math.inf(f64)));
     const finer = try Scale.init(.ns, .ps, .ps);
     try testing.expectError(error.DelayOverflow, finer.signedDelay(-1));
 }
