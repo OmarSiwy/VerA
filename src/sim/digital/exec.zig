@@ -23,6 +23,7 @@ const Type = compile.Type;
 const casts = compile.casts;
 const sys_fns = compile.sys_fns;
 const Inertial = @import("net.zig").Inertial;
+const Handle = @import("../scheduler.zig").Handle;
 const Bridge = @import("net.zig").Bridge;
 const Gate = @import("net.zig").Gate;
 const gateBit = @import("net.zig").gateBit;
@@ -38,8 +39,8 @@ const tasks = display.tasks;
 
 // ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
 
-// Each dispatch consumes all fields of one pending write. NBA snapshots own
-// their planes in the run arena, never point into mutable variable storage.
+// Each dispatch consumes all fields of one pending write. A `.write` value
+// lives in its row's own planes (see `Row`), never in mutable variable storage.
 pub const Pending = union(enum) {
     run_process: u32,
     write: struct { target: u32, value: Int.Literal },
@@ -50,24 +51,25 @@ pub const Pending = union(enum) {
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
     monitor_tick,
-    /// A.6.1's `[ delay3 ]` on a continuous assignment: the driver's value
-    /// arrives this late. `gen` is how §6.1.3's inertial cancel is free — see
-    /// `Inertial`.
-    drive: struct { driver: u32, gen: u32, value: Int.Literal },
+    /// A.6.1's `[ delay3 ]` on a continuous assignment: this driver's
+    /// `transition.target` arrives now. §6.1.3's inertial cancel is the
+    /// scheduler's — see `Inertial`.
+    drive: u32,
     /// A.2.1.3's `[ delay3 ]` on the net declaration: the same delay one level
     /// down, on the RESOLVED value rather than on one driver's.
-    net_update: struct { net: u32, gen: u32, value: Int.Literal },
+    net_update: u32,
     /// A.2.1.3's third `delay3` value on a `trireg`: the charge that has now
     /// been held long enough to be worth nothing.
-    decay: struct { net: u32, gen: u32 },
-    /// Nothing left to do: the row has already been dispatched, or a `disable`
-    /// cancelled it. The scheduler owns no cancel operation and needs none —
-    /// the payload row is the event, so emptying the row empties the event.
-    /// Retiring a row ON DISPATCH is what makes the cancel exact: without it a
-    /// `disable` scanning for this block's resumptions could not tell one still
-    /// queued from one the process already consumed.
-    retired,
+    decay: u32,
 };
+
+/// One payload row. Rows are recycled: a row is live exactly while the
+/// scheduler holds its `handle` pending, and goes back on `Run.free_rows` when
+/// it dispatches or is cancelled — so the table is as large as the most
+/// events ever queued at once, not as the run is long. `buf` is the row's own
+/// storage for a `.write` value, kept across reuse and grown only when a wider
+/// value arrives.
+pub const Row = struct { item: Pending, handle: Handle = undefined, buf: []u64 = &.{} };
 
 // §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
 // with x and z as the intermediate value on either side of the transition.
@@ -376,7 +378,7 @@ fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
             j -= 1;
             if (self.waiters.items[j].pc == w.pc) _ = self.waiters.swapRemove(j);
         }
-        try enqueue(self, .{ .run_process = w.pc }, null, false);
+        _ = try enqueue(self, .{ .run_process = w.pc }, null, false);
         i = 0;
     }
 }
@@ -428,10 +430,9 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     // between the resolution and the publish — every driver has already
     // been folded in by the time it applies.
     if (n.delay.present) {
-        if (try schedule(self, self.values[n.slot], n.resolved, &self.nets[net].transition)) |copy| {
-            const st = self.nets[net].transition;
-            try enqueue(self, .{ .net_update = .{ .net = net, .gen = st.gen, .value = copy } }, n.delay.to(copy.bit(0)), false);
-        }
+        const st = &self.nets[net].transition;
+        if (try schedule(self, self.values[n.slot], n.resolved, st))
+            st.in_flight = try enqueue(self, .{ .net_update = net }, n.delay.to(st.target.bit(0)), false);
         return;
     }
     try store(self, n.slot, n.resolved.planes);
@@ -439,22 +440,31 @@ pub fn resolve(self: *Run, net: u32) Error!void {
 
 /// §6.1.3's inertial rule, shared by a driver's delay and a net's: "if the
 /// value changes before the delay has elapsed, the scheduled event is
-/// cancelled". Returns the delay a new transition needs, having already
-/// cancelled whatever it displaced, or null when there is nothing to do.
+/// cancelled". Returns whether a new transition to `to` is needed, having
+/// already cancelled whatever it displaced and recorded `to` as the target;
+/// the caller schedules it and keeps the handle in `st.in_flight`.
 ///
-/// Null covers the two cases that make a pulse shorter than the delay
+/// False covers the two cases that make a pulse shorter than the delay
 /// vanish rather than arrive late: the value is back to what is published,
 /// and the value is what is already on its way.
-fn schedule(self: *Run, from: Int.Literal, to: Int.Literal, st: *Inertial) Error!?Int.Literal {
-    const settled = st.target orelse from;
-    if (std.mem.eql(u64, settled.planes, to.planes)) return null;
-    // Every earlier event now carries a stale generation, which is the
-    // cancel — the scheduler's queues are never touched.
-    st.gen +%= 1;
-    const copy = try filled(self.arena, to.width, to.signed, .z);
-    @memcpy(copy.planes, to.planes);
-    st.target = copy;
-    return copy;
+fn schedule(self: *Run, from: Int.Literal, to: Int.Literal, st: *Inertial) Error!bool {
+    const settled = if (st.in_flight != null) st.target else from;
+    if (std.mem.eql(u64, settled.planes, to.planes)) return false;
+    if (st.in_flight) |h| try cancel(self, h);
+    st.in_flight = null;
+    if (st.target.planes.len != to.planes.len) st.target.planes = try self.arena.alloc(u64, to.planes.len);
+    @memcpy(st.target.planes, to.planes);
+    st.target.width = to.width;
+    st.target.signed = to.signed;
+    return true;
+}
+
+/// Cancel one queued event and give its row back.
+fn cancel(self: *Run, h: Handle) Error!void {
+    const row = self.scheduler.payloadOf(h) orelse return;
+    _ = self.scheduler.cancel(h) catch |e|
+        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
+    try self.free_rows.append(self.arena, row);
 }
 
 /// §3.8 charge decay. The countdown restarts on each ENTRY into the
@@ -462,18 +472,19 @@ fn schedule(self: *Run, from: Int.Literal, to: Int.Literal, st: *Inertial) Error
 ///
 /// ponytail: whole-net, not per-bit. A vector `trireg` with some bits driven
 /// and some floating decays all of them together; per-bit needs one
-/// generation per bit, which no fixture asks for.
+/// countdown per bit, which no fixture asks for.
 fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
     const n = &self.nets[net];
     const was = n.capacitive;
     n.capacitive = floating;
     // Leaving the state, or entering one that never decays, only has to
-    // strand whatever countdown was running.
+    // cancel whatever countdown was running.
     if (was == floating) return;
-    n.charge_gen.gen +%= 1;
+    if (n.decay_event) |h| try cancel(self, h);
+    n.decay_event = null;
     if (!floating) return;
     const after = n.decay orelse return;
-    try enqueue(self, .{ .decay = .{ .net = net, .gen = n.charge_gen.gen } }, after, false);
+    n.decay_event = try enqueue(self, .{ .decay = net }, after, false);
 }
 
 /// What a gate driver contributes: §7.8.5's one output bit.
@@ -533,11 +544,31 @@ fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
 /// the timestep", which the scheduler already orders after active,
 /// inactive and NBA.
 fn enqueueMonitor(self: *Run, item: Pending) Error!void {
-    if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
-    const payload: u32 = @intCast(self.pending.items.len);
-    try self.pending.append(self.arena, item);
-    _ = self.scheduler.schedule(.monitor, payload) catch |e|
+    const at = try claim(self, item);
+    self.pending.items[at].handle = self.scheduler.schedule(.monitor, at) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
+}
+
+/// A row for `item`: a recycled one when there is one. A `.write` value is
+/// copied into the row's own planes, so the caller's may be scratch.
+fn claim(self: *Run, item: Pending) Error!u32 {
+    const at: u32 = self.free_rows.pop() orelse blk: {
+        if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
+        try self.pending.append(self.arena, .{ .item = item });
+        break :blk @intCast(self.pending.items.len - 1);
+    };
+    const row = &self.pending.items[at];
+    row.item = item;
+    switch (item) {
+        .write => |w| {
+            if (row.buf.len < w.value.planes.len) row.buf = try self.arena.alloc(u64, w.value.planes.len);
+            const planes = row.buf[0..w.value.planes.len];
+            @memcpy(planes, w.value.planes);
+            row.item.write.value.planes = planes;
+        },
+        .run_process, .strobe, .monitor_tick, .drive, .net_update, .decay => {},
+    }
+    return at;
 }
 
 /// IEEE 1364-2005 §10.3's `disable`, which §1.1 makes part of this
@@ -570,24 +601,26 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
             hit = true;
         }
     }
-    for (self.pending.items) |*p| switch (p.*) {
-        .run_process => |at| if (at >= start and at < end) {
-            p.* = .retired;
+    // Only live rows: a free row's handle is stale, and so is the handle of
+    // the row now dispatching, which the scheduler released before returning.
+    for (self.pending.items) |row| switch (row.item) {
+        .run_process => |at| if (at >= start and at < end and self.scheduler.payloadOf(row.handle) != null) {
+            try cancel(self, row.handle);
             hit = true;
         },
-        else => {},
+        .write, .strobe, .monitor_tick, .drive, .net_update, .decay => {},
     };
-    if (hit) try enqueue(self, .{ .run_process = end }, null, false);
+    if (hit) _ = try enqueue(self, .{ .run_process = end }, null, false);
 }
 
-pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!void {
-    if (self.pending.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital events", .{});
-    const payload: u32 = @intCast(self.pending.items.len);
-    try self.pending.append(self.arena, item);
-    _ = if (delay) |d|
-        self.scheduler.scheduleAfter(d, if (nba) .nba else .inactive, payload) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital timing failure: {t}", .{e})
+pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!Handle {
+    const at = try claim(self, item);
+    const h = (if (delay) |d|
+        self.scheduler.scheduleAfter(d, if (nba) .nba else .inactive, at) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital timing failure: {t}", .{e})
     else
-        self.scheduler.schedule(if (nba) .nba else .active, payload) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
+        self.scheduler.schedule(if (nba) .nba else .active, at) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e}));
+    self.pending.items[at].handle = h;
+    return h;
 }
 
 fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool {
@@ -653,14 +686,21 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // §8.5.3.3 says is not resolved until the process resumes.
                 const width = self.values[try self.baseSlot(a.target)].width;
                 const rhs = try eval(self, scratch, a.value, width);
-                // The arena, not scratch: the value has to outlive this
-                // dispatch, which is the whole point of parking it.
-                self.holds.items[s.cell] = try normalize(self.arena, rhs, .{ .width = width, .signed = rhs.signed });
+                // The cell's own planes, not scratch: the value has to
+                // outlive this dispatch, which is the whole point of parking
+                // it. The width is the site's, so the planes are sized once.
+                const parked = try normalize(scratch, rhs, .{ .width = width, .signed = rhs.signed });
+                const cell = &self.holds.items[s.cell];
+                if (cell.planes.len != parked.planes.len) cell.planes = try self.arena.alloc(u64, parked.planes.len);
+                @memcpy(cell.planes, parked.planes);
+                cell.width = parked.width;
+                cell.signed = parked.signed;
+                cell.sized = parked.sized;
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
                     if (try address(self, scratch, a.target)) |target|
-                        try enqueue(
+                        _ = try enqueue(
                             self,
                             .{ .write = .{ .target = target, .value = self.holds.items[s.cell] } },
                             if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null,
@@ -670,7 +710,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     continue;
                 }
                 if (a.timing_is_delay)
-                    try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, a.timing, tok), false)
+                    _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, a.timing, tok), false)
                 else
                     try suspendOn(self, a.timing, pc + 1);
                 return;
@@ -719,13 +759,13 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // not what the net shows: the other drivers are unaffected
                 // and the net re-resolves when the delayed value lands.
                 if (d.delay.present) {
-                    if (try schedule(self, d.current, value, &self.drivers[at].transition)) |copy| {
-                        const st = self.drivers[at].transition;
+                    const st = &self.drivers[at].transition;
+                    if (try schedule(self, d.current, value, st)) {
                         const delay = if (d.gate == null and d.bridge == null and d.pull == null)
-                            d.delay.continuous(d.current, copy)
+                            d.delay.continuous(d.current, st.target)
                         else
-                            d.delay.to(copy.bit(0));
-                        try enqueue(self, .{ .drive = .{ .driver = at, .gen = st.gen, .value = copy } }, delay, false);
+                            d.delay.to(st.target.bit(0));
+                        st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
                 } else {
                     @memcpy(d.current.planes, value.planes);
@@ -795,12 +835,12 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (try address(self, scratch, s.target)) |target| {
                     const dest = self.values[target];
                     const rhs = try eval(self, scratch, s.value, dest.width);
-                    const value = try normalize(if (s.nonblocking) self.arena else scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
-                    if (s.nonblocking) try enqueue(self, .{ .write = .{ .target = target, .value = value } }, null, true) else try store(self, target, value.planes);
+                    const value = try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
+                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target, .value = value } }, null, true) else try store(self, target, value.planes);
                 }
             },
             .event_control => |s| {
-                try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, s.event, self.file.stmtTok(id)), false);
+                _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, s.event, self.file.stmtTok(id)), false);
                 return;
             },
             .sys_task => |s| switch (tasks.get(self.file.str(s.name)).?) {

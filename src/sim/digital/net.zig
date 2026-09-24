@@ -13,22 +13,23 @@ const Ast = Front.Ast;
 const Int = Front.Integer;
 const Error = @import("root.zig").Error;
 const expectRun = @import("root.zig").expectRun;
+const Handle = @import("../scheduler.zig").Handle;
 
 // ---- delays (A.2.2.3, §7.14, §6.1.3) ----------------------------------------
 
 /// IEEE 1364-2005 §6.1.3: a delayed continuous assignment is INERTIAL — "if
 /// the value changes before the delay has elapsed, the scheduled event is
 /// cancelled". So a driver or a net has at most ONE transition in flight, and
-/// the cheapest cancel is a counter: the event carries the generation it was
-/// scheduled under, and a later evaluation bumps it, which makes every earlier
-/// event a no-op on arrival without touching the scheduler's queues.
+/// cancelling it is the scheduler's own `cancel` on the handle kept here.
 pub const Inertial = struct {
-    gen: u32 = 0,
-    /// What the event in flight will publish, or null when none is. Compared
-    /// against rather than the published value, so that a re-evaluation landing
-    /// on the value already on its way leaves the timer alone instead of
-    /// restarting it.
-    target: ?Int.Literal = null,
+    /// The event in flight, or null when none is. Cleared when it dispatches.
+    in_flight: ?Handle = null,
+    /// What the event in flight will publish, meaningful only while
+    /// `in_flight` is set. Compared against rather than the published value, so
+    /// that a re-evaluation landing on the value already on its way leaves the
+    /// timer alone instead of restarting it. Its planes are sized once and
+    /// then reused, so a toggling input costs no memory per transition.
+    target: Int.Literal = .{ .width = 0, .sized = true, .signed = false, .planes = &.{} },
 };
 
 /// A.2.2.3's three values, already in scheduler ticks. `present` is false for
@@ -112,7 +113,8 @@ pub const Net = struct {
     /// §3.8's capacitive state. The decay countdown restarts on each ENTRY into
     /// it, so the transition is what is watched, not the state.
     capacitive: bool = false,
-    charge_gen: Inertial = .{},
+    /// The §3.8 decay countdown in flight, cancelled on leaving the state.
+    decay_event: ?Handle = null,
 };
 
 /// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
