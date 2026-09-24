@@ -54,6 +54,18 @@ const dists = [_]Dist{
     .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11, .count = true },
 };
 
+// The flags agree with each row's arity: at most two parameters (both
+// readers fold into a `[2]f64`), `positive` names only parameters the row
+// has, `ordered` relates two of them, and a `count` is a positive first one.
+comptime {
+    for (dists) |d| {
+        std.debug.assert(d.nparam <= 2);
+        std.debug.assert(d.positive >> @intCast(d.nparam) == 0);
+        if (d.ordered) std.debug.assert(d.nparam == 2);
+        if (d.count) std.debug.assert(d.positive & 1 != 0);
+    }
+}
+
 /// The Table 9-10 row `name` spells, or null. A linear scan of 16 rows.
 pub fn of(name: []const u8) ?*const Dist {
     for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
@@ -61,7 +73,10 @@ pub fn of(name: []const u8) ?*const Dist {
 }
 
 /// The name §9.13.2 gives parameter `i` of `d`, for the diagnostics.
+/// Asserts that `i` is a parameter of `d` (`i < d.nparam`): both callers
+/// judge the arity first.
 pub fn paramName(d: *const Dist, i: usize) []const u8 {
+    std.debug.assert(i < d.nparam);
     if (d.ordered) return if (i == 0) "start" else "end";
     if (std.mem.endsWith(u8, d.name, "chi_square") or std.mem.endsWith(u8, d.name, "_t"))
         return "degree_of_freedom";

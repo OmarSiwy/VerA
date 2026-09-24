@@ -584,20 +584,26 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
 }
 
 /// Removes `inst` from `block`'s chain; the rows after it stay linked. The row
-/// is orphaned, not reused, and keeps its `block` column. `inst` must be
-/// linked into `block`. This operation is O(n) in the block's length.
+/// is orphaned, not reused, and keeps its `block` column. Asserts that
+/// `inst` is linked into `block`. This operation is O(n) in the block's length.
 pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
+    assert(inst != .none);
     const next = self.insts.items(.next);
     const first = self.blocks.items(.first);
     const last = self.blocks.items(.last);
     const b = @backingInt(block);
     var prev: Inst = .none;
     var cur = first[b];
-    while (cur != inst) : (cur = next[@backingInt(cur)]) prev = cur;
+    while (cur != inst) : (cur = next[@backingInt(cur)]) {
+        assert(cur != .none); // the chain ended without reaching `inst`
+        prev = cur;
+    }
     const after = next[@backingInt(inst)];
     if (prev == .none) first[b] = after else next[@backingInt(prev)] = after;
     if (last[b] == inst) last[b] = prev;
     next[@backingInt(inst)] = .none;
+    // An empty chain has neither end; a nonempty one has both.
+    assert((first[b] == .none) == (last[b] == .none));
 }
 
 /// Relinks every row of `from`, in order, at the end of `to`; `from` is left
@@ -657,7 +663,8 @@ fn addResultInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow)
 /// Asserts that `ops` matches `op`'s class (see `InstRow`'s encoding table);
 /// phi, branch, jump, call and anew have their own builders.
 pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: []const Value) !Value {
-    assert(ops.len >= 1 and ops.len <= 3);
+    assert(ops.len >= 1);
+    assert(ops.len <= 3);
     assert(switch (opClass(op)) {
         .unary => ops.len == 1,
         .binary => ops.len == 2,
@@ -684,8 +691,11 @@ pub fn emitAnewCached(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u
     return self.addResultInst(gpa, block, .{ .op = .anew, .a = array, .b = tp + 1, .c = slot });
 }
 
-/// Appends a §5.8 two-way branch, the block's terminator.
+/// Appends a §5.8 two-way branch, the block's terminator. Asserts that both
+/// targets are blocks of this Mir.
 pub fn emitBranch(self: *Mir, gpa: std.mem.Allocator, block: Block, cond: Value, then_block: Block, else_block: Block) !Inst {
+    assert(@backingInt(then_block) < self.blockCount());
+    assert(@backingInt(else_block) < self.blockCount());
     return self.addInst(gpa, block, .{
         .op = .branch,
         .a = @backingInt(cond),
@@ -694,8 +704,10 @@ pub fn emitBranch(self: *Mir, gpa: std.mem.Allocator, block: Block, cond: Value,
     });
 }
 
-/// Appends a §5.9 unconditional jump, the block's terminator.
+/// Appends a §5.9 unconditional jump, the block's terminator. Asserts that
+/// `target` is a block of this Mir.
 pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block) !Inst {
+    assert(@backingInt(target) < self.blockCount());
     return self.addInst(gpa, block, .{ .op = .jump, .a = @backingInt(target) });
 }
 
@@ -813,7 +825,8 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
 /// Asserts that `inst` is a phi and `i` is below its pair count.
 pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
     const n = @backingInt(inst);
-    assert(self.insts.items(.op)[n] == .phi and i < self.insts.items(.c)[n]);
+    assert(self.insts.items(.op)[n] == .phi);
+    assert(i < self.insts.items(.c)[n]);
     const at = self.insts.items(.b)[n] + i * 2;
     return .{
         .block = @fromBackingInt(@intCast(self.extra.items[at])),

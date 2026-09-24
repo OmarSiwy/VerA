@@ -81,8 +81,10 @@ pub const Kind = enum {
     /// means the table's top-level identity. Force real arithmetic: even an
     /// integer spelling of a coordinate or angle is a real-valued system
     /// parameter, so a fractional angle never passes through integer `%`.
-    /// The new nodes are appended to `file.exprs` from `arena`.
+    /// The new nodes are appended to `file.exprs` from `arena`. Asserts that
+    /// `value` is an expression: only `parent` may be `.none`.
     pub fn compose(self: Kind, file: *Ast.SourceFile, arena: std.mem.Allocator, parent: Ast.ExprId, value: Ast.ExprId, tok: u32) std.mem.Allocator.Error!Ast.ExprId {
+        std.debug.assert(value != .none);
         const x = &file.exprs;
         const real_value = if (constfold.fold(file, value, constfold.literal_env)) |v|
             if (v == .str) value else try x.addReal(arena, tok, v.asReal())

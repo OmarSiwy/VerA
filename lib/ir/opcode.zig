@@ -184,21 +184,39 @@ pub fn get(op: Opcode) Info {
 /// `lower/contrib.scanFinite`). Null when `op` is not a constant operation or
 /// the kernel declines (a zero integer divisor, `0 ** -1`). `args` holds one
 /// folded operand per operand of `op` (one for a unary, two for a binary).
+/// Asserts that `args.len` is that operand count for every opcode that
+/// folds (a `.none` row reads no operand and takes any slice).
 pub fn fold(op: Opcode, args: []const Const) ?Const {
     return switch (table.get(op).fold) {
         .none => null,
-        .identity => args[0],
+        .identity => blk: {
+            std.debug.assert(args.len == 1);
+            break :blk args[0];
+        },
         // §4.2.1.1/§4.2.1.2 convert a number; `asReal` would read a string as 0.
-        .to_real => if (args[0] == .str) null else .{ .real = args[0].asReal() },
-        .to_int => if (args[0] == .str) null else .{ .int = std.math.lossyCast(i64, @round(args[0].asReal())) },
-        .unary => |k| wrapped(k.wrap, constfold.unary(k.f, as(k.int, args[0]) orelse return null)),
-        .binary => |k| wrapped(k.wrap, constfold.binary(
-            k.f,
-            as(k.int, args[0]) orelse return null,
-            as(k.int, args[1]) orelse return null,
-            null,
-        )),
+        .to_real => blk: {
+            std.debug.assert(args.len == 1);
+            break :blk if (args[0] == .str) null else .{ .real = args[0].asReal() };
+        },
+        .to_int => blk: {
+            std.debug.assert(args.len == 1);
+            break :blk if (args[0] == .str) null else .{ .int = std.math.lossyCast(i64, @round(args[0].asReal())) };
+        },
+        .unary => |k| blk: {
+            std.debug.assert(args.len == 1);
+            break :blk wrapped(k.wrap, constfold.unary(k.f, as(k.int, args[0]) orelse return null));
+        },
+        .binary => |k| blk: {
+            std.debug.assert(args.len == 2);
+            break :blk wrapped(k.wrap, constfold.binary(
+                k.f,
+                as(k.int, args[0]) orelse return null,
+                as(k.int, args[1]) orelse return null,
+                null,
+            ));
+        },
         .math => |k| blk: {
+            std.debug.assert(args.len == k.f.arity());
             var buf: [2]Const = undefined;
             for (args, 0..) |a, i| buf[i] = as(k.int, a) orelse return null;
             break :blk wrapped(k.wrap, constfold.math(k.f, buf[0..args.len]));

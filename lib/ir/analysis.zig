@@ -517,9 +517,11 @@ fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
 }
 
 /// Returns whether block `a` dominates block `x`. O(1) via the Euler-tour
-/// interval. Unreachable blocks dominate only themselves. Both must be
-/// below `nb`.
+/// interval. Unreachable blocks dominate only themselves. Asserts that both
+/// are below `nb`.
 pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
+    std.debug.assert(a < self.nb);
+    std.debug.assert(x < self.nb);
     const ia = self.dom_in[a];
     const ix = self.dom_in[x];
     if (ia == none_u32 or ix == none_u32) return a == x;
@@ -614,8 +616,11 @@ fn buildWideWidths(self: *Analysis) Error!void {
     self.wide_w = try self.arena.alloc(u32, self.nv);
     @memset(self.wide_w, 0);
     if (self.lowered.wide_nodes.items.len == 0) return;
+    // A width only goes from 0 to set, so each changing sweep sets one more.
+    var sweeps: u32 = 0;
     var changed = true;
-    while (changed) {
+    while (changed) : (sweeps += 1) {
+        std.debug.assert(sweeps <= self.nv);
         changed = false;
         for (Mir.Value.first_dynamic..self.nv) |v| {
             if (self.vty[v] != .wide or self.wide_w[v] != 0) continue;
@@ -665,8 +670,11 @@ fn buildArrOf(self: *Analysis) Error!void {
     self.arr_of = try self.arena.alloc(u32, self.nv);
     @memset(self.arr_of, none_u32);
     if (self.lowered.mem_arrays.items.len == 0) return;
+    // Each sweep that grows marks at least one more of the `nv` values.
+    var sweeps: u32 = 0;
     var grew = true;
-    while (grew) {
+    while (grew) : (sweeps += 1) {
+        std.debug.assert(sweeps <= self.nv);
         grew = false;
         for (Mir.Value.first_dynamic..self.nv) |i| {
             if (self.arr_of[i] != none_u32) continue;
@@ -694,8 +702,9 @@ fn buildArrOf(self: *Analysis) Error!void {
 }
 
 /// §3.2.2 the array a Value is a version of, or null for a scalar.
-/// Requires `build`, not `buildStructure`.
+/// Requires `build`, not `buildStructure`; asserts that it ran.
 pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
+    std.debug.assert(self.arr_of.len == self.nv);
     const a = self.arr_of[@backingInt(self.rv(v))];
     return if (a == none_u32) null else a;
 }
@@ -1013,8 +1022,11 @@ pub const Folded = struct { f: f64 };
 /// defaults (`parameter real b = a*2;`, §6.3.4) and §4.5 operator control
 /// arguments; anything touching an unknown or a call is not constant.
 /// `resolve_params` looks through a parameter to its declared default, which
-/// only a Model default may do. O(1): a load from `folds`. Requires `build`.
+/// only a Model default may do. O(1): a load from `folds`. Requires `build`
+/// (`buildLiteralFolds` for `resolve_params = false`); asserts that the
+/// column it reads was built.
 pub fn foldConst(self: *const Analysis, v: Mir.Value, resolve_params: bool) ?Folded {
+    std.debug.assert(self.folds[@intFromBool(resolve_params)].kind.len == self.nv);
     const c = self.folds[@intFromBool(resolve_params)].get(v) orelse return null;
     return .{ .f = c.asReal() };
 }
@@ -1041,8 +1053,11 @@ fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error!FoldColumn {
     @memset(col.bits, 0);
     // An answer only ever goes from null to a constant, so this terminates;
     // operands precede users except through aliases or forward defaults.
+    // Each sweep that changes something folds at least one more value.
+    var sweeps: u32 = 0;
     var changed = true;
-    while (changed) {
+    while (changed) : (sweeps += 1) {
+        std.debug.assert(sweeps <= self.nv);
         changed = false;
         for (0..self.nv) |v| {
             if (col.kind[v] != .none) continue;

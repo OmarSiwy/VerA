@@ -28,6 +28,8 @@ pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
         while (b < nb) : (b += 1) {
             if (try tryConvert(gpa, mir, @fromBackingInt(@intCast(b)), preds)) {
                 converted += 1;
+                // Each conversion retires one block's branch and adds none.
+                std.debug.assert(converted <= nb);
                 changed = true;
             }
         }
@@ -127,6 +129,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
         join = br.then_block; // triangle: then edge is direct
         else_arm = br.else_block;
     } else return false;
+    std.debug.assert(join != x); // `classifyArm` refuses a join back into X
 
     // Validate every live phi in the join: it must carry a pair for each side
     // of this diamond, or the conversion cannot rewrite it.
@@ -223,6 +226,7 @@ fn phiValueFor(mir: *const Mir, phi: Mir.Inst, from: Mir.Block) ?Mir.Value {
 /// single incoming value the phi collapses to an alias, exactly like ssa.zig's
 /// trivial-phi removal.
 fn rewritePhi(mir: *Mir, phi: Mir.Inst, then_key: Mir.Block, else_key: Mir.Block, x: Mir.Block, sel: Mir.Value) void {
+    std.debug.assert(then_key != else_key); // two distinct edges into the join
     const d = mir.instData(phi).phi;
     var count: u32 = 0;
     // Validation found both edges: replacing them by one always fits. Payload
@@ -234,6 +238,7 @@ fn rewritePhi(mir: *Mir, phi: Mir.Inst, then_key: Mir.Block, else_key: Mir.Block
         mir.extra.items[d.start + count * 2 + 1] = @backingInt(p.value);
         count += 1;
     }
+    std.debug.assert(count + 2 <= d.count); // both edges' pairs were dropped
     mir.extra.items[d.start + count * 2] = @backingInt(x);
     mir.extra.items[d.start + count * 2 + 1] = @backingInt(sel);
     mir.insts.items(.c)[@backingInt(phi)] = count + 1;

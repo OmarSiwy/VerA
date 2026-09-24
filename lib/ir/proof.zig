@@ -122,7 +122,10 @@ pub fn proveOpts(
     try p.buildClasses(); // structural congruence, so guards reach every copy
     try p.markSelectArms(); // §4.2.12 `?:` guards its own arms
     try p.walk(); // the one linear pass: intervals + domain checks
-    return p.verdict(); // per-unit join over the backward slices
+    const v = try p.verdict(); // per-unit join over the backward slices
+    std.debug.assert(v.unit_modes.len == unitCount(lowered));
+    std.debug.assert(v.error_count <= max_errors); // `Verdict.error_count` saturates
+    return v;
 }
 
 test FloatMode {

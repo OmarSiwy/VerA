@@ -246,6 +246,8 @@ pub const Callee = enum(u8) {
 const by_name = std.StaticStringMap(Callee).initComptime(blk: {
     const e = @typeInfo(Callee).@"enum";
     const n = e.field_names.len;
+    // The last field is `.systf`, `fromName`'s fallback, which no name spells.
+    std.debug.assert(std.mem.eql(u8, e.field_names[n - 1], "systf"));
     var kvs: [n - 1]struct { []const u8, Callee } = undefined;
     for (e.field_names[0 .. n - 1], e.field_values[0 .. n - 1], &kvs) |name, value, *kv| kv.* = .{ name, @fromBackingInt(@intCast(value)) };
     break :blk kvs;
@@ -437,6 +439,19 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$fscanf$str" = .{ .ty = .str, .family = .file_read },
     .@"$ferror$str" = .{ .ty = .str, .family = .file_read },
 });
+
+// Each row is self-consistent: an arity range is not empty, and a descriptor
+// position names an argument a call can carry, of a §9.5 descriptor family.
+comptime {
+    std.debug.assert(@backingInt(Callee.@"$held_int") < @backingInt(Callee.systf)); // `synthetic`'s range
+    for (table.values) |info| {
+        std.debug.assert(info.args.min <= info.args.max);
+        if (info.fd) |fd| {
+            std.debug.assert(fd < info.args.max);
+            std.debug.assert(info.family == .file_out or info.family == .file_func);
+        }
+    }
+}
 
 /// Returns the value type of a call to `c`.
 pub fn ty(c: Callee) Ty {
