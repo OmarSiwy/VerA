@@ -9,7 +9,8 @@
 const std = @import("std");
 const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
-const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
+const Mir = @import("ir").Mir;
 const Io = tb.Io;
 const Allocator = tb.Allocator;
 const Error = tb.Error;
@@ -299,17 +300,17 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 }
 
 /// The mixed-signal plan of a compile, or null for a module with no discrete
-/// half that needs the event queue (`Lower.mixed_signal`). Borrowed from the
+/// half that needs the event queue (`Lowered.mixed_signal`). Borrowed from the
 /// compile's arena.
-pub fn mixedPlan(lower: *const Lower) ?tb.Mixed {
-    if (!lower.mixed_signal) return null;
-    const ts = lower.directives.timescale();
+pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
+    if (!lowered.mixed_signal) return null;
+    const ts = lowered.directives.timescale();
     return .{
-        .source = lower.src,
-        .top = lower.mir.name,
+        .source = lowered.src,
+        .top = mir.name,
         .unit = if (ts) |t| t.unit else null,
         .precision = if (ts) |t| t.precision else null,
-        .inputs = lower.discrete_inputs.keys(),
+        .inputs = lowered.discrete_inputs.keys(),
     };
 }
 

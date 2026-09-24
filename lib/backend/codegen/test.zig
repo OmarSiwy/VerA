@@ -11,6 +11,7 @@ const codegen = @import("../codegen.zig");
 const gen_kernel_text = @import("kernel_text.zig");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
 const assert = codegen.assert;
@@ -32,6 +33,7 @@ pub const Harness = struct {
     file: Ast.SourceFile,
     mir: Mir,
     low: Lower,
+    lowered: Lowered,
     bag: diag.Bag,
 
     fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
@@ -40,6 +42,7 @@ pub const Harness = struct {
             .file = .empty,
             .mir = .{},
             .low = undefined,
+            .lowered = undefined,
             .bag = undefined,
         };
         const arena = out.arena_state.allocator();
@@ -53,7 +56,7 @@ pub const Harness = struct {
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-        _ = try out.low.lowerFile();
+        out.lowered = try out.low.lowerFile();
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
@@ -62,15 +65,15 @@ pub const Harness = struct {
 
     /// Same, with §9.4 display tasks emitted — the printing artifact.
     fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
-        const v = try proof.prove(gpa, &self.mir, &self.low, &self.bag);
+        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
         const a = self.arena_state.allocator();
-        return (try generate(a, a, &self.mir, &self.low, v, &fatal, .{ .display = .emit })).text;
+        return (try generate(a, a, &self.mir, &self.lowered, v, &fatal, .{ .display = .emit })).text;
     }
 
     fn genOut(self: *Harness, gpa: std.mem.Allocator) !Output {
-        const v = try proof.prove(gpa, &self.mir, &self.low, &self.bag);
+        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
         // ponytail: the harness hands `generate` its arena as the output gpa, so
@@ -80,7 +83,7 @@ pub const Harness = struct {
         const a = self.arena_state.allocator();
         // The harness bag is arena-lived and never detached, so unlike the
         // driver's it is still the right one to hand codegen.
-        return generate(a, a, &self.mir, &self.low, v, &fatal, .{ .diags = &self.bag });
+        return generate(a, a, &self.mir, &self.lowered, v, &fatal, .{ .diags = &self.bag });
     }
 
     fn deinit(self: *Harness) void {
@@ -109,12 +112,12 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try Harness.run(std.testing.allocator, resistor_va, &h);
     defer h.deinit();
 
-    const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
+    const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
     defer v.deinit(std.testing.allocator);
     var fatal = false;
     const a = h.arena_state.allocator();
-    const off = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{})).text;
-    const on = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .jac_f32 = true })).text;
+    const off = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{})).text;
+    const on = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{ .jac_f32 = true })).text;
 
     try std.testing.expect(std.mem.indexOf(u8, off, "jac_f32") == null);
     const decl = "pub const jac_f32 = true;\n\n";
@@ -128,7 +131,7 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     // `--jac-f32-host` is the stronger request and emits the permission too:
     // a host width without the permission is the one combination
     // `tools/contract.zig` rejects, so codegen must never produce it.
-    const host = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .jac_f32_host = true })).text;
+    const host = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{ .jac_f32_host = true })).text;
     try std.testing.expect(std.mem.indexOf(u8, host, decl) != null);
     try std.testing.expect(std.mem.indexOf(u8, host, "pub const jac_f32_host = true;") != null);
 }
@@ -571,7 +574,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     defer h.deinit();
     // root.zig runs this between lower and prove; the harness does the same.
     // The MIR is arena-owned, so the pass must append with the same arena.
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
     try std.testing.expect(n >= 1);
     const src = try h.gen(std.testing.allocator);
     // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
@@ -602,7 +605,7 @@ test "codegen: a value shared by select arms is computed once, not once per use"
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
     const src = try h.gen(std.testing.allocator);
     const unit = src[std.mem.indexOf(u8, src, "fn sh__").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
@@ -620,7 +623,7 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
         \\endmodule
     , &h);
     defer h.deinit();
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
     const src = try h.gen(std.testing.allocator);
     // What this protects is §4.2.12 laziness, not a spelling: `ln` runs only
     // on the path `V > vmin` selects. The guard may come out as a lazy
@@ -665,7 +668,7 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
     // The guard's evidence only survives conversion on exclusively-owned
     // slices; a shared `ln` result must refuse, or the model silently drops
     // to `.strict` (and an integer `/` in the same shape turns REJECTED).
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
     try std.testing.expectEqual(@as(u32, 0), n);
     // Still compiles and proves through the CFG dominance path.
     const src = try h.gen(std.testing.allocator);
@@ -1910,7 +1913,7 @@ test "codegen: a zero short still collapses after if-conversion makes its join a
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse(") != null);
     try std.testing.expect(std.mem.indexOf(
@@ -2024,12 +2027,12 @@ test "codegen: metadata control failure stays fatal with and without diagnostics
             \\endmodule
         , &h);
         defer h.deinit();
-        const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
+        const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
         defer v.deinit(std.testing.allocator);
         try std.testing.expect(!h.bag.failed());
         const a = h.arena_state.allocator();
         var fatal = false;
-        _ = try generate(a, a, &h.mir, &h.low, v, &fatal, .{
+        _ = try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{
             .diags = if (with_diags) &h.bag else null,
         });
         try std.testing.expect(fatal);

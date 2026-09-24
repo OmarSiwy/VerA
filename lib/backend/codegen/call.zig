@@ -21,6 +21,7 @@ const Analysis = @import("ir").Analysis;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -96,7 +97,7 @@ pub fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
     switch (self.mir.valueDef(self.an.rv(v0))) {
         .str_const => |s| return try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
-            if (Analysis.tyOfParam(self.lower.params.items[p].ty) != .str) return null;
+            if (Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str) return null;
             self.uses_model = true;
             return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]});
         },
@@ -111,9 +112,9 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         .int_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{n}),
         .float_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{std.math.lossyCast(i64, @round(n))}),
         .param_ref => |p| {
-            if (Analysis.tyOfParam(self.lower.params.items[p].ty) == .str) return null;
+            if (Analysis.tyOfParam(self.lowered.params.items[p].ty) == .str) return null;
             self.uses_model = true;
-            return switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
+            return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .int => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
                 .real => try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round(model.{s}))", .{self.p_names[p]}),
                 .str => unreachable,
@@ -346,7 +347,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
     switch (self.mir.valueDef(v)) {
         .param_ref => |p| {
             self.uses_model = true;
-            return switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
+            return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .real => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
                 .int => try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.{s}))", .{self.p_names[p]}),
                 .str => "0.0",
@@ -415,7 +416,7 @@ pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
     if (self.diags) |bag| try bag.add(
         .codegen,
         .E0515,
-        self.lower.tokenSpan(if (tok == Mir.no_tok) self.ctrl_tok else tok),
+        self.lowered.tokenSpan(if (tok == Mir.no_tok) self.ctrl_tok else tok),
         "this argument is computed during the solve; only literals, parameters " ++
             "and arithmetic over them are available where the host evaluates it",
         .{},
@@ -917,7 +918,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
                 self.uses_model = true;
                 return self.b("S.con(model.{s})", .{f});
             }
-            if (self.lower.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
+            if (self.lowered.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
             if (args.len > 1) return self.b("S.con({s})", .{try f64Expr(self, args[1])});
             // Unknown, no fallback: E0811 already refused this compile unless
             // the name was not a literal, in which case zero is the only answer
@@ -1143,7 +1144,7 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
     if (self.diags) |bag| try bag.add(
         .codegen,
         .W0852,
-        self.lower.tokenSpan(self.mir.instTok(inst)),
+        self.lowered.tokenSpan(self.mir.instTok(inst)),
         "`{s}` is not a system function this compiler defines, so it is exported in " ++
             "`systf_calls` for a VPI application to supply; a host that binds none " ++
             "will not build",
@@ -1552,10 +1553,10 @@ pub fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []con
 /// the `updateState` loop before either asks for the times, so both sides
 /// of the operator resolve the same directive.
 pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
-    const list = self.lower.directives.transitions;
+    const list = self.lowered.directives.transitions;
     if (list.len == 0) return null;
-    if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lower.tok_starts.len) return null;
-    const t = Preprocessor.DefaultTransition.inForce(list, self.lower.tok_starts[self.ctrl_tok], null) orelse return null;
+    if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lowered.tok_starts.len) return null;
+    const t = Preprocessor.DefaultTransition.inForce(list, self.lowered.tok_starts[self.ctrl_tok], null) orelse return null;
     return try gen_file.fmtF64(self, t);
 }
 

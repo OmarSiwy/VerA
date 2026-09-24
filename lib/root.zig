@@ -76,6 +76,7 @@ const Analysis = @import("ir").Analysis;
 const Ssa = @import("ir").Ssa;
 const Elaborate = @import("ir").Elaborate;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
 pub const diag = @import("diag");
@@ -161,8 +162,7 @@ pub const Options = struct {
 
 /// Result of one frontend run (source → MIR → optionally device.zig).
 ///
-/// The arena is HEAP-allocated on purpose: `Lower`, `Ssa.SsaBuilder` and the
-/// AST stores all hold an `Allocator` whose `ptr` is the ArenaAllocator's
+/// The arena is HEAP-allocated on purpose: `Ssa.SsaBuilder` and the AST stores all hold an `Allocator` whose `ptr` is the ArenaAllocator's
 /// address, so moving the ArenaAllocator by value into this struct would
 /// dangle every one of them. Keeping a pointer makes the result freely movable
 /// — out of the function that built it, into a caller's own table, …
@@ -172,7 +172,9 @@ pub const CompileResult = struct {
     /// Preprocessed source (arena). Every AST/MIR string borrows from it.
     source: []const u8,
     mir: *Mir,
-    lower: *Lower,
+    /// Lowering's output. The `Lower` that built it is gone: nothing after
+    /// stage 4 can reach a symbol table, a scope or the SSA builder.
+    lowered: *const Lowered,
     /// gpa-owned (its `unit_modes` slice is).
     verdict: proof.Verdict,
     target: Target,
@@ -211,7 +213,7 @@ pub const CompileResult = struct {
                 self.gpa,
                 self.arena.allocator(),
                 self.mir,
-                self.lower,
+                self.lowered,
                 self.verdict,
                 &self.device_has_compile_error,
                 self.codegen_opts,
@@ -223,7 +225,7 @@ pub const CompileResult = struct {
     /// Source units in the codegen/proof sense (LRM §5.6 contributions).
     /// `verdict.unit_modes` is parallel to this.
     pub fn unitCount(self: *const CompileResult) usize {
-        return proof.unitCount(self.lower);
+        return proof.unitCount(self.lowered);
     }
 };
 
@@ -365,14 +367,18 @@ fn compileInArena(
     // --- stage 4: lower (classes 3,4,5,7,9) ---------------------------------
     const mir = try arena.create(Mir);
     mir.* = .{};
-    const lower = try arena.create(Lower);
-    lower.* = Lower.init(arena, mir, file, text, starts, bag);
-    lower.directives = pp.directives;
-    lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
+    const lowered = try arena.create(Lowered);
     {
+        var lower = Lower.init(arena, mir, file, text, starts, bag);
+        lower.directives = pp.directives;
+        lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
         // SSA maps its matrix directly; the compilation arena cannot free it.
-        defer lower.builder.deinit();
-        _ = lower.lowerFile() catch |err| switch (err) {
+        defer {
+            lower.builder.deinit();
+            // Direct OS mappings must be gone before returning the arena-owned MIR.
+            std.debug.assert(lower.builder.defs.len == 0);
+        }
+        lowered.* = lower.lowerFile() catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoModule => {
                 try bag.add(.lower, .E1001, .{}, "", .{});
@@ -387,13 +393,13 @@ fn compileInArena(
     // proof sees the same evidence the CFG edge carried, and codegen can emit
     // proven-total conditionals branchless (S.sel) instead of `if`.
     // The arena, not the gpa: ifconv appends to the arena-owned MIR tables.
-    _ = try ifconv.run(arena, mir, lower.contributions.items);
+    _ = try ifconv.run(arena, mir, lowered.contributions.items);
 
     // --- stage 5: PROVE (class 6) — gates every target ----------------------
     // Also the source of the W0650 finiteness WARNING, which is why this runs
     // even when nothing downstream needs the verdict: a `.lint` run exists to
     // tell the user what their model costs.
-    const verdict = try proof.proveOpts(gpa, mir, lower, opts.proof, bag);
+    const verdict = try proof.proveOpts(gpa, mir, lowered, opts.proof, bag);
     errdefer verdict.deinit(gpa);
     // §4.3.2: a domain violation is a compile error on every target.
     if (!verdict.ok()) return error.CompileFailed;
@@ -401,8 +407,8 @@ fn compileInArena(
     // §9.4/§9.5. Reported HERE and not in lower.zig, because "was the side
     // effect kept?" is a property of what the caller asked to build, and lowering
     // does not know that. Both are warnings: the model is legal either way.
-    for (lower.displays.items) |d| {
-        const span = lower.tokenSpan(d.tok);
+    for (lowered.displays.items) |d| {
+        const span = lowered.tokenSpan(d.tok);
         if (opts.display == .drop) {
             // §9.5 the file family is on this list for SEQUENCING, not for text,
             // so the sentence it fell foul of is a different one — and the answer
@@ -419,7 +425,7 @@ fn compileInArena(
         .arena = arena_state,
         .source = text,
         .mir = mir,
-        .lower = lower,
+        .lowered = lowered,
         .verdict = verdict,
         .target = target,
         // `opts.diags`, not the compilation's own bag: codegen runs AFTER
@@ -490,11 +496,9 @@ test "lint: source → MIR, arena freed clean" {
     defer res.deinit();
 
     try std.testing.expectEqualStrings("res", res.mir.name);
-    try std.testing.expectEqual(@as(usize, 2), res.lower.num_ports);
+    try std.testing.expectEqual(@as(usize, 2), res.lowered.num_ports);
     try std.testing.expect(res.verdict.ok());
     try std.testing.expectEqual(res.unitCount(), res.verdict.unit_modes.len);
-    // Direct OS mappings must be gone before returning the arena-owned MIR.
-    try std.testing.expectEqual(@as(usize, 0), res.lower.builder.defs.len);
 }
 
 test "IEEE 1364 §19.1 cell membership survives the preprocessor" {

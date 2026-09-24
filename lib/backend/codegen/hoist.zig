@@ -17,6 +17,7 @@ const opcode_zig = @import("opcode_zig.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -59,7 +60,7 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
     const ok: bool = switch (self.mir.valueDef(v)) {
         .undef, .float_const, .int_const => true,
         .str_const, .block_param => false,
-        .param_ref => |p| Analysis.tyOfParam(self.lower.params.items[p].ty) != .str,
+        .param_ref => |p| Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str,
         .inst_result => |inst| blk: {
             const row = self.mir.instRow(inst);
             switch (row.op) {
@@ -451,7 +452,7 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
 
 /// Auxiliary core sweeps must not initialize first-call state at a trial bias.
 pub fn probeInstance(self: *Gen) Error![]const u8 {
-    if (self.lower.table_samples.items.len == 0) return "inst";
+    if (self.lowered.table_samples.items.len == 0) return "inst";
     try self.w("    var table_probe = inst.*;\n", .{});
     return "&table_probe";
 }

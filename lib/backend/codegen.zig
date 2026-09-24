@@ -15,7 +15,7 @@
 //!
 //! SHAPE OF THE OUTPUT (top-down, so it reads like it is generated):
 //!   1. imports + S-generic value-form math helpers                      (§4.3)
-//!   2. `U` enum from Lower.node_order (ports first) + `num_ports`  (§1.3.1/§6.5)
+//!   2. `U` enum from Lowered.node_order (ports first) + `num_ports`  (§1.3.1/§6.5)
 //!   3. `Model`  — one field per parameter, spec default                  (§3.4)
 //!   4. `Instance` — temperature/abstime/analysis kind + per-operator state (§4.5)
 //!   5. one fn per source unit, uniform signature, per-unit @setFloatMode
@@ -46,6 +46,7 @@ const cg_display = @import("cg_display.zig");
 const cg_filters = @import("cg_filters.zig");
 const cg_limit = @import("cg_limit.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("naming.zig");
@@ -195,7 +196,7 @@ pub fn generate(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
     verdict: proof.Verdict,
     /// Set for any fatal generation failure, including metadata outside units.
     fatal_out: *bool,
@@ -208,13 +209,13 @@ pub fn generate(
     // with `num_ports == 0` and an empty `U`, which the host simply never
     // stamps; that is a host-side triviality, not a source-language error.
 
-    const an = try Analysis.build(arena, mir, lower);
+    const an = try Analysis.build(arena, mir, lowered);
     var g: Gen = .{
         .gpa = gpa,
         .an = &an,
         .arena = arena,
         .mir = mir,
-        .lower = lower,
+        .lowered = lowered,
         .verdict = verdict,
         .display = opts.display,
         .jac_f32 = opts.jac_f32 or opts.jac_f32_host,
@@ -276,7 +277,7 @@ pub const Gen = struct {
     an: *const Analysis,
     arena: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
     verdict: proof.Verdict,
     out: std.ArrayList(u8) = .empty,
     /// Rendered text of every float constant seen, keyed on its bit pattern.
@@ -459,7 +460,7 @@ pub const Gen = struct {
     /// when `display == .drop`). Set by `buildJobs`, which is also where the job
     /// that renders it is queued.
     display_name: []const u8 = "",
-    /// Extra solver unknowns codegen appends after `Lower.node_order`: one
+    /// Extra solver unknowns codegen appends after `Lowered.node_order`: one
     /// branch current per §5.6 potential contribution that lowering did not
     /// already give a `flow(a,b)` slot. Values are node_order-space indices.
     branch_u: []u32 = &.{},
@@ -516,11 +517,11 @@ pub const Gen = struct {
     lin: [2][]f64 = .{ &.{}, &.{} },
     /// Sanitized U-enum member name per unknown.
     u_names: [][]const u8 = &.{},
-    /// Sanitized Model field name per `Lower.params` entry.
+    /// Sanitized Model field name per `Lowered.params` entry.
     p_names: [][]const u8 = &.{},
-    /// Sanitized Model field name per `Lower.aliases` entry (§3.4.7).
+    /// Sanitized Model field name per `Lowered.aliases` entry (§3.4.7).
     a_names: [][]const u8 = &.{},
-    /// §5.10 `Instance` field name per `Lower.held_vars` entry.
+    /// §5.10 `Instance` field name per `Lowered.held_vars` entry.
     held_names: [][]const u8 = &.{},
     /// Core field index holding each held variable's end-of-block value, or
     /// `none_u32` when it folded to `.f_zero`. Filled by `planCommon`.
@@ -646,7 +647,7 @@ pub const Gen = struct {
         try cg_limit.planPrep(self);
         // After it, and before ANY emission: `emitInstance` and `emitPrecompute`
         // are both written above the core and both need the region's width.
-        if (self.lower.table_samples.items.len == 0) try gen_hoist.planHoistPrefix(self);
+        if (self.lowered.table_samples.items.len == 0) try gen_hoist.planHoistPrefix(self);
     }
 
     // The shared core: values several units read, computed once per eval — codegen/common.zig
@@ -660,13 +661,13 @@ pub const Gen = struct {
 
     fn buildUnits(self: *Gen) Error!void {
         const a = self.arena;
-        self.units = naming.enumerateUnits(a, self.mir, self.lower) catch |e| switch (e) {
+        self.units = naming.enumerateUnits(a, self.mir, self.lowered) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoSpaceLeft => return error.NameTooLong,
         };
         // The contract `unitMode` below depends on, checked once where all
         // three tables are in hand for the only time.
-        naming.assertCanonicalOrder(self.units, self.lower, self.verdict.unit_modes.len);
+        naming.assertCanonicalOrder(self.units, self.lowered, self.verdict.unit_modes.len);
         self.unit_names = try a.alloc([]const u8, self.units.len);
         var buf: [naming.max_name_len]u8 = undefined;
         for (self.units, 0..) |u, i| {
@@ -694,7 +695,7 @@ pub const Gen = struct {
     }
 
     fn uNameTaken(self: *const Gen, nm: []const u8, extra: []const []const u8) bool {
-        for (self.lower.node_order.items) |n| {
+        for (self.lowered.node_order.items) |n| {
             if (std.mem.eql(u8, n, nm)) return true;
         }
         for (extra) |n| {
@@ -711,12 +712,12 @@ pub const Gen = struct {
         // allocates a `flow(a,b)` slot only where the model PROBES I(a,b), so
         // codegen appends the missing ones after node_order — every existing
         // block_param index keeps its meaning.
-        const base: u32 = @intCast(self.lower.node_order.items.len);
-        self.branch_u = try a.alloc(u32, self.lower.contributions.items.len);
+        const base: u32 = @intCast(self.lowered.node_order.items.len);
+        self.branch_u = try a.alloc(u32, self.lowered.contributions.items.len);
         @memset(self.branch_u, none_u32);
         // Raw names of the unknowns appended after node_order, in append order.
         var extra: std.ArrayList([]const u8) = .empty;
-        for (self.lower.contributions.items, 0..) |c, i| {
+        for (self.lowered.contributions.items, 0..) |c, i| {
             // A §5.6 potential source and a §5.6.7 indirect (nullor) source are
             // the same topology: a source in the branch whose current is its
             // own unknown.
@@ -734,11 +735,11 @@ pub const Gen = struct {
             // module with a plain net called `gnd` the branches (a, reference)
             // and (a, gnd) matched each other's slot and V(a) and V(a,gnd) drove
             // one current.
-            var found: u32 = if (self.lower.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
+            var found: u32 = if (self.lowered.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
             if (found != none_u32 and self.uIsDriven(found, i)) found = none_u32;
             if (found == none_u32) {
                 const nm = try std.fmt.allocPrint(a, "flow({s},{s})", .{
-                    self.lower.nodeName(c.hi), self.lower.nodeName(c.lo),
+                    self.lowered.nodeName(c.hi), self.lowered.nodeName(c.lo),
                 });
                 found = base + @as(u32, @intCast(extra.items.len));
                 try extra.append(a, try self.freshUName(nm, extra.items));
@@ -748,19 +749,19 @@ pub const Gen = struct {
         self.n_u = base + @as(u32, @intCast(extra.items.len));
 
         self.u_names = try a.alloc([]const u8, self.n_u);
-        for (self.lower.node_order.items, 0..) |n, i| {
+        for (self.lowered.node_order.items, 0..) |n, i| {
             self.u_names[i] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
         }
         for (extra.items, 0..) |n, k| {
             self.u_names[base + k] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
         }
 
-        self.p_names = try a.alloc([]const u8, self.lower.params.items.len);
-        for (self.lower.params.items, 0..) |p, i| {
+        self.p_names = try a.alloc([]const u8, self.lowered.params.items.len);
+        for (self.lowered.params.items, 0..) |p, i| {
             self.p_names[i] = try a.dupe(u8, naming.sanitize(&buf, p.name) catch return error.OutOfMemory);
         }
-        self.a_names = try a.alloc([]const u8, self.lower.aliases.items.len);
-        for (self.lower.aliases.items, 0..) |al, i| {
+        self.a_names = try a.alloc([]const u8, self.lowered.aliases.items.len);
+        for (self.lowered.aliases.items, 0..) |al, i| {
             self.a_names[i] = try a.dupe(u8, naming.sanitize(&buf, al.name) catch return error.OutOfMemory);
         }
 
@@ -771,29 +772,29 @@ pub const Gen = struct {
         // unit can spell that segment, so the two name spaces cannot meet. The
         // target is one `sanitize`d leaf, which is injective — and a module
         // variable's name is unique in its scope, so the whole key is.
-        self.held_names = try a.alloc([]const u8, self.lower.held_vars.items.len);
+        self.held_names = try a.alloc([]const u8, self.lowered.held_vars.items.len);
         if (self.held_names.len != 0) {
             var mod_buf: [naming.max_name_len]u8 = undefined;
             const mod = naming.sanitize(&mod_buf, self.mir.name) catch return error.NameTooLong;
-            for (self.lower.held_vars.items, 0..) |h, i| {
+            for (self.lowered.held_vars.items, 0..) |h, i| {
                 const leaf = naming.sanitize(&buf, h.name) catch return error.NameTooLong;
                 self.held_names[i] = try std.fmt.allocPrint(a, "{s}__held__{s}", .{ mod, leaf });
             }
         }
-        self.p_given = try a.alloc(bool, self.lower.params.items.len);
+        self.p_given = try a.alloc(bool, self.lowered.params.items.len);
         @memset(self.p_given, false);
         // A non-local parameter whose default reads another parameter is a
         // `derive()` target, and its guard (`if (!model.X__given)`) needs the
         // flag whether or not the model ever queries §9.19 — same fold
         // condition `emitDerive` selects assignments on.
-        for (self.lower.params.items, 0..) |p, i| {
+        for (self.lowered.params.items, 0..) |p, i| {
             if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
             if (self.an.foldConst(p.default, 0, false) == null) self.p_given[i] = true;
         }
         // §9.15's host-published `$simparam` is recorded at the CALL, not by
         // this walk: a parameter default is lowered outside the block stream,
         // and `parameter real tnom = $simparam("tnom")` is the whole point.
-        self.uses_nom_temp = self.lower.uses_host_simparam;
+        self.uses_nom_temp = self.lowered.uses_host_simparam;
         // §9.19 $param_given(p): the flag lives in Model, but only for the
         // parameters actually asked about.
         for (0..self.an.nb) |bi| {

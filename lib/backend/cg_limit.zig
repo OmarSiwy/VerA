@@ -38,6 +38,7 @@
 //! Zig cannot extend a struct across files.
 
 const std = @import("std");
+const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
@@ -328,7 +329,7 @@ fn algOf(g: *const Gen, args: []const Mir.Value) ?Alg {
 /// node fights the sources and the other devices on it (`contract.zig`'s
 /// note on `limit`).
 fn writable(g: *const Gen, u: u32) bool {
-    return u != none_u32 and u >= g.lower.num_ports;
+    return u != none_u32 and u >= g.lowered.num_ports;
 }
 
 // -------------------------------------------------------- the live sets
@@ -459,7 +460,7 @@ fn scValue(sc: *Sc, v0: Mir.Value, depth: u32) bool {
         .undef, .float_const, .int_const => true,
         // §4.4 access functions ARE the bias. A string cannot feed a clamp.
         .str_const, .block_param => false,
-        .param_ref => |p| Analysis.tyOfParam(g.lower.params.items[p].ty) != .str,
+        .param_ref => |p| Analysis.tyOfParam(g.lowered.params.items[p].ty) != .str,
         .inst_result => |inst| blk: {
             const row = g.mir.instRow(inst);
             switch (row.op) {
@@ -611,7 +612,7 @@ fn scBlock(sc: *Sc, b: u32, depth: u32) bool {
 pub fn planPrep(g: *Gen) Error!void {
     g.lp_idx = try g.arena.alloc(u32, g.an.nv);
     @memset(g.lp_idx, none_u32);
-    if (g.lower.table_samples.items.len != 0) return;
+    if (g.lowered.table_samples.items.len != 0) return;
     if (g.limits.len == 0) return;
 
     var sc: Sc = .{

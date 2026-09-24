@@ -18,6 +18,7 @@ const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -52,7 +53,7 @@ pub fn emitDispatchers(self: *Gen) Error!void {
 
 /// Does any contribution have a reactive half — i.e. is `q` emitted?
 pub fn anyQ(self: *const Gen) bool {
-    for (self.lower.contributions.items) |c| {
+    for (self.lowered.contributions.items) |c| {
         if (self.an.rv(c.react_val) != .f_zero) return true;
     }
     return false;
@@ -184,17 +185,17 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // not recover this by itself — measured, see `planCommon`'s header — so
     // the number of times the model runs is decided here, in the emitter.
     var opened = false;
-    if (self.lower.table_effect != .f_zero) {
+    if (self.lowered.table_effect != .f_zero) {
         opened = true;
         self.uses_x = true;
         self.uses_model = true;
         self.uses_inst = true;
         self.core_wanted = true;
         if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
-        try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lower.table_effect)).?});
+        try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lowered.table_effect)).?});
     }
 
-    for (self.lower.contributions.items, 0..) |c, i| {
+    for (self.lowered.contributions.items, 0..) |c, i| {
         const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
         // §5.6.1.3 a `.flow` entry whose branch row is runtime-selected is
         // consumed BY that row (`I_b − value`); its KCL current is the ±I_b
@@ -228,7 +229,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         // form has a flux: its own react, or the switch partner's.
         const partner_react: Mir.Value = if (run_pot != null) blk: {
             const j = gen_unit.switchFlowOf(self, i) orelse break :blk .f_zero;
-            break :blk self.an.rv(self.lower.contributions.items[j].react_val);
+            break :blk self.an.rv(self.lowered.contributions.items[j].react_val);
         } else .f_zero;
         const live = if (react)
             val != .f_zero or partner_react != .f_zero
@@ -401,7 +402,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     //
     // Emitted AFTER the contribution loop because it reads the finished
     // res[p]; that is also why there is no separate summation helper.
-    for (self.lower.port_probes.items) |pp| {
+    for (self.lowered.port_probes.items) |pp| {
         self.uses_x = true;
         stamps += 1;
         try self.ind(1);
@@ -613,7 +614,7 @@ pub fn collapsible(self: *const Gen, i: usize) bool {
 /// residual solved for I_b, so the signs are the plain `.flow` stamp's.
 pub fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
     const j = partner orelse return self.b("S.con(0.0)", .{});
-    const f = self.lower.contributions.items[j];
+    const f = self.lowered.contributions.items[j];
     const fv = self.an.rv(if (react) f.react_val else f.resist_val);
     switch (gen_unit.retention(self, f)) {
         .off => try self.b("S.con(0.0)", .{}),
@@ -634,7 +635,7 @@ pub fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
 pub fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
     const open: []const u8 = if (react) "S.con(0.0)" else "ib";
     const j = partner orelse return self.b("{s}", .{open});
-    const f = self.lower.contributions.items[j];
+    const f = self.lowered.contributions.items[j];
     const fv = self.an.rv(if (react) f.react_val else f.resist_val);
     switch (gen_unit.retention(self, f)) {
         // Discarded on every path: the partner entry is dead and the else
@@ -817,7 +818,7 @@ pub fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: b
     var acc = uBit(self.branch_u[i]) |
         self.an.unknownDeps(if (react) c.react_val else c.resist_val);
     if (gen_unit.switchFlowOf(self, i)) |j| {
-        const f = self.lower.contributions.items[j];
+        const f = self.lowered.contributions.items[j];
         acc |= self.an.unknownDeps(if (react) f.react_val else f.resist_val);
     }
     return acc;

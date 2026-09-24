@@ -13,6 +13,7 @@ const proof_prover = @import("prover.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Lower = @import("../lower.zig");
+const Lowered = Lower.Lowered;
 const diag = @import("diag");
 const FloatMode = proof.FloatMode;
 const Verdict = proof.Verdict;
@@ -34,6 +35,7 @@ pub const Harness = struct {
     file: Ast.SourceFile,
     mir: Mir,
     low: Lower,
+    lowered: Lowered,
     bag: diag.Bag,
 
     fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
@@ -42,6 +44,7 @@ pub const Harness = struct {
             .file = .empty,
             .mir = .{},
             .low = undefined,
+            .lowered = undefined,
             .bag = undefined,
         };
         const arena = out.arena_state.allocator();
@@ -54,13 +57,13 @@ pub const Harness = struct {
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-        _ = try out.low.lowerFile();
+        out.lowered = try out.low.lowerFile();
     }
 
     /// Run the prover against this harness's own bag, so a test can assert on
     /// the CODES that came out rather than on prose.
     fn prove(self: *Harness, gpa: std.mem.Allocator, opts: Options) !Verdict {
-        return proveOpts(gpa, &self.mir, &self.low, opts, &self.bag);
+        return proveOpts(gpa, &self.mir, &self.lowered, opts, &self.bag);
     }
 
     fn has(self: *const Harness, code: diag.Code) bool {
@@ -708,7 +711,7 @@ test "proof: the unit count is the contribution count (the naming.zig contract)"
     const v = try h.prove(std.testing.allocator, .{});
     defer v.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(unitCount(&h.low), v.unit_modes.len);
+    try std.testing.expectEqual(unitCount(&h.lowered), v.unit_modes.len);
     try std.testing.expectEqual(@as(usize, 2), v.unit_modes.len);
 }
 

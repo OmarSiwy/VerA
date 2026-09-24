@@ -18,6 +18,7 @@ const gen_cfg = @import("cfg.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("../naming.zig");
@@ -129,8 +130,8 @@ pub fn retention(self: *const Gen, c: Lower.Contribution) Retention {
 /// one. ponytail: O(n) scan per potential entry; contributions per module
 /// are tens, same order as `uIsDriven`'s existing scan.
 pub fn switchFlowOf(self: *const Gen, pi: usize) ?usize {
-    const p = self.lower.contributions.items[pi];
-    for (self.lower.contributions.items, 0..) |c, j| {
+    const p = self.lowered.contributions.items[pi];
+    for (self.lowered.contributions.items, 0..) |c, j| {
         if (j == pi or c.kind != .direct or c.access != .flow) continue;
         if (c.hi == p.hi and c.lo == p.lo and c.br == p.br) return j;
     }
@@ -142,9 +143,9 @@ pub fn switchFlowOf(self: *const Gen, pi: usize) ?usize {
 /// unknown (row `I_b − value`, stamps ±I_b), and stamping it here as well
 /// would inject the current twice.
 pub fn flowIsMerged(self: *const Gen, j: usize) bool {
-    const f = self.lower.contributions.items[j];
+    const f = self.lowered.contributions.items[j];
     if (f.kind != .direct or f.access != .flow) return false;
-    for (self.lower.contributions.items) |c| {
+    for (self.lowered.contributions.items) |c| {
         if (c.kind != .direct or c.access != .potential) continue;
         if (c.hi != f.hi or c.lo != f.lo or c.br != f.br) continue;
         return retention(self, c) == .runtime;
@@ -191,7 +192,7 @@ pub fn planNoise(self: *Gen) Error!void {
     var ids: std.ArrayList(u32) = .empty;
     var tabs: std.ArrayList([]const [2]f64) = .empty;
     var tab_vals: std.ArrayList([]const [2]Mir.Value) = .empty;
-    for (self.lower.contributions.items) |c| {
+    for (self.lowered.contributions.items) |c| {
         if (c.noise_srcs.len == 0) continue;
         // §1.3.1.1 ground is not an unknown: a to-ground generator is
         // spelled row == col, and one on ground-ground has neither. The
@@ -393,7 +394,7 @@ pub fn refuseNoise(
     comptime fmt: []const u8,
     args: anytype,
 ) Error!void {
-    if (self.diags) |bag| try bag.add(.codegen, code, self.lower.tokenSpan(tok), fmt, args);
+    if (self.diags) |bag| try bag.add(.codegen, code, self.lowered.tokenSpan(tok), fmt, args);
     self.any_fatal = true;
     if (self.noise_fatal == null)
         self.noise_fatal = try std.fmt.allocPrint(self.arena, "LRM 4.6.4: " ++ fmt, args);
@@ -401,7 +402,7 @@ pub fn refuseNoise(
 
 pub fn buildJobs(self: *Gen) Error!void {
     var jobs: std.ArrayList(Job) = .empty;
-    for (self.lower.contributions.items, 0..) |c, i| {
+    for (self.lowered.contributions.items, 0..) |c, i| {
         const mode = unitMode(self, i);
         const resist = self.an.rv(c.resist_val);
         const react = self.an.rv(c.react_val);
@@ -469,7 +470,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // gains a held variable appends a core field, it renumbers none.
     //
     // `.strict` unconditionally: proof.zig rates contributions only.
-    for (self.lower.held_vars.items) |h| {
+    for (self.lowered.held_vars.items) |h| {
         try jobs.append(self.arena, .{
             .kind = .held,
             .target = self.an.rv(h.final),
@@ -493,15 +494,15 @@ pub fn buildJobs(self: *Gen) Error!void {
             });
         }
     }
-    for (self.lower.limit_slots.items) |slot| try jobs.append(self.arena, .{
+    for (self.lowered.limit_slots.items) |slot| try jobs.append(self.arena, .{
         .kind = .limit_old,
         .target = self.an.rv(slot.final),
         .mode = .strict,
         .comment = "§9.17.3 next-iteration limiter value",
     });
-    if (self.lower.reject_iteration_place != null) try jobs.append(self.arena, .{
+    if (self.lowered.reject_iteration_place != null) try jobs.append(self.arena, .{
         .kind = .reject_iteration,
-        .target = self.an.rv(self.lower.reject_iteration),
+        .target = self.an.rv(self.lowered.reject_iteration),
         .mode = .strict,
         .comment = "§9.17.1 iteration rejection",
     });
@@ -511,7 +512,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // job for the same insert-tolerance reason as both neighbours — and a
     // module whose every potential contribution is unconditional queues
     // NOTHING here, so its core fields do not move.
-    for (self.lower.contributions.items, 0..) |c, i| {
+    for (self.lowered.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
         const ret = retention(self, c);
         if (ret != .runtime) continue;
@@ -522,7 +523,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             .comment = "§5.6.1.3 retention flag",
         });
         if (switchFlowOf(self, i)) |j| {
-            const fret = retention(self, self.lower.contributions.items[j]);
+            const fret = retention(self, self.lowered.contributions.items[j]);
             if (fret == .runtime) try jobs.append(self.arena, .{
                 .kind = .retained,
                 .target = fret.runtime,
@@ -611,9 +612,9 @@ pub fn buildJobs(self: *Gen) Error!void {
             .comment = "§5.10.3.3 the latest period, read by the schedule",
         });
     }
-    if (self.lower.table_effect != .f_zero) try jobs.append(self.arena, .{
+    if (self.lowered.table_effect != .f_zero) try jobs.append(self.arena, .{
         .kind = .table_effect,
-        .target = self.an.rv(self.lower.table_effect),
+        .target = self.an.rv(self.lowered.table_effect),
         .mode = .strict,
         .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
     });
@@ -624,7 +625,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // `.strict` unconditionally: proof.zig rates contributions only, a print
     // is not on the residual path, so there is nothing here for `.optimized`
     // to speed up and no verdict that would justify claiming it.
-    const root = self.an.rv(self.lower.display_root);
+    const root = self.an.rv(self.lowered.display_root);
     if (self.display == .emit and root != .f_zero) {
         var buf: [naming.max_name_len]u8 = undefined;
         const n = naming.unitName(&buf, self.mir.name, .{

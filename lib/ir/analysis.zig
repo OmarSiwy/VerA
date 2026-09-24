@@ -36,6 +36,7 @@
 const std = @import("std");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
+const Lowered = Lower.Lowered;
 const Ast = @import("frontend").Ast;
 const Const = @import("frontend").constfold.Const;
 
@@ -54,7 +55,7 @@ pub const VTy = Mir.callee.Ty;
 
 arena: std.mem.Allocator,
 mir: *const Mir,
-lower: *const Lower,
+lowered: *const Lowered,
 
 nb: u32 = 0,
 rpo_num: []u32 = &.{},
@@ -158,9 +159,9 @@ deps_folded: bool = false,
 pub fn build(
     arena: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
 ) Error!Analysis {
-    var self = try buildStructure(arena, mir, lower);
+    var self = try buildStructure(arena, mir, lowered);
     try self.buildValueTypes();
     try self.buildDeps();
     return self;
@@ -184,9 +185,9 @@ pub fn build(
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
 ) Error!Analysis {
-    var self: Analysis = .{ .arena = arena, .mir = mir, .lower = lower };
+    var self: Analysis = .{ .arena = arena, .mir = mir, .lowered = lowered };
     self.nv = @intCast(mir.defs.len + Mir.Value.first_dynamic);
     self.alias = try arena.alloc(Mir.Value, self.nv);
     for (self.alias, 0..) |*p, v| p.* = mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
@@ -549,7 +550,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
             .float_const => .real,
             .int_const => .int,
             .str_const => .str,
-            .param_ref => |p| tyOfParam(self.lower.params.items[p].ty),
+            .param_ref => |p| tyOfParam(self.lowered.params.items[p].ty),
             .block_param => .real,
             .inst_result => |inst| blk: {
                 const op = self.mir.instOp(inst);
@@ -797,7 +798,7 @@ fn foldValue(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: b
         // Only a Model DEFAULT may look through a parameter: everywhere
         // else the value is whatever the host overrode it with.
         .param_ref => |p| return if (resolve_params)
-            self.foldValue(self.lower.params.items[p].default, depth + 1, true)
+            self.foldValue(self.lowered.params.items[p].default, depth + 1, true)
         else
             null,
         .inst_result => |inst| switch (self.mir.instData(inst)) {
@@ -830,7 +831,7 @@ fn foldValue(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: b
                 const arg = self.mir.valueDef(self.rv(d.args[0]));
                 if (arg != .str_const) return null;
                 if (Lower.simparamHostField(arg.str_const) == null) return null;
-                return .{ .real = self.lower.simparamValue(arg.str_const) orelse return null };
+                return .{ .real = self.lowered.simparamValue(arg.str_const) orelse return null };
             },
             .phi, .branch, .jump => return null,
         },

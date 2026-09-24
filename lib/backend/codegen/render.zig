@@ -21,6 +21,7 @@ const opcode_zig = codegen.opcode_zig;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -140,7 +141,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         .str_const => |s| try self.b("\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
             self.uses_model = true;
-            switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
+            switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .real => try self.b("S.con(model.{s})", .{self.p_names[p]}),
                 .int, .str => try self.b("model.{s}", .{self.p_names[p]}),
             }
