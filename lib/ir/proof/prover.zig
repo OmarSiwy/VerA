@@ -954,7 +954,8 @@ pub const Prover = struct {
             // and an unprovable one is accepted and forfeits `finite`:
             //   - real `%`: `@rem(x, 0.0)` is NaN, IEEE-defined under `.strict`;
             //   - integer `/`: codegen guards it (`render.zig`'s `.idiv`), since
-            //     `@divTrunc(i64, 0)` is illegal behavior in Zig.
+            //     `@divTrunc(i64, 0)` is illegal behavior in Zig, and a zero
+            //     divisor yields 0 — which W0653 announces.
             // Integer `%` stays an error unless proven non-zero: its device
             // form (`@rem`) has no guard, so there is nothing defined to fall
             // back on.
@@ -967,6 +968,9 @@ pub const Prover = struct {
                     return self.violated(inst, .E0601, what, d.rhs, y, "is provably zero", "a zero divisor is an error (§4.2.4); check the expression or the parameter's range");
                 if (op == .imod)
                     return self.violated(inst, .E0601, what, d.rhs, y, "cannot be proven non-zero", "constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division");
+                // Legal, but not silent: the guarded device division yields
+                // 0 for a zero divisor, a value the LRM does not give.
+                if (op == .idiv) try self.warnIntDivisor(inst, d.rhs, y);
                 return false;
             },
             .pow_sign => { // §4.3.1 Table 4-14
@@ -1201,6 +1205,19 @@ pub const Prover = struct {
             else => {},
         }
         b.note("`.strict` is correct and spec-legal — this warning is about speed, not correctness", .{});
+        try b.emit();
+    }
+
+    /// W0653 — an integer `/` whose divisor the prover cannot show non-zero.
+    /// Accepted (§4.2.4 has no zero rule for `/`), but the device's guarded
+    /// division yields 0 where IEEE 1364 §5.1.5 would yield `x`, which an
+    /// analog integer cannot hold — so the substitution is announced, never
+    /// silent. A warning: it does not touch `error_count`.
+    fn warnIntDivisor(self: *Prover, inst: Mir.Inst, divisor: Mir.Value, iv: proof_lattice.Interval) !void {
+        if (!self.bag.enabled(.W0653)) return;
+        var b = self.violation(inst, .W0653, divisor, iv, "integer `/` divisor");
+        b.point("cannot be proven non-zero; if it is zero at run time the result is 0", .{});
+        b.help("give the parameter `exclude 0` or `from [1:inf)`, guard the division with an `if` the prover can see, or pass `--allow=W0653`", .{});
         try b.emit();
     }
 

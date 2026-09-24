@@ -574,8 +574,9 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // A divisor the prover could not show non-zero is ACCEPTED
             // (proof checkDomain, §4.2.4 has no zero rule for `/`), and
             // `@divTrunc(x, 0)` is illegal behavior, so it goes through
-            // `idiv_fn`: x / 0 is 0 (IEEE 1364's 'bx has no analog value). A
-            // non-zero literal divisor keeps the bare form.
+            // `idiv_fn`: x / 0 is 0 (IEEE 1364's 'bx has no analog value),
+            // announced at compile time by the prover's W0653. A non-zero
+            // literal divisor keeps the bare form.
             const lit = self.mir.valueDef(self.an.rv(b2));
             const bare = lit == .int_const and lit.int_const != 0;
             try self.b("@as(i64, @as(i32, @truncate(", .{});
