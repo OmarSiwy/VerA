@@ -12,23 +12,22 @@
 //   V(p) = 1.0 > 0.5, so i = 2
 //   {i{"Hi"}}  = "HiHi"         (a string literal Str)
 //   {i{b}}     = "HiHi"         (Str of type string, b = "Hi")
+//   {(i - 2){"Hi"}} = ""        (N = 0: zero copies, the empty string)
 //
 // "HiHiHi" (i = 3, the other arm) is checked unequal, so a device that took the
 // wrong arm or a fixed count cannot pass. 52_nonconstant_replication_to_integral.va
-// is the illegal neighbour: the same replication into an integral target, E0354.
+// is the illegal neighbour: the same replication into an integral target, E0354;
+// replication_nonconstant_real_multiplier_rejected.va is the other: a
+// nonconstant multiplier that is not "of integral type".
+//
+// This was an XFAIL (E0328, "a compiled device has no run-time string value")
+// until 2026-09-24. The fixture was right and VerA was not: the row says "can be
+// nonconstant" in so many words. Lowering now emits `$str$repeat`, which builds
+// the N copies in the call site's scratch (str_kernels.zStrRepeat); E0328 is
+// retired.
 //
 //! lrm 3.3
 //! bias V(p) = 1.0
-// WHY IT STAYS AN XFAIL (re-read 2026-09-24). The fixture is right: Table 3-3
-// makes a nonconstant multiplier legal, and `i` here is an analog VARIABLE set
-// from a probe, so no compile-time value exists to fold. A PARAMETER multiplier
-// is a different case — a shape parameter, fixed at compilation (§3.4) — and
-// passes in string_replication_parameter_multiplier.va. What this row needs is
-// a string value built while the device runs; the emitted device carries only
-// compile-time strings (a `str_const`), so that is an implementation limit, not
-// a reading of the LRM, and no cap on `i` would be one the clause states.
-//
-//! xfail E0328: implementation limit — a compiled device has no run-time string value, so {i{"Hi"}} with i a probe-dependent variable is refused
 `include "check.vh"
 module ch3_string_replication_runtime_multiplier(p);
     inout p;
@@ -45,6 +44,8 @@ module ch3_string_replication_runtime_multiplier(p);
         `CHECKI("and not the other arm's three", (a == "HiHiHi"), 0);
         a = {i{b}};
         `CHECKI("a probe-dependent multiplier of a string variable", (a == "HiHi"), 1);
+        a = {(i - 2){"Hi"}};
+        `CHECKI("a probe-dependent multiplier of zero: the empty string", (a == ""), 1);
         I(p) <+ 0.0 * V(p);
     end
 endmodule

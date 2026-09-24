@@ -766,6 +766,38 @@ pub fn zSBuf(comptime site: usize) []u8 {
     return &Buf.b;
 }
 
+/// §3.3 Table 3-3 "Concatenation of Str1,…,Strn" when a piece is a string
+/// known only at run time, into its call site's `zSBuf`. A piece may be this
+/// same site's previous result (`s = {s, "x"}`), so the bytes are built in a
+/// local first and copied once; the overrun rule is `$sformat`'s: the empty
+/// string, never a truncation (see `zSBuf`).
+pub fn zStrCat(buf: []u8, parts: []const []const u8) []const u8 {
+    var tmp: [4096]u8 = undefined;
+    var n: usize = 0;
+    for (parts) |p| {
+        if (p.len > tmp.len - n) return "";
+        @memcpy(tmp[n..][0..p.len], p);
+        n += p.len;
+    }
+    if (n > buf.len) return "";
+    @memcpy(buf[0..n], tmp[0..n]);
+    return buf[0..n];
+}
+
+/// §3.3 Table 3-3 Replication with a nonconstant multiplier: "a string
+/// containing N concatenated copies of Str". The row fixes no result for a
+/// negative N (§4.2.13's "non-negative" governs a constant), so N <= 0 is the
+/// empty string, as zero copies are. Same local and overrun rule as `zStrCat`.
+pub fn zStrRepeat(buf: []u8, count: i64, s: []const u8) []const u8 {
+    if (count <= 0 or s.len == 0) return "";
+    var tmp: [4096]u8 = undefined;
+    if (count > tmp.len / s.len or s.len * @as(usize, @intCast(count)) > buf.len) return "";
+    const k: usize = @intCast(count);
+    for (0..k) |j| @memcpy(tmp[j * s.len ..][0..s.len], s);
+    @memcpy(buf[0 .. k * s.len], tmp[0 .. k * s.len]);
+    return buf[0 .. k * s.len];
+}
+
 /// §2.6.2 Table 2-1's scale factor for one symbol, or null when the character
 /// is not one. The 1e3 row is spelled "K, k", so a SCANNER takes both — which
 /// is why no fixture may pin which of the two an output prints.

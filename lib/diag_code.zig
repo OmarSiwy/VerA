@@ -2352,21 +2352,14 @@ fn infoOf(c: Code) Info {
             \\non-x and non-z constant expression".
             ,
         },
-        .E0328 => .{
-            .title = "string concatenation with a run-time operand is not supported",
-            .lrm = "3.3",
-            .explain =
-            \\A concatenation or replication of strings is folded at compile time
-            \\into one string literal, so each operand and the multiplier must be
-            \\known then. There is no run-time string buffer in a compiled device.
-            \\
-            \\This is VerA's limit, not the LRM's: 3.3 Table 3-3 says a
-            \\replication multiplier "can be nonconstant", and the result is then
-            \\a string of N copies built while the model runs. A multiplier
-            \\whose value lowering can still see (`integer i = 1;`) is folded and
-            \\accepted.
-            ,
-        },
+        .E0328 => retiredInfo(
+            \\"string concatenation with a run-time operand is not supported".
+            \\Retired: 3.3 Table 3-3 makes both a string-typed concatenation
+            \\operand and a nonconstant replication multiplier legal, and the
+            \\device now builds such a string while it runs (`$str$cat`,
+            \\`$str$repeat`, str_kernels.zig). A nonconstant multiplier that is
+            \\not of integral type is E0327. The number is not reused.
+        ),
         .E0329 => .{
             .title = "part selects are not supported",
             .lrm = "4.2.13",
