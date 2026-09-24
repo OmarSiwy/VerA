@@ -218,6 +218,11 @@ pub const Run = struct {
     /// Called after a `.vpi`-watched slot changed value and its waiters were
     /// woken. The VPI installs it; nothing else in the engine reads it.
     vpi_change: ?*const fn (r: *Run, slot: u32) void = null,
+    /// IEEE 1364-2005 §12.3.11 "the sign attribute shall not cross
+    /// hierarchy": a port that COLLAPSED onto its parent's net shares the
+    /// parent's slot but keeps its own declaration's signedness. Keyed by the
+    /// port's name in the child, and present only where the two differ.
+    port_signed: std.AutoHashMapUnmanaged(Name, bool) = .empty,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -517,7 +522,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (n.discipline != .none or n.is_ground)
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        const at = try mintNet(r, e, n.kind, width, n.name, n.main_tok);
+        const at = try mintNet(r, e, n.kind, width, n.is_signed, n.name, n.main_tok);
         if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
             .msb = try r.declaredBound(range.msb, n.main_tok),
             .lsb = try r.declaredBound(range.lsb, n.main_tok),
@@ -552,6 +557,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             if (outer.resolved.width != width)
                 return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
             try r.bind(p.name, outer.slot, p.main_tok);
+            if (p.is_signed != e.values.items[outer.slot].signed)
+                try r.port_signed.put(arena, .{ .scope = scope, .str = p.name }, p.is_signed);
             continue;
         }
         // `p.kind`, NOT `.wire`. A body declaration naming a header port is
@@ -561,7 +568,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // was that an internal `tri0` read 0 while the identical declaration
         // on a port read z: §7.9's resolution and `netPull`'s undriven value
         // are both functions of the net type, and the port's was a lie.
-        const at = try mintNet(r, e, p.kind, width, p.name, p.main_tok);
+        const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
         switch (bind) {
             // IEEE 1364 §19.10: an unconnected INPUT port declared in an
             // `unconnected_drive` region is pulled to a logic level THROUGH A
@@ -666,14 +673,14 @@ fn newScope(r: *Run, tok: u32) Error!u32 {
 }
 
 /// Allocate one net and its slot, and bind `name` to it in the current scope.
-fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, name: Ast.StrId, tok: u32) Error!u32 {
+fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name: Ast.StrId, tok: u32) Error!u32 {
     if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
     const slot: u32 = @intCast(e.values.items.len);
     const at: u32 = @intCast(e.nets.items.len);
     try r.bind(name, slot, tok);
     // §3.7: a net with no driver is Z, not X — except where the net type itself
     // supplies a value. That is the whole net/variable difference.
-    try e.values.append(r.arena, try filled(r.arena, width, false, undriven(kind)));
+    try e.values.append(r.arena, try filled(r.arena, width, signed, undriven(kind)));
     try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, width, false, .z), .tok = tok });
     try r.net_of.put(r.arena, slot, at);
     return at;
@@ -1082,6 +1089,25 @@ test "§19.10 nounconnected_drive leaves an open input port floating" {
         \\initial #0 $display("%b", u.a);
         \\endmodule
     , "z\n");
+}
+
+// §12.3.11: each side of a port reads the connected bits with ITS OWN
+// declaration's signedness — the child's `signed` port sees -1 in a parent's
+// unsigned 8'hff, and an unsigned port sees 255 in a signed parent net.
+test "§12.3.11 the sign attribute does not cross a port, and a signed net is signed" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module sc(input signed [7:0] v, output n); assign n = v < 0; endmodule
+        \\module uc(v, n); input [7:0] v; output n; assign n = v < 0; endmodule
+        \\module m;
+        \\wire [7:0] pu = 8'hff;
+        \\wire signed [7:0] ps = 8'hff;
+        \\wire a, b;
+        \\sc x(pu, a);
+        \\uc y(ps, b);
+        \\initial #1 $display("%b%b %0d %0d", a, b, ps, pu);
+        \\endmodule
+    , "10 -1 255\n");
 }
 
 // §7.8: a pull source drives at pull strength unless its OWN side's strength

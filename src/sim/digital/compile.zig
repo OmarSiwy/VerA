@@ -125,7 +125,8 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             // value an expression could read.
             if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
             const v = self.values[at];
-            break :blk .{ .width = v.width, .signed = v.signed };
+            const own = if (ex.tag(e) == .ident) self.port_signed.get(.{ .scope = self.scope, .str = ex.strOf(e) }) else null;
+            break :blk .{ .width = v.width, .signed = own orelse v.signed };
         },
         .int_literal => blk: {
             const n = ex.intLiteral(e);

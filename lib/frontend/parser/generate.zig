@@ -307,7 +307,8 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
     // It is §7.9's resolution input — see `Ast.Port.kind`.
     var kind: Ast.NetKind = .wire;
-    const disc = try parse_module.optPortType(self, &kind);
+    var signed = false;
+    const disc = try parse_module.optPortType(self, &kind, &signed);
     // A.2.1.2's two VARIABLE arms, which only `output` has:
     //
     //     output_declaration ::=
@@ -340,7 +341,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
             .{self.found(self.pos)},
         );
         self.pos += 1;
-        _ = self.eat(.kw_signed);
+        signed = self.eat(.kw_signed);
     }
     // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
     // "port direction declaration", the half of the clause that carries
@@ -365,10 +366,12 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
                 .init = init_expr,
                 .storage = storage,
                 .packed_range = range,
+                .is_signed = signed,
                 .main_tok = tok,
             });
         }
         if (findPort(b, name)) |p| {
+            if (signed) p.is_signed = true;
             // §6.2 "Ports declared in the list of port declarations shall
             // not be redeclared within the body of the module." A direction
             // is what a `list_of_port_declarations` header carries and a
@@ -612,7 +615,7 @@ pub fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }
 
-pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength) Error!void {
+pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength, signed: bool) Error!void {
     const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
     // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
     // belongs to the NET, not to the declaration's optional assignment:
@@ -663,6 +666,7 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // what used to make the second one invisible. The entry adds no
         // node: internNode finds the port's existing slot by name.
         const port = if (is_ground) null else findPort(b, name);
+        if (port != null and signed) port.?.is_signed = true;
         if (port != null and port.?.discipline == .none) {
             port.?.discipline = disc;
             // §6.5.2.2: this IS the port type declaration. Recorded beside
@@ -695,6 +699,7 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
                 .discipline = disc,
                 .is_ground = is_ground,
                 .range = range,
+                .is_signed = signed,
                 .charge = st.charge,
                 .strength0 = st.strength0,
                 .strength1 = st.strength1,
