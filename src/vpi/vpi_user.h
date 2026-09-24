@@ -605,7 +605,17 @@ extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
-/* §12.11 the delays of a continuous assignment or delay control. */
+/* §12.18 real properties: the analysis's, asked of NULL. "available to analog
+ * tasks and functions only" — outside an analog systf's callback the answer
+ * is vpiUndefined with vpiError; inside one this process has no analysis to
+ * report either, so it is the same. VerA's numbers. */
+#define vpiStartTime          742
+#define vpiEndTime            743
+#define vpiTransientMaxStep   744
+#define vpiStartFrequency     745
+#define vpiEndFrequency       746
+extern double     vpi_get_real(PLI_INT32 prop, vpiHandle obj);
+/* §12.11 the delays of a primitive, continuous assignment or delay control. */
 extern void       vpi_get_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* --------------------------------------------------------------------------
  * §12.32/§12.33 user system tasks and functions.
