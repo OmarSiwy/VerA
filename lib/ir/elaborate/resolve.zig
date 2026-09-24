@@ -217,6 +217,8 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
         if (!gop.found_existing) gop.value_ptr.* = .{ .tok = p.main_tok };
         try gop.value_ptr.discs.append(self.ctx.arena, disc);
         try gop.value_ptr.paths.append(self.ctx.arena, path);
+        // Parallel columns: `resolveLevel` reads arrival i's path beside its discipline.
+        std.debug.assert(gop.value_ptr.discs.items.len == gop.value_ptr.paths.items.len);
     }
     if (disc == .none) return;
     const declared = self.disc_of.get(bound) orelse .none;
@@ -318,6 +320,7 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
 /// proper prefix of `i`'s), or null for a segment at the net's own level.
 /// This recovers the levels a flattened net's single list mixes together.
 fn levelOf(paths: []const []const u8, i: usize) ?usize {
+    std.debug.assert(i < paths.len);
     var best: ?usize = null;
     for (paths, 0..) |q, j| {
         if (q.len >= paths[i].len or !std.mem.startsWith(u8, paths[i], q)) continue;
@@ -333,6 +336,9 @@ fn levelOf(paths: []const []const u8, i: usize) ?usize {
 /// 7-2's NetA sees "the resulting cmos3 from module twoblks", not twoblks'
 /// children.
 fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error!?Ast.StrId {
+    // `resolveDiscipline` appends the two columns together.
+    std.debug.assert(s.discs.items.len == s.paths.items.len);
+    if (group) |g| std.debug.assert(g < s.discs.items.len);
     if (group) |g| if (s.resolved.get(@intCast(g))) |cached| return cached;
     var discs: std.ArrayList(Ast.StrId) = try .initCapacity(self.ctx.arena, s.discs.items.len);
     for (s.discs.items, 0..) |d, i| {
@@ -378,6 +384,9 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
         if (std.mem.findScalar(Ast.StrId, cands.items, d) == null)
             cands.appendAssumeCapacity(d);
     }
+    // The level's domain is continuous as soon as one candidate is, so a
+    // discrete level has no other-domain arrival.
+    if (!net_continuous) std.debug.assert(!mixed_port);
     if (cands.items.len <= 1) return if (cands.items.len == 1) cands.items[0] else null;
 
     if (try matchResolution(self, cands.items, true)) |r| {

@@ -67,7 +67,8 @@ fn isVector(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
 /// `src.len` is the index at which the auto-inserted ones begin. Returns
 /// `src` itself when nothing is mixed; otherwise the list is new, in the
 /// arena. Reports E0922 for a port that matches more than one connect
-/// statement.
+/// statement. Asserts that `gates` holds exactly the generate instances'
+/// schemes, `src.len == module.instances.len + gates.len` (`enterLevel`).
 ///
 /// §7.8.4: "A connection shall be selected for a port only
 /// if one of the connections to the port is digital and the other is analog.
@@ -98,6 +99,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
     // out-of-context declaration below is collected only when its module is
     // walked (`resolve.collectOoc`), so an answer cached for the level above
     // may predate it.
+    std.debug.assert(src.len == module.instances.len + gates.len); // `enterLevel`'s, consumed here
     self.seg_up.clearRetainingCapacity();
     var n_ins: usize = 0;
     for (self.ctx.file.connectrules) |cr| n_ins += cr.insertions.len;
@@ -312,6 +314,9 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
             .main_tok = conn.main_tok,
         });
     }
+    // The first hit never finds an earlier one of its group, so at least one
+    // bridge was appended.
+    std.debug.assert(out.items.len > src.len);
     return out.items;
 }
 

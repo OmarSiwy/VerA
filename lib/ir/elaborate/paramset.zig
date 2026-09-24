@@ -68,7 +68,9 @@ pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance, path: []const u
 /// Shared by actual instantiation and §6.9.3 connect insertion. Both must see
 /// the same effective overrides at the external instance path, before storage
 /// is renamed to the internal `instance.paramset.parameter` namespace.
+/// Asserts that `live` starts empty.
 pub fn matchingParamsets(self: *Flatten, inst: *const Ast.Instance, path: []const u8, live: *std.ArrayList(*const Ast.ParamsetDecl)) Error!usize {
+    std.debug.assert(live.items.len == 0);
     var count: usize = 0;
     for (self.ctx.file.paramsets) |ps| if (ps.name == inst.module) {
         count += 1;
@@ -86,6 +88,7 @@ pub fn matchingParamsets(self: *Flatten, inst: *const Ast.Instance, path: []cons
     // "applied in order until a unique paramset has been selected".
     for ([_]TieRule{ .un_overridden, .ranged_locals, .unconnected_ports }) |rule|
         if (live.items.len > 1) try tieBreak(self, inst, path, live, rule);
+    std.debug.assert(live.items.len <= count);
     return count;
 }
 
@@ -101,6 +104,7 @@ fn tieBreak(
     live: *std.ArrayList(*const Ast.ParamsetDecl),
     rule: TieRule,
 ) Error!void {
+    std.debug.assert(live.items.len > 1); // a unique paramset needs no tie-break
     const scores = try self.ctx.arena.alloc(i64, live.items.len);
     for (live.items, scores) |ps, *s| s.* = switch (rule) {
         // "the fewest number of un-overridden parameters": the paramset's
@@ -141,6 +145,8 @@ fn tieBreak(
         live.items[w] = ps;
         w += 1;
     };
+    // The best score is some candidate's, so it survives.
+    std.debug.assert(w != 0);
     live.shrinkRetainingCapacity(w);
 }
 
@@ -334,6 +340,9 @@ fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bo
 /// The paramset's own parameters become localparams under
 /// `path ++ paramset_name ++ sep`, so `u.gain` stays the module's parameter
 /// and `u.ch6_ps.gain` is the paramset's.
+///
+/// Asserts that `ps`'s §6.4 chain reaches a module, as the walk's
+/// `chainEnd` established before inlining.
 pub fn paramsetOverrides(
     self: *Flatten,
     inst: *const Ast.Instance,
@@ -352,7 +361,9 @@ pub fn paramsetOverrides(
     // §6.4's chain, near to far. `chainEnd` already walked it to find
     // `child`, so this cannot fail here.
     var chain: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
-    _ = try elab_names.paramsetChain(self, ps, &chain);
+    const reaches = try elab_names.paramsetChain(self, ps, &chain);
+    std.debug.assert(reaches);
+    std.debug.assert(chain.items[0] == ps);
 
     // ---- level 1: the paramset's own parameters, overridden by the instance
     var ps_unit: Unit = .{ .hier = parent.hier };
@@ -479,6 +490,7 @@ fn paramsetStatements(
     path: []const u8,
     stmts: *std.ArrayList(Ast.StmtId),
 ) Error!void {
+    std.debug.assert(units.len == chain.len); // one unit per link
     const file = self.ctx.file;
     var any = false;
     for (chain) |link| any = any or link.body.len != 0 or link.vars.len != 0;

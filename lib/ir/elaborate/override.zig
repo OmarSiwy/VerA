@@ -42,7 +42,8 @@ comptime {
 /// any child is inlined: a defparam applies downward, and the parameters it
 /// overrides are created as those instances are. Under a §6.4 paramset
 /// instance a defparam overrides nothing; it lands in
-/// `Flatten.paramset_defparams` for lowering to judge.
+/// `Flatten.paramset_defparams` for lowering to judge. Asserts that `path`
+/// is empty (the top) or ends in `sep`.
 pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error!void {
     for (module.defparams) |dp| {
         if (self.unit.paramset_instance) |instance| {
@@ -269,6 +270,8 @@ fn seedValueOf(self: *Flatten, name: Ast.StrId) ?Ast.ExprId {
 /// of the path runs down from there. A top-level module's instance name is
 /// its module name. Nothing matching leaves the path downward, for E0907.
 fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, dp: []const u8) Error![]const u8 {
+    // The ancestor walk below cuts `path` at each `sep`.
+    if (path.len != 0) std.debug.assert(path[path.len - 1] == elaborate.sep);
     if (rootedPath(self, dp)) |r| return r;
     const downward = try self.ctx.arena.print("{s}{s}", .{ path, dp });
     const dot = std.mem.findScalar(u8, dp, elaborate.sep) orelse return downward;
@@ -294,7 +297,9 @@ fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, 
                 return self.ctx.arena.print("{s}{s}", .{ prefix, dp[dot + 1 ..] });
         }
         if (end == 0) return downward;
+        const was = end;
         end = if (std.mem.findScalarLast(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+        std.debug.assert(end < was); // one level up per pass, so the walk ends at the top
     }
 }
 

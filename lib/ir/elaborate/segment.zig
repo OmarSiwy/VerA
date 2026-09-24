@@ -78,8 +78,14 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     const behavioral = digitalUse(file, module, net);
     if (std.mem.findScalar(Ast.StrId, self.seg_on.items, module.name) != null)
         return .{ .domain = if (behavioral) .discrete else .unspecified, .behavioral = behavioral };
+    const on = self.seg_on.items.len;
     try self.seg_on.append(self.ctx.arena, module.name);
-    defer _ = self.seg_on.pop();
+    // Every nested climb pops what it pushed, so this frame's own push is
+    // on top when it returns.
+    defer {
+        std.debug.assert(self.seg_on.items.len == on + 1);
+        _ = self.seg_on.pop();
+    }
     var below: std.ArrayList(Seg) = .empty;
     if (self.tree.get(path)) |kids| {
         for (kids.items) |*kid| try visitChild(self, &kid.inst, kid.module, kid.path, net, depth, &below);
@@ -94,6 +100,7 @@ fn compute(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, net:
     }
     var domain: Ast.DisciplineDecl.Domain = if (behavioral) .discrete else .unspecified;
     if (!behavioral) for (below.items) |s| {
+        std.debug.assert(s.domain != .unspecified); // `visitChild` keeps known domains only
         if (s.domain == .continuous) domain = .continuous;
         if (s.domain == .discrete and domain == .unspecified) domain = .discrete;
     };

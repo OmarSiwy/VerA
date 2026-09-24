@@ -702,8 +702,11 @@ const ParamEnv = struct {
     reads: ?[]bool = null,
 
     /// Resolves an identifier to a flattened scalar parameter's folded value.
+    /// Asserts that `reads`, when given, has one flag per flattened parameter.
     pub fn leaf(env: ParamEnv, e: Ast.ExprId) ?constfold.Const {
         const self = env.self;
+        // `matchingParamsets` sizes it so, and zips it with `params` after.
+        if (env.reads) |reads| std.debug.assert(reads.len == self.params.items.len);
         const ex = &self.ctx.file.exprs;
         // ponytail: a depth cap, not cycle detection; a cyclic default is
         // lowering's diagnostic, this only has to terminate.

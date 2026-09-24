@@ -89,6 +89,9 @@ fn scoped(file: *Ast.SourceFile, arena: std.mem.Allocator, prefix: []const u8, i
 /// `locals` are their localparams, outermost first (`bindGenLocals`).
 fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []const u8, locals: []const Ast.ParamDecl, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
     if (id == .none) return;
+    // `out` and `gates` grow together: one scheme per generate instance.
+    std.debug.assert(out.items.len >= gates.items.len);
+    const lead = out.items.len - gates.items.len;
     switch (self.ctx.file.stmt(id)) {
         .block => |b| {
             const inner = try blockPrefix(self.ctx.file, self.ctx.arena, prefix, b);
@@ -114,6 +117,7 @@ fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, prefix: []cons
         .case_stmt => |s| for (s.arms) |a| try refuseGen(self, a.body),
         else => {}, // else: no other statement holds a generate block
     }
+    std.debug.assert(out.items.len - gates.items.len == lead);
 }
 
 /// §6.6.2 a generate block's localparams are declared in the block's scope,
@@ -283,6 +287,7 @@ pub fn genvarLoop(comptime T: type, scheme: anytype, first: T) !LoopRun(T) {
             power *|= 2;
             lam = 0;
         }
+        std.debug.assert(lam < power); // Brent: the hare is less than one power ahead
     }
 }
 
@@ -394,7 +399,8 @@ fn conj(self: *Flatten, a: Ast.ExprId, c: Ast.ExprId, negate: bool) Error!Ast.Ex
 /// instance is inlined (`inlineInstance`), then the instances of its module
 /// are walked before its next sibling. One `Level` per unit being walked
 /// sits on a heap stack, so the walk is as deep as the tree with no native
-/// stack per level: §6.2.2 bounds nothing about the depth.
+/// stack per level: §6.2.2 bounds nothing about the depth. Asserts that
+/// `stack` holds `top` (is not empty), and leaves it as it found it.
 pub fn walkInstances(
     self: *Flatten,
     top: *const Ast.ModuleDecl,
@@ -404,9 +410,13 @@ pub fn walkInstances(
     stack: *std.ArrayList(Ast.StrId),
 ) Error!void {
     const a = self.ctx.arena;
+    std.debug.assert(stack.items.len != 0); // `top` is on it
+    const base = stack.items.len;
     var levels: std.ArrayList(Level) = .empty;
     if (try enterLevel(self, top, "", stack.items)) |l| try levels.append(a, l);
     while (levels.items.len != 0) {
+        // Every level below the top pushed its module; the top's was there.
+        std.debug.assert(stack.items.len + 1 == base + levels.items.len);
         if (try nextChild(self, &levels.items[levels.items.len - 1], stack.items)) |c| {
             const parent = try inlineInstance(self, c.inst, c.child, c.ps, c.path, c.gate);
             try stack.append(a, c.child.name);
@@ -426,6 +436,7 @@ pub fn walkInstances(
             self.unit = p.*;
         }
     }
+    std.debug.assert(stack.items.len == base);
 }
 
 /// One unit `walkInstances` is walking: its instance list as planned, and
@@ -598,6 +609,9 @@ fn nextChild(self: *Flatten, lv: *Level, stack: []const Ast.StrId) Error!?Child 
 fn startInstance(self: *Flatten, lv: *Level) Error!bool {
     const module = lv.module;
     const idx = lv.idx;
+    std.debug.assert(idx < lv.all.len);
+    // `enterLevel`'s: one scheme per generate instance, after the source ones.
+    std.debug.assert(lv.src.len == module.instances.len + lv.gates.len);
     const inst = &lv.all[idx];
     const auto = idx >= lv.src.len;
     lv.gate = if (idx < module.instances.len or auto) .none else lv.gates[idx - module.instances.len];
@@ -724,6 +738,9 @@ fn inlineInstance(
     /// §6.6 the scheme of the generate block `inst` sits in (`genInstances`).
     gate: Ast.ExprId,
 ) Error!*const Unit {
+    // `nextChild` spells every child path `parent ++ leaf ++ sep`.
+    std.debug.assert(path.len != 0);
+    std.debug.assert(path[path.len - 1] == sep);
     // Put back by the walk; the rename map is a stack.
     const parent = try self.ctx.arena.create(Unit);
     parent.* = self.unit;
@@ -943,6 +960,7 @@ fn inlineInstance(
         .path = path,
         .decl = child,
     });
+    std.debug.assert(self.unit_paths.items.len == @as(usize, unit_id) + 1); // `run` appended unit 0, the top
     for (child.analog) |blk| try appendAnalog(self, &unit, unit_id, blk.is_initial, try elab_clone.cloneStmt(self, blk.body), blk.main_tok);
     // §6.4.3 a paramset's statements, after the module's blocks: an output
     // variable "may be computed from values of any output parameters of the

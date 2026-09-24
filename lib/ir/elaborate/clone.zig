@@ -235,6 +235,9 @@ fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.Var
 /// Clones the branch a `<+` or an indirect assignment drives, as opposed to
 /// one it reads: §6.3.6's flow-probe division must not fire on it.
 fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
+    // A target holds no statement, so no target clone nests inside another,
+    // and the reset below cannot end an outer one early.
+    std.debug.assert(!self.contrib_target);
     self.contrib_target = true;
     defer self.contrib_target = false;
     return cloneExpr(self, e);
@@ -325,6 +328,8 @@ const GenCond = struct { cond: Ast.ExprId, negate: bool };
 /// matched, so neither is found here.
 fn genBlock(self: *Flatten, id: Ast.StmtId, name: Ast.StrId, conds: *std.ArrayList(GenCond)) Error!?Ast.SeqBlock {
     if (id == .none) return null;
+    // A miss pops every scheme it pushed; a hit leaves its path on.
+    const depth = conds.items.len;
     switch (self.ctx.file.stmt(id)) {
         .block => |b| {
             if (b.gen_name != .none and b.name == name) return b;
@@ -337,6 +342,7 @@ fn genBlock(self: *Flatten, id: Ast.StmtId, name: Ast.StrId, conds: *std.ArrayLi
         },
         else => {}, // else: only blocks and if-generates lead to a scope this search may name
     }
+    std.debug.assert(conds.items.len == depth);
     return null;
 }
 

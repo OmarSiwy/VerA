@@ -826,6 +826,11 @@ pub const Flatten = struct {
         var stack: std.ArrayList(Ast.StrId) = .empty;
         try stack.append(self.ctx.arena, top.name);
         try elab_instance.walkInstances(self, top, &stack);
+        // The walk puts back every unit it inlined, ending on the top's.
+        std.debug.assert(self.unit.module.? == top);
+        std.debug.assert(self.unit.up == null);
+        // `Design.units[i]` is unit i: the top, then one row per instance.
+        std.debug.assert(self.unit_paths.items.len == @as(usize, self.last_unit) + 1);
 
         // E.3.2.2 "If there are no continuous disciplines defined on the net
         // segment, then the discipline shall default to electrical": the
