@@ -512,11 +512,11 @@ fn scValue(sc: *Sc, v0: Mir.Value, depth: u32) bool {
                     const b = g.an.def_block[i];
                     break :blk b != none_u32 and scBlock(sc, b, depth + 1);
                 },
-                else => switch (Mir.opClass(row.op)) {
+                else => switch (Mir.opClass(row.op)) { // else: every other opcode is a pure op, decided by its operands
                     .unary => break :blk scValue(sc, @enumFromInt(row.a), depth + 1),
                     .binary => break :blk scValue(sc, @enumFromInt(row.a), depth + 1) and
                         scValue(sc, @enumFromInt(row.b), depth + 1),
-                    else => break :blk false,
+                    .ternary, .phi, .branch, .jump, .call => break :blk false,
                 },
             }
         },
