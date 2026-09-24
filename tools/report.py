@@ -687,7 +687,7 @@ def render(d):
         o.append("<p>Not measured in this run (pass <code>--models DIR</code>).</p>")
     o.append("<h3>Generated-device eval speed</h3><p>No eval-speed benchmark exists in <code>tests/</code> or "
              "<code>build.zig</code>, so this report measures none. Dated one-off measurements (ns/eval, Ir/eval, "
-             "with their own bench hosts) are in <code>docs/measurements/</code>; they are not re-run here.</p>")
+             "with their own bench hosts) were in <code>docs/measurements/</code>, removed in 6e59b3d4 (<code>git show 6e59b3d4^:docs/measurements/</code> lists them); they are not re-run here.</p>")
     # --- Gaps --------------------------------------------------------------
     g = d["gaps"]
     o.append("<h2 id=gaps>Gaps</h2>")
