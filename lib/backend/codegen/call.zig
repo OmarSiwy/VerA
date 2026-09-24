@@ -788,6 +788,10 @@ pub fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: 
     // `void_tasks` below is for a model that reads the void result).
     if (self.display == .emit and Lower.isSimCtlTask(name))
         return cg_display.emitSimCtl(self, name, args);
+    // §9.4.1 a monitor's registration (`Lower.armMonitor`): a side effect, so
+    // only the display unit performs it; anywhere else it is the void below.
+    if (self.emitting_display and eq(u8, name, "$monitor$arm"))
+        return cg_display.emitMonitorArm(self, args);
     // §9.5 the descriptor family. Real kernels only in the display unit (see
     // `emitting_display`); rendered but discarded in any other unit of the
     // same artifact, so the slice `callArgIsValue` asked for is consumed.
@@ -1040,6 +1044,7 @@ pub fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: 
         "$monitor", "$monitoron", "$monitoroff",    "$debug",
         "$finish",  "$stop",      "$fatal",         "$error",
         "$warning", "$info",      "$discontinuity", "$bound_step",
+        "$monitor$arm",
     };
     for (void_tasks) |t| {
         if (eq(u8, name, t)) return self.b("S.con(0.0)", .{});

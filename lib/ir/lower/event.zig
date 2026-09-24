@@ -240,6 +240,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // argument. In statement position the count is dropped, the write is not.
     if (try lowerFileRead(self, tok, name, args)) |_| return;
     if (try lowerKernelCtl(self, tok, name, args)) return; // §9.17
+    // §9.4.1 `$monitor` and its §9.5.2 file twin: registered HERE, reported at
+    // the end of every accepted step from then on — see `armMonitor`.
+    const mon: ?Mir.Value = if (isMonitor(name)) try armMonitor(self, name) else null;
+    if (mon != null and self.restrict == null) return queueDisplay(self, tok, name, args, mon);
     // §9.4.1 the display/severity/control family on the unconditional spine:
     // its call is minted at the end of the block, and an operand that reads a
     // branch flow is EVALUATED there — see `queueDisplay`. The conditional and
@@ -249,7 +253,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // where `restrict` is still set).
     if ((isDisplayTask(name) or isSimCtlTask(name)) and
         self.cond_depth == 0 and self.restrict == null)
-        return queueDisplay(self, tok, name, args);
+        return queueDisplay(self, tok, name, args, null);
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     var live: std.ArrayList(Ast.ExprId) = .empty;
@@ -274,6 +278,9 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         // TYPE. After the loop, because the types are what lowering computed.
         try prepareFormatArgs(self, live.items, tys.items, vals.items);
     }
+    // A restricted context's monitor reports at the statement: its operands
+    // are diagnosed there, and an inlined function's locals end with the body.
+    if (mon) |k| try vals.insert(self.arena, 0, k);
     const v = try self.call(name, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
     if (isDisplayTask(name) or isFileOutTask(name) or isSimCtlTask(name)) {
@@ -333,13 +340,19 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 ///
 /// The call is minted at the end even when NO operand defers, so the §9.4
 /// prints keep source order among themselves in the emitted unit body.
-pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+///
+/// `monitor` non-null is a §9.4.1 `$monitor`/`$fmonitor` REPORT (`armMonitor`),
+/// and then EVERY operand defers: the report runs at the end of each accepted
+/// step whether or not the statement ran in it, so no at-statement value
+/// exists to capture — and it is on the unconditional spine even when the
+/// statement is guarded, which is why this path takes a guarded one too.
+pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
     const pre = try self.arena.alloc(?TypedValue, args.len);
     var any_deferred = false;
     for (args, pre) |a, *p| {
         p.* = null;
         if (a == .none) continue; // A.6.9 empty argument slot
-        if (containsFlowRead(self, a)) {
+        if (monitor != null or containsFlowRead(self, a)) {
             any_deferred = true;
             continue;
         }
@@ -363,6 +376,7 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         .genvars = genvars,
         .unit = self.cur_unit,
         .display = @intCast(self.displays.items.len),
+        .monitor = monitor,
     });
     // The placeholder keeps `displays` in source order — W0850 reporting and
     // the chain both walk it — and `lowerDeferredDisplays` fills `.val`.
@@ -372,6 +386,42 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         .tok = tok,
         .conditional = false,
     });
+}
+
+/// §9.4.1 `$monitor` and §9.5.2's `$fmonitor`, the two members of the display
+/// family that report on a CHANGE rather than when executed.
+pub fn isMonitor(name: []const u8) bool {
+    return std.mem.eql(u8, name, "$monitor") or std.mem.eql(u8, name, "$fmonitor");
+}
+
+/// §9.4.1: "When a $monitor task is invoked with one or more arguments, the
+/// simulator SETS UP A MECHANISM whereby for each accepted step, if the variable
+/// or an expression in the argument list changes value compared with the last
+/// accepted step ... the entire argument list is displayed AT THE END OF THE
+/// TIME STEP as if reported by the $strobe task."
+///
+/// So one statement is two events. The INVOCATION happens where the statement
+/// is, under whatever guards it — this call, `$monitor$arm(k)`, which latches
+/// site `k` on in the display unit. The REPORT is standing: it runs at the end
+/// of every accepted step from then on, whether or not the statement ran in that
+/// step, which is `queueDisplay`'s end-of-block call with `k` prepended. Codegen
+/// joins the two on `k` (`str_kernels.zMonitor`). A monitor registered once under
+/// `@(initial_step)` therefore keeps reporting — which a report minted where the
+/// statement is could never do, since it would run exactly when the statement
+/// does.
+///
+/// The arm rides `display_cond_place` and NOT `displays`: it is part of the
+/// same source statement as the report, which already has its `displays` row,
+/// and W0850 is one warning per statement.
+pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
+    if (std.mem.eql(u8, name, "$fmonitor")) {
+        self.uses_file_tasks = true;
+        self.uses_str_tasks = true;
+    }
+    const k = try self.mir.addIntConst(self.arena, self.monitor_sites);
+    self.monitor_sites += 1;
+    try self.chainCondDisplay(try self.call("$monitor$arm", &.{k}));
+    return k;
 }
 
 /// Does this operand tree read a branch FLOW (§4.4.1 `I(...)` under any
@@ -425,6 +475,7 @@ pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
         for (dd.genvars) |g| _ = self.consts.remove(g.name);
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
         try prepareFormatArgs(self, live.items, tys.items, vals.items);
+        if (dd.monitor) |k| try vals.insert(self.arena, 0, k);
         self.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }
 }

@@ -683,7 +683,9 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 ///
 /// Returns the text when it differs from what this site last reported — which
 /// includes the FIRST accepted step, where there is no "last accepted step" to
-/// compare against — and null when the step is to be suppressed.
+/// compare against — and null when the step is to be suppressed, or when the
+/// statement has not been invoked yet: the mechanism exists only once "a
+/// $monitor task is invoked" (`zMonitorArm`). `site` is `Lower.armMonitor`'s key.
 //
 // ponytail: one 4096-byte latch per call site, file scope, on `zSBuf`'s terms
 // and for `zSBuf`'s reason — the comparison has to outlive the step that made
@@ -691,18 +693,32 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 // compared; per-instance latches are the upgrade the day a host runs two
 // instances of a model that monitors.
 pub fn zMonitor(comptime site: usize, text: []const u8) ?[]const u8 {
-    const Last = struct {
-        const n = site;
-        var b: [4096]u8 = undefined;
-        var len: usize = 0;
-        var seen: bool = false;
-    };
+    const Last = zMonitorLatch(site);
+    if (!Last.armed) return null;
     if (text.len > Last.b.len) return text;
     if (Last.seen and Last.len == text.len and zstd.mem.eql(u8, Last.b[0..text.len], text)) return null;
     @memcpy(Last.b[0..text.len], text);
     Last.len = text.len;
     Last.seen = true;
     return text;
+}
+
+/// §9.4.1 "sets up a mechanism": the statement ran, so site `site` reports at
+/// the end of this accepted step and every one after it. f64 because the call
+/// is a void task riding the display chain.
+pub fn zMonitorArm(comptime site: usize) f64 {
+    zMonitorLatch(site).armed = true;
+    return 0.0;
+}
+
+fn zMonitorLatch(comptime site: usize) type {
+    return struct {
+        const n = site;
+        var b: [4096]u8 = undefined;
+        var len: usize = 0;
+        var seen: bool = false;
+        var armed: bool = false;
+    };
 }
 
 /// §3.3 string storage excludes NUL bytes. Compact the completed formatter

@@ -63,11 +63,8 @@
 // on a CONSTANT list — the pair pins both directions of the clause's "if ...
 // changes value" condition.
 //
-// FAILS TODAY for the same two reasons fixture 05 does, and they are listed in
-// full there: no change detection in `Lower.isDisplayTask`, and a `$fopen`
-// result that reads back as 0 outside the display unit, so `$ftell(fd)` is −1. This file no
-// longer passes at HEAD; the earlier version did, and only because $fmonitor
-// was $fdisplay and the measurement was taken inline.
+// Needed the same two fixes fixture 05 did, listed there: a standing §9.4.1
+// report, and a `$fopen` result that survives outside the display unit.
 //
 //! lrm 9.4.1
 //! lrm 9.5.2

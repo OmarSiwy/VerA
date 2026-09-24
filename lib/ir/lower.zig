@@ -672,6 +672,10 @@ display_cond_place: ?Ssa.Place = null,
 /// clause reading. Parallel-ish to `displays`: each entry names the
 /// placeholder `displays` row whose `.val` it fills.
 deferred_displays: std.ArrayList(DeferredDisplay) = .empty,
+/// §9.4.1 `$monitor`/`$fmonitor` statements lowered so far. Each one's ordinal
+/// is the key its registration (`$monitor$arm`) and its end-of-step report
+/// share — see `lower_event.armMonitor`.
+monitor_sites: u32 = 0,
 /// §6.6.1/§5.9.3 genvars currently bound in `consts` — a stack, pushed and
 /// popped by `tryUnrollFor`. Exists so `queueDisplay` can SNAPSHOT the
 /// bindings a deferred operand in an unrolled body was written under;
@@ -838,6 +842,9 @@ const DeferredDisplay = struct {
     unit: u32,
     /// Index of the placeholder row in `displays` whose `.val` this fills.
     display: u32,
+    /// §9.4.1 a `$monitor`/`$fmonitor` report: the site key, prepended to the
+    /// call's operands. Every operand of one is lowered at the end of the block.
+    monitor: ?Mir.Value = null,
 };
 
 pub const GenvarBind = struct { name: []const u8, c: Const };
@@ -1903,6 +1910,7 @@ pub const isSimCtlTask = lower_event.isSimCtlTask;
 pub const isFileOutTask = lower_event.isFileOutTask;
 pub const isFileCall = lower_event.isFileCall;
 pub const isDisplayTask = lower_event.isDisplayTask;
+pub const isMonitor = lower_event.isMonitor;
 pub const distOf = lower_event.distOf;
 pub const distParamName = lower_event.distParamName;
 

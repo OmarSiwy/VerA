@@ -188,7 +188,9 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site:
     // The finish_number sets the $finish diagnostic level; it is not part of
     // the message, so it must not print. Dropped only when it is not a string,
     // so a (nonconforming but unambiguous) `$fatal("bye")` keeps its text.
-    const body = if (std.mem.eql(u8, name, "$fatal") and args.len > 0 and g.strArg(args, 0) == null)
+    // §9.4.1 a monitor report carries its site key first (`Lower.armMonitor`).
+    const mon = isMonitor(name);
+    const body = if (mon or (std.mem.eql(u8, name, "$fatal") and args.len > 0 and g.strArg(args, 0) == null))
         args[1..]
     else
         args;
@@ -204,11 +206,11 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site:
     // same block as the print.
     try g.b("zd: {{ ", .{});
     try emitScratch(g, ops.items);
-    if (isMonitor(name)) {
+    if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when the RECORD differs from the one this site last produced.
         // An overrun formats to the empty string, `emitStringFormat`'s rule.
-        try g.b("if (zMonitor({d}, std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, site, std.zig.fmtString(fmt.items) });
+        try g.b("if (zMonitor({d}, std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ monitorKey(g, args), site, std.zig.fmtString(fmt.items) });
         try renderPrintArgs(g, ops.items);
         try g.b("}}) catch \"\")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
     } else {
@@ -451,7 +453,10 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     // newline rule (`$write` is the member that does not end the line, and so
     // is `$fwrite`).
     const base = name[2..];
-    const rest = if (args.len > 0) args[1..] else args;
+    // §9.4.1 a monitor report carries its site key ahead of the descriptor.
+    const mon = isMonitor(name);
+    const all = if (mon) args[1..] else args;
+    const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
     try buildArgs(g, rest, &fmt, &ops);
@@ -466,26 +471,34 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
     // front, so §9.4.1's change condition travels with it: the record is
     // composed either way, and `zMonitor` decides whether it is written.
-    const mon = isMonitor(name);
     if (mon) try g.b("const zt = ", .{}) else try g.b("break :zf zFPut(", .{});
     if (!mon) {
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", ", .{});
     }
     try g.b("std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
     try g.b("}}) catch \"\"", .{});
     if (mon) {
-        try g.b("; break :zf if (zMonitor({d}, zt)) |zm| zFPut(", .{site});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b("; break :zf if (zMonitor({d}, zt)) |zm| zFPut(", .{monitorKey(g, args)});
+        try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", zm) else 0; }}", .{});
     } else try g.b("); }}", .{});
 }
 
 /// §9.4.1 `$monitor` and its §9.5.2 file twin — the two members of the family
 /// that report only on a CHANGE. Every other member prints unconditionally.
-fn isMonitor(name: []const u8) bool {
-    return std.mem.eql(u8, name, "$monitor") or std.mem.eql(u8, name, "$fmonitor");
+const isMonitor = Lower.isMonitor;
+
+/// The site key `Lower.armMonitor` put first in a monitor's registration and in
+/// its report — a literal, so it can key a comptime latch.
+fn monitorKey(g: *const Gen, args: []const Mir.Value) i64 {
+    return g.mir.valueDef(g.an.rv(args[0])).int_const;
+}
+
+/// §9.4.1 the registration half: latch site `k` on (`str_kernels.zMonitorArm`).
+pub fn emitMonitorArm(g: *Gen, args: []const Mir.Value) Error!void {
+    return g.b("S.con(zMonitorArm({d}))", .{monitorKey(g, args)});
 }
 
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
@@ -985,16 +998,22 @@ test "§9.4.1 $monitor reports a step only when the record changed" {
     const s = try emitBody(a, "$strobe(\"v=%d\", 1);");
     try std.testing.expect(has(s, "zd: { std.debug.print("));
     const m = try emitBody(a, "$monitor(\"v=%d\", 1);");
-    try std.testing.expect(has(m, "zd: { if (zMonitor("));
+    try std.testing.expect(has(m, "S.con(zMonitorArm(0))")); // the invocation
+    try std.testing.expect(has(m, "zd: { if (zMonitor(0, "));
     try std.testing.expect(has(m, ") |zt| std.debug.print(\"{s}\", .{zt});"));
     // §9.5.2 "$fmonitor ... works just like its counterpart": the record is
     // composed, then written only if it changed.
     const f = try emitBody(a, "$fmonitor(1, \"v=%d\", 1);");
-    try std.testing.expect(has(f, "break :zf if (zMonitor("));
+    try std.testing.expect(has(f, "break :zf if (zMonitor(0, "));
     try std.testing.expect(has(f, ") |zm| zFPut("));
 
     // The latch itself, at the boundary the emitted code uses it at.
     const k = @import("kernels").str_kernels;
+    // "When a $monitor task is invoked ... the simulator sets up a mechanism":
+    // before the statement has run there is no mechanism and nothing reports.
+    try std.testing.expect(k.zMonitor(9001, "a\n") == null);
+    _ = k.zMonitorArm(9001);
+    _ = k.zMonitorArm(9002);
     try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, "a\n").?); // first step: no predecessor
     try std.testing.expect(k.zMonitor(9001, "a\n") == null); // unchanged
     try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, "b\n").?);

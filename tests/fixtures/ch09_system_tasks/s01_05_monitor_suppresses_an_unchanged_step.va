@@ -75,18 +75,14 @@
 // there is no "last accepted step" to compare against at t = 0; the mechanism
 // has to start somewhere and the argument list is what it is asked to display.
 //
-// TWO REASONS THIS FAILS TODAY, both real and both named so neither is mistaken
-// for the other. (1) `Lower.isDisplayTask` (lib/ir/lower.zig:6146) lists
-// `$monitor` beside `$display` and `cg_display.emitDisplayTask` gives it the
-// same unconditional inline print — the §9.4.1 mechanism is not implemented
-// anywhere in src/. (2) The guarded `$fopen` above runs — W0851, which used to
-// drop a task under an event guard, was lifted on 2026-09-20 — but its RESULT
-// cannot leave the display unit: `codegen.emitFileCallDropped` renders every
-// §9.5 call as the literal `0` in any other unit, so the shared core computes
-// `fd = 0`, `updateState` stores that 0, and `$ftell(fd)` is `$ftell(0)` = −1.
-// (2) has to be lifted before (1) can be observed by any fixture at all: the
-// clause's obligation is cross-step, and the only way to register a monitor
-// exactly once is to guard the registration.
+// WHAT IT TOOK — two defects, closed together on 2026-09-23. (1) VerA's §9.4.1
+// was a print-if-changed AT THE STATEMENT, so a monitor registered once under
+// the guard never reported again. The statement now arms site k where it
+// stands and the report runs at the end of every accepted step from then on
+// (`lower_event.armMonitor`). (2) The guarded `$fopen`'s RESULT could not leave
+// the display unit: `emitFileCallDropped` rendered it as the literal 0 in the
+// core, so `updateState` held fd = 0 and `$ftell(fd)` was `$ftell(0)` = -1. The
+// display unit now latches it (`file_kernels.zFRes`) and the core reads that.
 //
 //! lrm 9.4.1
 //! lrm 9.5.2
