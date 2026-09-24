@@ -370,14 +370,20 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
     // Not done in `Elaborate`'s clone: a `$root` path in the TOP module's body is
     // never cloned (the tree-of-one returns by pointer), so the rule would only
     // have applied to children. Here it applies to every unit.
-    if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) {
+    if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) parts = parts[1..];
+    // The top module's own name, with or without `$root`: IEEE 1364 §12.6's
+    // upward name referencing, which §6.7.1's last paragraph adopts, lets a
+    // path open with the name of a module ABOVE the reference — §5.5.5's
+    // example reads `V(top.a1.b)` from inside `b1`. The flattened namespace is
+    // rooted at the top, so its name drops. A local of the same name wins
+    // (§6.2.1 "priority to the local scope"): cloning has already renamed
+    // part 0 of a child's local path, and the top's own instances are
+    // checked here.
+    if (parts.len > 1) if (self.out.module) |m| if (parts[0] == m.name and for (m.instances) |inst| {
+        if (inst.name == parts[0]) break false;
+    } else true) {
         parts = parts[1..];
-        if (parts.len > 1) {
-            if (self.out.module) |m| if (parts[0] == m.name) {
-                parts = parts[1..];
-            };
-        }
-    }
+    };
     var out: std.ArrayList(u8) = .empty;
     for (parts, 0..) |p, i| {
         if (i != 0) try out.append(self.arena, Elaborate.sep);

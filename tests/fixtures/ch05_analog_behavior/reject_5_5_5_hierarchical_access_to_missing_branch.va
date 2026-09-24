@@ -8,13 +8,10 @@
 // branch or net called `nosuch`, so `V(top_hier_missing.a1.nosuch)` names
 // nothing and the clause requires an error.
 //
-// What this file can claim and what it cannot: VerA reports E0901
-// "hierarchical name names nothing in the elaborated design: ... names no net",
-// which is true of `nosuch`. But VerA also refuses the LEGAL form of the
-// clause's own example, `V(top.a1.b)` on the existing named branch, with the
-// same E0901 (probed), because it resolves hierarchical access-function
-// arguments as nets only. So the positive half of §5.5.5 (named branches) is
-// not met today; this file pins only the refusal of a name that exists nowhere.
+// VerA reports E0901 "hierarchical name names nothing in the elaborated
+// design: ... names no net", which is true of `nosuch`. The legal form of the
+// clause's own example, `V(top.a1.b)` on the existing named branch through
+// the top module's name, is hierarchical_named_branch_access.va.
 //
 //! lrm 5.5.5
 //! reject E0901
