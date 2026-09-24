@@ -615,6 +615,9 @@ pub const Code = enum(u16) {
     E0918,
     /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
     E0919,
+    /// §6.2.2/§7.2.2 an inlined child brings a discrete process into a design
+    /// whose digital half needs the event kernel — VerA's limit, not the LRM's.
+    E0920,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5021,9 +5024,9 @@ fn infoOf(c: Code) Info {
             \\
             \\A connect module bridges a discrete side, and its digital half lives
             \\in `initial` / `always` blocks. Flattening inlines a child's analog
-            \\blocks and does not carry its digital processes, so inlining a
-            \\bridge would stamp its continuous half into the device with the
-            \\digital half silently absent — a plausible-looking wrong device,
+            \\blocks, and a flattened child's processes cannot reach the event
+            \\kernel (E0920), so inlining a bridge would stamp its continuous
+            \\half into the device with the digital half silently absent — a plausible-looking wrong device,
             \\which is worse than a refusal that names the reason.
             \\
             \\Automatic insertion (7.8) is not performed either, and a
@@ -5156,6 +5159,30 @@ fn infoOf(c: Code) Info {
             \\
             \\Declare the net on the other side of the port as wire, tri or
             \\wreal.
+            ,
+        },
+        .E0920 => .{
+            .title = "a child instance's digital processes are not supported in a mixed-signal design",
+            .lrm = "7.2.2",
+            .explain =
+            \\This is VerA's limitation, not the LRM's. LRM 6.2.2 lets any module
+            \\be instantiated, IEEE 1364 Clause 12 gives every instance its own
+            \\processes, and 7.2.2 puts a child's `initial` and `always` blocks
+            \\in the discrete context exactly as it does the top's.
+            \\
+            \\Elaboration flattens the hierarchy into one device, renaming each
+            \\child's names under its instance path (`u.q`). A child's `initial`
+            \\block of constant assignments survives that: it is installed as the
+            \\variable's starting value, as it would be in the top. Anything that
+            \\needs the event kernel (8.5) does not — an `always`, a continuous
+            \\assignment, a delay or event control, or any of those elsewhere in
+            \\the design. The mixed-signal runner re-elaborates the source and
+            \\binds each discrete input by its top-level name, so a flattened
+            \\child's variable would reach nothing and the analog half would be
+            \\stamped without it.
+            \\
+            \\Move the digital process into the top module, or keep the child's
+            \\digital half to constant `initial` assignments.
             ,
         },
 

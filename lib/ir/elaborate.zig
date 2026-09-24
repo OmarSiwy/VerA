@@ -65,6 +65,9 @@ const diag = @import("diag");
 // an in-paramset draw with the SAME code a device embeds, so the two cannot
 // disagree on the stream.
 const Lower = @import("lower.zig");
+// §8.5 whether a module's discrete half needs the event kernel — the refusal
+// in `Flatten.run` asks it of the flattened module, with lowering's own rule.
+const lower_context = @import("lower/context.zig");
 const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
@@ -296,6 +299,53 @@ const Defparam = struct {
     used: bool = false,
 };
 
+/// What the flatten does with one field of `Ast.ModuleDecl`.
+const Fate = enum {
+    /// The device's own: the top's value, as parsed.
+    top,
+    /// The top's entries followed by every inlined instance's, renamed into the
+    /// flat namespace by `inlineInstance`. `Flatten` holds a list of the same
+    /// name, and `run` publishes it.
+    merged,
+    /// Applied by the walk and gone after it — nothing downstream reads it.
+    consumed,
+};
+
+/// EVERY field of `Ast.ModuleDecl`, classified. `EnumFieldStruct` with no
+/// default makes each entry required, so a field added to `ModuleDecl` is a
+/// compile error here until someone decides what a CHILD's copy of it becomes.
+/// That is the point: a child's `initial` blocks used to vanish because the
+/// synthesized module simply never named `discrete`, and nothing noticed.
+/// `run` builds its output from this table, so the table cannot drift from
+/// what is published.
+const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, null) = .{
+    .name = .top,
+    .ports = .top, // §6.5 the device's terminals are the top's
+    .params = .merged,
+    .aliasparams = .merged,
+    .vars = .merged,
+    .nets = .merged,
+    .branches = .merged,
+    .instances = .consumed, // §6.2.2 inlined; lowering must not elaborate them again
+    .defparams = .consumed, // §6.3.1 applied to the parameter each names
+    .genvars = .merged,
+    .events = .merged,
+    .functions = .merged,
+    .analog = .merged,
+    // §7.2.2 the discrete context. Merged, and a child's then REFUSED (E0920)
+    // whenever the flattened module needs the event kernel: see `run`.
+    .discrete = .merged,
+    .assigns = .merged,
+    // Lowering reads no gate in any module; the parser's W0252 reports each.
+    // Merged anyway, so a child's gate is where a top's gate is.
+    .gates = .merged,
+    .attrs = .merged,
+    // `pickTop` never picks a connect module and `walkInstances` refuses
+    // inlining one (E0913), so this is always the top's `false`.
+    .is_connect = .top,
+    .main_tok = .top,
+};
+
 pub const Flatten = struct {
     ctx: Ctx,
     had_error: bool = false,
@@ -316,7 +366,15 @@ pub const Flatten = struct {
     events: std.ArrayList(Ast.StrId) = .empty,
     functions: std.ArrayList(Ast.FuncDecl) = .empty,
     analog: std.ArrayList(Ast.AnalogBlock) = .empty,
+    discrete: std.ArrayList(Ast.DiscreteBlock) = .empty,
+    assigns: std.ArrayList(Ast.ContAssign) = .empty,
+    gates: std.ArrayList(Ast.GateInst) = .empty,
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
+
+    /// One entry per inlined INSTANCE that brought a discrete process or a
+    /// continuous assignment with it: its path, and the first such item's
+    /// token. What `run`'s E0920 reports.
+    child_digital: std.ArrayList(NameSite) = .empty,
 
     /// §6.7 path → flat name. See `Design.names`.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -452,6 +510,9 @@ pub const Flatten = struct {
         try self.events.appendSlice(self.ctx.arena, top.events);
         try self.functions.appendSlice(self.ctx.arena, top.functions);
         try self.attrs.appendSlice(self.ctx.arena, top.attrs);
+        try self.discrete.appendSlice(self.ctx.arena, top.discrete);
+        try self.assigns.appendSlice(self.ctx.arena, top.assigns);
+        try self.gates.appendSlice(self.ctx.arena, top.gates);
 
         // Unit 0 is the top itself, and §9.15's example makes a top-level
         // module's instance name its module name ("testbench").
@@ -494,27 +555,30 @@ pub const Flatten = struct {
             .{dp.key_ptr.*},
         );
 
-        if (self.had_error) return error.DiagnosticsReported;
-
         const out = try self.ctx.arena.create(Ast.ModuleDecl);
-        out.* = .{
-            .name = top.name,
-            .main_tok = top.main_tok,
-            .ports = top.ports, // §6.5 the device's terminals are the top's
-            .params = self.params.items,
-            .aliasparams = self.aliasparams.items,
-            .vars = self.vars.items,
-            .nets = self.nets.items,
-            .branches = self.branches.items,
-            .genvars = self.genvars.items,
-            .events = self.events.items,
-            .functions = self.functions.items,
-            .analog = self.analog.items,
-            .attrs = self.attrs.items,
-            // Flattened away. Nothing after this pass reads it, and leaving the
-            // children in would make lowering elaborate them a second time.
-            .instances = &.{},
+        inline for (@typeInfo(Ast.ModuleDecl).@"struct".fields) |fld| @field(out, fld.name) = switch (@field(fate, fld.name)) {
+            .top => @field(top, fld.name),
+            .merged => @field(self, fld.name).items,
+            .consumed => comptime fld.defaultValue().?,
         };
+
+        // §7.2.2 a child's discrete half, flattened, is carried exactly when
+        // lowering can give it its one kernel-free reading: an `initial` of
+        // constant assignments, which `collectInitialState` installs as the
+        // renamed variable's value. Once the design needs the event kernel
+        // (§8.5) — an `always`, a continuous assignment or a suspending
+        // `initial` anywhere in it — the digital half runs on the mixed
+        // runner, which re-elaborates the SOURCE and binds a discrete input by
+        // its top-scope name, so a flat `u.q` reaches nothing. Refused, per
+        // instance, instead of stamping the analog half without it.
+        if (lower_context.isMixed(self.ctx.file, out)) for (self.child_digital.items) |site| try self.err(
+            site.main_tok,
+            .E0920,
+            "instance `{s}` brings a discrete process into a design that needs the event kernel",
+            .{site.name[0 .. site.name.len - 1]},
+        );
+
+        if (self.had_error) return error.DiagnosticsReported;
         return .{
             .top = out,
             .names = self.names,
@@ -593,11 +657,11 @@ pub const Flatten = struct {
             };
             // §7.1: connect modules "can be manually inserted (by the user) or
             // automatically inserted (by the simulator)", so naming one here is
-            // legal. Refused rather than inlined because inlining one would be
-            // silently WRONG in a way the reader cannot see: the flatten carries
-            // analog blocks and drops `discrete` ones, so a bridge's continuous
-            // half would be stamped into the device with its digital half
-            // missing. connect_module_manually_inserted.va is the xfail.
+            // legal. Refused rather than inlined because a bridge's digital
+            // half is a PROCESS, and a flattened child's processes cannot reach
+            // the event kernel (E0920) — so its continuous half would be
+            // stamped into the device alone.
+            // connect_module_manually_inserted.va is the xfail.
             if (child.is_connect) {
                 try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`; §7.1 allows placing it by hand, but its digital half would not be carried into the device", .{
                     self.ctx.file.str(child.name),
@@ -798,6 +862,32 @@ pub const Flatten = struct {
             .main_tok = blk.main_tok,
             .unit = unit_id,
         });
+        for (child.discrete) |blk| try self.discrete.append(self.ctx.arena, .{
+            .is_always = blk.is_always,
+            .body = try elab_clone.cloneStmt(self, blk.body),
+            .main_tok = blk.main_tok,
+        });
+        for (child.assigns) |a| {
+            var o = a;
+            o.target = try elab_clone.cloneExpr(self, a.target);
+            o.value = try elab_clone.cloneExpr(self, a.value);
+            o.delay = try elab_clone.cloneDelay(self, a.delay);
+            try self.assigns.append(self.ctx.arena, o);
+        }
+        for (child.gates) |g| {
+            var o = g;
+            o.out = try elab_clone.cloneExpr(self, g.out);
+            const ins = try self.ctx.arena.alloc(Ast.ExprId, g.ins.len);
+            for (g.ins, ins) |src, *d| d.* = try elab_clone.cloneExpr(self, src);
+            o.ins = ins;
+            o.delay = try elab_clone.cloneDelay(self, g.delay);
+            try self.gates.append(self.ctx.arena, o);
+        }
+        // The first process or assignment in source order anchors E0920.
+        const first_digital: ?u32 = if (child.discrete.len != 0)
+            child.discrete[0].main_tok
+        else if (child.assigns.len != 0) child.assigns[0].main_tok else null;
+        if (first_digital) |tok| try self.child_digital.append(self.ctx.arena, .{ .name = path, .main_tok = tok });
 
         // ---- recurse, with this unit's map in force ------------------------
         try stack.append(self.ctx.arena, child.name);
@@ -1548,8 +1638,8 @@ test "a connect module is neither the top nor a child (§7.6)" {
     try std.testing.expectEqualStrings("top", f.file.str(design.top.name));
 
     // And naming one in an instantiation is E0913 rather than a silent inline:
-    // the flatten carries analog blocks and drops `discrete` ones, so inlining a
-    // bridge would stamp its continuous half with its digital half missing.
+    // a bridge's digital half is a process, which a flattened child cannot
+    // take to the event kernel (E0920), so its continuous half would stand alone.
     var g: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer g.deinit();
     try parse(&g,
@@ -1558,6 +1648,31 @@ test "a connect module is neither the top nor a child (§7.6)" {
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
     try std.testing.expectEqual(diag.Code.E0913, g.bag.at(0).code);
+}
+
+test "§7.2.2 a flattened discrete half is carried or refused (E0920), never dropped" {
+    // The top's own `initial` survives having a child, and the child's is
+    // renamed into the flat namespace next to it.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module c(p); inout p; electrical p; integer k; initial k = 3; analog I(p) <+ k * V(p); endmodule
+        \\module top(p); inout p; electrical p; integer j; initial j = 2; c u(p); analog I(p) <+ j * V(p); endmodule
+    );
+    const design = try elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 2), design.top.discrete.len);
+    const child_init = f.file.stmt(design.top.discrete[1].body).assign;
+    try std.testing.expectEqualStrings("u.k", f.file.str(f.file.exprs.strOf(child_init.target)));
+
+    // A child's process in a design that needs the event kernel is refused.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try parse(&g,
+        \\module c(p); inout p; electrical p; reg q; always #5 q = ~q; analog I(p) <+ V(p); endmodule
+        \\module top(p); inout p; electrical p; c u(p); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
+    try std.testing.expectEqual(diag.Code.E0920, g.bag.at(0).code);
 }
 
 test {

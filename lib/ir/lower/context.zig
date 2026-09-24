@@ -69,9 +69,12 @@ pub const DiscreteCtx = struct {
 /// event or level control, a nonblocking or intra-assignment-timed write) is
 /// one too. Anything else is `collectInitialState`'s constant shape, which
 /// needs no kernel and keeps its fast path.
-pub fn isMixed(self: *const Lower, module: *const Ast.ModuleDecl) bool {
+///
+/// Takes the FILE rather than the `Lower` so elaboration can ask it of the
+/// flattened module before lowering exists (`elaborate.Flatten.run`, E0920).
+pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
-    for (module.discrete) |blk| if (blk.is_always or suspends(self.file, blk.body)) return true;
+    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body)) return true;
     return false;
 }
 
@@ -115,7 +118,7 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
 // instantiates one mixed device twice; the right home is an `Instance` field,
 // which is codegen's to emit.
 pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    if (!isMixed(self, module)) return;
+    if (!isMixed(self.file, module)) return;
     self.mixed_signal = true;
     const ex = &self.file.exprs;
     var owned: std.ArrayList(Ast.ExprId) = .empty;
