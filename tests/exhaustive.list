@@ -29,7 +29,6 @@ lib/backend/cg_limit.zig scValue Mir.Opcode
 lib/backend/cg_limit.zig spell Mir.DefKind
 lib/backend/codegen.zig devSafe Mir.Opcode
 lib/backend/codegen.zig dynCtrlArgs op.OpKind
-lib/backend/codegen/call.zig emitCall op.OpKind
 lib/backend/codegen/call.zig f64Const Ast.ExprTag
 lib/backend/codegen/call.zig f64Const Mir.DefKind
 lib/backend/codegen/call.zig f64Const Mir.Opcode

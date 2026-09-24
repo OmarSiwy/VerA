@@ -70,13 +70,19 @@ pub const FilterPlan = struct {
 /// each vector argument as `<count>, e0, e1, …` (see `lower.appendVectorArg`),
 /// so the argument list is g-describing.
 pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan {
-    const name = g.mir.instData(inst).call.name;
-    const z = std.mem.startsWith(u8, name, "zi_");
     // `*_zp`/`*_zd` give the ZEROS as roots; `*_zp`/`*_np` give the POLES
     // as roots. The two letters after the underscore say which.
-    const tail = name[if (z) 3 else 8..];
-    const num_roots = tail[0] == 'z';
-    const den_roots = tail[1] == 'p';
+    const z: bool, const num_roots: bool, const den_roots: bool = switch (g.mir.instData(inst).call.callee) {
+        .laplace_zd => .{ false, true, false },
+        .laplace_zp => .{ false, true, true },
+        .laplace_nd => .{ false, false, false },
+        .laplace_np => .{ false, false, true },
+        .zi_zd => .{ true, true, false },
+        .zi_zp => .{ true, true, true },
+        .zi_nd => .{ true, false, false },
+        .zi_np => .{ true, false, true },
+        else => unreachable, // else: `planAll` plans only a `.laplace`/`.zi` unit, whose call is one of these eight
+    };
 
     const saved = g.uses_model;
     g.uses_model = false;
@@ -157,7 +163,7 @@ pub fn planAll(g: *Gen) Error!void {
     defer g.ctrl_tok = saved_tok;
     for (g.units, 0..) |u, i| {
         if (u.role != .analog_op or u.inst == .none) continue;
-        const k = cg.opKind(u.target);
+        const k = u.op;
         if (k != .laplace and k != .zi) continue;
         // `emitOperator` set this before planning, and E0515 falls back to it
         // for a coefficient with no token of its own.

@@ -27,7 +27,6 @@ const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 const dynCtrlArgs = codegen.dynCtrlArgs;
 const unitComment = codegen.unitComment;
-const opKind = codegen.opKind;
 
 // =======================================================================
 // Units
@@ -423,7 +422,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         const inst = opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
-        const k = opKind(u.target);
+        const k = u.op;
         try jobs.append(self.arena, .{
             .kind = .op_input,
             .target = if (args.len == 0) Mir.Value.f_zero else self.an.rv(args[0]),
@@ -451,7 +450,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         const inst = opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
-        for (dynCtrlArgs(opKind(u.target))) |ai| {
+        for (dynCtrlArgs(u.op)) |ai| {
             if (ai >= args.len) continue;
             const v = self.an.rv(args[ai]);
             if (v == .f_zero) continue;
@@ -599,7 +598,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // same insert-tolerance reason as every neighbour: a model that gains a
     // dynamic period appends a core field and renumbers none.
     for (self.units, 0..) |u, i| {
-        if (u.role != .analog_op or opKind(u.target) != .timer) continue;
+        if (u.role != .analog_op or u.op != .timer) continue;
         const args = opArgs(self, i);
         if (args.len < 2) continue;
         if (self.an.foldConst(args[1], 0, false) != null) continue; // renders inline
@@ -660,7 +659,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     // unaffected by the merge.
     for (self.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
-        const k = opKind(u.target);
+        const k = u.op;
         if (k != .laplace and k != .zi) continue;
         if (opInstOf(self, @intCast(i)) == null) continue;
         const p = cg_filters.planOf(self, i);

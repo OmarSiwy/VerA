@@ -15,6 +15,7 @@
 //! comptime rows in `.rodata`. No allocation.
 
 const std = @import("std");
+const op = @import("op.zig");
 
 pub const Callee = enum(u8) {
     // §4.5 analog operators (Table 4-19) and §4.5.13/§4.5.14 limexp, ddx.
@@ -256,6 +257,56 @@ pub fn ty(c: Callee) Ty {
     return table.get(c).ty;
 }
 
+/// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
+/// `naming.enumerateUnits` gives it and the `Instance` state `op.table` says
+/// it owns — or `.none`. Written out, so a new callee states whether it owns
+/// state; `op.byName` is the same map over spellings, held equal below.
+pub fn opKind(c: Callee) op.OpKind {
+    return switch (c) {
+        .ddt => .ddt,
+        .idt => .idt,
+        .idtmod => .idtmod,
+        .absdelay => .absdelay,
+        .transition => .transition,
+        .slew => .slew,
+        .last_crossing => .last_crossing,
+        .cross => .cross,
+        .above => .above,
+        .timer => .timer,
+        .@"$bound_step" => .bound_step,
+        .@"$discontinuity" => .discontinuity,
+        .laplace_zd, .laplace_zp, .laplace_nd, .laplace_np => .laplace,
+        .zi_zd, .zi_zp, .zi_nd, .zi_np => .zi,
+        // §4.5.13/§4.5.14 are pure (no state, no unit), and nothing else
+        // here owns per-instance state or a monitored event.
+        .limexp, .ddx, .initial_step, .final_step, .analog_initial, .analysis, .ac_stim,
+        .white_noise, .flicker_noise, .noise_table, .noise_table_log, .@"$temperature", .@"$vt",
+        .@"$mfactor", .@"$abstime", .@"$realtime", .@"$simparam", .@"$simparam$str",
+        .@"$param_given", .@"$port_connected", .@"$analog_node_alias", .@"$analog_port_alias",
+        .@"$test$plusargs", .@"$value$plusargs", .@"$xposition", .@"$yposition", .@"$angle",
+        .@"$hflip", .@"$vflip", .@"$rtoi", .@"$itor", .@"$realtobits", .@"$bitstoreal", .@"$clog2",
+        .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10", .@"$floor",
+        .@"$ceil", .@"$sin", .@"$cos", .@"$tan", .@"$asin", .@"$acos", .@"$atan", .@"$sinh",
+        .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh", .@"$atanh", .@"$pow", .@"$hypot", .@"$atan2",
+        .@"$display", .@"$displayb", .@"$displayo", .@"$displayh", .@"$write", .@"$writeb",
+        .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb", .@"$strobeo", .@"$strobeh",
+        .@"$monitor", .@"$monitoron", .@"$monitoroff", .@"$debug", .@"$fatal", .@"$error",
+        .@"$warning", .@"$info", .@"$finish", .@"$stop", .@"$fopen", .@"$fclose", .@"$fflush",
+        .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor", .@"$fdebug", .@"$fgets",
+        .@"$fscanf", .@"$ftell", .@"$fseek", .@"$rewind", .@"$ferror", .@"$feof", .@"$sformat",
+        .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int", .@"$held_real", .@"$limit$old",
+        .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width", .@"$monitor$arm",
+        .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str",
+        .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$rng$auto", .@"$rng$check",
+        .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform", .@"$rng$i_uniform_next",
+        .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal", .@"$rng$normal_next",
+        .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson", .@"$rng$poisson_next",
+        .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t", .@"$rng$t_next",
+        .@"$rng$erlang", .@"$rng$erlang_next", .systf,
+        => .none,
+    };
+}
+
 test "a callee name round-trips; anything else is .systf" {
     for (std.meta.tags(Callee)) |c| {
         if (c == .systf) continue;
@@ -266,4 +317,11 @@ test "a callee name round-trips; anything else is .systf" {
     try std.testing.expectEqual(Ty.int, ty(.@"$held_int"));
     try std.testing.expectEqual(Ty.real, ty(.@"$held_real"));
     try std.testing.expectEqual(Ty.real, ty(.systf));
+}
+
+test "opKind is op.byName over every spelling" {
+    for (std.meta.tags(Callee)) |c| {
+        const want = if (c == .systf) op.OpKind.none else op.byName(@tagName(c));
+        try std.testing.expectEqual(want, opKind(c));
+    }
 }

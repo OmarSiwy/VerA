@@ -23,7 +23,6 @@ const Lower = @import("ir").Lower;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
-const opKind = codegen.opKind;
 const opHasState = codegen.opHasState;
 const enableArgIdx = codegen.enableArgIdx;
 
@@ -48,7 +47,7 @@ fn scanAccept(self: *Gen) Error!Accept {
     var a: Accept = .{};
     for (self.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
-        const k = opKind(u.target);
+        const k = u.op;
         a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
         if (k == .absdelay and try gen_call.absdelayFreezes(self, gen_unit.opArgs(self, i))) a.reads_t_prev = true;
         if (!opHasState(k)) continue;
@@ -217,7 +216,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
         \\
     , .{});
     for (self.units, 0..) |u, i| {
-        const k = opKind(u.target);
+        const k = u.op;
         if (u.role != .analog_op or !opHasState(k)) continue;
         const n = self.unit_names[i];
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
@@ -848,7 +847,7 @@ pub fn emitDelays(self: *Gen) Error!void {
     self.uses_model = false;
     var tds: std.ArrayList([]const u8) = .empty;
     for (self.units, 0..) |u, i| {
-        if (u.role != .analog_op or opKind(u.target) != .absdelay) continue;
+        if (u.role != .analog_op or u.op != .absdelay) continue;
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
@@ -878,14 +877,14 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
 
     var timers: std.ArrayList([3]?[]const u8) = .empty;
     for (self.units, 0..) |u, i| {
-        if (u.role != .analog_op or opKind(u.target) != .timer) continue;
+        if (u.role != .analog_op or u.op != .timer) continue;
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse return;
         const args = self.mir.instData(inst).call.args;
         // §5.10.3.3 "if enable is specified and it is zero, then timer() is
         // inactive": a constant-zero enable means this timer never fires, so
         // it contributes no breakpoint — and it must not veto the others.
         var guard: ?[]const u8 = null;
-        if (enableArgIdx("timer")) |ei| {
+        if (enableArgIdx(.timer)) |ei| {
             if (ei < args.len) {
                 if (self.an.foldConst(args[ei], 0, false)) |c| {
                     if (c.f == 0.0) continue;

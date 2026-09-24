@@ -25,12 +25,10 @@ const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
-const array_index_types = codegen.array_index_types;
 const mathOpByName = codegen.mathOpByName;
 const isAnalysisName = codegen.isAnalysisName;
 const devSafe = codegen.devSafe;
 const OpKind = codegen.OpKind;
-const opKind = codegen.opKind;
 const opNeedsInput = codegen.opNeedsInput;
 const enableArgIdx = codegen.enableArgIdx;
 
@@ -363,7 +361,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             // nothing, `paramDefault` wrote 0 and W1050 fired.
             if (row.op == .call) {
                 const d = self.mir.instData(inst).call;
-                if (!std.mem.eql(u8, d.name, "$simparam")) return null;
+                if (d.callee != .@"$simparam") return null;
                 const f = Lower.simparamHostField(strArg(self, d.args, 0) orelse "") orelse return null;
                 self.uses_model = true;
                 return try std.fmt.allocPrint(self.arena, "model.{s}", .{f});
@@ -637,8 +635,8 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
 /// than a codegen-time constant — `enableArgIdx` is what makes `UnitPlan`
 /// give it a slot, so a `cross(…, enable)` whose enable is a variable
 /// assigned in the block renders as that variable and not as its phi's zero.
-pub fn enableTest(self: *Gen, name: []const u8, args: []const Mir.Value) Error![]const u8 {
-    const i = enableArgIdx(name) orelse return "true";
+pub fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
+    const i = enableArgIdx(k) orelse return "true";
     if (i >= args.len) return "true";
     const at = self.out.items.len;
     try gen_cfg.renderCond(self, args[i]);
@@ -665,23 +663,48 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
 /// arm there that reads `inst.<field>` of this kind belongs here too.
 pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
     const d = self.mir.instData(inst).call;
-    const k = opKind(d.name);
-    if (k != .none) return opReadsSimState(k);
-    const eq = std.mem.eql;
-    const names = [_][]const u8{
-        "analog_initial", // inst.is_analog_initial (§5.2.1)
-        "initial_step", "final_step", // inst.is_initial_step / is_final_step
-        "analysis", "ac_stim", // inst.analysis_kind (§4.6.1, §4.6.3)
-        "$abstime", "$realtime", // inst.abstime
-        "$simparam$str", // @tagName(inst.analysis_kind)
-        "$limit$old", // inst.limiter_previous (advanceIteration)
+    return switch (d.callee) {
+        .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
+        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
+        .@"$bound_step", .@"$discontinuity",
+        => opReadsSimState(Mir.callee.opKind(d.callee)),
+        .analog_initial, // inst.is_analog_initial (§5.2.1)
+        .initial_step, .final_step, // inst.is_initial_step / is_final_step
+        .analysis, .ac_stim, // inst.analysis_kind (§4.6.1, §4.6.3)
+        .@"$abstime", .@"$realtime", // inst.abstime
+        .@"$simparam$str", // @tagName(inst.analysis_kind)
+        .@"$limit$old", // inst.limiter_previous (advanceIteration)
+        => true,
+        // §9.15 `$simparam("iteration")`: inst.newton_iteration.
+        .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
+        // Constants, Model reads, and Instance fields the host does NOT
+        // rewrite between evaluations (`temperature`, `mfactor`, the held and
+        // seed latches), and every task, conversion and kernel of its
+        // operands alone.
+        .limexp, .ddx, .white_noise, .flicker_noise, .noise_table, .noise_table_log,
+        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected",
+        .@"$analog_node_alias", .@"$analog_port_alias", .@"$test$plusargs", .@"$value$plusargs",
+        .@"$xposition", .@"$yposition", .@"$angle", .@"$hflip", .@"$vflip", .@"$rtoi", .@"$itor",
+        .@"$realtobits", .@"$bitstoreal", .@"$clog2", .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln",
+        .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan",
+        .@"$asin", .@"$acos", .@"$atan", .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh",
+        .@"$atanh", .@"$pow", .@"$hypot", .@"$atan2", .@"$display", .@"$displayb", .@"$displayo",
+        .@"$displayh", .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb",
+        .@"$strobeo", .@"$strobeh", .@"$monitor", .@"$monitoron", .@"$monitoroff", .@"$debug",
+        .@"$fatal", .@"$error", .@"$warning", .@"$info", .@"$finish", .@"$stop", .@"$fopen",
+        .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor",
+        .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek", .@"$rewind", .@"$ferror",
+        .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int",
+        .@"$held_real", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
+        .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
+        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$rng$auto",
+        .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
+        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
+        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
+        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
+        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next", .systf,
+        => false,
     };
-    for (names) |n| {
-        if (eq(u8, d.name, n)) return true;
-    }
-    // §9.15 `$simparam("iteration")`: inst.newton_iteration.
-    if (eq(u8, d.name, "$simparam")) return Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse "");
-    return false;
 }
 
 /// The operator half of `readsSimState`, one arm per `OpKind` so a new
@@ -701,10 +724,17 @@ fn opReadsSimState(k: OpKind) bool {
 }
 
 /// System/environment and operator calls. LRM ch9, §4.5, §4.6.
+///
+/// ONE switch over `Mir.Callee`, without `else`: a callee lowering learns to
+/// emit does not compile here until this says how it renders. The raw name is
+/// read only where the text needs it — §9.7.1's diagnostic line and `.systf`,
+/// whose spelling is not its tag.
 pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const d = self.mir.instData(inst).call;
+    const c = d.callee;
     const name = d.name;
-    const k = opKind(name);
+    const args = d.args;
+    const k = Mir.callee.opKind(c);
     // Lane accounting for the batch differential gate. ddt/idt and the
     // §4.5.11/§4.5.12 filters stay lane-exact: their helpers branch only
     // on `dt` (lane-uniform) and are otherwise S-linear over shared f64
@@ -714,119 +744,460 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     // collapses it (delays), so it pins.
     switch (k) {
         .none, .ddt, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
-        else => for (d.args) |arg| gen_render.pinLanes(self, arg),
+        .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| gen_render.pinLanes(self, arg),
     }
-    if (k != .none) return emitOperator(self, inst, d.args, k);
+    switch (c) {
+        .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
+        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
+        .@"$bound_step", .@"$discontinuity",
+        => return emitOperator(self, inst, args, k),
 
-    // §4.5.13 limexp — user-invoked only; the engine never inserts it.
-    // Pins: zLimexp branches on its argument's `.val()`.
-    if (std.mem.eql(u8, name, "limexp")) {
-        if (d.args.len > 0) gen_render.pinLanes(self, d.args[0]);
-        return gen_render.helper1(self, "zLimexp", if (d.args.len > 0) d.args[0] else .f_zero);
-    }
+        // §4.5.13 limexp — user-invoked only; the engine never inserts it.
+        // Pins: zLimexp branches on its argument's `.val()`.
+        .limexp => {
+            if (args.len > 0) gen_render.pinLanes(self, args[0]);
+            return gen_render.helper1(self, "zLimexp", if (args.len > 0) args[0] else .f_zero);
+        },
 
-    // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
-    // Pins: `.ddxAt` reads one scalar partial, which a value-form batch S
-    // does not carry.
-    if (std.mem.eql(u8, name, "ddx")) {
-        if (d.args.len > 0) gen_render.pinLanes(self, d.args[0]);
-        const u = if (d.args.len > 1) self.an.foldConst(d.args[1], 0, true) else null;
-        const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
-        // The VALUE reads a lane, so that lane must exist in a narrow S —
-        // `ddx_reads`, which `contract.validate` holds inside `deriv_reads`.
-        self.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
-        try self.b("S.con((", .{});
-        try gen_render.renderVal(self, if (d.args.len > 0) d.args[0] else .f_zero, .real);
-        // The index is a literal lowering minted, but the cast is still
-        // saturating: a compiler panic is never the answer to bad MIR.
-        try self.b(").ddxAt({d}))", .{lane});
-        return;
-    }
+        // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
+        // Pins: `.ddxAt` reads one scalar partial, which a value-form batch S
+        // does not carry.
+        .ddx => {
+            if (args.len > 0) gen_render.pinLanes(self, args[0]);
+            const u = if (args.len > 1) self.an.foldConst(args[1], 0, true) else null;
+            const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
+            // The VALUE reads a lane, so that lane must exist in a narrow S —
+            // `ddx_reads`, which `contract.validate` holds inside `deriv_reads`.
+            self.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
+            try self.b("S.con((", .{});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
+            // The index is a literal lowering minted, but the cast is still
+            // saturating: a compiler panic is never the answer to bad MIR.
+            try self.b(").ddxAt({d}))", .{lane});
+            return;
+        },
 
-    // §5.2.1 the `analog initial` guard. Its own flag and not
-    // `is_initial_step`: §5.2.1 re-executes the block for each SUB-TASK of a
-    // parameter sweep, and Table 5-1's initial_step is the first point of the
-    // whole analysis. See `Lower.lowerModule`.
-    if (std.mem.eql(u8, name, "analog_initial")) {
-        self.uses_inst = true;
-        try self.b("S.con(if (inst.is_analog_initial) 1.0 else 0.0)", .{});
-        return;
-    }
+        // §5.2.1 the `analog initial` guard. Its own flag and not
+        // `is_initial_step`: §5.2.1 re-executes the block for each SUB-TASK of a
+        // parameter sweep, and Table 5-1's initial_step is the first point of the
+        // whole analysis. See `Lower.lowerModule`.
+        .analog_initial => {
+            self.uses_inst = true;
+            try self.b("S.con(if (inst.is_analog_initial) 1.0 else 0.0)", .{});
+            return;
+        },
 
-    // §5.10.2 global events.
-    if (std.mem.eql(u8, name, "initial_step") or std.mem.eql(u8, name, "final_step")) {
-        self.uses_inst = true;
-        const flag = if (name[0] == 'i') "is_initial_step" else "is_final_step";
-        try self.b("S.con(if (inst.{s}", .{flag});
-        if (d.args.len != 0) {
-            try self.b(" and (", .{});
-            try analysisMatch(self, d.args);
-            try self.b(")", .{});
-        }
-        try self.b(") 1.0 else 0.0)", .{});
-        return;
-    }
+        // §5.10.2 global events.
+        .initial_step, .final_step => {
+            self.uses_inst = true;
+            const flag = if (c == .initial_step) "is_initial_step" else "is_final_step";
+            try self.b("S.con(if (inst.{s}", .{flag});
+            if (args.len != 0) {
+                try self.b(" and (", .{});
+                try analysisMatch(self, args);
+                try self.b(")", .{});
+            }
+            try self.b(") 1.0 else 0.0)", .{});
+            return;
+        },
 
-    // §4.6.1 analysis("dc"|"tran"|…).
-    if (std.mem.eql(u8, name, "analysis")) {
-        self.uses_inst = true;
-        try self.b("S.con(if (", .{});
-        try analysisMatch(self, d.args);
-        try self.b(") 1.0 else 0.0)", .{});
-        return;
-    }
+        // §4.6.1 analysis("dc"|"tran"|…).
+        .analysis => {
+            self.uses_inst = true;
+            try self.b("S.con(if (", .{});
+            try analysisMatch(self, args);
+            try self.b(") 1.0 else 0.0)", .{});
+            return;
+        },
 
-    // §4.6.4 noise sources contribute in a small-signal noise analysis only;
-    // their residual contribution is identically zero. The generator
-    // topology is exported through `noise_gens` and the PSD — which IS the
-    // call's argument, not anything derivable from the residual — through
-    // `noisePsd`, whose core fields the argument slice already holds.
-    const noise = [_][]const u8{ "white_noise", "flicker_noise", "noise_table", "noise_table_log" };
-    for (noise) |n| {
-        if (std.mem.eql(u8, name, n)) return self.b("S.con(0.0)", .{});
-    }
-    // §4.6.3 ac_stim(analysis_name, mag, phase) is NOT a noise source: it
-    // is a small-signal stimulus. "The AC stimulus function returns zero
-    // (0) during large-signal analyses (such as DC and transient) as well
-    // as on all small-signal analyses using names which do not match
-    // analysis_name" — so the whole function is one conditional on the
-    // analysis in force, with the §4.6.1 name comparison `analysis()`
-    // already spells. The name defaults to "ac", mag to 1.0, phase to 0.0.
-    //
-    // ponytail: the residual is REAL, so a matching analysis contributes
-    // the phasor's real part, mag·cos(phase). The quadrature component is
-    // dropped, which costs nothing for the phase = 0 form every model in
-    // the suite writes and is wrong by cos for the rest. Upgrade path is
-    // an `ac_gens` export beside `noise_gens`, carrying (mag, phase) for a
-    // host that solves a complex system — the same shape §4.6.4 uses, and
-    // the reason this is a conditional rather than an export today is that
-    // the contract has no complex side to hand it to.
-    if (std.mem.eql(u8, name, "ac_stim")) {
-        self.uses_inst = true;
-        // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
-        // same production a contribution's right-hand side uses, and puts
-        // `constant_expression` only where it means one (the filters'
-        // trailing argument, two productions above). §4.5's Table 4-20 is
-        // the constant-argument register and `ac_stim` is not in it,
-        // because it is not an analog operator and keeps no state. So
-        // `ctrlEval`, not `argF64`: a magnitude the solve computes —
-        // `ac_stim("ac", k*V(ctrl))`, a swept-amplitude source — is a
-        // rendered expression here, and only a literal or a parameter
-        // still folds to the number it always did.
-        const mag = try ctrlEval(self, d.args, 1, "1.0");
-        const phase = try ctrlEval(self, d.args, 2, "0.0");
-        try self.b("S.con(if (", .{});
-        if (d.args.len == 0)
-            try self.b("inst.analysis_kind == .ac", .{})
+        // §4.6.4 noise sources contribute in a small-signal noise analysis only;
+        // their residual contribution is identically zero. The generator
+        // topology is exported through `noise_gens` and the PSD — which IS the
+        // call's argument, not anything derivable from the residual — through
+        // `noisePsd`, whose core fields the argument slice already holds.
+        .white_noise, .flicker_noise, .noise_table, .noise_table_log => return self.b("S.con(0.0)", .{}),
+
+        // §4.6.3 ac_stim(analysis_name, mag, phase) is NOT a noise source: it
+        // is a small-signal stimulus. "The AC stimulus function returns zero
+        // (0) during large-signal analyses (such as DC and transient) as well
+        // as on all small-signal analyses using names which do not match
+        // analysis_name" — so the whole function is one conditional on the
+        // analysis in force, with the §4.6.1 name comparison `analysis()`
+        // already spells. The name defaults to "ac", mag to 1.0, phase to 0.0.
+        //
+        // ponytail: the residual is REAL, so a matching analysis contributes
+        // the phasor's real part, mag·cos(phase). The quadrature component is
+        // dropped, which costs nothing for the phase = 0 form every model in
+        // the suite writes and is wrong by cos for the rest. Upgrade path is
+        // an `ac_gens` export beside `noise_gens`, carrying (mag, phase) for a
+        // host that solves a complex system — the same shape §4.6.4 uses, and
+        // the reason this is a conditional rather than an export today is that
+        // the contract has no complex side to hand it to.
+        .ac_stim => {
+            self.uses_inst = true;
+            // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
+            // same production a contribution's right-hand side uses, and puts
+            // `constant_expression` only where it means one (the filters'
+            // trailing argument, two productions above). §4.5's Table 4-20 is
+            // the constant-argument register and `ac_stim` is not in it,
+            // because it is not an analog operator and keeps no state. So
+            // `ctrlEval`, not `argF64`: a magnitude the solve computes —
+            // `ac_stim("ac", k*V(ctrl))`, a swept-amplitude source — is a
+            // rendered expression here, and only a literal or a parameter
+            // still folds to the number it always did.
+            const mag = try ctrlEval(self, args, 1, "1.0");
+            const phase = try ctrlEval(self, args, 2, "0.0");
+            try self.b("S.con(if (", .{});
+            if (args.len == 0)
+                try self.b("inst.analysis_kind == .ac", .{})
+            else
+                try analysisMatch(self, args[0..1]);
+            try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
+            return;
+        },
+
+        // ---- Clause 9 system functions ------------------------------------
+        .@"$display$width" => return gen_render.renderVal(self, args[0], .int),
+        // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In
+        // a device they are void (below).
+        .@"$display", .@"$displayb", .@"$displayo", .@"$displayh", .@"$write", .@"$writeb",
+        .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb", .@"$strobeo", .@"$strobeh",
+        .@"$monitor", .@"$debug", .@"$fatal", .@"$error", .@"$warning", .@"$info",
+        => return if (self.display == .emit)
+            cg_display.emitDisplayTask(self, c, args, @intFromEnum(inst))
         else
-            try analysisMatch(self, d.args[0..1]);
-        try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
-        return;
+            voidTask(self),
+        // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
+        // the call's position among the prints; in a device the call is dead
+        // (`Lower.isSimCtlTask` calls join the display chain and nothing else,
+        // so under `.drop` nothing ever renders one — the void answer is for a
+        // model that reads the void result).
+        .@"$finish", .@"$stop" => return if (self.display == .emit)
+            cg_display.emitSimCtl(self, name, args)
+        else
+            voidTask(self),
+        // §9.4.1 a monitor's registration (`Lower.armMonitor`): a side effect, so
+        // only the display unit performs it; anywhere else it is void.
+        .@"$monitor$arm" => return if (self.emitting_display) cg_display.emitMonitorArm(self, args) else voidTask(self),
+        .@"$monitoron", .@"$monitoroff" => return voidTask(self),
+        // §9.5 the descriptor family. Real kernels only in the display unit (see
+        // `emitting_display`); rendered but discarded in any other unit of the
+        // same artifact, so the slice `callArgIsValue` asked for is consumed.
+        //
+        // NOT gated on the display mode, and that is the point: `buildJobs`
+        // queues a display unit only under `.emit`, so `emitting_display` is
+        // already false throughout a `.drop` build and every §9.5 name lands in
+        // `emitFileCallDropped` — the one place that answers with the type
+        // `Mir.callee.ty` gave the call. Answering with `voidTask` instead put
+        // an `S` in the `i64` slot §9.5.1 says a descriptor is:
+        // `const t0: i64 = S.con(0.0);`, `--emit-zig` exit 0, and the failure
+        // deferred to whoever compiled the device.
+        .@"$fopen", .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe",
+        .@"$fmonitor", .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek",
+        .@"$rewind", .@"$ferror", .@"$feof", .@"$fgets$str", .@"$ferror$str",
+        .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str",
+        => return if (self.emitting_display)
+            cg_display.emitFileCall(self, c, args, @intFromEnum(inst))
+        else
+            emitFileCallDropped(self, c, args, @intFromEnum(inst)),
+        // §9.10 environment.
+        .@"$temperature" => {
+            self.uses_inst = true;
+            return self.b("S.con(inst.temperature)", .{});
+        },
+        .@"$vt" => {
+            // k/q = 8.617333262e-5 V/K (§9.10 $vt = kT/q).
+            if (args.len == 0) {
+                self.uses_inst = true;
+                return self.b("S.con(inst.temperature * 8.617333262145179e-5)", .{});
+            }
+            try self.b("(", .{});
+            try gen_render.renderVal(self, args[0], .real);
+            return self.b(").scale(8.617333262145179e-5)", .{});
+        },
+        .@"$abstime", .@"$realtime" => {
+            self.uses_inst = true;
+            return self.b("S.con(inst.abstime)", .{});
+        },
+        // §5.10 the retained value of an event-assigned variable. `Lower` put
+        // this in the entry block in place of the declared initializer, so
+        // reading the variable before the event has ever fired reads the
+        // `Instance` default and after it the last accepted value.
+        .@"$held_real", .@"$held_int" => {
+            self.uses_inst = true;
+            const f = self.held_names[heldIdx(self, args)];
+            return if (c == .@"$held_int")
+                self.b("inst.{s}", .{f})
+            else
+                self.b("S.con(inst.{s})", .{f});
+        },
+        .@"$mfactor" => { // §6.3.6
+            self.uses_inst = true;
+            return self.b("S.con(inst.mfactor)", .{});
+        },
+        // §9.18 Table 9-29 hierarchical system parameters. Their value is the
+        // top-level value combined down the instantiation hierarchy; VerA
+        // elaborates exactly ONE flat module, so the device IS the top level
+        // and the table's "Top-Level Value" column is exact — not a substitute.
+        // ($mfactor is the exception above: the host scales the whole stamp by
+        // it, so it stays a settable Instance field.)
+        .@"$xposition", .@"$yposition" => return self.b("S.con(0.0)", .{}), // 0.0 m
+        .@"$angle" => return self.b("S.con(0.0)", .{}), // 0 degrees
+        .@"$hflip", .@"$vflip" => return self.b("S.con(1.0)", .{}), // +1
+        // §9.15 $simparam(name [, fallback]), in the clause's own order: the
+        // KNOWN value first, the fallback only for a name this engine does not
+        // have ("its value is returned IF param_name is not known"). The list
+        // and the values are `Lower.simparamValue`, so the name that reaches
+        // here answered is the same set that escaped E0811 at lowering.
+        .@"$simparam" => {
+            const nm = strArg(self, args, 0) orelse "";
+            if (Lower.simparamIsRuntime(nm)) {
+                self.uses_inst = true;
+                return self.b("S.con(@floatFromInt(inst.newton_iteration))", .{});
+            }
+            // Host-published first: `simparamValue` also answers `tnom`, but
+            // only as the DECLARED default (`Lower.simparamHostField`).
+            if (Lower.simparamHostField(nm)) |f| {
+                self.uses_model = true;
+                return self.b("S.con(model.{s})", .{f});
+            }
+            if (self.lower.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
+            if (args.len > 1) return self.b("S.con({s})", .{try f64Expr(self, args[1])});
+            // Unknown, no fallback: E0811 already refused this compile unless
+            // the name was not a literal, in which case zero is the only answer
+            // available and the model asked for a name nothing could resolve.
+            return self.b("S.con(0.0)", .{});
+        },
+        // §9.15 "Table 9-28 gives a list of simulation string parameter names
+        // that shall be supported by $simparam$str" — no "if they support the
+        // parameter" escape, unlike Table 9-27's numeric side, so the two names
+        // this engine actually knows are answered. The rest ("cwd", "instance",
+        // "path") describe the host's filesystem and instantiation hierarchy,
+        // which a flat elaborated device has no view of: "" is the honest answer
+        // there, an invented path is not.
+        .@"$simparam$str" => {
+            // §9.15: "The argument param_name is a string value, either a string
+            // literal, a string parameter, or a STRING VARIABLE." A variable's
+            // value is only known while the block runs, so the table is
+            // consulted at RUN TIME and not folded here. The name folds to a
+            // literal in the common case and `zig` collapses the chain back to
+            // one branch; `strArg orelse ""` used to answer every unfoldable
+            // name with the empty string, which is a constant folder wearing
+            // §9.15's signature.
+            //
+            // §4.6.1's analysis names ARE the `AnalysisKind` tag spellings, so
+            // the enum is the table — no second list to drift out of step.
+            // Table 9-28's hierarchy rows are answered by `Lower` (they are
+            // elaboration facts, and this function has one flattened module):
+            // "module" survives here only for the callers that build a `Gen`
+            // with no elaborated unit table.
+            self.uses_inst = true;
+            try self.b("(if (std.mem.eql(u8, ", .{});
+            try gen_render.renderValueRef(self, self.an.rv(args[0]));
+            try self.b(", \"analysis_type\")) @tagName(inst.analysis_kind) else if (std.mem.eql(u8, ", .{});
+            try gen_render.renderValueRef(self, self.an.rv(args[0]));
+            return self.b(", \"module\")) \"{f}\" else \"\")", .{std.zig.fmtString(self.mir.name)});
+        },
+        // §9.19 $param_given / $port_connected.
+        .@"$param_given" => {
+            const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
+            if (def == .param_ref) {
+                self.uses_model = true;
+                return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.p_names[def.param_ref]});
+            }
+            return self.b("@as(i64, 0)", .{});
+        },
+        // Every port of an elaborated device instance is connected; an
+        // unconnected one is the host's business (§6.5.6).
+        .@"$port_connected" => return self.b("@as(i64, 1)", .{}),
+        // §9.20 node aliases do NOT render here, and used to: this arm answered
+        // the constant 0 on the argument that "this engine elaborates ONE FLAT
+        // MODULE, so there is no instance hierarchy for such a string to resolve
+        // into". The premise was false. Elaboration FLATTENS a hierarchy, and a
+        // flattened child's net keeps its path as its name (`Elaborate.sep` is a
+        // period), so the string §9.20 hands the compiler and the name the
+        // design carries are the same bytes. `Lower.bindAlias` resolves it
+        // against `node_voltages`, performs the clause's topology edit there —
+        // an alias is that map's business, since it is what every probe goes
+        // through — and folds the call to its 1 or its 0. This backend never
+        // sees one of these callees; were one to arrive, it is what it was
+        // before it had a tag — an unregistered `$name` (below).
+        .@"$analog_node_alias", .@"$analog_port_alias" => return emitUnregistered(self, inst, name, args),
+        // §9.12 command-line plusargs: absent.
+        .@"$test$plusargs", .@"$value$plusargs" => return self.b("@as(i64, 0)", .{}),
+        // §9.22/§9.23 driver & receiver access do NOT appear here. They used to,
+        // answering the constant 0 (and -1.0 for $driver_delay's no-pending-value
+        // sentinel) on the argument that a flat analog device has no digital
+        // drivers so zero is the true count. The argument is wrong at the first
+        // step: §9.22 paragraph 3 says "Driver access functions can only be
+        // called from connect modules", so the call itself is illegal in every
+        // module VerA can compile and there is no result to render. Refused at
+        // lowering now (E0818, `isConnectModuleOnlySysFunc`), which is where the
+        // call site is known — so this backend never sees one of these names.
+        // §4.5.15 $limit: the limiting ALGORITHM is a convergence aid the host
+        // owns (contract `limit`); the LRM lets a simulator that does not apply
+        // it return the access function unchanged, which is what happens here.
+        // §9.17.3 the USER-FUNCTION form. `lower.lowerLimitUser` has already
+        // inlined the function body and latched its return into the site's
+        // `LimitSlot`; what is left is the one thing only the backend can
+        // spell — the returned value carries the ACCESS FUNCTION's derivative,
+        // not the limiter's, so the clamp lands as a constant shift on the
+        // probe. args = (vnew, vlim). See `zLimitUf`.
+        .@"$limit$uf" => {
+            if (args.len != 2) return emitUnregistered(self, inst, name, args);
+            // `.val()` on two x-dependent carriers: a vector S would collapse
+            // per lane, so this pins them for the same reason `zPow` does.
+            gen_render.pinLanes(self, args[0]);
+            gen_render.pinLanes(self, args[1]);
+            return gen_render.helper2(self, "zLimitUf", args[0], args[1]);
+        },
+        .@"$limit$old" => {
+            self.uses_inst = true;
+            return self.b("S.con(inst.limiter_previous[{d}])", .{gen_render.intArg(self, args, 0) orelse unreachable});
+        },
+        .@"$limit" => return gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real),
+        .@"$clog2" => return gen_render.intCall1(self, "zClog2", if (args.len > 0) args[0] else .zero),
+        // §9.11 conversions. `$rtoi` truncates (Table 9-7); the saturation is
+        // ours — the clause is silent on overflow and `@intFromFloat` is UB in
+        // the ReleaseFast artifact a host actually links.
+        .@"$rtoi" => {
+            if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
+            try self.b("std.math.lossyCast(i64, @trunc((", .{});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
+            return self.b(").val()))", .{});
+        },
+        .@"$itor" => {
+            try self.b("S.con(@as(f64, @floatFromInt(", .{});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
+            return self.b(")))", .{});
+        },
+        // §9.11 Table 9-8 $realtobits/$bitstoreal: the IEEE-754 bit pattern of
+        // the real, verbatim. Exactly representable in the i64 that lowering
+        // gives integers, so this is the spec function, not an approximation.
+        .@"$realtobits" => {
+            if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
+            try self.b("@as(i64, @bitCast((", .{});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
+            return self.b(").val()))", .{});
+        },
+        .@"$bitstoreal" => {
+            try self.b("S.con(@as(f64, @bitCast(", .{});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
+            return self.b(")))", .{});
+        },
+        // §9.5.3 `$swrite`/`$sformat`, arriving as the synthetic `$sformat` whose
+        // operands are the format and its arguments — the destination is gone,
+        // because lowering made this call the right-hand side of an assignment to
+        // it. The text goes into this call site's own scratch row.
+        .@"$sformat" => return cg_display.emitStringFormat(self, args, @intFromEnum(inst)),
+        .@"$table_model" => return gen_render.emitTable(self, inst, args), // §9.21
+        // §§3.2/5.7 runtime array index — one switch, see `emitIdx`. The
+        // element type is the callee's own (`Mir.callee.ty`).
+        .@"$idx", .@"$idx$int", .@"$idx$str" => return gen_render.emitIdx(self, args, Mir.callee.ty(c)),
+        // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
+        // seed's incoming value, then the distribution's parameters. Every one is
+        // a pure function of that seed and carries no derivative — a variate is a
+        // constant of the operating point, which is what makes it admissible in a
+        // residual at all (see `rng_kernels.zig`).
+        .@"$rng$auto", .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
+        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
+        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
+        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
+        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next",
+        => return gen_render.emitRng(self, c, args),
+        // §9.5.4.2 `$sscanf`: the count, and the three item flavours lowering
+        // picks from the destination's declared type. All four are pure functions
+        // of the same two strings, so nothing here has to sequence them.
+        //
+        // Unreached item helpers return default payloads, not assignments.
+        // Lower.lowerScan guards each destination write with count > index,
+        // retaining its incoming SSA value when conversion did not assign it.
+        .@"$sscanf" => return gen_render.emitScan(self, "zScanN", args, .int),
+        .@"$sscanf$int" => return gen_render.emitScan(self, "zScanI", args, .int),
+        .@"$sscanf$real" => return gen_render.emitScan(self, "zScanR", args, .real),
+        .@"$sscanf$str" => return gen_render.emitScan(self, "zScanS", args, .str),
+        // IEEE 1364 §17.11 math functions, carried into Verilog-AMS: `$ln`,
+        // `$exp`, `$pow`, … are the same functions as their bare spellings —
+        // resolved at comptime, so a `$` tag with no Table 4-14/4-15 opcode
+        // does not compile. A wrong arity is an unregistered `$name` (below).
+        inline .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10",
+        .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan", .@"$asin", .@"$acos", .@"$atan",
+        .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh", .@"$atanh", .@"$pow",
+        .@"$hypot", .@"$atan2",
+        => |t| {
+            const op = comptime mathOpByName(@tagName(t)[1..]).?;
+            if (Mir.opClass(op) == .unary and args.len >= 1) return gen_render.renderOp(self, op, args[0], .f_zero, .real);
+            if (Mir.opClass(op) == .binary and args.len >= 2) return gen_render.renderOp(self, op, args[0], args[1], .real);
+            return emitUnregistered(self, inst, name, args);
+        },
+        // Not a Chapter 9 function, not an Annex D macro and not a §4.5
+        // operator. A `$name` is an UNREGISTERED system function
+        // (`emitUnregistered`); anything else is a MIR call no clause defines.
+        .systf => {
+            if (name.len != 0 and name[0] == '$') return emitUnregistered(self, inst, name, args);
+            return abort(self, "VerA: unhandled call `{s}`", .{name});
+        },
     }
+}
 
-    if (name.len != 0 and name[0] == '$') return emitSysCall(self, name, d.args, inst);
+/// §9.4/§9.7 display and control tasks outside the printing unit: void.
+/// Lowering keeps them as calls; their result is never read, so this only
+/// fires if a model assigns one — and every one of them is real-valued
+/// (`Mir.callee.ty` types none of them `.int`), which is what makes ONE answer
+/// correct for the whole family.
+///
+/// The §9.5 descriptor family is NOT here. It used to be, for the case where a
+/// device carries no host file table — but that answer is
+/// `emitFileCallDropped`'s, which reads the callee's type and returns
+/// `@as(i64, 0)` for the eight integer-valued names §9.5.1 defines a
+/// descriptor as. The blanket `S.con(0.0)` typed them real and the two
+/// disagreed.
+fn voidTask(self: *Gen) Error!void {
+    return self.b("S.con(0.0)", .{});
+}
 
-    return abort(self, "VerA: unhandled call `{s}`", .{name});
+/// Nothing in `emitCall` claimed the call, so it is not a Chapter 9 function,
+/// not an Annex D macro and not a §4.5 operator: it is an UNREGISTERED system
+/// function. §2.8.3 makes `$name` grammatical and lists "defined using the VPI
+/// as described in Clause 11 and Clause 12" as one of its definition sites;
+/// §12.32's vpi_register_analog_systf() hands the APPLICATION a compiletf
+/// routine, so what an unknown systf means is the host's decision and not this
+/// compiler's. §12.32.3's own sampnhold listing puts one in a contribution. No
+/// clause makes the source an error, so it may not be rejected — see W0852.
+///
+/// THE SET THAT ARRIVES HERE IS ACTUALLY EMPTY OF LRM NAMES, which is what
+/// makes the answer below safe rather than a blanket amnesty: every Chapter 9
+/// name is either implemented in `emitCall` or diagnosed by a RULE before
+/// codegen (E0806 for a digital-only row of the §9.2 tables, E0808 for the
+/// retired v1.0 `$limexp`, E0812, E0813, E0815, E0816). Probing the whole of
+/// ch9 by hand, the only names that reach this line are ones Verilog-AMS
+/// defines nowhere — `$countdrivers`, `$rose`, `$fell`, and a typo. Add an
+/// unimplemented LRM function to `Mir.Callee` and `emitCall`, not here.
+///
+/// WHY THIS IS NOT THE SILENT-ZERO THE REST OF THIS FILE REFUSES. Every
+/// `abort` here stands where the LRM fixes a number and a substitute would
+/// contradict it (E0515's control arguments, a filter VerA cannot build). This
+/// name has no such number: the language defines no value for an unregistered
+/// systf at all — §12.32.3 never initializes sampler->value before the first
+/// update callback and returns that field through vpi_put_value() — so there
+/// is nothing to be wrong about, only an absent host. The compromise is that
+/// it is LOUD: one warning per call site, `--deny=W0852` restores the refusal
+/// for anyone who wants a host-less build to fail instead.
+fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const Mir.Value) Error!void {
+    if (self.diags) |bag| try bag.add(
+        .codegen,
+        .W0852,
+        self.lower.tokenSpan(self.mir.instTok(inst)),
+        "`{s}` is not a system function this compiler defines, so it is exported in " ++
+            "`systf_calls` for a VPI application to supply; a host that binds none " ++
+            "will not build",
+        .{name},
+    );
+    // A systf crosses to the host through concrete f64s (`.val()` per
+    // argument, partials written back) — a per-lane crossing does not
+    // exist, so it pins regardless of what the host computes.
+    self.lane_pinned = self.lane_pinned or !self.emitting_display;
+    return emitSystfCall(self, name, args);
 }
 
 pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
@@ -865,341 +1236,6 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
         }
     }
     if (first) try self.b("false", .{});
-}
-
-/// `inst` is the call's own MIR instruction, and it is here for exactly one
-/// reason: §9.5.3's formatter needs storage for the bytes it produces that
-/// outlives the expression (a string slot is a `[]const u8`), and the
-/// instruction id is the per-call-site name `zSBuf` keys that storage by.
-pub fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: Mir.Inst) Error!void {
-    if (std.mem.eql(u8, name, "$display$width")) return gen_render.renderVal(self, args[0], .int);
-    const eq = std.mem.eql;
-    // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
-    // device they fall through to `void_tasks` below.
-    if (self.display == .emit and Lower.isDisplayTask(name))
-        return cg_display.emitDisplayTask(self, name, args, @intFromEnum(inst));
-    // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
-    // the call's position among the prints; in a device the call is dead
-    // (`Lower.isSimCtlTask` calls join the display chain and nothing else,
-    // so under `.drop` nothing ever renders one — the fall-through to
-    // `void_tasks` below is for a model that reads the void result).
-    if (self.display == .emit and Lower.isSimCtlTask(name))
-        return cg_display.emitSimCtl(self, name, args);
-    // §9.4.1 a monitor's registration (`Lower.armMonitor`): a side effect, so
-    // only the display unit performs it; anywhere else it is the void below.
-    if (self.emitting_display and eq(u8, name, "$monitor$arm"))
-        return cg_display.emitMonitorArm(self, args);
-    // §9.5 the descriptor family. Real kernels only in the display unit (see
-    // `emitting_display`); rendered but discarded in any other unit of the
-    // same artifact, so the slice `callArgIsValue` asked for is consumed.
-    //
-    // NOT gated on the display mode, and that is the point: `buildJobs`
-    // queues a display unit only under `.emit`, so `emitting_display` is
-    // already false throughout a `.drop` build and every §9.5 name lands in
-    // `emitFileCallDropped` — the one place that answers with the type
-    // `Analysis.callTy` gave the call. Gating here instead sent them to
-    // `void_tasks`' blanket `S.con(0.0)`, which put an `S` in the `i64` slot
-    // §9.5.1 says a descriptor is: `const t0: i64 = S.con(0.0);`, `--emit-zig`
-    // exit 0, and the failure deferred to whoever compiled the device.
-    if (Lower.isFileCall(name)) {
-        if (!self.emitting_display) return emitFileCallDropped(self, name, args, @intFromEnum(inst));
-        return cg_display.emitFileCall(self, name, args, @intFromEnum(inst));
-    }
-    // §9.10 environment.
-    if (eq(u8, name, "$temperature")) {
-        self.uses_inst = true;
-        return self.b("S.con(inst.temperature)", .{});
-    }
-    if (eq(u8, name, "$vt")) {
-        // k/q = 8.617333262e-5 V/K (§9.10 $vt = kT/q).
-        if (args.len == 0) {
-            self.uses_inst = true;
-            return self.b("S.con(inst.temperature * 8.617333262145179e-5)", .{});
-        }
-        try self.b("(", .{});
-        try gen_render.renderVal(self, args[0], .real);
-        return self.b(").scale(8.617333262145179e-5)", .{});
-    }
-    if (eq(u8, name, "$abstime") or eq(u8, name, "$realtime")) {
-        self.uses_inst = true;
-        return self.b("S.con(inst.abstime)", .{});
-    }
-    // §5.10 the retained value of an event-assigned variable. `Lower` put
-    // this in the entry block in place of the declared initializer, so
-    // reading the variable before the event has ever fired reads the
-    // `Instance` default and after it the last accepted value.
-    if (eq(u8, name, "$held_real") or eq(u8, name, "$held_int")) {
-        self.uses_inst = true;
-        const f = self.held_names[heldIdx(self, args)];
-        return if (eq(u8, name, "$held_int"))
-            self.b("inst.{s}", .{f})
-        else
-            self.b("S.con(inst.{s})", .{f});
-    }
-    if (eq(u8, name, "$mfactor")) { // §6.3.6
-        self.uses_inst = true;
-        return self.b("S.con(inst.mfactor)", .{});
-    }
-    // §9.18 Table 9-29 hierarchical system parameters. Their value is the
-    // top-level value combined down the instantiation hierarchy; VerA
-    // elaborates exactly ONE flat module, so the device IS the top level
-    // and the table's "Top-Level Value" column is exact — not a substitute.
-    // ($mfactor is the exception above: the host scales the whole stamp by
-    // it, so it stays a settable Instance field.)
-    if (eq(u8, name, "$xposition") or eq(u8, name, "$yposition"))
-        return self.b("S.con(0.0)", .{}); // 0.0 m
-    if (eq(u8, name, "$angle"))
-        return self.b("S.con(0.0)", .{}); // 0 degrees
-    if (eq(u8, name, "$hflip") or eq(u8, name, "$vflip"))
-        return self.b("S.con(1.0)", .{}); // +1
-    // §9.15 $simparam(name [, fallback]), in the clause's own order: the
-    // KNOWN value first, the fallback only for a name this engine does not
-    // have ("its value is returned IF param_name is not known"). The list
-    // and the values are `Lower.simparamValue`, so the name that reaches
-    // here answered is the same set that escaped E0811 at lowering.
-    if (eq(u8, name, "$simparam")) {
-        const nm = strArg(self, args, 0) orelse "";
-        if (Lower.simparamIsRuntime(nm)) {
-            self.uses_inst = true;
-            return self.b("S.con(@floatFromInt(inst.newton_iteration))", .{});
-        }
-        // Host-published first: `simparamValue` also answers `tnom`, but
-        // only as the DECLARED default (`Lower.simparamHostField`).
-        if (Lower.simparamHostField(nm)) |f| {
-            self.uses_model = true;
-            return self.b("S.con(model.{s})", .{f});
-        }
-        if (self.lower.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
-        if (args.len > 1) return self.b("S.con({s})", .{try f64Expr(self, args[1])});
-        // Unknown, no fallback: E0811 already refused this compile unless
-        // the name was not a literal, in which case zero is the only answer
-        // available and the model asked for a name nothing could resolve.
-        return self.b("S.con(0.0)", .{});
-    }
-    // §9.15 "Table 9-28 gives a list of simulation string parameter names
-    // that shall be supported by $simparam$str" — no "if they support the
-    // parameter" escape, unlike Table 9-27's numeric side, so the two names
-    // this engine actually knows are answered. The rest ("cwd", "instance",
-    // "path") describe the host's filesystem and instantiation hierarchy,
-    // which a flat elaborated device has no view of: "" is the honest answer
-    // there, an invented path is not.
-    if (eq(u8, name, "$simparam$str")) {
-        // §9.15: "The argument param_name is a string value, either a string
-        // literal, a string parameter, or a STRING VARIABLE." A variable's
-        // value is only known while the block runs, so the table is
-        // consulted at RUN TIME and not folded here. The name folds to a
-        // literal in the common case and `zig` collapses the chain back to
-        // one branch; `strArg orelse ""` used to answer every unfoldable
-        // name with the empty string, which is a constant folder wearing
-        // §9.15's signature.
-        //
-        // §4.6.1's analysis names ARE the `AnalysisKind` tag spellings, so
-        // the enum is the table — no second list to drift out of step.
-        // Table 9-28's hierarchy rows are answered by `Lower` (they are
-        // elaboration facts, and this function has one flattened module):
-        // "module" survives here only for the callers that build a `Gen`
-        // with no elaborated unit table.
-        self.uses_inst = true;
-        try self.b("(if (std.mem.eql(u8, ", .{});
-        try gen_render.renderValueRef(self, self.an.rv(args[0]));
-        try self.b(", \"analysis_type\")) @tagName(inst.analysis_kind) else if (std.mem.eql(u8, ", .{});
-        try gen_render.renderValueRef(self, self.an.rv(args[0]));
-        return self.b(", \"module\")) \"{f}\" else \"\")", .{std.zig.fmtString(self.mir.name)});
-    }
-    // §9.19 $param_given / $port_connected.
-    if (eq(u8, name, "$param_given")) {
-        const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
-        if (def == .param_ref) {
-            self.uses_model = true;
-            return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.p_names[def.param_ref]});
-        }
-        return self.b("@as(i64, 0)", .{});
-    }
-    if (eq(u8, name, "$port_connected")) {
-        // Every port of an elaborated device instance is connected; an
-        // unconnected one is the host's business (§6.5.6).
-        return self.b("@as(i64, 1)", .{});
-    }
-    // §9.20 node aliases do NOT appear here, and used to: this arm answered
-    // the constant 0 on the argument that "this engine elaborates ONE FLAT
-    // MODULE, so there is no instance hierarchy for such a string to resolve
-    // into". The premise was false. Elaboration FLATTENS a hierarchy, and a
-    // flattened child's net keeps its path as its name (`Elaborate.sep` is a
-    // period), so the string §9.20 hands the compiler and the name the
-    // design carries are the same bytes. `Lower.bindAlias` resolves it
-    // against `node_voltages`, performs the clause's topology edit there —
-    // an alias is that map's business, since it is what every probe goes
-    // through — and folds the call to its 1 or its 0. This backend never
-    // sees one of these names.
-    // §9.12 command-line plusargs: absent.
-    if (eq(u8, name, "$test$plusargs") or eq(u8, name, "$value$plusargs"))
-        return self.b("@as(i64, 0)", .{});
-    // §9.22/§9.23 driver & receiver access do NOT appear here. They used to,
-    // answering the constant 0 (and -1.0 for $driver_delay's no-pending-value
-    // sentinel) on the argument that a flat analog device has no digital
-    // drivers so zero is the true count. The argument is wrong at the first
-    // step: §9.22 paragraph 3 says "Driver access functions can only be
-    // called from connect modules", so the call itself is illegal in every
-    // module VerA can compile and there is no result to render. Refused at
-    // lowering now (E0818, `isConnectModuleOnlySysFunc`), which is where the
-    // call site is known — so this backend never sees one of these names.
-    // §4.5.15 $limit: the limiting ALGORITHM is a convergence aid the host
-    // owns (contract `limit`); the LRM lets a simulator that does not apply
-    // it return the access function unchanged, which is what happens here.
-    // §9.17.3 the USER-FUNCTION form. `lower.lowerLimitUser` has already
-    // inlined the function body and latched its return into the site's
-    // `LimitSlot`; what is left is the one thing only the backend can
-    // spell — the returned value carries the ACCESS FUNCTION's derivative,
-    // not the limiter's, so the clamp lands as a constant shift on the
-    // probe. args = (vnew, vlim). See `zLimitUf`.
-    if (eq(u8, name, "$limit$uf") and args.len == 2) {
-        // `.val()` on two x-dependent carriers: a vector S would collapse
-        // per lane, so this pins them for the same reason `zPow` does.
-        gen_render.pinLanes(self, args[0]);
-        gen_render.pinLanes(self, args[1]);
-        return gen_render.helper2(self, "zLimitUf", args[0], args[1]);
-    }
-    if (eq(u8, name, "$limit$old")) {
-        self.uses_inst = true;
-        return self.b("S.con(inst.limiter_previous[{d}])", .{gen_render.intArg(self, args, 0) orelse unreachable});
-    }
-    if (eq(u8, name, "$limit"))
-        return gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
-    if (eq(u8, name, "$clog2"))
-        return gen_render.intCall1(self, "zClog2", if (args.len > 0) args[0] else .zero);
-    // §9.11 conversions. `$rtoi` truncates (Table 9-7); the saturation is
-    // ours — the clause is silent on overflow and `@intFromFloat` is UB in
-    // the ReleaseFast artifact a host actually links.
-    if (eq(u8, name, "$rtoi")) {
-        if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
-        try self.b("std.math.lossyCast(i64, @trunc((", .{});
-        try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
-        return self.b(").val()))", .{});
-    }
-    if (eq(u8, name, "$itor")) {
-        try self.b("S.con(@as(f64, @floatFromInt(", .{});
-        try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
-        return self.b(")))", .{});
-    }
-    // §9.11 Table 9-8 $realtobits/$bitstoreal: the IEEE-754 bit pattern of
-    // the real, verbatim. Exactly representable in the i64 that lowering
-    // gives integers, so this is the spec function, not an approximation.
-    if (eq(u8, name, "$realtobits")) {
-        if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
-        try self.b("@as(i64, @bitCast((", .{});
-        try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
-        return self.b(").val()))", .{});
-    }
-    if (eq(u8, name, "$bitstoreal")) {
-        try self.b("S.con(@as(f64, @bitCast(", .{});
-        try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
-        return self.b(")))", .{});
-    }
-    // §9.5.3 `$swrite`/`$sformat`, arriving as the synthetic `$sformat` whose
-    // operands are the format and its arguments — the destination is gone,
-    // because lowering made this call the right-hand side of an assignment to
-    // it. The text goes into this call site's own scratch row.
-    if (eq(u8, name, "$sformat"))
-        return cg_display.emitStringFormat(self, args, @intFromEnum(inst));
-    // §9.5.4.2 `$sscanf`: the count, and the three item flavours lowering
-    // picks from the destination's declared type. All four are pure functions
-    // of the same two strings, so nothing here has to sequence them.
-    //
-    // Unreached item helpers return default payloads, not assignments.
-    // Lower.lowerScan guards each destination write with count > index,
-    // retaining its incoming SSA value when conversion did not assign it.
-    if (eq(u8, name, "$table_model")) return gen_render.emitTable(self, inst, args); // §9.21
-    // §§3.2/5.7 runtime array index — one switch, see `emitIdx`.
-    if (array_index_types.get(name)) |ty| return gen_render.emitIdx(self, args, ty);
-    // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
-    // seed's incoming value, then the distribution's parameters. Every one is
-    // a pure function of that seed and carries no derivative — a variate is a
-    // constant of the operating point, which is what makes it admissible in a
-    // residual at all (see `rng_kernels.zig`).
-    if (std.mem.startsWith(u8, name, "$rng$")) return gen_render.emitRng(self, name, args);
-    if (eq(u8, name, "$sscanf")) return gen_render.emitScan(self, "zScanN", args, .int);
-    if (eq(u8, name, "$sscanf$int")) return gen_render.emitScan(self, "zScanI", args, .int);
-    if (eq(u8, name, "$sscanf$real")) return gen_render.emitScan(self, "zScanR", args, .real);
-    if (eq(u8, name, "$sscanf$str")) return gen_render.emitScan(self, "zScanS", args, .str);
-    // §9.4/§9.7 display and control tasks: void. Lowering keeps them as
-    // calls; their result is never read, so this only fires if a model
-    // assigns one — and every one of these is real-valued (`Analysis.callTy`
-    // types nothing here `.int`), which is what makes ONE answer correct for
-    // the whole list.
-    //
-    // The §9.5 descriptor family is NOT here. It used to be, for the case
-    // where a device carries no host file table — but that answer is
-    // `emitFileCallDropped`'s, which reads `callTy` and returns `@as(i64, 0)`
-    // for the eight integer-valued names §9.5.1 defines a descriptor as. The
-    // blanket `S.con(0.0)` below typed them real and the two disagreed.
-    // `Lower.isFileCall` above now claims every §9.5 spelling in BOTH display
-    // modes, so nothing in that family reaches this list.
-    const void_tasks = [_][]const u8{
-        "$display", "$displayb",  "$displayo",      "$displayh",
-        "$write",   "$writeb",    "$writeo",        "$writeh",
-        "$strobe",  "$strobeb",   "$strobeo",       "$strobeh",
-        "$monitor", "$monitoron", "$monitoroff",    "$debug",
-        "$finish",  "$stop",      "$fatal",         "$error",
-        "$warning", "$info",      "$discontinuity", "$bound_step",
-        "$monitor$arm",
-    };
-    for (void_tasks) |t| {
-        if (eq(u8, name, t)) return self.b("S.con(0.0)", .{});
-    }
-    // IEEE 1364 §17.11 math functions, carried into Verilog-AMS: `$ln`,
-    // `$exp`, `$pow`, … are the same functions as their bare spellings.
-    const bare = name[1..];
-    if (mathOpByName(bare)) |op| {
-        if (Mir.opClass(op) == .unary and args.len >= 1) return gen_render.renderOp(self, op, args[0], .f_zero, .real);
-        if (Mir.opClass(op) == .binary and args.len >= 2) return gen_render.renderOp(self, op, args[0], args[1], .real);
-    }
-    if (eq(u8, bare, "abs") and args.len >= 1) return gen_render.method1(self, args[0], "abs");
-    if ((eq(u8, bare, "min") or eq(u8, bare, "max")) and args.len >= 2)
-        return gen_render.helper2(self, if (bare[1] == 'i') "zMin" else "zMax", args[0], args[1]);
-
-    // Nothing above claimed the name, so it is not a Chapter 9 function, not
-    // an Annex D macro and not a §4.5 operator: it is an UNREGISTERED system
-    // function. §2.8.3 makes `$name` grammatical and lists "defined using the
-    // VPI as described in Clause 11 and Clause 12" as one of its definition
-    // sites; §12.32's vpi_register_analog_systf() hands the APPLICATION a
-    // compiletf routine, so what an unknown systf means is the host's
-    // decision and not this compiler's. §12.32.3's own sampnhold listing
-    // puts one in a contribution. No clause makes the source an error, so it
-    // may not be rejected — see W0852.
-    //
-    // THE SET THAT ARRIVES HERE IS ACTUALLY EMPTY OF LRM NAMES, which is
-    // what makes the answer below safe rather than a blanket amnesty: every
-    // Chapter 9 name is either implemented above or diagnosed by a RULE
-    // before codegen (E0806 for a digital-only row of the §9.2 tables, E0808
-    // for the retired v1.0 `$limexp`, E0812, E0813, E0815, E0816). Probing
-    // the whole of ch9 by hand, the only names that reach this line are ones
-    // Verilog-AMS defines nowhere — `$countdrivers`, `$rose`, `$fell`, and a
-    // typo. Add an unimplemented LRM function above, not here.
-    //
-    // WHY THIS IS NOT THE SILENT-ZERO THE REST OF THIS FILE REFUSES. Every
-    // `abort` here stands where the LRM fixes a number and a substitute
-    // would contradict it (E0515's control arguments, a filter VerA cannot
-    // build). This name has no such number: the language defines no value
-    // for an unregistered systf at all — §12.32.3 never initializes
-    // sampler->value before the first update callback and returns that field
-    // through vpi_put_value() — so there is nothing to be wrong about, only
-    // an absent host. The compromise is that it is LOUD: one warning per
-    // call site, `--deny=W0852` restores the refusal for anyone who wants a
-    // host-less build to fail instead.
-    if (self.diags) |bag| try bag.add(
-        .codegen,
-        .W0852,
-        self.lower.tokenSpan(self.mir.instTok(inst)),
-        "`{s}` is not a system function this compiler defines, so it is exported in " ++
-            "`systf_calls` for a VPI application to supply; a host that binds none " ++
-            "will not build",
-        .{name},
-    );
-    // A systf crosses to the host through concrete f64s (`.val()` per
-    // argument, partials written back) — a per-lane crossing does not
-    // exist, so it pins regardless of what the host computes.
-    self.lane_pinned = self.lane_pinned or !self.emitting_display;
-    return emitSystfCall(self, name, args);
 }
 
 /// §2.8.3/§12.32: hand one unresolved `$name` to the host's VPI application.
@@ -1290,14 +1326,14 @@ pub fn emitSystfTable(self: *Gen) Error!void {
 /// is also every §9.5 call in a device. `callArgIsValue` marks nothing live
 /// there, which agrees the other way round: no slot is declared, and there is
 /// nothing to consume. What matters in both modes is the TYPE below — the
-/// caller's slot is `Analysis.callTy`'s, and §9.5's descriptors are integers.
-pub fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+/// caller's slot is `Mir.callee.ty`'s, and §9.5's descriptors are integers.
+pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
     // A printing artifact HAS a file table: the display unit performed this
     // call and latched its integer result (`file_kernels.zFRes`), so a
     // descriptor assigned in the analog block reads back as the descriptor.
     // A device (`.drop`) never performs one and keeps the zero below.
-    if (self.display == .emit and Analysis.callTy(name) == .int)
+    if (self.display == .emit and Mir.callee.ty(c) == .int)
         return self.b("zFRes({d}).*", .{site});
     // §9.5.1 reserves 0 for `$fopen`'s failure, §9.5.4.1 for "an error occurs
     // reading", §9.5.8 for "no EOF has been detected" and §9.5.7 for "the most
@@ -1305,7 +1341,7 @@ pub fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value
     // answer here and not a stub. §9.5.5's positioning family is the one
     // exception: its error return is EOF, but `$ftell` on a descriptor that
     // was never opened has no offset to report either way.
-    try self.b("{s}", .{switch (Analysis.callTy(name)) {
+    try self.b("{s}", .{switch (Mir.callee.ty(c)) {
         .real => "S.con(0.0)",
         .int => "@as(i64, 0)",
         .str => "\"\"",
@@ -1439,7 +1475,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // `above` is the operator that is explicitly exempt from both.)
         .cross => try self.b("S.con(if (inst.analysis_kind == .tran and inst.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
             try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in})),
-            try enableTest(self, "cross", args),
+            try enableTest(self, .cross, args),
         }),
         // §5.10.3.3 fires at `start_time` and every `period` after it.
         // `__next` carries the schedule, but it initialises to 0.0 and is
@@ -1465,7 +1501,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
                 try std.fmt.allocPrint(self.arena, " and ({s}).val() >= 0.0", .{in})
             else
                 "",
-            try enableTest(self, "timer", args),
+            try enableTest(self, .timer, args),
         }),
         // §5.10.3.2 "above() generates a monitored analog event to detect
         // threshold crossings in analog signals when the expression crosses
@@ -1482,7 +1518,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // expression crosses zero from below"). The initialisation case is
         // the `__prev = 0.0` initialiser — see `emitInstance`.
         .above => try self.b("S.con(if (inst.{0s}__prev <= 0.0 and ({1s}).val() > 0.0 and ({2s})) 1.0 else 0.0)", .{
-            n, in, try enableTest(self, "above", args),
+            n, in, try enableTest(self, .above, args),
         }),
         // §9.17 tasks return no value ("It does not return a value").
         // Unreachable in practice — lowering never leaves one in an eval

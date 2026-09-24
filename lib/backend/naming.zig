@@ -42,6 +42,10 @@ pub const Unit = struct {
     /// for every other role. Recorded by the ONE walk that defines the unit
     /// order, so no consumer has to re-walk the MIR and hope it agrees.
     inst: Mir.Inst = .none,
+    /// That call's operator (`Mir.callee.opKind`); `.none` for every other
+    /// role. The same walk records it, so no consumer re-derives it from the
+    /// target's spelling.
+    op: opdb.OpKind = .none,
 };
 
 pub const Role = enum {
@@ -269,18 +273,19 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
         var insts = mir.blockInsts(block);
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call) continue;
-            const callee = mir.instData(inst).call.name;
+            const callee = mir.instData(inst).call.callee;
             // `ir/op.zig`'s table IS the set: an `OpKind` other than `.none`
             // is exactly an operator that owns state or a monitored event.
-            if (opdb.byName(callee) == .none) continue;
-            // The `$` of a §9.17 task is dropped, not escaped: codegen looks the
-            // OpKind up from `Unit.target`, and `sanitize` would turn it into
-            // `Z24bound_step`. No collision is possible — every other unit
-            // target here is a reserved keyword (annex B), which no user
-            // identifier can be.
-            const bare = if (callee[0] == '$') callee[1..] else callee;
+            const k = Mir.callee.opKind(callee);
+            if (k == .none) continue;
+            // The `$` of a §9.17 task is dropped, not escaped: `sanitize` would
+            // turn it into `Z24bound_step`. No collision is possible — every
+            // other unit target here is a reserved keyword (annex B), which no
+            // user identifier can be.
+            const spelling = @tagName(callee);
+            const bare = if (spelling[0] == '$') spelling[1..] else spelling;
             const t = try gpa.dupe(u8, try sanitize(&scratch, bare));
-            try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst });
+            try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst, .op = k });
         }
     }
 

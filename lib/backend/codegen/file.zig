@@ -28,7 +28,6 @@ const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 const hist_len = codegen.hist_len;
 const OpKind = codegen.OpKind;
-const opKind = codegen.opKind;
 const opHasState = codegen.opHasState;
 const header_txt = gen_kernel_text.header_txt;
 const math_txt = gen_kernel_text.math_txt;
@@ -270,14 +269,14 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lower.held_vars.items.len != 0 or self.lower.limit_slots.items.len != 0 or self.lower.uses_newton_iter or self.lower.reject_iteration_place != null) return true;
     for (self.units) |u| {
-        if (u.role == .analog_op and opHasState(opKind(u.target))) return true;
+        if (u.role == .analog_op and opHasState(u.op)) return true;
     }
     return false;
 }
 
 pub fn usesOp(self: *const Gen, k: OpKind) bool {
     for (self.units) |u| {
-        if (u.role == .analog_op and opKind(u.target) == k) return true;
+        if (u.role == .analog_op and u.op == k) return true;
     }
     return false;
 }
@@ -834,7 +833,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         // The nine operators whose Instance shape is FIXED are a table
         // read — the per-operator prose that used to live in these arms is
         // now beside the row it explains, in ir/op.zig.
-        for (opdb.get(opKind(u.target)).slots) |s| {
+        for (opdb.get(u.op).slots) |s| {
             if (s.note.len == 0) {
                 try self.w("    {s}__{s}: f64 = {s},\n", .{ n, s.suffix, s.default });
             } else {
@@ -843,7 +842,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         }
         // The three whose field COUNT depends on the call (`shape =
         // .from_args`) stay here, because it does.
-        switch (opKind(u.target)) {
+        switch (u.op) {
             .absdelay => {
                 try self.w(
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
@@ -870,7 +869,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 const p = cg_filters.planOf(self, i);
                 if (p.err != null) continue;
                 try self.w("    {s}__u: [{d}]f64 = @splat(0.0), // §4.5.{s}\n", .{
-                    n, p.ns * p.deg, if (opKind(u.target) == .zi) "12" else "11",
+                    n, p.ns * p.deg, if (u.op == .zi) "12" else "11",
                 });
                 try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
                 // §4.5.12 the filter's own clock as a COUNT of samples
@@ -879,7 +878,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 // (1e-9 + 1e-9 + 1e-9 is strictly greater than the double
                 // nearest 3e-9), and the first timepoint that lands under
                 // the drifted clock loses a sample for the whole run.
-                if (opKind(u.target) == .zi) try self.w(
+                if (u.op == .zi) try self.w(
                     "    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n",
                     .{ n, n },
                 );
@@ -947,7 +946,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         }
         for (self.units, 0..) |u, i| {
             if (u.role != .analog_op) continue;
-            switch (opKind(u.target)) {
+            switch (u.op) {
                 .cross, .above => try self.w(
                     "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
                     .{self.unit_names[i]},
@@ -1117,7 +1116,7 @@ pub fn fsmStateCtl(self: *const Gen) bool {
     if (self.lower.held_vars.items.len == 0) return false;
     for (self.units) |u| {
         if (u.role != .analog_op) continue;
-        switch (opKind(u.target)) {
+        switch (u.op) {
             .cross, .above => return true,
             else => {},
         }
@@ -1186,7 +1185,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     for (self.units, 0..) |u, i| {
         if (!fsm) break;
         if (u.role != .analog_op) continue;
-        switch (opKind(u.target)) {
+        switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.unit_names[i], self.unit_names[i] }),
             else => {},
         }
@@ -1204,7 +1203,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     for (self.units, 0..) |u, i| {
         if (!fsm) break;
         if (u.role != .analog_op) continue;
-        switch (opKind(u.target)) {
+        switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.unit_names[i], self.unit_names[i] }),
             else => {},
         }
