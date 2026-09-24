@@ -56,7 +56,7 @@ pub fn tickAtOrBefore(t: f64, tick: f64) Tick {
 /// `A` provides three methods, each fallible:
 ///   setInputs(a, dig)             copy the discrete inputs the analog block reads
 ///                                 out of `dig` (§7.3.1 Table 7-1 conversion is A's)
-///   solve(a, t, dt, first, last)  a TENTATIVE solution at `t`; `first` opens the
+///   solveAt(a, t, dt, first, last) a TENTATIVE solution at `t`; `first` opens the
 ///                                 analysis (dt = 0), `last` is its final point
 ///   finish(a)                     the last tentative solution is final: report it
 ///                                 (§9.4 strobes) and commit its state (§4.5.2)
@@ -103,7 +103,7 @@ fn State(comptime A: type) type {
                 s.prev = ta;
             };
             try s.a.setInputs(s.dig);
-            try s.a.solve(t, if (s.prev) |p| t - p else 0.0, s.prev == null, t == s.final);
+            try s.a.solveAt(t, if (s.prev) |p| t - p else 0.0, s.prev == null, t == s.final);
             s.acc = t;
         }
     };
@@ -126,7 +126,7 @@ const Fake = struct {
     pub fn setInputs(f: *Fake, dig: *digital.Run) !void {
         f.input = dig.values[f.slot].asInt() orelse -1;
     }
-    pub fn solve(f: *Fake, t: f64, dt: f64, first: bool, last: bool) !void {
+    pub fn solveAt(f: *Fake, t: f64, dt: f64, first: bool, last: bool) !void {
         try f.solves.append(f.gpa, .{ .t = t, .dt = dt, .v = f.input, .first = first, .last = last });
     }
     pub fn finish(f: *Fake) !void {

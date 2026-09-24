@@ -124,12 +124,27 @@ fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     return base + @as(u32, @intCast(at - arr.low));
 }
 
+/// IEEE 1364-2005 §5.2.1: one bit of a vector, named against its DECLARED
+/// range — `[3:0]` counts up from the right, `[0:3]` down — and x when the
+/// index is x/z or outside that range.
+fn bitSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
+    const ex = &self.file.exprs;
+    const at = try self.slot(ex.lhs(e));
+    const v = self.values[at];
+    const range: @import("root.zig").VecRange = self.vec_ranges.get(at) orelse .{ .msb = @as(i64, v.width) - 1, .lsb = 0 };
+    const index = (try eval(self, a, ex.rhs(e), 0)).asInt() orelse return filled(a, 1, false, .x);
+    const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
+    if (pos < 0 or pos >= v.width) return filled(a, 1, false, .x);
+    return filled(a, 1, false, v.bit(@intCast(pos)));
+}
+
 fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .ident, .hier_ident => self.values[try self.slot(e)],
         .index => blk: {
             const ty = compile.typeOf(self, e);
+            if (try self.indexedArray(e) == null) break :blk try bitSelect(self, a, e);
             const at = (try address(self, a, e)) orelse break :blk try filled(a, ty.width, ty.signed, .x);
             break :blk self.values[at];
         },
