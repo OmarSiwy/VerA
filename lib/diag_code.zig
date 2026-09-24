@@ -380,6 +380,8 @@ pub const Code = enum(u16) {
     /// A.2.1.3 / §3.6.2 a net declaration whose discipline identifier names
     /// no declared discipline.
     E0371,
+    /// §3.12.1 a port branch `branch (<x>)` whose x is not a port.
+    E0372,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -3088,6 +3090,20 @@ fn infoOf(c: Code) Info {
             \\    child c1();    // A.4.1 module_instance, even with no ports
             \\
             \\Otherwise declare the discipline, or `include "disciplines.vams"`.
+            ,
+        },
+        .E0372 => .{
+            .title = "port branch names a net that is not a port",
+            .lrm = "3.12.1",
+            .explain =
+            \\LRM 3.12.1: "A port branch is a special type of branch used to
+            \\access the flow into a port of a module (see 5.4.3). It is a branch
+            \\between the upper and lower connections of the port." Syntax 3-9
+            \\spells it `branch ( < port_identifier > )`. An internal net has
+            \\no upper connection — nothing outside the module is joined to it
+            \\— so there is no branch between the two for the declaration to
+            \\name. Declare the net as a port, or use an ordinary branch
+            \\`branch (x, y) b;`.
             ,
         },
 

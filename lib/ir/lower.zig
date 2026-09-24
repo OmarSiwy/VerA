@@ -1149,6 +1149,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     try lower_discipline.collectDisciplines(self); // §3.6.1/§3.6.2 (annex D.1 is inlined here)
     try lower_discipline.checkNatureTable(self); // §3.6.1/§3.13 — the declaration table itself
+    try lower_node.checkPortBranchDecls(self); // §3.12.1 — per source module, before flattening's renames matter
 
     // §3.4 parameters BEFORE the ports, because a range is a constant
     // expression over them: §6.5.2.2's own example is `input [1:width] dt`
