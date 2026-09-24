@@ -51,11 +51,28 @@
 // Nothing between "right" and "wrong in kind" lives in that gap: the next
 // plausible wrong answer after 6.0 ns is 6.2 ns, and the one below it is 5.2 ns.
 //
-// The same 1-ULP hazard sat in the arm selector `($abstime < 6n)` itself: at the
-// reported 6 ns point the runner's $abstime and the model's literal can straddle
-// the comparison and select the pre-event arm. No timepoint is reported between
-// 5 ns and 6 ns, so the selector moves to 5.5 ns — 0.5 ns clear of the nearest
-// observation on both sides, and therefore not decidable by rounding.
+// The same 1-ULP hazard sits in WHERE the 6 ns value is pinned, twice over.
+// An earlier draft partitioned on `$abstime < 6n`, which at the reported 6 ns
+// point lets the runner's $abstime and the model's literal straddle the
+// comparison; moving the selector to 5.5 ns fixed that but not the second half:
+// the declared 6 ns point and the §8.4.7 D2A solution at tick 6's promotion are
+// the SAME solution only if 6e-9 == 6 * 1e-9, and in IEEE double they are not.
+// A conforming tool may therefore solve the declared 6e-9 first — where
+// §7.3.6.5's "greatest digital time tick which is less than or equal to the
+// analog time" is still tick 5 and B is still 1 — and the D2A one ULP later.
+// Nothing about that ordering is the clause's claim, so the checks now follow
+// 04 and 07: every want is the literal 1, every got is bounded at every point of
+// the run, and the values are pinned only at declared points at least 0.5 ns
+// clear of the event that decides them:
+//
+//     tick_a      0 at <= 5 ns        5 at >= 6 ns      (the 5.2 ns crossing)
+//     tick_b      0 at <= 5.5 ns      6 at >= 6.5 ns    (tick 6)
+//     ana_b       0 at <= 5.5 ns      6n +- 1e-18 at >= 6.5 ns
+//     b_dig       1 at <= 5.5 ns      0 at >= 6.5 ns
+//
+// so the tick-6 values are pinned at 7 and 10 ns, and the inserted 5.2 ns point
+// is still held to "B has not moved yet", which is the half of Figure 8-5 that
+// distinguishes a unit delay from 05's zero delay.
 //
 // The pre-crossing value of B is 1 from both the time-zero `initial` and the
 // inverter's own evaluation of a_dig = 0, as in 05, so no time-zero start order
@@ -85,13 +102,19 @@ module m02_unit_delay_tick_alignment(vi, vo);
   analog begin
     @(b_dig) ana_b = $abstime;
     `CHECKI("the A2D edge is quantized to tick 5 before the delay is applied",
-            tick_a, (V(vi) > 0.52) ? 5 : 0);
+            (tick_a == 0 || tick_a == 5)
+            && (($abstime <= 5n) ? (tick_a == 0) : 1)
+            && (($abstime >= 6n) ? (tick_a == 5) : 1), 1);
     `CHECKI("the #1 nonblocking assign therefore lands on tick 6",
-            tick_b, ($abstime < 5.5n) ? 0 : 6);
-    `CHECK("and the analog kernel sees B at exactly 6.0 ns, not 5.2 ns + 1 ns",
-           ana_b, ($abstime < 5.5n) ? 0.0 : 6n, 1e-18);
-    `CHECKX("B still holds its old value across the whole 5.2 ns to 6.0 ns window",
-            b_dig ? 1.0 : 0.0, ($abstime < 5.5n) ? 1.0 : 0.0);
+            (tick_b == 0 || tick_b == 6)
+            && (($abstime <= 5.5n) ? (tick_b == 0) : 1)
+            && (($abstime >= 6.5n) ? (tick_b == 6) : 1), 1);
+    `CHECKI("and the analog kernel sees B at exactly 6.0 ns, not 5.2 ns + 1 ns",
+            (($abstime <= 5.5n) ? (ana_b == 0.0) : 1)
+            && (($abstime >= 6.5n) ? (abs(ana_b - 6n) <= 1e-18) : 1), 1);
+    `CHECKI("B still holds its old value across the whole 5.2 ns to 6.0 ns window",
+            (($abstime <= 5.5n) ? (b_dig == 1) : 1)
+            && (($abstime >= 6.5n) ? (b_dig == 0) : 1), 1);
     V(vo) <+ b_dig ? 1.0 : 0.0;
   end
 endmodule

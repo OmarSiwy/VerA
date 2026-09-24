@@ -34,13 +34,28 @@
 // the second check is what makes the first one mean "rounded", rather than
 // "the analog solver happened to land on 5.0 ns".
 //
-// WHY THE PARTITION IS ON V(vi) AND NOT ON $abstime. §5.10.3.1 makes cross()
-// control the timestep, so a conforming simulator inserts a timepoint of its own
-// AT 5.2 ns, which the runner will also assert at. A time-based partition would be
-// wrong exactly there. `V(vi) > 0.52` is the same partition of the run stated in
-// the quantity that defines it, and the clause guarantees the event fires after
-// the crossing, so it is right at the inserted point too. None of the declared
-// samples sit on either threshold.
+// BOUNDED EVERYWHERE, PINNED ONLY WHERE NOTHING IS DECIDED BY PLACEMENT.
+// §5.10.3.1 makes cross() control the timestep, so a conforming simulator
+// solves at a point of its own within 1p of 5.2 ns and of 7.6 ns, and the
+// $strobe-based checks below are asserted there too. At such a point V(vi) - 0.52
+// may have either sign and the digital engine may or may not have consumed the
+// A2D yet, so NO exact value is right there. An earlier draft wrote the want as
+// `(V(vi) > 0.52) ? 5 : 0`, which is both a knife edge at the inserted point and
+// a want the compiler under test computes. So every want below is the literal 1,
+// and each got is:
+//
+//   - a BOUND that holds at every point of the run: each variable holds its
+//     pre-event value or its post-event value, nothing else;
+//   - PINNED to one of those only at declared points at least 0.5 ns clear of
+//     the event that decides it: 0 at <= 5 ns (resp. <= 7 ns), the event value
+//     at >= 6 ns for the 5.2 ns crossing, and at >= 9 ns for tick 8.
+//
+// Why tick 8 is pinned from 9 ns and not at the declared 8 ns point: tick 8 IS
+// 8 ns. §7.3.6.5 has the analog block read "the greatest digital time tick which
+// is less than or equal to the analog time", and whether the promotion of tick 8
+// compares <= the 8 ns point's $abstime is a floating-point accident (3e-9 and
+// 3 * 1e-9 differ by one ULP; 8e-9 and 8 * 1e-9 happen not to), not the clause.
+// The first declared point clear of it is 10 ns.
 //
 // The 1 ps tolerance on the analog crossing time is the `time_tol` passed to
 // cross() — §5.10.3.1 places the event "while the signal remains in the box
@@ -71,11 +86,16 @@ module m02_a2d_tick_quantization(vi, vo);
   analog begin
     @(cross(V(vi) - 0.52, +1, 1p, 1u)) ana_lo = $abstime;
     `CHECKI("a 5.2 ns A2D crossing is reported by the digital kernel at tick 5",
-            tick_lo, (V(vi) > 0.52) ? 5 : 0);
+            (tick_lo == 0 || tick_lo == 5)
+            && (($abstime <= 5n) ? (tick_lo == 0) : 1)
+            && (($abstime >= 6n) ? (tick_lo == 5) : 1), 1);
     `CHECKI("a 7.6 ns A2D crossing rounds UP, to tick 8",
-            tick_hi, (V(vi) > 0.76) ? 8 : 0);
-    `CHECK("while the analog kernel keeps the unrounded crossing time",
-           ana_lo, (V(vi) > 0.52) ? 5.2n : 0.0, 1p);
+            (tick_hi == 0 || tick_hi == 8)
+            && (($abstime <= 7n) ? (tick_hi == 0) : 1)
+            && (($abstime >= 9n) ? (tick_hi == 8) : 1), 1);
+    `CHECKI("while the analog kernel keeps the unrounded crossing time",
+            (($abstime <= 5n) ? (ana_lo == 0.0) : 1)
+            && (($abstime >= 6n) ? (abs(ana_lo - 5.2n) <= 1p) : 1), 1);
     V(vo) <+ tick_lo * 0.1;
   end
 endmodule
