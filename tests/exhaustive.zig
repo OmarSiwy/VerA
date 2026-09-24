@@ -45,6 +45,8 @@ const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "Mir.OpClass", .fields = std.meta.fieldNames(Mir.OpClass) },
     .{ .name = "Mir.DefKind", .fields = std.meta.fieldNames(Mir.DefKind) },
     .{ .name = "op.OpKind", .fields = std.meta.fieldNames(op.OpKind) },
+    // Last: its `ddt`/`cross`/… overlap OpKind, which keeps those switches.
+    .{ .name = "Mir.Callee", .fields = std.meta.fieldNames(Mir.Callee) },
 };
 
 const listed = @embedFile("exhaustive.list");

@@ -28,6 +28,9 @@ const Ast = @import("frontend").Ast;
 const assert = std.debug.assert;
 /// The per-opcode fact table (class, type, domain, …).
 pub const opcode = @import("opcode.zig");
+/// What a `call` calls, and the per-callee fact table.
+pub const callee = @import("callee.zig");
+pub const Callee = callee.Callee;
 
 const Mir = @This();
 
@@ -199,7 +202,8 @@ pub fn opIsInteger(op: Opcode) bool {
 ///   phi     b = extra start, c = pair count (2 u32 per pair: block, value)
 ///   branch  a = cond, b = then Block, c = else Block        (§5.8)
 ///   jump    a = target Block                                (§5.9)
-///   call    a = callee StrId, b = extra start, c = arg count
+///   call    a = Callee, b = extra start (the raw name's StrId, then the
+///           args), c = arg count
 pub const InstRow = struct {
     op: Opcode,
     a: u32 = 0,
@@ -262,7 +266,9 @@ pub const InstData = union(OpClass) {
     phi: struct { start: u32, count: u32 },
     branch: struct { cond: Value, then_block: Block, else_block: Block },
     jump: struct { target: Block },
-    call: struct { name: []const u8, args: []const Value },
+    /// `name` is the spelling the call was emitted with: `@tagName(callee)`,
+    /// except for `.systf`, whose name only this carries.
+    call: struct { callee: Callee, name: []const u8, args: []const Value },
 };
 
 pub const PhiPair = struct { block: Block, value: Value };
@@ -620,13 +626,15 @@ pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block)
 }
 
 /// LRM §4.3/§4.5/§4.7/ch9 call by name (math builtin, analog operator, UDF,
-/// system function). `callee` names it; codegen.emitCall dispatches on the name.
-pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, callee: StrId, args: []const Value) !Value {
-    const start = try self.addExtra(gpa, @ptrCast(args));
+/// system function). `name` spells it; this is where it becomes a `Callee`,
+/// once, for every consumer. The raw name is kept for `.systf`.
+pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, args: []const Value) !Value {
+    const start = try self.addExtra(gpa, &.{@intFromEnum(name)});
+    _ = try self.addExtra(gpa, @ptrCast(args));
     const result = try self.addValue(gpa, .inst_result, 0);
     const inst = try self.addInst(gpa, block, .{
         .op = .call,
-        .a = @intFromEnum(callee),
+        .a = @intFromEnum(Callee.fromName(self.strings.get(name))),
         .b = start,
         .c = @intCast(args.len),
         .result = result,
@@ -702,9 +710,10 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
         } },
         .jump => .{ .jump = .{ .target = @enumFromInt(row.a) } },
         .call => .{ .call = .{
-            .name = self.strings.get(@enumFromInt(row.a)),
+            .callee = @enumFromInt(row.a),
+            .name = self.strings.get(@enumFromInt(self.extra.items[row.b])),
             // Borrowed slice into the payload pool; invalidated by further appends.
-            .args = @ptrCast(self.extra.items[row.b..][0..row.c]),
+            .args = @ptrCast(self.extra.items[row.b + 1 ..][0..row.c]),
         } },
     };
 }
@@ -780,6 +789,7 @@ test "mir: const dedup, block chain, phi pairs, alias" {
     const e = try mir.emitCall(gpa, entry, nm, &.{id});
     const cd = mir.instData(mir.valueDef(e).inst_result).call;
     try std.testing.expectEqualStrings("exp", cd.name);
+    try std.testing.expectEqual(Callee.systf, cd.callee); // bare `exp` is an opcode, not a callee
     try std.testing.expectEqualSlices(Value, &.{id}, cd.args);
 
     // phi (§5.8): empty then filled, and trivial-phi aliasing

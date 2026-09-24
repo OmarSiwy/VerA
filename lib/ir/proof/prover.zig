@@ -726,7 +726,7 @@ pub const Prover = struct {
             },
             // §4.5 analog operators / ch9 system functions: known ones carry a
             // spec-given range, everything else is ⊤.
-            .call => |c| return self.callTransfer(c.name, c.args),
+            .call => |c| return self.callTransfer(c.callee, c.args),
             .branch, .jump => return .{ .iv = .top, .finite = false },
         }
     }
@@ -736,25 +736,26 @@ pub const Prover = struct {
     /// finite whatever the argument — handed `1.0/$vt(V(p,n))` and
     /// `1.0/limexp(V(p,n))` `@setFloatMode(.optimized)` over a division by a
     /// value that can be zero: silent, Release-only UB.
-    fn callTransfer(self: *Prover, name: []const u8, args: []const Mir.Value) Abstract {
+    fn callTransfer(self: *Prover, c: Mir.Callee, args: []const Mir.Value) Abstract {
         if (args.len == 1) {
             const a = self.ivOf(args[0]);
             const af = self.isFinite(args[0]);
-            // §9.15 `$vt(T)` = kT/q: T's sign, T's finiteness. $vt(0) = 0.
-            // Only the argument-free form reads the (positive) simulator
-            // temperature. The factor is codegen's; only its sign matters to a
-            // domain proof.
-            if (std.mem.eql(u8, name, "$vt"))
-                return .{ .iv = combine(a, proof_lattice.Interval.point(8.617333262145179e-5), mulOp), .finite = af };
-            // §4.5.13: "The apparent behavior of limexp() is not
-            // distinguishable from exp()" — so exp's interval, and exp(x)
-            // underflows to 0.0 below about -745, so NOT nonzero. Finite
-            // exactly when its argument is: the linearised side does not
-            // overflow the way exp does (SOUNDNESS MODEL 3 covers its slope).
-            if (std.mem.eql(u8, name, "limexp"))
-                return .{ .iv = unaryTransfer(.exp, a, af).iv, .finite = af };
+            switch (c) {
+                // §9.15 `$vt(T)` = kT/q: T's sign, T's finiteness. $vt(0) = 0.
+                // Only the argument-free form reads the (positive) simulator
+                // temperature. The factor is codegen's; only its sign matters to a
+                // domain proof.
+                .@"$vt" => return .{ .iv = combine(a, proof_lattice.Interval.point(8.617333262145179e-5), mulOp), .finite = af },
+                // §4.5.13: "The apparent behavior of limexp() is not
+                // distinguishable from exp()" — so exp's interval, and exp(x)
+                // underflows to 0.0 below about -745, so NOT nonzero. Finite
+                // exactly when its argument is: the linearised side does not
+                // overflow the way exp does (SOUNDNESS MODEL 3 covers its slope).
+                .limexp => return .{ .iv = unaryTransfer(.exp, a, af).iv, .finite = af },
+                else => {}, // else: every other range is argument-free, `callAbstract`'s
+            }
         }
-        return callAbstract(name);
+        return callAbstract(c);
     }
 
     /// Integer results (§3.2): clamp to the i64 range so an integer expression
@@ -1379,32 +1380,65 @@ pub const Prover = struct {
 
 /// The handful of `call`s whose range the LRM fixes. Everything else is ⊤ —
 /// unmodelled costs `.strict`, never a wrong `.optimized`.
-pub fn callAbstract(name: []const u8) Prover.Abstract {
+pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
-    // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
-    // not here: its range is its argument's (`Prover.callTransfer`).
-    if (std.mem.eql(u8, name, "$vt") or // thermal voltage kT/q > 0 — argument-free; see callTransfer
-        std.mem.eql(u8, name, "$temperature") or // absolute temperature, kelvin
-        std.mem.eql(u8, name, "$mfactor")) // multiplicity factor > 0
-        return .{ .iv = positive, .finite = true };
-    if (std.mem.eql(u8, name, "$abstime") or std.mem.eql(u8, name, "$realtime"))
-        return .{ .iv = non_negative, .finite = true };
-    // §9.13 reference algorithms can overflow or underflow (Erlang's product,
-    // Student-t's divisor, and unbounded real scale parameters). A distribution
-    // name alone proves no finite value; retain strict floating-point mode.
-    // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
-    // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
-    // unit — the only kind `proof` rates — the emitter renders it as the literal 0
-    // §9.5.1 reserves, because the descriptor operation itself happens only in the
-    // display unit (`codegen.Gen.emitting_display`). Without this line a model
-    // that reads a file into its contribution compiled `.strict` on account of a
-    // call the emitter had already folded to a constant.
-    //
-    // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
-    // rather than a small one, and there is nothing useful to bound.
-    if (Lower.isFileCall(name)) return .{ .iv = .top, .finite = true };
-    return .{ .iv = .top, .finite = false };
+    return switch (c) {
+        // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
+        // not here: its range is its argument's (`Prover.callTransfer`).
+        .@"$vt", // thermal voltage kT/q > 0 — argument-free; see callTransfer
+        .@"$temperature", // absolute temperature, kelvin
+        .@"$mfactor", // multiplicity factor > 0
+        => .{ .iv = positive, .finite = true },
+        .@"$abstime", .@"$realtime" => .{ .iv = non_negative, .finite = true },
+        // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
+        // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
+        // unit — the only kind `proof` rates — the emitter renders it as the literal 0
+        // §9.5.1 reserves, because the descriptor operation itself happens only in the
+        // display unit (`codegen.Gen.emitting_display`). Without this line a model
+        // that reads a file into its contribution compiled `.strict` on account of a
+        // call the emitter had already folded to a constant.
+        //
+        // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
+        // rather than a small one, and there is nothing useful to bound.
+        // `Lower.isFileCall`'s set; the test below holds the two together.
+        .@"$fopen",
+        .@"$fclose",
+        .@"$fflush",
+        .@"$fdisplay",
+        .@"$fwrite",
+        .@"$fstrobe",
+        .@"$fmonitor",
+        .@"$fdebug",
+        .@"$fgets",
+        .@"$fscanf",
+        .@"$ftell",
+        .@"$fseek",
+        .@"$rewind",
+        .@"$ferror",
+        .@"$feof",
+        .@"$fgets$str",
+        .@"$ferror$str",
+        .@"$fscanf$int",
+        .@"$fscanf$real",
+        .@"$fscanf$str",
+        => .{ .iv = .top, .finite = true },
+        // §9.13 reference algorithms can overflow or underflow (Erlang's product,
+        // Student-t's divisor, and unbounded real scale parameters). A distribution
+        // name alone proves no finite value; retain strict floating-point mode.
+        else => .{ .iv = .top, .finite = false }, // else: the prover models no other call's range
+    };
+}
+
+test "callAbstract's §9.5 prong is exactly Lower.isFileCall" {
+    for (std.meta.tags(Mir.Callee)) |c| {
+        const env = switch (c) {
+            .@"$vt", .@"$temperature", .@"$mfactor", .@"$abstime", .@"$realtime" => true,
+            else => false, // else: the file prong is the question
+        };
+        if (env) continue;
+        try std.testing.expectEqual(Lower.isFileCall(@tagName(c)), callAbstract(c).finite);
+    }
 }
 
 /// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics.
