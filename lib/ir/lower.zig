@@ -389,6 +389,8 @@ directives: Preprocessor.Directives = .{},
 /// their byte offsets and nothing about port binding. Neither half is a
 /// judgement, so neither pass had to learn the other's subject.
 unconnected_inputs: []const Elaborate.NameSite = &.{},
+/// `Elaborate.Design.port_concats`, held for `lowerModule` the same way.
+port_concats: []const Elaborate.PortConcat = &.{},
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -1023,6 +1025,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     // the E0337 the invented floating node would cause three phases later.
     for (design.implicit_nets) |n| try lower_node.rejectImplicitNet(self, n.name, n.main_tok);
     self.unconnected_inputs = design.unconnected_inputs;
+    self.port_concats = design.port_concats;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
     return self.lowered();
@@ -1193,6 +1196,21 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // — the parameter loop runs above the port loop — so a nodeset written
         // over a parameter folds here and not later.
         if (n.init != .none) try lower_node.recordNodeset(self, idx, n.init, n.main_tok, name);
+    }
+
+    // §6.5.7.1 a vector port bound to a concatenated net expression: element k
+    // of the port IS net `elems[k]`, so its key names that net's node.
+    for (self.port_concats) |pc| {
+        const r = (try lower_node.foldDim(self, pc.range, pc.main_tok)) orelse continue;
+        if (r.size() != pc.elems.len) {
+            try self.err(pc.main_tok, .E0906, "the concatenation is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
+            continue;
+        }
+        for (pc.elems, 0..) |el, k| {
+            const idx = try lower_node.internNode(self, el, "");
+            try self.node_voltages.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
+        }
+        try self.out.vectors.put(self.arena, pc.name, r);
     }
 
     // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's

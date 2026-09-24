@@ -5,7 +5,7 @@
 // The positive half, for the third legal shape the sentence names: a vector
 // port on a CONCATENATED net expression of matching width. The vector-net and
 // scalar shapes are matching_size_vector_net.va (which passes), kept separate
-// so this file's xfail cannot hide them; lrm_6_5_7_1.va pins the refusal of a
+// so a failure here cannot hide them; lrm_6_5_7_1.va pins the refusal of a
 // mismatch.
 //
 //   u_cat   2-bit port `v`  <- concatenation {s1, s0} of two scalars
@@ -28,7 +28,6 @@
 //! lrm 6.5.7.1
 //! bias V(p) = 0.125
 //! solve
-//! xfail VerA refuses a concatenation as a port connection (E0906 "a port connection must be a net reference"); §6.5.7.1 names a "concatenated net expression of the matching width" as a legal actual for a vector port
 `include "check.vh"
 module ch6_matching_size_concat_parent(p);
   inout p;

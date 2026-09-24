@@ -160,6 +160,23 @@ pub const Design = struct {
     /// mixed-signal runner: its digital engine elaborates the SOURCE hierarchy,
     /// in which the bridges do not exist.
     inserts: []const Inserted = &.{},
+    /// §6.5.7.1 "a vector port can be connected to a vector net or
+    /// concatenated net expression of the matching width". One entry per port
+    /// connected to a concatenation: the child's vector, renamed to a flat
+    /// name of its own, whose element k (declaration order, msb first — IEEE
+    /// 1364 §12.3.9.2 binds the port's MSB to the expression's MSB) IS the
+    /// parent net `elems[k]`. Lowering interns no node for it: each element
+    /// aliases its net's node (`Lower.lowerModule`).
+    port_concats: []const PortConcat = &.{},
+};
+
+pub const PortConcat = struct {
+    name: []const u8,
+    /// The child's declared range, cloned into the flat namespace so a
+    /// parameter in it folds against the instance's own overrides.
+    range: Ast.Dim,
+    elems: []const []const u8,
+    main_tok: u32,
 };
 
 /// One port §7.8.4 re-pointed at a connect module (`elaborate/insert.zig`), by
@@ -482,6 +499,7 @@ pub const Flatten = struct {
     /// their doc comments for why the judging happens a stage later.
     implicit_nets: std.ArrayList(NameSite) = .empty,
     unconnected_inputs: std.ArrayList(NameSite) = .empty,
+    port_concats: std.ArrayList(PortConcat) = .empty,
 
     /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
     /// the parameter it overrides — the declaring module's own path joined with
@@ -704,6 +722,7 @@ pub const Flatten = struct {
             .unconnected_inputs = self.unconnected_inputs.items,
             .units = self.unit_paths.items,
             .inserts = self.inserts.items,
+            .port_concats = self.port_concats.items,
         };
     }
 
@@ -886,9 +905,31 @@ pub const Flatten = struct {
         // Resolved in the PARENT's namespace, which means through the parent's
         // rename map: an actual naming a net of a mid-level module has already
         // been flattened to `u.n`.
+        var concats: std.ArrayList(struct { port: Ast.Port, elems: []const []const u8, tok: u32 }) = .empty;
         for (child.ports, 0..) |p, i| {
             const conn = connectionFor(inst, p, i);
             try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
+            // §6.5.7.1 a concatenated net expression: each operand a net of the
+            // parent, bound element by element once the child's range is known.
+            if (conn) |c| if (c.expr != .none and self.ctx.file.exprs.tag(c.expr) == .concat) {
+                const ops = self.ctx.file.exprs.args(c.expr);
+                const elems = try self.ctx.arena.alloc([]const u8, ops.len);
+                for (ops, elems) |o, *el| {
+                    const n = elab_names.netRefName(self, o) orelse {
+                        try self.err(c.main_tok, .E0906, "a concatenation in a port connection must list scalar net references", .{});
+                        break;
+                    };
+                    el.* = self.ctx.file.str(parent.rename.get(n) orelse n);
+                } else {
+                    if (p.range == null and p.type_range == null) {
+                        try self.err(c.main_tok, .E0906, "a concatenation connects only a vector port, and `{s}` is scalar", .{self.ctx.file.str(p.name)});
+                        continue;
+                    }
+                    try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
+                    try concats.append(self.ctx.arena, .{ .port = p, .elems = elems, .tok = c.main_tok });
+                }
+                continue;
+            };
             const actual: ?Ast.StrId = if (conn) |c| elab_names.netRefName(self, c.expr) else null;
             if (actual) |n| {
                 // The port IS the parent's net. No new node, no new
@@ -971,6 +1012,12 @@ pub const Flatten = struct {
         for (subs.items) |sub| try elab_names.bind(self, &unit, path, sub.name);
 
         self.unit = unit;
+        for (concats.items) |cc| try self.port_concats.append(self.ctx.arena, .{
+            .name = self.ctx.file.str(unit.rename.get(cc.port.name).?),
+            .range = (try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range)).?,
+            .elems = cc.elems,
+            .main_tok = cc.tok,
+        });
 
         // ---- the declarations themselves -----------------------------------
         try elab_clone.cloneParams(self, child.params, child.aliasparams, &over);
