@@ -413,6 +413,17 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         const v = @intFromEnum(self.live.items[k]);
         if (v < Mir.Value.first_dynamic) break; // sentinels sort first
         if (self.eager_use[v] != 0 or self.arm_use[v] == 0) continue;
+        // Read at MORE than one arm position: a slot, computed once where it
+        // is defined. Inlined, its whole backward slice was re-rendered at
+        // every use, in every select sharing it — including values the source
+        // computed before the `if`, whose only readers happen to be arms.
+        // Eager is sound here: proof.markSelectArms guards only a slice owned
+        // through use-count-1 links, so a value with two uses — and whatever
+        // it alone reads — was proved on EVERY path, guard or not. And ifconv
+        // keeps an arm holding a domain-restricted op as a CFG diamond, so no
+        // ln/sqrt/pow/integer `/` reaches here from under a guard (§4.2.12).
+        // One arm position stays inlined: laziness that costs nothing.
+        if (self.arm_use[v] > 1) continue;
         // A live-out is a FIELD of the returned cache, so it has to exist as
         // a value; inlining it into its uses would render its expression at
         // every one of them, including the `return`.

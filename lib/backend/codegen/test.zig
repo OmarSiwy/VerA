@@ -506,6 +506,31 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     try std.testing.expect(std.mem.indexOf(u8, src, "break :B") == null);
 }
 
+test "codegen: a value shared by select arms is computed once, not once per use" {
+    var h: Harness = undefined;
+    // bsim2's vgeff shape: `e` is computed BEFORE the `if`, and after
+    // conversion its only readers are select arms. Inlined per arm position
+    // it came out as four `exp` calls for the source's one.
+    try Harness.run(std.testing.allocator,
+        \\module sh(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    real e, g;
+        \\    e = exp(V(p, n));
+        \\    if (V(p, n) > 0.5) g = e * e + e; else g = 0.5 * e;
+        \\    I(p, n) <+ g;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items) >= 1);
+    const src = try h.gen(std.testing.allocator);
+    const unit = src[std.mem.indexOf(u8, src, "fn sh__").?..];
+    const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, ".exp()"));
+}
+
 test "codegen: a domain-guarded arm stays lazy through if-conversion" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
