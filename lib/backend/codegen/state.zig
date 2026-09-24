@@ -347,9 +347,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 \\        const period = {1s};
                 \\        if (inst.{0s}__start != in) {{
                 \\            inst.{0s}__start = in;
-                \\            inst.{0s}__next = zNextTimer(in, period, inst.abstime) orelse std.math.inf(f64);
+                \\            inst.{0s}__next = zNextTimer(in, period, inst.abstime) orelse z_inf;
                 \\        }} else if (inst.abstime >= inst.{0s}__next) {{
-                \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else std.math.inf(f64);
+                \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else z_inf;
                 \\        }}
                 \\
             , .{ n, try gen_call.timerPeriod(self, args) }),
