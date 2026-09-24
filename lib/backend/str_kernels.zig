@@ -670,35 +670,36 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 /// system tasks work just like their counterparts ... except that they write to
 /// files using the file descriptor".
 ///
-/// WHY THE RENDERED LINE IS THE COMPARISON and not a sensitivity list over the
-/// arguments. "Only one display is produced that shows the new values" makes
-/// the obligation a property of the RECORD, not of any one argument, and the
-/// record is the only thing that exists once the format run has consumed the
-/// operands — an argument may be an expression with no storage of its own, and
-/// two different values may render identically (a `%d` of 2.0 and of 2.4), in
-/// which case the clause's own words say the display "shows the new values"
-/// and there are none to show. `src/sim/digital.zig`'s `monitorPrint` takes
-/// exactly this route for exactly this reason; this is the analog half of the
-/// same rule.
+/// WHAT IS COMPARED: the argument VALUES, not the rendered line. The clause
+/// asks whether "the variable or an expression in the argument list changes
+/// value", and it exempts two of them by name — "with the exception of the
+/// $abstime or $realtime system functions". A line comparison cannot honour
+/// the exemption: a `$monitor("%g %d", $abstime, k)` renders a different line
+/// on every step and reported every step. So the emitter hands this kernel one
+/// u64 per watched argument — the bit pattern of a real or integer, a hash of
+/// a string — with the `$abstime`/`$realtime` operands left out, and the text
+/// to write when they changed. `src/sim/digital.zig`'s monitor tracks its
+/// watched variables the same way (IEEE 1364-2005 §17.1.3's `$time` rule).
 ///
-/// Returns the text when it differs from what this site last reported — which
-/// includes the FIRST accepted step, where there is no "last accepted step" to
-/// compare against — and null when the step is to be suppressed, or when the
-/// statement has not been invoked yet: the mechanism exists only once "a
-/// $monitor task is invoked" (`zMonitorArm`). `site` is `Lower.armMonitor`'s key.
+/// Returns the text when the watched values differ from those this site last
+/// reported — which includes the FIRST accepted step, where there is no "last
+/// accepted step" to compare against — and null when the step is to be
+/// suppressed, or when the statement has not been invoked yet: the mechanism
+/// exists only once "a $monitor task is invoked" (`zMonitorArm`). `site` is
+/// `Lower.armMonitor`'s key.
 //
-// ponytail: one 4096-byte latch per call site, file scope, on `zSBuf`'s terms
+// ponytail: one 64-value latch per call site, file scope, on `zSBuf`'s terms
 // and for `zSBuf`'s reason — the comparison has to outlive the step that made
-// it. A record longer than the latch is reported every step rather than
-// compared; per-instance latches are the upgrade the day a host runs two
+// it. A monitor watching more than 64 arguments reports every step rather than
+// compares; per-instance latches are the upgrade the day a host runs two
 // instances of a model that monitors.
-pub fn zMonitor(comptime site: usize, text: []const u8) ?[]const u8 {
+pub fn zMonitor(comptime site: usize, vals: []const u64, text: []const u8) ?[]const u8 {
     const Last = zMonitorLatch(site);
     if (!Last.armed) return null;
-    if (text.len > Last.b.len) return text;
-    if (Last.seen and Last.len == text.len and zstd.mem.eql(u8, Last.b[0..text.len], text)) return null;
-    @memcpy(Last.b[0..text.len], text);
-    Last.len = text.len;
+    if (vals.len > Last.v.len) return text;
+    if (Last.seen and Last.cnt == vals.len and zstd.mem.eql(u64, Last.v[0..vals.len], vals)) return null;
+    @memcpy(Last.v[0..vals.len], vals);
+    Last.cnt = vals.len;
     Last.seen = true;
     return text;
 }
@@ -714,8 +715,8 @@ pub fn zMonitorArm(comptime site: usize) f64 {
 fn zMonitorLatch(comptime site: usize) type {
     return struct {
         const n = site;
-        var b: [4096]u8 = undefined;
-        var len: usize = 0;
+        var v: [64]u64 = undefined;
+        var cnt: usize = 0;
         var seen: bool = false;
         var armed: bool = false;
     };
