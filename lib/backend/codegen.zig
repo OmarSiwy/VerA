@@ -63,6 +63,8 @@ const plan_jobs = @import("codegen/plan/jobs.zig");
 const plan_core = @import("codegen/plan/core.zig");
 const plan_args = @import("codegen/plan/args.zig");
 const plan_setup = @import("codegen/plan/setup.zig");
+/// §3.2: root.zig runs it between lowering and if-conversion.
+pub const pruneHeld = plan_setup.pruneHeld;
 const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");

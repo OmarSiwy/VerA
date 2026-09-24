@@ -68,6 +68,17 @@ pub fn run(gpa: std.mem.Allocator, mir: *Mir, contributions: []const Lower.Contr
     return converted;
 }
 
+/// §5.2.1 `analog initial` and §5.10.2 `initial_step`: the branch on the
+/// first-evaluation flag stays a branch. Its join phi, `phi(held read,
+/// assigned value)`, is what codegen's setup split recognises as initial-only
+/// work and computes once; a `select` on the flag would run every evaluation.
+fn firstPoint(mir: *const Mir, cond: Mir.Value) bool {
+    const def = mir.valueDef(mir.resolveAlias(cond));
+    if (def != .inst_result or mir.instOp(def.inst_result) != .call) return false;
+    const d = mir.instData(def.inst_result).call;
+    return d.callee == .analog_initial or (d.callee == .initial_step and d.args.len == 0);
+}
+
 fn countPreds(mir: *const Mir, preds: []u32) void {
     @memset(preds, 0);
     for (0..preds.len) |b| {
@@ -133,6 +144,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     if (mir.instOp(term) != .branch) return false;
     const br = mir.instData(term).branch;
     if (br.then_block == br.else_block) return false;
+    if (firstPoint(mir, br.cond)) return false;
 
     // Resolve the two sides. At least one must be a real arm; the other may be
     // the join itself (triangle from `&&`/`||` and one-armed `if`).

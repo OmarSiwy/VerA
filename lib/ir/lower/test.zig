@@ -973,6 +973,47 @@ test "lower: §5.9 a loop body has no carve-out, and §4.5.6/§4.5.13 have no hi
     try std.testing.expect(h3.bag.isEmpty());
 }
 
+test "lower: §3.2 a variable some path reads before writing is held, and only that" {
+    // §5.6.1.3 "Unlike variables, the contributed value for a branch is only
+    // valid for the current iteration": a variable keeps its value, which a
+    // read is able to see only where no write of this evaluation precedes it.
+    const W = Lower.HeldVar.Why;
+    const cases = [_]struct { body: []const u8, held: usize, why: W = .unless_invariant }{
+        .{ .body = "x = 2.0; I(p) <+ x;", .held = 0 },
+        .{ .body = "if (V(p) > 0) x = 1.0; else x = 2.0; I(p) <+ x;", .held = 0 },
+        .{ .body = "if (V(p) > 0) x = 1.0; I(p) <+ x;", .held = 1 }, // the else path
+        .{ .body = "x = x + 1.0; I(p) <+ x;", .held = 1, .why = .retained }, // the read reaches the write
+        .{ .body = "I(p) <+ x; x = V(p);", .held = 1, .why = .retained },
+        .{ .body = "if (V(p) > 0) I(p) <+ x; else x = 1.0;", .held = 1 }, // the arms exclude each other
+        .{ .body = "for (k = 0; k < 2; k = k + 1) begin $strobe(\"%g\", x); x = 1.0; end", .held = 1, .why = .retained }, // the next iteration
+        .{ .body = "a[0] = 1.0; a[1] = 2.0; I(p) <+ a[0] + a[1];", .held = 0 },
+        .{ .body = "a[0] = 1.0; I(p) <+ a[1];", .held = 2 }, // every element of the array
+        .{ .body = "I(p) <+ x;", .held = 0 }, // never written: nothing to retain
+        .{ .body = "@(cross(V(p), 1)) x = 1.0; I(p) <+ x;", .held = 1, .why = .event },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p);
+            \\  inout p;
+            \\  electrical p;
+            \\  real x, y, a[0:1];
+            \\  integer k;
+            \\  analog begin
+            \\    {s}
+            \\  end
+            \\endmodule
+        , .{c.body});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const out = try h.low.lowerFile();
+        errdefer std.debug.print("body: {s}\n", .{c.body});
+        try std.testing.expectEqual(c.held, out.held_vars.items.len);
+        for (out.held_vars.items) |v| try std.testing.expectEqual(c.why, v.why);
+    }
+}
+
 test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514" {
     // §5.8: event control "cannot be used inside conditional statements unless
     // the conditional expression is a constant expression" — CONSTANT, not
