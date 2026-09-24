@@ -92,52 +92,21 @@ pub fn scanCallSites(
     out: if (limits) void else *std.ArrayList(u32),
 ) Oom!void {
     if (id == .none) return;
-    switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try scanCallSites(self, s, limits, fns, out),
-        .assign => |a| {
-            if (!limits) try scanCallSitesExpr(self, a.target, limits, fns, out);
-            try scanCallSitesExpr(self, a.value, limits, fns, out);
-        },
-        .contribute => |c| {
-            if (!limits) try scanCallSitesExpr(self, c.lhs, limits, fns, out);
-            try scanCallSitesExpr(self, c.rhs, limits, fns, out);
-        },
-        .indirect => |c| {
-            if (!limits) try scanCallSitesExpr(self, c.lhs, limits, fns, out);
-            if (!limits) try scanCallSitesExpr(self, c.probe, limits, fns, out);
-            try scanCallSitesExpr(self, c.eqn, limits, fns, out);
-        },
-        .if_stmt => |s| {
-            try scanCallSitesExpr(self, s.cond, limits, fns, out);
-            try scanCallSites(self, s.then_s, limits, fns, out);
-            try scanCallSites(self, s.else_s, limits, fns, out);
-        },
-        .case_stmt => |s| {
-            try scanCallSitesExpr(self, s.scrutinee, limits, fns, out);
-            for (s.arms) |arm| {
-                if (!limits) for (arm.labels) |l| try scanCallSitesExpr(self, l, limits, fns, out);
-                try scanCallSites(self, arm.body, limits, fns, out);
-            }
-        },
-        .for_stmt => |s| {
-            if (!limits) try scanCallSites(self, s.init, limits, fns, out);
-            try scanCallSitesExpr(self, s.cond, limits, fns, out);
-            if (!limits) try scanCallSites(self, s.step, limits, fns, out);
-            try scanCallSites(self, s.body, limits, fns, out);
-        },
-        .while_stmt => |s| {
-            try scanCallSitesExpr(self, s.cond, limits, fns, out);
-            try scanCallSites(self, s.body, limits, fns, out);
-        },
-        .repeat_stmt => |s| {
-            if (!limits) try scanCallSitesExpr(self, s.count, limits, fns, out);
-            try scanCallSites(self, s.body, limits, fns, out);
-        },
-        .event_control => |s| try scanCallSites(self, s.body, limits, fns, out),
-        .sys_task => |s| for (s.args) |a| try scanCallSitesExpr(self, a, limits, fns, out),
-        .jump => |j| try scanCallSitesExpr(self, j.value, limits, fns, out),
-        else => {},
-    }
+    // Every edge of the statement (`SourceFile.stmtEdges`): a `$limit` or a
+    // call is a site wherever it is written, a for-loop's init and step, a
+    // case label, a repeat count and an event expression included.
+    const Walk = struct {
+        l: *Lower,
+        fns: if (limits) void else []const Ast.FuncDecl,
+        out: if (limits) void else *std.ArrayList(u32),
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+            try scanCallSitesExpr(w.l, e, limits, w.fns, w.out);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            try scanCallSites(w.l, s, limits, w.fns, w.out);
+        }
+    };
+    try self.file.stmtEdges(id, Walk{ .l = self, .fns = fns, .out = out });
 }
 
 pub fn scanCallSitesExpr(
