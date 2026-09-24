@@ -259,6 +259,7 @@ pub const Run = struct {
                     const d = &r.drivers[at];
                     d.transition.in_flight = null;
                     @memcpy(d.current.planes, d.transition.target.planes);
+                    d.or_z = d.transition.or_z;
                     try exec.resolve(r, d.net);
                 },
                 .net_update => |at| {

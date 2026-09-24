@@ -25,7 +25,7 @@ const Handle = @import("../scheduler.zig").Handle;
 const Bridge = @import("net.zig").Bridge;
 const Gate = @import("net.zig").Gate;
 const gateBit = @import("net.zig").gateBit;
-const Pair = @import("net.zig").Pair;
+const Signal = @import("net.zig").Signal;
 const netPull = @import("net.zig").netPull;
 const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
@@ -439,26 +439,20 @@ pub fn resolve(self: *Run, net: u32) Error!void {
             // Each driver collapses on its own first, so that a strength
             // that suppresses a value (`highz0` holding 0) drops out of the
             // fold entirely instead of voting as a 0.
-            for (n.drivers) |d| {
-                const dr = self.drivers[d];
-                bit = wired(n.kind, bit, Pair.of(dr.current.bit(at), dr.s0, dr.s1).collapse());
-            }
+            for (n.drivers) |d| bit = wired(n.kind, bit, contribution(self.drivers[d], at).collapse());
             if (bit == .z) bit = undriven(n.kind);
         } else {
-            var acc: Pair = .{};
-            for (n.drivers) |d| {
-                const dr = self.drivers[d];
-                acc = acc.max(Pair.of(dr.current.bit(at), dr.s0, dr.s1));
-            }
+            var acc: Signal = .{};
+            for (n.drivers) |d| acc = acc.combine(contribution(self.drivers[d], at));
             // §7.9/§7.10: a `trireg` with no driver asserting anything is in
             // the capacitive state, and what it asserts there is the charge
             // it last held, at its charge strength. Checked before the net
             // type's own pull so that a driven trireg never sees it.
             if (n.kind == .trireg and acc.none()) {
-                acc = Pair.of(current.bit(at), n.charge, n.charge);
+                acc = .of(current.bit(at), n.charge, n.charge);
                 floating += 1;
             }
-            bit = acc.max(netPull(n.kind)).collapse();
+            bit = acc.combine(netPull(n.kind)).collapse();
         }
         setBit(n.resolved, at, bit);
     }
@@ -468,11 +462,18 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     // been folded in by the time it applies.
     if (n.delay.present) {
         const st = &self.nets[net].transition;
-        if (try schedule(self, self.values[n.slot], n.resolved, st))
+        if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
             st.in_flight = try enqueue(self, .{ .net_update = net }, n.delay.to(st.target.bit(0)), false);
         return;
     }
     try store(self, n.slot, n.resolved.planes);
+}
+
+/// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
+/// H/L when a gate's control is unknown.
+fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
+    const b = dr.current.bit(at);
+    return if (dr.or_z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
 }
 
 /// §6.1.3's inertial rule, shared by a driver's delay and a net's: "if the
@@ -484,15 +485,17 @@ pub fn resolve(self: *Run, net: u32) Error!void {
 /// False covers the two cases that make a pulse shorter than the delay
 /// vanish rather than arrive late: the value is back to what is published,
 /// and the value is what is already on its way.
-fn schedule(self: *Run, from: Int.Literal, to: Int.Literal, st: *Inertial) Error!bool {
+fn schedule(self: *Run, from: Int.Literal, from_or_z: bool, to: Int.Literal, to_or_z: bool, st: *Inertial) Error!bool {
     const settled = if (st.in_flight != null) st.target else from;
-    if (std.mem.eql(u64, settled.planes, to.planes)) return false;
+    const settled_or_z = if (st.in_flight != null) st.or_z else from_or_z;
+    if (std.mem.eql(u64, settled.planes, to.planes) and settled_or_z == to_or_z) return false;
     if (st.in_flight) |h| try cancel(self, h);
     st.in_flight = null;
     if (st.target.planes.len != to.planes.len) st.target.planes = try self.arena.alloc(u64, to.planes.len);
     @memcpy(st.target.planes, to.planes);
     st.target.width = to.width;
     st.target.signed = to.signed;
+    st.or_z = to_or_z;
     return true;
 }
 
@@ -524,15 +527,18 @@ fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
     n.decay_event = try enqueue(self, .{ .decay = net }, after, false);
 }
 
-/// What a gate driver contributes: §7.8.5's one output bit.
-fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate) Error!Int.Literal {
+/// What a gate driver contributes: §7.8.5's one output bit, and whether it is
+/// §7.10.2's H/L.
+fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, or_z: *bool) Error!Int.Literal {
     // One scratch list per evaluation, which `execute` resets each
     // instruction — the point is to keep `gateBit` a pure function of the
     // input bits, where §7.8.5's tables can be read straight off.
     var bits: std.ArrayList(Int.Bit) = .empty;
     for (g.ins) |in| try bits.append(scratch, (try eval(self, scratch, in, 1)).bit(0));
     const out = try filled(scratch, 1, false, .z);
-    setBit(out, 0, gateBit(g.kind, bits.items));
+    const o = gateBit(g.kind, bits.items);
+    setBit(out, 0, o.bit);
+    or_z.* = o.or_z;
     return out;
 }
 
@@ -852,10 +858,11 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // PARENT of the net it feeds, so it is the driver's scope
                 // and not the dispatch's that resolves its names.
                 self.scope = d.scope;
+                var or_z = false;
                 const value = if (d.bridge) |b|
                     try window(self, scratch, b, d.current.width)
                 else if (d.gate) |g|
-                    try gateValue(self, scratch, g)
+                    try gateValue(self, scratch, g, &or_z)
                 else if (d.pull) |b|
                     try filled(scratch, d.current.width, false, b)
                 else blk: {
@@ -867,7 +874,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and the net re-resolves when the delayed value lands.
                 if (d.delay.present) {
                     const st = &self.drivers[at].transition;
-                    if (try schedule(self, d.current, value, st)) {
+                    if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
                         const delay = if (d.gate == null and d.bridge == null and d.pull == null)
                             d.delay.continuous(d.current, st.target)
                         else
@@ -876,6 +883,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     }
                 } else {
                     @memcpy(d.current.planes, value.planes);
+                    self.drivers[at].or_z = or_z;
                     try resolve(self, d.net);
                 }
                 for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });

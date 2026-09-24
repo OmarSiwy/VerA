@@ -30,6 +30,8 @@ pub const Inertial = struct {
     /// timer alone instead of restarting it. Its planes are sized once and
     /// then reused, so a toggling input costs no memory per transition.
     target: Int.Literal = .{ .width = 0, .sized = true, .signed = false, .planes = &.{} },
+    /// `target`'s §7.10.2 H/L flag, for a gate driver (see `Driver.or_z`).
+    or_z: bool = false,
 };
 
 /// A.2.2.3's three values, already in scheduler ticks. `present` is false for
@@ -117,6 +119,10 @@ pub const Net = struct {
     decay_event: ?Handle = null,
 };
 
+/// One gate evaluation: §7.8.5's output bit, and whether it is §7.10.2's H/L
+/// — `bit` or high impedance — rather than `bit` itself.
+pub const GateOut = struct { bit: Int.Bit, or_z: bool = false };
+
 /// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
 /// the type and the input terminals in source order.
 pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId };
@@ -135,17 +141,37 @@ fn gateIn(b: Int.Bit) Int.Bit {
 /// controls, while `xor(0, x)` is x because xor has no controlling value. An
 /// implementation that folds "unknown in, unknown out" uniformly gets the and
 /// and or rows wrong and nothing else.
-pub fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
-    const invert = struct {
-        fn f(b: Int.Bit) Int.Bit {
-            return switch (b) {
-                .zero => .one,
-                .one => .zero,
-                // ~x is x and ~z is x: the complement of "unknown" is unknown.
-                else => .x,
-            };
-        }
-    }.f;
+pub fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) GateOut {
+    switch (kind) {
+        // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
+        // regimes: the OFF enable gives z whatever the data is; the ON enable
+        // gives the gate function of the data; an x/z enable means the gate may
+        // or may not be conducting, which IEEE 1364 writes as L (0-or-z) or H
+        // (1-or-z). Neither is a member of {0,1,x,z} — L is not 0, because it
+        // might be z — so the value alone projects to x, and the flag is what
+        // lets §7.10.3 resolve it against another driver (Figure 7-6).
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
+            const on: Int.Bit = if (kind == .g_bufif1 or kind == .g_notif1) .one else .zero;
+            const enable = ins[1];
+            const data = if (kind == .g_bufif0 or kind == .g_bufif1) gateIn(ins[0]) else invert(ins[0]);
+            if (enable == .x or enable == .z) return .{ .bit = data, .or_z = data != .x };
+            if (enable != on) return .{ .bit = .z };
+            return .{ .bit = data };
+        },
+        .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => return .{ .bit = logicBit(kind, ins) },
+    }
+}
+
+/// ~x is x and ~z is x: the complement of "unknown" is unknown.
+fn invert(b: Int.Bit) Int.Bit {
+    return switch (b) {
+        .zero => .one,
+        .one => .zero,
+        .x, .z => .x,
+    };
+}
+
+fn logicBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
     switch (kind) {
         .g_and, .g_nand, .g_or, .g_nor => {
             // The value that decides the output on its own, and the output it
@@ -173,19 +199,7 @@ pub fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
         },
         .g_buf => return gateIn(ins[0]),
         .g_not => return invert(ins[0]),
-        // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
-        // regimes: the OFF enable gives z whatever the data is; the ON enable
-        // gives the gate function of the data; an x/z enable means the gate may
-        // or may not be conducting, which IEEE 1364 writes as L (0-or-z) or H
-        // (1-or-z). Neither is a member of {0,1,x,z} — L is not 0, because it
-        // might be z — so the only sound four-state projection is x.
-        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
-            const on: Int.Bit = if (kind == .g_bufif1 or kind == .g_notif1) .one else .zero;
-            const enable = ins[1];
-            if (enable == .x or enable == .z) return .x;
-            if (enable != on) return .z;
-            return if (kind == .g_bufif0 or kind == .g_bufif1) gateIn(ins[0]) else invert(ins[0]);
-        },
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => unreachable, // gateBit's own arm
     }
 }
 
@@ -209,12 +223,14 @@ pub const Driver = struct {
     /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
     /// directive pulls an unconnected input port to a logic level THROUGH A
     /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
-    /// the net's own type through `Pair` like any other. A constant, hence no
+    /// the net's own type through `Signal` like any other. A constant, hence no
     /// expression and an empty sensitivity list — it is evaluated once, at the
     /// initial `.continuous` dispatch, and never re-runs.
     pull: ?Int.Bit = null,
     sensitivity: []const u32,
     current: Int.Literal,
+    /// A gate's `current` is §7.10.2's H/L: its one bit, or high impedance.
+    or_z: bool = false,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     /// A.6.1 `[ delay3 ]`.
@@ -224,41 +240,86 @@ pub const Driver = struct {
 
 // ---- strength and resolution (clause 7, §7.9 Tables 7-4/7-6/7-7, §3.7) ------
 
-/// IEEE 1364-2005 clause 7's strength pair: what ONE contributor asserts on the
-/// 0 side and on the 1 side of a net. A four-state value is not enough to
-/// resolve a net, because "0 and 1 disagree" has a different answer depending on
-/// which driver is stronger; the pair is what the clause's tables are written
-/// over, and collapsing back to four states is the LAST step, not the first.
-pub const Pair = struct {
-    s0: Ast.Strength = .highz,
-    s1: Ast.Strength = .highz,
+/// IEEE 1364-2005 §7.10's signal: a RANGE of strength levels on Figure 7-2's
+/// scale, which runs Su0 … Sm0 HiZ0 HiZ1 Sm1 … Su1. A position here is that
+/// scale folded at HiZ: `-s` is strength0 level `s`, `+s` strength1 level
+/// `s`, and 0 is HiZ. A four-state value is not enough to resolve a net,
+/// because "0 and 1 disagree" has a different answer depending on which
+/// driver is stronger, and a per-side maximum is not enough either: §7.10.2's
+/// StH (a bufif1 with an x enable passing a 1) is `[HiZ, St1]`, which a
+/// maximum cannot tell from St1 and which §7.10.3 lets a Pu1 settle to 1.
+/// Collapsing back to four states is the LAST step, not the first.
+pub const Signal = struct {
+    lo: i8 = 0,
+    hi: i8 = 0,
 
-    /// What a driver holding `b` at `(s0, s1)` asserts. An `x` asserts BOTH
+    /// What a driver holding `b` at `(s0, s1)` asserts. An `x` spans BOTH
     /// sides — that is what makes it an ambiguous range rather than a value —
-    /// and a `z` asserts neither, which is why an undriven net reads z.
-    pub fn of(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Pair {
+    /// and a `z` asserts nothing, which is why an undriven net reads z. A
+    /// `highz` strength on one side of an `x` is Figure 7-17's H/L: "HiZ0 is
+    /// part of the result because the strength specification ... specified
+    /// that strength for an output with a value 0".
+    pub fn of(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Signal {
+        const p0 = -@as(i8, @intCast(@intFromEnum(s0)));
+        const p1: i8 = @intCast(@intFromEnum(s1));
         return switch (b) {
-            .one => .{ .s1 = s1 },
-            .zero => .{ .s0 = s0 },
-            .x => .{ .s0 = s0, .s1 = s1 },
+            .one => .{ .lo = p1, .hi = p1 },
+            .zero => .{ .lo = p0, .hi = p0 },
+            .x => .{ .lo = p0, .hi = p1 },
             .z => .{},
         };
     }
-    fn stronger(a: Ast.Strength, b: Ast.Strength) Ast.Strength {
-        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+
+    /// §7.10.2 H or L: `b` or high impedance, at `b`'s side's strength —
+    /// what a three-state driver with an unknown control asserts (Figure 7-6).
+    pub fn orZ(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Signal {
+        return of(.x, if (b == .one) .highz else s0, if (b == .zero) .highz else s1);
     }
-    pub fn max(a: Pair, b: Pair) Pair {
-        return .{ .s0 = stronger(a.s0, b.s0), .s1 = stronger(a.s1, b.s1) };
+
+    pub fn none(self: Signal) bool {
+        return self.lo == 0 and self.hi == 0;
     }
-    pub fn none(self: Pair) bool {
-        return self.s0 == .highz and self.s1 == .highz;
+
+    /// §7.10.1-§7.10.3, one more contributor folded in.
+    ///   - two unambiguous signals: the stronger wins; equal strength and
+    ///     opposite values give x "along with the strength levels of both
+    ///     signals and all the smaller strength levels" — the hull;
+    ///   - two ambiguous ones: "a range that includes the extremes of the
+    ///     signals and all the strengths between them" — the hull again;
+    ///   - one of each: §7.10.3's rules a-c. The ambiguous levels STRONGER
+    ///     than the unambiguous one remain, the rest disappear, and the gap
+    ///     between what remains and the unambiguous level is filled. An
+    ///     opposite-value level EQUAL to it remains too: Figure 7-21's text
+    ///     drops only the opposite levels of "lesser strength", and §4.6.1
+    ///     Table 4-2 makes St0 with StX an x, which dropping it would not.
+    pub fn combine(a: Signal, b: Signal) Signal {
+        if (a.none()) return b;
+        if (b.none()) return a;
+        const hull: Signal = .{ .lo = @min(a.lo, b.lo), .hi = @max(a.hi, b.hi) };
+        const ua = a.lo == a.hi;
+        const ub = b.lo == b.hi;
+        if (ua and ub) {
+            if (@abs(a.lo) != @abs(b.lo)) return if (@abs(a.lo) > @abs(b.lo)) a else b;
+            return hull;
+        }
+        if (!ua and !ub) return hull;
+        const u = if (ua) a.lo else b.lo;
+        const amb = if (ua) b else a;
+        const s: i8 = @intCast(@abs(u));
+        return .{
+            .lo = if (amb.lo < -s or (amb.lo == -s and u > 0)) @min(u, amb.lo) else u,
+            .hi = if (amb.hi > s or (amb.hi == s and u < 0)) @max(u, amb.hi) else u,
+        };
     }
-    /// The one place the pair becomes a printable value again.
-    pub fn collapse(self: Pair) Int.Bit {
-        const a = @intFromEnum(self.s0);
-        const b = @intFromEnum(self.s1);
-        if (a == b) return if (a == 0) .z else .x;
-        return if (b > a) .one else .zero;
+
+    /// The one place the range becomes a printable value again: wholly on
+    /// one side is that side's value, HiZ alone is z, and anything that
+    /// straddles HiZ — including §7.10.2's H and L — is x.
+    pub fn collapse(self: Signal) Int.Bit {
+        if (self.lo > 0) return .one;
+        if (self.hi < 0) return .zero;
+        if (self.none()) return .z;
+        return .x;
     }
 };
 
@@ -267,12 +328,12 @@ pub const Pair = struct {
 /// strength that lets a driver argue with it: a `weak1` driver cannot move a
 /// `tri0` because pull(5) beats weak(3), and nothing an `assign` can write
 /// beats a supply net's supply(7).
-pub fn netPull(kind: Ast.NetKind) Pair {
+pub fn netPull(kind: Ast.NetKind) Signal {
     return switch (kind) {
-        .supply0 => .{ .s0 = .supply },
-        .supply1 => .{ .s1 = .supply },
-        .tri0 => .{ .s0 = .pull },
-        .tri1 => .{ .s1 = .pull },
+        .supply0 => .of(.zero, .supply, .highz),
+        .supply1 => .of(.one, .highz, .supply),
+        .tri0 => .of(.zero, .pull, .highz),
+        .tri1 => .of(.one, .highz, .pull),
         else => .{},
     };
 }
@@ -292,7 +353,7 @@ pub fn wiredLogic(kind: Ast.NetKind) bool {
 /// which is exactly why an undriven net reads z.
 ///
 /// Only the wired-logic net types reach this now: `wire`/`tri`/`tri0`/`tri1`/
-/// `trireg` and the supply nets resolve through `Pair`, which is clause 7's
+/// `trireg` and the supply nets resolve through `Signal`, which is clause 7's
 /// strength model, and the `else` arm below survives for the one thing the
 /// value tables still do there — deciding what a fold with no contribution at
 /// all reads as.
@@ -301,7 +362,7 @@ pub fn wiredLogic(kind: Ast.NetKind) bool {
 /// the combination a strength of its own (the stronger of the two on the
 /// winning side), which nothing can observe here because a wired-logic net is
 /// never itself a driver of another net and `%v` does not exist. When gate
-/// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Pair`
+/// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Signal`
 /// fold with the table applied to the collapsed values and the strength taken
 /// alongside.
 pub fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
@@ -604,4 +665,28 @@ test "the pull supply and capacitive net types supply what no driver did" {
         \\float 0 1 0 1 0
         \\
     );
+}
+
+// §7.10.2/§7.10.3 against the clause's own figures, each as (lo, hi) on the
+// folded scale: 35X is [-3, 5], 56X [-5, 6], 36X [-3, 6], 651 [5, 6].
+test "§7.10 strength ranges combine the way Figures 7-9 through 7-19 draw them" {
+    const S = Signal;
+    // Figure 7-9: PuH + WeL is 35X, "the extremes of the signals and all the strengths between".
+    try std.testing.expectEqual(S{ .lo = -3, .hi = 5 }, S.orZ(.one, .strong, .pull).combine(S.orZ(.zero, .weak, .strong)));
+    // Figure 7-14: 651 + 530 is 56X.
+    try std.testing.expectEqual(S{ .lo = -5, .hi = 6 }, (S{ .lo = 5, .hi = 6 }).combine(.{ .lo = -5, .hi = -3 }));
+    // Figure 7-19: StH + We0 is 36X (rule c fills the gap).
+    const sth = S.of(.x, .highz, .strong);
+    try std.testing.expectEqual(S{ .lo = -3, .hi = 6 }, sth.combine(S.of(.zero, .weak, .strong)));
+    // Rules a/b: StH + Pu1 keeps only St1 above Pu1 — a 1, not an x.
+    try std.testing.expectEqual(Int.Bit.one, sth.combine(S.of(.one, .strong, .pull)).collapse());
+    try std.testing.expectEqual(Int.Bit.x, sth.collapse());
+    // An opposite level EQUAL to the unambiguous one ties: Table 4-2's 0-with-x.
+    try std.testing.expectEqual(Int.Bit.x, S.of(.x, .strong, .strong).combine(S.of(.zero, .strong, .strong)).collapse());
+    try std.testing.expectEqual(Int.Bit.x, S.of(.x, .pull, .pull).combine(S.of(.zero, .pull, .highz)).collapse());
+    try std.testing.expectEqual(Int.Bit.x, sth.combine(S.of(.zero, .strong, .strong)).collapse());
+    // §7.10.1: unambiguous — the stronger wins, equal and opposite is x.
+    try std.testing.expectEqual(Int.Bit.zero, S.of(.one, .strong, .weak).combine(S.of(.zero, .pull, .strong)).collapse());
+    try std.testing.expectEqual(Int.Bit.x, S.of(.one, .strong, .pull).combine(S.of(.zero, .pull, .strong)).collapse());
+    try std.testing.expectEqual(Int.Bit.z, S.of(.one, .strong, .highz).collapse());
 }
