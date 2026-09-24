@@ -1070,6 +1070,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
     try lower_context.declareDiscreteInputs(self, module);
+    // §8.5.3.5 switch processing is the discrete cycle's; with no discrete
+    // half to run it on, the device carries nothing for the switch.
+    if (!self.out.mixed_signal) for (module.switches) |sw|
+        try self.bag.add(.lower, .W0250, self.tokenSpan(sw.main_tok), "`{s}` switch primitive", .{@tagName(sw.kind)});
 
     // §6.5 ports first: this order IS the host device's terminal order.
     for (module.ports) |p| {

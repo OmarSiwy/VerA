@@ -408,8 +408,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     // ponytail: a child's task writes are not digital-owned to the analog side;
     // merge them (renamed like `discrete`) when a child's task needs it.
     .tasks = .top,
-    // The same for switches: an analog parse warns W0250 and records none.
-    .switches = .top,
+    // §8.5.3.5 switches, run by the digital engine; merged like gates.
+    .switches = .merged,
     .attrs = .merged,
     // `pickTop` never picks a connect module, so this is always the top's
     // `false`; a hand-placed one (§7.1) is a child like any other.
@@ -441,6 +441,7 @@ pub const Flatten = struct {
     assigns: std.ArrayList(Ast.ContAssign) = .empty,
     gates: std.ArrayList(Ast.GateInst) = .empty,
     pulls: std.ArrayList(Ast.PullInst) = .empty,
+    switches: std.ArrayList(Ast.SwitchInst) = .empty,
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
 
     /// §6.7 path → flat name. See `Design.names`.
@@ -1096,7 +1097,7 @@ pub const Flatten = struct {
             });
         }
         // ponytail: a gated child's discrete half has no scheme to run under.
-        if (unit.gate != .none and child.discrete.len + child.assigns.len + child.gates.len + child.pulls.len != 0)
+        if (unit.gate != .none and child.discrete.len + child.assigns.len + child.gates.len + child.pulls.len + child.switches.len != 0)
             try self.err(inst.main_tok, .E0235, "a module instance with discrete behavior", .{});
         for (child.discrete) |blk| try self.discrete.append(self.ctx.arena, .{
             .is_always = blk.is_always,
@@ -1123,6 +1124,14 @@ pub const Flatten = struct {
             var o = p;
             o.out = try elab_clone.cloneExpr(self, p.out);
             try self.pulls.append(self.ctx.arena, o);
+        }
+        for (child.switches) |sw| {
+            var o = sw;
+            const terms = try self.ctx.arena.alloc(Ast.ExprId, sw.terms.len);
+            for (sw.terms, terms) |src, *d| d.* = try elab_clone.cloneExpr(self, src);
+            o.terms = terms;
+            o.delay = try elab_clone.cloneDelay(self, sw.delay);
+            try self.switches.append(self.ctx.arena, o);
         }
         // ---- recurse, with this unit's map in force ------------------------
         try stack.append(self.ctx.arena, child.name);

@@ -78,6 +78,8 @@ pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool 
     // §3.7 a wreal is a digital net, and only the digital kernel holds its
     // value — 0.0 undriven, or its single driver's.
     for (module.nets) |n| if (n.kind == .wreal) return true;
+    // §8.5.3.5 a switch on a discrete net is processed in the discrete cycle.
+    for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(file, module, t) != null) return true;
     for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body) or writesFourState(file, blk.body)) return true;
     return false;
 }
@@ -182,6 +184,10 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     // shadows a module variable counts as that variable; the output actuals
     // of an enable are not collected. Follow the enables when a source needs it.
     for (module.tasks) |t| try collectWrites(self, t.body, &owned);
+    // §7.2 "only digital blocks and primitives can drive a discrete net": a
+    // discrete net on a switch terminal takes its value from the switch-level
+    // resolution of its whole network (§8.5.3.5), which the kernel computes.
+    for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(self.file, module, t)) |id| try owned.append(self.arena, id);
     var owned_names: std.ArrayList(struct { name: Ast.StrId, tok: u32 }) = .empty;
     for (owned.items) |t| try owned_names.append(self.arena, .{ .name = ex.strOf(t), .tok = ex.mainTok(t) });
     // §3.7 "If no driver is connected to a wreal net, its value shall be zero
@@ -440,6 +446,13 @@ pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.S
         .event_negedge => .negedge,
         else => .any, // else: the bare-name term
     } };
+}
+
+/// `e` when it names a net of `module` with no continuous discipline, else null.
+fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none or file.exprs.tag(e) != .ident) return null;
+    const n = netOf(module, file.exprs.strOf(e)) orelse return null;
+    return if (lower_discipline.isContinuous(file, n.discipline)) null else e;
 }
 
 /// The net `name` declares in `module`, of any discipline, or null (a
