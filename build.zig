@@ -140,6 +140,10 @@ pub fn build(b: *std.Build) void {
     // runner that could disagree about which `vpi_user.h` it means would be
     // grading a different ABI.
     o.addOption([]const u8, "vpi_include", b.pathFromRoot("src/vpi"));
+    // Which `.c` fixtures RUN (`vpi_runs` below): `--coverage` counts a `.c`
+    // fixture's `//! lrm` tags only for these, because compiling is not
+    // runtime evidence. Passed, not copied, so the two cannot disagree.
+    o.addOption([]const []const u8, "vpi_runs", &vpi_run_paths);
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
 
     const suite_mod = b.createModule(.{
@@ -427,6 +431,13 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
         .stdout = "vpi-event-handles=ok\n",
     },
+};
+
+/// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
+const vpi_run_paths = blk: {
+    var paths: [vpi_runs.len][]const u8 = undefined;
+    for (vpi_runs, &paths) |r, *p| p.* = r.c;
+    break :blk paths;
 };
 
 /// Create every module in `module_specs`, resolving each spec's imports against

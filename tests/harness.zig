@@ -326,7 +326,7 @@ pub fn run(
     }
 
     if (cfg.coverage) {
-        const ok = try reportCoverage(arena, io, options.docs_root, fixtures, w);
+        const ok = try reportCoverage(arena, io, options.docs_root, cfg.root, cfg.filter, fixtures, w);
         try w.flush();
         return if (ok) 0 else 1;
     }
@@ -436,6 +436,10 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
 /// why this prints the list and does not score it — the judgement is per clause
 /// and belongs to whoever reads the LRM sentence.
 ///
+/// The `.c` VPI fixtures cite with the same `//! lrm` lines (`cCites`), with
+/// per-line polarity, and count only when `build.zig` runs them: a `.c` that
+/// only compiles is listed as `~` and moves no number.
+///
 /// Returns whether every cite resolved. An unresolved cite is a FIXTURE defect
 /// of the same family the format already fails on (a cite that is not a section
 /// number), so it is the one thing here that decides an exit code. An uncited or
@@ -444,6 +448,8 @@ fn reportCoverage(
     arena: std.mem.Allocator,
     io: Io,
     docs_root: []const u8,
+    root: []const u8,
+    filter: ?[]const u8,
     fixtures: []const Fixture,
     w: *Io.Writer,
 ) !bool {
@@ -455,7 +461,6 @@ fn reportCoverage(
             "and implementation-limit rejections remain in this inventory.\n\n",
     );
 
-    const Cite = struct { section: []const u8, path: []const u8, reject: bool };
     var cites: std.ArrayList(Cite) = .empty;
     var citing: usize = 0;
     for (fixtures) |f| {
@@ -467,8 +472,26 @@ fn reportCoverage(
         for (d.lrm) |s| try cites.append(arena, .{
             .section = s,
             .path = f.path,
-            .reject = d.reject.len != 0,
+            .side = if (d.reject.len != 0) .neg else .pos,
         });
+    }
+    const c_files = try cFixtures(arena, io, root, filter);
+    var bad_tags: usize = 0;
+    for (c_files) |path| {
+        const source = try Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
+        const before = cites.items.len;
+        cCites(arena, &cites, path, source, cFixtureRuns(path)) catch |err| switch (err) {
+            error.BadCTag => {
+                try w.print("BAD TAG — {s}: a `//!` line that is not `lrm <clause>` or `lrm-reject <clause>`\n", .{path});
+                bad_tags += 1;
+                continue;
+            },
+            else => |e| return e,
+        };
+        for (cites.items[before..]) |c| if (c.side != .compiled) {
+            citing += 1;
+            break;
+        };
     }
     std.mem.sort(Cite, cites.items, {}, struct {
         fn lt(_: void, a: Cite, b: Cite) bool {
@@ -482,10 +505,15 @@ fn reportCoverage(
     const Sides = struct { pos: bool = false, neg: bool = false };
     var cited: std.StringHashMapUnmanaged(Sides) = .empty;
     for (cites.items) |c| {
+        // A compile-only `.c` cite is listed, never counted: it is not runtime
+        // evidence of either polarity.
+        if (c.side == .compiled) continue;
         const g = try cited.getOrPut(arena, c.section);
         if (!g.found_existing) g.value_ptr.* = .{};
-        if (c.reject) g.value_ptr.neg = true else g.value_ptr.pos = true;
+        if (c.side == .neg) g.value_ptr.neg = true else g.value_ptr.pos = true;
     }
+    var compiled: std.StringHashMapUnmanaged(void) = .empty;
+    for (cites.items) |c| if (c.side == .compiled) try compiled.put(arena, c.section, {});
 
     var prev: []const u8 = "";
     for (cites.items) |c| {
@@ -493,9 +521,14 @@ fn reportCoverage(
             try w.print("§{s}\n", .{c.section});
             prev = c.section;
         }
-        // `+` declares a positive fixture, `-` declares a rejection fixture.
-        // Show each path so a reviewer can inspect the actual evidence.
-        try w.print("  {s} {s}\n", .{ if (c.reject) "-" else "+", c.path });
+        // `+` declares a positive fixture, `-` declares a rejection fixture,
+        // `~` a compile-only `.c` fixture. Show each path so a reviewer can
+        // inspect the actual evidence.
+        try w.print("  {s} {s}\n", .{ switch (c.side) {
+            .pos => "+",
+            .neg => "-",
+            .compiled => "~",
+        }, c.path });
     }
 
     // The cites that name nothing in the LRM. Sorted with everything else, so
@@ -562,7 +595,12 @@ fn reportCoverage(
     }
     if (uncited.items.len != 0) {
         try w.print("\nUNCITED — no fixture names these at all:\n", .{});
-        for (uncited.items) |cl| try w.print("§{s} {s}  ({s})\n", .{ cl.id, cl.title, cl.file });
+        for (uncited.items) |cl| try w.print("§{s} {s}  ({s}){s}\n", .{
+            cl.id,
+            cl.title,
+            cl.file,
+            if (compiled.contains(cl.id)) "  ~ compile-only .c cite" else "",
+        });
     }
 
     const n = clauses.count();
@@ -571,13 +609,116 @@ fn reportCoverage(
             "  {d} cited both ways · {d} positive citations only · {d} rejection citations only · {d} uncited\n",
         .{
             n - uncited.items.len,                                           n,
-            citing,                                                          fixtures.len,
+            citing,                                                          fixtures.len + c_files.len,
             n - uncited.items.len - pos_only.items.len - neg_only.items.len, pos_only.items.len,
             neg_only.items.len,                                              uncited.items.len,
         },
     );
+    var compiled_only: usize = 0;
+    for (uncited.items) |cl| {
+        if (compiled.contains(cl.id)) compiled_only += 1;
+    }
+    if (compiled_only != 0) try w.print(
+        "  {d} of the uncited carry only compile-only `.c` cites (`~`), which are not counted\n",
+        .{compiled_only},
+    );
     if (unresolved != 0) try w.print("{d} cite(s) resolve to no clause\n", .{unresolved});
-    return unresolved == 0;
+    if (bad_tags != 0) try w.print("{d} `.c` fixture(s) carry a malformed tag\n", .{bad_tags});
+    return unresolved == 0 and bad_tags == 0;
+}
+
+/// One `//! lrm` citation and the polarity its fixture declares.
+const Cite = struct {
+    section: []const u8,
+    path: []const u8,
+    side: enum { pos, neg, compiled },
+};
+
+/// The `.c` VPI fixtures under `root`. `collect` does not walk them: they are
+/// C applications, not VerA source, and only `--coverage` reads them.
+fn cFixtures(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]const u8) ![]const []const u8 {
+    var dir = Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => return err,
+    };
+    defer dir.close(io);
+    var list: std.ArrayList([]const u8) = .empty;
+    var walker = try dir.walk(arena);
+    defer walker.deinit();
+    while (try walker.next(io)) |e| {
+        if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".c")) continue;
+        const path = try std.fs.path.join(arena, &.{ root, e.path });
+        if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
+        try list.append(arena, path);
+    }
+    return list.items;
+}
+
+/// Does `build.zig` RUN this `.c` fixture in-process and assert its output?
+/// `options.vpi_runs` is that file's own `vpi_runs` table, not a copy of it.
+fn cFixtureRuns(path: []const u8) bool {
+    for (options.vpi_runs) |r| {
+        if (std.mem.endsWith(u8, path, r)) return true;
+    }
+    return false;
+}
+
+/// A `.c` fixture's tags: the `.va` grammar, one per line, as C99 `//`
+/// comments. Polarity is PER LINE, because one C application can both assert
+/// a routine's result and assert that the routine refuses invalid input:
+///
+///   //! lrm 12.16          a result this clause requires is asserted
+///   //! lrm-reject 12.34   a refusal (error return, vpi_chk_error) is asserted
+///
+/// Neither counts unless the fixture RUNS (`runs`): compiler acceptance is not
+/// runtime evidence (`AGENTS.md §2`), so a compile-only fixture's cites become
+/// `.compiled` — listed, never counted. Any other `//!` key is a malformed
+/// tag, reported rather than skipped.
+fn cCites(
+    arena: std.mem.Allocator,
+    out: *std.ArrayList(Cite),
+    path: []const u8,
+    source: []const u8,
+    runs: bool,
+) !void {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, "//!")) continue;
+        var words = std.mem.tokenizeAny(u8, line["//!".len..], " \t");
+        const key = words.next() orelse return error.BadCTag;
+        const reject = if (std.mem.eql(u8, key, "lrm"))
+            false
+        else if (std.mem.eql(u8, key, "lrm-reject"))
+            true
+        else
+            return error.BadCTag;
+        const section = words.next() orelse return error.BadCTag;
+        if (words.next() != null) return error.BadCTag;
+        try out.append(arena, .{
+            .section = section,
+            .path = path,
+            .side = if (!runs) .compiled else if (reject) .neg else .pos,
+        });
+    }
+}
+
+test "a .c fixture's polarity is per line, and only a running one counts" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\nint x;\n";
+    var cites: std.ArrayList(Cite) = .empty;
+    try cCites(arena, &cites, "a.c", src, true);
+    try std.testing.expectEqual(@as(usize, 2), cites.items.len);
+    try std.testing.expectEqualStrings("12.6", cites.items[0].section);
+    try std.testing.expect(cites.items[0].side == .pos);
+    try std.testing.expect(cites.items[1].side == .neg);
+    cites.clearRetainingCapacity();
+    try cCites(arena, &cites, "a.c", src, false);
+    for (cites.items) |c| try std.testing.expect(c.side == .compiled);
+    try std.testing.expectError(error.BadCTag, cCites(arena, &cites, "a.c", "//! reject E0512\n", true));
+    try std.testing.expectError(error.BadCTag, cCites(arena, &cites, "a.c", "//! lrm\n", true));
 }
 
 /// One numbered clause of the LRM, as `docs/*.html` spells it.
