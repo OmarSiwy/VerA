@@ -334,8 +334,7 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
     for (self.ctx.file.connectrules) |cr| {
         for (cr.insertions) |ins| {
             // §7.7.1 "connect connectmodule_identifier": the name must be
-            // a §7.6 connect module — an ordinary module bridges nothing
-            // (E0913 is the same fact from the instantiation side).
+            // a §7.6 connect module — an ordinary module bridges nothing.
             const m = elab_names.findModule(self, ins.module) orelse {
                 try self.err(ins.main_tok, .E0915, "nothing declares `{s}`", .{self.ctx.file.str(ins.module)});
                 continue;
