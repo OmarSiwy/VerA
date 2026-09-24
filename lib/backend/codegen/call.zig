@@ -28,6 +28,7 @@ const VTy = codegen.VTy;
 const mathOpByName = codegen.mathOpByName;
 const isAnalysisName = codegen.isAnalysisName;
 const devSafe = codegen.devSafe;
+const opcode_zig = codegen.opcode_zig;
 const OpKind = codegen.OpKind;
 const opNeedsInput = codegen.opNeedsInput;
 const enableArgIdx = codegen.enableArgIdx;
@@ -370,43 +371,11 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 // Rendered as open/close (and separator) fragments rather
                 // than as a format string per opcode: `allocPrint` wants a
                 // comptime format, and a `{s}`-per-case switch would be the
-                // same table written twice as long.
+                // same table written twice as long. The fragments are
+                // `opcode_zig`'s `host_f64` column.
                 .unary => {
                     const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
-                    const fix: [2][]const u8 = switch (row.op) {
-                        .fneg, .ineg => .{ "-(", ")" },
-                        .fabs, .iabs => .{ "@abs(", ")" },
-                        .sqrt => .{ "@sqrt(", ")" },
-                        // §4.3.1 Table 4-14 and §4.3.2 Table 4-15 in full.
-                        // Every one is a pure f64→f64 function of a value
-                        // the host already has, so a §6.3.4 default over one
-                        // derives exactly as an arithmetic default does —
-                        // the clause puts no operator restriction on a
-                        // dependent parameter, so neither does this.
-                        .exp => .{ "@exp(", ")" },
-                        .ln => .{ "@log(", ")" },
-                        .log10 => .{ "@log10(", ")" },
-                        .expm1 => .{ "std.math.expm1(", ")" },
-                        .ln1p => .{ "std.math.log1p(", ")" },
-                        .floor => .{ "@floor(", ")" },
-                        .ceil => .{ "@ceil(", ")" },
-                        .sin => .{ "@sin(", ")" },
-                        .cos => .{ "@cos(", ")" },
-                        .tan => .{ "@tan(", ")" },
-                        .asin => .{ "std.math.asin(", ")" },
-                        .acos => .{ "std.math.acos(", ")" },
-                        .atan => .{ "std.math.atan(", ")" },
-                        .sinh => .{ "std.math.sinh(", ")" },
-                        .cosh => .{ "std.math.cosh(", ")" },
-                        .tanh => .{ "std.math.tanh(", ")" },
-                        .asinh => .{ "std.math.asinh(", ")" },
-                        .acosh => .{ "std.math.acosh(", ")" },
-                        .atanh => .{ "std.math.atanh(", ")" },
-                        // An int→real widening and a reassociation barrier
-                        // are both identities in the f64 domain.
-                        .if_cast, .opt_barrier => .{ "", "" },
-                        else => return null,
-                    };
+                    const fix = opcode_zig.get(row.op).host_f64 orelse return null;
                     return try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ fix[0], a, fix[1] });
                 },
                 .binary => {
@@ -415,21 +384,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                         const b2 = try f64Const(self, @enumFromInt(row.b), depth + 1, in_unit) orelse return null;
                         return try std.fmt.allocPrint(self.arena, "(if (({s}) == 0.0) @panic(\"VerA: real parameter remainder divisor is zero\") else @rem({s}, {s}))", .{ b2, a, b2 });
                     }
-                    // Integer ops render in the f64 domain like `foldConst`
-                    // folds them there; `idiv` is left out because its
-                    // truncation is NOT what `/` does on an f64.
-                    const fix: [3][]const u8 = switch (row.op) {
-                        .fadd, .iadd => .{ "(", ") + (", ")" },
-                        .fsub, .isub => .{ "(", ") - (", ")" },
-                        .fmul, .imul => .{ "(", ") * (", ")" },
-                        .fdiv => .{ "(", ") / (", ")" },
-                        .fmin, .imin => .{ "@min(", ", ", ")" },
-                        .fmax, .imax => .{ "@max(", ", ", ")" },
-                        .pow => .{ "std.math.pow(f64, ", ", ", ")" },
-                        .hypot => .{ "std.math.hypot(", ", ", ")" },
-                        .atan2 => .{ "std.math.atan2(", ", ", ")" },
-                        else => return null,
-                    };
+                    const fix = opcode_zig.get(row.op).host_f64 orelse return null;
                     const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
                     const b2 = try f64Const(self, @enumFromInt(row.b), depth + 1, in_unit) orelse return null;
                     return try std.fmt.allocPrint(self.arena, "{s}{s}{s}{s}{s}", .{

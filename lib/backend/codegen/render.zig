@@ -17,6 +17,7 @@ const gen_file = @import("file.zig");
 const gen_hoist = @import("hoist.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_unit = @import("unit.zig");
+const opcode_zig = codegen.opcode_zig;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
@@ -417,61 +418,34 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 else => "mul",
             }, b2);
         },
-        .fdiv => try method2(self, a, "div", b2),
-        .fneg => try method1(self, a, "neg"),
-        .fmod => {
-            // zFmod truncates a `.val()` quotient — a scalar collapse.
-            pinLanes(self, a);
-            pinLanes(self, b2);
-            try helper2(self, "zFmod", a, b2);
-        },
-        // §4.3.1/§4.3.2 math
-        .sqrt => try method1(self, a, "sqrt"),
-        .exp => try method1(self, a, "exp"),
-        .ln => try method1(self, a, "log"),
-        .sin => try method1(self, a, "sin"),
-        .cos => try method1(self, a, "cos"),
-        .tanh => try method1(self, a, "tanh"),
-        .sinh => try method1(self, a, "sinh"),
-        .cosh => try method1(self, a, "cosh"),
-        .atan => try method1(self, a, "atan"),
-        .fabs => try method1(self, a, "abs"),
+        // `fdiv` keeps the dual op (see above), and §4.3.1/§4.3.2 math is one
+        // `S` method or one kernel per opcode — `opcode_zig`'s `s` column.
         // §4.3.1 Table 4-14 names the C library's expm1/log1p, which exist
-        // BECAUSE exp(x)-1 and log(1+x) cancel for small x. So they are
-        // scalar PRIMITIVES here, not helpers composed from exp/log — a
+        // BECAUSE exp(x)-1 and log(1+x) cancel for small x, so they are
+        // scalar PRIMITIVES there, not helpers composed from exp/log — a
         // composed helper is the exact form the clause tells us to avoid.
-        .expm1 => try method1(self, a, "expm1"),
-        .ln1p => try method1(self, a, "log1p"),
-        .log10 => try helper1(self, "zLog10", a),
-        .tan => try helper1(self, "zTan", a),
-        .asin => try helper1(self, "zAsin", a),
-        .acos => try helper1(self, "zAcos", a),
-        .asinh => try helper1(self, "zAsinh", a),
-        .acosh => try helper1(self, "zAcosh", a),
-        .atanh => try helper1(self, "zAtanh", a),
-        // zFloor/zCeil collapse to `S.con` of a `.val()`, and zAtan2
-        // branches on its operands' signs — all three pin lanes.
-        .floor => {
-            pinLanes(self, a);
-            try helper1(self, "zFloor", a);
+        // zFmod truncates a `.val()` quotient, zFloor/zCeil collapse to
+        // `S.con` of a `.val()`, zHypot linearizes around `.val()` of both
+        // operands and zAtan2 branches on their signs: all five pin lanes
+        // (the `pins_lanes` column).
+        // Resolved at comptime: an opcode here whose row says `.custom` is a
+        // compile error, not a runtime surprise.
+        inline .fdiv, .fneg, .fmod, .sqrt, .exp, .ln, .sin, .cos, .tanh, .sinh, .cosh, .atan,
+        .fabs, .expm1, .ln1p, .log10, .tan, .asin, .acos, .asinh, .acosh, .atanh, .floor, .ceil,
+        .hypot, .atan2, .fmin, .fmax,
+        => |o| {
+            const r = comptime opcode_zig.get(o);
+            const binary = comptime Mir.opClass(o) == .binary;
+            if (r.pins_lanes) {
+                pinLanes(self, a);
+                if (binary) pinLanes(self, b2);
+            }
+            switch (r.s) {
+                .method => |m| if (binary) try method2(self, a, m, b2) else try method1(self, a, m),
+                .helper => |h| if (binary) try helper2(self, h, a, b2) else try helper1(self, h, a),
+                .custom => @compileError("renderOp: opcode_zig gives `" ++ @tagName(o) ++ "` no S spelling"),
+            }
         },
-        .ceil => {
-            pinLanes(self, a);
-            try helper1(self, "zCeil", a);
-        },
-        // zHypot linearizes around `.val()` of both operands — pins.
-        .hypot => {
-            pinLanes(self, a);
-            pinLanes(self, b2);
-            try helper2(self, "zHypot", a, b2);
-        },
-        .atan2 => {
-            pinLanes(self, a);
-            pinLanes(self, b2);
-            try helper2(self, "zAtan2", a, b2);
-        },
-        .fmin => try helper2(self, "zMin", a, b2),
-        .fmax => try helper2(self, "zMax", a, b2),
         .pow => {
             // The scalar interface only has pow(S, f64); a constant exponent
             // (the overwhelming case) uses it, anything else goes through
