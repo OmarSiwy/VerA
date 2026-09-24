@@ -574,6 +574,30 @@ fn reportCoverage(
     for ([_]*std.ArrayList(Clause){ &uncited, &pos_only, &neg_only }) |l|
         std.mem.sort(Clause, l.items, {}, byId);
 
+    // CLAUSE-AUDIT §5 classifications. A one-way or uncited clause the audit
+    // classifies leaves its work list for a fifth bucket, printed with its
+    // evidence so a reviewer reads the quote rather than the count. A clause
+    // tested both ways stays there: a classification never outranks evidence.
+    const classes = try readClassifications(arena, io, root, &clauses, &cited, w);
+    var classified: std.ArrayList(Classified) = .empty;
+    for ([_]*std.ArrayList(Clause){ &uncited, &pos_only, &neg_only }) |l| {
+        var keep: usize = 0;
+        for (l.items) |cl| {
+            if (classes.map.get(cl.id)) |c| {
+                try classified.append(arena, .{ .clause = cl, .row = c });
+                continue;
+            }
+            l.items[keep] = cl;
+            keep += 1;
+        }
+        l.shrinkRetainingCapacity(keep);
+    }
+    std.mem.sort(Classified, classified.items, {}, struct {
+        fn lt(_: void, a: Classified, b: Classified) bool {
+            return sectionLessThan(a.clause.id, b.clause.id);
+        }
+    }.lt);
+
     if (neg_only.items.len != 0) {
         try w.print(
             "\nREJECTION CITATIONS ONLY — every citing fixture declares `//! reject`.\n" ++
@@ -603,15 +627,32 @@ fn reportCoverage(
         });
     }
 
+    if (classified.items.len != 0) {
+        try w.print(
+            "\nCLASSIFIED — CLAUSE-AUDIT §5: the clause states no obligation an input can\n" ++
+                "break, or its obligation is of a kind a fixture may not pin one way. Each\n" ++
+                "row is a reviewed claim, not evidence; its quote is in the file named.\n",
+            .{},
+        );
+        for (classified.items) |c| try w.print("§{s} {s}  [{s}]  ({s})\n", .{
+            c.clause.id, c.clause.title, @tagName(c.row.kind), c.row.file,
+        });
+    }
+
     const n = clauses.count();
+    var uncited_classified: usize = 0;
+    for (classified.items) |c| {
+        if (cited.get(c.clause.id) == null) uncited_classified += 1;
+    }
     try w.print(
         "\n{d} of {d} LRM clauses cited, by {d} of {d} fixtures\n" ++
-            "  {d} cited both ways · {d} positive citations only · {d} rejection citations only · {d} uncited\n",
+            "  {d} cited both ways · {d} positive citations only · {d} rejection citations only · {d} uncited · {d} classified\n",
         .{
-            n - uncited.items.len,                                           n,
-            citing,                                                          fixtures.len + c_files.len,
-            n - uncited.items.len - pos_only.items.len - neg_only.items.len, pos_only.items.len,
-            neg_only.items.len,                                              uncited.items.len,
+            n - uncited.items.len - uncited_classified,                                                   n,
+            citing,                                                                                        fixtures.len + c_files.len,
+            n - uncited.items.len - pos_only.items.len - neg_only.items.len - classified.items.len,       pos_only.items.len,
+            neg_only.items.len,                                                                            uncited.items.len,
+            classified.items.len,
         },
     );
     var compiled_only: usize = 0;
@@ -624,7 +665,101 @@ fn reportCoverage(
     );
     if (unresolved != 0) try w.print("{d} cite(s) resolve to no clause\n", .{unresolved});
     if (bad_tags != 0) try w.print("{d} `.c` fixture(s) carry a malformed tag\n", .{bad_tags});
-    return unresolved == 0 and bad_tags == 0;
+    if (classes.bad != 0) try w.print("{d} CLAUSES.tsv row(s) rejected\n", .{classes.bad});
+    return unresolved == 0 and bad_tags == 0 and classes.bad == 0;
+}
+
+/// The CLAUSE-AUDIT §5 kinds a `CLAUSES.tsv` row may name, plus
+/// `no_prohibition`: a normative clause whose every sentence is positive, so
+/// its positive fixtures are the whole obligation and there is nothing to
+/// reject. That one kind is checked against the evidence: it is refused unless
+/// a positive fixture cites the clause.
+const ClassKind = enum {
+    non_normative,
+    no_prohibition,
+    optional,
+    implementation_defined,
+    resource_limit,
+    unspecified,
+};
+
+const ClassRow = struct { kind: ClassKind, file: []const u8 };
+const Classified = struct { clause: Clause, row: ClassRow };
+
+/// Read every `CLAUSES.tsv` directly under a fixture directory of `root`.
+/// A row is `<clause>\t<kind>\t<evidence>`; `#` starts a comment line. The
+/// kind is spelled with hyphens (`non-normative`). A row that names no clause,
+/// names an unknown kind, carries no evidence, or claims `no-prohibition` for
+/// a clause no positive fixture cites is REJECTED: printed, not counted, and it
+/// fails the run the way an unresolved cite does.
+fn readClassifications(
+    arena: std.mem.Allocator,
+    io: Io,
+    root: []const u8,
+    clauses: *const std.StringHashMapUnmanaged(Clause),
+    cited: anytype,
+    w: *Io.Writer,
+) !struct { map: std.StringHashMapUnmanaged(ClassRow), bad: usize } {
+    var map: std.StringHashMapUnmanaged(ClassRow) = .empty;
+    var bad: usize = 0;
+    var dir = Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return .{ .map = map, .bad = 0 },
+        else => return err,
+    };
+    defer dir.close(io);
+    var files: std.ArrayList([]const u8) = .empty;
+    var walker = try dir.walk(arena);
+    defer walker.deinit();
+    while (try walker.next(io)) |e| {
+        if (e.kind != .file or !std.mem.eql(u8, e.basename, "CLAUSES.tsv")) continue;
+        try files.append(arena, try std.fs.path.join(arena, &.{ root, e.path }));
+    }
+    std.mem.sort([]const u8, files.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+    for (files.items) |path| {
+        const text = try Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        var line_no: usize = 0;
+        while (lines.next()) |raw| {
+            line_no += 1;
+            const line = std.mem.trim(u8, raw, " \r");
+            if (line.len == 0 or line[0] == '#') continue;
+            const why = classifyRow(arena, line, clauses, cited) catch |err| {
+                try w.print("BAD CLASSIFICATION — {s}:{d}: {s}\n", .{ path, line_no, @errorName(err) });
+                bad += 1;
+                continue;
+            };
+            const g = try map.getOrPut(arena, why.id);
+            if (!g.found_existing) g.value_ptr.* = .{ .kind = why.kind, .file = path };
+        }
+    }
+    return .{ .map = map, .bad = bad };
+}
+
+fn classifyRow(
+    arena: std.mem.Allocator,
+    line: []const u8,
+    clauses: *const std.StringHashMapUnmanaged(Clause),
+    cited: anytype,
+) !struct { id: []const u8, kind: ClassKind } {
+    var cols = std.mem.splitScalar(u8, line, '\t');
+    var id = std.mem.trim(u8, cols.next() orelse return error.MissingClause, " ");
+    if (id.len != 0 and std.mem.startsWith(u8, id, "§")) id = id["§".len..];
+    if (clauses.get(id) == null) return error.UnknownClause;
+    const kind_text = std.mem.trim(u8, cols.next() orelse return error.MissingKind, " ");
+    const spelled = try arena.dupe(u8, kind_text);
+    std.mem.replaceScalar(u8, spelled, '-', '_');
+    const kind = std.meta.stringToEnum(ClassKind, spelled) orelse return error.UnknownKind;
+    const evidence = std.mem.trim(u8, cols.rest(), " \t");
+    if (evidence.len == 0) return error.MissingEvidence;
+    if (kind == .no_prohibition) {
+        const s = cited.get(id) orelse return error.NoPositiveFixture;
+        if (!s.pos) return error.NoPositiveFixture;
+    }
+    return .{ .id = id, .kind = kind };
 }
 
 /// One `//! lrm` citation and the polarity its fixture declares.

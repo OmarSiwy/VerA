@@ -60,12 +60,15 @@ else
 fi
 read -r both acc ref unc < <(grep -oP '\d+(?= (cited both ways|positive citations only|rejection citations only|uncited))' \
   <<<"$cov" | paste -sd' ')
+# CLAUSE-AUDIT §5 classifications (`CLAUSES.tsv`), counted apart from both
+# ways: a reviewed claim that a clause carries nothing to reject, not evidence.
+classified="$(grep -oP '\d+(?= classified$)' <<<"$cov" | head -1)"
 clauses="$(grep -oP '^\d+ of \K\d+(?= LRM clauses cited)' <<<"$cov" | head -1)"
 [[ "${clauses:-}" =~ ^[0-9]+$ ]] || die "could not parse the coverage tally. harness.zig:564 changed?"
-for value in "${both:-}" "${acc:-}" "${ref:-}" "${unc:-}"; do
+for value in "${both:-}" "${acc:-}" "${ref:-}" "${unc:-}" "${classified:-}"; do
   [[ "$value" =~ ^[0-9]+$ ]] || die "incomplete coverage polarity tally"
 done
-(( both + acc + ref + unc == clauses )) || die "coverage tally does not sum to clause denominator"
+(( both + acc + ref + unc + classified == clauses )) || die "coverage tally does not sum to clause denominator"
 
 # --- The two gates that are pass/fail, not a percentage ----------------------
 zig build test         >/dev/null 2>&1 && unit=pass    || unit=FAIL
@@ -78,8 +81,9 @@ block="$(cat <<EOF
 |---|---|---|---|
 | **A** — fixtures behaving as stated | **$pass / $total — $(pct "$pass" "$total")** | $((total - pass)) rows | \`zig build benchmark -- --strict\` |
 | &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | $fail · $unas · $xfail | all three to 0 | same run |
-| **C** — clauses with both citation polarities (static) | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both)) clauses | \`zig build benchmark -- --coverage\` |
+| **C** — clauses with both citation polarities (static) | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both - classified)) clauses | \`zig build benchmark -- --coverage\` |
 | &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | $acc · $ref · $unc | requires rule-level review | same run |
+| &nbsp;&nbsp;↳ classified under \`CLAUSE-AUDIT.md\` §5 (\`CLAUSES.tsv\`) | $classified | reviewed claims, not evidence | same run |
 | **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | not measured by this script | source and evidence review required |
 | **D** — \`ARCHITECTURE.md\` §6 phases landed | hand-entered, see \`ARCHITECTURE.md\` §8 | not measured by this script | architecture review required |
 | \`zig build test\` | **$unit** | pass | \`zig build test\` |
