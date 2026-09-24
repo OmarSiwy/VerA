@@ -34,6 +34,10 @@ pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
     "while (zp_e > 0) : (zp_e >>= 1) { if (zp_e & 1 != 0) zp_r *%= zp_x; zp_x *%= zp_x; } " ++
     "return zp_r; } }.zp_f)";
 
+/// Integer `/` with a zero divisor defined as 0 — see `renderOp`'s `.idiv`.
+pub const idiv_fn = "(struct { fn zd_f(zd_a: i64, zd_b: i64) i64 { " ++
+    "return if (zd_b == 0) 0 else @divTrunc(zd_a, zd_b); } }.zd_f)";
+
 // ---- value / instruction rendering --------------------------------------
 
 /// Emit a value reference, converting per §4.2.1.1/§4.2.1.2 when the use
@@ -567,8 +571,15 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         .isub => try intBin32(self, a, "-%", b2),
         .imul => try intBin32(self, a, "*%", b2),
         .idiv => {
+            // A divisor the prover could not show non-zero is ACCEPTED
+            // (proof checkDomain, §4.2.4 has no zero rule for `/`), and
+            // `@divTrunc(x, 0)` is illegal behavior, so it goes through
+            // `idiv_fn`: x / 0 is 0 (IEEE 1364's 'bx has no analog value). A
+            // non-zero literal divisor keeps the bare form.
+            const lit = self.mir.valueDef(self.an.rv(b2));
+            const bare = lit == .int_const and lit.int_const != 0;
             try self.b("@as(i64, @as(i32, @truncate(", .{});
-            try intCall2(self, "@divTrunc", a, b2);
+            try intCall2(self, if (bare) "@divTrunc" else idiv_fn, a, b2);
             try self.b(")))", .{});
         },
         .imod => try intCall2(self, "@rem", a, b2),

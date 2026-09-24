@@ -947,15 +947,27 @@ pub const Prover = struct {
         if (dom == .all) return true;
 
         switch (dom) {
-            // Integer `/` and `%` only (§4.2.4). These stay HARD ERRORS: integer
-            // division by zero is illegal behavior in Zig, not an IEEE infinity,
-            // so there is no `.strict` fallback that makes it well-defined.
+            // Integer `/`, and `%` of either type (§4.2.4). The same three-way
+            // rule as every other domain: "It shall be an error to pass zero
+            // (0) as the second argument to the modulus operator" is an error
+            // when the divisor IS zero, so a provably-zero divisor is E0601
+            // and an unprovable one is accepted and forfeits `finite`:
+            //   - real `%`: `@rem(x, 0.0)` is NaN, IEEE-defined under `.strict`;
+            //   - integer `/`: codegen guards it (`render.zig`'s `.idiv`), since
+            //     `@divTrunc(i64, 0)` is illegal behavior in Zig.
+            // Integer `%` stays an error unless proven non-zero: its device
+            // form (`@rem`) has no guard, so there is nothing defined to fall
+            // back on.
             .nonzero_divisor => {
                 const d = self.mir.instData(inst).binary;
                 const y = self.ivOf(d.rhs);
                 if (y.excludesZero() or y.isEmpty()) return true;
                 const what = if (op == .fmod or op == .imod) "`%` divisor" else "`/` divisor";
-                return self.violated(inst, .E0601, what, d.rhs, y, "cannot be proven non-zero", "constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division");
+                if (y.lo == 0 and y.hi == 0)
+                    return self.violated(inst, .E0601, what, d.rhs, y, "is provably zero", "a zero divisor is an error (§4.2.4); check the expression or the parameter's range");
+                if (op == .imod)
+                    return self.violated(inst, .E0601, what, d.rhs, y, "cannot be proven non-zero", "constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division");
+                return false;
             },
             .pow_sign => { // §4.3.1 Table 4-14
                 const d = self.mir.instData(inst).binary;

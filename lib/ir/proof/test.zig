@@ -494,7 +494,7 @@ test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
         \\  inout p, n;
         \\  electrical p, n;
         \\  parameter integer d = 0;
-        \\  analog I(p, n) <+ V(p, n) * (10 / d);
+        \\  analog I(p, n) <+ V(p, n) * (10 % d);
         \\endmodule
     , &h);
     defer h.deinit();
@@ -508,7 +508,7 @@ test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
     try std.testing.expect(!e.span.isNone());
     // And the span must land on the source the user wrote, not the prelude.
     const src_text = h.bag.fileText(h.bag.locate(e.span, e.file).file);
-    try std.testing.expect(std.mem.indexOf(u8, src_text, "10 / d") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src_text, "10 % d") != null);
 }
 
 test "proof: unbounded voltage exp is .strict, never an error (LRM 4.3.2 'All x')" {
@@ -650,9 +650,9 @@ test "proof: `/` by a possibly-zero divisor is ACCEPTED and forced .strict (LRM 
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
 }
 
-test "proof: integer `/` and `%` by a possibly-zero divisor remain errors (LRM 4.2.4)" {
-    // No IEEE escape for integers: Zig's @divTrunc/@rem by zero is illegal
-    // behavior, so a static proof is the only sound option.
+test "proof: integer `%` by a possibly-zero divisor remains an error (LRM 4.2.4)" {
+    // No IEEE escape for integers: Zig's @rem by zero is illegal behavior,
+    // and the device has no guarded form of it.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(p, n);
@@ -781,4 +781,51 @@ test "proof: $vt(T) and limexp(x) keep their argument's evidence" {
     defer v.deinit(std.testing.allocator);
     try std.testing.expect(v.ok());
     try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+}
+
+test "proof: an unprovable integer `/` or real `%` divisor is accepted as .strict (LRM 4.2.4)" {
+    // §4.2.4's one zero rule makes `%` by zero an error when the divisor IS
+    // zero; `/` has none. The file's three-way rule: unprovable -> accept.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer k = 2;
+        \\  parameter real r = 3.0;
+        \\  analog I(p,n) <+ (10 / k) * V(p,n) + V(p,n) % r;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0601));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "proof: a provably-zero divisor is still E0601, for `/` and real `%` alike" {
+    for ([_][]const u8{ "(10 / k) * V(p,n)", "V(p,n) % r" }) |e| {
+        var h: Harness = undefined;
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  integer k;
+            \\  real r;
+            \\  analog begin
+            \\    k = 0;
+            \\    r = 0.0;
+            \\    I(p,n) <+ {s};
+            \\  end
+            \\endmodule
+        , .{e});
+        defer std.testing.allocator.free(src);
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const v = try h.prove(std.testing.allocator, .{});
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(!v.ok());
+        try std.testing.expect(h.has(.E0601));
+    }
 }
