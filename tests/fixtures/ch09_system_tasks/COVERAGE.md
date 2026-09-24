@@ -6,7 +6,7 @@ and defparam overrides (including equal-to-default values), and nested
 omitted/connected ports, have direct behavioral checks. Invalid variable/net
 argument kinds were accepted (BIND-ARG-001/002) and are now refused as E0822.
 Runtime signed conversion passes the new observations; legal constant defaults
-fail as CONV-CONST-001. The 063 bit-pattern oracle now compares explicitly
+fold now (CONV-CONST-001 closed). The 063 bit-pattern oracle now compares explicitly
 sized patterns and checks Boolean results, avoiding unsized-width assumptions.
 These bounded tests do not close every rule of §9.11 or §9.19.
 
