@@ -7,12 +7,10 @@
 // the parent avoid an incidental accessor mismatch masking this test.
 // This is an isolated invalid accessor; the corresponding local control uses
 // I(port) and must be legal. E0501 is the existing flat-net mismatch diagnostic;
-// acceptance here exposes the lost local declaration, not conformance.
-// Direct checking accepts this invalid access; MIX-LOCAL-001 records the gap.
+// elaboration reports it against the child port's own declaration.
 //! lrm 4.4
 //! lrm 6.5.8
 //! reject E0501
-//! xfail MIX-LOCAL-001 accepts parent Ia accessor on an explicitly electrical child port
 nature local_potential;
   units = "V"; access = Va; abstol = 1u;
 endnature

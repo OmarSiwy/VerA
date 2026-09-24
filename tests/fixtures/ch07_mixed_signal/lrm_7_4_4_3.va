@@ -25,7 +25,6 @@
 //! lrm 4.4
 //! lrm 6.5.8
 //! checks 4
-//! xfail MIX-LOCAL-001 shared-node discipline replaces the child's local declaration and rejects legal V/I accesses
 //! bias V(plain) = 0.25
 //! solve
 //! print none
