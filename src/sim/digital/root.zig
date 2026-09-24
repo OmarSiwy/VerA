@@ -204,6 +204,9 @@ pub const Run = struct {
     disables: std.ArrayList(struct { at: u32, name: Name, tok: u32 }) = .empty,
     // One counter per lexical repeat is sufficient without recursive processes.
     repeats: std.ArrayList(u64) = .empty,
+    /// §9.8.2 one counter per lexical `fork`: the arms still running. One per
+    /// SITE is enough for `repeats`' reason — the parent waits at the site.
+    joins: std.ArrayList(u32) = .empty,
     // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
     // control. One cell per SITE is enough for the same reason `repeats` is:
     // the process that reached it is suspended there, so it cannot reach it

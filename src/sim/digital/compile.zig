@@ -92,6 +92,11 @@ pub const Instruction = union(enum(u5)) {
     disable_task: u32,
     // §17.5 start an asynchronous PLA's own process at this pc.
     pla_start: u32,
+    // §9.8.2 `fork`: start every arm as a process of its own, then wait for
+    // `join` cell `join` to count them all back; the parent resumes at `end`.
+    fork: struct { arms: []const u32, join: u32, end: u32 },
+    // One `fork` arm finished; the last one resumes the parent at `end`.
+    join_arm: struct { join: u32, end: u32 },
     stop,
 };
 
@@ -558,7 +563,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 }
             }
             const start = position(self);
-            for (b.body) |s| try compileStmt(self, s, depth + 1);
+            if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
             self.scope = outer;
             if (b.name != .none) {
                 const entry = try self.blocks.getOrPut(self.arena, .{ .scope = self.scope, .str = b.name });
@@ -821,6 +826,24 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         },
         else => return self.fail(tok, "this digital statement is not implemented", .{}),
     }
+}
+
+/// IEEE 1364-2005 §9.8.2 a parallel block: each statement is compiled as an
+/// arm ending in `.join_arm`; `.fork` starts them all and suspends the parent
+/// until the last one is back, which resumes it at the end of the block.
+fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u16) Error!void {
+    const join: u32 = @intCast(self.joins.items.len);
+    try self.joins.append(self.arena, 0);
+    const arms = try self.arena.alloc(u32, body.len);
+    const at = try append(self, .{ .fork = .{ .arms = arms, .join = join, .end = 0 } });
+    const ends = try self.arena.alloc(u32, body.len);
+    for (body, arms, ends) |s, *arm, *end| {
+        arm.* = position(self);
+        try compileStmt(self, s, depth + 1);
+        end.* = try append(self, .{ .join_arm = .{ .join = join, .end = 0 } });
+    }
+    self.code.items[at].fork.end = position(self);
+    for (ends) |e| self.code.items[e].join_arm.end = position(self);
 }
 
 // ---- tasks and functions (IEEE 1364-2005 §10) --------------------------------
