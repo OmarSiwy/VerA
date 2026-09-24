@@ -8,7 +8,6 @@
 //! lrm 4.5.14
 //! lrm 4.5.7
 //! checks 5
-//! xfail Dynamic maxdelay in a constant slot is rejected E0515 instead of sampled at analysis start
 //! bias V(n) = 0
 //! wave V(d) = 1, 1, 4, 4, 4
 //! time 0, 1n, 2n, 3n, 4n

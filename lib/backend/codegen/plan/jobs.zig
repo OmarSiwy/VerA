@@ -359,7 +359,10 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
 /// `constant_expression` and is still E0515 when it is a solve result.
 fn dynCtrlArgs(k: OpKind) []const usize {
     return switch (k) {
-        .absdelay => &.{1}, // td  ("dynamic: expr, td"; maxdelay is the constant one)
+        // td ("dynamic: expr, td"), and maxdelay: the constant one, but §4.5.14
+        // samples a dynamic value there "at the start of the analysis", which
+        // `updateState` latches off this field (`absdelayMaxdSampled`).
+        .absdelay => &.{ 1, 2 },
         .idt => &.{ 1, 2 }, // ic, assert
         .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
         .none, .ddt, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},

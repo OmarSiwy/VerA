@@ -2014,16 +2014,17 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
 
 test "codegen: metadata control failure stays fatal with and without diagnostics" {
     // §4.5.14 permits first-use capture of a nonliteral constant argument.
-    // Dynamic maxdelay is currently unsupported, not invalid source. Whatever
-    // that limitation's diagnostic, callers must never receive a success flag
-    // merely because a later unit reset the per-body `fatal` field.
+    // A dynamic transition rise_time is currently unsupported, not invalid
+    // source (absdelay's maxdelay is sampled now). Whatever that limitation's
+    // diagnostic, callers must never receive a success flag merely because a
+    // later unit reset the per-body `fatal` field.
     for ([_]bool{ false, true }) |with_diags| {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator,
             \\module sampled(p, n, c);
             \\  inout p, n, c;
             \\  electrical p, n, c;
-            \\  analog I(p,n) <+ absdelay(V(p,n), 1e-9, V(c));
+            \\  analog I(p,n) <+ transition(V(p,n), 0, V(c));
             \\endmodule
         , &h);
         defer h.deinit();

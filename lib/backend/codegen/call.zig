@@ -488,8 +488,25 @@ pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool
     // and no varying td. Table 4-20 makes maxdelay the constant argument,
     // so it renders over Model where td renders over the core.
     return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{
-        td, try argF64(self, args, 2, "0.0"),
+        td, if (try absdelayMaxdSampled(self, args))
+            try std.fmt.allocPrint(self.arena, "inst.{s}__maxd", .{n})
+        else
+            try argF64(self, args, 2, "0.0"),
     });
+}
+
+/// §4.5.14 "If a dynamic expression is passed as an argument which expects a
+/// constant expression, the value of the dynamic expression at the start of
+/// the analysis defaults to the constant value of the argument. Any further
+/// change in value of that expression is ignored" — and Table 4-20 makes
+/// `maxdelay` such an argument. So a signal-valued one is latched into
+/// `Instance` where the two-argument td is, instead of refused (E0515).
+///
+/// ponytail: `absdelay`'s maxdelay only. Every other constant slot still
+/// answers a solve result with E0515; the same latch is the upgrade path.
+pub fn absdelayMaxdSampled(self: *Gen, args: []const Mir.Value) Error!bool {
+    if (args.len != 3) return false;
+    return ctrlIsDynamic(self, args[2]);
 }
 
 /// §4.5.7 "If maxdelay is not specified, the value of td when the

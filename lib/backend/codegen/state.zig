@@ -51,7 +51,8 @@ fn scanAccept(self: *Gen) Error!Accept {
         if (u.role != .analog_op) continue;
         const k = u.op;
         a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
-        if (k == .absdelay and try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) a.reads_t_prev = true;
+        if (k == .absdelay and (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i)) or
+            try gen_call.absdelayMaxdSampled(self, self.names.opArgs(self.mir, i)))) a.reads_t_prev = true;
         if (!opHasState(k)) continue;
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
@@ -263,6 +264,12 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 if (try gen_call.absdelayFreezes(self, args)) try self.w(
                     "        if (inst.abstime <= state.t_prev) inst.{s}__td = {s};\n",
                     .{ n, try gen_call.ctrlStep(self, args, 1, "0.0") },
+                );
+                // §4.5.14 a dynamic maxdelay: its value at the start of the
+                // analysis, latched at the same first evaluation.
+                if (try gen_call.absdelayMaxdSampled(self, args)) try self.w(
+                    "        if (inst.abstime <= state.t_prev) inst.{s}__maxd = {s};\n",
+                    .{ n, try gen_call.ctrlStep(self, args, 2, "0.0") },
                 );
                 // §9.17.2 the same self-defence the §4.5.12 filter mounts
                 // with its period: ask the host to keep the step at or
