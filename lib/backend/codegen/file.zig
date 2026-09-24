@@ -904,7 +904,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     // Temperature/parameter-only prep, hoisted out of the per-eval path:
     // `precompute` writes these once per model-card/temperature write.
     // LAST, for the same insert-tolerance reason as the held block above.
-    for (0..self.pc_vals.len) |k| {
+    for (0..self.pc.vals.len) |k| {
         try self.w("    pc__{d}: f64 = 0.0, // precompute\n", .{k});
     }
     // §4.5.15 the solve-independent clamp arguments, latched by
@@ -944,7 +944,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     // §4.5.15's clamp-argument latch rides in this same function — it is the
     // same "once per model-card/temperature write" phase — so a model with
     // no `pc__` roots but a hoisted clamp argument still needs the body.
-    const has_pc = self.pc_vals.len != 0;
+    const has_pc = self.pc.vals.len != 0;
     const has_lp = self.lp_vals.len != 0;
     // …and so does the core's hoisted prefix, off the same core call.
     const has_hp = self.hp_vals.len != 0;
@@ -960,8 +960,8 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     const save_idx = self.plan.lo_idx;
     const save_vals = self.plan.lo_vals;
     if (has_pc) {
-        self.plan.lo_idx = self.pc_idx;
-        self.plan.lo_vals = self.pc_vals;
+        self.plan.lo_idx = self.pc.idx;
+        self.plan.lo_vals = self.pc.vals;
         self.plan.pc_on = false; // computing the fields, not reading them
         self.plan.flat = true;
         self.plan.display_unit = false;
@@ -1009,7 +1009,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
                 try self.w(";\n", .{});
             }
         }
-        for (self.pc_vals, 0..) |v, k| {
+        for (self.pc.vals, 0..) |v, k| {
             const i = @intFromEnum(v);
             assert(self.plan.slot[i] != none_u32); // a target is never inlined
             try self.w("    inst.pc__{d} = t{d}.val();\n", .{ k, self.plan.slot[i] });
