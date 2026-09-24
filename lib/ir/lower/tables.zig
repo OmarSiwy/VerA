@@ -166,6 +166,12 @@ params: std.ArrayList(Lower.ParamInfo) = .empty, // §3.4
 /// saying which is the alias.
 aliases: std.ArrayList(Lower.Alias) = .empty,
 contributions: std.ArrayList(Lower.Contribution) = .empty, // §5.6
+/// §5.4.1 the OTHER instances whose `<+` a row accumulated
+/// (`Contribution.shared`): `row` is a `contributions` index, `unit` the
+/// instance. The row's own `unit` is not repeated here. Each of them still
+/// declares its own unnamed branch (§5.4.2), which the VPI's §11.6.6 model
+/// lists — it is only that branch's share of the flow that the sum erased.
+contrib_sharers: std.ArrayList(struct { row: u32, unit: u32 }) = .empty,
 /// §5.6.1.2 every charge site, in source order (`Lower.ChargeSite`).
 charge_sites: std.ArrayList(Lower.ChargeSite) = .empty,
 

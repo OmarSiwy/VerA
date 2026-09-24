@@ -398,6 +398,24 @@ pub const Obj = struct {
     /// `.code` only: §11.6.13/§11.6.14's vpiDefName of a primitive or UDP
     /// definition.
     def_name: []const u8 = "",
+    /// `.node` of the analog model: its `Lowered.nodes` row — the solver
+    /// unknown whose value §12.10 reads for a potential. Null for a node the
+    /// lowering never gave a row (declared, never reached by analog code).
+    row: ?u16 = null,
+    /// `.branch` of the analog model: the §5.6 contribution rows carrying its
+    /// two values, by `Lowered.contributions` index — the potential source
+    /// (whose branch-flow unknown IS the flow) and the flow source (whose
+    /// row's value is). Both null is an open branch, which carries no flow.
+    contrib_pot: ?u32 = null,
+    contrib_flow: ?u32 = null,
+    /// `.branch`: the terminal rows, `Lower.ground` for the reference node.
+    hi_row: u16 = Lower.ground,
+    lo_row: u16 = Lower.ground,
+    /// `.branch`: its flow row absorbed another instance's `<+`
+    /// (`Contribution.shared`), or a named branch whose rows could not be told
+    /// from a sibling's over the same pair — either way its own share of the
+    /// flow is not a number this model holds.
+    flow_unknowable: bool = false,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -903,6 +921,15 @@ fn addAnalog(
         objects.items[net].disc = di;
         try scopes[src.owner.?].nodes.append(gpa, at);
     }
+    // Each node's solver row: the `Lowered.nodes` row spelled by the node's
+    // flattened name (`nodes` rows are named as `nets` are, §6.7 paths).
+    for (lowered.nodes.items(.name), lowered.nodes.items(.kind), 0..) |name, kind, row| {
+        if (kind != .net) continue;
+        const denoted = lowered.hier_names.get(name) orelse name;
+        const net = net_at.get(try joinPath(arena, top_name, denoted)) orelse continue;
+        const node = objects.items[net].node orelse continue;
+        if (objects.items[node].row == null) objects.items[node].row = @intCast(row);
+    }
 
     // --- branches, each with its two quantities.
     for (flat.branches) |b| {
@@ -923,6 +950,8 @@ fn addAnalog(
             .neg = neg,
             .flow = at + 1,
             .pot = at + 2,
+            .hi_row = if (pos) |p| objects.items[p].row orelse Lower.ground else Lower.ground,
+            .lo_row = if (neg) |n| objects.items[n].row orelse Lower.ground else Lower.ground,
         });
         // §11.6.7: a quantity's nature is the one its branch's discipline
         // binds on that side.
@@ -931,7 +960,126 @@ fn addAnalog(
         try objects.append(gpa, .{ .kind = .quantity, .owner = split.scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
         try scopes[split.scope].branches.append(gpa, at);
     }
+
+    // --- the rows behind each branch's values, and the UNNAMED branches.
+    //
+    // §5.4.2: "an unnamed branch ... between two nets" exists wherever an
+    // access function names the pair, so a `<+` in an instance declares one —
+    // and §11.6.6 draws it like any other: `vpi_iterate(vpiBranch, module)`
+    // reaches it and `vpiFlow`/`vpiPotential` reach its quantities. The
+    // flattened design keeps §5.4.1's ONE unnamed branch per pair, so the
+    // INSTANCE a row belongs to is `Contribution.unit`, the one lowering
+    // recorded as it lowered that instance's analog block. A potential and a
+    // flow row of one instance over one pair are one branch.
+    const rows = lowered.contributions.items;
+    var unnamed: std.AutoHashMapUnmanaged(UnnamedKey, u32) = .empty;
+    defer unnamed.deinit(gpa);
+    for (rows, 0..) |c, k| {
+        const idx: u32 = @intCast(k);
+        if (c.br != Lower.unnamed_branch) {
+            // A named branch: the one of this pair its instance declares. Two
+            // named branches over one pair are told apart by an id lowering
+            // keeps to itself, so this model does not guess between them.
+            var found: ?u32 = null;
+            var twice = false;
+            for (objects.items, 0..) |o, i| {
+                if (o.kind != .branch or o.full.len == 0) continue;
+                if (!branchSpans(objects.items, o, c.hi, c.lo)) continue;
+                if (found != null) twice = true;
+                found = @intCast(i);
+            }
+            const b = found orelse continue;
+            bindRow(&objects.items[b], c, idx);
+            objects.items[b].flow_unknowable = objects.items[b].flow_unknowable or twice;
+            continue;
+        }
+        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, c.unit);
+        for (lowered.contrib_sharers.items) |sh| {
+            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, sh.unit);
+        }
+    }
     return .{ .disciplines = disciplines, .natures = natures };
+}
+
+const UnnamedKey = struct { scope: u32, hi: u16, lo: u16 };
+
+/// The §5.4.2 unnamed branch instance `unit` declares over row `idx`'s pair,
+/// made on first sight and bound to the row.
+fn unnamedBranch(
+    gpa: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    scopes: []Building,
+    unnamed: *std.AutoHashMapUnmanaged(UnnamedKey, u32),
+    by_path: *const std.StringHashMapUnmanaged(u32),
+    lowered: *const Lowered,
+    c: Lower.Contribution,
+    idx: u32,
+    unit: u32,
+) Error!void {
+    {
+        const scope: u32 = if (unit < lowered.unit_paths.len)
+            by_path.get(std.mem.trimEnd(u8, lowered.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
+        else
+            0;
+        const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
+        if (!g.found_existing) {
+            const at: u32 = @intCast(objects.items.len);
+            const pos = nodeOfRow(objects.items, c.hi);
+            const neg = nodeOfRow(objects.items, c.lo);
+            const disc = if (pos) |p| objects.items[p].disc else if (neg) |n| objects.items[n].disc else null;
+            try objects.append(gpa, .{
+                .kind = .branch,
+                .owner = scope,
+                // §5.4.2 gives an unnamed branch no name; `vpiName` answers
+                // the empty string, as §11.6.7's unnamed quantity does.
+                .name = "",
+                .full = "",
+                .disc = disc,
+                .pos = pos,
+                .neg = neg,
+                .flow = at + 1,
+                .pot = at + 2,
+                .hi_row = c.hi,
+                .lo_row = c.lo,
+            });
+            const dobj: ?Obj = if (disc) |di| objects.items[di] else null;
+            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.flow else null });
+            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
+            try scopes[scope].branches.append(gpa, at);
+            g.value_ptr.* = at;
+        }
+        bindRow(&objects.items[g.value_ptr.*], c, idx);
+    }
+}
+
+/// Record contribution row `k` as the source of `b`'s potential or flow.
+fn bindRow(b: *Obj, c: Lower.Contribution, k: u32) void {
+    b.hi_row = c.hi;
+    b.lo_row = c.lo;
+    switch (c.access) {
+        .potential => b.contrib_pot = k,
+        .flow => {
+            b.contrib_flow = k;
+            if (c.shared) b.flow_unknowable = true;
+        },
+    }
+}
+
+/// The node object whose solver row is `row`; null for ground (§1.3.1.1 has
+/// no node row for it) and for a row no node object carries.
+fn nodeOfRow(objects: []const Obj, row: u16) ?u32 {
+    if (row == Lower.ground) return null;
+    for (objects, 0..) |o, i| if (o.kind == .node and o.row != null and o.row.? == row) return @intCast(i);
+    return null;
+}
+
+/// Does named branch `o` join rows `hi` and `lo`, in either order? §5.4.2's
+/// reference direction is the declaration's, and contributions are
+/// canonicalised to one spelling of the pair, so both orders are the branch.
+fn branchSpans(objects: []const Obj, o: Obj, hi: u16, lo: u16) bool {
+    const p: u16 = if (o.pos) |n| objects[n].row orelse return false else Lower.ground;
+    const n: u16 = if (o.neg) |m| objects[m].row orelse return false else Lower.ground;
+    return (p == hi and n == lo) or (p == lo and n == hi);
 }
 
 /// The node a branch terminal names: an identifier, read through
@@ -1285,7 +1433,9 @@ fn addAnalogCode(
     defer an.branches.deinit(gpa);
     defer an.flow_access.deinit(gpa);
     for (objects.items, 0..) |o, i| switch (o.kind) {
-        .branch => try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
+        // Keyed by the declared name a statement spells; an unnamed branch
+        // (§5.4.2) has none, and a statement reaches it by its node pair.
+        .branch => if (o.full.len > top_name.len) try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
         .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
         .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
     };
@@ -2611,6 +2761,44 @@ test "§11.6.5–§11.6.7: nodes, a branch between them, and its two quantities"
     try std.testing.expect(vpi_get_str(vpiName, q) == null);
     try std.testing.expect(vpi_handle(vpiPosNode, mid) == null);
     try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+test "§5.4.2/§11.6.6: an instance's `<+` declares an unnamed branch the instance iterates" {
+    var res = try openSource(
+        \\`include "disciplines.vams"
+        \\module vsrc(p, n); inout p, n; electrical p, n;
+        \\  analog V(p, n) <+ 1.25;
+        \\endmodule
+        \\module res(p, n); inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ V(p, n) / 500.0;
+        \\endmodule
+        \\module top; electrical a, gnd; ground gnd;
+        \\  vsrc v1(.p(a), .n(gnd));
+        \\  res r1(.p(a), .n(gnd));
+        \\  res r2(.p(a), .n(gnd));
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+    // One unnamed branch per instance, each in ITS scope, though all three
+    // span the same pair (a, gnd).
+    for ([_][]const u8{ "top.v1", "top.r1", "top.r2" }) |inst| {
+        const it = vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast(inst.ptr), null));
+        try std.testing.expect(it != null);
+        const b = vpi_scan(it).?;
+        try std.testing.expect(vpi_scan(it) == null);
+        const o = asObj(b).?;
+        try std.testing.expect(o.pos != null);
+        try std.testing.expect(o.neg == null); // gnd is §1.3.1.1's reference
+        try std.testing.expectEqual(vpiQuantity, vpi_get(vpiType, vpi_handle(vpiFlow, b)));
+    }
+    const v1 = asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.v1"), null))).?).?;
+    try std.testing.expect(v1.contrib_pot != null and v1.contrib_flow == null);
+    // r1 and r2 are two devices in parallel: lowering sums their `<+` into
+    // one row, so neither one's share of the flow is known — refused, not
+    // reported as the total.
+    const r1 = asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.r1"), null))).?).?;
+    try std.testing.expect(r1.contrib_flow != null and r1.flow_unknowable);
 }
 
 test "§11.6.20/§11.6.21: the analog process, its contribution and an identifier that IS its object" {

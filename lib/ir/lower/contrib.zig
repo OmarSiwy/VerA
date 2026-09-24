@@ -964,7 +964,13 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
         // spelling of the pair's UNNAMED branch shares the one §5.4.1 Example 2
         // allows it.
         if (c.access == t.access and c.hi == t.hi and c.lo == t.lo and c.br == t.br) {
-            if (c.unit != self.cur_unit) self.out.contributions.items[i].shared = true;
+            if (c.unit != self.cur_unit) {
+                self.out.contributions.items[i].shared = true;
+                const row: u32 = @intCast(i);
+                for (self.out.contrib_sharers.items) |sh| {
+                    if (sh.row == row and sh.unit == self.cur_unit) break;
+                } else try self.out.contrib_sharers.append(self.arena, .{ .row = row, .unit = self.cur_unit });
+            }
             return @intCast(i);
         }
     }
