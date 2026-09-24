@@ -412,9 +412,21 @@ pub fn domainOf(d: *const Ast.DisciplineDecl) ?Ast.DisciplineDecl.Domain {
 /// §3.13.1 the declaration a discipline name denotes, or null. Every
 /// discipline lookup in the compiler goes through here, so no two stages can
 /// answer the question differently.
+///
+/// The LAST declaration wins. A name can only be declared twice across files
+/// (E0342 refuses it within one), and the case that matters is the Annex D
+/// prelude VerA prepends to every compilation: Annex D makes those
+/// declarations a file the description includes, so a description that does
+/// not include it and declares its own `electrical` has exactly one
+/// `electrical` by the LRM — its own. The prelude is the prefix of
+/// `file.disciplines`, so the description's declaration is the later one.
+/// `collectDisciplines` builds lowering's `disciplines` table in declaration
+/// order with an overwriting `put`, which is the same answer.
 pub fn declOf(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.DisciplineDecl {
-    for (file.disciplines) |*d| {
-        if (d.name == name) return d;
+    var i = file.disciplines.len;
+    while (i > 0) {
+        i -= 1;
+        if (file.disciplines[i].name == name) return &file.disciplines[i];
     }
     return null;
 }
