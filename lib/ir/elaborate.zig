@@ -70,6 +70,7 @@ const Lower = @import("lower.zig");
 // §8.5 whether a module's discrete half needs the event kernel — the refusal
 // in `Flatten.run` asks it of the flattened module, with lowering's own rule.
 const lower_context = @import("lower/context.zig");
+const discipline = @import("lower/discipline.zig");
 const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
@@ -429,6 +430,12 @@ pub const Flatten = struct {
     /// without also being able to overrule a real declaration.
     port_resolved: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 
+    /// E.3.2's LAST source, deferred: every bound port of an analog primitive,
+    /// whose own `electrical` is only "the default analog primitive" and so
+    /// binds its net after the walk, and only if nothing else did (E.3.2.2 "If
+    /// there are no continuous disciplines defined on the net segment").
+    prim_ports: std.ArrayList(struct { path: []const u8, port: Ast.Port, bound: Ast.StrId }) = .empty,
+
     /// `Design.implicit_nets` / `Design.unconnected_inputs`, collected on the
     /// way through and published unchanged. Both are pure observations — see
     /// their doc comments for why the judging happens a stage later.
@@ -537,6 +544,15 @@ pub const Flatten = struct {
         try stack.append(self.ctx.arena, top.name);
         try self.walkInstances(top, "", &stack, 0);
 
+        // E.3.2.2 "If there are no continuous disciplines defined on the net
+        // segment, then the discipline shall default to electrical" — the
+        // primitive's own declaration, on a net nothing else resolved.
+        for (self.prim_ports.items) |pp| {
+            const d = self.disc_of.get(pp.bound) orelse .none;
+            if (d == .none or !discipline.isContinuous(self.ctx.file, d))
+                try elab_resolve.resolveDiscipline(self, pp.path, pp.port, pp.bound, null);
+        }
+
         // Annex F.2.1 step 4's multi-candidate arm, over the segment sets the
         // walk collected — after the walk because 4.b matches the COMPLETE
         // candidate set of a signal against §7.7.2's resolution statements.
@@ -644,6 +660,27 @@ pub const Flatten = struct {
         // port at a digital segment and appends the bridges, which then inline
         // like any child. Indices past `module.instances.len` are those.
         const insts = try elab_insert.plan(self, module, path);
+
+        // E.3.2's first source, "A port_discipline attribute on the analog
+        // primitive", bound for every primitive of this level BEFORE any is
+        // inlined — so E.3.2.2's scan, which gives an unattributed primitive
+        // "the same discipline" as the others on its segment, finds the
+        // segment resolved whatever order the source wrote the instances in.
+        // ponytail: a primitive reached through a paramset keeps only the
+        // default; `selectParamset` diagnoses, so it is not run twice.
+        for (module.instances) |*inst| {
+            const child = elab_names.findModule(self, inst.module) orelse continue;
+            if (!elab_names.isPrimitive(self, child)) continue;
+            for (child.ports, 0..) |p, i| {
+                const conn = connectionFor(inst, p, i) orelse continue;
+                const n = elab_names.netRefName(self, conn.expr) orelse continue;
+                var q = p;
+                q.discipline = elab_names.portDisciplineAttr(self, module, inst, conn) orelse continue;
+                const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, self.ctx.file.str(inst.name), sep });
+                try elab_resolve.resolveDiscipline(self, child_path, q, self.unit.rename.get(n) orelse n, conn.main_tok);
+            }
+        }
+
         for (insts, 0..) |inst, idx| {
             const auto = idx >= module.instances.len;
             // §3.6.5, the structural half: an actual that names nothing `module`
@@ -775,7 +812,12 @@ pub const Flatten = struct {
                     try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
                     self.ctx.file.str(bound),
                 );
-                try elab_resolve.resolveDiscipline(self, path, p, bound, if (unit.primitive) null else conn.?.main_tok);
+                // E.3.2: a primitive's attribute was bound by `walkInstances`,
+                // and its declared `electrical` is the default, bound last.
+                if (unit.primitive)
+                    try self.prim_ports.append(self.ctx.arena, .{ .path = path, .port = p, .bound = bound })
+                else
+                    try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
             } else {
                 // §6.2.2 "a blank port connection shall represent the situation
                 // where the port is not to be connected", and an omitted named
