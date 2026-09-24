@@ -54,6 +54,22 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try b.emit();
         return poison;
     }
+    // §4.6.1 "The analysis() function takes one or more string arguments", and
+    // A.8.2 puts the quotation marks in the production:
+    // `analysis ( " analysis_identifier " { , " analysis_identifier " } )`.
+    // So each argument is a string LITERAL and there is at least one — a
+    // number or an empty list has no analysis type to match.
+    if (std.mem.eql(u8, name, "analysis")) {
+        const args = ex.args(e);
+        if (args.len == 0) {
+            try self.err(ex.mainTok(e), .E0574, "`analysis()` names no analysis", .{});
+            return poison;
+        }
+        for (args) |a| if (a == .none or ex.tag(a) != .str_literal) {
+            try self.err(if (a != .none) ex.mainTok(a) else ex.mainTok(e), .E0574, "each argument of `analysis()` is a quoted analysis name", .{});
+            return poison;
+        };
+    }
     // §9.19: "The $param_given() function takes a single argument, which must
     // be a parameter identifier", and $port_connected's "must be a port
     // identifier". Elaboration already answered every call whose argument was
