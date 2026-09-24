@@ -21,11 +21,10 @@ remains explicitly limited.
 New `audit_attribute_ignored_on_ordinary_instances.va` tests the required
 ignore-on-ordinary-module/connection boundary behaviorally. The three new
 `audit_primitive_attribute_*_rejected.va` cases separately test numeric,
-undeclared and discrete-domain values on analog primitives; each retains an
-XFAIL for the observed missing validation. Each pins a distinct intended future
+undeclared and discrete-domain values on analog primitives; elaboration refuses
+each with E0358 (`elab_names.checkPortDiscipline`). Each pins a distinct
 diagnostic phrase, not the attribute name alone: echoed source lines can contain
-that name even when an unrelated diagnostic caused rejection. These phrases
-are not claimed to be existing emitted diagnostics.
+that name even when an unrelated diagnostic caused rejection.
 
 Source: `docs/annex-e-spice.html`, read section by section.
 
