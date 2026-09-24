@@ -29,6 +29,7 @@
 //
 //! lrm 7.3.2.1
 //! reject contribution of an infinite value
+//! reject E0424
 module ch7_infinity_contribution(p);
   inout p; electrical p;
   real bad;

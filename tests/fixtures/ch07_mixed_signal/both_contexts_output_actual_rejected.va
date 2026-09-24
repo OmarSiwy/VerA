@@ -14,6 +14,7 @@
 //! lrm 7.2.2
 //! lrm 4.7.2.3
 //! reject assigned in both contexts
+//! reject E0432
 module ch7_both_contexts_output(p);
   inout p; electrical p;
   real sampled, d;
