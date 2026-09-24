@@ -122,6 +122,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         try b.emit();
         return;
     };
+    if (try checkHierParallel(self, lhs, target)) return;
     if (target.access == .flow) try checkMfactorDoubleScaling(self, lhs, rhs);
     const idx = try contribIndex(self, target, self.file.exprs.mainTok(lhs));
 
@@ -502,6 +503,160 @@ pub fn checkProbeBranches(self: *Lower) Oom!void {
             return; // one report per module: the second pair is the same defect
         }
     }
+}
+
+/// §5.6.8.1 one potential `<+` written through hierarchical net references.
+pub const HierPotential = struct { hi: u16, lo: u16, unit: u32, tok: u32 };
+
+/// Does the left-hand side reach another instance's nets by §5.6.8.1's spelling
+/// — a hierarchical NET reference — rather than §5.6.8.2's `inst.branch(...)`?
+fn hierNetForm(self: *const Lower, lhs: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    if (ex.extraOf(lhs) == Ast.branch_ref_hier_unnamed) return false;
+    for ([_]Ast.ExprId{ ex.lhs(lhs), ex.rhs(lhs) }) |t| {
+        if (t != .none and ex.tag(t) == .hier_ident) return true;
+    }
+    return false;
+}
+
+/// §5.6.8.1 "In these cases, a new unnamed branch is created in the module
+/// containing the direct contribution statements. ... The simulator shall
+/// check if the contribution produces a solvable set of equations, e.g. no
+/// voltage source loops created."
+///
+/// A potential `<+` to `V(drv.x)` is therefore a SECOND unnamed branch beside
+/// any potential source the instance `drv` has on the same pair — two
+/// potential sources in parallel, the shortest voltage-source loop there is.
+/// `contribIndex` keys an unnamed branch on its node pair alone, so it would
+/// merge the two into one accumulator and sum them; the loop is found here,
+/// before that merge, in either lowering order (the record list covers the
+/// writer lowering first). True when it reported.
+///
+/// Every such statement is counted, conditional or not: a potential source
+/// that closes the loop on some iterations still leaves those iterations
+/// without a solution.
+fn checkHierParallel(self: *Lower, lhs: Ast.ExprId, target: Target) Oom!bool {
+    if (target.access != .potential or target.br != unnamed_branch) return false;
+    const hier = hierNetForm(self, lhs);
+    const clash: ?u32 = blk: {
+        for (self.hier_potentials.items) |h| {
+            if (h.unit != self.cur_unit and samePair(h.hi, h.lo, target.hi, target.lo)) break :blk h.tok;
+        }
+        if (hier) for (self.out.contributions.items) |c| {
+            if (c.kind != .direct or c.access != .potential or c.br != unnamed_branch) continue;
+            if (c.unit != self.cur_unit and samePair(c.hi, c.lo, target.hi, target.lo)) break :blk c.tok;
+        };
+        break :blk null;
+    };
+    if (hier) try self.hier_potentials.append(self.arena, .{ .hi = target.hi, .lo = target.lo, .unit = self.cur_unit, .tok = self.file.exprs.mainTok(lhs) });
+    const other = clash orelse return false;
+    var d = self.errWith(self.file.exprs.mainTok(lhs), .E0477);
+    d.msg("`V({s},{s})` closes a loop of potential sources with a contribution from another module instance", .{
+        lower_node.nodeName(self, target.hi), lower_node.nodeName(self, target.lo),
+    });
+    d.label(self.tokenSpan(other), "the other potential source on the same two nets", .{});
+    d.note("a hierarchical net reference creates a new branch in the writing module (5.6.8.1), in parallel with this one", .{});
+    try d.emit();
+    return true;
+}
+
+/// §5.6.8.1 "The simulator shall check if the contribution produces a solvable
+/// set of equations, e.g. no voltage source loops created." §5.6.8.2 repeats the
+/// sentence for hierarchical contributions to a child's branches.
+///
+/// A loop of POTENTIAL sources fixes the sum of its branch potentials twice
+/// (KVL) and leaves the branch flows around it undetermined, whatever the
+/// values: the system is singular. The sweep is a union-find over the node
+/// rows, one edge per potential-source row that is a source on EVERY path —
+/// an unconditional direct row (`wrote_val` is the constant 1.0; a switch arm
+/// is not always a potential source, §5.6.5) or an indirect row (always
+/// unconditional, §5.6.7). An edge whose two ends are already joined closes a
+/// loop.
+///
+/// Reported only when the loop's rows come from more than one module instance
+/// (`Contribution.unit`): that is the case these clauses create — a
+/// contribution into another instance's nets, landing in parallel with that
+/// instance's own sources — and the one no single module's author can see.
+/// A loop inside one module is left alone, as it was before this check.
+pub fn checkSourceLoops(self: *Lower) Oom!void {
+    const Edge = struct { a: u32, b: u32, unit: u32 };
+    const n_nodes: u32 = @intCast(self.out.nodes.len + 1); // the last row is ground
+    const Ix = struct {
+        n: u32,
+        fn of(ix: @This(), node: u16) u32 {
+            return if (node == ground) ix.n - 1 else node;
+        }
+    };
+    const ix: Ix = .{ .n = n_nodes };
+    const root = try self.arena.alloc(u32, n_nodes);
+    for (root, 0..) |*r, i| r.* = @intCast(i);
+    var edges: std.ArrayList(Edge) = .empty;
+    for (self.out.contributions.items) |c| {
+        if (c.access != .potential) continue;
+        switch (c.kind) {
+            .direct => if (c.wrote_val != .f_one) continue,
+            .indirect => {},
+        }
+        const a = ix.of(c.hi);
+        const b = ix.of(c.lo);
+        const ra = find(root, a);
+        const rb = find(root, b);
+        if (ra != rb) {
+            root[ra] = rb;
+            try edges.append(self.arena, .{ .a = a, .b = b, .unit = c.unit });
+            continue;
+        }
+        // Closed. The loop is this row plus the forest path from a to b; walk
+        // that path (breadth-first over the accepted edges) and ask whether any
+        // row on it belongs to another instance.
+        const via = try self.arena.alloc(u32, n_nodes); // edge index that reached the node
+        @memset(via, std.math.maxInt(u32));
+        var queue: std.ArrayList(u32) = .empty;
+        try queue.append(self.arena, a);
+        var head: usize = 0;
+        via[a] = @intCast(edges.items.len); // sentinel: the start
+        while (head < queue.items.len and via[b] == std.math.maxInt(u32)) : (head += 1) {
+            const at = queue.items[head];
+            for (edges.items, 0..) |e, k| {
+                const next = if (e.a == at) e.b else if (e.b == at) e.a else continue;
+                if (via[next] != std.math.maxInt(u32)) continue;
+                via[next] = @intCast(k);
+                try queue.append(self.arena, next);
+            }
+        }
+        var other: ?u32 = null;
+        var at = b;
+        while (at != a and via[at] < edges.items.len) {
+            const e = edges.items[via[at]];
+            if (e.unit != c.unit) other = e.unit;
+            at = if (e.a == at) e.b else e.a;
+        }
+        const theirs = other orelse continue;
+        var d = self.errWith(c.tok, .E0477);
+        d.msg("`V({s},{s})` closes a loop of potential sources with a contribution from `{s}`", .{
+            lower_node.nodeName(self, c.hi),
+            lower_node.nodeName(self, c.lo),
+            if (theirs < self.out.unit_paths.len and self.out.unit_paths[theirs].path.len != 0)
+                self.out.unit_paths[theirs].path[0 .. self.out.unit_paths[theirs].path.len - 1] // drop the trailing separator
+            else
+                "the top-level module",
+        });
+        d.note("a loop of potential sources fixes its potentials twice and leaves its flows undetermined", .{});
+        try d.emit();
+        return; // one report: every further loop through this component is the same defect
+    }
+}
+
+fn find(root: []u32, x: u32) u32 {
+    var r = x;
+    while (root[r] != r) r = root[r];
+    var y = x;
+    while (root[y] != r) {
+        const next = root[y];
+        root[y] = r;
+        y = next;
+    }
+    return r;
 }
 
 /// Is anything contributed to this node pair — directly (§5.6.1) or indirectly

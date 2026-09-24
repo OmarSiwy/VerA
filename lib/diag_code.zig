@@ -452,6 +452,9 @@ pub const Code = enum(u16) {
     /// §5.6.8.2 a potential and a flow contribution to one named branch from
     /// two module instances.
     E0439,
+    /// §5.6.8.1/§5.6.8.2 potential sources from two module instances close a
+    /// loop — the equations are not solvable.
+    E0477,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3749,6 +3752,29 @@ fn infoOf(c: Code) Info {
             \\the two analog blocks, so which kind wins is not defined, and the
             \\clause forbids it. Contribute the same access function the owning
             \\module does, or move the decision into that module.
+            ,
+        },
+        .E0477 => .{
+            .title = "contributions from two module instances close a loop of potential sources",
+            .lrm = "5.6.8.1",
+            .explain =
+            \\LRM 5.6.8.1: "The simulator shall check if the contribution produces
+            \\a solvable set of equations, e.g. no voltage source loops created."
+            \\5.6.8.2 says the same of hierarchical contributions to a child's
+            \\branches.
+            \\
+            \\A hierarchical contribution creates a NEW unnamed branch in the
+            \\module that writes it (5.6.8.1), so `V(drv.x) <+ 1.8` in a parent
+            \\sits in parallel with any potential source the instance `drv`
+            \\already has on `x`. Two potential sources around one loop fix the
+            \\loop's potentials twice (Kirchhoff's voltage law) and leave the
+            \\flows around it undetermined, whatever the values, so the system
+            \\has no unique solution.
+            \\
+            \\Only loops that are a potential source on every path are checked: a
+            \\switch branch (5.6.5) that is sometimes a flow source is not a loop.
+            \\Contribute a flow instead, or contribute to the instance's own
+            \\branch (5.6.8.2), which accumulates rather than adding a branch.
             ,
         },
 

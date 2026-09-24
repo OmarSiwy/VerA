@@ -373,6 +373,12 @@ accum: std.ArrayList(Accum) = .empty,
 /// come after the read — so the rule is a sweep over this at the end, not a
 /// test at the read. Reads only: the left of a `<+` is a contribution.
 branch_reads: std.ArrayList(BranchRead) = .empty,
+/// §5.6.8.1 every potential `<+` spelled with hierarchical NET references
+/// (`V(drv.x)`, not §5.6.8.2's `V(drv.branch(x))`): each creates a NEW unnamed
+/// branch in the writing instance, which `contribIndex` nonetheless merges
+/// with the pair's accumulator. Kept so `lower_contrib.checkHierParallel` can
+/// see the second branch the merge hides.
+hier_potentials: std.ArrayList(lower_contrib.HierPotential) = .empty,
 /// Preprocessed source and the lexer's `.start` column, kept ONLY so a token
 /// index can become a `diag.Span`. proof.zig reaches them through
 /// `tokenSpan` too — it holds a `*const Lower` already, so this is the whole
@@ -1593,6 +1599,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         c.react_val = try self.builder.readVariable(acc.react, self.cur);
         c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
     }
+    // §5.6.8.1 needs the final retention flags just read.
+    try lower_contrib.checkSourceLoops(self);
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
     for (self.out.held_vars.items, self.held_places.items) |*h, p| h.final = try self.builder.readVariable(p, self.cur);
