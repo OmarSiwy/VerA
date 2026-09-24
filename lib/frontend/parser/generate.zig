@@ -213,7 +213,9 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // every Body list is either hoisted above, kept under `blk`, or refused.
     // A digital parse keeps the instances on the block, whose scheme the
     // digital engine decides (`src/sim/digital/root.zig`, `generate`).
-    if (self.digital) blk.instances = gb.instances.items else for (gb.instances.items) |inst| try self.report(inst.main_tok, .E0235, "a module instance", .{});
+    // An analog one too: elaboration gates an if-generate's instances by the
+    // scheme and refuses (E0235) the rest (`Flatten.genInstances`).
+    blk.instances = gb.instances.items;
     for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
     for (gb.discrete.items) |d|
         try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});

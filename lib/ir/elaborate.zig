@@ -212,7 +212,9 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // names a parameter "in any module instance throughout the design", so with
     // no instance it names nothing, and E0907 is owed. The flatten is where that
     // is noticed, so the shortcut is declined for it.
-    if (top.instances.len == 0 and top.defparams.len == 0) {
+    var gen: std.ArrayList(Ast.Instance) = .empty;
+    for (top.analog) |blk| try genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
+    if (top.instances.len == 0 and top.defparams.len == 0 and gen.items.len == 0) {
         if (f.had_error) return error.DiagnosticsReported;
         return .{ .top = top };
     }
@@ -232,6 +234,24 @@ pub fn elaborate(ctx: Ctx) Error!Design {
 /// descriptions, `check.vh` fixtures do, and §6.2.1 gives no rule for choosing
 /// between them — so the first one in source order is the answer, exactly as it
 /// was before there were edges to count.
+/// §6.6 every module instance in a generate block under `id`, schemes aside.
+fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
+    if (id == .none) return;
+    switch (file.stmt(id)) {
+        .block => |b| {
+            try out.appendSlice(arena, b.instances);
+            for (b.body) |s| try genInstanceList(file, s, arena, out);
+        },
+        .if_stmt => |s| {
+            try genInstanceList(file, s.then_s, arena, out);
+            try genInstanceList(file, s.else_s, arena, out);
+        },
+        .for_stmt => |s| try genInstanceList(file, s.body, arena, out),
+        .case_stmt => |s| for (s.arms) |a| try genInstanceList(file, a.body, arena, out),
+        else => {}, // else: no other statement holds a generate block
+    }
+}
+
 fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
     const mods = ctx.file.modules;
     // Annex E: a candidate is a module the USER wrote. The shipped Table E.1
@@ -251,7 +271,10 @@ fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
         if (m.is_connect) continue;
         var instantiated = false;
         for (mods) |*other| {
-            for (other.instances) |inst| {
+            var gen: std.ArrayList(Ast.Instance) = .empty;
+            for (other.analog) |blk| try genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
+            for (other.instances) |inst| try gen.append(ctx.arena, inst);
+            for (gen.items) |inst| {
                 if (inst.module == m.name) instantiated = true;
                 // §6.4 an instance that names a PARAMSET is an instance of the
                 // module the paramset specializes, so it is an incoming edge on
@@ -506,7 +529,68 @@ pub const Flatten = struct {
         /// folding is needed to get §9.18's "times the parent's value, and so
         /// on, until the top level is reached" right.
         mfactor: Ast.ExprId = .none,
+        /// §6.6 the conjunction of if-generate schemes that brings this unit
+        /// into existence, in the flat namespace; `.none` when nothing does.
+        /// Every analog block of the unit is lowered under it.
+        gate: Ast.ExprId = .none,
     };
+
+    /// One §6.6 generate-block instance and the scheme it exists under.
+    const Gated = struct { inst: Ast.Instance, gate: Ast.ExprId };
+
+    /// §6.6 a generate block's module instances, each with the scheme that
+    /// brings it into existence, cloned into this unit's flat namespace.
+    /// "At most one generate block instantiated from a set of alternatives":
+    /// an if-generate's arms are gated `c` and `!c`, and `inlineInstance`
+    /// lowers each child's analog blocks under its gate — the same runtime
+    /// diamond `checkGenScheme` gives the analog items of an arm, so a model
+    /// card overriding the scheme's parameter selects the arm it names.
+    /// ponytail: if-generate only. A loop or case generate's instance is
+    /// E0235 (`refuseGen`): the loop needs one renamed instance per
+    /// iteration, the case an equality chain per arm.
+    fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, out: *std.ArrayList(Gated)) Error!void {
+        if (id == .none) return;
+        switch (self.ctx.file.stmt(id)) {
+            .block => |b| {
+                for (b.instances) |inst| try out.append(self.ctx.arena, .{ .inst = inst, .gate = gate });
+                for (b.body) |s| try self.genInstances(s, gate, out);
+            },
+            .if_stmt => |s| if (s.is_generate) {
+                const c = try elab_clone.cloneExpr(self, s.cond);
+                try self.genInstances(s.then_s, try self.conj(gate, c, false), out);
+                try self.genInstances(s.else_s, try self.conj(gate, c, true), out);
+            },
+            .for_stmt => |s| try self.refuseGen(s.body),
+            .case_stmt => |s| for (s.arms) |a| try self.refuseGen(a.body),
+            else => {}, // else: no other statement holds a generate block
+        }
+    }
+
+    fn refuseGen(self: *Flatten, id: Ast.StmtId) Error!void {
+        var all: std.ArrayList(Ast.Instance) = .empty;
+        try genInstanceList(self.ctx.file, id, self.ctx.arena, &all);
+        for (all.items) |inst| try self.err(inst.main_tok, .E0235, "a module instance in a loop or case generate", .{});
+    }
+
+    /// `a && c` (or `a && !c`), `a` = `.none` meaning true.
+    fn conj(self: *Flatten, a: Ast.ExprId, c: Ast.ExprId, negate: bool) Error!Ast.ExprId {
+        const ex = &self.ctx.file.exprs;
+        const tok = ex.mainTok(c);
+        const t = if (!negate) c else try ex.add(self.ctx.arena, .{
+            .tag = .unary,
+            .main_tok = tok,
+            .lhs = c,
+            .extra = @intFromEnum(Ast.UnaryOp.logical_not),
+        });
+        if (a == .none) return t;
+        return ex.add(self.ctx.arena, .{
+            .tag = .binary,
+            .main_tok = tok,
+            .lhs = a,
+            .rhs = t,
+            .extra = @intFromEnum(Ast.BinaryOp.logical_and),
+        });
+    }
 
     pub fn err(self: *Flatten, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
         self.had_error = true;
@@ -681,8 +765,14 @@ pub const Flatten = struct {
             }
         }
 
-        for (insts, 0..) |inst, idx| {
-            const auto = idx >= module.instances.len;
+        var gated: std.ArrayList(Gated) = .empty;
+        for (module.analog) |blk| try self.genInstances(blk.body, .none, &gated);
+        const all = try self.ctx.arena.alloc(Ast.Instance, insts.len + gated.items.len);
+        @memcpy(all[0..insts.len], insts);
+        for (gated.items, all[insts.len..]) |g, *o| o.* = g.inst;
+        for (all, 0..) |inst, idx| {
+            const auto = idx >= module.instances.len and idx < insts.len;
+            const gate: Ast.ExprId = if (idx < insts.len) .none else gated.items[idx - insts.len].gate;
             // §3.6.5, the structural half: an actual that names nothing `module`
             // declared is an implicit net. Collected HERE and not in
             // `inlineInstance`, which is the only other place a connection list
@@ -692,7 +782,7 @@ pub const Flatten = struct {
             //
             // Not an error and not a declaration: see `Design.implicit_nets`.
             // The source's own connections, not `plan`'s segments, which are.
-            if (!auto) for (module.instances[idx].ports) |c| {
+            if (!auto) for ((if (idx < module.instances.len) module.instances[idx] else inst).ports) |c| {
                 const n = elab_names.netRefName(self, c.expr) orelse continue;
                 if (declares(module, n)) continue;
                 try self.implicit_nets.append(self.ctx.arena, .{
@@ -765,7 +855,7 @@ pub const Flatten = struct {
                 else
                     self.ctx.file.str(inst.name);
                 const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, leaf, sep });
-                try self.inlineInstance(&inst, child, ps, child_path, stack, depth);
+                try self.inlineInstance(&inst, child, ps, child_path, stack, depth, gate);
             }
         }
     }
@@ -785,9 +875,14 @@ pub const Flatten = struct {
         path: []const u8,
         stack: *std.ArrayList(Ast.StrId),
         depth: u32,
+        /// §6.6 the scheme of the generate block `inst` sits in (`genInstances`).
+        gate: Ast.ExprId,
     ) Error!void {
         const parent = self.unit; // restored below; the rename map is a stack
-        var unit: Unit = .{ .primitive = elab_names.isPrimitive(self, child) };
+        var unit: Unit = .{
+            .primitive = elab_names.isPrimitive(self, child),
+            .gate = if (gate == .none) parent.gate else try self.conj(parent.gate, gate, false),
+        };
 
         // ---- §6.2.2 port connections ---------------------------------------
         // Resolved in the PARENT's namespace, which means through the parent's
@@ -869,6 +964,9 @@ pub const Flatten = struct {
         for (child.events) |e| try elab_names.bind(self, &unit, path, e);
         for (child.functions) |fd| try elab_names.bind(self, &unit, path, fd.name);
         for (child.instances) |sub| try elab_names.bind(self, &unit, path, sub.name);
+        var subs: std.ArrayList(Ast.Instance) = .empty;
+        for (child.analog) |blk| try genInstanceList(self.ctx.file, blk.body, self.ctx.arena, &subs);
+        for (subs.items) |sub| try elab_names.bind(self, &unit, path, sub.name);
 
         self.unit = unit;
 
@@ -918,12 +1016,26 @@ pub const Flatten = struct {
             .path = path,
             .decl = child,
         });
-        for (child.analog) |blk| try self.analog.append(self.ctx.arena, .{
-            .is_initial = blk.is_initial,
-            .body = try elab_clone.cloneStmt(self, blk.body),
-            .main_tok = blk.main_tok,
-            .unit = unit_id,
-        });
+        for (child.analog) |blk| {
+            var body = try elab_clone.cloneStmt(self, blk.body);
+            // §6.6 an instance a generate scheme brings into existence behaves
+            // only while the scheme holds.
+            if (unit.gate != .none) body = try self.ctx.file.addStmt(self.ctx.arena, .{ .if_stmt = .{
+                .cond = unit.gate,
+                .then_s = body,
+                .else_s = .none,
+                .is_generate = false,
+            } }, blk.main_tok);
+            try self.analog.append(self.ctx.arena, .{
+                .is_initial = blk.is_initial,
+                .body = body,
+                .main_tok = blk.main_tok,
+                .unit = unit_id,
+            });
+        }
+        // ponytail: a gated child's discrete half has no scheme to run under.
+        if (unit.gate != .none and child.discrete.len + child.assigns.len + child.gates.len + child.pulls.len != 0)
+            try self.err(inst.main_tok, .E0235, "a module instance with discrete behavior", .{});
         for (child.discrete) |blk| try self.discrete.append(self.ctx.arena, .{
             .is_always = blk.is_always,
             .body = try elab_clone.cloneStmt(self, blk.body),
@@ -1345,6 +1457,32 @@ test "a module instantiating itself is E0905, not a stack overflow" {
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
     try std.testing.expectEqual(diag.Code.E0905, f.bag.at(0).code);
+}
+
+test "§6.6 an if-generate's instances are elaborated under their arm's scheme; a loop generate's are E0235" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module top(p); inout p; electrical p; parameter integer sel = 0;
+        \\  generate if (sel) begin leaf a(p); end else begin leaf b(p); end endgenerate
+        \\endmodule
+        \\module leaf(q); inout q; electrical q; analog I(q) <+ V(q); endmodule
+    );
+    const d = try elaborate(f.ctx());
+    // Both leaves, then the top's own block; each leaf's body under its gate.
+    try std.testing.expectEqual(@as(usize, 3), d.top.analog.len);
+    for (d.top.analog[0..2]) |blk| try std.testing.expect(f.file.stmt(blk.body) == .if_stmt);
+
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try parse(&g,
+        \\module top(p); inout p; electrical p; genvar i;
+        \\  generate for (i = 0; i < 2; i = i + 1) begin leaf a(p); end endgenerate
+        \\endmodule
+        \\module leaf(q); inout q; electrical q; analog I(q) <+ V(q); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
+    try std.testing.expectEqual(diag.Code.E0235, g.bag.at(0).code);
 }
 
 test "§6.3.6 a scaled instance's flow contribution is multiplied, its flow probe divided" {

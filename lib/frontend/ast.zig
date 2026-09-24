@@ -1343,8 +1343,9 @@ pub const SeqBlock = struct {
     vars: []const VarDecl = &.{},
     body: []const StmtId = &.{},
     /// A generate block's module instances (§6.6: the block "brings ...
-    /// module instances within the block into existence"). Only a digital
-    /// parse keeps them here; an analog one refuses them (E0235).
+    /// module instances within the block into existence"). The digital engine
+    /// decides a digital parse's scheme; elaboration gates an analog
+    /// if-generate's (`Flatten.genInstances`).
     instances: []const Instance = &.{},
 };
 
