@@ -502,6 +502,10 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
         break;
     };
+    // VAMS §6.3 the card's root parameters, for the digital half to read the
+    // same values the `Model` below is given (`sim.digital.Mixed.params`).
+    try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
+    for (d.params) |p| try print(&out, arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
     try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
 
     // --- main ---------------------------------------------------------------
