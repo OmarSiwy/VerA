@@ -35,6 +35,18 @@ const toReal = Lower.toReal;
 const toInt = Lower.toInt;
 const coerceTo = Lower.coerceTo;
 
+/// This file's private state on `Lower` (`Lower.stmt_state`).
+pub const State = struct {
+    /// A.6.5 `disable` targets — the enclosing named blocks, innermost last.
+    named_blocks: std.ArrayList(NamedBlockCtx) = .empty,
+};
+
+/// A.6.5 `disable hierarchical_block_identifier` target: §5.3's "the control
+/// shall pass out of the block", i.e. that block's own exit. One entry per
+/// ENCLOSING named block, so an inner and an outer block of the same nesting
+/// are two different targets chosen by the name and by nothing else.
+const NamedBlockCtx = struct { name: []const u8, exit: Mir.Block };
+
 // ---------------------------------------------------------------------------
 // Class 4 — statements (LRM §5)
 // ---------------------------------------------------------------------------
@@ -115,10 +127,10 @@ pub fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
     // name that reaches no enclosing block label has no derivation. Searched
     // INNERMOST-first: §6.7 makes a block label a scope name, and the nearest
     // one is the one in scope.
-    var i = self.named_blocks.items.len;
+    var i = self.stmt_state.named_blocks.items.len;
     while (i > 0) {
         i -= 1;
-        const nb = self.named_blocks.items[i];
+        const nb = self.stmt_state.named_blocks.items[i];
         if (!std.mem.eql(u8, nb.name, name)) continue;
         // §5.3: "the control shall pass out of the block after the last
         // statement is executed" — a disable passes out of it EARLY, which is
@@ -154,13 +166,13 @@ pub fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     // being disabled — so the join is the same one either way.
     const exit: ?Mir.Block = if (b.name == .none) null else blk: {
         const e = try self.mir.addBlock(self.arena);
-        try self.named_blocks.append(self.arena, .{ .name = self.file.str(b.name), .exit = e });
+        try self.stmt_state.named_blocks.append(self.arena, .{ .name = self.file.str(b.name), .exit = e });
         break :blk e;
     };
     // ponytail: the only statement-list caller keeps its source-order loop here.
     for (b.body) |s| try lowerStmt(self, s);
     if (exit) |e| {
-        _ = self.named_blocks.pop();
+        _ = self.stmt_state.named_blocks.pop();
         try self.gotoBlock(e);
         try self.builder.sealBlock(e);
         self.cur = e;

@@ -337,10 +337,6 @@ params: std.ArrayList(ParamInfo) = .empty, // §3.4
 /// Deduped `param_ref` Value per params[i] — parallel to `params`.
 param_values: std.ArrayList(Mir.Value) = .empty,
 branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branches
-/// Last `BranchInfo.id` handed out. Starts at `unnamed_branch`, so the first
-/// declared branch is 1 and no named branch can ever be mistaken for §5.4.1
-/// Example 2's single implicit branch of a node pair.
-last_branch_id: u32 = unnamed_branch,
 /// §3.12.1 port branches: branch name → the port's `node_order` slot. A table
 /// of its own and not a flag on `BranchInfo`, because a port branch is not a
 /// node pair at all — it is the §5.4.3 port flow under a second name, and
@@ -382,14 +378,6 @@ node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
 /// stopped `I(a)` and `I(a,gnd)` sharing an unknown when a plain net is spelled
 /// `gnd` — see `flowUnknown`. Bounded by the branch count of one module.
 flow_unknowns: std.AutoHashMapUnmanaged(FlowKey, u16) = .empty,
-/// Every spelling handed to `node_order`, so `appendNode` can keep them unique.
-/// This is NOT an identity table — two different unknowns may want one spelling
-/// (`uniqueSpelling` names both ways that happens); it exists because the
-/// emitted `U` enum has one member per slot and two members cannot share a name.
-/// Heap, and one entry per `node_order` slot: the only bound on that count is
-/// the source, since |U| ≤ 256 is enforced by `codegen.emitTopology` AFTER
-/// lowering has built the table.
-spellings: std.StringHashMapUnmanaged(void) = .empty,
 disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 /// §3.6.3 declared vector nets and §3.12 vector branches, by base name.
 ///
@@ -403,8 +391,13 @@ disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 vectors: std.StringHashMapUnmanaged(VecRange) = .empty,
 
 // ---- internal lowering state (not part of the codegen contract) ----
-/// Deduped probe Value per node_order slot; `.undef` = not probed yet.
-probe_cache: std.ArrayList(Mir.Value) = .empty,
+/// Sub-file-private state: each is read and written by that one file only.
+node_state: lower_node.State = .{},
+event_state: lower_event.State = .{},
+param_state: lower_param.State = .{},
+stmt_state: lower_stmt.State = .{},
+table_model_state: lower_table_model.State = .{},
+hier_name_state: lower_hier_name.State = .{},
 /// Accumulator places, parallel to `contributions`.
 accum: std.ArrayList(Accum) = .empty,
 /// §1.3.1/§5.4.2.1 every access function READ, in source order. A branch is a
@@ -506,8 +499,6 @@ noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
 noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
-/// A.6.5 `disable` targets — the enclosing named blocks, innermost last.
-named_blocks: std.ArrayList(NamedBlockCtx) = .empty,
 /// §5.3.2 "All identifiers declared within a named sequential block can be
 /// accessed outside the scope in which they are declared." The qualified
 /// `<label>.<local>` spellings `publishBlockLocals` bound, which is what tells
@@ -529,18 +520,6 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
-/// §9.20 the analog_net_reference of every alias call so far → the unknown that
-/// net was DECLARED with, before any alias moved it.
-///
-/// Two rules need this and neither can be answered from `node_voltages` once an
-/// alias has been applied. The relation between two calls — "It shall be an
-/// error for the hierarchical_reference_string to reference a node that is used
-/// as an analog_net_reference in ANOTHER ... call" — is the key set. And the
-/// clause's ban on a PORT as the analog_net_reference is about the net's own
-/// declaration: once `n1` has been aliased onto a port, `node_voltages` says it
-/// IS one, and the SECOND call of the last-writer rule would be refused for
-/// something the source never wrote.
-alias_home: std.StringHashMapUnmanaged(u16) = .empty,
 /// §9.5.3/§9.5.4.2 — does the module call `$sformat`/`$swrite`/`$sscanf`? Set at
 /// the call, read by codegen to decide whether `str_kernels.zig` is emitted. A
 /// flag rather than a site list because the SITE that needs a name (the format
@@ -559,8 +538,6 @@ uses_file_tasks: bool = false,
 uses_table_model: bool = false,
 /// First-call sample counts, one entry per array-source call site.
 table_samples: std.ArrayList(u32) = .empty,
-/// Source identity survives repeated analog-function inlining.
-table_sources: std.ArrayList(Ast.ExprId) = .empty,
 /// Guard-aware source-order chain for table captures and distribution checks;
 /// its final value is a core live-out.
 table_effect_place: ?Ssa.Place = null,
@@ -652,15 +629,6 @@ display_root: Mir.Value = .f_zero,
 /// The print itself stays where lowering put it: codegen emits the block's
 /// instructions inside the emitted `if`, so it runs exactly when the arm does.
 display_cond_place: ?Ssa.Place = null,
-/// §9.4.1 display statements whose CALL is created at the end of the analog
-/// block (`finishDisplays`), in source order — see `queueDisplay` for the
-/// clause reading. Parallel-ish to `displays`: each entry names the
-/// placeholder `displays` row whose `.val` it fills.
-deferred_displays: std.ArrayList(DeferredDisplay) = .empty,
-/// §9.4.1 `$monitor`/`$fmonitor` statements lowered so far. Each one's ordinal
-/// is the key its registration (`$monitor$arm`) and its end-of-step report
-/// share — see `lower_event.armMonitor`.
-monitor_sites: u32 = 0,
 /// §6.6.1/§5.9.3 genvars currently bound in `consts` — a stack, pushed and
 /// popped by `tryUnrollFor`. Exists so `queueDisplay` can SNAPSHOT the
 /// bindings a deferred operand in an unrolled body was written under;
@@ -674,19 +642,6 @@ active_genvars: std.ArrayList([]const u8) = .empty,
 /// declaration at the top of every evaluation. Each entry gets a persistent
 /// `Instance` slot instead; codegen reads it directly.
 held_vars: std.ArrayList(HeldVar) = .empty,
-/// Variables `markHeldVars` found assigned under an `@(...)`, collected BEFORE
-/// the module's variables are declared. Empty for a module with no event
-/// control.
-///
-/// Keyed on §5.3.2's "unique location", i.e. the pair (scope, name) spelled as
-/// a dotted path: a module variable is its bare name, a named block's local is
-/// `<label>.<name>` (`<outer>.<inner>.<name>` when nested). A bare name would
-/// make `lo.n`, `hi.n` and the module's own `n` one slot.
-held_names: std.StringHashMapUnmanaged(void) = .empty,
-/// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
-/// nearest declaration of it — a module variable assigned from inside a block
-/// still keys bare, because the block does not declare it.
-held_frames: std.ArrayList(HeldFrame) = .empty,
 /// §5.3.2 the dotted prefix of the named block being lowered ("" at module
 /// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
 /// key; see `declareVarDecl`.
@@ -796,43 +751,12 @@ pub const Display = struct {
     tok: u32,
     /// The call sits under an `if` or a loop, so it reaches the display root
     /// through `display_cond_place` rather than by direct `fadd` (the value
-    /// does not dominate the root). Emitted either way; kept because codegen
-    /// and the driver's W0850 still want to know which prints are guarded.
+    /// does not dominate the root). `finishDisplays` is the one reader: it
+    /// leaves these out of the unconditional chain.
     conditional: bool,
 };
 
-/// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
-/// every unconditional display-family statement takes this route (see
-/// `queueDisplay`). Holds what the statement position knew and the end of the
-/// block will not: the at-statement operand values and the genvar bindings.
-const DeferredDisplay = struct {
-    name: []const u8,
-    tok: u32,
-    /// The original argument list, `.none` slots included (A.6.9).
-    args: []const Ast.ExprId,
-    /// Parallel to `args`. Non-null = the operand's value, captured AT THE
-    /// STATEMENT (§5.6.1.2 sequential semantics for everything that is not
-    /// converged simulation data — a variable printed then reassigned shows
-    /// its at-statement value). Null = the operand reads a branch flow and is
-    /// lowered at the end of the block instead, against the converged
-    /// retention state (§9.4.1/§5.4.2.2).
-    pre: []const ?TypedValue,
-    /// §5.9.3 genvar bindings live at the statement, re-established around the
-    /// end-of-block lowering so `I(pair[k])` in an unrolled body still folds.
-    genvars: []const GenvarBind,
-    /// `Ast.AnalogBlock.unit` of the block this statement was written in.
-    /// Re-established around the end-of-block lowering for the same reason
-    /// `genvars` is: `flowAccum` keys on it (§5.6.8.1's per-instance branch),
-    /// and by `finishDisplays` time `cur_unit` is whatever block lowered last.
-    unit: u32,
-    /// Index of the placeholder row in `displays` whose `.val` this fills.
-    display: u32,
-    /// §9.4.1 a `$monitor`/`$fmonitor` report: the site key, prepended to the
-    /// call's operands. Every operand of one is lowered at the end of the block.
-    monitor: ?Mir.Value = null,
-};
 
-pub const GenvarBind = struct { name: []const u8, c: Const };
 
 pub const VarSlot = struct { place: Ssa.Place, ty: Ty };
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
@@ -843,15 +767,6 @@ pub const ArrayInfo = struct {
     ty: Ty,
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
-/// A.6.5 `disable hierarchical_block_identifier` target: §5.3's "the control
-/// shall pass out of the block", i.e. that block's own exit. One entry per
-/// ENCLOSING named block, so an inner and an outer block of the same nesting
-/// are two different targets chosen by the name and by nothing else.
-const NamedBlockCtx = struct { name: []const u8, exit: Mir.Block };
-/// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
-/// its locals are keyed under, and the declarations that say which names those
-/// are.
-const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// `wrote` is §5.6.1.3's retention FLAG beside the value: 0.0 in the entry
 /// block, 1.0 after every `<+` on this (access, branch), back to 0.0 when the
