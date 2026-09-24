@@ -265,19 +265,19 @@ test "lower: contribution splits into resistive and reactive parts" {
     _ = try h.low.lowerFile();
 
     // §6.5 ports first, in header order — this is the host's terminal order.
-    try std.testing.expectEqual(@as(usize, 2), h.low.num_ports);
-    try std.testing.expectEqualStrings("p", h.low.node_order.items[0]);
-    try std.testing.expectEqualStrings("n", h.low.node_order.items[1]);
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.num_ports);
+    try std.testing.expectEqualStrings("p", h.low.out.node_order.items[0]);
+    try std.testing.expectEqualStrings("n", h.low.out.node_order.items[1]);
 
     // §3.4.2 the value range MUST survive to proof.zig.
-    try std.testing.expectEqual(@as(usize, 2), h.low.params.items.len);
-    try std.testing.expectEqualStrings("r", h.low.params.items[0].name);
-    try std.testing.expectEqual(@as(usize, 1), h.low.params.items[0].ranges.len);
-    try std.testing.expectEqual(Ast.ValueRange.Kind.from, h.low.params.items[0].ranges[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.params.items.len);
+    try std.testing.expectEqualStrings("r", h.low.out.params.items[0].name);
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.params.items[0].ranges.len);
+    try std.testing.expectEqual(Ast.ValueRange.Kind.from, h.low.out.params.items[0].ranges[0].kind);
 
     // §5.6.1.3 both `<+` statements accumulate into ONE target…
-    try std.testing.expectEqual(@as(usize, 1), h.low.contributions.items.len);
-    const c = h.low.contributions.items[0];
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
+    const c = h.low.out.contributions.items[0];
     try std.testing.expectEqual(Access.flow, c.access);
     try std.testing.expectEqual(@as(u16, 0), c.hi);
     try std.testing.expectEqual(@as(u16, 1), c.lo);
@@ -311,8 +311,8 @@ test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement"
 
     // §5.6.7.1 several indirect contributions are legal, and each is its own
     // equation — NEVER accumulated the way §5.6.1.3 accumulates `<+`.
-    try std.testing.expectEqual(@as(usize, 2), h.low.contributions.items.len);
-    for (h.low.contributions.items) |c| {
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.contributions.items.len);
+    for (h.low.out.contributions.items) |c| {
         try std.testing.expectEqual(Kind.indirect, c.kind);
         try std.testing.expectEqual(Access.potential, c.access);
         try std.testing.expectEqual(@as(u16, 0), c.hi); // out
@@ -322,7 +322,7 @@ test "lower: §5.6.7 indirect contribution is a nullor entry, one per statement"
     // Row ORIENTATION: probe − equation, so the top-level op is `fsub` whose
     // LHS is the probe slice. Reversed, the residual is negated and an
     // asymmetric equation converges to the wrong point.
-    const row = h.mir.resolveAlias(h.low.contributions.items[0].resist_val);
+    const row = h.mir.resolveAlias(h.low.out.contributions.items[0].resist_val);
     const inst = h.mir.valueDef(row).inst_result;
     try std.testing.expectEqual(Mir.Opcode.fsub, h.mir.instOp(inst));
     const lhs = h.mir.resolveAlias(h.mir.instData(inst).binary.lhs);
@@ -395,8 +395,8 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
     , &ok);
     defer ok.deinit();
     _ = try ok.low.lowerFile();
-    try std.testing.expectEqual(@as(usize, 1), ok.low.contributions.items.len);
-    try std.testing.expectEqual(Kind.indirect, ok.low.contributions.items[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), ok.low.out.contributions.items.len);
+    try std.testing.expectEqual(Kind.indirect, ok.low.out.contributions.items[0].kind);
 }
 
 test "lower: a ddt that is not a linear factor is a diagnostic, not wrong physics" {
@@ -430,7 +430,7 @@ test "lower: genvar loops unroll, procedural loops do not" {
     _ = try h.low.lowerFile();
     // §6.6.1: three unrolled bodies accumulate into one target, and the loop
     // left no CFG behind (entry only).
-    try std.testing.expectEqual(@as(usize, 1), h.low.contributions.items.len);
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
     try std.testing.expectEqual(@as(u32, 1), h.mir.blockCount());
 }
 
@@ -484,22 +484,22 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     defer h.deinit();
     _ = try h.low.lowerFile();
 
-    try std.testing.expectEqual(@as(usize, 2), h.low.num_ports);
-    try std.testing.expectEqual(@as(usize, 2), h.low.port_probes.items.len);
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.num_ports);
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.port_probes.items.len);
     // Deduped by port, in first-probe order, and never inside `num_ports`.
-    try std.testing.expectEqual(@as(u16, 0), h.low.port_probes.items[0].port);
-    try std.testing.expectEqual(@as(u16, 1), h.low.port_probes.items[1].port);
-    for (h.low.port_probes.items) |pp| {
-        try std.testing.expect(pp.u >= h.low.num_ports);
+    try std.testing.expectEqual(@as(u16, 0), h.low.out.port_probes.items[0].port);
+    try std.testing.expectEqual(@as(u16, 1), h.low.out.port_probes.items[1].port);
+    for (h.low.out.port_probes.items) |pp| {
+        try std.testing.expect(pp.u >= h.low.out.num_ports);
         // The KIND tag, which is what codegen's `isFlowUnknown` now reads. This
         // used to assert the `"flow(<"` prefix, i.e. the spelling — and §2.8.1
         // makes that predicate false for a net someone declared `\flow(<p>)`.
         // The spelling still reaches the host as `flowZ28Z3cpZ3eZ29` and is
         // pinned there, in codegen.zig's "the `U` block is the SPELLING
         // contract" test; the two claims no longer ride on one string.
-        try std.testing.expectEqual(pp.port, h.low.node_kind.items[pp.u].port_flow);
+        try std.testing.expectEqual(pp.port, h.low.out.node_kind.items[pp.u].port_flow);
     }
-    try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.port_probes.items[0].u));
+    try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.out.port_probes.items[0].u));
 }
 
 test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.2 reads it" {
@@ -525,8 +525,8 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     // value. `emitResidual` skips a contribution whose value folds to `.f_zero`,
     // so the discarded flow source of 2.0 emits no row at all, which is what
     // "the flow being discarded" has to mean in the device.
-    try std.testing.expectEqual(@as(usize, 2), h.low.contributions.items.len);
-    for (h.low.contributions.items) |c| {
+    try std.testing.expectEqual(@as(usize, 2), h.low.out.contributions.items.len);
+    for (h.low.out.contributions.items) |c| {
         switch (c.access) {
             .flow => try std.testing.expectEqual(Mir.Value.f_zero, c.resist_val),
             .potential => try std.testing.expect(c.resist_val != .f_zero),
@@ -562,7 +562,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         defer g.deinit();
         _ = try g.low.lowerFile();
         // `p` and `n` are node_order 0 and 1, so the branch is that pair.
-        try std.testing.expectEqual(c.unknown, g.low.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
+        try std.testing.expectEqual(c.unknown, g.low.out.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
     }
 }
 
@@ -662,7 +662,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
     defer h.deinit();
     _ = try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
-    try std.testing.expectEqual(Mir.Value.one, h.low.reject_iteration);
+    try std.testing.expectEqual(Mir.Value.one, h.low.out.reject_iteration);
     // Iteration rejection must not become a timestep discontinuity.
     try std.testing.expect(h.low.disc_place == null);
     try std.testing.expect(h.low.bound_step_place == null);

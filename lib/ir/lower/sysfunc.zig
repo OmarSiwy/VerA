@@ -129,17 +129,17 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // one flattened module and answered them with the TOP's name and "" — right
     // only for a call that happens to sit in the top module. `cur_unit` is the
     // instance that wrote this block, which is exactly what the clause asks for.
-    if (std.mem.eql(u8, name, "$simparam$str") and self.cur_unit < self.unit_paths.len) {
+    if (std.mem.eql(u8, name, "$simparam$str") and self.cur_unit < self.out.unit_paths.len) {
         const a = ex.args(e);
         if (a.len >= 1) if (constStrArg(self, a[0])) |nm| {
-            const u = self.unit_paths[self.cur_unit];
+            const u = self.out.unit_paths[self.cur_unit];
             if (std.mem.eql(u8, nm, "module"))
                 return .{ .v = try self.mir.addStrConst(self.arena, u.module), .ty = .string };
             // §9.15's worked example produces "testbench.dut1": a top-level
             // module's instance name is its module name, and the path is joined
             // to it by §6.7's period. `path` already carries the separator.
             if (std.mem.eql(u8, nm, "instance")) {
-                const top = if (self.unit_paths.len != 0) self.unit_paths[0].module else u.module;
+                const top = if (self.out.unit_paths.len != 0) self.out.unit_paths[0].module else u.module;
                 const full = if (u.path.len == 0)
                     top
                 else
@@ -166,8 +166,8 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // `updateState`/`stateCtl` pair, so it is emitted only for a model that
         // reads one of the two names that need it (`simparamIsRuntime`).
         if (args.len >= 1) if (constStrArg(self, args[0])) |s| {
-            if (simparamIsRuntime(s)) self.uses_newton_iter = true;
-            if (simparamHostField(s) != null) self.uses_host_simparam = true;
+            if (simparamIsRuntime(s)) self.out.uses_newton_iter = true;
+            if (simparamHostField(s) != null) self.out.uses_host_simparam = true;
         };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};

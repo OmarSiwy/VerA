@@ -123,7 +123,7 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // recording a branch READ instead would make the pair a flow-probe
             // branch — a 0 V short §4.5.6 gives a derivative operator no
             // license to add to the topology. Absent unknown = the plain 0.
-            .flow => self.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
+            .flow => self.out.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
                 return .{ .v = .f_zero, .ty = .real },
         };
         const d = try self.call("ddx", &.{ f, try self.mir.addIntConst(self.arena, u) });
@@ -311,11 +311,11 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
     const net = self.file.str(parts[0]);
     const idx = self.node_voltages.get(net) orelse return null;
     if (idx == ground) return null;
-    const dname = self.node_disciplines.items[idx];
+    const dname = self.out.node_disciplines.items[idx];
     const attr = self.file.str(parts[2]);
 
     if (std.mem.eql(u8, attr, "abstol")) {
-        const info = self.disciplines.get(dname) orelse return null;
+        const info = self.out.disciplines.get(dname) orelse return null;
         return .{ .value = .{ .real = if (is_potential) info.potential_abstol else info.flow_abstol } };
     }
     // ponytail: reuse compatibility's first-declaration lookup.

@@ -78,11 +78,11 @@ pub fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool 
                 break :blk if (p.ty == .integer) true else if (p.ty == .unspecified) integerSourceSigned(self, p.default, depth + 1) else null;
             }
             const pi = self.param_index.get(name) orelse break :blk null;
-            const p = self.params.items[pi];
+            const p = self.out.params.items[pi];
             if (p.ty != .integer) break :blk null;
             if (p.integer32) break :blk true;
             if (!p.is_local) break :blk null; // host overrides carry no signedness
-            const module = self.module orelse break :blk null;
+            const module = self.out.module orelse break :blk null;
             for (module.params) |decl| {
                 if (std.mem.eql(u8, self.file.str(decl.name), p.name))
                     break :blk integerSourceSigned(self, decl.default, depth + 1);

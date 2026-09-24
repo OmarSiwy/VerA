@@ -104,10 +104,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // to an `output` is the whole point of a signal-flow port, and an `inout`
     // signal-flow port never gets this far: E0360 refuses the declaration.
     for ([_]u16{ target.hi, target.lo }) |n| {
-        if (n >= self.node_dir.items.len or self.node_dir.items[n] != .input) continue;
-        if (!lower_node.isSignalFlow(self, self.node_disciplines.items[n])) continue;
+        if (n >= self.out.node_dir.items.len or self.out.node_dir.items[n] != .input) continue;
+        if (!lower_node.isSignalFlow(self, self.out.node_disciplines.items[n])) continue;
         var b = self.errWith(self.file.exprs.mainTok(lhs), .E0425);
-        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.node_order.items[n], self.node_disciplines.items[n] });
+        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.out.node_order.items[n], self.out.node_disciplines.items[n] });
         try b.emit();
         return;
     }
@@ -151,7 +151,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // the identity dedup in `addNoiseSrc` keeps as one generator.
     {
         var srcs: std.ArrayList(NoiseSrc) = .empty;
-        try srcs.appendSlice(self.arena, self.contributions.items[idx].noise_srcs);
+        try srcs.appendSlice(self.arena, self.out.contributions.items[idx].noise_srcs);
         try noiseSrcsOf(self, rhs, &srcs);
         // §4.6.4.6 the per-use coefficient. It ADDS across statements, because
         // two `<+` lines on one branch sum into one source: `V(a,b) <+ c1*n`
@@ -185,7 +185,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
                 }
             }
         }
-        self.contributions.items[idx].noise_srcs = srcs.items;
+        self.out.contributions.items[idx].noise_srcs = srcs.items;
     }
 }
 
@@ -440,7 +440,7 @@ pub fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprI
     // §5.6.7.2 incompatible with a direct contribution across the same pair of
     // analog nets — checked on the accumulator ENTRY, since `<+` statements are
     // deduped across statements and across if-arms.
-    for (self.contributions.items) |c| {
+    for (self.out.contributions.items) |c| {
         if (c.kind != .direct) continue;
         if (!samePair(c.hi, c.lo, target.hi, target.lo)) continue;
         var b = self.errWith(self.file.exprs.mainTok(lhs), .E0415);
@@ -493,7 +493,7 @@ pub fn checkProbeBranches(self: *Lower) Oom!void {
 /// Is anything contributed to this node pair — directly (§5.6.1) or indirectly
 /// (§5.6.7)? That is exactly §1.3.1's test for "not a probe".
 pub fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
-    for (self.contributions.items) |c| {
+    for (self.out.contributions.items) |c| {
         if (samePair(c.hi, c.lo, hi, lo)) return true;
     }
     return false;
@@ -507,7 +507,7 @@ pub fn samePair(a_hi: u16, a_lo: u16, b_hi: u16, b_lo: u16) bool {
 }
 
 pub fn indirectOn(self: *const Lower, hi: u16, lo: u16) bool {
-    for (self.contributions.items) |c| {
+    for (self.out.contributions.items) |c| {
         if (c.kind == .indirect and samePair(c.hi, c.lo, hi, lo)) return true;
     }
     return false;
@@ -728,7 +728,7 @@ pub const generic_flow = "flow";
 /// spelling to suggest, which is a note, not a rule.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
     if (node == ground) return;
-    const dname = self.node_disciplines.items[node];
+    const dname = self.out.node_disciplines.items[node];
     if (dname.len == 0) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0337);
         b.msg("`{s}` has no discipline, so `{s}` names nothing on it", .{ lower_node.nodeName(self, node), name });
@@ -736,7 +736,7 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
         try b.emit();
         return;
     }
-    const info = self.disciplines.get(dname) orelse return;
+    const info = self.out.disciplines.get(dname) orelse return;
     const want = switch (access) {
         .potential => info.potential_access,
         .flow => info.flow_access,
@@ -775,7 +775,7 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
 /// that receives BOTH a potential and a flow contribution (in different arms)
 /// is the §5.6.5 switch branch — two entries, one per access.
 pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
-    for (self.contributions.items, 0..) |c, i| {
+    for (self.out.contributions.items, 0..) |c, i| {
         // §5.6.7.2 an indirectly-assigned branch is never an accumulation
         // target, so its entry can never absorb a `<+` (which `lowerIndirect`
         // rejects outright anyway).
@@ -792,8 +792,8 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
 /// Append a fresh contribution + its accumulator pair. The two tables stay
 /// parallel; see the UNIT ORDERING note in proof.zig.
 pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
-    const idx: u32 = @intCast(self.contributions.items.len);
-    try self.contributions.append(self.arena, .{
+    const idx: u32 = @intCast(self.out.contributions.items.len);
+    try self.out.contributions.append(self.arena, .{
         .access = t.access,
         .br = t.br,
         .tok = tok,
@@ -840,7 +840,7 @@ pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// flow source, neither → §5.6.1.3's open circuit).
 pub fn discardOpposite(self: *Lower, t: Target) Oom!void {
     const other: Access = if (t.access == .potential) .flow else .potential;
-    for (self.contributions.items, self.accum.items) |c, acc| {
+    for (self.out.contributions.items, self.accum.items) |c, acc| {
         if (c.kind != .direct or c.access != other or c.hi != t.hi or c.lo != t.lo) continue;
         // §5.6.1.3 is stated of "a branch", so only the OTHER quantity of THIS
         // branch is discarded. A parallel named branch over the same pair is a

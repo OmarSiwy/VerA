@@ -133,7 +133,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     const default = try parameterDefault(self, decl.default, decl.ty);
 
     try addParam(self, name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
-    self.params.items[self.params.items.len - 1].integer32 = decl.ty == .integer;
+    self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
 }
 
 /// §3.4/A.2.4: the spelling of the first simulation-state reference in a
@@ -312,7 +312,7 @@ pub fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8
 /// at `derive` time, which needs the two structs to know about each other.
 pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
     if (!std.mem.eql(u8, target, "$mfactor")) return false;
-    self.mfactor_param = @intCast(self.params.items.len);
+    self.mfactor_param = @intCast(self.out.params.items.len);
     try addParam(self, alias, .real, try self.mir.addFloatConst(self.arena, 1.0), .{ .real = 1.0 }, &.{}, false, Mir.no_tok);
     return true;
 }
@@ -327,8 +327,8 @@ pub fn addParam(
     is_local: bool,
     tok: u32,
 ) Oom!void {
-    const idx: u32 = @intCast(self.params.items.len);
-    try self.params.append(self.arena, .{
+    const idx: u32 = @intCast(self.out.params.items.len);
+    try self.out.params.append(self.arena, .{
         .name = name,
         .tok = tok, // §3.4.2 diagnostics point back at the declaration
         .ty = ty,
@@ -856,19 +856,19 @@ pub fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, pla
     // itself opened a diamond (§4.2.7 `&&`/`||` short-circuit), in which case it
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
-    const idx: i64 = @intCast(self.held_vars.items.len);
+    const idx: i64 = @intCast(self.out.held_vars.items.len);
     // Codegen makes one `Instance` field per entry out of `name`, so the name
     // has to be unique. It is — until a §6.6.1 unrolled `for` lowers the SAME
     // named block twice, which is two executions of one source declaration and
     // so, by §5.3.2, two locations that happen to share a path.
     var field = name;
-    for (self.held_vars.items) |h| {
+    for (self.out.held_vars.items) |h| {
         if (!std.mem.eql(u8, h.name, name)) continue;
         field = try std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
         break;
     }
     const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
-    try self.held_vars.append(self.arena, .{
+    try self.out.held_vars.append(self.arena, .{
         .name = field,
         .ty = ty,
         .init = init_val,
@@ -911,7 +911,7 @@ pub fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
     if (in_event) {
-        const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+        const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
         var writes: std.ArrayList(Ast.ExprId) = .empty;
         defer writes.deinit(self.arena);
         try self.file.stmtWrites(funcs, id, self.arena, &writes);

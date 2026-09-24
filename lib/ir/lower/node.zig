@@ -62,7 +62,7 @@ pub const State = struct {
 /// signal-flow" disciplines, which is one nature, present.
 pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
     if (dname.len == 0) return false;
-    const d = self.disciplines.get(dname) orelse return false;
+    const d = self.out.disciplines.get(dname) orelse return false;
     return d.has_potential != d.has_flow;
 }
 
@@ -85,7 +85,7 @@ pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 /// The same, for a declaration that may be a §3.6.3 vector: the default is
 /// written onto each scalarised element, since the base name is not a node.
 pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
-    const r = self.vectors.get(name) orelse
+    const r = self.out.vectors.get(name) orelse
         return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
     var key_buf: [lower_param.elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
@@ -96,7 +96,7 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
-    if (self.node_disciplines.items[idx].len != 0) return;
+    if (self.out.node_disciplines.items[idx].len != 0) return;
     if (main_tok >= self.tok_starts.len) return;
     const at = self.tok_starts[main_tok];
 
@@ -119,8 +119,8 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     // A default naming a discipline that was never declared supplies no
     // nature, so leaving the net bare is the honest outcome: E0337 then says
     // the net has no discipline, which is exactly what happened.
-    if (!self.disciplines.contains(dname)) return;
-    self.node_disciplines.items[idx] = dname;
+    if (!self.out.disciplines.contains(dname)) return;
+    self.out.node_disciplines.items[idx] = dname;
 }
 
 /// IEEE 1364 §19.2 `` `default_nettype none ``, on a name that is about to
@@ -178,7 +178,7 @@ pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
         if (drive == .float) continue;
         const idx = self.node_voltages.get(site.name) orelse continue;
         if (idx == ground) continue;
-        const info = self.disciplines.get(self.node_disciplines.items[idx]) orelse continue;
+        const info = self.out.disciplines.get(self.out.node_disciplines.items[idx]) orelse continue;
         if (!info.has_potential) continue;
         const target: lower_contrib.Target = .{ .access = .potential, .hi = idx, .lo = ground };
         const acc = self.accum.items[try lower_contrib.contribIndex(self, target, site.main_tok)];
@@ -198,7 +198,7 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
     const gop = try self.node_voltages.getOrPut(self.arena, name);
     if (gop.found_existing) {
         if (discipline.len != 0 and gop.value_ptr.* != ground)
-            self.node_disciplines.items[gop.value_ptr.*] = discipline;
+            self.out.node_disciplines.items[gop.value_ptr.*] = discipline;
         return gop.value_ptr.*;
     }
     const idx = try appendNode(self, name, discipline, .net);
@@ -231,7 +231,7 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
         try b.emit();
         return;
     };
-    try self.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
+    try self.out.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
 }
 
 /// The one place a `node_order` slot is created: it fixes the slot's KIND and
@@ -240,14 +240,14 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
 /// `flow_unknowns` for a branch, `port_probes` for a port) — this function does
 /// not dedupe and must not, since two distinct unknowns may ask for one name.
 pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
-    const idx: u16 = @intCast(self.node_order.items.len);
+    const idx: u16 = @intCast(self.out.node_order.items.len);
     assert(idx != ground);
     const spelling = try uniqueSpelling(self, name);
     try self.node_state.spellings.put(self.arena, spelling, {});
-    try self.node_order.append(self.arena, spelling);
-    try self.node_kind.append(self.arena, kind);
-    try self.node_disciplines.append(self.arena, discipline);
-    try self.node_dir.append(self.arena, .unspecified);
+    try self.out.node_order.append(self.arena, spelling);
+    try self.out.node_kind.append(self.arena, kind);
+    try self.out.node_disciplines.append(self.arena, discipline);
+    try self.out.node_dir.append(self.arena, .unspecified);
     try self.node_state.probe_cache.append(self.arena, .undef);
     return idx;
 }
@@ -311,7 +311,7 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             // and the reference to element 0 of `bus` is an `.index`, so the two
             // never share a path here; only the KEY had to be kept apart.
             const name = try netKey(self, self.file.str(ex.strOf(e)), ex.mainTok(e));
-            if (self.vectors.get(name)) |r| {
+            if (self.out.vectors.get(name)) |r| {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
             }
@@ -351,7 +351,7 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 return ground;
             }
             const name = self.file.str(ex.strOf(base));
-            const r = self.vectors.get(name) orelse {
+            const r = self.out.vectors.get(name) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` was not declared with a range", .{name});
                 return ground;
             };
@@ -475,7 +475,7 @@ pub fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
 pub fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
     if (e == .none) return null;
     if (self.file.exprs.tag(e) != .ident) return null;
-    return self.vectors.get(self.file.str(self.file.exprs.strOf(e)));
+    return self.out.vectors.get(self.file.str(self.file.exprs.strOf(e)));
 }
 
 /// §3.12 a vector branch. The LRM's own example:
@@ -526,12 +526,12 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
             .id = newBranchId(self),
         });
     }
-    try self.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
+    try self.out.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
 }
 
 /// The name codegen prints for a node_order index (naming.zig unit targets).
 pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
-    return if (idx == ground) "gnd" else self.node_order.items[idx];
+    return self.out.nodeName(idx);
 }
 
 /// §5.4.1 a fresh branch identity, one per DECLARED branch name (array elements
@@ -567,7 +567,7 @@ pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
 /// spelling-keyed version paid an `allocPrint` per reference to discover the
 /// entry already existed.
 pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
-    const gop = try self.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
+    const gop = try self.out.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
     if (gop.found_existing) return gop.value_ptr.*;
     const name = try std.fmt.allocPrint(self.arena, "flow({s},{s})", .{ nodeName(self, hi), nodeName(self, lo) });
     // The tolerance node is the HIGH one: a branch unknown carries no discipline
@@ -586,11 +586,11 @@ pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
 /// is the fix: the old order interned the name and let the string dedupe,
 /// so a net spelled `flow(<p>)` took over the port's current.
 pub fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
-    for (self.port_probes.items) |pp| {
+    for (self.out.port_probes.items) |pp| {
         if (pp.port == p) return pp.u;
     }
     const name = try std.fmt.allocPrint(self.arena, "flow(<{s}>)", .{nodeName(self, p)});
     const u = try appendNode(self, name, "", .{ .port_flow = p });
-    try self.port_probes.append(self.arena, .{ .port = p, .u = u });
+    try self.out.port_probes.append(self.arena, .{ .port = p, .u = u });
     return u;
 }

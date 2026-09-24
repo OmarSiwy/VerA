@@ -312,10 +312,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         try tys.append(self.arena, tv.ty);
     }
     if (isFileOutTask(name)) {
-        self.uses_file_tasks = true;
+        self.out.uses_file_tasks = true;
         // The §9.4.3 formatter renders into a scratch row before the write, so a
         // module with a §9.5.2 output task needs the string kernels too.
-        self.uses_str_tasks = true;
+        self.out.uses_str_tasks = true;
     }
     if (isDisplayTask(name) or isFileOutTask(name)) {
         // §9.4.3's other pairing half — each conversion against its operand's
@@ -340,7 +340,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         // as a conditional $strobe does — §9.4.6's argument applies verbatim.
         const cond = self.cond_depth != 0;
         if (cond) try self.chainCondDisplay(v);
-        try self.displays.append(self.arena, .{
+        try self.out.displays.append(self.arena, .{
             .val = v,
             .name = name,
             .tok = tok,
@@ -419,12 +419,12 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         .pre = pre,
         .genvars = genvars,
         .unit = self.cur_unit,
-        .display = @intCast(self.displays.items.len),
+        .display = @intCast(self.out.displays.items.len),
         .monitor = monitor,
     });
     // The placeholder keeps `displays` in source order — W0850 reporting and
     // the chain both walk it — and `lowerDeferredDisplays` fills `.val`.
-    try self.displays.append(self.arena, .{
+    try self.out.displays.append(self.arena, .{
         .val = .undef,
         .name = name,
         .tok = tok,
@@ -459,8 +459,8 @@ pub fn isMonitor(name: []const u8) bool {
 /// and W0850 is one warning per statement.
 pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
     if (std.mem.eql(u8, name, "$fmonitor")) {
-        self.uses_file_tasks = true;
-        self.uses_str_tasks = true;
+        self.out.uses_file_tasks = true;
+        self.out.uses_str_tasks = true;
     }
     const k = try self.mir.addIntConst(self.arena, self.event_state.monitor_sites);
     self.event_state.monitor_sites += 1;
@@ -515,7 +515,7 @@ pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
         try prepareFormatArgs(self, live.items, tys.items, vals.items);
         if (dd.monitor) |k| try vals.insert(self.arena, 0, k);
-        self.displays.items[dd.display].val = try self.call(dd.name, vals.items);
+        self.out.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }
 }
 
@@ -546,11 +546,11 @@ pub fn isSimCtlTask(name: []const u8) bool {
 /// so the carrier is `$itor` — a call codegen already renders, rather than a new
 /// synthetic name for a conversion that already has one.
 pub fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) Oom!void {
-    self.uses_file_tasks = true;
+    self.out.uses_file_tasks = true;
     const carrier = try self.call("$itor", &.{v});
     const cond = self.cond_depth != 0;
     if (cond) try self.chainCondDisplay(carrier);
-    try self.displays.append(self.arena, .{
+    try self.out.displays.append(self.arena, .{
         .val = carrier,
         .name = name,
         .tok = tok,
@@ -576,10 +576,10 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
     const scan = eq(u8, name, "$fscanf");
     const ferr = eq(u8, name, "$ferror");
     if (!gets and !scan and !ferr) return null;
-    self.uses_file_tasks = true;
+    self.out.uses_file_tasks = true;
     // §9.5.4.2's conversions are §9.5.3's conversions, so the scanner is the
     // string one and the string kernels have to be there.
-    if (scan) self.uses_str_tasks = true;
+    if (scan) self.out.uses_str_tasks = true;
 
     // Syntax 9-6/9-7/9-9: `$fgets` and `$ferror` take the destination FIRST and
     // second respectively; `$fscanf` takes the descriptor, the format, then the
@@ -788,9 +788,9 @@ pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) break :blk 32; // §3.2 integer variable
             const pi = self.param_index.get(name) orelse return null;
-            const module = self.module orelse return null;
+            const module = self.out.module orelse return null;
             for (module.params) |decl| {
-                if (!std.mem.eql(u8, self.file.str(decl.name), self.params.items[pi].name)) continue;
+                if (!std.mem.eql(u8, self.file.str(decl.name), self.out.params.items[pi].name)) continue;
                 if (decl.ty == .integer) break :blk 32;
                 // §3.4.1: an untyped parameter derives its type from the FINAL
                 // override. The host's numeric parameter ABI has no width.
@@ -946,7 +946,7 @@ pub fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const 
     }
     try checkFormatPairing(self, tok, args[1..]);
     try prepareFormatArgs(self, live.items, tys.items, vals.items);
-    self.uses_str_tasks = true;
+    self.out.uses_str_tasks = true;
     const v = try self.call("$sformat", vals.items);
     try self.builder.writeVariable(slot.place, self.cur, v);
 }
@@ -975,7 +975,7 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
         .str => |s| if (try checkScanFormat(self, tok, s)) return self.mir.addIntConst(self.arena, 0),
         else => {},
     };
-    self.uses_str_tasks = true;
+    self.out.uses_str_tasks = true;
     // Snapshot the count from the original input/format before any destination
     // assignment, including destinations aliasing either string argument.
     const count = try self.call("$sscanf", &.{ src, fmt });
@@ -1090,7 +1090,7 @@ pub fn distParamName(d: *const Dist, i: usize) []const u8 {
 pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?TypedValue {
     const d = distOf(name) orelse return null;
     const ex = &self.file.exprs;
-    self.uses_rng = true;
+    self.out.uses_rng = true;
 
     // Drop A.6.9 empty slots first, so the arity below counts what was written.
     var given: std.ArrayList(Ast.ExprId) = .empty;
@@ -1159,8 +1159,8 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         // it. So it is a latch in `Instance`, advanced by `updateState` on the
         // ACCEPTED step and only read here — the residual stays a pure function
         // of x, which a draw advancing per Newton iteration would destroy.
-        const site = self.rng_auto_sites;
-        self.rng_auto_sites += 1;
+        const site = self.out.rng_auto_sites;
+        self.out.rng_auto_sites += 1;
         const latch = try self.call("$rng$auto", &.{try self.mir.addIntConst(self.arena, site)});
         seed = if (given.items.len > 0)
             // The declared constant/parameter still SEEDS the stream, so it is
@@ -1355,12 +1355,12 @@ pub fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const As
             };
         }
         if (degree == -1) {
-            if (self.reject_iteration_place == null) {
+            if (self.out.reject_iteration_place == null) {
                 const p = self.builder.newPlace();
                 try self.builder.writeVariable(p, .entry, .zero);
-                self.reject_iteration_place = p;
+                self.out.reject_iteration_place = p;
             }
-            try self.builder.writeVariable(self.reject_iteration_place.?, self.cur, .one);
+            try self.builder.writeVariable(self.out.reject_iteration_place.?, self.cur, .one);
             return true;
         }
         if (degree < -1) {

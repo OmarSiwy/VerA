@@ -32,7 +32,7 @@ pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     const name = self.file.str(ex.strOf(a));
     if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name))
         return null;
-    const m = self.module orelse return null;
+    const m = self.out.module orelse return null;
     for (m.functions) |*fd| {
         if (std.mem.eql(u8, self.file.str(fd.name), name)) return fd;
     }
@@ -71,12 +71,12 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
     // however many of them ran this time. Reading the running value instead
     // chains them — a reader followed by a writer would limit twice per
     // evaluation and halve the damping.
-    const old = self.limit_slots.items[slot].seed;
+    const old = self.out.limit_slots.items[slot].seed;
     const res = try self.toReal(try lower_func.inlineUserFuncPre(self, fd, &.{ vnew, old }, args[2..], e));
     // The site's return is the slot's NEXT state. Written at the site, so the
     // last site to run this evaluation is the one the next iterate reads —
     // which is what makes the read-then-write accessor idiom work.
-    try self.builder.writeVariable(self.limit_slots.items[slot].place, self.cur, res);
+    try self.builder.writeVariable(self.out.limit_slots.items[slot].place, self.cur, res);
     return .{ .v = try self.call("$limit$uf", &.{ vnew, res }), .ty = .real };
 }
 
@@ -85,7 +85,7 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
 /// when the argument is not an access function at all.
 pub fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     const t = try limitSlotKey(self, a) orelse return null;
-    for (self.limit_slots.items, 0..) |s, i| {
+    for (self.out.limit_slots.items, 0..) |s, i| {
         if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
             return i;
     }
@@ -105,17 +105,17 @@ pub fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
 
 pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const t = try limitSlotKey(self, a) orelse return;
-    for (self.limit_slots.items) |s| {
+    for (self.out.limit_slots.items) |s| {
         if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
             return;
     }
-    const k: i64 = @intCast(self.limit_slots.items.len);
+    const k: i64 = @intCast(self.out.limit_slots.items.len);
     // A `call`, so it is opaque to `analysis.foldConst` — the previous iterate
     // is not a constant, however constant the rest of the expression is.
     const seed = try self.call("$limit$old", &.{try self.mir.addIntConst(self.arena, k)});
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, seed);
-    try self.limit_slots.append(self.arena, .{
+    try self.out.limit_slots.append(self.arena, .{
         .label = try std.fmt.allocPrint(self.arena, "{s}({s},{s})", .{
             if (t.access == .potential) "V" else "I", lower_node.nodeName(self, t.hi), lower_node.nodeName(self, t.lo),
         }),
