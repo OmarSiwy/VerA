@@ -143,7 +143,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // string result; every other replication was unrolled in the parser,
         // where the operand widths still exist.
         .concat, .multi_concat => return lowerConcat(self, e),
-        .assign_pattern => {
+        .assign_pattern, .pattern_repl => {
             try self.err(self.file.exprs.mainTok(e), .E0509, "", .{});
             return poison;
         },

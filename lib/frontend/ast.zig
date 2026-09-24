@@ -186,6 +186,12 @@ pub const ExprTag = enum(u8) {
     /// `'{a, b, ...}` assignment pattern (array param defaults §3.4.4, filter
     /// coefficient args §4.5.4) — `extra` = ExprId list offset.
     assign_pattern,
+    /// A.8.1's `'{ constant_expression { ... } }` whose count is not a literal
+    /// (`'{N{0.5}}`): the parser cannot unroll it before parameters have
+    /// values, so the pattern's ONLY element is this node — `lhs` = count,
+    /// `rhs` = an `.assign_pattern` holding the group. `Lower.patternElems`
+    /// unrolls it with the constant folder.
+    pattern_repl,
     /// §3.4.4 array / bit select `base[i]` — `lhs` = base, `rhs` = index.
     index,
     /// `msb:lsb` part select and `analog_range_expression` (A.8.3) —
@@ -392,7 +398,7 @@ pub const ExprStore = struct {
                 buf[0] = self.lhs(id);
                 return buf[0..1];
             },
-            .binary, .index, .range, .multi_concat, .event_or, .branch_access => {
+            .binary, .index, .range, .multi_concat, .pattern_repl, .event_or, .branch_access => {
                 buf[0..2].* = .{ self.lhs(id), self.rhs(id) };
                 return buf[0..2];
             },

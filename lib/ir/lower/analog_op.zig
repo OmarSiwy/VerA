@@ -426,7 +426,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
         .assign_pattern, .concat => {
-            const elems = ex.args(a);
+            const elems = try lower_param.patternElems(self, a);
             try out.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(elems.len)));
             for (elems) |el|
                 try out.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, el)));

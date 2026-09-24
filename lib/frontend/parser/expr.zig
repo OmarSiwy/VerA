@@ -188,9 +188,16 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 if (first != .none and self.peek() == .lbrace) {
                     var inner: std.ArrayList(Ast.ExprId) = .empty;
                     try braceGroup(self, &inner);
-                    const n = replCount(self, first) orelse
-                        return self.failAt(self.file.exprs.mainTok(first), .E0223, "", .{});
-                    for (0..n) |_| try items.appendSlice(self.arena, inner.items);
+                    if (replCount(self, first)) |n| {
+                        for (0..n) |_| try items.appendSlice(self.arena, inner.items);
+                    } else {
+                        // A constant_expression the parser cannot evaluate
+                        // (`'{N{0.5}}`, N a localparam): lowering unrolls it
+                        // with the folder in hand, `Lower.patternElems`.
+                        const off = try self.file.exprs.addExprList(self.arena, inner.items);
+                        const group = try self.file.exprs.add(self.arena, .{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
+                        try items.append(self.arena, try self.file.exprs.add(self.arena, .{ .tag = .pattern_repl, .main_tok = tok, .lhs = first, .rhs = group }));
+                    }
                 } else {
                     try items.append(self.arena, first);
                     while (self.eat(.comma)) try items.append(

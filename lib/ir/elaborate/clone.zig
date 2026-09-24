@@ -222,7 +222,7 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             n.extra = try self.ctx.file.exprs.addStrList(self.ctx.arena, out);
         },
         .unary => n.lhs = try cloneExpr(self, x.lhs(e)),
-        .binary, .index, .range, .event_or, .multi_concat => {
+        .binary, .index, .range, .event_or, .multi_concat, .pattern_repl => {
             n.lhs = try cloneExpr(self, x.lhs(e));
             n.rhs = try cloneExpr(self, x.rhs(e));
         },
