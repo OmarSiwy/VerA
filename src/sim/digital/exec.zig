@@ -150,7 +150,11 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
     };
 }
 
+/// `value` in type `ty`. Already that type is returned as is, planes and all —
+/// so the result may BE a variable's storage, and a caller that keeps it past
+/// the next store copies it (as `claim` and the hold cells do).
 fn normalize(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
+    if (value.width == ty.width and value.signed == ty.signed) return value;
     var result = value.resize(a, ty.width, if (ty.signed) .sign else .zero) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ZeroSize => unreachable,
@@ -341,7 +345,9 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     const dest = self.values[target];
     const before = dest.bit(0);
     const changed = !std.mem.eql(u64, dest.planes, planes);
-    @memcpy(dest.planes, planes);
+    // Not copied when unchanged — which also covers `planes` BEING
+    // `dest.planes` (`a = a`), a copy @memcpy forbids.
+    if (changed) @memcpy(dest.planes, planes);
     // §17.1.3: a standing monitor reports at the end of a timestep in which
     // something moved. One event however many values moved — the monitor
     // prints its whole argument list, so a second tick could only reprint
