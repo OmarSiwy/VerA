@@ -76,7 +76,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    if (self.lowered.uses_newton_iter) try self.w("    newton_iteration: u32 = 1,\n", .{});
+    if (self.lowered.uses.contains(.newton_iter)) try self.w("    newton_iteration: u32 = 1,\n", .{});
     try self.w(
         \\}};
         \\
@@ -419,14 +419,14 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
 /// Called after evaluating a Newton iterate, with that iterate's x.
 /// All return values are computed before any history slot is changed.
 pub fn emitAdvanceIteration(self: *Gen) Error!void {
-    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses_newton_iter and self.lowered.reject_iteration_place == null) return;
-    if (self.lowered.uses_newton_iter) try self.w(
+    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.newton_iter) and !self.lowered.uses.contains(.reject_iteration)) return;
+    if (self.lowered.uses.contains(.newton_iter)) try self.w(
         "pub fn beginSolve(inst: *Instance) void {{\n    inst.newton_iteration = 1;\n}}\n\n",
         .{},
     );
     var uses_core = false;
     for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
-    const uses_inst = uses_core or self.lowered.uses_newton_iter or self.lowered.limit_slots.items.len != 0;
+    const uses_inst = uses_core or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
     try self.w("pub fn advanceIteration({s}: *const Model, {s}: *Instance, {s}: [n_u]f64) void {{\n", .{
         if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_",
     });
@@ -440,9 +440,9 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
         else
             try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
     }
-    if (self.lowered.uses_newton_iter) try self.w("    inst.newton_iteration +|= 1;\n", .{});
+    if (self.lowered.uses.contains(.newton_iter)) try self.w("    inst.newton_iteration +|= 1;\n", .{});
     try self.w("}}\n\n", .{});
-    if (self.lowered.reject_iteration_place != null) {
+    if (self.lowered.uses.contains(.reject_iteration)) {
         try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
         const probe_inst = try gen_hoist.probeInstance(self);
         try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
@@ -488,7 +488,7 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
 /// One collapsible §5.6.5 switch branch: when `flag` (a §5.6.1.3
 /// retention flag, carried as a core field) is nonzero at build time,
 /// the host aliases unknown `victim` and the branch-flow unknown
-/// `flow_u` onto unknown `target`. Indices are node_order/U-enum space.
+/// `flow_u` onto unknown `target`. Indices are `nodes`/U-enum space.
 pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value };
 
 /// A §5.4.2 branch-flow unknown that no branch row defines.

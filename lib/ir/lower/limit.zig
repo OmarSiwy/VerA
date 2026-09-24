@@ -76,7 +76,7 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
     // The site's return is the slot's NEXT state. Written at the site, so the
     // last site to run this evaluation is the one the next iterate reads —
     // which is what makes the read-then-write accessor idiom work.
-    try self.builder.writeVariable(self.out.limit_slots.items[slot].place, self.cur, res);
+    try self.builder.writeVariable(self.limit_places.items[slot], self.cur, res);
     return .{ .v = try self.call("$limit$uf", &.{ vnew, res }), .ty = .real };
 }
 
@@ -124,9 +124,9 @@ pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
         .lo = t.lo,
         .neg = t.neg,
         .br = t.br,
-        .place = place,
         .seed = seed,
     });
+    try self.limit_places.append(self.arena, place);
 }
 
 /// §9.20's outcome for one `$analog_node_alias()` / `$analog_port_alias()`

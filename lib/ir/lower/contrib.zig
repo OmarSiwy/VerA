@@ -104,10 +104,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // to an `output` is the whole point of a signal-flow port, and an `inout`
     // signal-flow port never gets this far: E0360 refuses the declaration.
     for ([_]u16{ target.hi, target.lo }) |n| {
-        if (n >= self.out.node_dir.items.len or self.out.node_dir.items[n] != .input) continue;
-        if (!lower_node.isSignalFlow(self, self.out.node_disciplines.items[n])) continue;
+        if (n >= self.out.nodes.len or self.out.nodes.items(.dir)[n] != .input) continue;
+        if (!lower_node.isSignalFlow(self, self.out.nodes.items(.disc)[n])) continue;
         var b = self.errWith(self.file.exprs.mainTok(lhs), .E0425);
-        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.out.node_order.items[n], self.out.node_disciplines.items[n] });
+        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.out.nodes.items(.name)[n], self.out.nodes.items(.disc)[n] });
         try b.emit();
         return;
     }
@@ -537,7 +537,7 @@ pub fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
     };
 }
 
-/// A resolved access. `hi`/`lo` are in CANONICAL order (`hi < lo` as node_order
+/// A resolved access. `hi`/`lo` are in CANONICAL order (`hi < lo` as `nodes`
 /// indices, which puts `ground` — `maxInt(u16)` — last, so `V(n)` is untouched);
 /// `neg` says the source wrote the terminals the other way round.
 ///
@@ -728,7 +728,7 @@ pub const generic_flow = "flow";
 /// spelling to suggest, which is a note, not a rule.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
     if (node == ground) return;
-    const dname = self.out.node_disciplines.items[node];
+    const dname = self.out.nodes.items(.disc)[node];
     if (dname.len == 0) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0337);
         b.msg("`{s}` has no discipline, so `{s}` names nothing on it", .{ lower_node.nodeName(self, node), name });

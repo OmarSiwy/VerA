@@ -200,7 +200,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 ///    node reference shall be a port".
 ///
 /// Everything that survives is one `node_voltages` write. The aliased net keeps
-/// its own `node_order` slot, which no probe can reach any more: an unknown with
+/// its own `nodes` row, which no probe can reach any more: an unknown with
 /// no equation, which is what a net the clause has just merged away IS. That is
 /// the same shape a declared-and-unused net already has here, and pruning it
 /// would renumber `U` — an ABI the host reads.
@@ -223,10 +223,10 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
     if (hit.idx != ground) {
         if (lower_discipline.nodeDisciplineConflict(
             self,
-            self.out.node_disciplines.items[local],
-            self.out.node_disciplines.items[hit.idx],
+            self.out.nodes.items(.disc)[local],
+            self.out.nodes.items(.disc)[hit.idx],
         ) != null) return .unresolved;
-        if (self.out.disciplines.get(self.out.node_disciplines.items[hit.idx])) |info| {
+        if (self.out.disciplines.get(self.out.nodes.items(.disc)[hit.idx])) |info| {
             if (info.is_discrete) return .unresolved;
         }
     }

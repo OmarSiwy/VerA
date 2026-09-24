@@ -311,7 +311,7 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
     const net = self.file.str(parts[0]);
     const idx = self.node_voltages.get(net) orelse return null;
     if (idx == ground) return null;
-    const dname = self.out.node_disciplines.items[idx];
+    const dname = self.out.nodes.items(.disc)[idx];
     const attr = self.file.str(parts[2]);
 
     if (std.mem.eql(u8, attr, "abstol")) {

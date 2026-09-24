@@ -76,17 +76,17 @@ pub fn emitFile(self: *Gen) Error!void {
     // so a printing artifact needs the string kernels whether or not the
     // model ever names `$sformat`. This is the same condition `display_txt`
     // has always carried, now spelled once.
-    const strs = self.lowered.uses_str_tasks or self.display == .emit;
+    const strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit;
     // §9.21, set at the call for the same reason `strs` is: the lookup may
     // land in any unit once the MIR is sliced.
-    const tbl = self.lowered.uses_table_model;
+    const tbl = self.lowered.uses.contains(.table_model);
     // §9.13, set at the call for the same reason: `lowerRandom` runs long
     // before the MIR is sliced into units.
-    const rng = self.lowered.uses_rng;
+    const rng = self.lowered.uses.contains(.rng);
     // §9.5 the descriptor table. `display == .emit` is the second condition
     // and not a convenience: it is the artifact whose host runs the per-point
     // side-effect phase these kernels have to be sequenced in.
-    const files = self.display == .emit and self.lowered.uses_file_tasks;
+    const files = self.display == .emit and self.lowered.uses.contains(.file_tasks);
     try buildPrelude(self, stateful, hist, filt, timer, strs, tbl, rng, files);
     try self.out.appendSlice(self.gpa, header_txt);
     try self.out.appendSlice(self.gpa, math_txt);
@@ -268,7 +268,7 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
 /// emits together.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses_newton_iter or self.lowered.reject_iteration_place != null) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter) or self.lowered.uses.contains(.reject_iteration)) return true;
     for (self.units) |u| {
         if (u.role == .analog_op and opHasState(u.op)) return true;
     }
@@ -426,12 +426,12 @@ pub fn emitNodesets(self: *Gen) Error!void {
 pub fn flowOnlySignalFlowNet(self: *const Gen, c: Lower.Contribution) ?u16 {
     if (c.access != .flow or c.kind != .direct) return null;
     for ([_]u16{ c.hi, c.lo }) |n| {
-        if (n >= self.lowered.node_order.items.len) continue; // ground
-        switch (self.lowered.node_dir.items[n]) {
+        if (n >= self.lowered.nodes.len) continue; // ground
+        switch (self.lowered.nodes.items(.dir)[n]) {
             .input, .output => {},
             .unspecified, .inout => continue,
         }
-        const dname = self.lowered.node_disciplines.items[n];
+        const dname = self.lowered.nodes.items(.disc)[n];
         if (dname.len == 0) continue;
         const d = self.lowered.disciplines.get(dname) orelse continue;
         if (!d.has_potential and d.has_flow) return n;
@@ -440,18 +440,18 @@ pub fn flowOnlySignalFlowNet(self: *const Gen, c: Lower.Contribution) ?u16 {
 }
 
 pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
-    if (i >= self.lowered.node_order.items.len) return true; // codegen-added branch current
+    if (i >= self.lowered.nodes.len) return true; // codegen-added branch current
     // §5.4.2/§5.4.3. An array read: lowering records the kind where it
     // creates the slot. It used to be `startsWith("flow(")`, which §2.8.1
     // makes a lie — a net declared `\flow(p,n)` IS the identifier
     // `flow(p,n)` and was classified as a current.
-    if (self.lowered.node_kind.items[i] != .net) return true;
+    if (self.lowered.nodes.items(.kind)[i] != .net) return true;
     // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
     // a node is not defined"), so its ONE unknown is a flow even though it
     // is a plain node with a plain name. Everything that asks this question
     // — the host's `u_kinds`, the §3.6.1.2 tolerance, §4.5.15's refusal to
     // `$limit` a current — wants the quantity, not the spelling.
-    const dname = self.lowered.node_disciplines.items[i];
+    const dname = self.lowered.nodes.items(.disc)[i];
     if (dname.len == 0) return false;
     const d = self.lowered.disciplines.get(dname) orelse return false;
     return d.has_flow and !d.has_potential;
@@ -478,13 +478,13 @@ pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = isFlowUnknown(self, i);
     var idx: u16 = @intCast(i);
-    if (i < self.lowered.node_kind.items.len) switch (self.lowered.node_kind.items[i]) {
+    if (i < self.lowered.nodes.len) switch (self.lowered.nodes.items(.kind)[i]) {
         .net => {},
         .branch_flow, .port_flow => |n| idx = n,
     };
-    if (idx == Lower.ground or idx >= self.lowered.node_disciplines.items.len)
+    if (idx == Lower.ground or idx >= self.lowered.nodes.len)
         return if (flow) 1e-12 else 1e-6;
-    const info = self.lowered.disciplines.get(self.lowered.node_disciplines.items[idx]) orelse
+    const info = self.lowered.disciplines.get(self.lowered.nodes.items(.disc)[idx]) orelse
         return if (flow) 1e-12 else 1e-6;
     return if (flow) info.flow_abstol else info.potential_abstol;
 }
@@ -803,7 +803,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    if (self.lowered.uses_newton_iter) try self.w(
+    if (self.lowered.uses.contains(.newton_iter)) try self.w(
         "    newton_iteration: u32 = 1,\n",
         .{},
     );
@@ -1140,7 +1140,7 @@ pub fn pathLatches(self: *const Gen) bool {
 /// advance on. They contribute nothing to `query` — the base moving is
 /// the integrator's business, not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lowered.uses_newton_iter or self.lowered.limit_slots.items.len != 0;
+    return fsmStateCtl(self) or pathLatches(self) or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
 }
 
 /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -1158,7 +1158,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
-    , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses_newton_iter) "state" else "_"});
+    , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter)) "state" else "_"});
     var first = true;
     for (self.held_names) |n| {
         if (!fsm) break;
@@ -1176,7 +1176,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    if (self.lowered.uses_newton_iter) try self.w(
+    if (self.lowered.uses.contains(.newton_iter)) try self.w(
         "        state.newton_iteration = inst.newton_iteration;\n",
         .{},
     );
@@ -1196,7 +1196,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},
     );
-    if (self.lowered.uses_newton_iter) try self.w(
+    if (self.lowered.uses.contains(.newton_iter)) try self.w(
         "        inst.newton_iteration = state.newton_iteration;\n",
         .{},
     );

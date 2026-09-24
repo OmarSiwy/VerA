@@ -12,7 +12,7 @@
 //! beyond the returned owned slice.
 //!
 //! ABSOLUTE RULE: nothing that feeds a name may be a MIR index. Not `@intFromEnum(Mir.Value)`, not
-//! `Mir.Inst`, not a `node_order` index. Only stable leaf identities — module
+//! `Mir.Inst`, not a `nodes` index. Only stable leaf identities — module
 //! name, node NAMES, source identifiers — plus, where two units genuinely
 //! collide, a group-local ordinal. Inserting one line in the .va renumbers
 //! every later Value; a name built from one renumbers with it, and every
@@ -246,7 +246,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
     var scratch: [max_name_len]u8 = undefined;
 
     // (1) contributions — §5.6. Target is the ACCESS FUNCTION plus the NODE
-    // NAMES (never node_order indices: inserting a net renumbers those).
+    // NAMES (never `nodes` rows: inserting a net renumbers those).
     for (lowered.contributions.items) |c| {
         var b: Buf = .{ .buf = &scratch };
         // §4.4: the two access roles are closed even when a user nature renames
@@ -257,7 +257,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
         });
         for ([2]u16{ c.hi, c.lo }) |n| {
             try b.byte('_');
-            // §1.3.1.1 global ground is not a node_order slot. Spell it "0"
+            // §1.3.1.1 global ground is not a `nodes` row. Spell it "0"
             // (SPICE's ground node): `sanitize` escapes a leading digit, so no
             // real net — not even one literally named `gnd` — can collide.
             if (n == Lower.ground) try b.byte('0') else try sanitizeInto(&b, lowered.nodeName(n));
@@ -368,7 +368,8 @@ const Fixture = struct {
     fn init(f: *Fixture) !void {
         f.lowered = .{ .file = &f.file };
         const a = f.arena.allocator();
-        try f.lowered.node_order.appendSlice(a, &.{ "drain", "gate", "source" });
+        for ([_][]const u8{ "drain", "gate", "source" }) |n|
+            try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });
     }
 
     fn deinit(f: *Fixture) void {

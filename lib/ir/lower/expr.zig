@@ -895,7 +895,7 @@ pub fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
 /// The read half of §5.4.3, shared by `I(<p>)` and by a §3.12.1 port branch
 /// named over the same port: the two spellings are one quantity, so they must
-/// be one unknown and one set of rules. `p` is the port's `node_order` slot —
+/// be one unknown and one set of rules. `p` is the port's `nodes` row —
 /// resolved by the caller, because the two spellings name it differently (an
 /// argument expression here, a branch declaration there).
 pub fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {

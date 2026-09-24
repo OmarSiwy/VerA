@@ -221,7 +221,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, a)));
     // ponytail: rows are already lowered; append their contiguous values in order.
     try vals.appendSlice(self.arena, rows);
-    self.out.uses_table_model = true;
+    self.out.uses.insert(.table_model);
     const result = try self.call("$table_model", vals.items);
     if (site != 0) try self.builder.writeVariable(self.table_effect_place.?, self.cur, result);
     return .{ .v = result, .ty = .real };
