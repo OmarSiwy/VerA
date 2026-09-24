@@ -1304,7 +1304,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // evaluation and is LINEAR in the current input, so the Jacobian
         // `b0/a0` it hands the solver is exact.
         .laplace => {
-            const p = try cg_filters.filterPlan(self, inst, args);
+            const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, "{s}", .{m});
             // `__sec` takes a `*const Model` whatever its coefficients read,
             // so the call site is a use of `model` even when `filterPlan`
@@ -1325,7 +1325,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // after the timepoint is evaluated, so every zi_* ran one whole
         // sample period late.
         .zi => {
-            const p = try cg_filters.filterPlan(self, inst, args);
+            const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, "{s}", .{m});
             // Same reason `.laplace` above forces it: `__sec` takes a
             // `*const Model` whatever its coefficients read.

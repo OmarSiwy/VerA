@@ -534,6 +534,9 @@ pub const Gen = struct {
     /// `buildJobs`, which queues their algorithm arguments into the core.
     limits: []cg_limit.LimitCall = &.{},
     limits_declined: [][]const u8 = &.{},
+    /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for
+    /// every other unit). Filled once by `cg_filters.planAll`.
+    filters: []?cg_filters.FilterPlan = &.{},
 
     /// Where each slot's declaration goes — `probeBody` fills this, and it is
     /// only meaningful for the out-of-SSA path (`straight` declares everything
@@ -619,6 +622,7 @@ pub const Gen = struct {
         // After `buildNames`, which fills `branch_u` — the claim `freeFlows`
         // subtracts.
         self.free_flows = try gen_state.freeFlows(self);
+        try cg_filters.planAll(self);
         // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
         // `$limit` become core live-outs, and `buildJobs` is what queues them.
         try cg_limit.collect(self);

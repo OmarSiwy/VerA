@@ -53,6 +53,10 @@ pub const FilterPlan = struct {
     /// §4.5.12 sampling period T. Null for a laplace filter.
     period: ?[]const u8 = null,
     err: ?[]const u8 = null,
+    /// The unit refusal `f64Expr` raised while planning (E0515: a coefficient
+    /// or period the host cannot evaluate), replayed by `planOf` at every use
+    /// so the body that renders this filter still collapses to it.
+    fatal: ?[]const u8 = null,
 
     /// Section `i` of one side; a side that ran out of sections is the
     /// polynomial 1, which is how a 3-zero / 1-pole filter still cascades.
@@ -139,6 +143,42 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
     // §4.5.11 the optional ε argument only "deriv[es] an absolute
     // tolerance (if needed)"; VerA has no per-signal tolerance table, so
     // dropping it changes no value the device computes.
+    return p;
+}
+
+/// Plan every §4.5.11/§4.5.12 operator ONCE, into `Gen.filters` (indexed by
+/// unit). Six emitters read a filter's plan — the Instance shape, the section
+/// reader, the operator call inside the core, and the accepted-step advance —
+/// and each used to re-derive it, folding and allocating the same polynomials.
+pub fn planAll(g: *Gen) Error!void {
+    g.filters = try g.arena.alloc(?FilterPlan, g.units.len);
+    @memset(g.filters, null);
+    const saved_tok = g.ctrl_tok;
+    defer g.ctrl_tok = saved_tok;
+    for (g.units, 0..) |u, i| {
+        if (u.role != .analog_op or u.inst == .none) continue;
+        const k = cg.opKind(u.target);
+        if (k != .laplace and k != .zi) continue;
+        // `emitOperator` set this before planning, and E0515 falls back to it
+        // for a coefficient with no token of its own.
+        g.ctrl_tok = g.mir.instTok(u.inst);
+        const saved = g.fatal;
+        g.fatal = null;
+        var p = try filterPlan(g, u.inst, g.mir.instData(u.inst).call.args);
+        p.fatal = g.fatal;
+        g.fatal = saved;
+        g.filters[i] = p;
+    }
+}
+
+/// Filter unit `unit`'s plan, replaying the refusal planning raised the way
+/// `f64Expr` raises it (sticky `any_fatal`, first `fatal` wins).
+pub fn planOf(g: *Gen, unit: usize) FilterPlan {
+    const p = g.filters[unit].?;
+    if (p.fatal) |m| {
+        g.any_fatal = true;
+        if (g.fatal == null) g.fatal = m;
+    }
     return p;
 }
 
