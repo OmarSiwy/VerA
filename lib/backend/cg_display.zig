@@ -134,9 +134,11 @@ pub const PrintArg = struct {
 /// write a space between fields is a null argument.
 ///
 /// Two documented deviations from the 1364-2005 §17.1.1.2 heritage:
-///   - a bare INTEGER prints minimal-width (1364 auto-sizes the default %d
-///     field to the operand's largest value, 20 columns for VerA's 64-bit
-///     integers — nobody wants that in a transcript);
+///   - a bare or `%d` INTEGER prints minimal-width (1364 §17.1.1.3 auto-sizes
+///     the field to the operand's largest value, 20 columns for VerA's 64-bit
+///     integers — nobody wants that in a transcript) unless it is an unsigned
+///     sized literal, the one operand whose width and sign lowering knows
+///     (`decimalWidth`); the radices auto-size at every width it records;
 ///   - a bare REAL prints shortest-round-trip decimal, VerA's documented `%g`
 ///     rendering (see `appendConv`), where 1364 gives reals `%g` proper.
 fn buildArgs(
@@ -685,7 +687,7 @@ pub fn appendConv(
     ops: *std.ArrayList(PrintArg),
     operand: Mir.Value,
     conv_raw: u8,
-    spec: Spec,
+    spec_arg: Spec,
 ) Error!void {
     const a = g.arena;
     const v = operand;
@@ -699,6 +701,24 @@ pub fn appendConv(
     }
     const conv = std.ascii.toLower(conv_raw);
     const ty = g.an.tyOf(g.an.rv(v));
+    // §9.4.3 a bare operand is "the default decimal format"; lowering records a
+    // width on one (`decimalWidth`) only when `%d` would size it.
+    if (conv == 0 and ty == .int and bits < 64) return appendConv(g, fmt, ops, operand, 'd', spec_arg);
+    // IEEE 1364 §17.1.1.3 automatic sizing, for a width lowering recorded: the
+    // radices "always" show leading zeros, a decimal field pads with spaces to
+    // the largest value's columns, and `%0h`/`%0d` (the '0' flag with no width)
+    // "overrides" both.
+    var spec = spec_arg;
+    if (bits < 64 and spec.width == 0 and !spec.zero and !spec.left and !spec.plus and !spec.space) {
+        const max = (@as(u64, 1) << @intCast(bits)) - 1;
+        switch (conv) {
+            'h', 'x' => spec = .{ .width = (@as(usize, bits) + 3) / 4, .zero = true },
+            'o' => spec = .{ .width = (@as(usize, bits) + 2) / 3, .zero = true },
+            'b' => spec = .{ .width = bits, .zero = true },
+            'd' => spec = .{ .width = std.math.log10_int(max) + 1 },
+            else => {},
+        }
+    }
     switch (conv) {
         // §9.4.3 Table 9-23's four real conversions. They "have the full
         // formatting capabilities available in the C language", which is

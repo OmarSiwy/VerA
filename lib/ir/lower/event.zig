@@ -847,13 +847,13 @@ pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty
         // Use the actual lowered bytes, including direct literal NUL escapes,
         // so validation and emission inspect the same format.
         const lowered = self.mir.valueDef(vals[at]);
-        const fmt = if (lowered == .str_const) lowered.str_const else if (lower_constfold.constEval(self, live[at])) |c| switch (c) {
+        const fmt_or: ?[]const u8 = if (lowered == .str_const) lowered.str_const else if (lower_constfold.constEval(self, live[at])) |c| switch (c) {
             .str => |str| str,
-            else => {
-                at += 1;
-                continue;
-            },
-        } else {
+            else => null,
+        } else null;
+        const fmt = fmt_or orelse {
+            // §9.4.3 a bare operand takes "the default decimal format" — `%d`'s field.
+            if (tys[at] == .integer) try decimalWidth(self, live[at], &vals[at]);
             at += 1;
             continue;
         };
@@ -909,6 +909,8 @@ pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty
                             vals[next - 1], try self.mir.addIntConst(self.arena, bits),
                         });
                     }
+                } else if (conv == 'd' and ty == .integer) {
+                    try decimalWidth(self, arg, &vals[next - 1]);
                 }
                 continue;
             }
@@ -925,6 +927,19 @@ pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty
         }
         at = next;
     }
+}
+
+/// IEEE 1364 §17.1.1.3: "the values written to the output ... are sized
+/// automatically" — a decimal field is as wide as the operand's largest value.
+/// That needs the width AND the signedness, and only an unsigned sized literal
+/// carries both through today's IR; every other integer keeps the minimal
+/// field `cg_display.buildArgs` documents as a deviation.
+fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .int_literal) return;
+    const lit = ex.intLiteral(e);
+    if (lit.width == 0 or lit.width >= 64 or lit.signed) return;
+    v.* = try self.call("$display$width", &.{ v.*, try self.mir.addIntConst(self.arena, lit.width) });
 }
 
 /// §9.5.3 `$swrite(str, …)` / `$sformat(str, fmt, …)` — the §9.4.3 formatter
