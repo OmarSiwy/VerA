@@ -31,6 +31,9 @@ pub const BuildOptions = struct {
     /// in (`<root>/tools/contract.zig`). Only mixed-signal testbenches pay the
     /// extra build; every other one is byte-for-byte the build it always was.
     mixed: bool = false,
+    /// Build `renderVpiLib`'s runner as a shared library for a Clause 12
+    /// analog host to load, instead of an executable.
+    shared_lib: bool = false,
 };
 
 pub const BuildResult = union(enum) {
@@ -93,12 +96,13 @@ pub fn buildExe(
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{
         opts.zig_exe,
-        "build-exe",
+        if (opts.shared_lib) "build-lib" else "build-exe",
         try std.fmt.allocPrint(arena, "-femit-bin={s}", .{bin}),
         try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
         "--cache-dir",
         ".zig-cache",
     });
+    if (opts.shared_lib) try argv.append(arena, "-dynamic");
     try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
     try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });

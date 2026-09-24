@@ -260,6 +260,14 @@ pub fn build(b: *std.Build) void {
     // The host is built ONCE, as a static library exporting C's `main`, and
     // each application is one C file linked against it: a Zig executable per
     // application would compile the whole engine once per application.
+    // Where an analog application's device library is built (§12.31.3 needs
+    // a solver in this process: `vera.tb.renderVpiLib`), with what, and the
+    // `contract` it imports. The host runs with the cache as its cwd, so
+    // every path here is absolute.
+    const host_opts = b.addOptions();
+    host_opts.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
+    host_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    host_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-vpi"));
     const vpi_host = b.addLibrary(.{
         .name = "vera-vpi-host",
         .linkage = .static,
@@ -272,6 +280,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "vera", .module = byName(mods, "vera") },
                 .{ .name = "vpi", .module = byName(mods, "vpi") },
                 .{ .name = "sim", .module = byName(mods, "sim") },
+                .{ .name = "vpi_host_options", .module = host_opts.createModule() },
             },
         }),
     });
@@ -299,6 +308,9 @@ pub fn build(b: *std.Build) void {
     for (vpi_runs) |f| {
         const r = vpiApp(b, target, optimize, vpi_host, f.c, std.fs.path.dirname(f.c).?);
         r.addFileArg(b.path(f.design));
+        // An analog design's application names its analyses in its own
+        // banner (`*! analysis`); the host reads them there.
+        if (std.mem.endsWith(u8, f.design, ".va")) r.addFileArg(b.path(f.c));
         // Channels a fixture opens (§12.26) land in the cwd, which is the
         // cache and not the source tree.
         r.setCwd(b.path(".zig-cache"));
@@ -339,10 +351,64 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 /// NOT here, each for a reason outside the routine it exercises:
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
-///   p03_*   analog callbacks and values — needs an analog solver here
+///   p03_06/07/90  an analog $systf's calltf — the device calls it
+///           through `contract.SystfHost`, which this host does not yet bind
+///   p03_09  an `ac` analysis — no small-signal solve runs in this process
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
 const vpi_runs = [_]VpiRun{
+    // §12.31.3's analyses: the host builds the design's analog library and
+    // runs the `*! analysis` lines of the application's banner.
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_01_time_delta_freq_at_zero.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
+        .stdout = "p03-01: t0=0 dt0=0 f0=0 initial=1 final=1 later_pos=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_02_accepted_point_sequence.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-02: initial=1 final=1 t_final=0.005 monotone=1 delta_ok=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_03_forced_solution_points.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-03: abs_t=0.0025 abs_v=2.5 el1=0.0015 v1=1.5 el2=0.003 v2=3 accepted=3\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_04_remove_cb_during_dispatch.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-04: at1=1 at2=1 at3=0 at4=1 rm_future=1 rm_self=1 rm_same=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_05_convergence_test_rejection.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-05: rejected=1 backed_up=1 ct_before_ap=1 t_final=0.005\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_08_analog_value_formats.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
+        .stdout = "p03-08: v=1.25 i=0.0025 vexp=1.250000e+00 vdec=1.25 vg=1.25 fmt_reset=1 sep_buf=1 overwritten=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_10_repeated_analyses.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-10: initial=2 final=2 t0=0 v_final=2 late_t=0.0015 late_v=1.5 late_hits=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_11_registration_roundtrip.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
+        .stdout = "p03-11: systf_roundtrip=1 cb_roundtrip=1 dup_rejected=1 probe_hits=1 probe_t=0.0025\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_92_reject_analog_callback_times.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
+        .stdout = "p03-92: control_hits=1 control_t=0.0005 refused=4 errs=4\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_91_reject_stale_callback_handle.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
+        .stdout = "p03-91: first=1 second=0 null=0 wrongtype=0 info_err=1 errs=4 fired=0\n",
+    },
     .{
         .c = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.c",
         .design = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.v",

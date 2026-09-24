@@ -66,6 +66,7 @@ pub const callback = @import("callback.zig");
 pub const value = @import("value.zig");
 pub const systf = @import("systf.zig");
 pub const code = @import("code.zig");
+pub const analog_run = @import("analog.zig");
 comptime {
     _ = print;
     _ = run;
@@ -73,6 +74,7 @@ comptime {
     _ = value;
     _ = systf;
     _ = code;
+    _ = analog_run;
 }
 test {
     _ = print;
@@ -416,6 +418,10 @@ pub const Obj = struct {
     /// from a sibling's over the same pair — either way its own share of the
     /// flow is not a number this model holds.
     flow_unknowable: bool = false,
+    /// `.branch`: a declared branch whose (pos, neg) is the reverse of its
+    /// source row's canonical pair — its flow is the row's, negated
+    /// (§1.3.1.2: the reference direction is the declaration's).
+    flow_neg: bool = false,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -1054,8 +1060,10 @@ fn unnamedBranch(
 
 /// Record contribution row `k` as the source of `b`'s potential or flow.
 fn bindRow(b: *Obj, c: Lower.Contribution, k: u32) void {
-    b.hi_row = c.hi;
-    b.lo_row = c.lo;
+    if (b.full.len == 0) {
+        b.hi_row = c.hi;
+        b.lo_row = c.lo;
+    } else b.flow_neg = b.hi_row != c.hi;
     switch (c.access) {
         .potential => b.contrib_pot = k,
         .flow => {
@@ -2268,11 +2276,115 @@ pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void 
         fail("NOTQUANTITY", "vpi_get_analog_value: a {s} is not a vpiFlow or vpiPotential quantity", .{@tagName(o.kind)});
         return;
     }
-    _ = value_p orelse {
+    const v = value_p orelse {
         fail("BADVALUE", "vpi_get_analog_value: value_p is NULL", .{});
         return;
     };
-    fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{});
+    const re = analog_run.quantityValue(o) catch |e| {
+        switch (e) {
+            error.NoAnalysis => fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{}),
+            // A row two instances' <+ summed into holds their total; this
+            // branch's share of it is not a number the model has.
+            error.Unknowable => fail("SHARED", "vpi_get_analog_value: this branch's flow was summed with a parallel instance's and cannot be told apart", .{}),
+        }
+        return;
+    };
+    // No small-signal analysis runs here: every imaginary part is 0.
+    const im: f64 = 0;
+    switch (v.format) {
+        vpiRealVal => {
+            v.real = .{ .real = re };
+            v.imaginary = .{ .real = im };
+        },
+        vpiExpStrVal, vpiDecStrVal, vpiStringVal => {
+            // Table 12-2. The strings live in THIS routine's buffer — "different
+            // from the buffer which vpi_get_str() shall use" and "overwritten
+            // with each call".
+            var chose: c_int = v.format;
+            const a = analogString(&analog_buf[0], re, v.format, &chose) orelse return;
+            const b = analogString(&analog_buf[1], im, v.format, &chose) orelse return;
+            // vpiStringVal: "The call shall reset the format field to
+            // vpiExpStrVal or vpiDecStrVal to the selected format." The real
+            // part's choice is the one reported.
+            if (v.format == vpiStringVal) {
+                var ignored: c_int = 0;
+                _ = analogString(&analog_buf[1], im, vpiStringVal, &ignored);
+                v.format = chose;
+            }
+            v.real.str = a;
+            v.imaginary.str = b;
+        },
+        else => fail("BADFORMAT", "vpi_get_analog_value: format {d} is not one of Table 12-2's", .{v.format}),
+    }
+}
+
+const vpiRealVal = value.vpiRealVal;
+const vpiDecStrVal = value.vpiDecStrVal;
+const vpiStringVal = value.vpiStringVal;
+/// §12.10's `vpExpStrVal` (Table 12-2's spelling): vpi_user.h's number.
+const vpiExpStrVal: c_int = 710;
+
+/// §12.10's own string buffers, real and imaginary.
+var analog_buf: [2][64]u8 = undefined;
+
+/// One part of an analog value as Table 12-2 spells it: vpiExpStrVal "like
+/// printf %e", vpiDecStrVal "decimal char(s)", vpiStringVal "like printf
+/// %g" — reporting which of the other two %g chose in `chose`.
+fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
+    const text = switch (format) {
+        vpiExpStrVal => printfE(buf, x, 6),
+        vpiDecStrVal => std.fmt.bufPrintZ(buf, "{d}", .{x}) catch null,
+        vpiStringVal => printfG(buf, x, chose),
+        else => null,
+    } orelse {
+        fail("BADFORMAT", "vpi_get_analog_value: {e} does not fit the value buffer", .{x});
+        return null;
+    };
+    return @constCast(text.ptr);
+}
+
+/// C's `%.<prec>e`: one digit, the fraction, `e`, a sign and at least two
+/// exponent digits. Zig's `{e}` rounds correctly and spells the exponent
+/// bare (`2.5e-3`), so only the exponent is re-spelled.
+fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
+    var tmp: [64]u8 = undefined;
+    const raw = std.fmt.bufPrint(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
+    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
+    const sign: u8 = if (exp < 0) '-' else '+';
+    return std.fmt.bufPrintZ(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }) catch null;
+}
+
+/// C's `%g` (precision 6): %e when the exponent is below -4 or at least 6,
+/// %f otherwise, trailing zeros and a bare point dropped. `chose` becomes
+/// vpiExpStrVal or vpiDecStrVal after the form taken.
+fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
+    if (x == 0) {
+        chose.* = vpiDecStrVal;
+        return std.fmt.bufPrintZ(buf, "0", .{}) catch null;
+    }
+    var tmp: [64]u8 = undefined;
+    const raw = std.fmt.bufPrint(&tmp, "{e:.5}", .{x}) catch return null;
+    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
+    if (exp < -4 or exp >= 6) {
+        chose.* = vpiExpStrVal;
+        var m: []const u8 = raw[0..at];
+        if (std.mem.indexOfScalar(u8, m, '.') != null) {
+            m = std.mem.trimEnd(u8, m, "0");
+            m = std.mem.trimEnd(u8, m, ".");
+        }
+        const sign: u8 = if (exp < 0) '-' else '+';
+        return std.fmt.bufPrintZ(buf, "{s}e{c}{d:0>2}", .{ m, sign, @abs(exp) }) catch null;
+    }
+    chose.* = vpiDecStrVal;
+    const decimals: usize = @intCast(5 - exp);
+    var fixed: []const u8 = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
+    if (std.mem.indexOfScalar(u8, fixed, '.') != null) {
+        fixed = std.mem.trimEnd(u8, fixed, "0");
+        fixed = std.mem.trimEnd(u8, fixed, ".");
+    }
+    return std.fmt.bufPrintZ(buf, "{s}", .{fixed}) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2314,8 +2426,21 @@ pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
                 fail("BADHANDLE", "vpi_get_real: property {d} is the analysis's, asked of NULL", .{prop});
                 return undef;
             }
-            fail("NOANALYSIS", "vpi_get_real: no analysis is set up in this process", .{});
-            return undef;
+            const a = analog_run.analysis() orelse {
+                fail("NOANALYSIS", "vpi_get_real: no analysis is set up in this process", .{});
+                return undef;
+            };
+            return switch (prop) {
+                vpiStartTime => a.start,
+                vpiEndTime => a.stop,
+                vpiTransientMaxStep => a.max_step,
+                // §12.18 "for the start/end frequency of AC analysis": a
+                // transient or operating point has none.
+                else => {
+                    fail("NOANALYSIS", "vpi_get_real: property {d} is an AC analysis's, and none is running", .{prop});
+                    return undef;
+                },
+            };
         },
         else => {
             fail("NOPROP", "vpi_get_real: {d} is not a real property", .{prop});

@@ -109,8 +109,10 @@ typedef PLI_UINT32 *vpiHandle;
  *   vpi_handle(vpiFlow | vpiPotential, branch) §11.6.7 its two quantities
  *   vpi_handle(vpiBranch | vpiNature, quantity)
  *
- * A quantity has no name (§11.6.7 lists none). Values are not answered here:
- * vpi_get_analog_value() needs an analysis this process does not run.
+ * A quantity has no name (§11.6.7 lists none). An instance's `<+` declares
+ * §5.4.2's unnamed branch between the two nets, and it is a branch like any
+ * other here. Values come from vpi_get_analog_value() while an analysis runs
+ * (src/vpi/analog.zig).
  * -------------------------------------------------------------------------- */
 #define vpiQuantity           720
 #define vpiBranch             721
@@ -616,14 +618,21 @@ typedef struct t_vpi_analog_value {
   union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } real;
   union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } imaginary;
 } s_vpi_analog_value, *p_vpi_analog_value;
-/* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7). Anything
- * else is refused. A quantity's value belongs to an analysis, which this
- * process does not run: that is refused too, with its own error code. */
+/* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7), from the
+ * solution the running analysis attempted or last accepted. Anything else is
+ * refused, as is a value before any analysis solved (NOANALYSIS) and the flow
+ * of a branch whose `<+` was summed with a parallel instance's (SHARED). No
+ * small-signal analysis runs, so every imaginary part is 0. */
 extern void       vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
+/* §12.7 / §12.8 / §12.9: the step, the small-signal frequency (0: none runs)
+ * and the analog time. All three are 0 during DC and the time zero solution. */
+extern double     vpi_get_analog_delta(void);
+extern double     vpi_get_analog_freq(void);
+extern double     vpi_get_analog_time(void);
 /* §12.18 real properties: the analysis's, asked of NULL. "available to analog
  * tasks and functions only" — outside an analog systf's callback the answer
- * is vpiUndefined with vpiError; inside one this process has no analysis to
- * report either, so it is the same. VerA's numbers. */
+ * is vpiUndefined with vpiError; inside one, the running analysis's start,
+ * end and maximum step. VerA's numbers. */
 #define vpiStartTime          742
 #define vpiEndTime            743
 #define vpiTransientMaxStep   744
