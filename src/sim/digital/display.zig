@@ -560,7 +560,7 @@ fn emitTime(self: *Run, v: Int.Literal) Error!void {
         @floatFromInt(v.asInt() orelse 0)
     else
         @floatFromInt(v.values()[0]);
-    const scaled = raw * std.math.pow(f64, 10, @floatFromInt(self.unit_exp - f.units));
+    const scaled = raw * std.math.pow(f64, 10, @floatFromInt(self.timeOf(self.scope).unit_exp - f.units));
     var buf: [128]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     w.print("{d:.[1]}", .{ scaled, f.precision }) catch unreachable;

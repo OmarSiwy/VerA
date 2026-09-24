@@ -112,10 +112,13 @@ fn earliest(a: ?u64, b: ?u64) ?u64 {
     return @min(a.?, b.?);
 }
 
-/// The design's timescale, when it declared one: engine ticks per time unit.
-fn scale() ?sim.time.Scale {
+/// The time scale of `obj`'s module (IEEE 1364 §19.8: each definition has
+/// its own), as engine ticks per time unit. A module object is in its own
+/// scope; any other object in the scope that declares it.
+fn scale(obj: vpiHandle) ?sim.time.Scale {
     const r = engine orelse return null;
-    return r.scale;
+    const o = root.asObj(obj) orelse return r.scale;
+    return r.timeOf(if (o.kind == .module) o.scope else o.owner orelse 0).scale;
 }
 
 /// A §12.15 time structure as engine ticks. vpiSimTime is ticks already.
@@ -129,7 +132,7 @@ pub fn ticksOf(t: Time, obj: vpiHandle) ?u64 {
         root.fail("BADTIME", "{d} is not a time", .{t.real});
         return null;
     }
-    if (obj != null) if (scale()) |s| return s.realDelay(t.real) catch {
+    if (obj != null) if (scale(obj)) |s| return s.realDelay(t.real) catch {
         root.fail("BADTIME", "{d} cannot be represented in engine ticks", .{t.real});
         return null;
     };
@@ -146,7 +149,8 @@ pub fn timeNow(obj: vpiHandle, t: *Time) void {
 pub fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
     t.high = @truncate(ticks >> 32);
     t.low = @truncate(ticks);
-    t.real = if (obj != null and scale() != null) scale().?.realAt(ticks) else @floatFromInt(ticks);
+    const s = if (obj != null) scale(obj) else null;
+    t.real = if (s) |x| x.realAt(ticks) else @floatFromInt(ticks);
 }
 
 // ---------------------------------------------------------------------------

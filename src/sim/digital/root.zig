@@ -259,11 +259,15 @@ pub const Run = struct {
     /// module that names it.
     file_name: []const u8 = "",
     io: ?std.Io = null,
+    /// The ROOT module's time scale; every module's own is in `module_times`.
     scale: ?Time.Scale = null,
-    /// The module's TIME UNIT as a power of ten of a second, which `Scale`
+    /// The root module's TIME UNIT as a power of ten of a second, which `Scale`
     /// deliberately does not keep — it stores ratios, and `%t` needs the
     /// absolute magnitude to reach §17.3's `units_number`.
     unit_exp: i32 = 0,
+    /// IEEE 1364 §19.8 each module definition's own time scale, by name.
+    /// Read through `timeOf`.
+    module_times: std.AutoHashMapUnmanaged(Ast.StrId, ModuleTime) = .empty,
     time_format: TimeFormat = .{},
     /// §17.3.2 Table 17-11's default `units_number`: "the smallest time
     /// precision argument of all the `timescale compiler directives".
@@ -589,6 +593,14 @@ pub const Run = struct {
         while (self.scope_info.items[s].lexical) s = self.scope_info.items[s].parent;
         return s;
     }
+    /// IEEE 1364 §19.8 the time scale of the module `scope` is an instance
+    /// (or a block) of: the one its delays, `$time` and `%t` are in. The
+    /// root's when the scope is not a module instance (a UDP's).
+    pub fn timeOf(self: *const Run, scope: u32) ModuleTime {
+        const root_time: ModuleTime = .{ .scale = self.scale.?, .unit_exp = self.unit_exp };
+        if (scope >= self.scope_info.items.len) return root_time;
+        return self.module_times.get(self.scope_info.items[self.instanceOf(scope)].module) orelse root_time;
+    }
     /// A constant expression's value at elaboration (IEEE 1364-2005 §5.2 /
     /// §12.2): literals, parameters, operators and the constant system
     /// functions, folded by the engine's own evaluator — so a bound and a
@@ -616,7 +628,7 @@ pub const Run = struct {
     /// The `identifier` alternative names a parameter, so anything but a
     /// literal goes through `constant`.
     fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
-        const scale = self.scale.?; // elaborate always sets one (§19.8)
+        const scale = self.timeOf(self.scope).scale;
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
             .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
@@ -1413,6 +1425,8 @@ fn usesReal(t: *const Ast.Subroutine) bool {
 /// a function, and the contiguous slot range an automatic activation saves.
 /// §9.3 one slot's procedural continuous assignments: the pc range of the
 /// process maintaining each.
+pub const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
+
 pub const Overrides = struct {
     assign: ?PcRange = null,
     force: ?PcRange = null,
@@ -1661,34 +1675,49 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
         break :blk try pickTop(&r, file.modules);
     };
-    // §6.2.2: a `timescale applies from where it is written, and the FIRST
-    // description in the file is what "before any module" means once there is
-    // more than one — the root is not necessarily the first one declared.
-    // A mixed design's text opens with the annex D/E prelude, so its root is
-    // the module that has to come after the directive.
-    const first_tok = if (opts.mixed != null) m.main_tok else file.modules[0].main_tok;
-    var unit: Time.Quantum = default_quantum;
-    var precision: Time.Quantum = default_quantum;
-    for (times) |event| {
-        if (event.at > r.starts[first_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
-        // A null value is IEEE 1364 §19.6's `resetall, which returns
-        // `timescale to "none specified" — §19.8's simulator-specific
-        // default below. A MALFORMED directive never reaches here: the
-        // preprocessor refuses it where it is written (E0142).
-        const t = event.value orelse {
-            unit = default_quantum;
-            precision = default_quantum;
-            continue;
-        };
-        unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
-        precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
+    // IEEE 1364 §19.8: a `timescale applies to "all modules that follow this
+    // directive until another `timescale compiler directive is read", so each
+    // definition takes the last directive before it. A null value is §19.6's
+    // `resetall, which returns to "none specified" — the simulator-specific
+    // default. A MALFORMED directive never reaches here: the preprocessor
+    // refuses it where it is written (E0142). A mixed design's one timescale
+    // arrives at offset 0, before every module of its text.
+    const Local = struct { unit: Time.Quantum = default_quantum, precision: Time.Quantum = default_quantum, set: bool = false };
+    var finest: Time.Quantum = default_quantum;
+    var set: usize = 0;
+    const locals = try arena.alloc(Local, file.modules.len);
+    for (file.modules, locals) |*def, *l| {
+        l.* = .{};
+        for (times) |event| {
+            if (event.at > r.starts[def.main_tok]) continue;
+            const t = event.value orelse {
+                l.* = .{};
+                continue;
+            };
+            l.* = .{
+                .unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(def.main_tok, "unsupported time unit", .{}),
+                .precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(def.main_tok, "unsupported time precision", .{}),
+                .set = true,
+            };
+        }
+        set += @intFromBool(l.set);
+        if (@intFromEnum(l.precision) < @intFromEnum(finest)) finest = l.precision;
     }
-    r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
-    r.unit_exp = @intFromEnum(unit);
+    if (set != 0 and set != file.modules.len) return r.fail(m.main_tok, "§19.8: it shall be an error if some modules have a `timescale specified and others do not", .{});
+    // "The smallest time_precision argument of all the `timescale compiler
+    // directives in the design determines the precision of the time unit of
+    // the simulation": that is the scheduler's tick, and every module's delays
+    // are scaled to it.
+    for (file.modules, locals) |*def, l| try r.module_times.put(arena, def.name, .{
+        .scale = Time.Scale.init(l.unit, l.precision, finest) catch return r.fail(def.main_tok, "invalid timescale", .{}),
+        .unit_exp = @intFromEnum(l.unit),
+    });
+    const root_time = r.module_times.get(m.name).?;
+    r.scale = root_time.scale;
+    r.unit_exp = root_time.unit_exp;
     // §17.3: "the default ... is the smallest time precision argument of
     // all the `timescale compiler directives in the source description".
-    // One timescale applies to the whole design here, so that is its precision.
-    r.time_format.units = @intFromEnum(precision);
+    r.time_format.units = @intFromEnum(finest);
     r.finest = r.time_format.units;
     // PASS ONE — storage. Variables, array elements and nets share one slot
     // space, so one `store` publishes all three and wakes the same event
@@ -2313,8 +2342,30 @@ test "timescale provenance rejects malformed or later directives" {
     try expectRejected("`timescale 2ns/1ps\nmodule m; initial #1 ; endmodule", "is not a `timescale");
     try expectRejected("`timescale 1ns/1ps junk\nmodule m; initial #1 ; endmodule", "is not a `timescale");
     try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "coarser than the time unit");
-    try expectRejected("`timescale 1ns/1ps\nmodule m; initial #1 ; endmodule\n`timescale 1ms/1us\n", "after module start");
     try expectRejected("`timescale 1ns/1ns\nmodule m; initial #(128'd1) ; endmodule", "wider than 64");
+    // §19.8: "It shall be an error if some modules have a `timescale
+    // specified and others do not" — here `resetall takes it from `top`.
+    try expectRejected("`timescale 1ns/1ns\nmodule a; endmodule\n`resetall\nmodule top; a u(); endmodule", "others do not");
+}
+
+// IEEE 1364 §19.8: a `timescale applies to the modules that follow it, until
+// the next one; the simulation's tick is the finest precision of all (1 ps).
+// `top`'s #3 is 3 ns. `sub`'s #0.004 is 4 ns, which its $realtime reads in its
+// own 1 us unit as 0.004; its #1 more is 1004 ns, and $time rounds 1.004 us to
+// 1. A directive after the last module applies to nothing and is not an error.
+test "§19.8 each module definition runs in the timescale written before it" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module top;
+        \\  sub u();
+        \\  initial #3 $display("top %0d", $time);
+        \\endmodule
+        \\`timescale 1us/1ps
+        \\module sub;
+        \\  initial begin #0.004 $display("sub %g", $realtime); #1 $display("sub %0d", $time); end
+        \\endmodule
+        \\`timescale 1ms/1us
+    , "top 3\nsub 0.004\nsub 1\n");
 }
 
 fn testConcatRunAllocation(allocator: std.mem.Allocator) !void {
