@@ -38,6 +38,11 @@
  *! expect   91_reject_stale_callback_handle.expected.txt
  */
 
+//! lrm 12.2
+//! lrm-reject 12.6
+//! lrm 12.34
+//! lrm-reject 12.34
+
 #include "p03_vpi_analog.h"
 
 static int victim_fired;

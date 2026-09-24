@@ -47,6 +47,14 @@
  *! expect   06_sampler_plugin.expected.txt
  */
 
+//! lrm 12.9
+//! lrm 12.16
+//! lrm 12.30
+//! lrm 12.31.3
+//! lrm 12.32
+//! lrm 12.32.2
+//! lrm 12.32.3
+
 #include "p03_vpi_analog.h"
 
 #define PERIOD 1.0e-3

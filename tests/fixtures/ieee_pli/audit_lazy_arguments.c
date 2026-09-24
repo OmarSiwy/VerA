@@ -2,6 +2,14 @@
  * handle does not evaluate it; asking for its value executes its HDL call.
  * Load before elaboration. No manual callback invocation or header shims.
  */
+//! lrm 11.6.16
+//! lrm 12.16
+//! lrm 12.19
+//! lrm 12.23
+//! lrm 12.31.4
+//! lrm 12.33
+//! lrm 12.35
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

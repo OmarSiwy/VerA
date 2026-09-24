@@ -89,6 +89,18 @@
  * the call and asserts nothing was stored.
  */
 
+//! lrm 11.6.16
+//! lrm 12.5
+//! lrm 12.12
+//! lrm 12.14
+//! lrm 12.16
+//! lrm 12.19
+//! lrm 12.23
+//! lrm 12.30
+//! lrm 12.33
+//! lrm 12.33.1
+//! lrm 12.35
+
 #include "p02_check.h"
 
 static int order = 0;

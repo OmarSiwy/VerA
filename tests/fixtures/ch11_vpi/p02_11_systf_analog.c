@@ -102,6 +102,19 @@
  * declarative half of derivtf meaningless.
  */
 
+//! lrm 11.6.16
+//! lrm 12.13
+//! lrm 12.16
+//! lrm 12.20
+//! lrm-reject 12.20
+//! lrm 12.22
+//! lrm 12.22.1
+//! lrm-reject 12.22.1
+//! lrm 12.30
+//! lrm 12.32
+//! lrm 12.32.1
+//! lrm 12.32.2
+
 #include "p02_check.h"
 
 static int order = 0;

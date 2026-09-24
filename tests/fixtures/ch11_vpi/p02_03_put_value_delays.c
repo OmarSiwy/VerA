@@ -76,6 +76,16 @@
  * shall be NULL". qi therefore reads 0x5A at t=27 after the put and at t=30.
  */
 
+//! lrm 11.3.2
+//! lrm 12.2
+//! lrm 12.4
+//! lrm 12.5
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.30
+//! lrm 12.31.2
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 static vpiHandle qi, qt, qp;

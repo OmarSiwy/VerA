@@ -57,6 +57,15 @@
  *! expect   07_derivtf_partials.expected.txt
  */
 
+//! lrm 12.16
+//! lrm 12.22
+//! lrm 12.22.1
+//! lrm 12.22.2
+//! lrm 12.30
+//! lrm 12.32
+//! lrm 12.32.1
+//! lrm 12.32.2
+
 #include "p03_vpi_analog.h"
 
 static PLI_INT32 res_of[]  = { 1 };   /* d(argument 1) ... */

@@ -3,6 +3,19 @@
  * Iterate members without assuming their order. Numeric array indices are
  * obtained from expression handles, not invented integer properties.
  */
+//! lrm 11.3.1
+//! lrm 12.2
+//! lrm 12.3
+//! lrm 12.5
+//! lrm 12.16
+//! lrm 12.19
+//! lrm 12.20
+//! lrm 12.21
+//! lrm 12.23
+//! lrm 12.31.4
+//! lrm 12.33.2
+//! lrm 12.35
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

@@ -64,6 +64,17 @@
  * has three lines, listed in SPEC.md.
  */
 
+//! lrm 12.2
+//! lrm 12.24
+//! lrm-reject 12.24
+//! lrm 12.25
+//! lrm-reject 12.25
+//! lrm 12.26
+//! lrm 12.27
+//! lrm 12.28
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 #define NAME_A "p02_mcd_a.log"

@@ -57,6 +57,18 @@
  *     registration that silently dropped a field.
  */
 
+//! lrm 11.2.3
+//! lrm 12.2
+//! lrm 12.3
+//! lrm 12.6
+//! lrm 12.21
+//! lrm 12.31.1
+//! lrm 12.31.2
+//! lrm 12.31.4
+//! lrm 12.33.2
+//! lrm 12.34
+//! lrm-reject 12.34
+
 #include "p02_check.h"
 
 static vpiHandle n, g;

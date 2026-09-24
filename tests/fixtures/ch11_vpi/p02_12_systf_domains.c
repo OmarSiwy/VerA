@@ -56,6 +56,17 @@
  * nothing it registers is ever called.
  */
 
+//! lrm 11.2.3
+//! lrm 12.2
+//! lrm 12.3
+//! lrm 12.13
+//! lrm 12.14
+//! lrm 12.32
+//! lrm-reject 12.32
+//! lrm 12.33
+//! lrm-reject 12.33
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 static PLI_INT32 d_calltf(PLI_BYTE8 *u)    { (void)u; return 0; }
