@@ -266,6 +266,10 @@ pub const Run = struct {
     /// §12.2 parameter slots — constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// IEEE 1364-2005 §4.8 `real` variables and VAMS §3.7 `wreal` nets: slots
+    /// holding a double's 64 bits, which typing, conversion and change
+    /// detection read as a real.
+    reals: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
     part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
 
@@ -368,6 +372,11 @@ pub const Run = struct {
         }
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.lookup(self.scope, ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
+    }
+    /// The type a slot's value has, for an assignment to it.
+    pub fn slotType(self: *const Run, at: u32) compile.Type {
+        if (self.reals.contains(at)) return compile.real_type;
+        return .{ .width = self.values[at].width, .signed = self.values[at].signed };
     }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
     /// scope of the same module — never across an instance boundary.
@@ -658,10 +667,15 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.ports, 0..) |p, i| {
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         const bind = if (i < binds.len) binds[i] else PortBind.open;
-        const width = if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
+        const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         if (bind == .collapse) {
-            const outer = e.nets.items[bind.collapse];
-            if (outer.resolved.width != width)
+            // VAMS §3.7: "When the two nets connected by a port are of net
+            // type wreal and wire/tri, the resulting single net will be
+            // assigned as wreal" — on whichever side the wreal is.
+            const outer = &e.nets.items[bind.collapse];
+            const merging = (p.kind == .wreal) != (outer.kind == .wreal);
+            if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
+            if (!merging and outer.resolved.width != width)
                 return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
             try r.bind(p.name, outer.slot, p.main_tok);
             if (p.is_signed != e.values.items[outer.slot].signed)
@@ -816,10 +830,12 @@ pub fn newScope(r: *Run, tok: u32) Error!u32 {
 /// task inlined at a call site gets fresh storage while pass two compiles it.
 pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
-    if (v.ty != .integer) return r.fail(v.main_tok, "only reg, integer and time variables are implemented", .{});
+    if (v.ty == .string) return r.fail(v.main_tok, "string variables are not implemented", .{});
+    const real = v.ty == .real;
     if (v.dims.len > 16) return r.fail(v.main_tok, "arrays of more than 16 dimensions are not implemented", .{});
     // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
-    const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
+    // §4.8: a real is a double, held as its 64 bits.
+    const width: u32 = if (real) 64 else if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
         .reg => 1,
         .variable => 32,
         .time => 64,
@@ -848,7 +864,12 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
         .variable => true,
         .time => false,
     };
-    for (0..count) |_| try g.append(r.arena, try filled(r.arena, width, signed, .x));
+    // §4.8: "the default initial value for real ... shall be 0.0"; every
+    // other variable starts at x (§3.2).
+    for (0..count) |i| {
+        try g.append(r.arena, try filled(r.arena, width, signed or real, if (real) .zero else .x));
+        if (real) try r.reals.put(r.arena, base + @as(u32, @intCast(i)), {});
+    }
     r.values = g.items;
     return base;
 }
@@ -902,6 +923,19 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
 }
 
+/// VAMS §3.7's port merge: a wire or tri joined to a wreal port becomes one
+/// wreal net, for every other connection to it too. `wrealRules` has
+/// already refused the net types §3.7 does not call compatible.
+fn promoteWreal(r: *Run, e: *Elab, net: u32) Error!void {
+    const n = &e.nets.items[net];
+    if (n.kind == .wreal) return;
+    n.kind = .wreal;
+    n.resolved = try filled(r.arena, 64, false, .z);
+    e.values.items[n.slot] = try filled(r.arena, 64, true, .zero);
+    r.values = e.values.items;
+    try r.reals.put(r.arena, n.slot, {});
+}
+
 /// Allocate one net and its slot, and bind `name` to it in the current scope.
 fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name: Ast.StrId, tok: u32) Error!u32 {
     if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
@@ -909,9 +943,12 @@ fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name:
     const at: u32 = @intCast(e.nets.items.len);
     try r.bind(name, slot, tok);
     // §3.7: a net with no driver is Z, not X — except where the net type itself
-    // supplies a value. That is the whole net/variable difference.
-    try e.values.append(r.arena, try filled(r.arena, width, signed, undriven(kind)));
-    try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, width, false, .z), .tok = tok });
+    // supplies a value. That is the whole net/variable difference. VAMS §3.7:
+    // a wreal carries a real and "shall have an initial value of zero".
+    const wreal = kind == .wreal;
+    try e.values.append(r.arena, try filled(r.arena, if (wreal) 64 else width, signed or wreal, if (wreal) .zero else undriven(kind)));
+    if (wreal) try r.reals.put(r.arena, slot, {});
+    try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, if (wreal) 64 else width, false, .z), .tok = tok });
     try r.net_of.put(r.arena, slot, at);
     return at;
 }
@@ -983,9 +1020,8 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
 }
 
 /// §6.5.3 and §3.7, the two `wreal` rules about STRUCTURE rather than value.
-/// Checked on the parsed file, before the parser's E1100 for `wreal` itself
-/// stops the run, so a file that breaks one hears the LRM's reason and not
-/// only "not implemented" — and keeps hearing it once `wreal` runs.
+/// Checked on the parsed file, before elaboration, so a file that breaks one
+/// hears the LRM's reason.
 // ponytail: drivers are counted per module (assigns and the declaration's
 // own `=`); a driver arriving through a port is not. Counting those needs the
 // elaborated net, which `declare` builds after this.
@@ -1519,7 +1555,7 @@ pub fn expectRejected(source: []const u8, message: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, messages.written(), message) != null);
 }
 
-test "a legal wreal hears only the E1100, never the structural wreal codes" {
+test "a legal wreal runs, and hears none of the structural wreal codes" {
     // §3.7's compatible list is wire, tri and wreal, and one driver is legal.
     const legal = [_][]const u8{
         "module m; real a; wreal w; assign w = a; endmodule",
@@ -1532,10 +1568,9 @@ test "a legal wreal hears only the E1100, never the structural wreal codes" {
         defer arena.deinit();
         var bag = diag.Bag.init(arena.allocator());
         var output = std.Io.Writer.Allocating.init(arena.allocator());
-        try std.testing.expectError(error.DigitalFailed, run(arena.allocator(), source, .{}, &bag, &output.writer));
+        try run(arena.allocator(), source, .{}, &bag, &output.writer);
         var messages = std.Io.Writer.Allocating.init(arena.allocator());
         try diag.render(&bag, &messages.writer, .{});
-        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E1100") != null);
         try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0918") == null);
         try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0919") == null);
     }
@@ -1549,8 +1584,7 @@ test "the net and array declaration boundaries are explicit" {
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
     // §6.5.3 a wreal has at most one driver, and §3.7 closes the list of net
-    // types a port may join it to. Both are named even though `wreal` itself
-    // is still E1100.
+    // types a port may join it to.
     try expectRejected("module m; real a,b; wreal w; assign w = a; assign w = b; endmodule", "E0918");
     try expectRejected("module m; real a; wreal w = a; assign w = a; endmodule", "E0918");
     try expectRejected("module c(o); output o; wreal o; endmodule\nmodule m; wand n; c u(.o(n)); endmodule", "E0919");

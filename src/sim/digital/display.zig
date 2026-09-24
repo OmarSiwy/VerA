@@ -215,11 +215,6 @@ fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 
 
 // ---- the task table (§9.4.1 Table 9-1, §17.3) -------------------------------
 
-/// §17.7.2 `$realtime` — the only REAL-valued expression the digital engine
-/// has, and it exists only in a display argument. There are no real variables
-/// to put it in yet (that is M04's work), so it is recognised where it can be
-/// printed and nowhere else.
-const realtime_name = "$realtime";
 
 /// §9.4.3 Table 9-22's four conversions. The value is the base, so a digit is
 /// `@ctz(base)` bits wide for the three power-of-two members and decimal is the
@@ -359,6 +354,14 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 const d = format[i] - '0';
                 width = (width orelse 0) *| 10 +| d;
             }
+            // §17.1.1.2: a real conversion takes C's `.precision` too.
+            var precision: i64 = -1;
+            if (i < format.len and format[i] == '.') {
+                i += 1;
+                precision = 0;
+                while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
+                    precision = precision *| 10 +| (format[i] - '0');
+            }
             if (i == format.len) return self.exprFail(e, "unterminated display format");
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
@@ -417,12 +420,13 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| try emitValue(self, try exec.eval(self, a, args[arg], 0), r, width);
             } else {
-                const real = try evalReal(self, args[arg]);
-                if (allocator != null) {
+                try compile.checkExpr(self, args[arg]);
+                if (allocator) |a| {
+                    const real = try exec.evalReal(self, a, args[arg]);
                     // 512: the longest %f of an f64 is 309 integer digits
                     // plus ".000000"; a field width is padded here instead.
                     var buf: [512]u8 = undefined;
-                    const text = zCReal(&buf, real, format[i], 0, 0, -1);
+                    const text = zCReal(&buf, real, format[i], 0, 0, @min(precision, 60));
                     if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
                     try self.out.writeAll(text);
                 }
@@ -494,22 +498,6 @@ fn emitScope(self: *Run) Error!void {
         }
     }.lt);
     for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
-}
-
-/// The real half of the display surface, which is `$realtime` and nothing
-/// else today. It is validated and evaluated by the same call because there
-/// is no state to read: the answer is the clock.
-///
-/// ponytail: one name, no real variables and no real arithmetic. §17.7.2 is
-/// the only real a source can name until M04 gives the engine `real` and
-/// `wreal`; when it does, this is the seam that grows an evaluator.
-fn evalReal(self: *Run, e: Ast.ExprId) Error!f64 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) != .sys_call or !std.mem.eql(u8, self.file.str(ex.strOf(e)), realtime_name))
-        return self.exprFail(e, "a real display conversion takes a real expression, and `$realtime` is the only one implemented");
-    if (ex.args(e).len != 0) return self.exprFail(e, "$realtime takes no arguments");
-    const scale = self.scale.?; // elaborate always sets one (§19.8)
-    return scale.realAt(self.scheduler.now);
 }
 
 /// §17.3 `%t`. The operand is a time in the INVOKING MODULE'S TIME UNIT —
