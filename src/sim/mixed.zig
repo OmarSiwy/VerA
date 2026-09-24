@@ -105,6 +105,11 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 while (m.timer.?.next <= opts.times[0]) if (!m.advanceTimer()) break;
                 continue;
             }
+            if (std.mem.eql(u8, name, "absdelta")) {
+                // §5.10.3.4 absdelta(expr, delta, time_tol, expr_tol, enable).
+                m.* = .{ .dir = 0, .tol = 0, .absdelta = .{ .delta = @max((try dig.monitorArg(j, 1)) orelse 0, 0) } };
+                continue;
+            }
             const above = std.mem.eql(u8, name, "above");
             // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
@@ -155,6 +160,16 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         // The declared point itself, unless a D2A at this very time already
         // solved it with the tick's final values (region 3b follows 1-3).
         if (s.acc == null or s.acc.? != target) try s.accept(target);
+        // §5.10.3.4 absdelta "generates events ... During initialization".
+        if (sync and i == 0) {
+            var any = false;
+            for (s.mons, 0..) |*m, j| if (m.absdelta) |*ad| {
+                ad.last = try s.monValue(j);
+                try dig.deliverA2d(j, horizon);
+                any = true;
+            };
+            if (any) try s.runDigital(horizon);
+        }
     }
     try a.finish();
 }
@@ -170,6 +185,12 @@ const Mon = struct {
     tol: f64,
     v0: f64 = 0,
     timer: ?struct { next: f64, period: f64 } = null,
+    /// §5.10.3.4: the change that makes an event, and the value at the last one.
+    absdelta: ?struct { delta: f64, last: f64 = 0 } = null,
+
+    fn isCrossing(m: Mon) bool {
+        return m.timer == null and m.absdelta == null;
+    }
 
     /// The firing after this one, or false when there is none.
     fn advanceTimer(m: *Mon) bool {
@@ -270,7 +291,7 @@ fn State(comptime A: type) type {
             while (cuts < 64) : (cuts += 1) {
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
-                    if (m.timer != null) continue;
+                    if (!m.isCrossing()) continue;
                     const v1 = try s.monValue(j);
                     if (!crosses(m.dir, m.v0, v1)) continue;
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
@@ -284,8 +305,33 @@ fn State(comptime A: type) type {
                 if (s.acc.? + s.opts.tick * 1e-6 < tm.next) continue;
                 try s.dig.deliverA2d(j, tick);
                 while (m.timer.?.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
+            } else if (m.absdelta) |*ad| {
+                // §5.10.3.4 / §8.4.6: absdelta does not force a timestep; each
+                // change of "more than delta, relative to the previous
+                // absdelta() event" is interpolated between the step's ends.
+                // ponytail: a D2A it causes is re-solved at the step's end, not
+                // rolled back to the event (§8.4.6 case a); expr_tol, time_tol,
+                // enable and the direction-change trigger are not read.
+                const v1 = try s.monValue(j);
+                if (ad.delta == 0) {
+                    // "an event is generated every timestep the expression
+                    // value changes".
+                    if (v1 != m.v0) try s.dig.deliverA2d(j, tick);
+                    ad.last = v1;
+                } else while (@abs(v1 - ad.last) > ad.delta) {
+                    const level = ad.last + std.math.sign(v1 - ad.last) * ad.delta;
+                    const f = if (v1 != m.v0) std.math.clamp((level - m.v0) / (v1 - m.v0), 0, 1) else 1;
+                    const te = base + f * (s.acc.? - base);
+                    try s.dig.deliverA2d(j, @intFromFloat(@round(te / s.opts.tick)));
+                    ad.last = level;
+                }
             } else if (crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
-            const horizon = tickAtOrBefore(s.acc.?, s.opts.tick);
+            try s.runDigital(tickAtOrBefore(s.acc.?, s.opts.tick));
+        }
+
+        /// The digital ticks at or before `horizon`, re-solving at the current
+        /// analog time for every D2A they cause.
+        fn runDigital(s: *Self, horizon: Tick) !void {
             while (true) switch (try s.dig.runUntil(horizon)) {
                 .idle => break,
                 .explicit_d2a => try s.explicitD2a(),

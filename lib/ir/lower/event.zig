@@ -156,9 +156,10 @@ pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
         .event_function => {
             const name = self.file.str(ex.strOf(e));
             if (std.mem.eql(u8, name, "absdelta")) {
-                // §5.10.3 absdelta monitors a digital-domain delta; it has no
-                // analog kernel semantics. (Wording pinned by
-                // tests/fixtures/ch05_analog_behavior/absdelta_digital_only.)
+                // §5.10.3.4 "only allowed in an initial or always block": in a
+                // digital process it is the mixed-signal kernel's monitor, and
+                // here it is misplaced. (tests/fixtures/ch05_analog_behavior/
+                // absdelta_digital_only.)
                 try self.err(self.file.exprs.mainTok(e), .E0513, "", .{});
                 return null;
             }

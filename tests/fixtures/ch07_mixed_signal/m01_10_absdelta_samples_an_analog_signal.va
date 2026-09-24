@@ -69,7 +69,7 @@
 // onward. When M02 lands, tighten this to equality at 1e-12 — the LRM's rule
 // here really is equality, and this fixture is currently under-claiming it.
 //
-// WHAT FAILS TODAY, in the order the compiler reaches it — re-captured after
+// WHAT USED TO FAIL (green since ch07 step 9), in the order the compiler reached it — re-captured after
 // review, which found the two reversed here. FIRST `error[E0205]: unsupported
 // module item: found `always``, on line 95: `lib/frontend/parser.zig:1265`
 // refuses `always` outside a digital run, so the only call site §5.10.3.4
