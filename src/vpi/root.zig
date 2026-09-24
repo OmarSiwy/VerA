@@ -1904,6 +1904,17 @@ pub const name_buf_len = 4096;
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     const d = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
+    // §12.32.3's and §12.22.2's own listings: on a system task or function
+    // call, index 0 is "the returned value" — the function call itself, which
+    // is what §12.30 puts a return value on — and 1..n are its arguments.
+    if (o.kind == .code and (o.vtype == code.vpiSysFuncCall or o.vtype == code.vpiSysTaskCall)) {
+        if (index == 0 and o.vtype == code.vpiSysFuncCall) return handleOf(o);
+        for (o.lists) |l| if (l.tag == code.vpiArgument) {
+            if (index >= 1 and index <= l.items.len) return handleOf(&d.objects[l.items[@intCast(index - 1)]]);
+        };
+        fail("NOINDEX", "vpi_handle_by_index: `{s}` has no argument {d}", .{ o.name, index });
+        return null;
+    }
     if (o.members.len != 0) {
         for (o.members) |m| {
             const c = d.objects[m].index orelse continue;

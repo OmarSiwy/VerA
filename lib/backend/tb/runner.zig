@@ -702,7 +702,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     try print(&out, arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
         \\    g_inst.analysis_kind = @enumFromInt(kind);
-        \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = host_systf orelse &no_vpi_app;
+        \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
         \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model, &g_inst);
         \\    g_x = @splat(0.0);

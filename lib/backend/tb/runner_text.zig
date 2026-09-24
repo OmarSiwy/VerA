@@ -835,9 +835,26 @@ pub const vpi_lib_body =
     \\var g_forced: [n_u]?f64 = @splat(null);
     \\var g_state: State = undefined;
     \\var g_solved: bool = false;
-    \\/// §12.32 the host's analog system task/function callbacks, when it
-    \\/// registered any (`vera_vpi_systf`); the zero answer otherwise.
-    \\var host_systf: ?*contract.SystfHost = null;
+    \\/// §12.32 the host's analog system function calls, through a C
+    \\/// function: `contract.SystfHost.call` is a Zig-ABI pointer taking slices,
+    \\/// which may not cross a shared-library boundary. The library keeps the
+    \\/// `SystfHost` the device calls and forwards each call.
+    \\const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+    \\var host_call: ?HostCall = null;
+    \\fn viaHost(_: *anyopaque, k: usize, args: []const f64, partials: []f64) f64 {
+    \\    return host_call.?(k, args.ptr, args.len, partials.ptr);
+    \\}
+    \\var host_systf: contract.SystfHost = .{ .ctx = undefined, .call = viaHost };
+    \\const n_systf = if (@hasDecl(D, "systf_calls")) D.systf_calls.len else 0;
+    \\export fn vera_vpi_n_systf() callconv(.c) usize {
+    \\    return n_systf;
+    \\}
+    \\/// `systf_calls[k].name`, which is not NUL-terminated.
+    \\export fn vera_vpi_systf_name(k: usize, len: *usize) callconv(.c) [*]const u8 {
+    \\    if (comptime n_systf == 0) unreachable;
+    \\    len.* = D.systf_calls[k].name.len;
+    \\    return D.systf_calls[k].name.ptr;
+    \\}
     \\
     \\/// A `//! wave` value between the declared times, as the mixed runner
     \\/// reads it: one value per `//! time` point, linear between them.
@@ -849,8 +866,8 @@ pub const vpi_lib_body =
     \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
     \\}
     \\
-    \\export fn vera_vpi_systf(h: ?*contract.SystfHost) callconv(.c) void {
-    \\    host_systf = h;
+    \\export fn vera_vpi_systf(h: ?HostCall) callconv(.c) void {
+    \\    host_call = h;
     \\}
     \\export fn vera_vpi_n_u() callconv(.c) usize {
     \\    return n_u;

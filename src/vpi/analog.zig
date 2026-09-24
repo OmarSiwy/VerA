@@ -40,6 +40,8 @@
 const std = @import("std");
 const root = @import("root.zig");
 const callback = @import("callback.zig");
+const code = @import("code.zig");
+const systf = @import("systf.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -53,8 +55,13 @@ pub const Lib = struct {
     n_rows: *const fn () callconv(.c) usize,
     row: *const fn (usize, *[4]i32) callconv(.c) void,
     rows: *const fn ([*]f64) callconv(.c) void,
-    systf: *const fn (?*anyopaque) callconv(.c) void,
+    systf: *const fn (?HostCall) callconv(.c) void,
+    n_systf: *const fn () callconv(.c) usize,
+    systf_name: *const fn (usize, *usize) callconv(.c) [*]const u8,
 };
+
+/// The C function the library forwards `contract.SystfHost.call` to.
+pub const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
 
 pub const Kind = enum { op, tran };
 
@@ -104,6 +111,26 @@ const gpa = std.heap.smp_allocator;
 /// the compiled device, not of an analysis.
 pub fn attach(l: Lib) error{OutOfMemory}!void {
     lib = l;
+    // §12.32: the device's user system function calls, each bound to the
+    // one call object of that name — `systf_calls` is keyed by NAME, so a
+    // name with two call sites cannot say which of them is running, and is
+    // refused when called rather than handed to the wrong one.
+    const n_calls = l.n_systf();
+    call_obj = try gpa.alloc(?u32, n_calls);
+    for (call_obj, 0..) |*c, k| {
+        var len: usize = 0;
+        const name = l.systf_name(k, &len)[0..len];
+        c.* = null;
+        var seen: u32 = 0;
+        for (root.design.?.objects, 0..) |o, i| {
+            if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
+            if (!std.mem.eql(u8, o.name, name)) continue;
+            seen += 1;
+            c.* = @intCast(i);
+        }
+        if (seen > 1) c.* = null;
+    }
+    if (n_calls != 0) l.systf(deviceCall);
     const n = l.n_rows();
     rows = try gpa.alloc(Row, n);
     now_vals = try gpa.alloc(f64, 2 * n);
@@ -117,6 +144,10 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
 
 pub fn detach() void {
     lib = null;
+    gpa.free(call_obj);
+    call_obj = &.{};
+    arg_values.clearAndFree(gpa);
+    active_call = null;
     gpa.free(rows);
     gpa.free(now_vals);
     gpa.free(prev_react);
@@ -306,3 +337,74 @@ pub export fn vpi_get_analog_freq() f64 {
     root.clearError();
     return 0;
 }
+
+// ---------------------------------------------------------------------------
+// §12.32 analog system function calls, during the analysis
+// ---------------------------------------------------------------------------
+
+/// Per device call index: the VPI call object, or null when there is none
+/// or more than one.
+var call_obj: []?u32 = &.{};
+
+/// The call being evaluated: §12.32's calltf is running for it.
+const Active = struct { obj: u32, result: f64, partials: []f64 };
+var active_call: ?*Active = null;
+
+/// Each call argument's value at the latest evaluation, by object index —
+/// what `vpi_get_value` answers for an argument with no value of its own
+/// (an access function, an operation), inside calltf and after it: the
+/// §12.32.3 sampler reads its expression from an acbAbsTime callback.
+var arg_values: std.AutoHashMapUnmanaged(u32, f64) = .empty;
+
+/// `contract.SystfHost.call`, for the library. §12.32.1: calltf is called
+/// "each time the system task or function is invoked during simulation
+/// execution", with the registration's user_data, and inside it
+/// `vpi_handle(vpiSysTfCall, NULL)` is this call. The returned value is what
+/// calltf put on the call (§12.30 "system function calls"); the partials are
+/// what it put on §12.22.1's derivative objects, 0 where it put none.
+fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
+    @memset(partials[0..n], 0);
+    const at = if (k < call_obj.len) call_obj[k] else null;
+    const obj = at orelse {
+        root.fail("AMBIGUOUS", "an analog system function called from more than one site is not told apart by this host", .{});
+        return 0;
+    };
+    const d = &root.design.?;
+    const o = &d.objects[obj];
+    const reg = systf.find(o.name, .analog) orelse return 0;
+    for (o.lists) |l| if (l.tag == code.vpiArgument) {
+        for (l.items[0..@min(n, l.items.len)], 0..) |a, j| arg_values.put(gpa, a, args[j]) catch {};
+    };
+    const f = reg.analog.calltf orelse return 0;
+    var st: Active = .{ .obj = obj, .result = 0, .partials = partials[0..n] };
+    const prev_call = active_call;
+    const prev_sys = systf.active;
+    active_call = &st;
+    systf.active = obj;
+    defer {
+        active_call = prev_call;
+        systf.active = prev_sys;
+    }
+    var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(o), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
+    _ = f(&cb);
+    return st.result;
+}
+
+/// §12.16 for an analog call argument that has no value of its own: its
+/// value at the latest evaluation.
+pub fn argValue(o: *const root.Obj) ?f64 {
+    const d = &(root.design orelse return null);
+    const i = (@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(root.Obj);
+    return arg_values.get(@intCast(i));
+}
+
+/// §12.30 onto the call calltf is running for: its returned value. False
+/// when `o` is not that call, so the ordinary put rules apply.
+pub fn putResult(o: *const root.Obj, v: f64) bool {
+    const st = active_call orelse return false;
+    const d = &root.design.?;
+    if (o != &d.objects[st.obj]) return false;
+    st.result = v;
+    return true;
+}
+
