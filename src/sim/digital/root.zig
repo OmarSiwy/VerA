@@ -83,7 +83,11 @@ const Name = struct { scope: u32, str: Ast.StrId };
 // name maps to the first. `low`/`high` are the declared address bounds, in
 // either order of declaration — no operation here observes element ORDER, only
 // which address names which element.
-const Array = struct { count: u32, low: i64, high: i64 };
+///
+/// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
+/// and the others in `rest`, addressed row-major.
+const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
+pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
 pub const VecRange = struct { msb: i64, lsb: i64 };
@@ -447,19 +451,31 @@ pub const Run = struct {
     /// resolves which element it lands in.
     pub fn baseSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
-        return if (ex.tag(e) == .index) self.slot(ex.lhs(e)) else self.scalarSlot(e);
+        return if (ex.tag(e) == .index) self.slot(self.chainBase(e).base) else self.scalarSlot(e);
+    }
+    /// The name at the bottom of a stack of selects, `a` in `a[i][j]`, and
+    /// how many selects stand on it.
+    pub fn chainBase(self: *const Run, e: Ast.ExprId) struct { base: Ast.ExprId, depth: u32 } {
+        const ex = &self.file.exprs;
+        var x = e;
+        var depth: u32 = 0;
+        while (ex.tag(x) == .index) : (depth += 1) x = ex.lhs(x);
+        return .{ .base = x, .depth = depth };
     }
     pub fn scalarSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const at = try self.slot(e);
         if (self.arrays.contains(at)) return self.exprFail(e, "an unpacked array reference requires an element index");
         return at;
     }
-    /// The array an `.index` selects from, or null when this is not an element
-    /// reference (a bit or part select, which is not implemented).
+    /// The array an `.index` names an ELEMENT of — one index per dimension
+    /// (§4.9) — or null when it is a bit or part select.
     pub fn indexedArray(self: *Run, e: Ast.ExprId) Error!?Array {
         const ex = &self.file.exprs;
-        if (ex.tag(e) != .index or ex.tag(ex.lhs(e)) != .ident) return null;
-        return self.arrays.get(try self.slot(ex.lhs(e)));
+        if (ex.tag(e) != .index) return null;
+        const c = self.chainBase(e);
+        if (ex.tag(c.base) != .ident) return null;
+        const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
+        return if (c.depth == 1 + arr.rest.len) arr else null;
     }
 };
 
@@ -795,9 +811,7 @@ pub fn newScope(r: *Run, tok: u32) Error!u32 {
 pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
     if (v.ty != .integer) return r.fail(v.main_tok, "only reg, integer and time variables are implemented", .{});
-    // ponytail: one unpacked dimension. §3.9 admits any number; the second
-    // one needs a row-major address fold this has no consumer for yet.
-    if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
+    if (v.dims.len > 16) return r.fail(v.main_tok, "arrays of more than 16 dimensions are not implemented", .{});
     // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
     const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
         .reg => 1,
@@ -811,14 +825,16 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
         .lsb = try r.declaredBound(range.lsb, v.main_tok),
     });
     var count: u32 = 1;
-    if (v.dims.len == 1) {
-        const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
-        const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
-        const low = @min(lo, hi);
-        const high = @max(lo, hi);
-        if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-        count = @intCast(high - low + 1);
-        try r.arrays.put(r.arena, base, .{ .count = count, .low = low, .high = high });
+    if (v.dims.len != 0) {
+        const spans = try r.arena.alloc(Span, v.dims.len);
+        for (v.dims, spans) |d, *s| {
+            const lo = try r.declaredBound(d.lsb, v.main_tok);
+            const hi = try r.declaredBound(d.msb, v.main_tok);
+            s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
+            const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
+            count = std.math.mul(u32, count, size) catch return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
+        }
+        try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
     }
     if (count > std.math.maxInt(u32) - g.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
     const signed = switch (v.storage) {
@@ -1505,7 +1521,7 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] a; integer i; initial $display(\"%b\",a[i:0]); endmodule", "constant expression is required");
-    try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"x\"); endmodule", "one unpacked array dimension");
+    try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"%b\", mem[0]); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
     // A net's `=` no longer joins them: A.2.4's `net_decl_assignment` is a
