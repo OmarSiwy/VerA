@@ -16,9 +16,13 @@
 // DERIVATION: V(vo) is -1 V before 3.3 ns and 3 V from it, so V(vo) rises
 // through zero once, at 3.3 ns, and nowhere falls. The event fires once:
 // n = 1 from the next declared point on (4 ns), 0 before the crossing.
+// `//! solve` makes the testbench solve the netlist, so V(vo) is the
+// source's value; without it every probe reads the default 0 V and no
+// crossing exists (the testbench's documented default, as in m02_17).
 //
 //! lrm 5.10.3.1
 //! analysis tran
+//! solve
 //! time 0, 2n, 4n, 6n, 8n
 `timescale 1ns/1ns
 `include "check.vh"
