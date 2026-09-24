@@ -150,11 +150,7 @@ pub const Directive = enum {
 ///
 /// A CLOSED alternation of fifteen names, so anything else in that slot is a
 /// syntax error and not a second discipline (E0127).
-pub const qualifiers = std.StaticStringMap(void).initComptime(.{
-    .{"integer"}, .{"real"}, .{"reg"},    .{"wreal"},   .{"wire"},
-    .{"tri"},     .{"wand"}, .{"triand"}, .{"wor"},     .{"trior"},
-    .{"trireg"},  .{"tri0"}, .{"tri1"},   .{"supply0"}, .{"supply1"},
-});
+pub const Qualifier = enum { integer, real, reg, wreal, wire, tri, wand, triand, wor, trior, trireg, tri0, tri1, supply0, supply1 };
 
 /// One `default_discipline (or the `resetall / bare form that withdraws one),
 /// in the order the text stream met it. §10.2 makes the directive POSITIONAL —
@@ -169,8 +165,8 @@ pub const qualifiers = std.StaticStringMap(void).initComptime(.{
 /// it compares directly against a token start.
 pub const DefaultDiscipline = struct {
     at: u32,
-    /// Syntax 10-1's optional qualifier; "" when the directive named none.
-    qualifier: []const u8,
+    /// Syntax 10-1's optional qualifier; null when the directive named none.
+    qualifier: ?Qualifier,
     /// "" WITHDRAWS every default in force from `at` on. §10.2: "In addition
     /// to `resetall, if this directive is used without a discipline name,
     /// discipline resolution will not use a default discipline for nets
@@ -887,7 +883,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             // default discipline. An empty `discipline` is that withdrawal.
             try pp.defaults.append(pp.arena, .{
                 .at = @intCast(pp.out.items.len),
-                .qualifier = "",
+                .qualifier = null,
                 .discipline = "",
             });
             // IEEE 1364 §19.6: `resetall returns every directive to its default

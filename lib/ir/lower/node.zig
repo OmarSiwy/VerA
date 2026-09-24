@@ -92,8 +92,8 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
         // §10.2: the bare form and `resetall withdraw the default outright,
         // so nothing older than one of those is still in force.
         if (e.discipline.len == 0) break fallback;
-        if (std.mem.eql(u8, e.qualifier, "wire")) break e.discipline;
-        if (e.qualifier.len == 0 and fallback == null) fallback = e.discipline;
+        if (e.qualifier == .wire) break e.discipline;
+        if (e.qualifier == null and fallback == null) fallback = e.discipline;
     } else fallback;
 
     const dname = chosen orelse return;
