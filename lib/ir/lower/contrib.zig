@@ -14,6 +14,7 @@ const lower_analog_op = @import("analog_op.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
+const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const Ast = @import("frontend").Ast;
@@ -802,6 +803,7 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
 /// Append a fresh contribution + its accumulator pair. The two tables stay
 /// parallel; see the UNIT ORDERING note in proof.zig.
 pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
+    try lower_hier_name.refuseRuntime(self, tok, t.hi, t.lo);
     const idx: u32 = @intCast(self.out.contributions.items.len);
     try self.out.contributions.append(self.arena, .{
         .access = t.access,

@@ -11,6 +11,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
+const lower_hier_name = @import("hier_name.zig");
 const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const Ast = @import("frontend").Ast;
@@ -64,7 +65,7 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
         return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);
     }
     const c = try self.toBool(try lower_expr.lowerExpr(self, cond));
-    try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond) or try isStaticValue(self, c));
+    try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond) or try isStaticValue(self, c), cond);
 }
 
 /// Lower a body that only runs under a RUNTIME condition. The wrapper carries
@@ -300,6 +301,9 @@ pub fn lowerBranchStmt(
     then_s: Ast.StmtId,
     else_s: Ast.StmtId,
     static: bool,
+    /// The source condition of an `if`, for §9.20's parameter-chosen alias
+    /// (`lower_hier_name.pushCond`); `.none` for a guard the compiler made.
+    ast_cond: Ast.ExprId,
 ) Oom!void {
     const then_b = try self.mir.addBlock(self.arena);
     const else_b = try self.mir.addBlock(self.arena);
@@ -307,12 +311,18 @@ pub fn lowerBranchStmt(
 
     try self.branchTo(cond, then_b, else_b, true);
 
+    const src = ast_cond != .none;
+    const pure = src and isAnalysisOrConst(self, ast_cond);
     self.cur = then_b;
+    if (src) try lower_hier_name.pushCond(self, .{ .e = ast_cond, .pol = true, .pure = pure });
     try lowerCondBody(self, then_s, static);
+    if (src) lower_hier_name.popCond(self);
     try self.gotoBlock(join);
 
     self.cur = else_b;
+    if (src) try lower_hier_name.pushCond(self, .{ .e = ast_cond, .pol = false, .pure = pure });
     try lowerCondBody(self, else_s, static);
+    if (src) lower_hier_name.popCond(self);
     try self.gotoBlock(join);
 
     try self.builder.sealBlock(join);
@@ -362,12 +372,14 @@ pub fn lowerCase(
     for (arms) |a| for (a.labels) |l| if (ex.tag(l) == .logic_literal) {
         four = true;
     };
-    try lowerCaseChain(self, sv, if (four) scrutinee else null, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
+    try lowerCaseChain(self, sv, scrutinee, if (four) scrutinee else null, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
 }
 
 pub fn lowerCaseChain(
     self: *Lower,
     sv: TypedValue,
+    /// The source subject, for §9.20's parameter-chosen alias (`pushCond`).
+    subject: Ast.ExprId,
     four_state: ?Ast.ExprId,
     arms: []const Ast.CaseArm,
     default_arm: Ast.StmtId,
@@ -375,13 +387,13 @@ pub fn lowerCaseChain(
 ) Oom!void {
     if (arms.len == 0) return lower_stmt.lowerStmt(self, default_arm);
     const a = arms[0];
-    if (a.labels.len == 0) return lowerCaseChain(self, sv, four_state, arms[1..], default_arm, static);
+    if (a.labels.len == 0) return lowerCaseChain(self, sv, subject, four_state, arms[1..], default_arm, static);
 
     // §5.8.3 an arm with several labels matches any of them.
     var cond: ?Mir.Value = null;
     for (a.labels) |l| {
-        const eq = if (four_state) |subject|
-            (try lower_expr.caseEquality(self, subject, l)) orelse try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l))
+        const eq = if (four_state) |fs|
+            (try lower_expr.caseEquality(self, fs, l)) orelse try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l))
         else
             try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l));
         cond = if (cond) |c| try self.emit(.logor, &.{ c, eq }) else eq;
@@ -392,14 +404,19 @@ pub fn lowerCaseChain(
     const join = try self.mir.addBlock(self.arena);
     try self.branchTo(cond.?, then_b, else_b, true);
 
+    const pure = isAnalysisOrConst(self, subject);
     self.cur = then_b;
+    try lower_hier_name.pushCond(self, .{ .e = subject, .labels = a.labels, .pol = true, .pure = pure });
     try lowerCondBody(self, a.body, static);
+    lower_hier_name.popCond(self);
     try self.gotoBlock(join);
 
     self.cur = else_b;
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
-    try lowerCaseChain(self, sv, four_state, arms[1..], default_arm, static);
+    try lower_hier_name.pushCond(self, .{ .e = subject, .labels = a.labels, .pol = false, .pure = pure });
+    try lowerCaseChain(self, sv, subject, four_state, arms[1..], default_arm, static);
+    lower_hier_name.popCond(self);
     self.static_cond_depth -= @intFromBool(static);
     self.cond_depth -= 1;
     try self.gotoBlock(join);

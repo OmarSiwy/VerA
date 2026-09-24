@@ -117,7 +117,7 @@ pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!
     defer self.in_d2a_body = prev_d2a;
     if (hasD2aTerm(self, event)) self.in_d2a_body = true;
     // §5.10 an event's `hit` flag changes during the solve, so it is never static.
-    try lower_control.lowerBranchStmt(self, cond, body, .none, false);
+    try lower_control.lowerBranchStmt(self, cond, body, .none, false, .none);
 }
 
 fn hasD2aTerm(self: *Lower, e: Ast.ExprId) bool {
