@@ -160,6 +160,11 @@ pub const Design = struct {
 pub const UnitPath = struct {
     module: []const u8,
     path: []const u8,
+    /// The definition this unit was inlined FROM: the module `findModule`
+    /// named, or the end of the §6.4.2-selected paramset's chain. Published so
+    /// the VPI's `vpiDefName` and ports (Clause 11) read the answer instead of
+    /// re-resolving the name by a second rule.
+    decl: *const Ast.ModuleDecl,
 };
 
 /// A name the flatten wants a later stage to judge, and the token it was
@@ -453,6 +458,7 @@ pub const Flatten = struct {
         try self.unit_paths.append(self.ctx.arena, .{
             .module = self.ctx.file.str(top.name),
             .path = "",
+            .decl = top,
         });
 
         var stack: std.ArrayList(Ast.StrId) = .empty;
@@ -785,6 +791,7 @@ pub const Flatten = struct {
         try self.unit_paths.append(self.ctx.arena, .{
             .module = self.ctx.file.str(child.name),
             .path = path,
+            .decl = child,
         });
         for (child.analog) |blk| try self.analog.append(self.ctx.arena, .{
             .is_initial = blk.is_initial,
