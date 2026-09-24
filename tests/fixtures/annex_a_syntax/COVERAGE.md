@@ -17,8 +17,8 @@ new isolated design-input negative checks E0232; accepting the combined file
 would not close the map-reader gap. Measure A includes legacy regression rows,
 not a denominator of valid atomic normative requirements.
 
-New `$width`/`$period` negative fixtures expose missing mandatory event controls.
-Their XFAILs pin intended future rule-specific diagnostics, not existing output.
+New `$width`/`$period` negative fixtures pin the mandatory event control of a
+`controlled_reference_event`: the parser refuses a bare reference with E0207.
 Acceptance of a discarded specify block does not prove timing behavior.
 
 ## Historical fixture inventory, superseded where corrected above
