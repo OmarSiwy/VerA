@@ -40,15 +40,6 @@
 const std = @import("std");
 pub const Allocator = std.mem.Allocator;
 const diag = @import("diag");
-/// §2.6.2 number decoding, for §10.3's `transition_time` operand, and the
-/// prelude's own token snapshot. The lexer does not depend on this file, so the
-/// edge only goes one way.
-const Lexer = @import("lexer.zig");
-const token = @import("token.zig");
-/// Stage 3, imported by stage 1 for ONE reason: the prelude snapshot below
-/// carries the PARSE of the same three files, for the same "keyed on nothing"
-/// argument as the text and the tokens. Nothing else in this file parses.
-const Parser = @import("parser.zig");
 /// Annex E.2 — the `.MODEL`/`.SUBCKT` reader whose output joins this prelude.
 const spice_cards = @import("spice_cards.zig");
 

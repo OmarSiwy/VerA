@@ -4,8 +4,6 @@
 //! stripped text back to source offsets for diagnostics.
 //!
 //! LRM clauses this file's code cites: §2.2, §2.4, §2.7, §2.8.1.
-//!
-//! Cut verbatim from `preprocessor.zig`.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");

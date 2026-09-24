@@ -4,11 +4,8 @@
 //! any other module.
 //!
 //! LRM clauses this file's code cites: §3.4.4, §4.5.5, §4.6.1, §4.6.3, §6.2.2, §6.3, §6.4, §6.5.5, §6.7.1, §7, §9.10.
-//!
-//! Cut verbatim from `preprocessor.zig`.
 
 const std = @import("std");
-const Preprocessor = @import("../preprocessor.zig");
 
 // ---------------------------------------------------------------------------
 // Annex E — the Table E.1 SPICE primitives, as ordinary modules

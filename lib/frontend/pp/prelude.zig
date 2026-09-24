@@ -4,8 +4,6 @@
 //! compilation starts from, so disciplines.vams is not re-scanned per file.
 //!
 //! LRM clauses this file's code cites: §1, §6.7.
-//!
-//! Cut verbatim from `preprocessor.zig`.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");

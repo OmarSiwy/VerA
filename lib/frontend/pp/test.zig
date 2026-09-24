@@ -3,8 +3,6 @@
 //! Includes the differential tests of the `@Vector` scans against the scalar loops they replaced.
 //!
 //! LRM clauses this file's code cites: §1, §2.2, §2.4, §2.6.2, §2.8.1, §4.4.1, §4.5.8, §4.7, §9.15.
-//!
-//! Cut verbatim from `preprocessor.zig`.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");

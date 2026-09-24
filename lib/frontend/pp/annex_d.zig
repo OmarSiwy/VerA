@@ -4,10 +4,6 @@
 //! transcribed from docs/annex-d-stddefs.html.
 //!
 //! LRM clauses this file's code cites: §1.
-//!
-//! Cut verbatim from `preprocessor.zig`.
-
-const Preprocessor = @import("../preprocessor.zig");
 
 // ---------------------------------------------------------------------------
 // Annex D standard definitions (transcribed verbatim from docs/annex-d-stddefs.html)
