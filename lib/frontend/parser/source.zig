@@ -39,12 +39,14 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
     var connectrules: std.ArrayList(Ast.ConnectRulesDecl) = .empty;
     var udps: std.ArrayList(Ast.UdpDecl) = .empty;
+    var config_cells: std.ArrayList(Ast.StrId) = .empty;
     try modules.appendSlice(self.arena, self.file.modules);
     try disciplines.appendSlice(self.arena, self.file.disciplines);
     try natures.appendSlice(self.arena, self.file.natures);
     try paramsets.appendSlice(self.arena, self.file.paramsets);
     try connectrules.appendSlice(self.arena, self.file.connectrules);
     try udps.appendSlice(self.arena, self.file.udps);
+    try config_cells.appendSlice(self.arena, self.file.config_cells);
 
     while (true) {
         try self.skipAttributes();
@@ -138,7 +140,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                     const u = parseUdpDecl(self) catch |e| break :udp e;
                     break :udp udps.append(self.arena, u);
                 } else if (std.mem.eql(u8, w, "config"))
-                    parseConfigDecl(self)
+                    parseConfigDecl(self, &config_cells)
                 else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
                     parseLibraryDecl(self)
                 else
@@ -170,6 +172,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     self.file.paramsets = paramsets.items;
     self.file.connectrules = connectrules.items;
     self.file.udps = udps.items;
+    self.file.config_cells = config_cells.items;
     if (self.failed) return error.ParseError;
     return self.file;
 }
@@ -326,7 +329,12 @@ pub fn parseLibraryDecl(self: *Parser) Error!void {
 // ponytail: nothing is recorded, for `parseSpecifyBlock`'s reason — there
 // is no library table for a rule to select from, so a stored clause would
 // have no consumer. The upgrade is a map reader, which E0232 also wants.
-pub fn parseConfigDecl(self: *Parser) Error!void {
+///
+/// The `design` statement's cells are recorded (`SourceFile.config_cells`),
+/// and a digital run takes them as its tops (§13.3.1.1); the rules still bind
+/// nothing, which W0253 keeps saying whenever there are any — and always in
+/// an analog compile, which reads no cell list at all.
+pub fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
     const kw = self.pos;
     self.pos += 1;
     _ = try self.expectIdent();
@@ -335,14 +343,20 @@ pub fn parseConfigDecl(self: *Parser) Error!void {
     // above the repetition, not inside it.
     if (!parse_module.reservedIs(self, self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
     self.pos += 1;
-    while (self.peek() != .semicolon) _ = try parse_generate.parseDottedName(self, false);
+    while (self.peek() != .semicolon) {
+        const cell = self.file.str(try parse_generate.parseDottedName(self, false));
+        const last = if (std.mem.lastIndexOfScalar(u8, cell, '.')) |dot| cell[dot + 1 ..] else cell;
+        try cells.append(self.arena, try self.file.intern(self.arena, last));
+    }
     self.pos += 1;
+    var rules = false;
     while (!parse_module.reservedIs(self, self.pos, "endconfig")) {
         if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
         try parseConfigRule(self);
+        rules = true;
     }
     self.pos += 1;
-    try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
+    if (!self.digital or rules) try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
 }
 
 /// A.1.5 `config_rule_statement`. The five alternatives are three left

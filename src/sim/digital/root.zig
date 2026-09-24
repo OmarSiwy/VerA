@@ -556,6 +556,10 @@ const Elab = struct {
 /// §6.2.2: the root of the design is the description nothing instantiates.
 fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl {
     var top: ?*const Ast.ModuleDecl = null;
+    // IEEE 1364-2005 §13.3.1.1: a configuration's `design` statement names
+    // the top-level cells, whatever else the source leaves uninstantiated.
+    if (r.file.config_cells.len > 1) return r.fail(0, "digital execution requires exactly one top-level module", .{});
+    if (r.file.config_cells.len == 1) return findModule(r, r.file.config_cells[0], 0);
     outer: for (modules) |*candidate| {
         if (candidate.is_connect) continue;
         for (modules) |other| for (other.instances) |inst| {
