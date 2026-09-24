@@ -5,25 +5,17 @@
 // suspending is the one thing that needs the digital event queue by definition —
 // there is nowhere else to put a process that is waiting.
 //
-// VerA'S CEILING, NAMED, and no longer annex C's. `reg` and the digital `initial`
-// block are legal Verilog-AMS (A.2.1.3, A.6.2) and VerA accepts both now, so the
-// C.7 subset argument this file used to make ("no digital behavior or events are
-// supported in Verilog-A") is a rule of the SUBSET and not VerA's dialect. What is
-// left belongs to this compiler: `#` has no statement production, so it lands
-// where an expression was expected. Both delays are reported (the parser
-// resynchronises at the `;`); the third line, `@(source) target = source;`, PARSES
-// — §5.10's event control is an ordinary analog statement — and would be E0433,
-// "a statement in an initial block that is not a constant assignment", if the two
-// delays above it had not already made this a parse error. One file cannot pin
-// both, and the delay is the sharper claim: it is refused by the grammar, so no
-// change short of a discrete kernel can quietly start accepting it.
-//
-// The pin is the CODE. `reject reg` and `reject initial` are what this file used
-// to carry, and both matched only the prose of E0205's "found `reg`" message — a
-// verdict resting on a diagnostic's wording rather than on which rule fired.
+// VerA'S CEILING, NAMED, and no longer annex C's or the grammar's. A.6.2 makes
+// the body of an `initial` block A.6.4's `statement`, whose timing forms are
+// grammar in every module, so all three lines PARSE now (they used to be E0209,
+// "expected an expression", which was a claim about the analog statement
+// production and not about this block). What refuses them is E0433: an initial
+// block VerA can lower on its own is a run of constant assignments, and each of
+// these three suspends the process, which only §8.5's event queue can do. The
+// code is the pin; it moves when the mixed-signal runner executes the block.
 //
 //! lrm 8.5
-//! reject E0209
+//! reject E0433
 module ch8_blocking_timing;
   reg source, target;
   initial begin

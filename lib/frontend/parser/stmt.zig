@@ -48,7 +48,7 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     try self.skipAttributes();
     const tok = self.pos;
-    if (self.digital and self.eat(.hash)) {
+    if (self.discreteGrammar() and self.eat(.hash)) {
         const delay = if (self.eat(.lparen)) blk: {
             const value = try parse_expr.parseExpr(self);
             _ = try self.expect(.rparen);
@@ -59,7 +59,7 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     }
     // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null` —
     // digital only, like `#`: A.6.4 has no analog alternative for it.
-    if (self.digital and self.peek() == .kw_wait) {
+    if (self.discreteGrammar() and self.peek() == .kw_wait) {
         self.pos += 1;
         _ = try self.expect(.lparen);
         const cond = try parse_expr.parseExpr(self);
@@ -363,8 +363,8 @@ pub fn parseSysTask(self: *Parser) Error!Ast.StmtId {
 /// every operator in Table 4-3), then the operator decides the statement.
 pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
-    const lhs = if (self.digital) try parse_expr.parsePostfix(self) else try parse_expr.parseExpr(self);
-    if (self.digital and self.eat(.lt_eq)) {
+    const lhs = if (self.discreteGrammar()) try parse_expr.parsePostfix(self) else try parse_expr.parseExpr(self);
+    if (self.discreteGrammar() and self.eat(.lt_eq)) {
         const timing = try parseIntraTiming(self);
         const value = try parse_expr.parseExpr(self);
         _ = try self.expect(.semicolon);
@@ -421,7 +421,7 @@ pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
 /// countdown around the waiter and nothing asks for it yet; add it beside
 /// the `.at` arm when something does.
 pub fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
-    if (!self.digital) return .{ .expr = .none, .is_delay = false };
+    if (!self.discreteGrammar()) return .{ .expr = .none, .is_delay = false };
     switch (self.peek()) {
         .hash => {
             self.pos += 1;

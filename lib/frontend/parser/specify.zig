@@ -452,26 +452,6 @@ pub fn unsupportedItem(self: *Parser) Error {
     return self.failAt(self.pos, .E0205, "found {s}", .{self.found(self.pos)});
 }
 
-/// The SAME E0205, reported without setting `failed` — so the file is still
-/// refused (the bag holds an error, and `root.zig` reads `bag.failed()`) but
-/// `parseSourceFile` does not raise `ParseError`, and stage 4 therefore still
-/// runs over the recorded AST.
-///
-/// That distinction is the whole of why `always` is parsed at all (`reg` and
-/// `initial` are now accepted outright — see `parseDiscrete`). A construct
-/// VerA cannot execute is still a construct the LRM
-/// states rules ABOUT — §4.5.15 bars an analog operator from an `initial`
-/// block, §4.7.3 bars an analog function call from outside the analog
-/// context, §5.2.1 bars a digital value from an `analog initial` block,
-/// §7.2.2 bars a variable from being assigned in both contexts — and while
-/// the keyword was a hard syntax error not one of those four could ever
-/// fire. A modeller writing `initial x = ddt(V(p,n));` was told the block was
-/// unsupported and never told the expression was illegal in it.
-pub fn reportItem(self: *Parser, tok: u32) Error!void {
-    const span = lexer.tokenSpan(self.src, self.starts, tok);
-    try self.bag.add(.parse, .E0205, span, "found {s}", .{self.found(tok)});
-}
-
 /// A.4.1 `pass_switchtype pass_switch_instance { , pass_switch_instance } ;`
 /// with `pass_switchtype ::= tran | rtran` and `pass_switch_instance ::=
 /// [ name_of_gate_instance ] ( inout_terminal , inout_terminal )` — no
@@ -776,15 +756,19 @@ pub fn parseSwitch(self: *Parser) Error!void {
 /// A.6.2 `initial_construct ::= initial statement` /
 /// `always_construct ::= always statement` — §7.2.2's DISCRETE context.
 ///
-/// Shared statements retain the analog device pipeline's restrictions by
-/// default. Digital mode adds delay/NBA syntax and leaves execution support
-/// checks to the source runner. This keeps unsupported source explicit while
-/// preserving analog context checks in Lower.checkDiscreteContext.
+/// Both keywords are module items of every module (A.1.4), and the body is
+/// A.6.4's `statement`, whose digital forms (`#`, `wait`, `<=`, intra-
+/// assignment timing) are admitted by `in_discrete` whatever the file's
+/// extension. Whether a given discrete process can be EXECUTED is not a
+/// grammar question: lowering answers it (`Lower.checkDiscreteContext`), with
+/// the clause that decides it.
 pub fn parseDiscrete(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
     const is_always = self.peek() == .kw_always;
     self.pos += 1;
-    if (is_always and !self.in_connect_module and !self.digital) try reportItem(self, main_tok);
+    const saved = self.in_discrete;
+    self.in_discrete = true;
+    defer self.in_discrete = saved;
     const body = try parse_stmt.parseStmtNoNull(self);
     try b.discrete.append(self.arena, .{
         .is_always = is_always,

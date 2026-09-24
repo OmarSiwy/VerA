@@ -59,6 +59,15 @@ pub const DiscreteCtx = struct {
 };
 
 pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §8.5: an `always` block and a continuous assignment are discrete
+    // PROCESSES — each re-runs whenever what it reads changes, so what its
+    // target holds is a function of the 8.5.1 event queue. That queue is the
+    // mixed-signal kernel's, and until the testbench can run it the answer is a
+    // refusal that names it (E0437), never a silent constant.
+    for (module.discrete) |blk| if (blk.is_always)
+        try self.err(blk.main_tok, .E0437, "an `always` block re-runs on §8.5.1's event queue, which VerA does not run beside a device yet", .{});
+    for (module.assigns) |a|
+        try self.err(a.main_tok, .E0437, "a continuous assignment is a §8.5.3.1 process on the event queue, which VerA does not run beside a device yet", .{});
     if (module.discrete.len == 0) return;
 
     var ctx: DiscreteCtx = .{};

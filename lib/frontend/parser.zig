@@ -60,6 +60,13 @@ pub const Parser = struct {
     in_analog_fn: bool = false,
     /// Opt-in shared grammar for the digital source executor.
     digital: bool = false,
+    /// Inside the body of an `initial` or `always` block (§7.2.2's discrete
+    /// context). A.6.2/A.6.5 give that body the digital statement forms — a
+    /// `#` delay, `wait`, a nonblocking `<=`, an intra-assignment timing
+    /// control — in ANY module, analog or not. So those four are admitted by
+    /// position here, not by file extension; an `analog` block still has none
+    /// of them (A.6.4). See `discreteGrammar`.
+    in_discrete: bool = false,
     /// Inside a §7.6 `connectmodule` body. Two things read it: `parseDiscrete`,
     /// because a connect module is the one design element whose body has the
     /// discrete context LEGALLY (§7.2.2), so E0205 must not fire there; and
@@ -181,6 +188,13 @@ pub const Parser = struct {
     // -----------------------------------------------------------------------
     // Token access — LRM §2.2 (the stream), §2.8 (identifiers)
     // -----------------------------------------------------------------------
+
+    /// The A.6.5 statement forms an analog statement does not have — `#`,
+    /// `wait`, `<=`, intra-assignment timing — are grammar here: a digital
+    /// source, or the body of an `initial`/`always` block anywhere.
+    pub fn discreteGrammar(self: *const Parser) bool {
+        return self.digital or self.in_discrete;
+    }
 
     pub fn peek(self: *const Parser) token.Tag {
         return self.tags[self.pos];

@@ -1,9 +1,14 @@
-// Annex C.7: "No digital behavior or events are supported in Verilog-A." The
-// `always` process that would host a procedural continuous assignment is not a
-// Verilog-A module item.
-//! lrm C.7
-//! reject E0205
-//! reject always
+// §8.5.3.2 a procedural continuous assignment inside an `always` process. The
+// `always` item parses now (A.1.4 makes it a module item of every module; the
+// E0205 this file used to pin came from annex C.7, a Verilog-A subset rule), so
+// what refuses the source is the statement in its body: `force` has no statement
+// production in VerA's grammar and lands where an expression was expected
+// (E0209) — the same refusal procedural_force_unsupported.va pins in an
+// `initial` block.
+//
+//! lrm 8.5.3.2
+//! reject E0209
+//! reject force
 module ch8_proc_continuous;
   integer source, target;
   always begin force target = source; end

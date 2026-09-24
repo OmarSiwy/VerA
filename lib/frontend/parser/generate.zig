@@ -212,11 +212,8 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // every Body list is either hoisted above, kept under `blk`, or refused.
     for (gb.instances.items) |inst| try self.report(inst.main_tok, .E0235, "a module instance", .{});
     for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
-    for (gb.discrete.items) |d| {
-        // An analog-mode `always` was refused at its own token (`parseDiscrete`).
-        if (d.is_always and !self.digital and !self.in_connect_module) continue;
+    for (gb.discrete.items) |d|
         try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});
-    }
     // The same for the three the body used to DROP outright, with no message:
     // a continuous assignment (A.6.1) and a gate (A.3.1) are drivers the
     // scheme decides the existence of exactly as it does an instance's, and a

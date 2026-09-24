@@ -424,6 +424,9 @@ pub const Code = enum(u16) {
     /// §7.3.7 a DIGITAL function called from the analog context. E0430 is the
     /// other sentence of the same clause, in the other direction.
     E0436,
+    /// §8.5 a discrete process in a module VerA compiles as a device, where
+    /// executing it needs a mixed-signal kernel feature VerA does not have.
+    E0437,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3516,6 +3519,25 @@ fn infoOf(c: Code) Info {
             \\the body genuinely belongs to the discrete domain, let the
             \\digital process call it and have the analog block read the
             \\variable it wrote (LRM 7.3's legal direction, Table 7-1).
+            ,
+        },
+
+        .E0437 => .{
+            .title = "this discrete process needs a mixed-signal kernel feature VerA does not implement",
+            .lrm = "8.5",
+            .explain =
+            \\The source is legal Verilog-AMS. A module may hold `always` blocks,
+            \\continuous `assign`s and timed `initial` blocks beside its `analog`
+            \\block (LRM 7.2.2), and LRM 8.5 defines how the two kernels run them
+            \\together: the digital events of each time tick execute in the
+            \\stratified queue of 8.5.1, and an analog macro-process that reads a
+            \\digital value is re-solved when that value changes (8.5, the
+            \\implicit D2A event).
+            \\
+            \\The message names the part of that machinery the construct needs and
+            \\VerA does not have. It is a statement about this compiler, not about
+            \\the source: the construct becomes accepted when the named feature
+            \\lands, and the fixtures that pin it are written to flip then.
             ,
         },
 

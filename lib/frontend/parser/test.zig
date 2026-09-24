@@ -619,6 +619,33 @@ test "Table 4-3 precedence: ?: is the ONLY right-associative operator (§4.2.2)"
     try std.testing.expectEqual(Ast.ExprTag.int_literal, e.tag(e.rhs(pow)));
 }
 
+test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of any module, not in analog" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // `always`, `assign`, `#`, `wait`, `<=` and intra-assignment timing in an
+    // ANALOG module's discrete processes: all module items / statements.
+    const ok = try parseForTest(arena,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  reg clk, q; wire w;
+        \\  assign w = q;
+        \\  initial begin clk = 0; #4 clk = 1; wait (q) q = #1 0; end
+        \\  always @(posedge clk) q <= 1;
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), ok.count());
+    const m = ok.file.modules[0];
+    try std.testing.expectEqual(@as(usize, 1), m.assigns.len);
+    try std.testing.expectEqual(@as(usize, 2), m.discrete.len);
+    // The same forms in an ANALOG block are still not analog statements (A.6.4).
+    const nba = try parseForTest(arena, "module m(p); inout p; electrical p; integer s; analog begin s <= 1; I(p) <+ V(p); end endmodule");
+    try std.testing.expectEqual(diag.Code.E0214, nba.code(0));
+    const delay = try parseForTest(arena, "module m(p); inout p; electrical p; analog begin #1 I(p) <+ V(p); end endmodule");
+    try std.testing.expectEqual(diag.Code.E0209, delay.code(0));
+}
+
 test "errors are collected with locations and parsing continues" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -629,18 +656,15 @@ test "errors are collected with locations and parsing continues" {
         \\  inout p;
         \\  electrical p;
         \\  child u(p);
-        \\  always @(p) x = 1;
+        \\  wreal w;
         \\  analog I(p) <+ V(p);
         \\endmodule
     ;
     const res = try parseForTest(arena, src);
-    // `child u(p);` is a §6.2.2 module_instantiation and parses now; only the
-    // digital `always` is outside annex C.
+    // `child u(p);` is a §6.2.2 module_instantiation and parses now; only
+    // `wreal` is outside the grammar (annex C.4).
     try std.testing.expectEqual(@as(usize, 1), res.count());
     try std.testing.expectEqual(diag.Code.E0205, res.code(0));
-    // Backticked now: `always` has its own `kw_always` tag, so the "found ..."
-    // half is `Tag.quoted` rather than a slice of the source (see `found`).
-    try std.testing.expectEqualStrings("found `always`", res.msg(0));
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);
 
     // The span still points at the offending token, on line 5.
