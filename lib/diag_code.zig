@@ -362,6 +362,9 @@ pub const Code = enum(u16) {
     E0368,
     /// §4.2.1 `===`/`!==` with a real operand: Table 4-2 does not list them.
     E0369,
+    /// §3.6.2.5 a discipline overrides an attribute of a half it binds no
+    /// nature to, or one its bound nature does not define.
+    E0370,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2958,6 +2961,29 @@ fn infoOf(c: Code) Info {
             \\
             \\Use `==` and `!=`. For reals, prefer a tolerance comparison —
             \\`abs(a - b) < tol` — over exact equality.
+            ,
+        },
+        .E0370 => .{
+            .title = "discipline overrides an attribute of no bound nature",
+            .lrm = "3.6.2.5",
+            .explain =
+            \\LRM 3.6.2.5: "A discipline can override the value of the bound
+            \\nature for the pre-defined attributes ... To do so from a
+            \\discipline declaration, the bound nature and attribute needs to
+            \\be defined."
+            \\
+            \\`flow.abstol = 1n;` overrides the abstol of the nature bound to
+            \\the discipline's flow. A discipline that binds no flow nature has
+            \\no such value to override, and the line would otherwise be
+            \\dropped without a word. Bind the nature first:
+            \\
+            \\    discipline d;
+            \\      potential Voltage;
+            \\      flow Current;          // the nature the override needs
+            \\      flow.abstol = 1n;
+            \\    enddiscipline
+            \\
+            \\The same holds for an attribute the bound nature does not define.
             ,
         },
 
