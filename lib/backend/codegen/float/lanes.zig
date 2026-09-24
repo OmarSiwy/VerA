@@ -24,7 +24,6 @@ const std = @import("std");
 const codegen = @import("../../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("../render.zig");
-const gen_hoist = @import("../hoist.zig");
 const Mir = @import("ir").Mir;
 const proof = @import("ir").proof;
 
@@ -65,7 +64,7 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
     const def = self.mir.valueDef(v);
     if (def != .inst_result) return false;
     const row = self.mir.instRow(def.inst_result);
-    if (gen_hoist.libmClass(row.op)) return true;
+    if (codegen.opcode_zig.get(row.op).libm) return true;
     return switch (Mir.opClass(row.op)) {
         .unary => eagerCostly(self, @enumFromInt(row.a), depth + 1),
         .binary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or

@@ -13,7 +13,7 @@ const std = @import("std");
 const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
-const gen_hoist = @import("hoist.zig");
+const gen_setup = @import("setup.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
@@ -25,9 +25,10 @@ const VTy = codegen.VTy;
 // ---- control-flow reconstruction ------------------------------------------
 
 /// A unit returns its one contribution value; the common declaration
-/// returns the whole cache. Same exit points either way, so this is the one
-/// place that knows the difference.
+/// returns the whole cache; `setup` stores its roots. Same exit points either
+/// way, so this is the one place that knows the difference.
 pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
+    if (self.su.mode) return gen_setup.emitStores(self, depth, "");
     try self.ind(depth);
     if (!self.emitting_common) {
         try self.b("return ", .{});
@@ -35,21 +36,10 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
         try self.b(";\n", .{});
         return;
     }
-    // An exit inside the prefix guard would skip the else arm's reloads and
-    // the whole body after them, so the region ends before it.
-    self.hp.dirty = true;
     try self.b("return .{{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
-        try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
-        try self.b(",\n", .{});
-    }
-    // The prefix's live-outs ride out as ordinary fields — that is the only
-    // way `precompute` can see them (`planHoistPrefix`).
-    for (self.hp.vals, 0..) |v, j| {
-        try self.ind(depth + 1);
-        try self.b(".f{d} = ", .{self.core.lo_vals.len + j});
         try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
         try self.b(",\n", .{});
     }
@@ -62,9 +52,6 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
     for (stmts) |inst| {
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
         if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
-        if (depth == 1) try gen_hoist.hpBoundary(self);
-        gen_hoist.hpMarkInst(self, inst);
-        self.hp.stmts += 1;
         gen_unit.probeDef(self, self.plan.slot[i], true);
         // `or` short-circuits, so the straight-line path (`decl`, which runs
         // without a probe) never touches `place`.
@@ -82,8 +69,14 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
 }
 
 pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
-    if (depth == 1) try gen_hoist.hpBoundary(self);
     if (self.an.is_loop[bi]) {
+        // `setup` ends at a loop with a per-eval branch: nothing it can reach
+        // is placeable, and forcing its tests `then` could spin forever. The
+        // stop is a runtime flag so the structure after it still compiles.
+        if (self.su.mode and self.sinv.loop_varying[bi]) {
+            self.su.stop = true;
+            try gen_setup.emitStores(self, depth, "if (zs_stop) ");
+        }
         try self.ind(depth);
         try self.b("L{d}: while (true) {{\n", .{bi});
         try gen_unit.scopeOpen(self);
@@ -169,13 +162,18 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             // unit can observe in between, so emit the common action once.
             if (self.plan.dead_branch[bi])
                 return emitEdge(self, bi, @intFromEnum(d.then_block), depth, target);
-            // The condition decides which arm's phi copies run, so a
-            // bias-dependent one ends the region even when both arms are
-            // parameter-only.
-            gen_hoist.hpMark(self, d.cond);
             try self.ind(depth);
             try self.b("if (", .{});
-            try renderCond(self, d.cond);
+            if (self.su.mode and !self.sinv.val[@intFromEnum(self.an.rv(d.cond))]) {
+                // `setup` takes a per-eval branch `then` without testing it:
+                // neither arm holds setup work, and a §5.10.2 initial-step
+                // arm is exactly what it must compute (plan/setup.zig's
+                // header). Both arms are still emitted, behind the always-true
+                // runtime flag, so every label and break stays where the
+                // relooper put it.
+                self.su.stop = true;
+                try self.b("zs_stop", .{});
+            } else try renderCond(self, d.cond);
             try self.b(") {{\n", .{});
             try gen_unit.scopeOpen(self);
             try emitEdge(self, bi, @intFromEnum(d.then_block), depth + 1, target);
@@ -245,10 +243,6 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     for (phis) |inst| {
         if (!slotted(self, inst)) continue;
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-        // A phi is transparent to `hpPure` because THIS is where its value
-        // enters — one incoming copy per edge, each checked as it is written.
-        gen_hoist.hpMark(self, self.an.phiIn(inst, from));
-        self.hp.stmts += 1;
         try self.ind(d2);
         if (par) {
             try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
@@ -277,7 +271,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
 
 /// Does rendering `v` read the slot of a phi defined in block `to`? Walks the
 /// INLINE tree `renderVal` would print and stops at anything materialized —
-/// a slot, a cache field or a precompute field is a name, and only a phi slot
+/// a slot, a cache field or a setup field is a name, and only a phi slot
 /// of `to` is one the copies on this edge overwrite. Past the depth cap it
 /// answers yes, which keeps the temporaries: the safe side.
 fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {

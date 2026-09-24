@@ -1275,6 +1275,22 @@ pub fn validate(comptime D: type) void {
         if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
             @compileError(name ++ ".state_class = .path_latch requires stateCtl");
     }
+    // The solve-invariant slice. `setup(V, model, inst)` fills `inst.su` (a
+    // `Setup`) once per card, instance, temperature or `setup_simparams`
+    // write, with the host's VALUE scalar `V`; eval reads the fields as
+    // constants. The three come together or not at all.
+    if (@hasDecl(D, "Setup") != @hasDecl(D, "setup") or @hasDecl(D, "setup") != @hasDecl(D, "setup_simparams"))
+        @compileError(name ++ ": Setup, setup and setup_simparams come together");
+    if (@hasDecl(D, "setup")) {
+        const info = @typeInfo(@TypeOf(D.setup));
+        if (info != .@"fn" or info.@"fn".params.len != 3 or info.@"fn".params[0].type != type)
+            @compileError(name ++ ".setup: expected fn (comptime V: type, *const Model, *Instance) void");
+        if (!@hasField(D.Instance, "su") or @FieldType(D.Instance, "su") != D.Setup)
+            @compileError(name ++ ".Instance must carry `su: Setup`");
+        const sp = @typeInfo(@TypeOf(D.setup_simparams));
+        if (sp != .array or sp.array.child != []const u8)
+            @compileError(name ++ ".setup_simparams must be [k][]const u8");
+    }
     // §5.6.1.2 + §4.5.2 the fused accepted-point pass: `q` and `updateState`
     // from one core evaluation, so it needs both of them to be equivalent to.
     if (@hasDecl(D, "acceptQ")) {
@@ -1574,6 +1590,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // both checked in `validate`.
     .{ "state_class", {} },
     .{ "acceptQ", {} },
+    // The solve-invariant slice: the per-instance `Setup` block, the call that
+    // fills it, and the `$simparam` names it reads. Checked in `validate`.
+    .{ "Setup", {} },
+    .{ "setup", {} },
+    .{ "setup_simparams", {} },
     // Single-precision-Jacobian permission — checked inline in `validate` (the
     // "`jac_f32` must be a bool" guard); the S note in the header is the story.
     // Optional; absent means f64, which is the default a host must assume.
@@ -1899,6 +1920,12 @@ fn isValueType(comptime T: type) bool {
         // Integer-backed enums are fixed-size POD (e.g. Instance.analysis_kind).
         .@"enum" => |e| isValueType(e.tag_type),
         .array => |a| isValueType(a.child),
+        // `Instance.su` (a `Setup`): a plain struct of value fields is as
+        // copyable as its fields. `void` is `su_ok` outside Debug.
+        .@"struct" => |s| for (s.fields) |f| {
+            if (!isValueType(f.type)) break false;
+        } else true,
+        .void => true,
         else => false,
     };
 }
@@ -2056,7 +2083,13 @@ const MockAll = struct {
         is_final_step: bool = false,
         bound_step: f64 = std.math.inf(f64),
         systf: ?*const SystfHost = null,
+        su: Setup = .{},
     };
+    pub const Setup = struct { r: [1]f64 = @splat(std.math.nan(f64)) };
+    pub const setup_simparams = [_][]const u8{"tnom"};
+    pub fn setup(comptime V: type, m: *const Model, inst: *Instance) void {
+        inst.su.r[0] = V.con(@floatCast(m.g)).val();
+    }
 
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
     // §3.6.1.2 electrical potential's abstol, both unknowns being voltages.

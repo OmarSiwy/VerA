@@ -18,6 +18,7 @@ const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
+const gen_setup = @import("setup.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const cg_display = @import("../cg_display.zig");
@@ -317,11 +318,8 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // own declaration.
         if (depth > 0 and self.an.dFree(v)) {
             const i = @intFromEnum(v);
-            // A precompute field IS the plain f64 — no `.val()` needed.
-            if (i < self.an.nv and self.plan.pcHoisted(v)) {
-                self.uses_inst = true;
-                return try std.fmt.allocPrint(self.arena, "inst.pc__{d}", .{self.pc.idx[i]});
-            }
+            // A setup field IS the plain f64 — no `.val()` needed.
+            if (i < self.an.nv and self.plan.isRoot(v)) return try gen_setup.rootRef(self, v, true);
             if (i < self.an.nv and self.plan.cached(v))
                 return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
             if (i < self.an.nv and self.plan.slot[i] != none_u32) {
