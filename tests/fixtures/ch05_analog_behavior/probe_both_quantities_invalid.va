@@ -14,11 +14,11 @@
 // one each. This file differs from all three only in reading both of a branch
 // that has no source.
 //
-// No VerA code exists for this, so the expectation is the phase label: the file
-// must not compile at all.
+// E0423 ("both quantities of a probe branch are read") is VerA's code for this
+// rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.4.2.1
-//! reject DiagnosticsReported
+//! reject E0423
 module ch5_probe_both_quantities(a, b);
   inout a, b; electrical a, b;
   analog I(a) <+ V(a, b) + I(a, b);
