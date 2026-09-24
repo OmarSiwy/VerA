@@ -37,7 +37,7 @@
 //! analysis tran
 //! time 0, 50n
 //! checks 10
-//! xfail the analog parse refuses the connect module's `task` (E0205: tasks are a digital-parse item), and a mixed module's digital half declares no parameter for m04_ds_hold's `case (sel)` to read; the §9.22 half (src/sim/digital/driver.zig) counts and reads these four drivers
+//! xfail a mixed module's digital half declares no parameter for m04_ds_hold's `case (sel)` to read; the `task` parses and the §9.22 half (src/sim/digital/driver.zig) counts and reads these four drivers
 //
 // HAND DERIVATION
 //   Four ordinary modules drive the mixed net `net`, each holding one constant:

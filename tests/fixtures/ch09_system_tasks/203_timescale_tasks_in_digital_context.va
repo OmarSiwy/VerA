@@ -27,7 +27,6 @@
 //! analysis tran
 //! time 0, 10n
 //! print none
-//! xfail the mixed-signal runner's digital engine does not implement $printtimescale, $sformat or $swrite (E1100 "digital system task `$printtimescale` is not implemented"), so the digital context cannot run the IEEE 1364 §17.3 timescale tasks §9.6 leaves to it
 `timescale 1ns/1ns
 `include "check.vh"
 module ch09_timescale_tasks_in_digital_context(out);
