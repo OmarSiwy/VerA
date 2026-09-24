@@ -33,6 +33,9 @@ pub const Domain = enum {
     pow_sign, // pow(x,y) sign rules                          §4.3.1 Table 4-14
 };
 
+/// `lhs REL rhs` for the twelve comparison opcodes (`Info.rel`).
+pub const Relation = enum { lt, le, gt, ge, eq, ne };
+
 /// How the one constant kernel (`frontend/constfold.zig`) folds an opcode.
 /// No default: a new opcode states its fold or does not compile.
 pub const Fold = union(enum) {
@@ -72,6 +75,9 @@ pub const Info = struct {
     /// `peelToBool` may peel: the §4.2.5/§4.2.7 comparisons and `!`. NOT `&&`
     /// and `||`, which are 0/1 but carry no fact about an operand.
     predicate: bool = false,
+    /// The §4.2.4/§4.2.5 relation a comparison tests, real or integer alike;
+    /// null for every other opcode. The prover's `condFacts` mines it.
+    rel: ?Relation = null,
     /// The LRM domain obligation. For the binary members it is on the SECOND
     /// operand (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else
     /// constrains the single unary operand.
@@ -102,18 +108,18 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .idiv = .{ .class = .binary, .int = true, .domain = .nonzero_divisor, .fold = .{ .binary = .{ .f = .div, .int = true } } },
     .imod = .{ .class = .binary, .int = true, .domain = .nonzero_divisor, .fold = .{ .binary = .{ .f = .mod, .int = true } } },
     .ineg = .{ .class = .unary, .int = true, .fold = .{ .unary = .{ .f = .minus, .int = true, .wrap = true } } },
-    .flt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .lt } } },
-    .fgt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .gt } } },
-    .fle = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .le } } },
-    .fge = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .ge } } },
-    .feq = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .eq } } },
-    .fne = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .neq } } },
-    .ilt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .lt, .int = true } } },
-    .igt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .gt, .int = true } } },
-    .ile = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .le, .int = true } } },
-    .ige = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .ge, .int = true } } },
-    .ieq = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .eq, .int = true } } },
-    .ine = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .binary = .{ .f = .neq, .int = true } } },
+    .flt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .lt, .fold = .{ .binary = .{ .f = .lt } } },
+    .fgt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .gt, .fold = .{ .binary = .{ .f = .gt } } },
+    .fle = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .le, .fold = .{ .binary = .{ .f = .le } } },
+    .fge = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .ge, .fold = .{ .binary = .{ .f = .ge } } },
+    .feq = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .eq, .fold = .{ .binary = .{ .f = .eq } } },
+    .fne = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .ne, .fold = .{ .binary = .{ .f = .neq } } },
+    .ilt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .lt, .fold = .{ .binary = .{ .f = .lt, .int = true } } },
+    .igt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .gt, .fold = .{ .binary = .{ .f = .gt, .int = true } } },
+    .ile = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .le, .fold = .{ .binary = .{ .f = .le, .int = true } } },
+    .ige = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .ge, .fold = .{ .binary = .{ .f = .ge, .int = true } } },
+    .ieq = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .eq, .fold = .{ .binary = .{ .f = .eq, .int = true } } },
+    .ine = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .ne, .fold = .{ .binary = .{ .f = .neq, .int = true } } },
     .logand = .{ .class = .binary, .int = true, .bool01 = true, .fold = .{ .binary = .{ .f = .logical_and } } },
     .logor = .{ .class = .binary, .int = true, .bool01 = true, .fold = .{ .binary = .{ .f = .logical_or } } },
     .lognot = .{ .class = .unary, .int = true, .bool01 = true, .predicate = true, .fold = .{ .unary = .{ .f = .logical_not } } },
