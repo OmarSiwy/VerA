@@ -748,11 +748,20 @@ pub fn emitCommon(self: *Gen) Error!void {
     try gen_file.recordUnitFile(self, self.common_name, lo, at_fn);
 }
 
+/// The operator `call` unit `unit` was enumerated from — `naming` records it.
 pub fn opInstOf(self: *const Gen, unit: u32) ?Mir.Inst {
-    for (self.op_unit, 0..) |u, k| {
-        if (u == unit) return @enumFromInt(@as(u32, @intCast(k)));
+    const inst = self.units[unit].inst;
+    return if (inst == .none) null else inst;
+}
+
+/// The unit enumerated from operator `call` `inst`, or `none_u32`.
+// ponytail: a scan over the unit list (tens of entries), once per rendered
+// operator; an nv-sized reverse map is what this replaced.
+pub fn unitOfInst(self: *const Gen, inst: Mir.Inst) u32 {
+    for (self.units, 0..) |u, i| {
+        if (u.inst == inst) return @intCast(i);
     }
-    return null;
+    return none_u32;
 }
 
 /// Call arguments of the operator that owns unit `i` (empty if it has none).

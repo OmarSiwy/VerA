@@ -1278,7 +1278,7 @@ pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
 /// one stable key and adding an unrelated operator renumbers nothing.
 pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) Error!void {
     self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
-    const unit = self.op_unit[@intFromEnum(inst)];
+    const unit = gen_unit.unitOfInst(self, inst);
     if (unit == none_u32) return self.b("S.con(0.0)", .{});
     const n = self.unit_names[unit];
     // Only the operators whose kernel needs the CURRENT input read it; the

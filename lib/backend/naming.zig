@@ -21,7 +21,7 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
-const token = @import("frontend").token;
+const opdb = @import("ir").op;
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
 pub const Unit = struct {
@@ -38,6 +38,10 @@ pub const Unit = struct {
     target: []const u8,
     /// Only set (>0) when two units share (role,target) in the same scope.
     disambig: u16 = 0,
+    /// The operator `call` a `.analog_op` unit was enumerated from; `.none`
+    /// for every other role. Recorded by the ONE walk that defines the unit
+    /// order, so no consumer has to re-walk the MIR and hope it agrees.
+    inst: Mir.Inst = .none,
 };
 
 pub const Role = enum {
@@ -266,7 +270,9 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call) continue;
             const callee = mir.instData(inst).call.name;
-            if (!isStatefulAnalogOp(callee)) continue;
+            // `ir/op.zig`'s table IS the set: an `OpKind` other than `.none`
+            // is exactly an operator that owns state or a monitored event.
+            if (opdb.byName(callee) == .none) continue;
             // The `$` of a §9.17 task is dropped, not escaped: codegen looks the
             // OpKind up from `Unit.target`, and `sanitize` would turn it into
             // `Z24bound_step`. No collision is possible — every other unit
@@ -274,7 +280,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
             // identifier can be.
             const bare = if (callee[0] == '$') callee[1..] else callee;
             const t = try gpa.dupe(u8, try sanitize(&scratch, bare));
-            try units.append(gpa, .{ .role = .analog_op, .target = t });
+            try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst });
         }
     }
 
@@ -308,20 +314,6 @@ pub fn assertCanonicalOrder(units: []const Unit, lower: *const Lower, unit_modes
     std.debug.assert(units.len >= n_contrib);
     for (units[0..n_contrib]) |u| std.debug.assert(u.role == .analog); // (b)
     for (units[n_contrib..]) |u| std.debug.assert(u.role == .analog_op); // (c)
-}
-
-/// Does this `call` callee name a per-instance-stateful analog operator?
-/// Reuses token.zig's annex-A.8.2/A.6.5 groups rather than restating them.
-pub fn isStatefulAnalogOp(name: []const u8) bool {
-    // §9.17 kernel control: not keywords (they are `$` system tasks), but they
-    // need a unit for the same reason — `updateState` evaluates it and writes
-    // the result where the host can read it.
-    if (std.mem.eql(u8, name, "$bound_step") or std.mem.eql(u8, name, "$discontinuity")) return true;
-    const tag = token.keyword_map.get(name) orelse return false;
-    // §4.5.13 limexp and §4.5.14 ddx are pure functions of their argument — no
-    // state, so no unit and no Instance field.
-    if (tag == .kw_limexp or tag == .kw_ddx) return false;
-    return token.isFilterFunction(tag) or token.isEventFunction(tag);
 }
 
 /// Assign the within-group ordinal: the n-th unit sharing a (role, target) with
