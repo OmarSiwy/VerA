@@ -254,14 +254,24 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         // is self-determined and never widens the result.
         .index => blk: {
             if (try self.indexedArray(e) == null) {
-                // IEEE 1364-2005 §5.2.1 a bit-select of a vector: one bit,
-                // unsigned; the index is self-determined.
-                // ponytail: no part-select (`a[3:0]`, `+:`); it is the same
-                // arm with a width, and nothing reads one yet.
+                // IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector:
+                // unsigned, as wide as it selects; the index is
+                // self-determined and a part-select's bounds are constant.
+                // ponytail: no indexed part-select (`+:`/`-:`), which the
+                // parser does not read.
                 const lhs = ex.lhs(e);
-                if ((ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident) or ex.tag(ex.rhs(e)) == .range)
-                    return self.exprFail(e, "part selects are not implemented; a select is one bit of a whole vector, or an unpacked array element");
+                if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident)
+                    return self.exprFail(e, "a select is of a whole vector or an unpacked array element");
                 _ = try self.scalarSlot(lhs);
+                const rg = ex.rhs(e);
+                if (ex.tag(rg) == .range) {
+                    const tok = ex.mainTok(rg);
+                    const msb = (try self.constant(ex.lhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
+                    const lsb = (try self.constant(ex.rhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
+                    if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
+                    try self.part_selects.put(self.arena, e, .{ .msb = msb, .lsb = lsb });
+                    break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
+                }
                 const index = try inferValue(self, ex.rhs(e), depth + 1);
                 if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
                 break :blk .{ .width = 1, .signed = false };
@@ -626,7 +636,7 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
             } else try watch(self, base, out);
             try sensitivity(self, ex.rhs(e), out);
         },
-        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat => {
+        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range => {
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| try sensitivity(self, c, out);
         },
@@ -705,7 +715,10 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         if (typeOf(self, ex.rhs(e)).width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
         return;
     }
-    const at = try self.scalarSlot(e);
+    // §5.2.1 a bit- or part-select of a variable writes those bits only;
+    // typing it as a read folds its bounds and checks its index.
+    if (ex.tag(e) == .index) try checkExpr(self, e);
+    const at = if (ex.tag(e) == .index) try self.scalarSlot(ex.lhs(e)) else try self.scalarSlot(e);
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
@@ -790,7 +803,7 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");
     try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
-    try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
+    try expectRejected("module m; wire [3:0] w; initial w[0]=1; endmodule", "no procedural assignment to a net");
     // Past Table 9-22 and §17.1.1's %c %s %m %l %t, a conversion such as the
     // strength `%v` is refused, and the refusal names the table.
     try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
