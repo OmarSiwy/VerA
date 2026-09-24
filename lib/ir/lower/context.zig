@@ -185,6 +185,14 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         }
         try self.out.discrete_inputs.put(self.arena, name, ex.mainTok(t));
         try lower_param.addParam(self, name, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
+        if (reads.fourStateOnly(name)) {
+            // §7.3.2 the unknown plane, for `===`/`!==`/`case` (`lower_expr.fourState`).
+            // A name also read any other way keeps the x/z error at every
+            // solve (the runner's `mixedInput`), and compares two-state.
+            try self.out.discrete_xz.put(self.arena, name, {});
+            const xz = try std.fmt.allocPrint(self.arena, "{s}__xz", .{name});
+            try lower_param.addParam(self, xz, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
+        }
     }
 }
 
@@ -209,9 +217,38 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
             if (s != .none) try w.file.stmtEdges(s, w);
         }
     };
+    // §7.3.2 in the analog block of a mixed module, an x/z literal compared by
+    // `===`/`!==` or as a `case` label is the four-state comparison the clause
+    // provides (`lower_expr.caseEquality`); anywhere else it stays E0130.
+    const Cmp = struct {
+        file: *const Ast.SourceFile,
+        marks: []bool,
+        fn lit(w: @This(), e: Ast.ExprId) void {
+            if (e != .none and w.file.exprs.tag(e) == .logic_literal) w.marks[@intFromEnum(e)] = true;
+        }
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
+            if (e == .none) return;
+            const ex = &w.file.exprs;
+            if (ex.tag(e) == .binary and (ex.binOp(e) == .case_eq or ex.binOp(e) == .case_neq)) {
+                w.lit(ex.lhs(e));
+                w.lit(ex.rhs(e));
+            }
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (s == .none) return;
+            switch (w.file.stmt(s)) {
+                .case_stmt => |c| if (c.kind == .normal) for (c.arms) |arm| for (arm.labels) |l| w.lit(l),
+                else => {}, // else: only a case statement has labels
+            }
+            try w.file.stmtEdges(s, w);
+        }
+    };
     const w: Mark = .{ .file = file, .marks = marks };
     for (file.modules) |*m| {
         if (!isMixed(file, m)) continue;
+        for (m.analog) |blk| (Cmp{ .file = file, .marks = marks }).stmt(blk.body) catch unreachable;
         for (m.discrete) |blk| w.stmt(blk.body) catch unreachable;
         for (m.assigns) |a| for ([_]Ast.ExprId{ a.target, a.value, a.delay.rise, a.delay.fall, a.delay.off }) |e|
             w.expr(e, .read) catch unreachable;
@@ -226,8 +263,12 @@ const Reads = struct {
     l: *Lower,
     /// Digital-owned values and digitally triggered named events.
     digital: *const std.StringHashMapUnmanaged(void),
-    names: std.StringHashMapUnmanaged(void) = .empty,
+    /// Unguarded reads, counted.
+    names: std.StringHashMapUnmanaged(u32) = .empty,
     guarded: std.StringHashMapUnmanaged(void) = .empty,
+    /// §7.3.2 reads as an operand of `===`/`!==` or as a `case` subject,
+    /// counted: a name ALL of whose reads are these is read four-state.
+    xz: std.StringHashMapUnmanaged(u32) = .empty,
     sites: std.ArrayList(Site) = .empty,
     in_d2a: bool = false,
     const Site = struct { term: Ast.ExprId, name: []const u8, edge: Edge };
@@ -243,6 +284,7 @@ const Reads = struct {
                 if (w.sites.items.len != before) w.in_d2a = true;
                 return w.stmt(c.body);
             },
+            .case_stmt => |c| try w.caseOperand(c.scrutinee),
             else => {}, // else: every other statement is read edge by edge
         }
         try w.l.file.stmtEdges(s, w);
@@ -262,10 +304,31 @@ const Reads = struct {
         if (ex.tag(e) != .ident) try w.expr(e, .read);
     }
 
+    fn caseOperand(w: *Reads, e: Ast.ExprId) Oom!void {
+        const ex = &w.l.file.exprs;
+        if (w.in_d2a or e == .none or ex.tag(e) != .ident) return;
+        const n = try w.xz.getOrPutValue(w.l.arena, w.l.file.str(ex.strOf(e)), 0);
+        n.value_ptr.* += 1;
+    }
+
+    /// Every unguarded read of `name` is §7.3.2's four-state comparison, so an
+    /// x or z it holds is a value and not the clause's error.
+    fn fourStateOnly(w: *const Reads, name: []const u8) bool {
+        const n = w.xz.get(name) orelse return false;
+        return n == w.names.get(name).?;
+    }
+
     pub fn expr(w: *Reads, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
         if (e == .none) return;
         const ex = &w.l.file.exprs;
-        if (ex.tag(e) == .ident) try (if (w.in_d2a) &w.guarded else &w.names).put(w.l.arena, w.l.file.str(ex.strOf(e)), {});
+        if (ex.tag(e) == .ident) {
+            const name = w.l.file.str(ex.strOf(e));
+            if (w.in_d2a) try w.guarded.put(w.l.arena, name, {}) else (try w.names.getOrPutValue(w.l.arena, name, 0)).value_ptr.* += 1;
+        }
+        if (ex.tag(e) == .binary and (ex.binOp(e) == .case_eq or ex.binOp(e) == .case_neq)) {
+            try w.caseOperand(ex.lhs(e));
+            try w.caseOperand(ex.rhs(e));
+        }
         var buf: [3]Ast.ExprId = undefined;
         for (ex.children(e, &buf)) |c| {
             // §4.4: a bare name in `V(d)` is the net the access function is

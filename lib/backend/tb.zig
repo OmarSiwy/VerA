@@ -231,6 +231,8 @@ pub const Mixed = struct {
     /// §8.5.3.6 digital names read under an explicit D2A event, each a
     /// `<name>__1b` `Model` field.
     snaps: []const []const u8 = &.{},
+    /// §7.3.2 inputs read four-state, each with a `<name>__xz` `Model` field.
+    xz: []const []const u8 = &.{},
     /// §8.5 the explicit D2A terms, in site order.
     events: []const @import("ir").Lowered.DiscreteEvent = &.{},
 };

@@ -313,6 +313,7 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .precision = if (ts) |t| t.precision else null,
         .inputs = lowered.discrete_inputs.keys(),
         .snaps = lowered.discrete_snaps.keys(),
+        .xz = lowered.discrete_xz.keys(),
         .events = lowered.discrete_events.values(),
     };
 }
@@ -374,8 +375,12 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    /// parameters to the device, so its parameter-only prep is redone.
         \\    pub fn setInputs(a: *Analog, dig: *sim.digital.Run, fired: u64) !void {
         \\        a.flush();
-        \\        inline for (input_ports, 0..) |p, i|
-        \\            setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
+        \\        inline for (input_ports, 0..) |p, i| if (p.xz) |xz| {
+        \\            // §7.3.2 read four-state: both planes, and x or z is a value.
+        \\            const v = dig.values[a.slots[i]];
+        \\            setField(a.model, p.field, v.asInt() orelse @as(i64, @bitCast(v.values()[0])));
+        \\            setField(a.model, xz, @as(i64, @bitCast(v.unknowns()[0])));
+        \\        } else setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
         \\        inline for (snap_ports, 0..) |p, i| setField(a.model, p.field, a.snaps[i]);
         \\        inline for (event_ports, 0..) |p, k| setField(a.model, p.field, @intFromBool(fired >> k & 1 != 0));
         \\        if (comptime @hasDecl(D, "precompute")) D.precompute(a.inst, a.model);
@@ -420,7 +425,14 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     // Each digital name beside the `Model` field codegen spelled for it.
     var buf: [256]u8 = undefined;
     try out.appendSlice(arena, "const input_ports = [_]Port{");
-    for (mx.inputs) |name| try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
+    for (mx.inputs) |name| {
+        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
+        for (mx.xz) |x| if (std.mem.eql(u8, x, name)) {
+            const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__xz", .{name})) catch return error.OutOfMemory;
+            try print(&out, arena, ", .xz = \"{s}\"", .{field});
+        };
+        try out.appendSlice(arena, " },");
+    }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
         const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__1b", .{name})) catch return error.OutOfMemory;

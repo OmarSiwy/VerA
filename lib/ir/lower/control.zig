@@ -355,24 +355,35 @@ pub fn lowerCase(
     // §5.8.1 applies to `case` word for word: the arm LABELS are constants by
     // A.6.7, so whether an arm is decided before the solve turns entirely on
     // the scrutinee.
-    try lowerCaseChain(self, sv, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
+    // §7.3.2 a four-state subject or an x/z label compares both planes, as
+    // `===` does (IEEE 1364 §9.5: `case` IS case equality).
+    const ex = &self.file.exprs;
+    var four = ex.tag(scrutinee) == .ident and self.out.discrete_xz.contains(self.file.str(ex.strOf(scrutinee)));
+    for (arms) |a| for (a.labels) |l| if (ex.tag(l) == .logic_literal) {
+        four = true;
+    };
+    try lowerCaseChain(self, sv, if (four) scrutinee else null, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
 }
 
 pub fn lowerCaseChain(
     self: *Lower,
     sv: TypedValue,
+    four_state: ?Ast.ExprId,
     arms: []const Ast.CaseArm,
     default_arm: Ast.StmtId,
     static: bool,
 ) Oom!void {
     if (arms.len == 0) return lower_stmt.lowerStmt(self, default_arm);
     const a = arms[0];
-    if (a.labels.len == 0) return lowerCaseChain(self, sv, arms[1..], default_arm, static);
+    if (a.labels.len == 0) return lowerCaseChain(self, sv, four_state, arms[1..], default_arm, static);
 
     // §5.8.3 an arm with several labels matches any of them.
     var cond: ?Mir.Value = null;
     for (a.labels) |l| {
-        const eq = try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l));
+        const eq = if (four_state) |subject|
+            (try lower_expr.caseEquality(self, subject, l)) orelse try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l))
+        else
+            try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l));
         cond = if (cond) |c| try self.emit(.logor, &.{ c, eq }) else eq;
     }
 
@@ -388,7 +399,7 @@ pub fn lowerCaseChain(
     self.cur = else_b;
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
-    try lowerCaseChain(self, sv, arms[1..], default_arm, static);
+    try lowerCaseChain(self, sv, four_state, arms[1..], default_arm, static);
     self.static_cond_depth -= @intFromBool(static);
     self.cond_depth -= 1;
     try self.gotoBlock(join);

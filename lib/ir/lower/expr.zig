@@ -485,6 +485,57 @@ pub fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
 }
 
+/// §7.3.2 a four-state operand as its two planes (IEEE 1364 §5.1.8: z is value
+/// 0 / unknown 1, x is 1 / 1): an x/z literal, or a discrete input read through
+/// `===`/`!==`/`case` (`Lowered.discrete_xz`). Null for anything two-state.
+const Planes = struct { value: Mir.Value, unknown: Mir.Value };
+fn fourState(self: *Lower, e: Ast.ExprId) Oom!?Planes {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .logic_literal => {
+            const lit = ex.logicValue(e);
+            if (lit.width > 63) return null; // the E0130 the ordinary lowering reports
+            const value: i64 = lit.asInt() orelse @bitCast(lit.values()[0]);
+            return .{
+                .value = try self.mir.addIntConst(self.arena, value),
+                .unknown = try self.mir.addIntConst(self.arena, @bitCast(lit.unknowns()[0])),
+            };
+        },
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            if (self.in_d2a_body or !self.out.discrete_xz.contains(name)) return null;
+            const xz = self.param_index.get(try std.fmt.allocPrint(self.arena, "{s}__xz", .{name})).?;
+            return .{ .value = (try lookupName(self, e, name)).v, .unknown = self.param_values.items[xz] };
+        },
+        else => return null, // else: every other operand is two-state
+    }
+}
+
+/// §7.3.2 / IEEE 1364 §5.1.8 `a === b` when either side is four-state: both
+/// planes compare, and the result is never x. A two-state side has no unknown
+/// bits. Null when neither side is four-state (the ordinary `==` path).
+pub fn caseEquality(self: *Lower, l: Ast.ExprId, r: Ast.ExprId) Oom!?Mir.Value {
+    const pl = try fourState(self, l);
+    const pr = try fourState(self, r);
+    if (pl == null and pr == null) return null;
+    const a = pl orelse Planes{ .value = try twoState(self, l), .unknown = .zero };
+    const b = pr orelse Planes{ .value = try twoState(self, r), .unknown = .zero };
+    const same_value = try cmp(self, .eq, .{ .v = a.value, .ty = .integer }, .{ .v = b.value, .ty = .integer });
+    const same_unknown = try cmp(self, .eq, .{ .v = a.unknown, .ty = .integer }, .{ .v = b.unknown, .ty = .integer });
+    return try self.emit(.logand, &.{ same_value, same_unknown });
+}
+
+/// §4.2.1 Table 4-2: `===` is not an operator on reals (E0369, as on the
+/// two-state path).
+fn twoState(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
+    const tv = try lowerExpr(self, e);
+    if (tv.ty != .real) return self.toInt(tv);
+    var d = self.errWith(self.file.exprs.mainTok(e), .E0369);
+    d.help("use `==`; for reals prefer `abs(a - b) < tol`", .{});
+    try d.emit();
+    return .zero;
+}
+
 /// A.8.6 binary operators. LRM Table 4-3 precedence is the parser's job; this
 /// only picks the opcode family from the operand types (§4.2.1).
 pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
@@ -512,6 +563,8 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const want_same = op == .eq or op == .case_eq;
         return .{ .v = if (same == want_same) .one else .zero, .ty = .integer };
     }
+    if (op == .case_eq or op == .case_neq) if (try caseEquality(self, ex.lhs(e), ex.rhs(e))) |same|
+        return .{ .v = if (op == .case_eq) same else try self.emit(.lognot, &.{same}), .ty = .integer };
     var a = try lowerExpr(self, ex.lhs(e));
     var b = try lowerExpr(self, ex.rhs(e));
     // §2.7 makes a string operand an unsigned integer, so a MIXED pair is

@@ -219,6 +219,10 @@ discrete_events: std.AutoArrayHashMapUnmanaged(Ast.ExprId, DiscreteEvent) = .emp
 /// D2A event: each is read from a `<name>__1b` `Model` field holding the value
 /// after region 1 of the event's tick, not the live one region 3b sees.
 discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
+/// §7.3.2 the `discrete_inputs` the analog block reads through `===`, `!==`
+/// or a `case` subject: their unknown plane arrives in a `<name>__xz` `Model`
+/// field beside the value plane, and an x or z there is not an error.
+discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// The module's discrete half needs the event queue (`lower_context.isMixed`).
 mixed_signal: bool = false,
 
