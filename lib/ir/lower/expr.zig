@@ -512,11 +512,13 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             const rv = if (real) try self.toReal(b) else b.v;
             return .{ .v = try self.emit(opc, &.{ lv, rv }), .ty = ty };
         },
-        // §4.3.1 Table 4-14: pow is a real-valued math function.
-        .pow => return .{
-            .v = try self.emit(.pow, &.{ try self.toReal(a), try self.toReal(b) }),
-            .ty = .real,
-        },
+        // §4.2.1.3: "If either operand is real, the other operand is converted
+        // to real" — so two integers stay integer, and `7/(2**k)` divides by
+        // an integer. §4.3.1's `pow()` FUNCTION is the real-valued one.
+        .pow => return if (a.ty == .integer and b.ty == .integer)
+            .{ .v = try self.emit(.ipow, &.{ a.v, b.v }), .ty = .integer }
+        else
+            .{ .v = try self.emit(.pow, &.{ try self.toReal(a), try self.toReal(b) }), .ty = .real },
         .eq, .neq, .lt, .le, .gt, .ge => {
             // §4.2.9's unsigned context, applied to the pair rather than to
             // either operand. See `unsignedCompareMask`.
@@ -558,10 +560,8 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try d.emit();
             return poison;
         },
-        else => {
-            try self.err(self.file.exprs.mainTok(e), .E0325, "`{s}`", .{@tagName(op)});
-            return poison;
-        },
+        // `lowerShortCircuit` returned for both at the top.
+        .logical_and, .logical_or => unreachable,
     }
 }
 

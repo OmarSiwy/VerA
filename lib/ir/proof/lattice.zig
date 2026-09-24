@@ -172,7 +172,9 @@ pub fn domainOf(op: Mir.Opcode) Domain {
         .atanh => .unit_open,
         .acosh => .ge_one,
         .tan => .tan_poles,
-        .pow => .pow_sign,
+        // `ipow`'s one undefined corner is pow's: a zero base under a negative
+        // exponent (IEEE 1364-2005 Table 5-6's 'bx).
+        .pow, .ipow => .pow_sign,
         // NOT `.fdiv`: §4.2.4 makes ONLY `%`-by-zero an error. `x/0.0` is an
         // exact IEEE ±inf and is spec-legal, so it must not reject — it forfeits
         // finiteness instead (see the `.fdiv` transfer), which drops the unit to

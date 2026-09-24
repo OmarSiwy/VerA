@@ -24,6 +24,15 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 
+/// `.ipow`'s device text: `Lower.ipow32` spelled as a callable expression.
+/// Its locals carry a `zp_` prefix because Zig refuses a name that shadows
+/// one in ANY enclosing scope, and the enclosing function's are `x`, `model`….
+pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
+    "if (zp_n < 0) return if (zp_b == 1) 1 else if (zp_b == -1) (if (@rem(zp_n, 2) == 0) 1 else -1) else 0; " ++
+    "var zp_x: i32 = @truncate(zp_b); var zp_e = zp_n; var zp_r: i32 = 1; " ++
+    "while (zp_e > 0) : (zp_e >>= 1) { if (zp_e & 1 != 0) zp_r *%= zp_x; zp_x *%= zp_x; } " ++
+    "return zp_r; } }.zp_f)";
+
 // ---- value / instruction rendering --------------------------------------
 
 /// Emit a value reference, converting per §4.2.1.1/§4.2.1.2 when the use
@@ -566,6 +575,10 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         .iabs => try intCall1(self, "zIabs", a),
         .imin => try intCall2(self, "@min", a, b2),
         .imax => try intCall2(self, "@max", a, b2),
+        // `Lower.ipow32`, inline: a helper in `ops_txt` would grow every
+        // device for an operator few of them use. An anonymous struct and not
+        // a labelled block, so two nested `**` cannot collide on a label.
+        .ipow => try intCall2(self, ipow_fn, a, b2),
         // §4.2.5/§4.2.7 relational + equality — integer 0/1
         .flt => try cmpReal(self, a, "<", b2),
         .fgt => try cmpReal(self, a, ">", b2),

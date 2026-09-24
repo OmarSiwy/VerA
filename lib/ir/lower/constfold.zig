@@ -170,7 +170,8 @@ pub fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
             (if (b.asInt() == 0) null else Const{ .int = @intCast(@rem(@as(i65, a.asInt()), @as(i65, b.asInt()))) })
         else
             Const{ .real = @rem(x, y) },
-        .pow => .{ .real = std.math.pow(f64, x, y) },
+        // `Lower.ipow32`; its 'bx corner (0 ** negative) declines to fold.
+        .pow => if (int) (if (Lower.ipow32(a.asInt(), b.asInt())) |r| Const{ .int = r } else null) else Const{ .real = std.math.pow(f64, x, y) },
         .eq => .{ .int = @intFromBool(if (int) a.int == b.int else x == y) },
         .neq => .{ .int = @intFromBool(if (int) a.int != b.int else x != y) },
         .lt => .{ .int = @intFromBool(if (int) a.int < b.int else x < y) },

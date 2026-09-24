@@ -121,6 +121,10 @@ pub const Opcode = enum(u8) {
     iabs,
     imin,
     imax, // integer forms (§4.3.1: int operands ⇒ int result)
+    /// §4.2.1.3 `**` over two integers: integer, not §4.3.1's real `pow`.
+    /// IEEE 1364-2005 §5.1.5 Table 5-6 at §3.2's 32-bit width; `Lower.ipow32`
+    /// is the definition.
+    ipow,
     // --- trigonometric + hyperbolic, LRM Table 4-15 §4.3.2 ---
     sin,
     cos,
@@ -251,6 +255,7 @@ pub fn opIsInteger(op: Opcode) bool {
         .iabs,
         .imin,
         .imax,
+        .ipow,
         .fi_cast,
         => true,
         else => false,

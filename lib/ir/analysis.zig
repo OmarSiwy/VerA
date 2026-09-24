@@ -920,6 +920,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         else
                             .{ .f = @floatFromInt(@as(i32, @truncate(@divTrunc(@as(i65, asI64(a)), @as(i65, asI64(b2)))))) },
                         .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
+                        .ipow => if (Lower.ipow32(asI64(a), asI64(b2))) |r| .{ .f = @floatFromInt(r) } else null,
                         .fmin, .imin => .{ .f = @min(a.f, b2.f) },
                         .fmax, .imax => .{ .f = @max(a.f, b2.f) },
                         // §4.2.4 remainder. No wrap: a remainder is never wider
