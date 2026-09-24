@@ -17,6 +17,7 @@
 //
 //! lrm 9.20
 //! reject analog initial
+//! reject E0812
 module ch09_node_alias_outside_initial_rejected(p, n);
   inout p, n; electrical p, n;
   electrical local_node; integer status;

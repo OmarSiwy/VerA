@@ -30,6 +30,7 @@
 //
 //! lrm 9.15
 //! reject simulation parameter is not known
+//! reject E0811
 module ch09_simparam_unknown_no_fallback_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

@@ -34,6 +34,7 @@
 //! lrm 9.8
 //! lrm 9.9
 //! reject analog context
+//! reject E0806
 module ch09_timescale_pla_queue_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer in_array, out_array, status;

@@ -38,6 +38,7 @@
 //! lrm 6.7
 //! lrm 9.20
 //! reject another $analog_node_alias
+//! reject E0812
 module ch09_node_alias_duplicate_target_rejected(p, n);
   inout p, n; electrical p, n;
   electrical first, second;

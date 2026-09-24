@@ -23,6 +23,7 @@
 //
 //! lrm 9.5.4.2
 //! reject conversion
+//! reject E0813
 module ch09_sscanf_uppercase_conversion_rejected(p, n);
   inout p, n; electrical p, n;
   integer code, value;

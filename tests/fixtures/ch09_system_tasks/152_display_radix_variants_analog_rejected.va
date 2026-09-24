@@ -33,6 +33,7 @@
 //
 //! lrm 9.4.1
 //! reject analog context
+//! reject E0806
 module ch09_display_radix_variants_analog_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

@@ -29,6 +29,7 @@
 //
 //! lrm 9.22
 //! reject connect module
+//! reject E0818
 module ch09_driver_access(p, n);
   inout p, n; electrical p, n;
   real info;
