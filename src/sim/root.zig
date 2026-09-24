@@ -2,9 +2,11 @@
 pub const digital = @import("digital/root.zig");
 pub const time = @import("time.zig");
 pub const scheduler = @import("scheduler.zig");
+pub const mixed = @import("mixed.zig");
 
 test {
     _ = scheduler;
     _ = time;
     _ = digital;
+    _ = mixed;
 }

@@ -350,7 +350,19 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     if (!changed) return;
     // The value-change hook: every watcher of this slot hears it here.
     if (self.watch[target].contains(.monitor)) try requestMonitor(self);
+    if (self.watch[target].contains(.analog)) try requestAnalog(self);
     return wake(self, target, before, dest.bit(0));
+}
+
+/// VAMS §8.5: "the implicit D2A event ... is created when a digital variable to
+/// which an analog block is implicitly sensitive changes value". §8.5.3.7 then
+/// processes the macro-process in region 3b, after every region-1..3 event of
+/// the tick, and once however many inputs moved.
+fn requestAnalog(self: *Run) Error!void {
+    if (self.analog_pending) return;
+    self.analog_pending = true;
+    _ = self.scheduler.schedule(.analog, @import("root.zig").analog_payload) catch |e|
+        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
 }
 
 /// §17.1.3: "the entire argument list is displayed at the end of the time

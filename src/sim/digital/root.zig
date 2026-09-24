@@ -66,7 +66,21 @@ const Name = struct { scope: u32, str: Ast.StrId };
 // which address names which element.
 const Array = struct { count: u32, low: i64, high: i64 };
 
-pub const Watcher = enum { monitor };
+/// Who is told when a slot's value changes. `analog` is VAMS §8.5's implicit
+/// D2A: the slot is read by an analog block, so a change posts a region-3b
+/// macro-process event (see `watchAnalog`).
+pub const Watcher = enum { monitor, analog };
+
+/// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
+/// active, explicit D2A, inactive and nonblocking event of the current tick has
+/// run, and an analog-read value changed. The caller solves NOW and calls
+/// `runUntil` again, which resumes the same tick at its monitor region.
+pub const Stop = enum { idle, analog };
+
+/// The scheduler payload of the one analog macro-process. Not a `pending`
+/// row: the event carries no data, and the scheduler coalesces repeats of it
+/// (§8.5.3.7) by payload.
+pub const analog_payload: u32 = std.math.maxInt(u32);
 
 pub const Run = struct {
     arena: std.mem.Allocator,
@@ -168,17 +182,32 @@ pub const Run = struct {
     /// first watcher is §17.1.3's monitor. §18's VCD value changes and VAMS
     /// §8.5's implicit D2A are the same event and would each add a member.
     watch: []std.EnumSet(Watcher) = &.{},
+    /// One region-3b event per tick however many analog-read values moved,
+    /// the same coalescing `monitor_pending` does for region 4.
+    analog_pending: bool = false,
+
+    /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
+    /// guard, so it is implicitly sensitive to it and every change is an
+    /// implicit D2A. From now on a change of it makes `runUntil` stop with
+    /// `.analog` at region 3b of the tick it happened in.
+    pub fn watchAnalog(r: *Run, at: u32) void {
+        r.watch[at].insert(.analog);
+    }
 
     /// Dispatch every event at a time <= `limit` (IEEE 1364 §11.4's loop,
     /// VAMS §8.5.1's regions), then return with the queue holding only later
     /// work. `limit = maxInt` is the whole simulation, which is `run`. Calling
     /// again with a larger limit resumes; nothing is lost between calls
     /// because every suspended process is a waiter or a queued event.
-    pub fn runUntil(r: *Run, limit: Tick) Error!void {
+    pub fn runUntil(r: *Run, limit: Tick) Error!Stop {
         var scratch = std.heap.ArenaAllocator.init(r.arena);
         defer scratch.deinit();
         while (r.scheduler.nextUntil(limit)) |event| {
             _ = scratch.reset(.retain_capacity);
+            if (event.region == .analog) {
+                r.analog_pending = false;
+                return .analog;
+            }
             const item = r.pending.items[event.payload].item;
             switch (item) {
                 .run_process => |start| try exec.execute(r, &scratch, start),
@@ -217,6 +246,7 @@ pub const Run = struct {
             // nothing dispatched may reuse them before `store` has copied them.
             try r.free_rows.append(r.arena, event.payload);
         }
+        return .idle;
     }
 
     /// The slot a name declared in the design's ROOT scope is stored in, or
@@ -685,7 +715,8 @@ fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
     var r = try elaborate(arena, source, opts, bag, out);
-    try r.runUntil(std.math.maxInt(Tick));
+    // Nothing is `watchAnalog`ed in a digital-only run, so it never stops early.
+    _ = try r.runUntil(std.math.maxInt(Tick));
 }
 
 /// Everything `run` does before the first event dispatches: preprocess,
@@ -856,14 +887,14 @@ test "elaborate + runUntil step the engine one bounded horizon at a time" {
     try std.testing.expectEqual(@as(?u32, null), r.slotOf("nope"));
     // Nothing has run: the reg is still §3.2's x.
     try std.testing.expect(r.values[at].hasUnknown());
-    try r.runUntil(0);
+    _ = try r.runUntil(0);
     try std.testing.expectEqual(@as(?i64, 1), r.values[at].asInt());
     try std.testing.expectEqual(@as(?Tick, 10), r.scheduler.peekTime());
-    try r.runUntil(9);
+    _ = try r.runUntil(9);
     try std.testing.expectEqual(@as(?i64, 1), r.values[at].asInt());
-    try r.runUntil(10);
+    _ = try r.runUntil(10);
     try std.testing.expectEqual(@as(?i64, 5), r.values[at].asInt());
-    try r.runUntil(std.math.maxInt(Tick));
+    _ = try r.runUntil(std.math.maxInt(Tick));
     try std.testing.expectEqual(@as(?i64, 9), r.values[at].asInt());
     try std.testing.expectEqual(@as(?Tick, null), r.scheduler.peekTime());
 }
