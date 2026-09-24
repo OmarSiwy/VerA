@@ -655,6 +655,51 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     return @min(i, self.held_names.len -| 1);
 }
 
+/// Does this call, as `emitCall` renders it, read an `Instance` field the HOST
+/// rewrites between evaluations — time, step, analysis pass, the step and
+/// sub-task flags, the Newton iteration and the limiter history? That is the
+/// `core_reads_simstate` question: a host keeping Instance blobs resident on a
+/// device republishes those fields on its own copy only.
+///
+/// Kept beside `emitCall` because it is a column of the same dispatch: a new
+/// arm there that reads `inst.<field>` of this kind belongs here too.
+pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
+    const d = self.mir.instData(inst).call;
+    const k = opKind(d.name);
+    if (k != .none) return opReadsSimState(k);
+    const eq = std.mem.eql;
+    const names = [_][]const u8{
+        "analog_initial", // inst.is_analog_initial (§5.2.1)
+        "initial_step", "final_step", // inst.is_initial_step / is_final_step
+        "analysis", "ac_stim", // inst.analysis_kind (§4.6.1, §4.6.3)
+        "$abstime", "$realtime", // inst.abstime
+        "$simparam$str", // @tagName(inst.analysis_kind)
+        "$limit$old", // inst.limiter_previous (advanceIteration)
+    };
+    for (names) |n| {
+        if (eq(u8, d.name, n)) return true;
+    }
+    // §9.15 `$simparam("iteration")`: inst.newton_iteration.
+    if (eq(u8, d.name, "$simparam")) return Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse "");
+    return false;
+}
+
+/// The operator half of `readsSimState`, one arm per `OpKind` so a new
+/// operator has to answer it.
+fn opReadsSimState(k: OpKind) bool {
+    return switch (k) {
+        // `inst.dt`, and `inst.abstime`/`inst.analysis_kind` for some.
+        .ddt, .idt, .idtmod, .absdelay, .transition, .slew => true,
+        .laplace, .zi, .cross, .timer => true,
+        // Their own `__t_last`/`__prev` fields only, which `updateState` —
+        // a device entry point — writes.
+        .last_crossing, .above => false,
+        // A void task read as a value renders the literal zero.
+        .bound_step, .discontinuity => false,
+        .none => false,
+    };
+}
+
 /// System/environment and operator calls. LRM ch9, §4.5, §4.6.
 pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const d = self.mir.instData(inst).call;

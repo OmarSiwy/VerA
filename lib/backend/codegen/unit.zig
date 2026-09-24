@@ -755,6 +755,16 @@ pub fn emitCommon(self: *Gen) Error!void {
     try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
     self.cur_strict = self.common_mode == .strict;
 
+    // Off the slice, not the text: every call the core computes is in
+    // `plan.live`, and `gen_call.readsSimState` is the one list of which of
+    // them render a read of a host-published sim-state field.
+    for (self.plan.live.items) |lv| {
+        const def = self.mir.valueDef(lv);
+        if (def != .inst_result or self.mir.instOp(def.inst_result) != .call) continue;
+        if (self.plan.pcHoisted(lv)) continue; // a field read, not a call
+        if (gen_call.readsSimState(self, def.inst_result)) self.core_reads_simstate = true;
+    }
+
     const body_start = self.out.items.len;
     self.fatal = pre;
     try emitUnitBody(self, .undef);

@@ -139,32 +139,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
     if (self.lower.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
     try emitPrecompute(self);
-    const units_from = self.out.items.len;
     try gen_unit.emitUnits(self);
-    // Does the CORE (physics units, not the updateState epilogue) read a
-    // host-published sim-state Instance field? A GPU host keeps Instance
-    // blobs device-resident and republishes t/dt/kind on the HOST copy
-    // only, so such a core evals against stale values there — the decl
-    // lets it exclude the device (ARPice engine.gpuEligible). Text scan
-    // over exactly the unit range: the lowering sites are many (§4.6
-    // analysis(), $abstime, ddt/idt/laplace/transition/timer/cross) and
-    // every one spells its read `inst.<field>`.
-    const units_text = self.out.items[units_from..];
-    const reads_dt = blk: { // boundary-aware: `inst.dtemp` must not match
-        var from: usize = 0;
-        while (std.mem.indexOfPos(u8, units_text, from, "inst.dt")) |at| : (from = at + 1) {
-            const nxt = at + "inst.dt".len;
-            if (nxt >= units_text.len) break :blk true;
-            const c = units_text[nxt];
-            if (!std.ascii.isAlphanumeric(c) and c != '_') break :blk true;
-        }
-        break :blk false;
-    };
-    const core_reads_simstate = reads_dt or
-        std.mem.indexOf(u8, units_text, "inst.analysis_kind") != null or
-        std.mem.indexOf(u8, units_text, "inst.abstime") != null or
-        std.mem.indexOf(u8, units_text, "inst.is_initial_step") != null or
-        std.mem.indexOf(u8, units_text, "inst.is_final_step") != null;
     try gen_dispatch.emitDispatchers(self);
     try gen_dispatch.emitNoiseTable(self);
     try gen_dispatch.emitAcTable(self);
@@ -182,7 +157,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
     if (!self.lane_pinned) try self.w("pub const lane_clean = true;\n\n", .{});
-    if (core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
+    if (self.core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 

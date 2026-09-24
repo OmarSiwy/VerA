@@ -422,6 +422,10 @@ pub const Gen = struct {
     /// `<module>__common__core`, or empty for a model with no targets at all.
     common_name: []const u8 = "",
     common_mode: proof.FloatMode = .optimized,
+    /// Does the core read a host-published sim-state `Instance` field? Set by
+    /// `emitCommon` from the core's slice (`gen_call.readsSimState`), emitted
+    /// as `core_reads_simstate`.
+    core_reads_simstate: bool = false,
     /// Set while `emitFused` is emitting: the `core` call belongs to the whole
     /// function, above both halves, so `emitStamps` must not open its own.
     core_hoisted: bool = false,
