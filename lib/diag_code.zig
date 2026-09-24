@@ -189,8 +189,8 @@ pub const Code = enum(u16) {
     /// alternative — an edge indicator in a combinational body, or a mix of
     /// combinational and sequential entries.
     E0234,
-    /// §6.6 / §6.6.2: a module instance, defparam or discrete block inside a
-    /// generate block. VerA has no generate scope to select or repeat it in,
+    /// §6.6 / §6.6.2: a module instance, defparam, discrete block, continuous
+    /// assignment, gate or event declaration inside a generate block. VerA has no generate scope to select or repeat it in,
     /// so it is refused rather than elaborated once regardless of the scheme.
     E0235,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
@@ -1746,9 +1746,11 @@ fn infoOf(c: Code) Info {
             \\... from a set of alternatives".
             \\
             \\VerA keeps the analog bodies of a generate block under its scheme,
-            \\but has no generate scope for a module instance, a defparam or an
-            \\initial/always block. Those used to be moved to the module and
-            \\elaborated exactly once whatever the scheme said, so
+            \\but has no generate scope for a module instance, a defparam, an
+            \\initial/always block, a continuous assignment, a gate or a named
+            \\event. The first three used to be moved to the module and
+            \\elaborated exactly once whatever the scheme said, and the last
+            \\three were dropped without a word, so
             \\
             \\    if (use_r) begin res #(.r(2k)) u1(p, n); end
             \\

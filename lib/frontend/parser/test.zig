@@ -738,6 +738,7 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "generate if (0) begin r u(p); end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin defparam u.x = 1.0; end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin initial begin end end endgenerate endmodule", .code = .E0235 },
+        .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = .E0235 },
         // A generate REGION has no scheme; its items are ordinary module items.
         .{ .src = head ++ "generate r u(p); endgenerate endmodule", .code = null },
     };

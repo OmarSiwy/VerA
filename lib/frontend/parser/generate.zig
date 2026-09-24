@@ -208,7 +208,8 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // so they are refused (E0235) instead of silently misplaced, and not
     // hoisted, so an enclosing block does not report them again.
     // ponytail: interim. Per-block items selected/unrolled in elaboration
-    // replace this refusal.
+    // replace this refusal. Nothing a block holds may be dropped silently:
+    // every Body list is either hoisted above, kept under `blk`, or refused.
     for (gb.instances.items) |inst| try self.report(inst.main_tok, .E0235, "a module instance", .{});
     for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
     for (gb.discrete.items) |d| {
@@ -216,6 +217,13 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         if (d.is_always and !self.digital and !self.in_connect_module) continue;
         try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});
     }
+    // The same for the three the body used to DROP outright, with no message:
+    // a continuous assignment (A.6.1) and a gate (A.3.1) are drivers the
+    // scheme decides the existence of exactly as it does an instance's, and a
+    // named event (§5.10.4) is a declaration of the block's scope.
+    for (gb.assigns.items) |a| try self.report(a.main_tok, .E0235, "a continuous assignment", .{});
+    for (gb.gates.items) |g| try self.report(g.main_tok, .E0235, "a gate instance", .{});
+    if (gb.events.items.len != 0) try self.report(tok, .E0235, "an event declaration (`{s}`)", .{self.file.str(gb.events.items[0])});
     try b.genvars.appendSlice(self.arena, gb.genvars.items);
     try b.functions.appendSlice(self.arena, gb.functions.items);
     // A nested generate construct's block names are declarations of the
