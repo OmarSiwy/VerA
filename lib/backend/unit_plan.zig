@@ -9,10 +9,7 @@
 //! NOT purely a plan, and the name is generous on purpose. `analyze` computes
 //! the slice and the counts up front, but `slot`/`n_slots` are filled by the
 //! EMITTER as it walks (`emitUnitBody`, and `probeBody`'s dry run of it) —
-//! placement depends on the order the text comes out in. They live here anyway,
-//! because the partial reset below has to see the previous unit's `live` set to
-//! clear them, and splitting storage from that reset would put an ordering
-//! dependency across a file boundary. One owner, no hazard.
+//! placement depends on the order the text comes out in.
 //!
 //! ## CORPUS — where every measured number in this file comes from
 //!
@@ -20,49 +17,19 @@
 //! two of the 38 foundry models in the ARPice host repo, at
 //! `../ARPice/src/devices/models` — `VERA_MODELS` overrode that path for the
 //! `baseline.sh` oracle these were taken with. NONE is vendored here, and no
-//! fixture is remotely their shape — the numbers below are per-unit line counts
-//! in the thousands, over ~105 units. So every ratio below is real and none of
+//! fixture is remotely their shape. So every ratio below is real and none of
 //! it is reproducible from this tree alone: check the models out before you
 //! re-measure, and do not re-derive a replacement from a fixture.
 //!
-//! ## RESET IS PARTIAL, AND THAT IS THE DESIGN
+//! ## RESET IS FULL
 //!
-//! `analyze` clears only the cells named by the PREVIOUS unit's `live` set, not
-//! all `nv` of them. Clearing every table per unit was O(units × values), and a
-//! 600 K-line model has hundreds of units that each touch a small slice of the
-//! values.
-//!
-//! So every table here holds stale data from earlier units in every cell outside
-//! the previous unit's live set. `needed` is what makes that safe: it is the only
-//! one written by `mark`, and every read of `eager_use`, `arm_use`, `inlined` and
-//! `slot` is guarded by it. Unit N is correct because unit N−1 cleaned up after
-//! itself.
-//!
-//! Two consequences, both load-bearing:
-//!   - `analyze` must be called for EVERY unit, in order, even one whose output
-//!     is discarded. Skip one and its live set is never cleared, so the next unit
-//!     reads its `eager_use` under a `needed` that has just been set true.
-//!   - a field added here MUST be cleared in the same loop in `analyzeUnitOnce`,
-//!     or it silently inherits the previous unit's value.
-//!
-//! `loop_recompute` is the exception: it is indexed by BLOCK, not by value, so
-//! the live set cannot name its cells and `analyze` resets it in full.
-//!
-//! ### AND IN THIS TREE THE RESET LOOP RUNS ZERO ITERATIONS
-//!
-//! Measured, ReleaseFast, every fixture, by counting `analyzeUnitOnce` and
-//! printing `live.items.len` on entry: **739 of the 1164 fixtures reach codegen,
-//! each calls `analyze` exactly ONCE, and `live` is empty at all 739 resets.**
-//! `emitUnits` only calls `emitUnit` for a `job.is_display` job, so under the
-//! default `--display=drop` the shared core is the whole emission and there is
-//! no second unit to inherit anything. `--display=emit` adds exactly one
-//! `emitUnit` call — the only non-empty reset that exists here (live = 28 on
-//! `exhaustive/102_loops.va`).
-//!
-//! The scheme is not dead: it is what keeps the CORPUS models (~105 units) off
-//! O(units x values). But nothing in this tree exercises it, so the "a field
-//! added here MUST be cleared" hazard above has NO test coverage — read that as
-//! a reason to be careful, not as permission to simplify.
+//! `analyze` clears every per-value table with one `@memset` each. It used to
+//! clear only the cells the PREVIOUS unit's `live` set named, which made every
+//! field added here a "MUST be cleared in the same loop" hazard with no test
+//! behind it. That scheme paid for itself when ~105 units each called
+//! `analyze`; since the core merge a compilation calls it at most a handful of
+//! times (precompute, the core, the §9.4 display unit), so a full clear costs
+//! a few × nv × 14 bytes of stores and the hazard is gone.
 //!
 //! ## THE SIDE TABLES STAY `[]bool` — MEASURED; do not pack them into a bitset
 //!
@@ -80,10 +47,10 @@
 //! free. Converting them buys 87 bytes at the worst block table and charges a
 //! shift and a mask on every probe in the emitter's hottest walk.
 //!
-//! A bitset also cannot obsolete the partial reset above, which was the
-//! interesting question: three of the five tables that loop clears
-//! (`eager_use`, `arm_use`, `slot`) are `[]u32`, so a full clear stays
-//! O(units x values) no matter how `needed` and `inlined` are stored.
+//! A bitset would not have made the old partial reset unnecessary either:
+//! three of the five per-value tables (`eager_use`, `arm_use`, `slot`) are
+//! `[]u32`, so a full clear costs the same no matter how `needed` and
+//! `inlined` are stored.
 //!
 //! Where a whole-array clear IS the cost, the tool is a generation stamp, not a
 //! bitset — `proof.verdict` already does this: `seen[i] == u` reuses the slice
@@ -218,11 +185,7 @@ pub fn init(
     self.arm_use = try arena.alloc(u32, an.nv);
     self.inlined = try arena.alloc(bool, an.nv);
     self.slot = try arena.alloc(u32, an.nv);
-    @memset(self.needed, false);
-    @memset(self.eager_use, 0);
-    @memset(self.arm_use, 0);
-    @memset(self.inlined, false);
-    @memset(self.slot, none_u32);
+    // Cleared by `analyzeUnitOnce`, which every read is behind.
     // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few KB,
     // nothing like the `0..nv` per-unit sweeps that were deleted.
     self.blk_work = try arena.alloc(bool, an.nb);
@@ -339,17 +302,11 @@ fn markRecomputedLoops(self: *UnitPlan) bool {
 }
 
 fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
-    // Only the previous unit's live values can be dirty: every write below
-    // is guarded by `needed`, which only `mark` sets. Clearing the whole
-    // per-value tables per unit was O(units × values).
-    for (self.live.items) |lv| {
-        const i = @intFromEnum(lv);
-        self.needed[i] = false;
-        self.eager_use[i] = 0;
-        self.arm_use[i] = 0;
-        self.inlined[i] = false;
-        self.slot[i] = none_u32;
-    }
+    @memset(self.needed, false);
+    @memset(self.eager_use, 0);
+    @memset(self.arm_use, 0);
+    @memset(self.inlined, false);
+    @memset(self.slot, none_u32);
     self.live.clearRetainingCapacity();
     self.n_slots = 0;
 
