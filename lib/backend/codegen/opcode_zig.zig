@@ -28,7 +28,7 @@ pub const Row = struct {
     /// §4.3 its `S` spelling in `renderOp`.
     s: Spell,
     /// That spelling ALWAYS collapses its operands to `.val()` — a scalar
-    /// decision, so a lane-parallel `S` pins its lanes (`render.pinLanes`).
+    /// decision, so a lane-parallel `S` pins its lanes (`float/lanes.zig` `pinLanes`).
     /// `pow` is not here: it pins only on its `zPow` path, which `renderOp`
     /// decides from the exponent. `fi_cast` is, and pins in its own prong.
     pins_lanes: bool,
@@ -49,7 +49,7 @@ pub const Row = struct {
     /// without libm, AND the opcode is real-valued.
     dev_safe: bool,
     /// `hoist.libmClass`: the op is a libm call on the host, costly enough
-    /// that evaluating it eagerly is a price (`render.eagerCostly`).
+    /// that evaluating it eagerly is a price (`float/lanes.zig` `eagerCostly`).
     libm: bool,
 };
 

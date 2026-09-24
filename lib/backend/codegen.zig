@@ -52,6 +52,9 @@ const diag = @import("diag");
 const naming = @import("naming.zig");
 /// The pure planners: inputs in, a plan value out, no writer — codegen/plan/.
 const plan_input = @import("codegen/plan/input.zig");
+/// The float/lane concern of the EMITTED device (AGENTS.md §5) — codegen/float/.
+const float_mode = @import("codegen/float/mode.zig");
+const float_lanes = @import("codegen/float/lanes.zig");
 const plan_names = @import("codegen/plan/names.zig");
 const plan_topo = @import("codegen/plan/topology.zig");
 const plan_limit = @import("codegen/plan/limit.zig");
@@ -220,8 +223,7 @@ pub fn generate(
         .lowered = lowered,
         .verdict = verdict,
         .display = opts.display,
-        .jac_f32 = opts.jac_f32 or opts.jac_f32_host,
-        .jac_f32_host = opts.jac_f32_host,
+        .float = .{ .jac = .of(opts.jac_f32, opts.jac_f32_host) },
         .diags = opts.diags,
     };
     errdefer g.out.deinit(gpa);
@@ -331,6 +333,8 @@ pub const Gen = struct {
     // Ceiling: it is only ever read on the E0515 path, which refuses the unit.
     ctrl_tok: u32 = Mir.no_tok,
 
+    /// The float mode and lane state of the body being written — `codegen/float/`.
+    float: float_mode.Float = .{},
     /// Every declared identifier and the unknowns behind them — `plan/names.zig`.
     names: plan_names.Names = .{},
     /// One entry per emitted top-level unit declaration — see `Output`. Arena
@@ -387,26 +391,8 @@ pub const Gen = struct {
     /// Extra indent levels for body emission, so the residual stamps can be
     /// emitted verbatim inside `evalQ`'s two nested blocks. Only `ind` reads it.
     ind_base: u32 = 0,
-    /// Float mode of the unit CURRENTLY being emitted. `.strict` is the eager
-    /// `sel` license — see `renderInst`'s select case. Set by `emitUnit` and
-    /// the common-core emitter, false-by-default so any other emission path
-    /// keeps the lazy form.
-    cur_strict: bool = false,
-    /// True once any residual/charge unit steered on an x-dependent value
-    /// through a scalar — a `.val()` comparison, a lazy `if`, an int cast, an
-    /// event operator, a value-collapsing helper (floor, table lookup …). A
-    /// device that finishes with this still false gets `pub const lane_clean
-    /// = true;`: instantiating eval/q with a LANE-PARALLEL S (one operating
-    /// point per lane) is then exact per lane, which the testbench's batch
-    /// differential check asserts. Display units never set it — they are not
-    /// part of the residual.
-    lane_pinned: bool = false,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
-    /// `Options.jac_f32` — emit the single-precision-Jacobian permission decl.
-    jac_f32: bool = false,
-    /// `Options.jac_f32_host` — emit the host-should-take-it-too decl.
-    jac_f32_host: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
     /// Free branch flows and collapsible switch branches — `plan/topology.zig`.
@@ -727,6 +713,8 @@ test {
     _ = plan_args;
     _ = plan_hoist;
     _ = plan_jac;
+    _ = float_mode;
+    _ = float_lanes;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;

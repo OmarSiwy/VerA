@@ -153,10 +153,10 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
     try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) cg_limit.liveSets(self).writes else 0);
-    // Lane-parallel permission (see `lane_pinned`): eval/q of this device
+    // Lane-parallel permission (see `float/lanes.zig`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
-    if (!self.lane_pinned) try self.w("pub const lane_clean = true;\n\n", .{});
+    if (!self.float.pinned) try self.w("pub const lane_clean = true;\n\n", .{});
     if (self.core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
@@ -315,7 +315,7 @@ pub fn emitTopology(self: *Gen) Error!void {
     }
     try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
 
-    if (self.jac_f32) try self.w(
+    if (self.float.jac != .off) try self.w(
         \\/// This device permits a single-precision DERIVATIVE half in the
         \\/// host's scalar S. The residual stays f64 — see `--jac-f32`.
         \\/// Permission, not order: a host may take it on one instantiation
@@ -324,7 +324,7 @@ pub fn emitTopology(self: *Gen) Error!void {
         \\
         \\
     , .{});
-    if (self.jac_f32_host) try self.w(
+    if (self.float.jac == .host) try self.w(
         \\/// ...and the host should take that permission on its CPU path too,
         \\/// not only where f32 is free. See `--jac-f32-host`.
         \\pub const jac_f32_host = true;
@@ -987,7 +987,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     try self.w("model: *const Model) void {{\n", .{});
     try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
     if (has_pc) try self.w("    const S = P;\n", .{});
-    self.cur_strict = self.core.mode == .strict;
+    self.float.strict = self.core.mode == .strict;
     // BEFORE the core call below, and not merely for tidiness: `precompute`
     // runs again on every parameter write and every `setTemp`, and a stale
     // `hp_ok` would make that call reload the OLD card's values and store

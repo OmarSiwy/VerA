@@ -17,6 +17,7 @@ const proof = @import("ir").proof;
 const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
 const Job = @import("jobs.zig").Job;
+const float_mode = @import("../float/mode.zig");
 
 pub const Error = std.mem.Allocator.Error || error{NameTooLong};
 const none_u32 = std.math.maxInt(u32);
@@ -47,7 +48,7 @@ pub const Core = struct {
     held_idx: []u32 = &.{},
     /// `<module>__common__core`, or empty for a model with no targets at all.
     name: []const u8 = "",
-    /// §4.3 the STRICTEST mode of every job the core serves — see `plan`.
+    /// §4.3 the STRICTEST mode of every job the core serves — `float/mode.zig`.
     mode: proof.FloatMode = .optimized,
 };
 
@@ -123,14 +124,12 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     @memset(self.lo_idx, none_u32);
 
     var vals: std.ArrayList(Mir.Value) = .empty;
-    var mode: proof.FloatMode = .optimized;
     for (jobs) |job| {
         // §9.4 the display root stays OUT: the core runs once per `eval`,
         // and printing once per Newton iteration is exactly what
         // `emitDisplay` exists to prevent. It keeps its own declaration and
         // reads the core like the units used to.
         if (job.kind == .display) continue;
-        mode = .strictest(mode, job.mode);
         const v = in.an.rv(job.target);
         if (v == .f_zero) continue; // an operator with no input; rendered inline
         if (self.lo_idx[@intFromEnum(v)] != none_u32) continue;
@@ -164,7 +163,7 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
         self.acc_vals = qv.items;
         self.acc_lo = ql.items;
     }
-    self.mode = mode;
+    self.mode = float_mode.coreMode(jobs);
     self.lo_vals = vals.items;
     // §5.10 which core field each held variable's write-back reads. Done
     // here rather than by scanning `jobs` in `emitStateMachine`, because

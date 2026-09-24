@@ -10,7 +10,7 @@
 //! LRM clauses this file's code cites: §4.5, §4.6.3, §4.6.4, §5.6, §5.6.1.2,
 //! §5.6.1.3, §5.6.7, §5.10, §5.10.3.3, §9.4, §9.13, §9.17, §9.21.1.
 //!
-//! Cut verbatim from `codegen/unit.zig` (`Job`, `unitMode`, `buildJobs`) and
+//! Cut verbatim from `codegen/unit.zig` (`Job`, `buildJobs`) and
 //! `codegen.zig` (`dynCtrlArgs`, `unitComment`); only the receiver changed.
 
 const std = @import("std");
@@ -24,6 +24,7 @@ const Names = @import("names.zig").Names;
 const LimitCall = @import("limit.zig").LimitCall;
 const plan_noise = @import("noise.zig");
 const plan_topo = @import("topology.zig");
+const unitMode = @import("../float/mode.zig").unitMode;
 
 const none_u32 = std.math.maxInt(u32);
 
@@ -105,14 +106,6 @@ pub const Job = struct {
         display,
     };
 };
-
-fn unitMode(unit_modes: []const proof.FloatMode, i: usize) proof.FloatMode {
-    // proof.zig rates the CONTRIBUTION units only (proof.unitCount ==
-    // lower.contributions.len); an analog-operator unit is not covered, so
-    // it takes the safe side.
-    if (i >= unit_modes.len) return .strict;
-    return unit_modes[i];
-}
 
 pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     var out: Jobs = .{};

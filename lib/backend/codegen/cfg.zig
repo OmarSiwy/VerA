@@ -10,6 +10,7 @@
 //! directly, `gen_cfg.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_hoist = @import("hoist.zig");
@@ -193,7 +194,7 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
 }
 
 pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
-    gen_render.pinLanes(self, cond);
+    float_lanes.pinLanes(self, cond);
     const v = self.an.rv(cond);
     if (self.an.tyOf(v) == .int) {
         try gen_render.renderVal(self, v, .int);
