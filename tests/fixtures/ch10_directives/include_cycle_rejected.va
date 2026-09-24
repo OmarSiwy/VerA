@@ -1,0 +1,21 @@
+// IEEE 1364-2005 §19.5 (taken whole by §10.1): "A file included in the source
+// using the `include compiler directive may contain other `include compiler
+// directives. The number of nesting levels for include files shall be finite."
+// And: "Implementations may limit the maximum number of levels to which include
+// files can be nested, but the limit shall be at least 15."
+//
+// This file includes itself with no guard, so the nesting never ends: the
+// "shall be finite" sentence is broken for every limit, not only VerA's. (VerA's
+// limit is 32, above the 15 the clause requires, and the message states it.)
+// The guarded idiom, `ifndef / `define / `endif around the body, is what makes
+// a header safe to include from itself or twice.
+//
+//! lrm 10.1
+//! inherited IEEE 1364-2005 19.5
+//! reject E0125
+`include "include_cycle_rejected.va"
+`include "disciplines.vams"
+module ch10_include_cycle(p, n);
+  inout p, n; electrical p, n;
+  analog I(p, n) <+ V(p, n);
+endmodule
