@@ -811,6 +811,7 @@ pub const Flatten = struct {
             //
             // Not an error and not a declaration: see `Design.implicit_nets`.
             // The source's own connections, not `plan`'s segments, which are.
+            if (!auto and idx < module.instances.len) try self.checkVariableActuals(module, &module.instances[idx]);
             if (!auto) for ((if (idx < module.instances.len) module.instances[idx] else inst).ports) |c| {
                 const n = elab_names.netRefName(self, c.expr) orelse continue;
                 if (declares(module, n)) continue;
@@ -1183,6 +1184,33 @@ pub const Flatten = struct {
         for (module.ports) |p| if (p.name == name) return true;
         for (module.nets) |n| if (n.name == name) return true;
         return false;
+    }
+
+    /// §6.5 "Ports provide a means of interconnecting instances of modules. If a
+    /// module A instantiates module B, the ports of module B are associated with
+    /// either the ports or the internal nets of module A." A VARIABLE of A is
+    /// neither, so it cannot stand as the actual of B's continuous port: there is
+    /// no node for the port to join (§6.5.1 lists the port expressions, every one
+    /// of them a net), and `declares` above already says why it is not an
+    /// implicit net either.
+    ///
+    /// Only a port of CONTINUOUS discipline: a real variable driving a discrete
+    /// or `wreal` input is a real EXPRESSION, which §3.7 and IEEE 1364's input
+    /// port rules allow, and the mixed-signal kernel decides those.
+    fn checkVariableActuals(self: *Flatten, module: *const Ast.ModuleDecl, inst: *const Ast.Instance) Error!void {
+        const child = elab_names.findModule(self, inst.module) orelse return;
+        for (child.ports, 0..) |p, i| {
+            const c = connectionFor(inst, p, i) orelse continue;
+            const n = elab_names.netRefName(self, c.expr) orelse continue;
+            if (declares(module, n)) continue;
+            const is_var = for (module.vars) |v| {
+                if (v.name == n) break true;
+            } else false;
+            if (!is_var or p.discipline == .none or !discipline.isContinuous(self.ctx.file, p.discipline)) continue;
+            try self.err(c.main_tok, .E0906, "`{s}` is a variable, and port `{s}` of `{s}` has the continuous discipline `{s}`: it joins only a net", .{
+                self.ctx.file.str(n), self.ctx.file.str(p.name), self.ctx.file.str(child.name), self.ctx.file.str(p.discipline),
+            });
+        }
     }
 
     /// The ways a connection list can be malformed: longer than the port list,
