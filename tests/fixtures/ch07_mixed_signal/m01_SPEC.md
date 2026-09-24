@@ -134,7 +134,7 @@ The existing chapter-7 fixtures that name these constructs are almost all
 applies to Verilog-AMS HDL") does not apply, so several of them are inversions:
 they demand a diagnostic a conforming AMS compiler must not emit. Fixtures 03,
 04, 05, 08 and 09 below are the positive replacements for
-`xz_case_statement_unsupported.va`, `digital_event_unsupported.va`,
+`xz_case_statement_compared.va` (was `_unsupported`), `digital_event_unsupported.va`,
 `digital_probe_unsupported.va` and `digital_cross_unsupported.va`.
 **Nothing under `tests/fixtures/` was touched.**
 

@@ -893,7 +893,7 @@ The same shape, one level milder, applies to **E0130** (`diag_code.zig:892-895`,
 `1'bx` in an analog *value* position is correct — §7.3.2's `converter` example
 annotates exactly those lines `// error`. But refusing `4'b0x1z` as a *case item*
 or as a `===` operand is over-rejection of §7.3.2's second and fourth bullets.
-`ch07_mixed_signal/xz_case_statement_unsupported.va` is named correctly;
+(2026-09-24: in a mixed module both are accepted now, `ch07_mixed_signal/*_compared.va`.)
 `ch02_lexical/05_xz_integer_rejected.va` and `24_question_digit_rejected.va` are
 named as prohibitions and cite C.3.
 
