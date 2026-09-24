@@ -420,7 +420,10 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 'd', 'D' => .decimal,
                 // §9.4.3 Table 9-23's real conversions, which "have the full
                 // formatting capabilities available in the C language".
-                'e', 'E', 'f', 'F', 'g', 'G' => null,
+                // §9.4.7 adds the fourth row to THIS context: "the %r (or %R)
+                // format specifier may be used on real expressions in the
+                // digital context" — engineering notation, `zCReal`'s 'r'.
+                'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R' => null,
                 // §17.3 `%t` is not a radix at all — it reads the
                 // $timeformat state and formats a TIME, whose operand is
                 // in the module's own time unit.
@@ -461,7 +464,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 },
                 else => return self.exprFail(
                     e,
-                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g and %%) and %c %s %m %l %t are implemented",
+                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t are implemented",
                 ),
             };
             arg += 1;
