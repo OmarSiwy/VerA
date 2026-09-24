@@ -149,7 +149,7 @@ pub const FileFn = enum { fopen, fgetc, ungetc, ftell, fseek, rewind, feof, ssca
 
 /// The characters an operand holds (§17.1.1.7's reading: 8 bits each, leading
 /// NULs dropped), or null when any bit is x or z.
-fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
+pub fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
     if (v.hasUnknown()) return null;
     const bytes = (v.width + 7) / 8;
     var out: std.ArrayList(u8) = .empty;

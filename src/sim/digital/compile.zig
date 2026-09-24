@@ -858,6 +858,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         return;
                     }
                 },
+                .dump => |op| try @import("vcd.zig").check(self, op, s.args, tok),
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);

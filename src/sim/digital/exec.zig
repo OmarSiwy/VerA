@@ -49,6 +49,10 @@ pub const Pending = union(enum) {
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
     monitor_tick,
+    /// §18.1.4 "the value change dumper records the values of the variables
+    /// that change during each time increment": one per timestep, coalesced
+    /// by `Vcd.pending`.
+    vcd_tick,
     /// A.6.1's `[ delay3 ]` on a continuous assignment: this driver's
     /// `transition.target` arrives now. §6.1.3's inertial cancel is the
     /// scheduler's — see `Inertial`.
@@ -687,6 +691,7 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // The value-change hook: every watcher of this slot hears it here.
     if (self.watch[target].contains(.monitor)) try requestMonitor(self);
     if (self.watch[target].contains(.analog)) try requestAnalog(self);
+    if (self.watch[target].contains(.vcd)) try requestVcd(self);
     try wake(self, target, before, dest.bit(0));
     if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
 }
@@ -710,6 +715,13 @@ fn requestMonitor(self: *Run) Error!void {
     if (self.monitor == null or !self.monitor_on or self.monitor_pending) return;
     self.monitor_pending = true;
     try enqueueMonitor(self, .monitor_tick);
+}
+
+/// §18.1.3/§18.1.4 the dump is written at the end of the time step, once.
+pub fn requestVcd(self: *Run) Error!void {
+    if (self.vcd.pending) return;
+    self.vcd.pending = true;
+    try enqueueMonitor(self, .vcd_tick);
 }
 
 /// Resume every process suspended on `target` whose edge matches. Split out
@@ -1042,7 +1054,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .strobe, .monitor_tick, .drive, .net_update, .decay => {},
+        .run_process, .strobe, .monitor_tick, .vcd_tick, .drive, .net_update, .decay => {},
     }
     return at;
 }
@@ -1090,7 +1102,7 @@ fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
-        .write, .strobe, .monitor_tick, .drive, .net_update, .decay => {},
+        .write, .strobe, .monitor_tick, .vcd_tick, .drive, .net_update, .decay => {},
     };
     return hit;
 }
@@ -1277,6 +1289,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
+                    .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.
@@ -1286,6 +1299,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                             const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);
                             try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.scheduler.now, self.bag.fileName(loc.file), loc.offset });
                         }
+                        try @import("vcd.zig").finish(self, scratch);
                         self.scheduler.finish();
                         return;
                     },

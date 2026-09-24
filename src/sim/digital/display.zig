@@ -272,6 +272,8 @@ pub const Task = union(enum) {
     pla: system.Pla,
     /// §17.2.7 `$fclose`.
     fclose,
+    /// §18.1 the value change dump tasks.
+    dump: @import("vcd.zig").Op,
 };
 
 fn showAs(radix: Radix, newline: bool) Show {
@@ -308,6 +310,13 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$q_remove", Task{ .queue = .remove } },
     .{ "$q_exam", Task{ .queue = .exam } },
     .{ "$fclose", .fclose },
+    .{ "$dumpfile", Task{ .dump = .file } },
+    .{ "$dumpvars", Task{ .dump = .vars } },
+    .{ "$dumpoff", Task{ .dump = .off } },
+    .{ "$dumpon", Task{ .dump = .on } },
+    .{ "$dumpall", Task{ .dump = .all } },
+    .{ "$dumplimit", Task{ .dump = .limit } },
+    .{ "$dumpflush", Task{ .dump = .flush } },
 }) ++ pla_rows);
 
 const pla_rows: []const TaskRow = blk: {
