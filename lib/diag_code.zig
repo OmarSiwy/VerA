@@ -2209,14 +2209,12 @@ fn infoOf(c: Code) Info {
             \\Use `<<` and `>>`.
             ,
         },
-        .E0325 => .{
-            .title = "operator is not in the analog subset",
-            .lrm = "C",
-            .explain =
-            \\This operator belongs to full Verilog-AMS or IEEE 1364 Verilog.
-            \\Annex C lists what the Verilog-A analog subset keeps.
-            ,
-        },
+        .E0325 => retiredInfo(
+            \\"operator is not in the analog subset". Retired: nothing emits it.
+            \\Its one emitter was lowerBinary's dead `else`, reachable only for
+            \\`&&` and `||`, which return earlier; d19a227 made that switch
+            \\exhaustive and removed it. The number is not reused.
+        ),
         .E0326 => .{
             .title = "empty concatenation",
             .lrm = "4.2.13",
