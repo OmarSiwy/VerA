@@ -406,17 +406,32 @@ const EventRefs = struct {
     names: std.StringArrayHashMapUnmanaged(u32) = .empty,
     /// Only `-> e`, not `@(e)`.
     triggers_only: bool = false,
+    /// Skip a trigger the mixed-signal kernel carries to the digital context:
+    /// the statement of a `cross`/`above`/`timer` event control, or a
+    /// top-level statement of its block (`digital.Run.analogTriggers`).
+    skip_carried: bool = false,
     fn isEvent(w: *const EventRefs, s: Ast.StrId) bool {
         for (w.module.events) |ev| if (ev == s) return true;
         return false;
     }
     pub fn stmt(w: *EventRefs, s: Ast.StmtId) Oom!void {
         if (s == .none) return;
-        switch (w.l.file.stmt(s)) {
-            .event_trigger => |t| if (w.isEvent(t.name)) try w.names.put(w.l.arena, w.l.file.str(t.name), w.l.file.stmtTok(s)),
+        const f = w.l.file;
+        switch (f.stmt(s)) {
+            .event_trigger => |t| if (w.isEvent(t.name)) try w.names.put(w.l.arena, f.str(t.name), f.stmtTok(s)),
+            .event_control => |c| if (w.skip_carried and c.event != .none and f.exprs.tag(c.event) == .event_function and
+                !std.mem.eql(u8, f.str(f.exprs.strOf(c.event)), "absdelta"))
+            {
+                const body: []const Ast.StmtId = switch (f.stmt(c.body)) {
+                    .block => |b| b.body,
+                    else => &.{c.body}, // else: a single statement is its own body
+                };
+                for (body) |t| if (f.stmt(t) != .event_trigger) try w.stmt(t);
+                return;
+            },
             else => {}, // else: only a trigger names an event outside an expression
         }
-        try w.l.file.stmtEdges(s, w);
+        try f.stmtEdges(s, w);
     }
     pub fn expr(w: *EventRefs, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
         if (e == .none or w.triggers_only) return;
@@ -438,10 +453,10 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
     if (self.out.mixed_signal and module.events.len != 0) {
         var dig: EventRefs = .{ .l = self, .module = module };
         for (module.discrete) |blk| try dig.stmt(blk.body);
-        var ana: EventRefs = .{ .l = self, .module = module, .triggers_only = true };
+        var ana: EventRefs = .{ .l = self, .module = module, .triggers_only = true, .skip_carried = true };
         for (module.analog) |blk| try ana.stmt(blk.body);
         for (ana.names.keys(), ana.names.values()) |name, tok| if (dig.names.contains(name))
-            try self.err(tok, .E0437, "named event `{s}` is triggered by the analog block and named by a digital process, and the kernel carries no A2D event yet (§7.3.6.1)", .{name});
+            try self.err(tok, .E0437, "named event `{s}` is triggered by the analog block and named by a digital process, and the kernel carries such an A2D event only as a statement of a cross/above/timer event control (§7.3.6.1)", .{name});
     }
 
     var ctx: DiscreteCtx = .{ .mixed = self.out.mixed_signal };

@@ -96,6 +96,15 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         s.mons = try dig.arena.alloc(Mon, dig.monitors.items.len);
         for (s.mons, 0..) |*m, j| {
             const name = dig.file.str(dig.file.exprs.strOf(dig.monitors.items[j].expr));
+            if (std.mem.eql(u8, name, "timer")) {
+                // §5.10.3.3 timer(start_time, period, ...): "at start_time,
+                // and every period after that"; a period <= 0 fires once.
+                // ponytail: a firing at or before the DC point is not delivered.
+                const start = (try dig.monitorArg(j, 0)).?;
+                m.* = .{ .dir = 0, .tol = 0, .timer = .{ .next = start, .period = (try dig.monitorArg(j, 1)) orelse 0 } };
+                while (m.timer.?.next <= opts.times[0]) if (!m.advanceTimer()) break;
+                continue;
+            }
             const above = std.mem.eql(u8, name, "above");
             // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
@@ -110,6 +119,14 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 var t_end = target;
                 if (dig.scheduler.peekTime()) |k| if (k <= horizon) {
                     t_end = @min(t_end, s.timeOf(k, target, horizon));
+                };
+                // §5.10.3.3 a timer places a point at its firing time, whether
+                // it is monitored here or only the device's (`nextBreakpoint`).
+                for (s.mons) |m| if (m.timer) |tm| if (tm.next > s.acc.?) {
+                    t_end = @min(t_end, tm.next);
+                };
+                if (@hasDecl(A, "breakpoint")) if (a.breakpoint(s.acc.?)) |b| if (b > s.acc.?) {
+                    t_end = @min(t_end, b);
                 };
                 try s.step(t_end);
             }
@@ -146,8 +163,25 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
 const default_time_tol = 1e-12;
 
 /// One monitored analog event (`digital.Run.monitors`): its direction, its
-/// time tolerance, and its value on the last final solution.
-const Mon = struct { dir: i8, tol: f64, v0: f64 = 0 };
+/// time tolerance, and its value on the last final solution — or, for a
+/// timer, its next firing time.
+const Mon = struct {
+    dir: i8,
+    tol: f64,
+    v0: f64 = 0,
+    timer: ?struct { next: f64, period: f64 } = null,
+
+    /// The firing after this one, or false when there is none.
+    fn advanceTimer(m: *Mon) bool {
+        const tm = &m.timer.?;
+        if (tm.period <= 0) {
+            tm.next = std.math.inf(f64);
+            return false;
+        }
+        tm.next += tm.period;
+        return true;
+    }
+};
 
 /// §5.10.3.1: "If dir is +1, the event ... only occur[s] on rising edge
 /// transitions", -1 on falling ones, 0 on both, and any other value on none.
@@ -227,13 +261,16 @@ fn State(comptime A: type) type {
         /// it for every D2A they cause (§8.4.3.2 "accept at wake-up time").
         fn step(s: *Self, t_end: f64) !void {
             const base = s.acc.?;
-            for (s.mons, 0..) |*m, j| m.v0 = try s.monValue(j);
+            for (s.mons, 0..) |*m, j| if (m.timer == null) {
+                m.v0 = try s.monValue(j);
+            };
             try s.accept(t_end);
             // Secant cuts, bounded: a linear crossing is found by the first.
             var cuts: u8 = 0;
             while (cuts < 64) : (cuts += 1) {
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
+                    if (m.timer != null) continue;
                     const v1 = try s.monValue(j);
                     if (!crosses(m.dir, m.v0, v1)) continue;
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
@@ -242,7 +279,12 @@ fn State(comptime A: type) type {
                 try s.solve(cut orelse break);
             }
             const tick: Tick = @intFromFloat(@round(s.acc.? / s.opts.tick));
-            for (s.mons, 0..) |m, j| if (crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
+            for (s.mons, 0..) |*m, j| if (m.timer) |tm| {
+                // Stepped to exactly, so the point IS the firing.
+                if (s.acc.? + s.opts.tick * 1e-6 < tm.next) continue;
+                try s.dig.deliverA2d(j, tick);
+                while (m.timer.?.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
+            } else if (crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
             const horizon = tickAtOrBefore(s.acc.?, s.opts.tick);
             while (true) switch (try s.dig.runUntil(horizon)) {
                 .idle => break,
@@ -456,4 +498,25 @@ test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.
     // not at 5.2 ns where the event was detected.
     const at: f64 = @bitCast(dig.values[dig.slotOf("at").?].values()[0]);
     try testing.expectApproxEqAbs(@as(f64, 0.5), at, 1e-12);
+}
+
+test "§5.10.4 / §7.3.6.1 an analog timer's `-> ev` reaches `always @(ev)` at each firing, with a point there" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(p);
+        \\  inout p; electrical p; event ev; integer hits;
+        \\  initial hits = 0;
+        \\  always @(ev) hits = hits + 1;
+        \\  analog begin @(timer(5n, 10n)) -> ev; I(p) <+ 1m * hits; end
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena };
+    dig.watchAnalog(f.slot);
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9, 20e-9 }, .tick = 1e-9 });
+    try expectPoints(f, &.{ .{ 0, 0 }, .{ 5e-9, 1 }, .{ 10e-9, 1 }, .{ 15e-9, 2 }, .{ 20e-9, 2 } });
 }
