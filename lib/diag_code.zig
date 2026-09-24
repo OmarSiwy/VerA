@@ -185,6 +185,10 @@ pub const Code = enum(u16) {
     /// alternative — an edge indicator in a combinational body, or a mix of
     /// combinational and sequential entries.
     E0234,
+    /// §6.6 / §6.6.2: a module instance, defparam or discrete block inside a
+    /// generate block. VerA has no generate scope to select or repeat it in,
+    /// so it is refused rather than elaborated once regardless of the scheme.
+    E0235,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1688,6 +1692,32 @@ fn infoOf(c: Code) Info {
             \\them and `0 0` is two — so this check runs over the characters of
             \\an entry rather than over its tokens, which in this one region of
             \\the grammar carry no meaning of their own.
+            ,
+        },
+        .E0235 => .{
+            .title = "not supported inside a generate block",
+            .lrm = "6.6.2",
+            .explain =
+            \\6.6 says a generate block "brings the objects, behavioral
+            \\constructs, and module instances within the block into existence",
+            \\and its table of generate kinds says how many times: a loop
+            \\generate instantiates its block once per iteration, a conditional
+            \\generate (if-generate, case-generate) "at most one generate block
+            \\... from a set of alternatives".
+            \\
+            \\VerA keeps the analog bodies of a generate block under its scheme,
+            \\but has no generate scope for a module instance, a defparam or an
+            \\initial/always block. Those used to be moved to the module and
+            \\elaborated exactly once whatever the scheme said, so
+            \\
+            \\    if (use_r) begin res #(.r(2k)) u1(p, n); end
+            \\
+            \\stamped u1 with use_r = 0, and an if/else built both arms. That is a
+            \\wrong circuit with no message, so the construct is refused.
+            \\
+            \\The source is legal: this is a limitation of VerA, not an error in
+            \\the model. Write the instance at module level, or select between
+            \\instances with a parameter the child module reads.
             ,
         },
         .E0234 => .{
