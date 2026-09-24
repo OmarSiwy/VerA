@@ -782,15 +782,15 @@ obligation being marked done because a host change is pending, or the reverse.
 These need a call, not another agent pass. A decision v0.0.2 or v0.0.3 settled
 is struck through and says what settled it; the rest are open.
 
-1. **Does `driver_update` fire for a connect module's own driver?**
-   (`MANIFEST.md §5.8` item 7.) Under the literal reading of §9.22 ¶1/¶3 and
-   §9.22.4, every `updates=` column in M02's and M04's fixture 12 shifts by one
-   and all four `ok=` read 0. **Settle before v0.8.0 touches those rows.**
-   **Still open, and v0.0.2 sharpened it**: `CLAUSE-AUDIT.md` AMS-06 records
-   that `driver_update` parses, survives elaboration's cloner and is E0701 only
-   in value position — so the event is accepted and can never fire, and `§7.5`
-   item 4 adds that `missing` vs `partial` for that row is a judgement, not a
-   measurement. `m04_12` is in the measure-A FAIL name list at HEAD.
+1. ~~**Does `driver_update` fire for a connect module's own driver?**~~
+   **Settled 2026-09-24 by the user: no.** The reading is §9.22.6's
+   separation of the connect module's driver (it "will drive the receivers")
+   from "the drivers of the connect module digital port", the ordinary drivers
+   §9.22 ¶3's access functions see. `src/sim/digital/driver.zig`
+   `cm_driver_updates = false` implements it, and
+   `m04_12_driver_update_without_resolved_change.va` now asserts it (it left
+   the measure-A FAIL name list; with the other answer all four `updates`
+   checks read one high).
 2. **Can `";2"` carry a dependent selector with no interpolation control?**
    (item 8.) An implementer following fixture 06 literally still breaks 07.
    **Still open on the fixture text, but the implementation half moved**:
