@@ -23,7 +23,6 @@ const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
 const GenvarBind = Lower.GenvarBind;
 const VarSlot = Lower.VarSlot;
-const deinit = Lower.deinit;
 const err = Lower.err;
 const errWith = Lower.errWith;
 const poison = Lower.poison;

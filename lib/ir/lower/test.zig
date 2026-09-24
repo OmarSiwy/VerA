@@ -19,7 +19,6 @@ const ground = Lower.ground;
 const Access = Lower.Access;
 const Kind = Lower.Kind;
 const init = Lower.init;
-const deinit = Lower.deinit;
 const call = Lower.call;
 const strToInt = Lower.strToInt;
 const lowerFile = Lower.lowerFile;

@@ -23,7 +23,6 @@ const Lexer = @import("frontend").Lexer;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
-const deinit = Lower.deinit;
 const tokenSpan = Lower.tokenSpan;
 const err = Lower.err;
 const errWith = Lower.errWith;

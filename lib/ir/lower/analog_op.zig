@@ -22,7 +22,6 @@ const Oom = Lower.Oom;
 const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
-const deinit = Lower.deinit;
 const err = Lower.err;
 const errWith = Lower.errWith;
 const poison = Lower.poison;

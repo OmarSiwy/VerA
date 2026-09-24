@@ -968,49 +968,11 @@ pub fn init(
     };
 }
 
-/// Frees the side tables and the SSA scratch. A no-op under an arena; present
-/// so the whole pass runs leak-free on `std.testing.allocator`.
+/// Unmaps the SSA matrix, the one allocation an arena cannot reclaim.
+/// Every other table lives in `arena`: all six constructors (the driver,
+/// lower/codegen/proof test harnesses, naming.zig, cg_display.zig) pass one.
 pub fn deinit(self: *Lower) void {
-    const gpa = self.arena;
     self.builder.deinit();
-    self.params.deinit(gpa);
-    self.param_values.deinit(gpa);
-    self.branches.deinit(gpa);
-    self.port_branches.deinit(gpa);
-    self.contributions.deinit(gpa);
-    self.node_order.deinit(gpa);
-    self.node_kind.deinit(gpa);
-    self.node_disciplines.deinit(gpa);
-    self.node_dir.deinit(gpa);
-    self.port_probes.deinit(gpa);
-    self.nodesets.deinit(gpa);
-    self.alias_home.deinit(gpa);
-    self.node_voltages.deinit(gpa);
-    self.flow_unknowns.deinit(gpa);
-    self.spellings.deinit(gpa);
-    self.vectors.deinit(gpa);
-    self.disciplines.deinit(gpa);
-    self.probe_cache.deinit(gpa);
-    self.accum.deinit(gpa);
-    self.branch_reads.deinit(gpa);
-    self.access_kind.deinit(gpa);
-    self.vars.deinit(gpa);
-    self.scope_log.deinit(gpa);
-    self.consts.deinit(gpa);
-    self.param_index.deinit(gpa);
-    self.arrays.deinit(gpa);
-    self.loops.deinit(gpa);
-    self.named_blocks.deinit(gpa);
-    self.block_locals.deinit(gpa);
-    self.inlining.deinit(gpa);
-    self.displays.deinit(gpa);
-    self.deferred_displays.deinit(gpa);
-    self.active_genvars.deinit(gpa);
-    self.held_vars.deinit(gpa);
-    self.limit_slots.deinit(gpa);
-    self.held_names.deinit(gpa);
-    self.held_frames.deinit(gpa);
-    self.events.deinit(gpa);
 }
 
 // ---------------------------------------------------------------------------
