@@ -186,6 +186,11 @@ pub const Contribution = struct {
     /// devices aggregate, which is right, and neither can be discarded by the
     /// third instance wired across them, which is the point.
     unit: u32 = 0,
+    /// A `<+` from an instance other than `unit` accumulated into this entry
+    /// (two devices in parallel over one pair). The row is still right; what
+    /// is gone is any one instance's SHARE of it, so a reader that wants the
+    /// flow of `unit`'s own §5.4.1 branch (the VPI, §11.6.7) must refuse.
+    shared: bool = false,
 };
 
 pub const Kind = enum(u8) { direct, indirect };

@@ -808,7 +808,10 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
         // key. Two named branches over one pair get one accumulator each; every
         // spelling of the pair's UNNAMED branch shares the one §5.4.1 Example 2
         // allows it.
-        if (c.access == t.access and c.hi == t.hi and c.lo == t.lo and c.br == t.br) return @intCast(i);
+        if (c.access == t.access and c.hi == t.hi and c.lo == t.lo and c.br == t.br) {
+            if (c.unit != self.cur_unit) self.out.contributions.items[i].shared = true;
+            return @intCast(i);
+        }
     }
     return newContrib(self, .direct, t, tok);
 }
