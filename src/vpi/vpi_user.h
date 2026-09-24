@@ -641,6 +641,10 @@ extern double     vpi_get_analog_time(void);
 extern double     vpi_get_real(PLI_INT32 prop, vpiHandle obj);
 /* §12.11 the delays of a primitive, continuous assignment or delay control. */
 extern void       vpi_get_delays(vpiHandle obj, p_vpi_delay delay_p);
+/* §12.29 set the delays of a primitive (2 or 3) or a continuous assignment
+ * (1..3), in vpi_get_delays()'s order; the engine applies them from the next
+ * transition it schedules. */
+extern void       vpi_put_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* --------------------------------------------------------------------------
  * §12.32/§12.33 user system tasks and functions.
  *

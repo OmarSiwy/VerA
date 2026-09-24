@@ -313,6 +313,9 @@ pub const Driver = struct {
     /// A.6.1 `[ delay3 ]`.
     delay: Delay = .{},
     transition: Inertial = .{},
+    /// The statement's main token — with `scope`, the identity a VPI
+    /// application's §12.29 vpi_put_delays reaches this driver by.
+    tok: u32 = 0,
 };
 
 // ---- strength and resolution (clause 7, §7.9 Tables 7-4/7-6/7-7, §3.7) ------

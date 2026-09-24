@@ -358,6 +358,11 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
 const vpi_runs = [_]VpiRun{
+    .{
+        .c = "tests/fixtures/ch11_vpi/p05_01_put_delays.c",
+        .design = "tests/fixtures/ch11_vpi/p05_delays.v",
+        .stdout = "p05-01: w=2/12/32 y=3/11/33\np02: p05_01_put_delays checks=27\n",
+    },
     // §12.31.3's analyses: the host builds the design's analog library and
     // runs the `*! analysis` lines of the application's banner.
     .{
