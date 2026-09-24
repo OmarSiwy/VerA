@@ -476,6 +476,11 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p04_analog.va",
         .stdout = "p02: p04_09_systf_build checks=50\n",
     },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_10_primitives.c",
+        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
+        .stdout = "p02: p04_10_primitives checks=93\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).

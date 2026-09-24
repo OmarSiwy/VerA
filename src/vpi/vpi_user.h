@@ -189,6 +189,28 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiTaskCall            60
 #define vpiWait                69
 #define vpiWhile               70
+#define vpiGate                21   /* §11.6.13 a gate primitive */
+#define vpiPrimTerm            46   /* §11.6.13 a primitive's terminal */
+#define vpiTableEntry          58   /* §11.6.14 a UDP table entry */
+#define vpiUdp                 65   /* §11.6.13 a UDP instance */
+#define vpiUdpDefn             66   /* §11.6.14; vpi_iterate(vpiUdpDefn, NULL) */
+#define vpiPrimitive          103   /* module ->> primitive; term -> primitive */
+#define vpiPrimType            33   /* int: §11.6.13/§11.6.14, one of below */
+#define vpiTermIndex           30   /* int: §11.6.13, 0 for the output */
+#define vpiAndPrim              1
+#define vpiNandPrim             2
+#define vpiNorPrim              3
+#define vpiOrPrim               4
+#define vpiXorPrim              5
+#define vpiXnorPrim             6
+#define vpiBufPrim              7
+#define vpiNotPrim              8
+#define vpiBufif0Prim           9
+#define vpiBufif1Prim          10
+#define vpiNotif0Prim          11
+#define vpiNotif1Prim          12
+#define vpiSeqPrim             27
+#define vpiCombPrim            28
 #define vpiAnalog             733   /* §11.6.21 the analog process */
 #define vpiContrib            734   /* §11.6.20 a contribution */
 #define vpiDirect             735   /* bool: §11.6.20, `<+` rather than indirect */
@@ -257,8 +279,9 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiPowerOp             43
 
 /* §12.11 Figure 12-4, with Annex G's PLI_INT32 flags. vpi_get_delays() reads
- * a continuous assignment (1-3 delays: rise, fall, turn-off, IEEE 1364 §7.14
- * deriving the ones not written) and a delay control (1). */
+ * a primitive (2 or 3 delays), a continuous assignment (1-3: rise, fall,
+ * turn-off, IEEE 1364 §7.14 deriving the ones not written) and a delay
+ * control (1). */
 typedef struct t_vpi_delay {
   struct t_vpi_time *da;        /* user-allocated, Table 12-3's size */
   PLI_INT32  no_of_delays;
