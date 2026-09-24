@@ -730,6 +730,13 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
         const scratch = scratch_arena.allocator();
         switch (self.code.items[pc]) {
             .stop => return,
+            .init_var => |s| {
+                const dest = self.values[s.slot];
+                const rhs = try eval(self, scratch, s.value, dest.width);
+                try store(self, s.slot, (try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed })).planes);
+                pc += 1;
+                continue;
+            },
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
