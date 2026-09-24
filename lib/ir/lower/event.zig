@@ -472,23 +472,18 @@ pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
 /// §3.6.1.4 spelling)? That is the one read whose value is position-dependent
 /// inside the block (§5.6.1.2 retention); potentials and §5.4.3 port flows
 /// resolve to solver unknowns and read the same value everywhere, so they do
-/// not force an operand to the end. Same walk shape as `containsDdt`.
+/// not force an operand to the end. Every child edge is searched
+/// (`ExprStore.children`), assignment-pattern elements included.
 pub fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .branch_access => {
-            const kind = self.access_kind.get(self.file.str(ex.strOf(e))) orelse return false;
-            return kind == .flow;
-        },
-        .filter_call, .call, .builtin_call, .sys_call, .noise_call => {
-            for (ex.args(e)) |a| if (containsFlowRead(self, a)) return true;
-            return false;
-        },
-        .ternary => return containsFlowRead(self, ex.lhs(e)) or containsFlowRead(self, ex.rhs(e)) or
-            containsFlowRead(self, ex.ternaryElse(e)),
-        else => return containsFlowRead(self, ex.lhs(e)) or containsFlowRead(self, ex.rhs(e)),
+    if (ex.tag(e) == .branch_access) {
+        const kind = self.access_kind.get(self.file.str(ex.strOf(e))) orelse return false;
+        return kind == .flow;
     }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (containsFlowRead(self, c)) return true;
+    return false;
 }
 
 /// The end-of-block half of `queueDisplay`: lower what was deferred, mint each
