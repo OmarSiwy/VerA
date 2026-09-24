@@ -4939,9 +4939,9 @@ fn infoOf(c: Code) Info {
             \\creates one instance per element, so both bounds have to be known
             \\when the instance tree is built.
             \\
-            \\VerA's elaboration folds integer literals and the arithmetic over
-            \\them. A bound that reads a parameter is not yet supported: the
-            \\parameter table is built by lowering, which runs after this pass.
+            \\The bounds are constant expressions: literals, parameters (3.4) and
+            \\the operators over them, folded as an integer. A variable, a
+            \\real-valued bound, or a name that is no scalar parameter is not one.
             ,
         },
         .E0910 => .{
