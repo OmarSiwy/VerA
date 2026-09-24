@@ -131,3 +131,20 @@ analog-subset runner cannot execute them. The one row that was
 a debt disguised as a boundary is `s8-4-3-3`: A/D boundary timing is AMS-only by
 C.10, but `digital_boundary_unsupported.va` (withdrawn; see s8-4-3-3) was previously credited with covering
 it, which it never did.
+
+
+## 2026-09-24 — rejections for 8.5.1 and 8.5.3.x, and CLAUSES.tsv
+
+| Clause | Fixture | Verdict |
+|---|---|---|
+| 8.5.1, 7.3.5 | `a2d_event_on_a_probe_rejected.va` | new E0484: "A2D events must be analog event controlled statements" — `@(posedge (V(in) > 2.5))` in an `always` (was accepted) |
+| 8.5.3.1, A.6.1 | `continuous_assignment_to_a_variable_rejected.va` | E0438: `assign` to a `reg` |
+| 8.5.3.2, A.6.2 | `procedural_assign_to_a_net_rejected.va` | new E0482: procedural `assign` to a `wire` (was accepted) |
+| 8.5.3.3, A.6.2 | `blocking_assignment_to_a_net_rejected.va` | E0482: delayed blocking write to a `wire` (was accepted in a mixed module; E0313 "unknown variable" in a constant one) |
+| 8.5.3, 8.5.3.4, A.6.2 | `nonblocking_assignment_to_a_net_rejected.va` | E0482: nonblocking write to a `wire` (was accepted) |
+| 8.5.3.5, A.3.3 | `switch_terminal_is_a_variable_rejected.va` | new E0483: `tran` terminal is a `reg` (was accepted) |
+
+Parent cites added where a fixture here already asserts the parent's content:
+§8.3 on `transient_derivative.va`, §8.4 on `analog_digital_initial_order.va`,
+§8.5.3 on `blocking_assignment_delay.va`. The simulator-obligation clauses are
+classified, with their sentences and positive fixtures, in `CLAUSES.tsv`.

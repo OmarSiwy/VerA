@@ -191,3 +191,35 @@ remain full-AMS implementation and validation debt. The connect-statement
 fields with no consumer (`mode`, `#(...)`, port overrides) likewise remain
 unimplemented behavior. The standalone scheduler core does not supply bridge
 execution, insertion or driver-receiver segregation.
+
+
+## 2026-09-24 — rejections for the positive-only rows, and CLAUSES.tsv
+
+Every file below was run through `vera --check`/`--emit-exe` and the filtered
+suite; each header derives its rule from the clause text. Eight of the
+rejections pin a source VerA ACCEPTED before this date (compiler fixed in the
+same change); the rest pin a rule VerA already enforced but no fixture cited
+against this clause.
+
+| Clause | Fixture | Verdict |
+|---|---|---|
+| 7.2.4, 7.4.1 | `compatible_disciplines_without_resolveto_rejected.va` | E0903: two compatible continuous disciplines with different abstols on a mixed undeclared net, no `resolveto` |
+| 7.4.1 | `figure_7_2_resolveto_two_levels.va` | positive: Figure 7-2 rebuilt continuous, NetB resolved first at its own level, NetA read back as `abstol` 1e-6. Needed per-level resolution in `elaborate/resolve.zig` (the flatten had merged the levels and answered first-arrival 1e-8) |
+| 7.3.3, 7.3.6.3 | `probe_of_a_discrete_net_in_digital_rejected.va` | E0501 on `V(dn)` of a `ddiscrete` net in an `always` block (was accepted) |
+| 7.3.4, 7.3.6.2 | `contribution_under_a_digital_event_rejected.va` | E0406: Syntax 7-2's analog_event_statement has no contribution |
+| 7.3.5, 7.3.7 | `digital_function_in_cross_arguments_rejected.va` | E0436: a digital function in a digital `cross()`'s arguments, which are continuous context (was accepted) |
+| 7.3.6.1, 7.3.5 | `cross_direction_in_digital_event_control_rejected.va` | E0517 on direction 0.5 of a `cross()` in an `always` (was accepted) |
+| 7.3.6 | `digital_tick_is_the_timescale_precision.va` | positive: `#2.5` under 1ns/100ps lands at 2.5 ns |
+| 7.3.7 | `functions_called_from_their_own_context.va` | positive: a digital and an analog function in one module, each called in its own context and asserted |
+| 7.4.2, 3.7 | `wreal_port_joined_to_wand_rejected.va` | E0919 in a `.va` design (the check existed only in the digital runner; now shared as `frontend/wreal.zig`) |
+| 7.5, 7.6 | `connect_directions_not_table_7_2_rejected.va` | new E0982: connect module with continuous input and discrete input |
+| 7.7 | `connectrules_item_not_a_connect_statement_rejected.va` | Syntax 7-5: `wire w;` is not a connectrules_item |
+| 7.7.1, 3.11.1 | `connect_override_incompatible_discipline_rejected.va` | E0915, now judged per statement (was judged only when a port reached the rule) |
+| 7.7.3 | `connect_parameter_not_declared_rejected.va` | E0907 on a parameter the connect module does not declare (was accepted) |
+| 7.7.4, 7.8.3 | `connect_mode_not_merged_or_split_rejected.va` | parse error naming the connect_mode rule |
+
+Clauses with no prohibition a source can break are listed, with the LRM
+sentences that say so and the positive fixture that runs, in `CLAUSES.tsv`.
+§7.3.6.1's scheduling sentence ("shall not be schedule[d] in the digital domain
+earlier than the last or current digital event") binds the simulator; its
+rejection is the argument rule above, and m01_09/m02_04 carry the timing.
