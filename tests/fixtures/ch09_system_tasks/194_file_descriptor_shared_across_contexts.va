@@ -47,9 +47,9 @@
 // one ch07_mixed_signal/digital_initial_accepted.va documents — so
 // `fd = $fopen(...)` is not a call site that can be
 // reached, let alone one whose context could be judged. And behind that, the
-// digital execution engine has no file table at all: `src/sim/digital.zig`
-// dispatches four system tasks ($signed, $unsigned, $display, $finish) and none
-// of them is §9.5's. The gap is VerA's and not the LRM's.
+// digital engine's file table (src/sim/digital/system.zig) is its own: it and
+// the device's number descriptors from the same 3, so neither context can name
+// the other's file (2026-09-24). The gap is VerA's and not the LRM's.
 //
 // ONE WRITE, NOT ONE PER ITERATION. The analog block runs on every Newton
 // iteration, and an earlier revision wrote and CLOSED `fd` on each of them, so
@@ -65,7 +65,7 @@
 //! lrm 9.5.1.2
 //! lrm 9.5.1
 //! lrm 9.5.4.1
-//! xfail VerA has no digital-context file I/O: `fd = $fopen(...)` in an initial block is refused by §7.2.2's constant-assignment model (E0433), and src/sim/digital.zig implements none of §9.5 — so a descriptor opened in one context can never be handed to the other
+//! xfail `fd = $fopen(...)` in an initial block is refused by §7.2.2's constant-assignment model (E0433) instead of running on the digital kernel, and the kernel's own $fopen table (src/sim/digital/system.zig) and the device's (lib/backend/file_kernels.zig) number descriptors from the same 3 and share none, so a descriptor opened in one context names nothing, or another file, in the other
 `include "check.vh"
 module ch09_file_descriptor_shared_across_contexts(p, n);
   inout p, n; electrical p, n;
