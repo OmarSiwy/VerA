@@ -1022,6 +1022,30 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
     return count;
 }
 
+/// §9.12 / IEEE 1364 §17.10.2 `found = $value$plusargs(user_string, variable)`:
+/// "If no string is found matching, the function returns the integer value
+/// zero, and the variable provided is not modified" — so, as in `lowerScan`,
+/// the write is a `select` on the result over the variable's incoming value.
+/// The value is `$sscanf` of the matched plusarg against the whole user_string
+/// (the device's `zPlusarg` says why that is the clause's conversion).
+pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value {
+    const user = (try lower_expr.lowerExpr(self, args[0])).v;
+    const found = try self.call("$value$plusargs", &.{user});
+    const slot = try lower_stmt.resolveLvalue(self, args[1]) orelse return found;
+    self.out.uses.insert(.str_tasks);
+    const callee: []const u8 = switch (slot.ty) {
+        .integer => "$sscanf$int",
+        .string => "$sscanf$str",
+        .real => "$sscanf$real",
+    };
+    const zero = try self.mir.addIntConst(self.arena, 0);
+    const v = try self.call(callee, &.{ try self.call("$plusarg$str", &.{user}), user, zero });
+    const old = try self.builder.readVariable(slot.place, self.cur);
+    const hit = try self.emit(.igt, &.{ found, zero });
+    try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ hit, v, old }));
+    return found;
+}
+
 // ---------------------------------------------------------------------------
 // §9.13 probabilistic distributions
 // ---------------------------------------------------------------------------

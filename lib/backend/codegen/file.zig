@@ -112,6 +112,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (tbl) try depublish(self.gpa, &self.out, table_txt);
     if (rng) try depublish(self.gpa, &self.out, rng_txt);
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
+    if (self.lowered.uses.contains(.plusargs)) try self.out.appendSlice(self.gpa, plusarg_txt);
     try self.out.appendSlice(self.gpa, "\n");
     // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
     // they need `R` for the same reason `updateState` does. It stays out of
@@ -697,6 +698,22 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
     return gop.value_ptr.*;
 }
 
+/// §9.12 / IEEE 1364 §17.10.1/§17.10.2: the plusargs "are searched in the
+/// order provided", and a match is a plusarg whose prefix "matches all
+/// characters in the provided string". `fmt` cuts `$value$plusargs`'s
+/// user_string at its format, leaving the plusarg_string. The match comes back
+/// without its `+`, which is what `$sscanf` then reads against the whole
+/// user_string: the literal prefix matches itself and the format converts the
+/// remainder (an empty one scans as 0 or "", §17.10.2's own answer).
+const plusarg_txt =
+    \\fn zPlusarg(args: []const [:0]const u8, want: []const u8, fmt: bool) ?[]const u8 {
+    \\    const key = if (fmt) want[0 .. std.mem.indexOfScalar(u8, want, '%') orelse want.len] else want;
+    \\    for (args) |a| if (a.len != 0 and a[0] == '+' and std.mem.startsWith(u8, a[1..], key)) return a[1..];
+    \\    return null;
+    \\}
+    \\
+;
+
 /// Per-instance state: environment (§9.10) plus one field group per
 /// stateful §4.5 operator, KEYED BY THE STABLE UNIT NAME so adding an
 /// unrelated operator never renumbers existing state.
@@ -740,6 +757,14 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    systf: ?*const contract.SystfHost = null,
         \\
     , .{});
+    // §9.12 / IEEE 1364 §17.10: only a model that searches the plusargs has
+    // somewhere for the host to write them.
+    if (self.lowered.uses.contains(.plusargs)) try self.w(
+        "    /// §9.12 the invocation's command-line arguments, in supplied order,\n" ++
+            "    /// written by the host. Entries not starting with `+` are skipped.\n" ++
+            "    plusargs: []const [:0]const u8 = &.{{}},\n",
+        .{},
+    );
     for (self.lowered.table_samples.items, 0..) |count, site| {
         try self.w("    table_{d}: [{d}]f64 = @splat(0.0),\n", .{ site, count });
     }

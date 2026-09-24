@@ -5,7 +5,6 @@
 //! lrm 9.12
 //! plusargs +HELLO +unused=3
 //! checks 4
-//! xfail PLUSARGS-001: runtime codegen returns zero without searching argv
 `include "check.vh"
 module audit_plusargs_prefix(p, n);
   inout p, n; electrical p, n;

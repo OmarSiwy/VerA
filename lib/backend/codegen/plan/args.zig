@@ -208,6 +208,7 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$sscanf$int",
         .@"$sscanf$real",
         .@"$sscanf$str",
+        .@"$plusarg$str",
         .systf,
         => false,
     };

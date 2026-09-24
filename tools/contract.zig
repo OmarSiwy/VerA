@@ -661,6 +661,11 @@ const sim_state_fields = [_]SimStateField{
     .{ .name = "is_initial_step", .T = bool }, // §5.10.2
     .{ .name = "is_final_step", .T = bool }, // §5.10.2
     .{ .name = "bound_step", .T = f64 }, // §9.17.2 $bound_step
+    // §9.12 / IEEE 1364 §17.10 the command line's arguments, verbatim and in
+    // order (`argv[1..]`); only `+` entries are plusargs. Emitted only by a
+    // device that calls $test$plusargs/$value$plusargs; a host that never
+    // writes it leaves `&.{}`, i.e. "no plusargs", and every search answers 0.
+    .{ .name = "plusargs", .T = []const [:0]const u8 },
 };
 
 /// §4.6.4 noise generator topology. Position k of `noise_gens` names one
@@ -1886,6 +1891,9 @@ fn isValueType(comptime T: type) bool {
     // pointers in general would let a device hold one in `Model`, which the
     // loader DOES copy, and that is the bug this whole check exists to stop.
     if (T == ?*const SystfHost) return true;
+    // §9.12 `Instance.plusargs`, admitted by name for the same reason: the
+    // host's own argv, host-owned and host-lifetime.
+    if (T == []const [:0]const u8) return true;
     return switch (@typeInfo(T)) {
         .float, .int, .bool => true,
         // Integer-backed enums are fixed-size POD (e.g. Instance.analysis_kind).
