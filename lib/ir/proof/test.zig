@@ -738,3 +738,47 @@ test "proof: random distribution names do not prove finite results" {
     for ([_][]const u8{ "$rng$uniform", "$rng$normal", "$rng$exponential", "$rng$poisson", "$rng$chi_square", "$rng$t", "$rng$erlang" }) |name|
         try std.testing.expect(!proof_prover.callAbstract(name).finite);
 }
+
+test "proof: `1.0/$vt(V)` and `1.0/limexp(V)` are .strict with W0650 (§9.15, §4.5.13)" {
+    // $vt(0) = 0 (kT/q at T = 0), and limexp(x) is exp(x) below its knee,
+    // which is 0.0 in f64 below about -745: both divisors can be zero, so
+    // `.optimized` (ninf) over either division is UB. Both used to prove.
+    for ([_][]const u8{ "$vt", "limexp" }) |f| {
+        var h: Harness = undefined;
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p,n) <+ 1.0 / {s}(V(p,n));
+            \\endmodule
+        , .{f});
+        defer std.testing.allocator.free(src);
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const v = try h.prove(std.testing.allocator, .{});
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+        try std.testing.expect(h.has(.W0650));
+    }
+}
+
+test "proof: $vt(T) and limexp(x) keep their argument's evidence" {
+    // A positive, bounded argument still proves: the fix narrows the claim
+    // to what the argument supports, it does not drop to top.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real t = 300 from [250:400];
+        \\  parameter real x = 1 from [-10:10];
+        \\  analog I(p,n) <+ V(p,n) / $vt(t) + V(p,n) / limexp(x);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+}
