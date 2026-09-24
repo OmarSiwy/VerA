@@ -68,7 +68,11 @@ const Hit = struct {
 pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error![]const Ast.Instance {
     var rules: std.ArrayList(Rule) = .empty;
     for (self.ctx.file.connectrules) |cr| for (cr.insertions) |*ins| {
-        if (try ruleOf(self, ins)) |r| try rules.append(self.ctx.arena, r);
+        // `checkConnectRules` has reported what is wrong with a statement;
+        // here a refused one simply bridges nothing.
+        const r = try ruleOf(self, ins, false) orelse continue;
+        if (!try paramsDeclared(self, ins, r.module, false)) continue;
+        try rules.append(self.ctx.arena, r);
     };
     if (rules.items.len == 0) return module.instances;
 
@@ -217,8 +221,10 @@ fn domain(file: *const Ast.SourceFile, d: Ast.StrId) ?Ast.DisciplineDecl.Domain 
 /// The directional qualifiers of the discrete port determine the default
 /// scenarios"), then the statement's overrides applied by domain ("one shall
 /// be discrete and the other continuous"). Null for a statement this pass
-/// cannot read: an unknown module was E0915 already.
-fn ruleOf(self: *Flatten, ins: *const Ast.ConnectInsertion) Error!?Rule {
+/// cannot read: an unknown module was E0915 already. `report` is true for the
+/// one call per statement `checkConnectRules` makes, so a conflicting override
+/// is diagnosed once per compilation and not once per module that has ports.
+pub fn ruleOf(self: *Flatten, ins: *const Ast.ConnectInsertion, report: bool) Error!?Rule {
     const file = self.ctx.file;
     const m = elab_names.findModule(self, ins.module) orelse return null;
     if (!m.is_connect or m.ports.len != 2) return null;
@@ -242,7 +248,7 @@ fn ruleOf(self: *Flatten, ins: *const Ast.ConnectInsertion) Error!?Rule {
         // "the specified disciplines shall be compatible for both the
         // continuous and discrete disciplines of the given connect module"
         if (discipline.disciplineConflict(file, side.discipline, ov[1])) |why| {
-            try self.err(ins.main_tok, .E0915, "`{s}` cannot stand for `{s}`'s `{s}` ({s})", .{
+            if (report) try self.err(ins.main_tok, .E0915, "`{s}` cannot stand for `{s}`'s `{s}` ({s})", .{
                 file.str(ov[1]), file.str(m.name), file.str(side.discipline), why,
             });
             return null;
@@ -251,6 +257,66 @@ fn ruleOf(self: *Flatten, ins: *const Ast.ConnectInsertion) Error!?Rule {
         if (ov[0] != .unspecified) side.dir = ov[0];
     };
     return r;
+}
+
+/// §7.6 Table 7-2, "The following combinations of directional qualifiers are
+/// supported for the continuous and discrete disciplines of a connect module":
+/// input/output, output/input, inout/inout — read after §7.7.1's direction
+/// overrides, which "are used to define the type of connect module". Any other
+/// pair names no scenario the module could be inserted in, so the statement
+/// that designates it a connect module is refused. A port with no direction
+/// is not judged here.
+pub fn checkDirections(self: *Flatten, r: Rule) Error!void {
+    const c = r.cont.dir;
+    const d = r.disc.dir;
+    if (c == .unspecified or d == .unspecified) return;
+    if ((c == .input and d == .output) or (c == .output and d == .input) or (c == .inout and d == .inout)) return;
+    const file = self.ctx.file;
+    try self.err(r.ins.main_tok, .E0982, "`{s}`'s continuous port `{s}` is `{t}` and its discrete port `{s}` is `{t}`", .{
+        file.str(r.module.name), file.str(r.cont.port), c, file.str(r.disc.port), d,
+    });
+}
+
+/// §7.7.3 "Any parameters declared in the connect module can be specified":
+/// the statement's `#(...)` is an A.4.1 parameter_value_assignment on the
+/// module it names, so a name that module does not declare, a localparam
+/// (§3.4.5) or an ordered list longer than its overridable parameters is the
+/// same E0907 an instance gets — judged at the statement, where it is
+/// written, whether or not any port in the design ever selects it. `report`
+/// as in `ruleOf`; the answer is whether every entry named a parameter.
+pub fn paramsDeclared(self: *Flatten, ins: *const Ast.ConnectInsertion, m: *const Ast.ModuleDecl, report: bool) Error!bool {
+    const file = self.ctx.file;
+    if (ins.params.len == 0) return true;
+    const named = ins.params[0].name != .none;
+    if (!named) {
+        var n: usize = 0;
+        for (m.params) |p| if (!p.is_local) {
+            n += 1;
+        };
+        if (ins.params.len <= n) return true;
+        if (report) try self.err(ins.params[n].main_tok, .E0907, "`{s}` declares {d} overridable parameter{s}, and this connect statement sets {d}", .{
+            file.str(m.name), n, if (n == 1) "" else "s", ins.params.len,
+        });
+        return false;
+    }
+    var ok = true;
+    for (ins.params) |o| {
+        if (file.strings.eql(o.name, "$mfactor")) continue;
+        var target = o.name;
+        for (m.aliasparams) |al| if (al.alias == o.name) {
+            target = al.target;
+            break;
+        };
+        const decl = for (m.params) |*p| {
+            if (p.name == target) break p;
+        } else null;
+        if (decl != null and !decl.?.is_local) continue;
+        ok = false;
+        if (report) try self.err(o.main_tok, .E0907, "`{s}` is {s} of connect module `{s}`", .{
+            file.str(o.name), if (decl == null) "not a parameter" else "a localparam", file.str(m.name),
+        });
+    }
+    return ok;
 }
 
 /// Does connect rule `r` bridge a port of direction `dir` whose upper and
