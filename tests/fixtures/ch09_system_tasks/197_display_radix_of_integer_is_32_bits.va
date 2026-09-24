@@ -1,0 +1,41 @@
+// §9.4.3 Table 9-22: %h "display in hexadecimal format", %o octal, %b
+// binary — the operand's bit pattern, and IEEE 1364-2005 §17.1.1.2 (which
+// §9.4 inherits) sizes that display to the operand's width. §3.2: "An
+// integer declaration declares one or more variables of type integer. These
+// variables can hold values ranging from -2^31 to 2^31-1" — a 32-bit two's
+// complement variable. So, derived by hand:
+//
+//   integer k = -5;  32-bit pattern 0xFFFF_FFFB
+//     %h -> "fffffffb"       (8 hex digits, not 16)
+//     %o -> "37777777773"    (0xFFFFFFFB = 4294967291 = 37777777773 octal)
+//     %b -> "11111111111111111111111111111011"  (32 digits)
+//   integer j = 255;  no leading zeros without a width:
+//     %h -> "ff"
+//
+// The unsized literal is a different operand: §2.6.1 says only that it is
+// "at least 32" bits, VerA carries it in 64, and 171_display_c_format_flags
+// pins that (`%h` of -42 is sixteen digits). This fixture asserts the
+// variable, which §3.2 does fix.
+//
+//! print none
+//! lrm 9.4.3
+//! lrm 3.2
+`include "check.vh"
+module ch09_display_radix_integer_32(p, n);
+  inout p, n; electrical p, n;
+  integer k, j;
+  string t;
+  analog begin
+    k = -5;
+    j = 255;
+    $sformat(t, "%h", k);
+    `CHECKI("%h of integer -5 is its 32-bit pattern", t == "fffffffb", 1);
+    $sformat(t, "%o", k);
+    `CHECKI("%o of integer -5 is its 32-bit pattern", t == "37777777773", 1);
+    $sformat(t, "%b", k);
+    `CHECKI("%b of integer -5 is 32 binary digits", t == "11111111111111111111111111111011", 1);
+    $sformat(t, "%h", j);
+    `CHECKI("%h of integer 255 has no leading zeros", t == "ff", 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

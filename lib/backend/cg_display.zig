@@ -668,9 +668,11 @@ pub fn appendConv(
         },
         // §9.4.3 Table 9-22: a radix conversion shows the two's-complement bit
         // pattern of the operand — 1364-2005 §17.1.1.2 sizes the display to
-        // the operand's width, and VerA's integer model is 64-bit (§2.6.1; see
-        // codegen's "an integer literal keeps all 64 bits") — so `%h` of -42
-        // is ffffffffffffffd6. Zig's `{x}` on an i64 writes `-2a` instead,
+        // the operand's width: 32 for an `integer` (§3.2), which lowering
+        // records through `$display$width`, and the 64-bit carrier for an
+        // unsized literal (§2.6.1 "at least 32"; see codegen's "an integer
+        // literal keeps all 64 bits") — so `%h` of an integer -5 is fffffffb
+        // and of the literal -42 is ffffffffffffffd6. Zig's `{x}` on an i64 writes `-2a` instead,
         // hence the u64 bitcast of `.bits`. A float has no bit pattern to show
         // and Zig's `{x}` on an f64 is a hex FLOAT — not what `%h` asks for —
         // so a real rounds first, exactly like §4.2.1.1 does at any other
@@ -681,7 +683,7 @@ pub fn appendConv(
             try fmt.append(a, if (conv == 'h') 'x' else conv);
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            try ops.append(a, .{ .v = v, .want = .int, .how = .bits, .spec = spec });
+            try ops.append(a, .{ .v = v, .want = .int, .how = .bits, .spec = spec, .bits = bits });
         },
         // §9.4.5 "%s is used to print ASCII codes as characters" and Table
         // 9-22 gives %c the single character: the operand's low byte, whatever
@@ -773,9 +775,13 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             try g.b(")", .{});
         },
         .bits => {
+            // The pattern at the operand's own width (`PrintArg.bits`): §3.2
+            // makes an `integer` 32 bits, so -5 is fffffffb, not sixteen digits.
+            if (p.bits < 64) try g.b("@as(u{d}, @truncate(", .{p.bits});
             try g.b("@as(u64, @bitCast(@as(i64, ", .{});
             try g.renderVal(p.v, .int);
             try g.b(")))", .{});
+            if (p.bits < 64) try g.b("))", .{});
         },
         .chr => {
             try g.b("@as(u8, @truncate(@as(u64, @bitCast(@as(i64, ", .{});
