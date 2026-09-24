@@ -149,7 +149,7 @@ pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 try self.err(self.file.exprs.mainTok(e), .E0513, "", .{});
                 return null;
             }
-            try checkEventArgBounds(self, e, name); // §5.10.3.1/§5.10.3.2
+            try checkEventArgBounds(self, e, name); // §5.10.3.1-§5.10.3.3
             var args: std.ArrayList(Mir.Value) = .empty;
             defer args.deinit(self.arena);
             for (ex.args(e)) |a| {
@@ -189,15 +189,22 @@ pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
 /// non-integer direction, a negative tolerance, and a tolerance with no
 /// direction beside it.
 ///
-/// `timer` is deliberately absent. §5.10.3.3 gives it start_time/period/
-/// time_tol with no direction slot at all, and its own sentences about them are
-/// about scheduling, not sign — so it gets no rule here rather than a borrowed
-/// one.
+/// `timer` has no direction slot, but §5.10.3.3 repeats the tolerance sentence
+/// verbatim — "The tolerance (time_tol) is an analog_expression and shall be
+/// non-negative" — for its third argument, so that one rule applies to it.
 ///
 /// Same restraint as `checkFilterArgBounds`: Syntax 5-16 types every one of
 /// these `analog_expression`, so only what folds is judged.
 pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     const is_cross = std.mem.eql(u8, name, "cross");
+    if (std.mem.eql(u8, name, "timer")) {
+        const args = self.file.exprs.args(e);
+        if (args.len < 3 or args[2] == .none) return;
+        const c = lower_constfold.constEval(self, args[2]) orelse return;
+        if (c == .str or c.asReal() >= 0) return;
+        try self.err(self.file.exprs.mainTok(args[2]), .E0517, "`timer()` time_tol shall be non-negative, got {d}", .{c.asReal()});
+        return;
+    }
     if (!is_cross and !std.mem.eql(u8, name, "above")) return;
     const args = self.file.exprs.args(e);
     // §5.10.3.2 above() has no direction: its tolerances start one slot earlier.
