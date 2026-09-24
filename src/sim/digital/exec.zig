@@ -20,8 +20,6 @@ const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
 const Type = compile.Type;
-const casts = compile.casts;
-const sys_fns = compile.sys_fns;
 const Inertial = @import("net.zig").Inertial;
 const Handle = @import("../scheduler.zig").Handle;
 const Bridge = @import("net.zig").Bridge;
@@ -35,7 +33,6 @@ const setBit = @import("net.zig").setBit;
 const wired = @import("net.zig").wired;
 const undriven = @import("net.zig").undriven;
 const Show = display.Show;
-const tasks = display.tasks;
 
 // ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
 
@@ -284,9 +281,14 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 .x, .z => condition.conditional(a, try evalContext(self, a, ex.rhs(e), ty), try evalContext(self, a, ex.ternaryElse(e), ty)),
             };
         },
-        .sys_call => {
-            const name = self.file.str(ex.strOf(e));
-            if (sys_fns.get(name)) |f| {
+        // `infer` resolved every call it typed.
+        .sys_call => switch (self.sys_calls[@intFromEnum(e)].?) {
+            .make_signed, .make_unsigned => |cast| {
+                var value = try eval(self, a, ex.args(e)[0], 0);
+                value.signed = cast == .make_signed;
+                return normalize(a, value, ty);
+            },
+            .time, .stime, .clog2 => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
                     .time, .stime => blk: {
@@ -297,17 +299,14 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         const n = try eval(self, a, ex.args(e)[0], 0);
                         break :blk integerCeilingLog2(n);
                     },
+                    .make_signed, .make_unsigned => unreachable, // the arm above
                 };
                 const planes = try a.alloc(u64, 2);
                 planes[0] = if (natural.width >= 64) raw else raw & ((@as(u64, 1) << @intCast(natural.width)) - 1);
                 planes[1] = 0;
                 const value: Int.Literal = .{ .width = natural.width, .signed = natural.signed, .sized = true, .planes = planes };
                 return normalize(a, value, ty);
-            }
-            const cast = casts.get(name).?;
-            var value = try eval(self, a, ex.args(e)[0], 0);
-            value.signed = cast == .make_signed;
-            return normalize(a, value, ty);
+            },
         },
         .concat => {
             var parts: std.ArrayList(Int.Literal) = .empty;
@@ -656,9 +655,72 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
         // reused; an untimed loop therefore retains no iteration temporaries.
         _ = scratch_arena.reset(.retain_capacity);
         const scratch = scratch_arena.allocator();
-        const id = switch (self.code.items[pc]) {
+        switch (self.code.items[pc]) {
             .stop => return,
-            .statement => |id| id,
+            .assign => |s| {
+                // §3.9: an out-of-range or X/Z index names no element, so
+                // the write is discarded rather than landing somewhere.
+                if (try address(self, scratch, s.target)) |target| {
+                    const dest = self.values[target];
+                    const rhs = try eval(self, scratch, s.value, dest.width);
+                    const value = try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
+                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target, .value = value } }, null, true) else try store(self, target, value.planes);
+                }
+                pc += 1;
+                continue;
+            },
+            .delay => |s| {
+                _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, s.amount, s.tok), false);
+                return;
+            },
+            .task => |s| {
+                switch (s.task) {
+                    .show => |sh| try display.display(self, s.args, scratch, sh),
+                    // §17.1.2: the arguments are NOT captured, the call is.
+                    // What it reports is the value at the end of the timestep,
+                    // so evaluation waits for the `.monitor` region.
+                    .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope } }),
+                    .monitor => |sh| {
+                        self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope };
+                        self.monitor_last = null;
+                        try display.monitorPrint(self, scratch, true);
+                    },
+                    .monitor_enable => |on| {
+                        const was = self.monitor_on;
+                        self.monitor_on = on;
+                        // "$monitoron ... produces a display immediately", so
+                        // the re-enable itself is an event. Turning it off is
+                        // silent, and turning on what was already on is not a
+                        // transition.
+                        if (on and !was) try display.monitorPrint(self, scratch, true);
+                    },
+                    .timeformat => {
+                        const ex = &self.file.exprs;
+                        const units = try eval(self, scratch, s.args[0], 0);
+                        const precision = try eval(self, scratch, s.args[1], 0);
+                        const width = try eval(self, scratch, s.args[3], 0);
+                        self.time_format = .{
+                            .units = std.math.lossyCast(i32, units.asInt() orelse 0),
+                            .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
+                            .suffix = self.file.str(ex.strOf(s.args[2])),
+                            .width = std.math.lossyCast(u32, width.asInt() orelse 0),
+                        };
+                    },
+                    .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
+                    .finish => {
+                        const verbose = s.args.len == 0 or self.file.exprs.intValue(s.args[0]) != 0;
+                        if (verbose) {
+                            const start_byte = self.starts[s.tok];
+                            const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);
+                            try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.scheduler.now, self.bag.fileName(loc.file), loc.offset });
+                        }
+                        self.scheduler.finish();
+                        return;
+                    },
+                }
+                pc += 1;
+                continue;
+            },
             .jump => |target| {
                 pc = target;
                 continue;
@@ -833,69 +895,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 }
                 continue;
             },
-        };
-        switch (self.file.stmt(id)) {
-            .assign => |s| {
-                // §3.9: an out-of-range or X/Z index names no element, so
-                // the write is discarded rather than landing somewhere.
-                if (try address(self, scratch, s.target)) |target| {
-                    const dest = self.values[target];
-                    const rhs = try eval(self, scratch, s.value, dest.width);
-                    const value = try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
-                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target, .value = value } }, null, true) else try store(self, target, value.planes);
-                }
-            },
-            .event_control => |s| {
-                _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, s.event, self.file.stmtTok(id)), false);
-                return;
-            },
-            .sys_task => |s| switch (tasks.get(self.file.str(s.name)).?) {
-                .show => |sh| try display.display(self, s.args, scratch, sh),
-                // §17.1.2: the arguments are NOT captured, the call is.
-                // What it reports is the value at the end of the timestep,
-                // so evaluation waits for the `.monitor` region.
-                .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope } }),
-                .monitor => |sh| {
-                    self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope };
-                    self.monitor_last = null;
-                    try display.monitorPrint(self, scratch, true);
-                },
-                .monitor_enable => |on| {
-                    const was = self.monitor_on;
-                    self.monitor_on = on;
-                    // "$monitoron ... produces a display immediately", so
-                    // the re-enable itself is an event. Turning it off is
-                    // silent, and turning on what was already on is not a
-                    // transition.
-                    if (on and !was) try display.monitorPrint(self, scratch, true);
-                },
-                .timeformat => {
-                    const ex = &self.file.exprs;
-                    const units = try eval(self, scratch, s.args[0], 0);
-                    const precision = try eval(self, scratch, s.args[1], 0);
-                    const width = try eval(self, scratch, s.args[3], 0);
-                    self.time_format = .{
-                        .units = std.math.lossyCast(i32, units.asInt() orelse 0),
-                        .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
-                        .suffix = self.file.str(ex.strOf(s.args[2])),
-                        .width = std.math.lossyCast(u32, width.asInt() orelse 0),
-                    };
-                },
-                .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
-                .finish => {
-                    const verbose = s.args.len == 0 or self.file.exprs.intValue(s.args[0]) != 0;
-                    if (verbose) {
-                        const start_byte = self.starts[self.file.stmtTok(id)];
-                        const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);
-                        try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.scheduler.now, self.bag.fileName(loc.file), loc.offset });
-                    }
-                    self.scheduler.finish();
-                    return;
-                },
-            },
-            else => unreachable,
         }
-        pc += 1;
     }
 }
 

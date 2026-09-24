@@ -184,7 +184,6 @@ src/sim/digital/exec.zig evalContext Ast.ExprTag
 src/sim/digital/exec.zig evalContext Ast.UnaryOp
 src/sim/digital/exec.zig evalContext Ast.UnaryOp
 src/sim/digital/exec.zig evalContext Ast.UnaryOp
-src/sim/digital/exec.zig execute Ast.Stmt
 src/sim/digital/exec.zig leaf Ast.ExprTag
 src/sim/digital/exec.zig suspendOn Ast.ExprTag
 src/sim/digital/net.zig netPull Ast.NetKind
