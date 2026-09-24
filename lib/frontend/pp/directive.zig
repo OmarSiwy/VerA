@@ -42,6 +42,12 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
     if (path.len == 0) return pp.fail(pp.spanAt(off + start - 1, off + r.i + 1), .E0124, "", .{});
     // The file name itself, quotes excluded.
     const name_span = pp.spanAt(off + start, off + r.i);
+    // IEEE 1364 §19.5: "Only white space or a comment may appear on the same
+    // line as the `include compiler directive." Comments are gone already.
+    r.i += 1;
+    r.skipSpace();
+    if (r.i < r.s.len)
+        return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0144, "`{s}`", .{std.mem.trim(u8, r.s[r.i..], " \t\r\n")});
 
     if (pp.includes.items.len >= max_include_depth) {
         var b = pp.failWith(name_span, .E0125);

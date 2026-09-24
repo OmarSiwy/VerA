@@ -111,6 +111,8 @@ pub const Code = enum(u16) {
     E0142,
     /// IEEE 1364 §19.3.1: a `define whose name is a Table 10-1 directive.
     E0143,
+    /// IEEE 1364 §19.5: text after the file name of an `include.
+    E0144,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1152,6 +1154,21 @@ fn infoOf(c: Code) Info {
             \\`__LINE__ included. After `define include 1, `include would be
             \\ambiguous between the directive and the macro; the rule removes the
             \\question. Rename the macro.
+            ,
+        },
+
+        .E0144 => .{
+            .title = "text after the `include file name",
+            .lrm = "10.1",
+            .explain =
+            \\LRM 10.1 takes `include from IEEE Std 1364, whose 19.5 says: "Only
+            \\white space or a comment may appear on the same line as the
+            \\`include compiler directive." So
+            \\
+            \\    `include "fileB" // including fileB
+            \\
+            \\is legal and anything else after the file name is not. Put it on
+            \\the next line.
             ,
         },
 
