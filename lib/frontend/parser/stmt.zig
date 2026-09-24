@@ -100,8 +100,9 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     // `analog_loop_statement` has repeat/while/for and NO forever: annex
     // G.2.1 retired the analog one, so outside the discrete context the
     // keyword falls through to the expression statement and is E0209, as
-    // before. The body is `statement`, not `statement_or_null`, hence
-    // `parseStmtNoNull`.
+    // before. The body is `statement`, not `statement_or_null`: `forever ;`
+    // is E0296 in a `.v` as in a `.va` (`parseStmtNoNull` lets a digital
+    // source's null through, and this one would also never suspend).
     //
     // Recorded as `while (1) body`: §9.6 gives the two the same meaning, and
     // one loop node keeps every walk over `Ast.StmtKind` (lowering, the
@@ -111,7 +112,8 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     if (self.discreteGrammar() and self.peek() == .kw_forever) {
         self.pos += 1;
         const always = try self.file.exprs.addIntLiteral(self.arena, tok, .{ .value = 1, .width = 0, .signed = true });
-        const body = try parseStmtNoNull(self);
+        if (self.peek() == .semicolon) return self.failAt(self.pos, .E0296, "", .{});
+        const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .while_stmt = .{ .cond = always, .body = body } }, tok);
     }
     // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2 — digital only.
