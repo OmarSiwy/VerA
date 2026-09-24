@@ -28,9 +28,10 @@ pub fn constEval(self: *const Lower, e: Ast.ExprId) ?Const {
     return foldExpr(self, e, true);
 }
 
-/// `constEval` for a STORAGE SHAPE — an array or vector bound, a replication
-/// count. §3.4 fixes a parameter "at compilation time", and a shape is the one
-/// place the device cannot follow a card, so every parameter the fold reads is
+/// `constEval` for a SHAPE — an array or vector bound, a replication count, or
+/// the elaborated structure (a genvar loop's bounds, a generate scheme). §3.4
+/// fixes a parameter "at compilation time", and a shape is the one place the
+/// device cannot follow a card, so every parameter the fold reads is
 /// marked `ParamInfo.shape` and codegen's `checkShape` refuses a card that
 /// moves it (rather than the old silent disagreement between a folded shape
 /// and a card-read index).

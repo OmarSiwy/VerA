@@ -45,14 +45,18 @@ const toBool = Lower.toBool;
 /// as the §5.8 runtime branch it looks like, so a second mistake inside the
 /// selected arm is reported in the same run.
 ///
-/// ponytail: a scheme this accepts is not necessarily FOLDED. `foldExpr(..., false)` keeps
-/// refusing a parameter on purpose — folding it to its declared default would
-/// compile the arm the model card did not ask for — so a parameterized generate
-/// becomes a runtime diamond over both arms instead of one elaborated arm. Same
-/// behavior, different structure, and nothing VerA emits can observe the
-/// difference until §6.6.1's per-instance declarations exist.
+/// `shapeEval`: a parameter a scheme reads fixes the elaborated STRUCTURE, so it
+/// is a §3.4 shape parameter — compiled in, and `checkShape` refuses a card
+/// that moves it (decided 2026-09-24).
+///
+/// ponytail: a scheme this accepts is not necessarily FOLDED. `lowerIf` still
+/// lowers a parameterized generate as a runtime diamond over both arms instead
+/// of one elaborated arm; since the card cannot move a shape parameter, the
+/// diamond always takes the compiled arm. Same behavior, different structure,
+/// and nothing VerA emits can observe the difference until §6.6.1's
+/// per-instance declarations exist.
 pub fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
-    if (lower_constfold.constEval(self, scheme) != null) return;
+    if (lower_constfold.shapeEval(self, scheme) != null) return;
     var b = self.errWith(tok, .E0428);
     b.help("a generate scheme may read parameters and genvars, not variables", .{});
     try b.emit();
@@ -534,10 +538,12 @@ pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
 pub const max_unroll: u32 = 4096;
 
 /// §3.5/§6.6.1 genvar loop-generate. Returns false when this is an ordinary
-/// procedural `for` (which `lowerFor` then lowers as a CFG loop).
+/// procedural `for` (which `lowerFor` then lowers as a CFG loop). The bounds
+/// fold with `shapeEval`: a parameter in them fixes how many copies of the body
+/// exist, so it is a §3.4 shape parameter like an array bound.
 pub fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!bool {
     const gv = genvarOf(self, init_s) orelse return false;
-    const start = lower_constfold.constEval(self, assignValueOf(self, init_s).?) orelse {
+    const start = lower_constfold.shapeEval(self, assignValueOf(self, init_s).?) orelse {
         try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
         return true;
     };
@@ -548,13 +554,13 @@ pub fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: As
 
     var n: u32 = 0;
     while (n < max_unroll) : (n += 1) {
-        const c = lower_constfold.constEval(self, cond) orelse {
+        const c = lower_constfold.shapeEval(self, cond) orelse {
             try self.err(self.file.exprs.mainTok(cond), .E0418, "", .{});
             break;
         };
         if (!c.isTrue()) break;
         try lower_stmt.lowerStmt(self, body);
-        const next = lower_constfold.constEval(self, assignValueOf(self, step) orelse .none) orelse {
+        const next = lower_constfold.shapeEval(self, assignValueOf(self, step) orelse .none) orelse {
             try self.err(self.file.exprs.mainTok(cond), .E0419, "", .{});
             break;
         };

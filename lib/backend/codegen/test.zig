@@ -2235,6 +2235,25 @@ test "codegen: §3.4 a shape parameter is compiled in and a card that moves it i
     try std.testing.expect(std.mem.indexOf(u8, over, "    if (model.N != 5) return \"N\";\n") != null);
 }
 
+test "codegen: §6.6 a parameter in a generate scheme fixes structure, so it is a shape parameter" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module gs(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer sel = 1;
+        \\  generate
+        \\    if (sel) begin : on
+        \\      analog I(p, n) <+ V(p, n);
+        \\    end
+        \\  endgenerate
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const text = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, text, "    if (model.sel != 1) return \"sel\";\n") != null);
+}
+
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
     // The defect this fixes: `tnom` folded to the constant 27, so a SPICE deck
     // setting `.options tnom` was silently ignored by every model — and a
