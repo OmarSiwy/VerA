@@ -461,6 +461,16 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p04_analog.va",
         .stdout = "p02: p04_06_analog_objects checks=125\n",
     },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_07_behaviour_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
+        .stdout = "p02: p04_07_behaviour_objects checks=240\np04_behaviour: d=12\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_08_analog_behaviour.c",
+        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
+        .stdout = "p02: p04_08_analog_behaviour checks=76\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).

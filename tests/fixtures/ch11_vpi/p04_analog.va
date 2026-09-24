@@ -15,6 +15,12 @@
 // subtractions of doubles need not be bit-exact) rather than against a
 // value mid would have to converge to.
 
+// `$p04_tap(Vp(b1), 2.5)` is a user-defined analog system task call the C
+// application registers (§12.32) and then finds in the object model
+// (§11.6.16). Nothing registers it when this file runs as a fixture; the
+// call then compiles and does nothing, as
+// ch12_vpi_routines/01_analog_systf_resistor_call.va pins for $resistor.
+//
 // The access functions are the file's own natures', `Vp` and `Ip`: a
 // derived nature inherits its parent's access (§3.6.1.1), so p04_fine's
 // potential is read with `Vp` too.
@@ -59,6 +65,7 @@ module p04_analog(p, n);
   analog begin
     `CHECK("the two branches sum to V(p, n)", Vp(b1) + Vp(b2), Vp(p, n), 1e-15);
     `CHECK("which is 0.75 - 0.125", Vp(p, n), 0.625, 1e-15);
+    $p04_tap(Vp(b1), 2.5);
     Ip(b1) <+ Vp(b1) / 1k;
     Ip(b2) <+ Vp(b2) / 1k;
     Ip(f) <+ Vp(f) / 1k;
