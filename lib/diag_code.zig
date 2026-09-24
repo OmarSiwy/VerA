@@ -470,6 +470,8 @@ pub const Code = enum(u16) {
     E0520,
     /// §4.6.3/A.8.2 an `ac_stim` analysis name that is not a string literal.
     E0521,
+    /// §4.6.4.2/Syntax 4-4 a `flicker_noise` call with no exponent.
+    E0522,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -3958,6 +3960,21 @@ fn infoOf(c: Code) Info {
             \\where the LRM says so (4.6.4.3's noise table file name), not here.
             \\
             \\    I(p, n) <+ ac_stim("ac", 2.0, 0.0);
+            ,
+        },
+        .E0522 => .{
+            .title = "flicker_noise requires an exponent",
+            .lrm = "4.6.4.2",
+            .explain =
+            \\Syntax 4-4 brackets only the name:
+            \\
+            \\    flicker_noise ( analog_expression , analog_expression [ , string ] )
+            \\
+            \\and 4.6.4.2's "pink noise with a power of pwr at 1Hz which varies
+            \\in proportion to 1/f^exp" gives the exponent no default. A flat
+            \\spectrum is `white_noise(pwr)`; a 1/f source says so:
+            \\
+            \\    I(p, n) <+ flicker_noise(kf, 1.0);
             ,
         },
 
