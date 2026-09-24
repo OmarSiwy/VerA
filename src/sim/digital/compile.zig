@@ -90,6 +90,8 @@ pub const Instruction = union(enum(u5)) {
     copy_out: struct { target: Ast.ExprId, slot: u32 },
     // §10.3 `disable` naming a task: every activation of it ends.
     disable_task: u32,
+    // §17.5 start an asynchronous PLA's own process at this pc.
+    pla_start: u32,
     stop,
 };
 
@@ -113,6 +115,8 @@ pub const SysFn = enum {
     /// zero, and `$value$plusargs` leaves its variable alone.
     test_plusargs,
     value_plusargs,
+    /// §17.6.5 `$q_full(q_id, status)`, which also writes its status.
+    q_full,
     /// §17.7.3, the clock as a real in the module's unit.
     realtime,
     /// §17.8's conversions: `$rtoi` truncates, `$itor` converts, and
@@ -150,7 +154,7 @@ pub const SysFn = enum {
     /// question about the invocation.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .realtime, .test_plusargs, .value_plusargs => false,
+            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full => false,
             else => true, // else: a pure function of its arguments
         };
     }
@@ -174,6 +178,7 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$unsigned", .make_unsigned },
     .{ "$test$plusargs", .test_plusargs },
     .{ "$value$plusargs", .value_plusargs },
+    .{ "$q_full", .q_full },
     .{ "$realtime", .realtime },
     .{ "$rtoi", .rtoi },
     .{ "$itor", .itor },
@@ -429,6 +434,12 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     // §17.10: `(string)` and `(format, variable)`, returning
                     // an integer. The variable is only ever written on a
                     // match, so it is resolved and never read.
+                    .q_full => {
+                        if (args.len != 2 or args[0] == .none or args[1] == .none) return self.exprFail(e, "$q_full takes (q_id, status)");
+                        _ = try inferValue(self, args[0], depth + 1);
+                        try checkTarget(self, args[1]);
+                        break :blk .{ .width = 32, .signed = true };
+                    },
                     .realtime => {
                         if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
                         break :blk real_type;
@@ -756,6 +767,44 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         if (a == .none or !constantExpression(self, a))
                             return self.exprFail(a, "the $readmem address bounds must be constant");
                         try checkExpr(self, a);
+                    }
+                },
+                // §17.6: four arguments, the last the status; which of the
+                // others are written depends on the task.
+                .queue => |op| {
+                    if (s.args.len != 4) return self.fail(tok, "the §17.6 queue tasks take four arguments", .{});
+                    for (s.args, 0..) |a, i| {
+                        if (a == .none) return self.fail(tok, "the §17.6 queue tasks take four arguments", .{});
+                        const written = i == 3 or (op == .remove and i != 0) or (op == .exam and i == 2);
+                        if (written) try checkTarget(self, a) else try checkExpr(self, a);
+                    }
+                },
+                // §17.5 `(memory, inputs, outputs)`. An asynchronous array is
+                // its own process from here on: the loop is compiled out of
+                // line, jumped over, and started by `.pla_start`.
+                .pla => |p| {
+                    if (s.args.len != 3 or s.args[0] == .none or s.args[1] == .none or s.args[2] == .none)
+                        return self.fail(tok, "a §17.5 PLA task takes (memory, inputs, outputs)", .{});
+                    const ex = &self.file.exprs;
+                    const arr = if (ex.tag(s.args[0]) != .ident) null else self.arrays.get(try self.slot(s.args[0]));
+                    if (arr == null or arr.?.rest.len != 0) return self.exprFail(s.args[0], "a §17.5 personality is a one-dimensional memory");
+                    try checkExpr(self, s.args[1]);
+                    try checkTarget(self, s.args[2]);
+                    if (p.async_) {
+                        var sync = p;
+                        sync.async_ = false;
+                        const skip = try append(self, .{ .jump = 0 });
+                        const loop = position(self);
+                        _ = try append(self, .{ .task = .{ .task = .{ .pla = sync }, .args = s.args, .tok = tok } });
+                        var watched: std.ArrayList(u32) = .empty;
+                        const base = try self.slot(s.args[0]);
+                        for (0..arr.?.count) |i| try watch(self, base + @as(u32, @intCast(i)), &watched);
+                        try sensitivity(self, s.args[1], &watched);
+                        _ = try append(self, .{ .wait_slots = watched.items });
+                        _ = try append(self, .{ .jump = loop });
+                        self.code.items[skip].jump = position(self);
+                        _ = try append(self, .{ .pla_start = loop });
+                        return;
                     }
                 },
                 // §17.4.1: the argument is an expression selecting how much
