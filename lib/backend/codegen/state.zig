@@ -625,12 +625,34 @@ pub fn zeroOnEveryPath(self: *const Gen, v0: Mir.Value, depth: u32) bool {
     if (v == .f_zero) return true;
     if (self.an.foldConst(v, 0, false)) |k| return k.f == 0.0;
     const def = self.mir.valueDef(v);
-    if (def == .inst_result and self.mir.instRow(def.inst_result).op == .phi) {
+    if (def != .inst_result) return false;
+    const op = self.mir.instRow(def.inst_result).op;
+    if (op == .phi) {
         const d = self.mir.instData(def.inst_result).phi;
         for (0..d.count) |k| {
             if (!zeroOnEveryPath(self, self.mir.phiPair(def.inst_result, @intCast(k)).value, depth + 1)) return false;
         }
         return true;
+    }
+    // The same join after if-conversion (ir/ifconv.zig): a diamond's phi
+    // becomes `select(c, then, else)`, zero on every path exactly when both
+    // arms are. Without this a converted `if (rs > 0) I(b) <+ V(b)/rs; else
+    // V(b) <+ 0.0;` lost its collapse, and whether it collapsed depended on
+    // whether ifconv happened to convert the diamond.
+    if (op == .select) {
+        const d = self.mir.instData(def.inst_result).ternary;
+        return zeroOnEveryPath(self, d.then_val, depth + 1) and zeroOnEveryPath(self, d.else_val, depth + 1);
+    }
+    return false;
+}
+
+/// Does any MIR value read unknown `u` (a §4.4/§5.4.2 probe of it)? Every
+/// read of an unknown is its `block_param` value, so this is a scan of the
+/// value table — once per collapse candidate, of which a model has few.
+fn unknownProbed(self: *const Gen, u: u32) bool {
+    for (Mir.Value.first_dynamic..self.an.nv) |i| {
+        const def = self.mir.valueDef(@enumFromInt(i));
+        if (def == .block_param and def.block_param == u) return true;
     }
     return false;
 }
@@ -655,6 +677,10 @@ pub fn collapsePairs(self: *Gen) Error![]CollapsePair {
         if (!zeroOnEveryPath(self, c.react_val, 0)) continue;
         const fu = self.branch_u[i];
         if (fu == none_u32) continue;
+        // §5.4.2 a flow probe of the branch reads I_b, which `collapse` turns
+        // into the far node's VOLTAGE: the model would read that, not its
+        // current. Such a branch keeps its row (static_switch_elision.va).
+        if (unknownProbed(self, fu)) continue;
         // Only a non-port internal node is the host's to move, and only
         // onto a real unknown (§1.3.1.1 ground has none). The host
         // resolves aliases in ascending unknown order, so the target
