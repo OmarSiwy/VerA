@@ -20,6 +20,8 @@ const Ast = Front.Ast;
 const Int = Front.Integer;
 const diag = @import("diag");
 const Scheduler = @import("../scheduler.zig").Scheduler;
+/// Scheduler ticks. `Time` below is the timescale module, not this.
+pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
 const compile = @import("compile.zig");
 const exec = @import("exec.zig");
@@ -166,6 +168,64 @@ pub const Run = struct {
     /// first watcher is §17.1.3's monitor. §18's VCD value changes and VAMS
     /// §8.5's implicit D2A are the same event and would each add a member.
     watch: []std.EnumSet(Watcher) = &.{},
+
+    /// Dispatch every event at a time <= `limit` (IEEE 1364 §11.4's loop,
+    /// VAMS §8.5.1's regions), then return with the queue holding only later
+    /// work. `limit = maxInt` is the whole simulation, which is `run`. Calling
+    /// again with a larger limit resumes; nothing is lost between calls
+    /// because every suspended process is a waiter or a queued event.
+    pub fn runUntil(r: *Run, limit: Tick) Error!void {
+        var scratch = std.heap.ArenaAllocator.init(r.arena);
+        defer scratch.deinit();
+        while (r.scheduler.nextUntil(limit)) |event| {
+            _ = scratch.reset(.retain_capacity);
+            const item = r.pending.items[event.payload].item;
+            switch (item) {
+                .run_process => |start| try exec.execute(r, &scratch, start),
+                .write => |w| try exec.store(r, w.target, w.value.planes),
+                .strobe => |s| {
+                    r.scope = s.scope;
+                    try display.display(r, s.args, scratch.allocator(), s.show);
+                },
+                .monitor_tick => {
+                    r.monitor_pending = false;
+                    try display.monitorPrint(r, scratch.allocator());
+                },
+                // §6.1.3: a cancelled transition never gets here — the scheduler
+                // dropped it — so what arrives is the one still in flight.
+                .drive => |at| {
+                    const d = &r.drivers[at];
+                    d.transition.in_flight = null;
+                    @memcpy(d.current.planes, d.transition.target.planes);
+                    try exec.resolve(r, d.net);
+                },
+                .net_update => |at| {
+                    const n = &r.nets[at];
+                    n.transition.in_flight = null;
+                    try exec.store(r, n.slot, n.transition.target.planes);
+                },
+                // §3.8: the charge has been held for the decay time, and what a
+                // trireg holds once it is worth nothing is x.
+                .decay => |at| {
+                    const n = &r.nets[at];
+                    n.decay_event = null;
+                    for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
+                    try exec.store(r, n.slot, n.resolved.planes);
+                },
+            }
+            // Freed only now: the `.write` planes above are this row's own, and
+            // nothing dispatched may reuse them before `store` has copied them.
+            try r.free_rows.append(r.arena, event.payload);
+        }
+    }
+
+    /// The slot a name declared in the design's ROOT scope is stored in, or
+    /// null when the root declares no such variable or net. `values[slot]` is
+    /// its current value; this is how a caller outside the engine reads one.
+    pub fn slotOf(self: *const Run, name: []const u8) ?u32 {
+        const str = self.file.strings.find(name) orelse return null;
+        return self.names.get(.{ .scope = 0, .str = str });
+    }
 
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         const start = self.starts[@min(tok, self.starts.len - 1)];
@@ -624,6 +684,16 @@ fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
 /// Callers own the run arena and diagnostic source lifetime. No analog lowering,
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
+    var r = try elaborate(arena, source, opts, bag, out);
+    try r.runUntil(std.math.maxInt(Tick));
+}
+
+/// Everything `run` does before the first event dispatches: preprocess,
+/// parse, §6.2.2 elaboration, and every driver and process compiled and
+/// enqueued at time 0. The returned `Run` owns nothing outside `arena`, so a
+/// caller that holds it may step it with `runUntil` for as long as the arena
+/// lives — which is what a mixed-signal coordinator needs from it.
+pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
     const pp = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .bag = bag }) catch |e| return switch (e) {
         error.OutOfMemory => error.OutOfMemory,
         error.PreprocessFailed => error.DigitalFailed,
@@ -636,13 +706,15 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     parser.digital = true;
     // A failed parse still leaves every recovered module in `parser.file`, and
     // the `wreal` refusal is itself a parse error, so the rules read that.
-    const file = parser.parseSourceFile() catch |e| switch (e) {
+    // Arena-owned, not a local: the returned `Run` points at it.
+    const file = try arena.create(Ast.SourceFile);
+    file.* = parser.parseSourceFile() catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseError => parser.file,
     };
-    try wrealRules(&file, tokens.items(.start), bag);
+    try wrealRules(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives };
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives };
     if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
     const m = try pickTop(&r, file.modules);
     // §6.2.2: a `timescale applies from where it is written, and the FIRST
@@ -749,48 +821,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         const range = r.blocks.get(d.name) orelse return r.fail(d.tok, "undeclared named block", .{});
         r.code.items[d.at].disable_block = .{ .start = range.start, .end = range.end };
     }
-    var scratch = std.heap.ArenaAllocator.init(arena);
-    defer scratch.deinit();
-    while (r.scheduler.next()) |event| {
-        _ = scratch.reset(.retain_capacity);
-        const item = r.pending.items[event.payload].item;
-        switch (item) {
-            .run_process => |start| try exec.execute(&r, &scratch, start),
-            .write => |w| try exec.store(&r, w.target, w.value.planes),
-            .strobe => |s| {
-                r.scope = s.scope;
-                try display.display(&r, s.args, scratch.allocator(), s.show);
-            },
-            .monitor_tick => {
-                r.monitor_pending = false;
-                try display.monitorPrint(&r, scratch.allocator());
-            },
-            // §6.1.3: a cancelled transition never gets here — the scheduler
-            // dropped it — so what arrives is the one still in flight.
-            .drive => |at| {
-                const d = &r.drivers[at];
-                d.transition.in_flight = null;
-                @memcpy(d.current.planes, d.transition.target.planes);
-                try exec.resolve(&r, d.net);
-            },
-            .net_update => |at| {
-                const n = &r.nets[at];
-                n.transition.in_flight = null;
-                try exec.store(&r, n.slot, n.transition.target.planes);
-            },
-            // §3.8: the charge has been held for the decay time, and what a
-            // trireg holds once it is worth nothing is x.
-            .decay => |at| {
-                const n = &r.nets[at];
-                n.decay_event = null;
-                for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
-                try exec.store(&r, n.slot, n.resolved.planes);
-            },
-        }
-        // Freed only now: the `.write` planes above are this row's own, and
-        // nothing dispatched may reuse them before `store` has copied them.
-        try r.free_rows.append(arena, event.payload);
-    }
+    return r;
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -807,6 +838,34 @@ pub fn expectRun(source: []const u8, expected: []const u8) !void {
         return e;
     };
     try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "elaborate + runUntil step the engine one bounded horizon at a time" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg [3:0] code;
+        \\initial begin code = 4'd1; #10 code = 4'd5; #10 code = 4'd9; end
+        \\endmodule
+    , .{}, &bag, &output.writer);
+    const at = r.slotOf("code").?;
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("nope"));
+    // Nothing has run: the reg is still §3.2's x.
+    try std.testing.expect(r.values[at].hasUnknown());
+    try r.runUntil(0);
+    try std.testing.expectEqual(@as(?i64, 1), r.values[at].asInt());
+    try std.testing.expectEqual(@as(?Tick, 10), r.scheduler.peekTime());
+    try r.runUntil(9);
+    try std.testing.expectEqual(@as(?i64, 1), r.values[at].asInt());
+    try r.runUntil(10);
+    try std.testing.expectEqual(@as(?i64, 5), r.values[at].asInt());
+    try r.runUntil(std.math.maxInt(Tick));
+    try std.testing.expectEqual(@as(?i64, 9), r.values[at].asInt());
+    try std.testing.expectEqual(@as(?Tick, null), r.scheduler.peekTime());
 }
 
 test "§12.4 a downward hierarchical reference reads the named instance's net" {
