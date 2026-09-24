@@ -7,6 +7,14 @@
  * double arrow vpi_iterate()/vpi_scan(), and a property listed under an
  * object is read with vpi_get()/vpi_get_str() (§11.5.2).
  *
+ * 11.3's own Figure 11-1 is exactly the net walk below: "a one-to-many
+ * relationships from objects of type module to objects of type net and a
+ * one-to-one relationship from objects of type net to objects of type module.
+ * Objects of type net have properties vpiName, vpiVector, and vpiSize, with
+ * the C data types string, Boolean, and integer respectively" — so vpiName
+ * comes back through vpi_get_str(), and vpiVector (0 or 1) and vpiSize (a
+ * count) through vpi_get(), as the §11.5.2 key says.
+ *
  * ------------------------------------------------------------------ DERIVATION
  *
  * Every expected value below is read off p04_objects.v, not off a run.
@@ -47,7 +55,10 @@
  * W and W - 1 = 7 for M. The arrow back to the scope is the root.
  */
 
+//! lrm 11.3
 //! lrm 11.3.1
+//! lrm 11.5.2
+//! lrm 11.5.3
 //! lrm 11.6.1
 //! lrm 11.6.4
 //! lrm 11.6.8

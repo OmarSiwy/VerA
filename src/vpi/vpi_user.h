@@ -89,6 +89,43 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiRegArray           116   /* §11.6.11 a reg array (memory) */
 
 /* --------------------------------------------------------------------------
+ * The analog classes — §11.6.2, §11.6.5–§11.6.7. Verilog-AMS names these and
+ * numbers none; the numbers are VerA's, and agree with the P03 draft header
+ * (tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h) on every name the two
+ * share, so a plugin including both sees one value per name.
+ *
+ *   vpi_iterate(vpiDiscipline, NULL)          every discipline declared
+ *   vpi_iterate(vpiNature,     NULL)          every nature declared
+ *   vpi_handle(vpiFlowNature | vpiPotentialNature, discipline)
+ *   vpi_handle(vpiParent, nature)             a derived nature's parent;
+ *                                             NULL, no error, for a base one
+ *   vpi_iterate(vpiChild,      nature)        the natures derived from it
+ *   vpi_iterate(vpiDiscipline, nature)        the disciplines binding it
+ *   vpi_iterate(vpiNode,       module)        §11.6.5 one per continuous net
+ *   vpi_handle(vpiNode | vpiDiscipline, net)
+ *   vpi_iterate(vpiNet,        node)          the net the node is
+ *   vpi_iterate(vpiBranch,     module)        §11.6.6 declared branches
+ *   vpi_handle(vpiPosNode | vpiNegNode | vpiDiscipline, branch)
+ *   vpi_handle(vpiFlow | vpiPotential, branch) §11.6.7 its two quantities
+ *   vpi_handle(vpiBranch | vpiNature, quantity)
+ *
+ * A quantity has no name (§11.6.7 lists none). Values are not answered here:
+ * vpi_get_analog_value() needs an analysis this process does not run.
+ * -------------------------------------------------------------------------- */
+#define vpiQuantity           720
+#define vpiBranch             721
+#define vpiPotential          722
+#define vpiFlow               723
+#define vpiPosNode            724
+#define vpiNegNode            725
+#define vpiNode               726
+#define vpiDiscipline         727
+#define vpiNature             728
+#define vpiFlowNature         729
+#define vpiPotentialNature    731
+#define vpiChild              732
+
+/* --------------------------------------------------------------------------
  * Relationships — the `type` argument of vpi_handle()/vpi_iterate() when what
  * is being traversed is an edge of a §11.6 diagram rather than an object class.
  * -------------------------------------------------------------------------- */
