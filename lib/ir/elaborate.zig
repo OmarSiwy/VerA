@@ -1302,6 +1302,7 @@ pub const Flatten = struct {
                 // §6.3.3 an empty named association supplies no value. For
                 // §9.18 that leaves the inherited product unchanged (times 1).
                 if (o.value == .none) continue;
+                if (try elab_paramset.checkMfactor(self, o.main_tok, o.value)) continue;
                 mfactor = if (mfactor == .none)
                     value
                 else

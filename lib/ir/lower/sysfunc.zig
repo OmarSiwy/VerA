@@ -48,6 +48,19 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // connect module (see `isConnectModuleOnlySysFunc` for why the test is a
     // name test today and what it narrows into later).
     if (lower_event.isConnectModuleOnlySysFunc(name)) {
+        // Tables 9-19 and 9-20 split the connect module in two: every driver
+        // function reads "Supported in analog context of connectmodule: No"
+        // ($receiver_count alone reads Yes). This call IS in a connect module,
+        // in its analog block, so the fence it hits is §9.2's analog column,
+        // not §9.22's module one.
+        const in_cm = self.cur_unit < self.out.unit_paths.len and self.out.unit_paths[self.cur_unit].decl.is_connect;
+        if (in_cm and !std.mem.eql(u8, name, "$receiver_count")) {
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0806);
+            b.msg("`{s}` in the analog block of a connect module", .{name});
+            b.note("§9.2 Tables 9-19/9-20: \"Supported in analog context of connectmodule: No\"; call it from an `always` or `initial` block of the connect module", .{});
+            try b.emit();
+            return poison;
+        }
         var b = self.errWith(self.file.exprs.mainTok(e), .E0818);
         b.msg("`{s}` can only be called from a connect module", .{name});
         b.note("§9.22: \"Driver access functions can only be called from connect modules.\" This is a `module`", .{});
@@ -190,6 +203,8 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+    if (try checkArity(self, ex.mainTok(e), name, sys_args)) return poison;
+    if (Mir.Callee.fromName(name) == .@"$fopen" and try checkFopenType(self, sys_args)) return poison;
     // §9.20 the two alias functions: six validity rules, all of them about the
     // CALL rather than the value, so all of them here (E0812) — and then the
     // alias, which is a `node_voltages` write and a constant return. The call
@@ -275,9 +290,11 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
-    for (sys_args) |a| {
+    for (sys_args, 0..) |a, i| {
         if (a == .none) continue;
-        try vals.append(self.arena, (try lowerSysArg(self, a, takesNetRef(name))).v);
+        const tv = try lowerSysArg(self, a, takesNetRef(name));
+        if (try checkDescriptor(self, name, i, a, tv)) return poison;
+        try vals.append(self.arena, tv.v);
     }
     const v = try self.call(name, vals.items);
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
@@ -285,6 +302,70 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // observes, so it is sequenced into the I/O phase like the tasks.
     if (lower_event.isFileFunc(name)) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
+}
+
+/// The argument count a call's clause prints — `callee.Info.args`, one column,
+/// so a new callee states its arity where it states its type. `true` when the
+/// call was refused. `args.len` counts A.6.9 empty slots too: `$fflush(,)` has
+/// two arguments, both null, and Syntax 9-5's `$finish` with no parentheses
+/// has none.
+///
+/// §9.14's `$` math spellings keep E0506, the §4.3 code their undecorated
+/// twins already raise: "all of these functions, except $clog2, are aliases
+/// of the analog math operators", so the rule and its code are one.
+pub fn checkArity(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
+    const c = Mir.Callee.fromName(name);
+    const a = Mir.callee.arity(c);
+    if (a.admits(args.len)) return false;
+    // `$log10` is Table 9-11's spelling of Table 4-14's `log`.
+    const math = c == .@"$log10" or lower_expr.unaryMathOp(name[1..]) != null or
+        lower_expr.binaryMathOp(name[1..]) != null;
+    const want: u8 = if (args.len < a.min) a.min else a.max;
+    if (math) {
+        try self.err(tok, .E0506, "`{s}()` takes {d}", .{ name, want });
+        return true;
+    }
+    var b = self.errWith(tok, .E0887);
+    if (a.min == a.max)
+        b.msg("`{s}` takes {d} argument{s}, got {d}", .{ name, want, if (want == 1) "" else "s", args.len })
+    else if (args.len < a.min)
+        b.msg("`{s}` takes at least {d} argument{s}, got {d}", .{ name, want, if (want == 1) "" else "s", args.len })
+    else
+        b.msg("`{s}` takes at most {d} argument{s}, got {d}", .{ name, want, if (want == 1) "" else "s", args.len });
+    try b.emit();
+    return true;
+}
+
+/// §9.5.1/§9.5.2: the descriptor argument (`callee.Info.fd`) is "a 32-bit
+/// integer" — so, of the three types a lowered value has, only `.integer` is
+/// one. Judged on the LOWERED operand, at the site that lowers it, because
+/// lowering an argument twice would run a `$fopen` in it twice. `true` when
+/// the call was refused.
+pub fn checkDescriptor(self: *Lower, name: []const u8, i: usize, arg: Ast.ExprId, tv: TypedValue) Oom!bool {
+    const at = Mir.callee.fdArg(Mir.Callee.fromName(name)) orelse return false;
+    if (i != at or tv.ty == .integer) return false;
+    try self.err(self.file.exprs.mainTok(arg), .E0888, "`{s}`'s descriptor argument is {s}", .{
+        name, switch (tv.ty) {
+            .real => "a real",
+            .string => "a string",
+            .integer => unreachable,
+        },
+    });
+    return true;
+}
+
+/// §9.5.1 Table 9-24: "type is a string expression containing a character
+/// string of one of the forms in Table 9-24". Only a literal can be judged.
+pub fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
+    if (args.len != 2 or args[1] == .none) return false;
+    const s = constStrArg(self, args[1]) orelse return false;
+    const forms = [_][]const u8{
+        "r",  "rb",  "w",   "wb",  "a",  "ab",  "r+",  "r+b",
+        "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+",
+    };
+    for (forms) |f| if (std.mem.eql(u8, s, f)) return false;
+    try self.err(self.file.exprs.mainTok(args[1]), .E0889, "`\"{s}\"`", .{s});
+    return true;
 }
 
 /// §9.19's "port identifier": a name in the lowered module's port list.

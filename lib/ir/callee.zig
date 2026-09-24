@@ -212,22 +212,91 @@ const by_name = std.StaticStringMap(Callee).initComptime(blk: {
 /// to agree. `analysis.VTy` is this type.
 pub const Ty = enum(u8) { real, int, str };
 
+/// How many arguments a source call may carry, as its clause's syntax prints
+/// them. `unchecked` is every row not listed: its arity is judged elsewhere
+/// (the §9.13 distributions, §9.17, §9.21, the display family) or not at all.
+pub const Arity = struct {
+    min: u8 = 0,
+    max: u8 = std.math.maxInt(u8),
+
+    pub const unchecked: Arity = .{};
+    pub fn exactly(n: u8) Arity {
+        return .{ .min = n, .max = n };
+    }
+    pub fn admits(a: Arity, n: usize) bool {
+        return n >= a.min and n <= a.max;
+    }
+};
+
 pub const Info = struct {
     /// Everything not listed is real: §9.14/§9.15 and every §4.5 operator.
     ty: Ty = .real,
+    /// The argument count Syntax 9-2..9-9, 9-5 and Table 4-14 admit.
+    args: Arity = .unchecked,
+    /// §9.5.1/§9.5.2: the position of the multichannel or file descriptor —
+    /// "a 32-bit integer", "the result of an expression that takes the form
+    /// of a 32-bit unsigned integer value" — so a real or a string there is
+    /// not a descriptor at all. Null for a call that takes none.
+    fd: ?u3 = null,
 };
+
+const one: Arity = .exactly(1);
+const two: Arity = .exactly(2);
 
 pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$param_given" = .{ .ty = .int },
     .@"$port_connected" = .{ .ty = .int },
-    .@"$test$plusargs" = .{ .ty = .int },
-    .@"$value$plusargs" = .{ .ty = .int },
-    .@"$rtoi" = .{ .ty = .int },
-    .@"$clog2" = .{ .ty = .int },
+    // §9.12 / IEEE 1364 §17.10: `$test$plusargs(string)`,
+    // `$value$plusargs(user_string, variable)`.
+    .@"$test$plusargs" = .{ .ty = .int, .args = one },
+    .@"$value$plusargs" = .{ .ty = .int, .args = two },
+    .@"$rtoi" = .{ .ty = .int, .args = one },
+    .@"$itor" = .{ .args = one },
+    .@"$bitstoreal" = .{ .args = one },
+    .@"$clog2" = .{ .ty = .int, .args = one },
+    // §9.14: "aliases of the analog math operators described in 4.3.1", so
+    // Table 4-14's arity is theirs.
+    .@"$sqrt" = .{ .args = one },
+    .@"$exp" = .{ .args = one },
+    .@"$expm1" = .{ .args = one },
+    .@"$ln" = .{ .args = one },
+    .@"$ln1p" = .{ .args = one },
+    .@"$log" = .{ .args = one },
+    .@"$log10" = .{ .args = one },
+    .@"$floor" = .{ .args = one },
+    .@"$ceil" = .{ .args = one },
+    .@"$sin" = .{ .args = one },
+    .@"$cos" = .{ .args = one },
+    .@"$tan" = .{ .args = one },
+    .@"$asin" = .{ .args = one },
+    .@"$acos" = .{ .args = one },
+    .@"$atan" = .{ .args = one },
+    .@"$sinh" = .{ .args = one },
+    .@"$cosh" = .{ .args = one },
+    .@"$tanh" = .{ .args = one },
+    .@"$asinh" = .{ .args = one },
+    .@"$acosh" = .{ .args = one },
+    .@"$atanh" = .{ .args = one },
+    .@"$pow" = .{ .args = two },
+    .@"$hypot" = .{ .args = two },
+    .@"$atan2" = .{ .args = two },
+    // Syntax 9-5 `$finish [ ( n ) ]`; §9.7.2 gives $stop the same shape.
+    .@"$finish" = .{ .args = .{ .max = 1 } },
+    .@"$stop" = .{ .args = .{ .max = 1 } },
+    // Syntax 9-2 and 9-3: `$fclose(fd)`, and every output task's first
+    // argument is the descriptor.
+    .@"$fclose" = .{ .args = one, .fd = 0 },
+    .@"$fdisplay" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    .@"$fwrite" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    .@"$fstrobe" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    .@"$fmonitor" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    .@"$fdebug" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    // §9.5.6 `$fflush(mcd)`, `$fflush(fd)`, `$fflush()`.
+    .@"$fflush" = .{ .args = .{ .max = 1 }, .fd = 0 },
     // §9.11 Table 9-8: `$realtobits` yields the bit PATTERN (an integer),
     // `$bitstoreal` the real that pattern stands for — see
     // tests/fixtures/exhaustive/122_bit_conversions.va.
-    .@"$realtobits" = .{ .ty = .int },
+    .@"$realtobits" = .{ .ty = .int, .args = one },
     .@"$analog_node_alias" = .{ .ty = .int },
     .@"$analog_port_alias" = .{ .ty = .int },
     .@"$sscanf" = .{ .ty = .int },
@@ -237,16 +306,18 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §5.10 `Lower.holdSlot`'s synthetic seed: the callee is chosen by the
     // variable's declared type, so the name IS the type.
     .@"$held_int" = .{ .ty = .int },
-    // §9.5: every descriptor function is integer-valued.
-    .@"$fopen" = .{ .ty = .int },
-    .@"$fgets" = .{ .ty = .int },
-    .@"$fscanf" = .{ .ty = .int },
+    // §9.5: every descriptor function is integer-valued. The arities are
+    // Syntax 9-2 (`$fopen(filename [, type])`) and the call shapes §9.5.4.1,
+    // §9.5.4.2, §9.5.5, §9.5.7 and §9.5.8 print.
+    .@"$fopen" = .{ .ty = .int, .args = .{ .min = 1, .max = 2 } },
+    .@"$fgets" = .{ .ty = .int, .args = two, .fd = 1 },
+    .@"$fscanf" = .{ .ty = .int, .args = .{ .min = 2 }, .fd = 0 },
     .@"$fscanf$int" = .{ .ty = .int },
-    .@"$ftell" = .{ .ty = .int },
-    .@"$fseek" = .{ .ty = .int },
-    .@"$rewind" = .{ .ty = .int },
-    .@"$ferror" = .{ .ty = .int },
-    .@"$feof" = .{ .ty = .int },
+    .@"$ftell" = .{ .ty = .int, .args = one, .fd = 0 },
+    .@"$fseek" = .{ .ty = .int, .args = .exactly(3), .fd = 0 },
+    .@"$rewind" = .{ .ty = .int, .args = one, .fd = 0 },
+    .@"$ferror" = .{ .ty = .int, .args = two, .fd = 0 },
+    .@"$feof" = .{ .ty = .int, .args = one, .fd = 0 },
     .@"$simparam$str" = .{ .ty = .str },
     .@"$sformat" = .{ .ty = .str },
     .@"$sscanf$str" = .{ .ty = .str },
@@ -259,6 +330,14 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
 
 pub fn ty(c: Callee) Ty {
     return table.get(c).ty;
+}
+
+pub fn arity(c: Callee) Arity {
+    return table.get(c).args;
+}
+
+pub fn fdArg(c: Callee) ?u3 {
+    return table.get(c).fd;
 }
 
 /// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
