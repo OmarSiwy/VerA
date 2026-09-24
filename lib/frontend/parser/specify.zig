@@ -732,8 +732,15 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
 /// The shape of one A.3.1 switch arm, which is all four of them differ by:
 /// how many terminals an instance takes, how many of those are A.3.3
 /// `net_lvalue`s (everything after them is an `expression`), and whether a
-/// delay bracket precedes the instance list.
-pub const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool };
+/// delay bracket precedes the instance list. `shape` is the A.3.4 class and
+/// its instance's terminal list in words, for the diagnostic when an
+/// instance closes its list early.
+pub const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool, shape: []const u8 };
+
+const cmos_shape = "a cmos switch (A.3.4 cmos_switchtype) takes an output, an input, an ncontrol and a pcontrol terminal";
+const mos_shape = "a mos switch (A.3.4 mos_switchtype) takes an output, an input and an enable terminal";
+const pass_shape = "a pass switch (A.3.4 pass_switchtype) takes two inout terminals";
+const pass_en_shape = "a pass-enable switch (A.3.4 pass_en_switchtype) takes two inout terminals and an enable";
 
 /// A.3.4's ten switch spellings, keyed the way annex B reserves them — by
 /// SPELLING. Eight of the ten share `.kw_reserved` (`tran` and `rtran` are
@@ -741,24 +748,24 @@ pub const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool };
 /// dispatch would have to be two dispatches; this is one.
 pub const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
     // `cmos_switchtype [delay3] ( output , input , ncontrol , pcontrol )`
-    .{ "cmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
-    .{ "rcmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
+    .{ "cmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true, .shape = cmos_shape } },
+    .{ "rcmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true, .shape = cmos_shape } },
     // `mos_switchtype [delay3] ( output , input , enable )`
-    .{ "nmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
-    .{ "pmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
-    .{ "rnmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
-    .{ "rpmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+    .{ "nmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true, .shape = mos_shape } },
+    .{ "pmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true, .shape = mos_shape } },
+    .{ "rnmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true, .shape = mos_shape } },
+    .{ "rpmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true, .shape = mos_shape } },
     // `pass_switchtype ( inout , inout )` — the one arm with no delay
     // bracket at all, which is why A.4.1 prints it on its own.
-    .{ "tran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
-    .{ "rtran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
+    .{ "tran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false, .shape = pass_shape } },
+    .{ "rtran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false, .shape = pass_shape } },
     // `pass_en_switchtype [delay2] ( inout , inout , enable )`. `delay2` is
     // a `delay3` that stops at two values, which `parseDelay3` already
     // returns for a two-value list.
-    .{ "tranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
-    .{ "tranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
-    .{ "rtranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
-    .{ "rtranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+    .{ "tranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true, .shape = pass_en_shape } },
+    .{ "tranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true, .shape = pass_en_shape } },
+    .{ "rtranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true, .shape = pass_en_shape } },
+    .{ "rtranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true, .shape = pass_en_shape } },
 });
 
 /// A.3.1's four switch arms — the primitives whose output is a CONDUCTION
@@ -811,6 +818,11 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
         _ = try self.expect(.lparen);
         const terms = try self.arena.alloc(Ast.ExprId, arm.terminals);
         for (terms, 0..) |*t, i| {
+            // A list closed early is short by A.3.4's class, not by one
+            // token: say which class and what its instance takes, as
+            // `parseGates` does for the enable gates, rather than the bare
+            // "unexpected `)`" `expect(.comma)` would give.
+            if (i != 0 and self.peek() == .rparen) return self.failAt(inst_tok, .E0209, "{s}", .{arm.shape});
             if (i != 0) _ = try self.expect(.comma);
             // A.3.3: `output_terminal` and `inout_terminal` are
             // `net_lvalue`s and lead; `input_terminal`, `enable_terminal`,

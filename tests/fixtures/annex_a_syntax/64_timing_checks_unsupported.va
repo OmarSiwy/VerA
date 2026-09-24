@@ -75,6 +75,13 @@
 // §1.1's "complete IEEE Std 1364 Verilog" is the reason a full-AMS compiler must
 // accept this.
 //
+// `A.7.5` (System timing checks) is cited as well: it is the heading over the
+// subclauses this file exercises and states no production of its own. What
+// this file proves for it is the GRAMMAR — the timing checks parse and the file runs its
+// analog assertion — not a behaviour: the timing checks reach no device (W0251). No fixture runs its
+// timing behaviour; this is grammar coverage only.
+//
+//! lrm A.7.5
 //! lrm A.7.5.1
 //! lrm A.7.5.2
 //! lrm A.7.5.3

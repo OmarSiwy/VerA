@@ -44,6 +44,11 @@
 // written under). Neither is spelled below, because this file has to compile;
 // both are recorded here so the pair of refusals is not mistaken for coverage.
 //
+// `A.2.2` (Declaration data types) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same positive side.
+//
+//! lrm A.2.2
 //! lrm A.2.2.1
 //! lrm A.2.1.3
 //! lrm A.2.4

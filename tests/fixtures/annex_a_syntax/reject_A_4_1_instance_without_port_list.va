@@ -17,6 +17,11 @@
 // needed to be. With no parentheses the statement has A.2.1.3's SHAPE, so
 // the error lands on what would be its discipline identifier.
 //
+// `A.4` (Module instantiation and generate construct) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.4
 //! lrm A.4.1
 //! reject module_instance
 `include "disciplines.vams"
