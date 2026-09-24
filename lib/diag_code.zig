@@ -2235,12 +2235,18 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0328 => .{
-            .title = "string concatenation requires constant operands",
+            .title = "string concatenation with a run-time operand is not supported",
             .lrm = "3.3",
             .explain =
-            \\A concatenation of strings is folded at compile time into one
-            \\string literal, so each operand must be known then. There is no
-            \\runtime string buffer in a compiled device.
+            \\A concatenation or replication of strings is folded at compile time
+            \\into one string literal, so each operand and the multiplier must be
+            \\known then. There is no run-time string buffer in a compiled device.
+            \\
+            \\This is VerA's limit, not the LRM's: 3.3 Table 3-3 says a
+            \\replication multiplier "can be nonconstant", and the result is then
+            \\a string of N copies built while the model runs. A multiplier
+            \\whose value lowering can still see (`integer i = 1;`) is folded and
+            \\accepted.
             ,
         },
         .E0329 => .{
