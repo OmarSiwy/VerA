@@ -16,6 +16,7 @@
 //
 //! lrm 4.7.1
 //! reject named block
+//! reject E0226
 module ch4_fn_named(p);
   inout p;
   electrical p;

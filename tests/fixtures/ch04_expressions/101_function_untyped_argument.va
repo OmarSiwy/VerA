@@ -17,6 +17,7 @@
 //! lrm 4.7.1
 //! reject formal
 //! reject data type
+//! reject E0225
 module ch4_fn_untyped(p);
   inout p;
   electrical p;

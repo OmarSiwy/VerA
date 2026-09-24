@@ -15,6 +15,7 @@
 //! lrm 4.5.5
 //! reject modulus
 //! reject positive
+//! reject E0516
 module ch04_idtmod_modulus_rejected(p, n);
     inout p, n;
     electrical p, n;
