@@ -496,14 +496,10 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.S
     if (parse_generate.netKind(self.peek())) |k| {
         kind.* = k;
         self.pos += 1;
-    } else if (self.digital and reservedIs(self, self.pos, "wreal")) {
-        // Annex C.4 bullet 2: "From 3.7, Real net declarations: the wreal
-        // data type is not supported in Verilog-A." C.8 says it again for
-        // the PORT — "except support for real value ports is only
-        // applicable to Verilog-AMS HDL and IEEE Std 1364 Verilog (see
-        // 6.5.3)" — so in a `.va` the spelling stays a reserved word in an
-        // identifier position, which is the E0208 three annex C fixtures
-        // pin.
+    } else if (reservedIs(self, self.pos, "wreal")) {
+        // A.2.1.2's `[ net_type | wreal ]`. Annex C.4/C.8 remove it from the
+        // Verilog-A SUBSET only; VerA compiles Verilog-AMS, where §6.5.3
+        // makes a wreal port the way a real value crosses a module boundary.
         kind.* = .wreal;
         self.pos += 1;
     }
@@ -917,18 +913,13 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
 /// no `signed`, no strength bracket and no `vectored`/`scalared`, none of
 /// which means anything on a real.
 ///
-/// OUTSIDE A DIGITAL RUN IT IS NOT DERIVABLE AT ALL, and stays the E0205
-/// it has always been. Annex C.4 bullet 2 is the clause, and it is a rule
-/// about the LANGUAGE rather than a limitation of this compiler: "From
-/// 3.7, Real net declarations: the wreal data type is not supported in
-/// Verilog-A." C.8 says the same of the port spelling. So a `.va` refusing
-/// `wreal` is conformance, and three annex C fixtures pin it.
-///
-/// UNDER `--run` the source is IEEE Std 1364 digital, C.4 does not reach
-/// it, and the digital engine runs the net: a real lane that reads 0.0
-/// undriven, and §3.7's wire/tri/wreal port merge.
+/// Annex C.4 bullet 2 removes it from the Verilog-A SUBSET ("the wreal data
+/// type is not supported in Verilog-A"); VerA compiles Verilog-AMS, where
+/// §3.7 lets the analog block read one (its own `V(out) <+ in;` example).
+/// The analog half reads it as a digital-owned real (`lower_context.
+/// declareDiscreteInputs`); the digital engine runs the net: a real lane that
+/// reads 0.0 undriven, and §3.7's wire/tri/wreal port merge.
 pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
-    if (!self.digital) return parse_specify.unsupportedItem(self);
     self.pos += 1;
     // `[ discipline_identifier ]` — an identifier followed by another
     // identifier or a `[`, which is `optDiscipline`'s own lookahead.
