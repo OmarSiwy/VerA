@@ -609,7 +609,7 @@ pub fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // arm is off. The two counters `lowerCondBody` raises for an `if` body are
     // raised here for the same rule, and that is what lets E0514 in
     // `lowerFilter` see it.
-    const static = lower_control.isAnalysisOrConst(self, cond);
+    const static = lower_control.isAnalysisOrConst(self, cond) or try lower_control.isStaticValue(self, c);
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
     defer {

@@ -64,7 +64,7 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
         return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);
     }
     const c = try self.toBool(try lower_expr.lowerExpr(self, cond));
-    try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond));
+    try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond) or try isStaticValue(self, c));
 }
 
 /// Lower a body that only runs under a RUNTIME condition. The wrapper carries
@@ -178,6 +178,121 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
     };
 }
 
+/// §4.5.15 "terms which can not change their value during the course of a
+/// simulation", decided by DEPENDENCE on the lowered condition rather than by
+/// its syntax. `isAnalysisOrConst` answers for the spelling and refuses every
+/// variable; this follows the variable to what it was computed from. The
+/// clause's own reason is the test: an operator must be "evaluated every
+/// iteration", which a condition whose value cannot move guarantees however
+/// the source spelled it (`td = ptf * c * tf; if (td == 0.0) ...`).
+///
+/// Static leaves: literals, parameters (§3.4), and the calls `static_calls`
+/// names. Dynamic: a §4.4 probe (`block_param`), the committed-state latches,
+/// any other call (analog operators, `$abstime`, `$held_*` seeds, I/O, ...),
+/// and a phi whose merge a dynamic branch decides.
+///
+/// ponytail: a phi is judged by EVERY branch backward-reachable from its
+/// incoming blocks, not only the ones between its dominator and itself, so a
+/// solve-dependent `if` anywhere earlier in the block makes a later merge
+/// dynamic even when it cannot decide it. Sound, and no worse than the
+/// syntactic test it extends (which refuses every variable). Upgrade: control
+/// dependence through the immediate dominator of the phi's block. A held
+/// variable is dynamic even when every write to it is static, for the same
+/// reason.
+pub fn isStaticValue(self: *Lower, v: Mir.Value) Oom!bool {
+    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
+    defer seen.deinit(self.arena);
+    var blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty;
+    defer blocks.deinit(self.arena);
+    return staticWalk(self, v, &seen, &blocks);
+}
+
+/// The calls whose value is fixed for the whole simulation: A.8.2's
+/// `analysis()`, §9.15's `$temperature` and `$vt`, §9.18's six system
+/// parameters, and the runtime array read (a pure selection over its operands).
+const static_calls = std.StaticStringMap(void).initComptime(.{
+    .{"analysis"},  .{"$temperature"}, .{"$vt"},     .{"$mfactor"},  .{"$xposition"},
+    .{"$yposition"}, .{"$angle"},      .{"$hflip"},  .{"$vflip"},    .{"$idx"},
+    .{"$idx$int"},  .{"$idx$str"},
+});
+
+fn staticWalk(
+    self: *Lower,
+    v0: Mir.Value,
+    seen: *std.AutoHashMapUnmanaged(Mir.Value, void),
+    blocks: *std.AutoHashMapUnmanaged(Mir.Block, void),
+) Oom!bool {
+    const v = self.mir.resolveAlias(v0);
+    // A value already on the walk is being decided by the rest of it: a loop
+    // phi reaching itself adds no dependence of its own.
+    if ((try seen.getOrPut(self.arena, v)).found_existing) return true;
+    const inst = switch (self.mir.valueDef(v)) {
+        .undef, .float_const, .int_const, .str_const, .param_ref => return true,
+        .block_param => return false, // §4.4: an unknown of the solve
+        .inst_result => |i| i,
+    };
+    switch (self.mir.instData(inst)) {
+        .unary => |u| {
+            // Committed-solution latches: they move with every accepted step.
+            if (u.op == .path_prev or u.op == .path_acc) return false;
+            return staticWalk(self, u.operand, seen, blocks);
+        },
+        .binary => |b| return try staticWalk(self, b.lhs, seen, blocks) and
+            try staticWalk(self, b.rhs, seen, blocks),
+        .ternary => |t| return try staticWalk(self, t.cond, seen, blocks) and
+            try staticWalk(self, t.then_val, seen, blocks) and
+            try staticWalk(self, t.else_val, seen, blocks),
+        .call => |c| {
+            if (!static_calls.has(c.name)) return false;
+            // `args` borrows the payload pool; the walk appends nothing to it.
+            for (c.args) |a| if (!try staticWalk(self, a, seen, blocks)) return false;
+            return true;
+        },
+        .phi => |p| {
+            // An incomplete phi (unsealed loop header) has no operands yet.
+            if (p.count == 0) return false;
+            for (0..p.count) |k| {
+                const pair = self.mir.phiPair(inst, @intCast(k));
+                if (!try staticWalk(self, pair.value, seen, blocks)) return false;
+                if (!try controlStatic(self, pair.block, seen, blocks)) return false;
+            }
+            return true;
+        },
+        .branch, .jump => return false,
+    }
+}
+
+/// Every branch that can decide whether control reaches `from` has a static
+/// condition. Walks predecessors to the entry; see `isStaticValue` for the
+/// over-approximation this is.
+fn controlStatic(
+    self: *Lower,
+    from: Mir.Block,
+    seen: *std.AutoHashMapUnmanaged(Mir.Value, void),
+    blocks: *std.AutoHashMapUnmanaged(Mir.Block, void),
+) Oom!bool {
+    var stack: std.ArrayList(Mir.Block) = .empty;
+    defer stack.deinit(self.arena);
+    try stack.append(self.arena, from);
+    const b = &self.builder;
+    while (stack.pop()) |blk| {
+        if ((try blocks.getOrPut(self.arena, blk)).found_existing) continue;
+        const i = @intFromEnum(blk);
+        // Unsealed: more predecessors may still arrive (a loop's back edge).
+        if (i >= b.block_state.len or !b.block_state.items(.sealed)[i]) return false;
+        const last = self.mir.blockLast(blk);
+        if (last != .none and self.mir.instOp(last) == .branch) {
+            if (!try staticWalk(self, self.mir.instData(last).branch.cond, seen, blocks)) return false;
+        }
+        var node = b.block_state.items(.preds_head)[i];
+        for (0..b.block_state.items(.preds_len)[i]) |_| {
+            try stack.append(self.arena, b.pred_pool.items[node].block);
+            node = b.pred_pool.items[node].next;
+        }
+    }
+    return true;
+}
+
 pub fn lowerBranchStmt(
     self: *Lower,
     cond: Mir.Value,
@@ -241,7 +356,7 @@ pub fn lowerCase(
     // §5.8.1 applies to `case` word for word: the arm LABELS are constants by
     // A.6.7, so whether an arm is decided before the solve turns entirely on
     // the scrutinee.
-    try lowerCaseChain(self, sv, arms, default_arm, isAnalysisOrConst(self, scrutinee));
+    try lowerCaseChain(self, sv, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
 }
 
 pub fn lowerCaseChain(
