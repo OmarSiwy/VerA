@@ -431,6 +431,56 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
         .stdout = "vpi-event-handles=ok\n",
     },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_01_object_traversal.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_01_object_traversal checks=98\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_02_object_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_02_object_refusals checks=108\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_03_value_time_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_03_value_time_refusals checks=70\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_04_callback_systf_refusals.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_04_callback_systf_refusals checks=83\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_05_vlog_info.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_05_vlog_info checks=29\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_06_analog_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
+        .stdout = "p02: p04_06_analog_objects checks=136\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_07_behaviour_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
+        .stdout = "p02: p04_07_behaviour_objects checks=240\np04_behaviour: d=12\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_08_analog_behaviour.c",
+        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
+        .stdout = "p02: p04_08_analog_behaviour checks=76\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_09_systf_build.c",
+        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
+        .stdout = "p02: p04_09_systf_build checks=62\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_10_primitives.c",
+        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
+        .stdout = "p02: p04_10_primitives checks=93\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).

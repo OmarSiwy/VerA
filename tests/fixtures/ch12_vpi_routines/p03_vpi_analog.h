@@ -89,12 +89,7 @@ extern "C" {
 #define acbConvergenceTest    705   /* "Prior acceptance ... allows rejection ... and backup to an earlier time" */
 #define acbAcceptedPoint      706   /* "Upon acceptance of the solution at the given time" */
 
-/* §12.10 Table 12-2's extra analog value format. The other three names in that
- * table (vpiDecStrVal, vpiRealVal, vpiStringVal) are 1364's and are above.
- * Table 12-2 spells this one "vpExpStrVal" in the Format column and
- * "vpiExpStrVal" in the body of §12.10; the `vpi` spelling is obviously the
- * intended one and the other is a typo in the standard. */
-#define vpiExpStrVal          710
+/* §12.10's vpiExpStrVal moved to src/vpi/vpi_user.h with the routine. */
 
 /* §11.6.6/§11.6.7 object and relationship tags a quantity is reached through. */
 #define vpiQuantity           720   /* §11.6.7 the Quantity object */
@@ -109,13 +104,7 @@ extern "C" {
  * Structures.
  * ========================================================================== */
 
-/* Figure 12-3. The two unions are separate storage: §12.10 says "the value for
- * real and imaginary unions", so a complex small-signal value arrives whole. */
-typedef struct t_vpi_analog_value {
-  PLI_INT32 format;             /* vpi[RealVal,ExpStrVal,DecStrVal,StringVal] */
-  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } real;
-  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } imaginary;
-} s_vpi_analog_value, *p_vpi_analog_value;
+/* Figure 12-3 (s_vpi_analog_value) moved to src/vpi/vpi_user.h. */
 
 /* ==========================================================================
  * Routines.
@@ -127,10 +116,7 @@ extern double    vpi_get_analog_delta(void);
 extern double    vpi_get_analog_freq(void);
 extern double    vpi_get_analog_time(void);
 
-/* §12.10. Fills value_p from a vpiPotential or vpiFlow quantity object. The
- * string buffer is the routine's, is overwritten by the next call, and §12.10
- * requires it to be a DIFFERENT buffer from vpi_get_str()'s. */
-extern void      vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
+/* §12.10 vpi_get_analog_value() is declared by src/vpi/vpi_user.h. */
 
 /* §12.28. */
 extern PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...);
