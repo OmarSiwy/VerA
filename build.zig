@@ -331,17 +331,24 @@ fn vpiApp(
 const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
 
 /// NOT here, each for a reason outside the routine it exercises:
-///   p02_04  force/release — the digital engine performs no force
+///   p02_04  force/release — the engine forces now, but src/vpi's
+///           vpi_put_value still refuses vpiForceFlag (NOFORCE)
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
 ///   p02_13  p02_scales.v — the engine refuses a second `timescale
 ///   p03_*   analog callbacks and values — needs an analog solver here
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
-///   audit_array_object_kinds, audit_module_array, audit_vpi_value_formats,
-///   audit_vpi_invalid_time_callback — the engine refuses their .v (a `real`
-///           array, an instance array, `small` as a name, no `timescale)
+///   audit_array_object_kinds — the engine holds its `real` array; the VPI
+///           reports the array's variable type wrong
+///   audit_module_array, audit_vpi_value_formats — the engine refuses their
+///           .v (an instance array, `small` as a name)
 const vpi_runs = [_]VpiRun{
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.c",
+        .design = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.v",
+        .stdout = "vpi-invalid-time-callback=ok\n",
+    },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_12_systf_domains.c",
         .design = "tests/fixtures/ch11_vpi/p02_analog.va",
