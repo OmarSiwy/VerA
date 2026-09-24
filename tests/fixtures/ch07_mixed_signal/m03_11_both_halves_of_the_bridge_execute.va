@@ -65,6 +65,19 @@
 // That discrimination is y1's job, which is why the pair is the fixture and
 // neither check is shipped alone.
 //
+// WHY THE SELECTS ARE WRITTEN AFTER #0. The inverter's `always @(d)` only sees
+// a change of `d` it is already waiting for. Written as `assign sel1 = 1'b0;`,
+// the select's x-to-0 change and the always block's first arrival at `@(d)` are
+// both region-1 events of time 0, and §8.5.1 says region 1's events "can be
+// processed in any order" — "an essential source of nondeterminism". A
+// conforming kernel that updates the net first leaves q at its 1'b0 seed and
+// reads V(y1) = 0.25, so the earlier revision's chain 1 decided a race, not the
+// bridge. §8.5.1: "An explicit zero delay (#0) requires that the process be
+// suspended and added as an inactive event", processed only after every
+// region-1 event — so every process is waiting at its first event control when
+// `s1`/`s2`, and through the continuous assignments `sel1`/`sel2`, change.
+// The derivation above is unchanged; only its time-zero ordering is now fixed.
+//
 // DELIBERATELY NOT PINNED HERE: the a2d direction at a DC operating point. §7.8's
 // own `elect_to_logic` derives its digital state from `@(cross(...))`, and a
 // crossing does not occur during a DC solve — what the digital side holds at
@@ -76,7 +89,6 @@
 //! lrm 7.6
 //! lrm 7.8.4
 //! solve
-//! xfail the §7.8 bridge is inserted, but its digital half is a child's discrete process in a design that needs the event kernel, which the flatten refuses (E0920), so neither half runs
 `include "check.vh"
 
 connectmodule m03_d2a(cm, el);
@@ -110,8 +122,14 @@ module m03_top;
   ddiscrete sel1;
   ddiscrete sel2;
 
-  assign sel1 = 1'b0;
-  assign sel2 = 1'b1;
+  reg s1, s2;
+  assign sel1 = s1;
+  assign sel2 = s2;
+  initial begin
+    #0;
+    s1 = 1'b0;
+    s2 = 1'b1;
+  end
 
   m03_inv u1(sel1, y1);
   m03_inv u2(sel2, y2);

@@ -31,6 +31,9 @@ pub const DiscreteEvent = struct {
     param: []const u8,
 };
 
+/// §7.8.4 one port an automatic connect module was inserted on (`inserts`).
+pub const Inserted = Elaborate.Inserted;
+
 /// One row of `nodes`.
 pub const Node = struct {
     /// The unknown's unique spelling (codegen's `U` member).
@@ -228,6 +231,8 @@ discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
 discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// The module's discrete half needs the event queue (`lower_context.isMixed`).
 mixed_signal: bool = false,
+/// §7.8.4 the connect modules elaboration inserted — see `Elaborate.Design.inserts`.
+inserts: []const Inserted = &.{},
 
 /// Byte range of a token — the currency every diagnostic reports in.
 pub fn tokenSpan(self: *const Lowered, tok: u32) diag.Span {

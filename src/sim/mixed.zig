@@ -546,6 +546,35 @@ test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.
     try testing.expectApproxEqAbs(@as(f64, 0.5), at, 1e-12);
 }
 
+test "§7.8.4 an inserted bridge's digital half runs, and the analog reads it by its §6.7 path" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    // The source holds no bridge: `inserts` is the analog compile's §7.8.4
+    // insertion, re-pointing u.q at the segment `y__d2a__ddiscrete.cm`.
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\discipline ddiscrete domain discrete; enddiscipline
+        \\connectmodule d2a(cm, el); input cm; output el; ddiscrete cm; electrical el; reg lvl;
+        \\  always @(cm) lvl = cm;
+        \\endmodule
+        \\module src(q); output q; ddiscrete q; reg q; initial #4 q = 1'b1; endmodule
+        \\module m; electrical y; src u(y); endmodule
+    , .{ .mixed = .{
+        .top = "m",
+        .timescale = .{ .unit = 1e-9, .precision = 1e-9 },
+        .inserts = &.{.{ .path = "", .inst = "u", .port = "q", .module = "d2a", .name = "y__d2a__ddiscrete", .upper_port = "el", .lower_port = "cm" }},
+    } }, &bag, &out.writer);
+    var f: Fake = .{ .slot = dig.slotOf("y__d2a__ddiscrete.lvl").?, .gpa = arena };
+    dig.watchAnalog(f.slot);
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9 }, .tick = 1e-9 });
+    // x (-1) until the child's write crosses the segment into the bridge.
+    try expectPoints(f, &.{ .{ 0, -1 }, .{ 4e-9, 1 }, .{ 10e-9, 1 } });
+    try testing.expect(dig.slotOf("y__d2a__ddiscrete.cm") != null);
+}
+
 test "§5.10.4 / §7.3.6.1 an analog timer's `-> ev` reaches `always @(ev)` at each firing, with a point there" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

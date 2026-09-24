@@ -53,8 +53,9 @@
 //! (`elaborate/insert.zig`): a port whose two connections are of different
 //! domains and that one §7.7.1 statement matches is re-pointed at a segment,
 //! and the selected connect module is inlined between the two like any child.
-//! The bridge's ANALOG half is what that buys; a digital half that needs the
-//! event kernel is still E0920's.
+//! The flattened design carries both halves: the analog half lowers into the
+//! device, and the digital half runs on the mixed runner, whose engine
+//! elaborates the source hierarchy plus the bridges listed in `Design.inserts`.
 //!
 //! §6.5.7.1's vector-net distribution across an instance array is not here —
 //! a port connection has to be a scalar net reference.
@@ -67,9 +68,6 @@ const diag = @import("diag");
 // an in-paramset draw with the SAME code a device embeds, so the two cannot
 // disagree on the stream.
 const Lower = @import("lower.zig");
-// §8.5 whether a module's discrete half needs the event kernel — the refusal
-// in `Flatten.run` asks it of the flattened module, with lowering's own rule.
-const lower_context = @import("lower/context.zig");
 const discipline = @import("lower/discipline.zig");
 const rng = @import("kernels").rng_kernels;
 
@@ -158,6 +156,27 @@ pub const Design = struct {
     /// the same reason: "look for an instance called inst_name IN THE PARENT OF
     /// THE CURRENT INSTANCE".
     units: []const UnitPath = &.{},
+    /// §7.8.4 every port an automatic connect module was inserted on, for the
+    /// mixed-signal runner: its digital engine elaborates the SOURCE hierarchy,
+    /// in which the bridges do not exist.
+    inserts: []const Inserted = &.{},
+};
+
+/// One port §7.8.4 re-pointed at a connect module (`elaborate/insert.zig`), by
+/// name. In the module instance at `path` (instance prefix, separator
+/// included, empty at the top), port `port` of child `inst` is connected to
+/// the bridge `name`'s `lower_port` instead of its upper connection, and the
+/// bridge — an instance of `module` — takes that upper connection on
+/// `upper_port`. Merged ports share a bridge, so `name` repeats. The segment
+/// between the child and the bridge is `name ++ sep ++ lower_port`.
+pub const Inserted = struct {
+    path: []const u8,
+    inst: []const u8,
+    port: []const u8,
+    module: []const u8,
+    name: []const u8,
+    upper_port: []const u8,
+    lower_port: []const u8,
 };
 
 /// One entry of `Design.units`. `path` is the instance prefix, separator
@@ -358,8 +377,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .events = .merged,
     .functions = .merged,
     .analog = .merged,
-    // §7.2.2 the discrete context. Merged, and a child's then REFUSED (E0920)
-    // whenever the flattened module needs the event kernel: see `run`.
+    // §7.2.2 the discrete context. Merged: lowering reads what the analog
+    // half needs of it, and the mixed runner runs it under the flat names.
     .discrete = .merged,
     .assigns = .merged,
     // Lowering reads no gate in any module; the parser's W0252 reports each.
@@ -373,8 +392,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     // The same for switches: an analog parse warns W0250 and records none.
     .switches = .top,
     .attrs = .merged,
-    // `pickTop` never picks a connect module and `walkInstances` refuses
-    // inlining one (E0913), so this is always the top's `false`.
+    // `pickTop` never picks a connect module, so this is always the top's
+    // `false`; a hand-placed one (§7.1) is a child like any other.
     .is_connect = .top,
     .main_tok = .top,
 };
@@ -405,13 +424,10 @@ pub const Flatten = struct {
     pulls: std.ArrayList(Ast.PullInst) = .empty,
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
 
-    /// One entry per inlined INSTANCE that brought a discrete process or a
-    /// continuous assignment with it: its path, and the first such item's
-    /// token. What `run`'s E0920 reports.
-    child_digital: std.ArrayList(NameSite) = .empty,
-
     /// §6.7 path → flat name. See `Design.names`.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// See `Design.inserts`.
+    inserts: std.ArrayList(Inserted) = .empty,
 
     /// The discipline every flat net has been DECLARED with, keyed by the flat
     /// name — §3.10's precedence orders 1 and 2 after they have been decided.
@@ -673,22 +689,6 @@ pub const Flatten = struct {
             .consumed => comptime fld.defaultValue().?,
         };
 
-        // §7.2.2 a child's discrete half, flattened, is carried exactly when
-        // lowering can give it its one kernel-free reading: an `initial` of
-        // constant assignments, which `collectInitialState` installs as the
-        // renamed variable's value. Once the design needs the event kernel
-        // (§8.5) — an `always`, a continuous assignment or a suspending
-        // `initial` anywhere in it — the digital half runs on the mixed
-        // runner, which re-elaborates the SOURCE and binds a discrete input by
-        // its top-scope name, so a flat `u.q` reaches nothing. Refused, per
-        // instance, instead of stamping the analog half without it.
-        if (lower_context.isMixed(self.ctx.file, out)) for (self.child_digital.items) |site| try self.err(
-            site.main_tok,
-            .E0920,
-            "instance `{s}` brings a discrete process into a design that needs the event kernel",
-            .{site.name[0 .. site.name.len - 1]},
-        );
-
         if (self.had_error) return error.DiagnosticsReported;
         return .{
             .top = out,
@@ -696,6 +696,7 @@ pub const Flatten = struct {
             .implicit_nets = self.implicit_nets.items,
             .unconnected_inputs = self.unconnected_inputs.items,
             .units = self.unit_paths.items,
+            .inserts = self.inserts.items,
         };
     }
 
@@ -802,19 +803,9 @@ pub const Flatten = struct {
             };
             if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
             // §7.1: connect modules "can be manually inserted (by the user) or
-            // automatically inserted (by the simulator)", so naming one here is
-            // legal. Refused rather than inlined because a bridge's digital
-            // half is a PROCESS, and a flattened child's processes cannot reach
-            // the event kernel (E0920) — so its continuous half would be
-            // stamped into the device alone.
-            // connect_module_manually_inserted.va is the xfail. One `plan`
-            // inserted is the automatic kind, and is inlined.
-            if (child.is_connect and !auto) {
-                try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`; §7.1 allows placing it by hand, but its digital half would not be carried into the device", .{
-                    self.ctx.file.str(child.name),
-                });
-                continue;
-            }
+            // automatically inserted (by the simulator)", so one named here is
+            // inlined like any child: its digital half runs on the mixed
+            // runner, which elaborates the same hierarchy.
             for (stack.items) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
                     self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
@@ -989,7 +980,20 @@ pub const Flatten = struct {
             if (try elab_resolve.oocDiscipline(self, path, n.name)) |d| out.discipline = d;
             try elab_resolve.addNet(self, out);
         }
-        for (child.vars) |v| try self.vars.append(self.ctx.arena, try elab_clone.cloneVar(self, v));
+        for (child.vars) |v| {
+            const out = try elab_clone.cloneVar(self, v);
+            // IEEE 1364-2005 §12.3.3 an output port "declared as a variable"
+            // is renamed with its port onto the parent's net, so two such
+            // ports on one net (§9.22's two drivers) are one flat name. One
+            // declaration serves both: the digital half resolves the net.
+            const port = for (child.ports) |p| {
+                if (p.name == v.name) break true;
+            } else false;
+            const again = port and for (self.vars.items) |seen| {
+                if (seen.name == out.name) break true;
+            } else false;
+            if (!again) try self.vars.append(self.ctx.arena, out);
+        }
         for (child.branches) |b| {
             var out = b;
             out.name = elab_names.flat(self, b.name);
@@ -1062,12 +1066,6 @@ pub const Flatten = struct {
             o.out = try elab_clone.cloneExpr(self, p.out);
             try self.pulls.append(self.ctx.arena, o);
         }
-        // The first process or assignment in source order anchors E0920.
-        const first_digital: ?u32 = if (child.discrete.len != 0)
-            child.discrete[0].main_tok
-        else if (child.assigns.len != 0) child.assigns[0].main_tok else null;
-        if (first_digital) |tok| try self.child_digital.append(self.ctx.arena, .{ .name = path, .main_tok = tok });
-
         // ---- recurse, with this unit's map in force ------------------------
         try stack.append(self.ctx.arena, child.name);
         try self.walkInstances(child, path, stack, depth + 1);
@@ -1832,7 +1830,7 @@ test "an instance naming no module is E0904" {
     try std.testing.expectEqual(diag.Code.E0904, f.bag.at(0).code);
 }
 
-test "a connect module is neither the top nor a child (§7.6)" {
+test "a connect module is never the top (§7.6), and a hand-placed one is inlined (§7.1)" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer f.deinit();
 
@@ -1845,20 +1843,19 @@ test "a connect module is neither the top nor a child (§7.6)" {
     const design = try elaborate(f.ctx());
     try std.testing.expectEqualStrings("top", f.file.str(design.top.name));
 
-    // And naming one in an instantiation is E0913 rather than a silent inline:
-    // a bridge's digital half is a process, which a flattened child cannot
-    // take to the event kernel (E0920), so its continuous half would stand alone.
+    // §7.1: connect modules "can be manually inserted (by the user)", so
+    // naming one inlines it like any child — its analog block included.
     var g: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer g.deinit();
     try parse(&g,
-        \\connectmodule bridge(a, d); inout a, d; electrical a, d; endmodule
+        \\connectmodule bridge(a, d); inout a, d; electrical a, d; analog I(a, d) <+ V(a, d); endmodule
         \\module top(p); inout p; electrical p; bridge u(p, p); analog I(p) <+ V(p); endmodule
     );
-    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
-    try std.testing.expectEqual(diag.Code.E0913, g.bag.at(0).code);
+    const inlined = try elaborate(g.ctx());
+    try std.testing.expectEqual(@as(usize, 2), inlined.top.analog.len);
 }
 
-test "§7.2.2 a flattened discrete half is carried or refused (E0920), never dropped" {
+test "§7.2.2 a flattened discrete half is carried, never dropped" {
     // The top's own `initial` survives having a child, and the child's is
     // renamed into the flat namespace next to it.
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
@@ -1872,15 +1869,30 @@ test "§7.2.2 a flattened discrete half is carried or refused (E0920), never dro
     const child_init = f.file.stmt(design.top.discrete[1].body).assign;
     try std.testing.expectEqualStrings("u.k", f.file.str(f.file.exprs.strOf(child_init.target)));
 
-    // A child's process in a design that needs the event kernel is refused.
+    // So is a child's process in a design that needs the event kernel: the
+    // mixed runner resolves `u.q` as a §6.7 path (`sim.digital.Run.slotOf`).
     var g: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer g.deinit();
     try parse(&g,
         \\module c(p); inout p; electrical p; reg q; always #5 q = ~q; analog I(p) <+ V(p); endmodule
         \\module top(p); inout p; electrical p; c u(p); endmodule
     );
-    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
-    try std.testing.expectEqual(diag.Code.E0920, g.bag.at(0).code);
+    const mixed = try elaborate(g.ctx());
+    try std.testing.expectEqual(@as(usize, 1), mixed.top.discrete.len);
+    const toggle = g.file.stmt(g.file.stmt(mixed.top.discrete[0].body).event_control.body).assign;
+    try std.testing.expectEqualStrings("u.q", g.file.str(g.file.exprs.strOf(toggle.target)));
+}
+
+test "IEEE 1364 §12.3.3 two variable ports collapsed onto one net declare it once" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module d(o); output o; reg o; initial o = 1'b0; endmodule
+        \\module top(p); inout p; electrical p; wire w; d a(w); d b(w); analog I(p) <+ V(p); endmodule
+    );
+    const design = try elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 1), design.top.vars.len);
+    try std.testing.expectEqualStrings("w", f.file.str(design.top.vars[0].name));
 }
 
 test {

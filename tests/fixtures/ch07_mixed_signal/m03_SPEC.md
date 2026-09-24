@@ -6,6 +6,12 @@
 > §3.11.1, which §7.8.4 refuses) and passes; 09–11 are inserted but still
 > XFAIL on the digital half (E1100 / E0920); 12 is unchanged. The ground truth
 > below is the state BEFORE that, kept as the audit record.
+>
+> **Status (e0920, 2026-09-24).** E0920 is retired: the mixed runner's digital
+> engine elaborates the source hierarchy plus the inserted bridges
+> (`Lowered.inserts`) and binds a discrete input by its flattened path. 09–11
+> pass (10 and 11 now write their stimulus after `#0`, see their headers), and
+> 12 is refused with E0923.
 
 Pending conformance fixtures for the Verilog-AMS §7.8 connect-module
 auto-insertion phase. Nothing here is wired into `zig build torture` yet, and

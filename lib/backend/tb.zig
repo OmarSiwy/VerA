@@ -235,6 +235,9 @@ pub const Mixed = struct {
     xz: []const []const u8 = &.{},
     /// §8.5 the explicit D2A terms, in site order.
     events: []const @import("ir").Lowered.DiscreteEvent = &.{},
+    /// §7.8.4 the inserted connect modules, which the source hierarchy the
+    /// digital half re-elaborates does not hold.
+    inserts: []const @import("ir").Lowered.Inserted = &.{},
 };
 
 /// One `//! noise` line, split into the part that names the ROW and the parts

@@ -53,7 +53,7 @@
 //! analysis tran
 //! time 0, 50n
 //! checks 3
-//! xfail the §7.8 connect module is inserted (elaborate/insert.zig), but its digital half, which makes the §9.22 calls, is a child's discrete process in a design that needs the event kernel, and the flatten refuses it (E0920); nothing runs a connect module's digital half
+//! xfail the §7.8 connect module is inserted and its digital half runs on the mixed runner, but the ordinary `input` ports on `net` match no connect statement (elaborate/insert.zig reads the d2a statement as §7.6 Example 1 does: it bridges an input port only from a discrete upper connection), so they stay on the continuous net and the digital half has nothing to connect them to; and the digital engine implements none of the §9.22 driver-access functions, `driver_update` or §9.22.6's driver/receiver split
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, one merged
 // connect module. §9.22.1 numbers the ordinary drivers 0..N-1 and here N is 1,

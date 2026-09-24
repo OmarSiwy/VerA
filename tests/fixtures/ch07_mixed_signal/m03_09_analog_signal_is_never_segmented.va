@@ -54,7 +54,6 @@
 //! lrm 7.6
 //! lrm 6.7.1
 //! solve
-//! xfail the §7.8 bridge is inserted and the analog node is single, but `assign d = 1'b1` runs on the mixed runner, which re-elaborates the source and refuses u2's parameter override (E1100: "instance arrays and parameter overrides are not implemented by digital execution"), so the digital half never drives d
 `include "check.vh"
 
 connectmodule m03_d2a(cm, el);

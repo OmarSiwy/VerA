@@ -16,18 +16,16 @@
 // Each point is at least 5 ns clear of a toggle, so no tick-rounding question
 // can decide it.
 //
-// WHY XFAIL. Elaboration flattens `u` into the top, renaming `clk` to `u.clk`;
-// the mixed-signal runner re-elaborates the source and binds each discrete input
-// by its top-scope name, so the flattened name reaches nothing. VerA refuses the
-// design (E0920) rather than stamp the analog half with clk missing, which is
-// what it used to do silently.
+// Elaboration flattens `u` into the top, renaming `clk` to `u.clk`; the
+// mixed-signal runner's digital engine elaborates the same instance tree and
+// resolves `u.clk` as the §6.7 path it is. (This was E0920, retired, when the
+// runner bound a discrete input by its top-scope name only.)
 //
 //! lrm 7.2.2
 //! lrm 6.2.2
 //! lrm 7.3.6.5
 //! analysis tran
 //! time 0, 5n, 15n
-//! xfail E0920: a flattened child's `always` cannot reach the mixed-signal runner, which binds discrete inputs by top-scope name
 `timescale 1ns/1ns
 `include "check.vh"
 module ch7_child_always(p, n);

@@ -37,7 +37,7 @@
 //! analysis tran
 //! time 0, 50n
 //! checks 10
-//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
+//! xfail the analog parse refuses the connect module's `task` (E0205: tasks are a digital-parse item), and past it the digital engine implements none of the §9.22 driver-access functions and a mixed module's digital half declares no parameter for m04_ds_hold's `case (sel)` to read
 //
 // HAND DERIVATION
 //   Four ordinary modules drive the mixed net `net`, each holding one constant:

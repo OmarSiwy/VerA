@@ -630,13 +630,16 @@ pub const Code = enum(u16) {
     E0918,
     /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
     E0919,
-    /// §6.2.2/§7.2.2 an inlined child brings a discrete process into a design
-    /// whose digital half needs the event kernel — VerA's limit, not the LRM's.
+    /// RETIRED — was "a child instance's digital processes are not supported
+    /// in a mixed-signal design".
     E0920,
     /// §3.4.4 a parameter array's value is not the size its range declares.
     E0921,
     /// §7.8.4 a mixed port matches more than one connect statement.
     E0922,
+    /// §7.8 a connect statement's two disciplines are not one discrete and
+    /// one continuous.
+    E0923,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5135,28 +5138,14 @@ fn infoOf(c: Code) Info {
             \\nothing for a factor to double.
             ,
         },
-        .E0913 => .{
-            .title = "instantiating a connect module by name is not supported",
-            .lrm = "7.1",
-            .explain =
-            \\LRM 7.1: connect modules "can be manually inserted (by the user) or
-            \\automatically inserted (by the simulator)". A `connectmodule` is a
-            \\module (A.1.2's third `module_keyword`), so naming one in an
-            \\instantiation is legal Verilog-AMS. This is VerA's limit, not the
-            \\LRM's.
-            \\
-            \\A connect module bridges a discrete side, and its digital half lives
-            \\in `initial` / `always` blocks. Flattening inlines a child's analog
-            \\blocks, and a flattened child's processes cannot reach the event
-            \\kernel (E0920), so inlining a bridge would stamp its continuous
-            \\half into the device with the digital half silently absent — a plausible-looking wrong device,
-            \\which is worse than a refusal that names the reason.
-            \\
-            \\Automatic insertion (7.8) is not performed either, and a
-            \\source_text whose only design element is a connect module has no
-            \\device to compile (E1001).
-            ,
-        },
+        .E0913 => retiredInfo(
+            \\"instantiating a connect module by name is not supported". Retired:
+            \\LRM 7.1 says connect modules "can be manually inserted (by the
+            \\user) or automatically inserted (by the simulator)", and a
+            \\hand-placed one is now inlined like any child, its digital half
+            \\running on the mixed-signal runner (E0920 is retired with it). The
+            \\number is not reused.
+        ),
         .E0914 => .{
             .title = "more than one paramset is still applicable",
             .lrm = "6.4.2",
@@ -5284,30 +5273,15 @@ fn infoOf(c: Code) Info {
             \\wreal.
             ,
         },
-        .E0920 => .{
-            .title = "a child instance's digital processes are not supported in a mixed-signal design",
-            .lrm = "7.2.2",
-            .explain =
-            \\This is VerA's limitation, not the LRM's. LRM 6.2.2 lets any module
-            \\be instantiated, IEEE 1364 Clause 12 gives every instance its own
-            \\processes, and 7.2.2 puts a child's `initial` and `always` blocks
-            \\in the discrete context exactly as it does the top's.
-            \\
-            \\Elaboration flattens the hierarchy into one device, renaming each
-            \\child's names under its instance path (`u.q`). A child's `initial`
-            \\block of constant assignments survives that: it is installed as the
-            \\variable's starting value, as it would be in the top. Anything that
-            \\needs the event kernel (8.5) does not — an `always`, a continuous
-            \\assignment, a delay or event control, or any of those elsewhere in
-            \\the design. The mixed-signal runner re-elaborates the source and
-            \\binds each discrete input by its top-level name, so a flattened
-            \\child's variable would reach nothing and the analog half would be
-            \\stamped without it.
-            \\
-            \\Move the digital process into the top module, or keep the child's
-            \\digital half to constant `initial` assignments.
-            ,
-        },
+        .E0920 => retiredInfo(
+            \\"a child instance's digital processes are not supported in a
+            \\mixed-signal design". Retired: the mixed-signal runner now binds a
+            \\discrete input by its flattened hierarchical name (`u.q`), and its
+            \\digital engine elaborates the same instance tree the analog compile
+            \\flattened — the connect modules 7.8.4 inserted included — so a
+            \\child's `initial` and `always` blocks run as the top's do. The
+            \\number is not reused.
+        ),
         .E0921 => .{
             .title = "parameter array value is not the size its range declares",
             .lrm = "3.4.4",
@@ -5345,6 +5319,21 @@ fn infoOf(c: Code) Info {
             \\them: 7.7.2.1's "first match" rule is for `resolveto` statements
             \\only. Keep one statement per discipline pair and direction, or use
             \\7.7.1's overrides to make the pairs differ.
+            ,
+        },
+        .E0923 => .{
+            .title = "a connect statement's disciplines are not one discrete and one continuous",
+            .lrm = "7.8",
+            .explain =
+            \\LRM 7.8: "Each connect statement designates a module to be a connect
+            \\module. When two disciplines are specified in a connect statement,
+            \\one shall be discrete and the other continuous."
+            \\
+            \\That is what makes a connect insertion statement (7.7.1) a bridge
+            \\specification: its two disciplines stand for the connect module's
+            \\continuous and discrete ports. Two disciplines of one domain are the
+            \\7.7.2 `resolveto` form's business, which resolves a net instead of
+            \\bridging it.
             ,
         },
 

@@ -77,6 +77,26 @@ pub const Mixed = struct {
     /// `source` is the analog compile's own PREPROCESSED text, so it is not
     /// preprocessed again and the `timescale it consumed comes in here.
     timescale: ?Front.Preprocessor.Timescale,
+    /// VAMS §7.8.4 the connect modules the analog compile inserted: they are
+    /// in its flattened design and not in `source`'s hierarchy.
+    inserts: []const Insert = &.{},
+};
+
+/// One port VAMS §7.8.4 re-pointed at an inserted connect module, as the
+/// analog compile's flatten reports it (`ir` `Lowered.Inserted`, the same
+/// fields, since `sim` cannot import `ir`). In the instance at `path`
+/// (instance prefix, `.` included, empty at the root), port `port` of child
+/// `inst` connects to the segment `name.lower_port` instead of its upper
+/// connection, and the bridge `name`, an instance of `module`, takes that
+/// upper connection on `upper_port`. Merged ports repeat `name`.
+pub const Insert = struct {
+    path: []const u8,
+    inst: []const u8,
+    port: []const u8,
+    module: []const u8,
+    name: []const u8,
+    upper_port: []const u8,
+    lower_port: []const u8,
 };
 
 // ---- engine state and name resolution (§6.2.2, §12.4, §3.9) -----------------
@@ -312,6 +332,10 @@ pub const Run = struct {
     has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
     mixed: bool = false,
+    /// `Mixed.inserts`, and each row's segment as an identifier expression
+    /// (minted before pass one, while the expression tables can still grow).
+    inserts: []const Insert = &.{},
+    insert_segs: []const Ast.ExprId = &.{},
     /// §3.3 the declared `[msb:lsb]` of every packed vector, by slot, so a
     /// bit-select can name its bit (IEEE 1364-2005 §5.2.1). A slot absent from
     /// here is `[width-1:0]`.
@@ -536,12 +560,22 @@ pub const Run = struct {
         return .idle;
     }
 
-    /// The slot a name declared in the design's ROOT scope is stored in, or
-    /// null when the root declares no such variable or net. `values[slot]` is
-    /// its current value; this is how a caller outside the engine reads one.
+    /// The slot a name is stored in, or null when the design declares no such
+    /// variable or net. `name` is a root-scope name or a §6.7 downward path
+    /// (`u.v.q`: every part but the last an instance), which is the spelling
+    /// an analog compile's flatten gives a child's name (`elaborate.sep`).
+    /// `values[slot]` is its current value; this is how a caller outside the
+    /// engine reads one.
     pub fn slotOf(self: *const Run, name: []const u8) ?u32 {
-        const str = self.file.strings.find(name) orelse return null;
-        return self.names.get(.{ .scope = 0, .str = str });
+        var scope: u32 = 0;
+        var parts = std.mem.splitScalar(u8, name, '.');
+        var part = parts.first();
+        while (parts.next()) |next| : (part = next) {
+            const inst = self.file.strings.find(part) orelse return null;
+            scope = self.instances.get(.{ .scope = scope, .str = inst }) orelse return null;
+        }
+        const str = self.file.strings.find(part) orelse return null;
+        return self.names.get(.{ .scope = scope, .str = str });
     }
 
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
@@ -778,7 +812,10 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
 
 fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
     for (r.file.modules) |*m| if (m.name == name) {
-        if (m.is_connect) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
+        // VAMS §7.1: a connect module "can be manually inserted (by the user)
+        // or automatically inserted (by the simulator)" — in a mixed design,
+        // which is the only one that can hold its continuous half.
+        if (m.is_connect and !r.mixed) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
         return m;
     };
     return r.fail(tok, "undeclared module in instantiation", .{});
@@ -893,6 +930,23 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         const bind = if (i < binds.len) binds[i] else PortBind.open;
         const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
+        // IEEE 1364-2005 §12.3.3: an output port "declared as a variable"
+        // (`output q; reg q;`) is that variable, and it drives the net it
+        // is connected to — one driver of it, as a continuous assignment is.
+        if (r.names.get(.{ .scope = scope, .str = p.name })) |var_slot| {
+            if (p.direction != .output) return r.fail(p.main_tok, "§12.3.3: only an output port may be declared as a variable", .{});
+            switch (bind) {
+                .open => {},
+                .collapse => |net| try e.wires.append(arena, .{
+                    .net = net,
+                    .scope = scope,
+                    .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) },
+                    .tok = p.main_tok,
+                }),
+                .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
+            }
+            continue;
+        }
         if (bind == .collapse) {
             // VAMS §3.7: "When the two nets connected by a port are of net
             // type wreal and wire/tri, the resulting single net will be
@@ -1046,8 +1100,70 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
         try e.wires.append(arena, .{ .net = net, .scope = scope, .pull = if (p.one) .one else .zero, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
-    for (m.instances) |*inst| try instantiate(r, e, scope, inst, depth);
+    for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
+}
+
+/// VAMS §7.8.4 `m`'s instances at `scope` as the analog compile's connect
+/// module insertion left them (`Mixed.inserts`): every re-pointed port bound
+/// to its segment — a net of this scope, when the bridge's side of it is
+/// discrete — and one instance of each bridge appended, taking the port's
+/// upper connection. The source's own list where nothing was inserted.
+// ponytail: the bridge takes no parameter override (a mixed module's
+// parameters are the analog block's), and a generate scope's path is not
+// matched: insertion under a generate block reaches only the analog half.
+fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]const Ast.Instance {
+    if (r.inserts.len == 0) return m.instances;
+    const arena = r.arena;
+    const path = try scopePath(r, scope);
+    var out: std.ArrayList(Ast.Instance) = .empty;
+    try out.appendSlice(arena, m.instances);
+    for (r.inserts, r.insert_segs) |row, seg| {
+        if (!std.mem.eql(u8, row.path, path)) continue;
+        const inst = for (out.items[0..m.instances.len]) |*it| {
+            if (std.mem.eql(u8, r.file.str(it.name), row.inst)) break it;
+        } else return r.fail(m.main_tok, "the connect module inserted on `{s}{s}` names an instance the source does not hold", .{ path, row.inst });
+        const child = try findModule(r, inst.module, inst.main_tok);
+        const pi = for (child.ports, 0..) |p, k| {
+            if (std.mem.eql(u8, r.file.str(p.name), row.port)) break k;
+        } else return r.fail(inst.main_tok, "the connect module inserted on `{s}{s}` names a port the module does not have", .{ path, row.inst });
+        const named = inst.ports.len != 0 and inst.ports[0].name != .none;
+        const ci = if (!named) pi else for (inst.ports, 0..) |c, k| {
+            if (c.name == child.ports[pi].name) break k;
+        } else continue;
+        if (ci >= inst.ports.len) continue;
+        const ports = try arena.dupe(Ast.PortConn, inst.ports);
+        const up = ports[ci];
+        ports[ci].expr = seg;
+        inst.ports = ports;
+        for (out.items[m.instances.len..]) |b| {
+            if (std.mem.eql(u8, r.file.str(b.name), row.name)) break;
+        } else {
+            const bridge = try findModule(r, try interned(r, row.module), up.main_tok);
+            const lower = try interned(r, row.lower_port);
+            for (bridge.ports) |p| if (p.name == lower and !continuous(r.file, p.discipline)) {
+                _ = try mintNet(r, e, .wire, try portWidth(r, child.ports[pi]), false, r.file.exprs.strOf(seg), up.main_tok);
+            };
+            const conns = try arena.alloc(Ast.PortConn, 2);
+            conns[0] = .{ .name = try interned(r, row.upper_port), .expr = up.expr, .main_tok = up.main_tok };
+            conns[1] = .{ .name = lower, .expr = seg, .main_tok = up.main_tok };
+            try out.append(arena, .{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
+        }
+    }
+    return out.items;
+}
+
+/// A name `elaborate` made sure the file holds.
+fn interned(r: *Run, name: []const u8) Error!Ast.StrId {
+    return r.file.strings.find(name) orelse r.fail(0, "the inserted connect module names `{s}`, which the source does not declare", .{name});
+}
+
+/// §6.7 the instance path of `scope`, each name followed by `.`: the prefix
+/// the analog compile's flatten gives the names declared there.
+fn scopePath(r: *Run, scope: u32) Error![]const u8 {
+    if (scope == 0) return "";
+    const info = r.scope_info.items[scope];
+    return std.fmt.allocPrint(r.arena, "{s}{s}.", .{ try scopePath(r, info.parent), r.file.str(info.name) });
 }
 
 /// §7.6 "the bidirectional terminals of all six devices shall be connected
@@ -1214,7 +1330,9 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
     r.scope = scope;
-    if (inst.params.len != 0)
+    // A mixed module's parameters are the analog block's (`declare` mints
+    // none), so the digital half has nothing an override could set.
+    if (inst.params.len != 0 and !r.mixed)
         return r.fail(inst.main_tok, "parameter overrides are not implemented by digital execution", .{});
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     if (findUdp(r.file, inst.module) != null)
@@ -1725,6 +1843,22 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // is what lets a port connection resolve against nets that already exist.
     var e: Elab = .{};
     try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .module = m.name });
+    if (opts.mixed) |mx| {
+        // VAMS §7.8.4 each bridge's segment, spelled as the flatten spells it
+        // (`bridged` declares it), for the connections re-pointed at it.
+        const segs = try arena.alloc(Ast.ExprId, mx.inserts.len);
+        for (mx.inserts, segs) |row, *x| {
+            // Every other name a row holds is the source's own.
+            _ = try file.intern(arena, row.name);
+            x.* = try file.exprs.add(arena, .{
+                .tag = .ident,
+                .main_tok = m.main_tok,
+                .str = try file.intern(arena, try std.fmt.allocPrint(arena, "{s}.{s}", .{ row.name, row.lower_port })),
+            });
+        }
+        r.inserts = mx.inserts;
+        r.insert_segs = segs;
+    }
     // Allocated before pass one: a bound or a parameter is typed and folded
     // while the slot space is still growing (`Run.constant`).
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
@@ -2016,6 +2150,21 @@ test "§12.4 a downward hierarchical reference reads the named instance's net" {
         \\initial begin r = 1'b0; #0 $display("a=%b y=%b", u.a, u.y); end
         \\endmodule
     , "a=0 y=1\n");
+}
+
+test "§12.3.3 an output port declared as a variable drives the net it connects to" {
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module inv(d, q);
+        \\input d; output q; reg q;
+        \\always @(d) q = ~d;
+        \\endmodule
+        \\module top;
+        \\reg a; wire b, c;
+        \\inv u(a, b), v(b, c);
+        \\initial begin #0 a = 1'b0; #1 $display("b=%b c=%b", b, c); a = 1'b1; #1 $display("b=%b c=%b", b, c); end
+        \\endmodule
+    , "b=1 c=0\nb=0 c=1\n");
 }
 
 test "§12.4 a hierarchical path descends one instance per part" {

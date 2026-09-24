@@ -342,9 +342,21 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
             if (!m.is_connect) try self.err(ins.main_tok, .E0915, "`{s}` is not declared with `connectmodule`", .{
                 self.ctx.file.str(ins.module),
             });
-            // The §7.7.1 overrides are judged where they are consumed,
-            // `elab_insert.ruleOf`; the §7.7.3 parameter names, as any
-            // instance's, when the inserted bridge is inlined (E0907).
+            // §7.8 "When two disciplines are specified in a connect
+            // statement, one shall be discrete and the other continuous."
+            if (ins.overrides) |o| {
+                const da = discipline.domainOf(discipline.declOf(self.ctx.file, o.a) orelse continue);
+                const db = discipline.domainOf(discipline.declOf(self.ctx.file, o.b) orelse continue);
+                if (da == null or db == null or da == db) {
+                    try self.err(ins.main_tok, .E0923, "`{s}` and `{s}`: one shall be discrete and the other continuous", .{
+                        self.ctx.file.str(o.a), self.ctx.file.str(o.b),
+                    });
+                    continue;
+                }
+            }
+            // The §7.7.1 overrides are otherwise judged where they are
+            // consumed, `elab_insert.ruleOf`; the §7.7.3 parameter names, as
+            // any instance's, when the inserted bridge is inlined (E0907).
         }
         for (cr.resolutions) |r| {
             // §7.7.2 every identifier in a resolution statement is a
