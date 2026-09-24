@@ -113,6 +113,8 @@ const corpus = [_][]const u8{
     @embedFile("fixtures/ch04_expressions/01_arithmetic_operators.va"),
     @embedFile("fixtures/ch10_directives/d10_10_compact_modeling_macro_implies_its_extensions.va"),
     @embedFile("fixtures/ieee1364/09_behavioral_modeling/audit_assignment_force_release.v"),
+    // #48: an attribute instance as the last token, inside an unclosed generate block.
+    @embedFile("fixtures/ch06_hierarchy/generate_block_attribute_then_end_of_file_rejected.va"),
 };
 
 test "fuzz: .lint over raw bytes never panics, and every refusal is diagnosed" {

@@ -1521,6 +1521,8 @@ pass	ch06_hierarchy/empty_named_connection_unsupported.va
 pass	ch06_hierarchy/escaped_period_is_not_a_path.va
 pass	ch06_hierarchy/external_genblk_reference_unsupported.va
 pass	ch06_hierarchy/generate_array_name_conflict_rejected.va
+pass	ch06_hierarchy/generate_block_attribute_then_end.va
+pass	ch06_hierarchy/generate_block_attribute_then_end_of_file_rejected.va
 pass	ch06_hierarchy/generate_block_event_declaration.va
 pass	ch06_hierarchy/generate_block_gate.va
 pass	ch06_hierarchy/generate_block_name_collision_rejected.va
