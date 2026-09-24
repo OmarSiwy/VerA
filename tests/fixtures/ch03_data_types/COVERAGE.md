@@ -52,7 +52,7 @@ analog-operator-state limitations of these tests.
 Array-size audit, 2026-09-23: the exact-size override case independently observes
 each replacement element. Three isolated rejection fixtures expose accepted
 short/long overrides and resizing without a replacement as
-PARAM-ARRAY-SIZE-001/002/003 (XFAIL). The existing Chapter 6
+PARAM-ARRAY-SIZE-001/002/003; elaboration now refuses all three with E0921. The existing Chapter 6
 `h01_11_dependent_range_and_array_override.va` is the legal resize counterpart.
 These failures must not be hidden by the existing declaration/pattern tests;
 see the parameter ledger for shape and override-path gaps.

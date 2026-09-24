@@ -61,10 +61,18 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         }
         _ = try self.expect(.rparen);
     }
+    const header_params = b.params.items.len;
     if (self.peek() == .lparen) try parsePortList(self, &b);
     _ = try self.expect(.semicolon);
     try parseModuleItems(self, &b, .kw_endmodule);
     _ = try self.expect(.kw_endmodule);
+    // IEEE 1364-2005 §4.10.1, inherited by §1.1: "If any param_assignments
+    // appear in a module_parameter_port_list, then any param_assignments that
+    // appear in the module become local parameters and shall not be
+    // overridden by any method." §3.4.5's localparam is exactly that.
+    if (header_params != 0) for (b.params.items[header_params..]) |*p| {
+        p.is_local = true;
+    };
     try parse_generate.checkGenBlockNames(self, &b);
     const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
     self.attrs.clearRetainingCapacity();
