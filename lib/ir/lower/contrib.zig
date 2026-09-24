@@ -1190,21 +1190,13 @@ pub fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseS
             const srcs = self.var_noise.get(self.file.str(ex.strOf(e))) orelse return;
             for (srcs) |s| try addNoiseSrc(self.arena, out, s);
         },
-        .call, .builtin_call, .sys_call, .filter_call => {
-            for (ex.args(e)) |a| try noiseSrcsOf(self, a, out);
-        },
-        // §4.2.12 ?: — its third operand lives in `extra`, which the lhs/rhs
-        // catch-all cannot see (same shape as `containsDdt`). Both arms count:
-        // a SET of declared generators is what this walk collects, and which
-        // arm the solve takes does not undeclare the other one.
-        .ternary => {
-            try noiseSrcsOf(self, ex.lhs(e), out);
-            try noiseSrcsOf(self, ex.rhs(e), out);
-            try noiseSrcsOf(self, ex.ternaryElse(e), out);
-        },
-        else => {
-            try noiseSrcsOf(self, ex.lhs(e), out);
-            try noiseSrcsOf(self, ex.rhs(e), out);
+        // Every other tag through its children (`ExprStore.children`),
+        // assignment-pattern elements included. Both arms of a ?: count: a
+        // SET of declared generators is what this walk collects, and which arm
+        // the solve takes does not undeclare the other one.
+        else => { // else: every other tag holds generators only through its children
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try noiseSrcsOf(self, c, out);
         },
     }
 }

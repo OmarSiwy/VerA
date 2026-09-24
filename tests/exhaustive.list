@@ -103,7 +103,6 @@ lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
 lib/ir/lower/contrib.zig isMfactorRead Ast.ExprTag
 lib/ir/lower/contrib.zig lowerReactive Ast.ExprTag
 lib/ir/lower/contrib.zig lowerReactive Ast.UnaryOp
-lib/ir/lower/contrib.zig noiseSrcsOf Ast.ExprTag
 lib/ir/lower/contrib.zig scalesByMfactor Ast.BinaryOp
 lib/ir/lower/contrib.zig scalesByMfactor Ast.ExprTag
 lib/ir/lower/contrib.zig scalesByMfactor Ast.UnaryOp
