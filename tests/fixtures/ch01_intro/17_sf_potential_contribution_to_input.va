@@ -14,6 +14,7 @@
 //
 //! lrm 1.3.4.1
 //! reject contribution to an `input` signal-flow port
+//! reject E0425
 module ch01_sf_potential_contribution_to_input(inp, outp);
     input inp;
     output outp;
