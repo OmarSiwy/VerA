@@ -647,6 +647,7 @@ test "`include resolves the built-in annex D files" {
     try testing.expect(std.mem.indexOf(u8, got, "1.3806503e-23") != null);
     try expectFail("`include \"no_such_file.vams\"\n", .E0126);
     try expectFail("`include nonsense\n", .E0122);
+    try expectFail("`include <constants.vams>\n", .E0122);
 
     // annex D.3 is shipped too, and is NOT preloaded: it has to be asked for.
     const d3 = try runTest("`include \"driver_access.vams\"\n`DRIVER_WAND\n");

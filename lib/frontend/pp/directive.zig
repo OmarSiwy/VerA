@@ -29,11 +29,10 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
     var r: Rest = .{ .s = rest };
     r.skipSpace();
     const open = r.peek() orelse return pp.fail(sp, .E0121, "", .{});
-    const close: u8 = switch (open) {
-        '"' => '"',
-        '<' => '>',
-        else => return pp.fail(pp.spanAt(off + r.i, off + r.i + 1), .E0122, "found `{c}`", .{open}),
-    };
+    // IEEE 1364-2005 §19.5 Syntax 19-6 has one form, `include "filename". C's
+    // `<file>` is not in it, so `<` is E0122 like any other opener.
+    if (open != '"') return pp.fail(pp.spanAt(off + r.i, off + r.i + 1), .E0122, "found `{c}`", .{open});
+    const close: u8 = '"';
     r.i += 1;
     const start = r.i;
     while (r.i < r.s.len and r.s[r.i] != close) r.i += 1;
