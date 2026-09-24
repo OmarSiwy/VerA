@@ -313,7 +313,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 value.signed = cast == .make_signed;
                 return normalize(a, value, ty);
             },
-            .time, .stime, .clog2 => |f| {
+            .time, .stime, .clog2, .test_plusargs, .value_plusargs => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
                     .time, .stime => blk: {
@@ -324,6 +324,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         const n = try eval(self, a, ex.args(e)[0], 0);
                         break :blk integerCeilingLog2(n);
                     },
+                    .test_plusargs, .value_plusargs => 0,
                     .make_signed, .make_unsigned => unreachable, // the arm above
                 };
                 const planes = try a.alloc(u64, 2);

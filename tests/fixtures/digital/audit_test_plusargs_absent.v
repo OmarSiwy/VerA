@@ -9,6 +9,6 @@ module audit_test_plusargs_absent;
     initial begin
         literal_result = $test$plusargs("feature");
         $display("literal=%0d", literal_result);
-        $finish;
+        $finish(0); // §17.4.1: a bare $finish prints its time and location
     end
 endmodule

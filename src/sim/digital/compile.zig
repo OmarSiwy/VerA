@@ -94,14 +94,20 @@ pub const SysFn = enum {
     clog2,
     make_signed,
     make_unsigned,
+    /// IEEE 1364-2005 §17.10.1/§17.10.2, the plusarg queries. `vera --run`
+    /// takes no plusargs, so every query is §17.10's "no match": an integer
+    /// zero, and `$value$plusargs` leaves its variable alone.
+    test_plusargs,
+    value_plusargs,
 
-    /// Does this read the simulation clock? Such a call is not a constant
-    /// expression however constant its arguments are, which a replication
-    /// count and a case label both depend on.
-    fn readsClock(self: SysFn) bool {
+    /// Is a call a constant expression when its arguments are? A clock query
+    /// never is, however constant its (absent) arguments — which a
+    /// replication count and a case label both depend on — and neither is a
+    /// question about the invocation.
+    fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime => true,
-            .clog2, .make_signed, .make_unsigned => false,
+            .time, .stime, .test_plusargs, .value_plusargs => false,
+            .clog2, .make_signed, .make_unsigned => true,
         };
     }
 };
@@ -112,6 +118,8 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$clog2", .clog2 },
     .{ "$signed", .make_signed },
     .{ "$unsigned", .make_unsigned },
+    .{ "$test$plusargs", .test_plusargs },
+    .{ "$value$plusargs", .value_plusargs },
 });
 
 // ---- expression typing (§5.5.1 Table 5-22, §5.1.14) -------------------------
@@ -179,7 +187,7 @@ fn constantExpression(self: *Run, e: Ast.ExprId) bool {
         // constant its (absent) arguments are. Without this `$time`
         // would be accepted as a replication count.
         .sys_call => if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
-            if (f.readsClock()) return false;
+            if (!f.constant()) return false;
         },
         else => return false, // else: not a form this executor folds
     }
@@ -302,6 +310,19 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                         const operand = try inferValue(self, args[0], depth + 1);
                         break :blk .{ .width = operand.width, .signed = f == .make_signed };
+                    },
+                    // §17.10: `(string)` and `(format, variable)`, returning
+                    // an integer. The variable is only ever written on a
+                    // match, so it is resolved and never read.
+                    .test_plusargs, .value_plusargs => {
+                        const want: usize = if (f == .test_plusargs) 1 else 2;
+                        if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
+                        _ = try inferValue(self, args[0], depth + 1);
+                        if (f == .value_plusargs) {
+                            if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
+                            try checkTarget(self, args[1]);
+                        }
+                        break :blk .{ .width = 32, .signed = true };
                     },
             }
         },

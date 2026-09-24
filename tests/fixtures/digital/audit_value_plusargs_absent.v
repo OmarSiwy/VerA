@@ -16,6 +16,6 @@ module audit_value_plusargs_absent;
         packed_result = $value$plusargs("word=%h", packed_value);
         $display("literal=%0d value=%0d packed=%0d word=%h",
                  literal_result, value, packed_result, packed_value);
-        $finish;
+        $finish(0); // §17.4.1: a bare $finish prints its time and location
     end
 endmodule
