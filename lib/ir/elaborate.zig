@@ -238,6 +238,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // (A.1.2), not of the top module, so the tree-of-one shortcut below must
     // not skip a misspelled connect module or discipline in one.
     try f.checkConnectRules();
+    try f.checkNetDisciplines(); // A.2.1.3, every module: see there
 
     // The tree of one. Returned BY POINTER, so a module with no children is
     // handed to lowering as the parser built it — same ids, same order, same
@@ -1360,6 +1361,7 @@ pub const Flatten = struct {
     // Annex F.2 discipline resolution across the hierarchy — elaborate/resolve.zig
     const elab_resolve = @import("elaborate/resolve.zig");
     pub const checkConnectRules = elab_resolve.checkConnectRules;
+    pub const checkNetDisciplines = elab_resolve.checkNetDisciplines;
 
     // §7.8 automatic insertion of connect modules — elaborate/insert.zig
     const elab_insert = @import("elaborate/insert.zig");
