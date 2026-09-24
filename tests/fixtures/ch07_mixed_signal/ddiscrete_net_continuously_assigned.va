@@ -35,7 +35,6 @@
 //! lrm 7.3
 //! lrm 7.3.1
 //! lrm A.6.1
-//! xfail the digital runner treats every disciplined net as continuous, so a ddiscrete net is never minted (src/sim/digital/root.zig)
 `include "check.vh"
 module ch7_ddiscrete_net_continuously_assigned(p);
   inout p;
