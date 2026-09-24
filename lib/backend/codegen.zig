@@ -445,6 +445,10 @@ pub const Gen = struct {
     /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
     /// Empty above 64 unknowns, where neither decl is emitted.
     lin: [2][]f64 = .{ &.{}, &.{} },
+    /// The constants of a collapsible switch row that hold only under its
+    /// guard (`dispatch.emitSwitchRow`), eval half — `plan/jac.zig` merges
+    /// them into `jac_const` with a `.when`.
+    guarded: std.ArrayList(plan_jac.Entry) = .empty,
     /// §4.5.15 the honoured and declined `$limit` sites — `plan/limit.zig`.
     limits: plan_limit.Limits = .{},
     /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for

@@ -3084,3 +3084,31 @@ test "codegen: §5.10.2 a held variable written only by @(initial_step) is compu
     try std.testing.expect(std.mem.indexOf(u8, body, "is_initial_step") == null);
     try std.testing.expect(std.mem.indexOf(u8, body, "log") == null);
 }
+
+test "codegen: §5.6.5 a collapsible short's flow column leaves deriv_reads behind a guarded jac_const" {
+    // `rs` alone decides the 0 V arm, so the retention flag is a function of
+    // the card: `derive` publishes it as a Model field, the ±1 KCL stamps of
+    // the branch current become `jac_const` entries guarded by that field,
+    // and the flow unknown needs no derivative lane (contract.JacWhen).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module sw(p, n);
+        \\  inout p, n; electrical p, n, ai;
+        \\  parameter real rs = 1000.0;
+        \\  analog begin
+        \\    I(ai, n) <+ V(ai, n) / 1000.0;
+        \\    if (rs > 0.0) I(p, ai) <+ V(p, ai) / rs;
+        \\    else V(p, ai) <+ 0.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const field = "flowZ28pZ2caiZ29__retained";
+    try std.testing.expect(std.mem.indexOf(u8, src, "    " ++ field ++ ": f64 = ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "    model." ++ field ++ " = m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .row = .p, .col = .flowZ28pZ2caiZ29, .g = 1.0, .c = 0.0, .when = .{ .flag = \"" ++ field ++ "\", .collapse_open = true } },") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .row = .ai, .col = .flowZ28pZ2caiZ29, .g = -1.0, .c = 0.0, .when = .{ .flag = \"" ++ field ++ "\", .collapse_open = true } },") != null);
+    // p, n, ai have lanes; the flow unknown (bit 3) does not.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const deriv_reads: u64 = 0x0000000000000007;") != null);
+}

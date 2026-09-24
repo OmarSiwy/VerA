@@ -489,6 +489,16 @@ pub fn emitModel(self: *Gen) Error!void {
         "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
         .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lowered.simparamValue("tnom").?) },
     );
+    // §5.6.5 the card-only retention flag of each collapsible switch branch,
+    // published for the host: a guarded `jac_const` entry names this field
+    // (`contract.JacWhen`). Not a parameter — `derive` overwrites it. The
+    // initializer is the flag at the declared defaults when that folds, and
+    // NaN otherwise, so a host that skips `derive` does not get a plausible 0.
+    for (self.topo.cpairs, 0..) |p, k| {
+        if (!p.card) continue;
+        const d = if (self.an.foldConst(p.flag, 0, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
+        try self.w("    {s}: f64 = {s}, // §5.6.5 retention flag — `derive` writes it\n", .{ try gen_dispatch.guardField(self, @intCast(k)), d });
+    }
     if (self.lowered.params.items.len == 0 and !self.lowered.uses.contains(.host_simparam)) {
         try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
     }
@@ -574,8 +584,40 @@ pub fn emitDerive(self: *Gen) Error!void {
             .str => unreachable,
         }
     }
+    try deriveFlags(self);
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("}}\n\n", .{});
+}
+
+/// §5.6.5 `derive`'s tail: every card-only retention flag, into the `Model`
+/// field `emitModel` declared for it. The core at x = 0 on a scratch
+/// Instance, exactly as `collapse` reads the same flags — exact, since a
+/// card-only flag reads neither x nor the Instance. After the parameter
+/// writes above, which it reads.
+// ponytail: evaluated with `R`, like `collapse`, not with the host's value
+// scalar. A flag is a comparison of card values; a knife-edge one could round
+// apart from eval's. Upgrade path: a flag field eval itself reads.
+fn deriveFlags(self: *Gen) Error!void {
+    var any = false;
+    for (self.topo.cpairs) |p| any = any or p.card;
+    if (!any) return;
+    try self.w(
+        \\    // §5.6.5 the published retention flags (`contract.JacWhen`).
+        \\    var xr: [n_u]R = undefined;
+        \\    for (&xr) |*p| p.* = R.con(0.0);
+        \\    var pin: Instance = .{{}};
+        \\
+    , .{});
+    if (self.su.vals.len != 0) try self.w("    setup(R, model, &pin);\n", .{}) else try self.w("    _ = &pin;\n", .{});
+    try self.w("    const m = core(R, xr, model, &pin);\n", .{});
+    for (self.topo.cpairs, 0..) |p, k| {
+        if (!p.card) continue;
+        const f = self.core.lo_idx[@intFromEnum(self.an.rv(p.flag))];
+        if (self.an.vty[@intFromEnum(self.an.rv(p.flag))] == .int)
+            try self.w("    model.{s} = @floatFromInt(m.f{d});\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f })
+        else
+            try self.w("    model.{s} = m.f{d}.v;\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f });
+    }
 }
 
 /// W1050 — the one place a parameter whose default VerA never computes is
