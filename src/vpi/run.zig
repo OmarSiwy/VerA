@@ -183,6 +183,55 @@ pub export fn vpi_get_time(obj: vpiHandle, time_p: ?*Time) void {
 }
 
 // ---------------------------------------------------------------------------
+// §12.36 vpi_sim_control
+// ---------------------------------------------------------------------------
+
+pub const vpiStop: c_int = 66;
+pub const vpiFinish: c_int = 67;
+pub const vpiReset: c_int = 68;
+pub const vpiSetInteractiveScope: c_int = 69;
+
+/// "shall return 1 (true) if successful; 0 (false) on a failure".
+///
+/// vpiFinish — "cause $finish built-in Verilog system task to be executed upon
+/// return of user function". The engine is told to finish now, which is the
+/// same thing from where a user function sits: a callback runs between two
+/// dispatches (or inside a store, which completes), nothing further is
+/// dispatched, and the loop above ends the run and fires cbEndOfSimulation at
+/// the time the request was made. The diagnostic-level argument is read and
+/// not printed.
+///
+/// ponytail: vpiStop, vpiReset and vpiSetInteractiveScope all need an
+/// interactive mode or a restartable run, and VerA's engine has neither, so
+/// they fail with vpiError rather than pretending. The VAMS analog controls
+/// (vpiRejectTransientStep, vpiTransientFailConverge) need an analog solver
+/// in this process, which there is not.
+pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
+    root.clearError();
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    switch (operation) {
+        vpiFinish => {
+            _ = @cVaArg(&ap, c_int); // the diagnostic level, as $finish(n)
+            const r = engine orelse {
+                root.fail("NORUN", "vpi_sim_control(vpiFinish): no simulation is running", .{});
+                return 0;
+            };
+            r.scheduler.finish();
+            return 1;
+        },
+        vpiStop, vpiReset, vpiSetInteractiveScope => {
+            root.fail("NOCONTROL", "vpi_sim_control: operation {d} needs an interactive mode VerA does not have", .{operation});
+            return 0;
+        },
+        else => {
+            root.fail("NOCONTROL", "vpi_sim_control: {d} is not a §12.36 operation", .{operation});
+            return 0;
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // §11.6.25 time queues
 // ---------------------------------------------------------------------------
 
@@ -380,5 +429,41 @@ test "§12.15/§11.6.25: vpi_get_time scales by the object, and the time queues 
     var junk: u32 = 0;
     t.type = callback.vpiSimTime;
     vpi_get_time(@ptrCast(&junk), &t);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+var finish_seen: u64 = 0;
+var end_seen: u64 = std.math.maxInt(u64);
+
+fn finishNow(_: *callback.CbData) callconv(.c) c_int {
+    finish_seen = now();
+    if (vpi_sim_control(vpiFinish, @as(c_int, 0)) != 1) finish_seen = 999;
+    return 0;
+}
+
+fn atEnd(_: *callback.CbData) callconv(.c) c_int {
+    end_seen = now();
+    return 0;
+}
+
+test "§12.36: vpiFinish from a callback ends the run at that time, and the design does no more" {
+    var h: Harness = undefined;
+    try h.init(timeline);
+    defer h.deinit();
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 8, .real = 0 };
+    const fin: callback.CbData = .{ .reason = callback.cbAtStartOfSimTime, .cb_rtn = finishNow, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&fin) != null);
+    const end: callback.CbData = .{ .reason = callback.cbEndOfSimulation, .cb_rtn = atEnd, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&end) != null);
+    seen_n = 0;
+    try simulate();
+    try std.testing.expectEqual(@as(u64, 8), finish_seen);
+    try std.testing.expectEqual(@as(u64, 8), end_seen);
+    // The design's `#3 $display("done")` at t=10 never ran.
+    try std.testing.expectEqualStrings("", h.out.written());
+
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiStop, @as(c_int, 0)));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(12345));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
 }
