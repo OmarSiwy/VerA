@@ -124,7 +124,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // (`plan/topology.zig`) before any residual is emitted.
     const cpairs = self.topo.cpairs;
     if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
-        self.hp_vals.len != 0 or self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
+        self.hp.vals.len != 0 or self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
     {
         try self.out.appendSlice(self.gpa, rscalar_txt);
         // Pinned to the contract's primitive list, same as tb.zig's
@@ -910,7 +910,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     // §4.5.15 the solve-independent clamp arguments, latched by
     // `cg_limit.emitPrep` off the same `precompute` call. After `pc__`
     // because `emitPrep`'s core evaluation READS those fields.
-    for (0..self.lp_vals.len) |k| {
+    for (0..self.lp.vals.len) |k| {
         try self.w("    lp__{d}: f64 = 0.0, // $limit prep\n", .{k});
     }
     // The core's hoisted PREFIX (`planHoistPrefix`): the solve-independent
@@ -918,10 +918,10 @@ pub fn emitInstance(self: *Gen) Error!void {
     // call the `lp__` fields ride. `hp_ok` is what the core tests, so it is
     // cleared on entry to `precompute` and set only once the values behind
     // it belong to the model card now in force.
-    if (self.hp_real != 0) try self.w("    hp: [{d}]f64 = @splat(0.0), // core prefix cache\n", .{self.hp_real});
-    if (self.hp_vals.len != self.hp_real)
-        try self.w("    hpi: [{d}]i64 = @splat(0),\n", .{self.hp_vals.len - self.hp_real});
-    if (self.hp_vals.len != 0) try self.w("    hp_ok: i64 = 0,\n", .{});
+    if (self.hp.real != 0) try self.w("    hp: [{d}]f64 = @splat(0.0), // core prefix cache\n", .{self.hp.real});
+    if (self.hp.vals.len != self.hp.real)
+        try self.w("    hpi: [{d}]i64 = @splat(0),\n", .{self.hp.vals.len - self.hp.real});
+    if (self.hp.vals.len != 0) try self.w("    hp_ok: i64 = 0,\n", .{});
     try self.w("}};\n\n", .{});
 }
 
@@ -945,9 +945,9 @@ pub fn emitPrecompute(self: *Gen) Error!void {
     // same "once per model-card/temperature write" phase — so a model with
     // no `pc__` roots but a hoisted clamp argument still needs the body.
     const has_pc = self.pc.vals.len != 0;
-    const has_lp = self.lp_vals.len != 0;
+    const has_lp = self.lp.vals.len != 0;
     // …and so does the core's hoisted prefix, off the same core call.
-    const has_hp = self.hp_vals.len != 0;
+    const has_hp = self.hp.vals.len != 0;
     if (!has_pc and !has_lp and !has_hp) return;
     // `P`, not `R`, fills the hp latch below: eval reads those fields as
     // `S.con(...)`, so they must carry the HOST's value chain (see pscalar_txt).
@@ -1034,10 +1034,10 @@ pub fn emitPrecompute(self: *Gen) Error!void {
             \\    const mh = core(P, xp, model, inst);
             \\
         , .{});
-        for (self.hp_vals, 0..) |v, j| {
+        for (self.hp.vals, 0..) |v, j| {
             const f = self.core.lo_vals.len + j;
             if (self.an.vty[@intFromEnum(v)] == .int)
-                try self.w("    inst.hpi[{d}] = mh.f{d};\n", .{ j - self.hp_real, f })
+                try self.w("    inst.hpi[{d}] = mh.f{d};\n", .{ j - self.hp.real, f })
             else
                 try self.w("    inst.hp[{d}] = mh.f{d}.v;\n", .{ j, f });
         }

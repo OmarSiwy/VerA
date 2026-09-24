@@ -135,7 +135,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     for (self.core.lo_vals, 0..) |v, k| {
         try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
     }
-    for (self.hp_vals, 0..) |v, j| {
+    for (self.hp.vals, 0..) |v, j| {
         try self.w("    f{d}: {s}, // hoisted prefix\n", .{
             self.core.lo_vals.len + j, zigTy(self.an.vty[@intFromEnum(v)]),
         });
@@ -406,16 +406,16 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
 
     const at = self.out.items.len;
     self.probing = true;
-    self.hp_bnd = 0;
-    self.hp_cut = 0;
-    self.hp_off = 0;
-    self.hp_dirty = false;
-    self.stmt_count = 0;
+    self.hp.bnd = 0;
+    self.hp.cut = 0;
+    self.hp.off = 0;
+    self.hp.dirty = false;
+    self.hp.stmts = 0;
     try scopeOpen(self); // the function body itself
     try gen_cfg.emitTree(self, 0, 1, target);
     scopeClose(self, self.out.items.len);
     self.probing = false;
-    self.hp_bnd = 0; // the real walk counts the same boundaries from zero
+    self.hp.bnd = 0; // the real walk counts the same boundaries from zero
     self.out.shrinkRetainingCapacity(at);
 
     for (self.place.items) |*p| {
@@ -427,7 +427,7 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
     // A value crossing the prefix guard has to be in a hoist ARRAY: the
     // guard is a scope its `const` would not survive, and the else arm has
     // to be able to assign it.
-    for (self.hp_vals) |v| {
+    for (self.hp.vals) |v| {
         const s = self.plan.slot[@intFromEnum(v)];
         if (s != none_u32) self.place.items[s].at_def = false;
     }
@@ -534,5 +534,5 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // The guard opened at boundary 0 is closed at boundary `hp_cut`;
     // if the real walk never reached it the emitted brace is unbalanced,
     // which is a generator bug and not something to ship.
-    assert(!self.hp_on or !self.emitting_common or self.hp_bnd > self.hp_cut);
+    assert(!self.hp.on or !self.emitting_common or self.hp.bnd > self.hp.cut);
 }
