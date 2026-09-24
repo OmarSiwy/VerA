@@ -529,20 +529,21 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 .monitor_enable => if (s.args.len != 0)
                     return self.fail(tok, "$monitoron and $monitoroff take no arguments", .{}),
                 .timeformat => {
-                    // §17.3's four arguments are simulator SETTINGS, read
-                    // once when the task runs; a source that computed them
-                    // from a net would be asking the format to track a
-                    // value, which the clause does not define.
+                    // §17.3.2 Syntax 17-10: no arguments at all (Table
+                    // 17-11's defaults), or all four. The three numbers are
+                    // integers read once when the task runs — so an
+                    // expression is legal, and a later change to it is not
+                    // tracked.
                     const ex = &self.file.exprs;
-                    if (s.args.len != 4) return self.fail(tok, "$timeformat takes exactly four arguments", .{});
-                    for (s.args[0..2]) |a| if (a == .none or !constantExpression(self, a))
-                        return self.exprFail(a, "$timeformat's units and precision must be constant");
-                    if (s.args[2] == .none or ex.tag(s.args[2]) != .str_literal)
-                        return self.exprFail(s.args[2], "$timeformat's suffix must be a string literal");
-                    if (s.args[3] == .none or !constantExpression(self, s.args[3]))
-                        return self.exprFail(s.args[3], "$timeformat's minimum width must be constant");
-                    for (s.args[0..2]) |a| try checkExpr(self, a);
-                    try checkExpr(self, s.args[3]);
+                    if (s.args.len != 0 and s.args.len != 4) return self.fail(tok, "$timeformat takes no arguments or exactly four", .{});
+                    if (s.args.len == 4) {
+                        for ([_]Ast.ExprId{ s.args[0], s.args[1], s.args[3] }) |a| {
+                            if (a == .none) return self.fail(tok, "$timeformat's units, precision and minimum width are required", .{});
+                            try checkExpr(self, a);
+                        }
+                        if (s.args[2] == .none or ex.tag(s.args[2]) != .str_literal)
+                            return self.exprFail(s.args[2], "$timeformat's suffix must be a string literal");
+                    }
                 },
                 .readmem => {
                     const ex = &self.file.exprs;
@@ -558,12 +559,13 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         try checkExpr(self, a);
                     }
                 },
+                // §17.4.1: the argument is an expression selecting how much
+                // is printed (0, 1 or 2), read when the task runs.
                 .finish => {
                     if (s.args.len > 1) return self.fail(tok, "$finish accepts zero or one argument", .{});
                     if (s.args.len == 1) {
-                        const ex = &self.file.exprs;
-                        if (ex.tag(s.args[0]) != .int_literal or ex.intValue(s.args[0]) < 0 or ex.intValue(s.args[0]) > 1)
-                            return self.fail(tok, "only $finish(0), $finish(1), and $finish are implemented", .{});
+                        if (s.args[0] == .none) return self.fail(tok, "$finish's argument is an expression", .{});
+                        try checkExpr(self, s.args[0]);
                     }
                 },
             }
@@ -760,7 +762,6 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
-    try expectRejected("module m; initial $finish(2); endmodule", "only $finish");
     // Past Table 9-22 and §17.1.1's %c %s %m %l %t, a conversion such as the
     // strength `%v` is refused, and the refusal names the table.
     try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
