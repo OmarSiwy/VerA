@@ -34,8 +34,13 @@ Before and after any change:
 cmd=$(zig build benchmark -- --strict zzz-none 2>&1 | grep '^failed command:' | sed 's/^failed command: //')
 set -- $cmd; "$1" "$2" --strict > out.txt 2> err.txt      # suite, vera
 grep -E '^(FAIL|XFAIL) ' err.txt | sed 's|^\(X\?FAIL\) .*/tests/fixtures/|\1 |; s|:.*||' | sort > after.txt
-diff before.txt after.txt          # 0 names means the capture broke, not a pass
+diff before.txt after.txt          # an empty diff is a pass only if the run happened:
 ```
+
+No fixture carries `//! xfail` today, so both lists can be legitimately empty. An
+empty list counts only when `out.txt` holds the suite's
+`N/M fixtures behave as they say they do` line; compare N/M too, so a fixture that
+stopped being collected shows.
 
 The same trick applies to `zig build test-devices` (the digital transcripts;
 all cases pass as of 2026-09-24 and must keep passing).
@@ -329,7 +334,7 @@ testbench's batch family (`tb/runner_text.zig`, `@Vector(NL, f64)`) asserts.
 Measured and not built (2026-09):
 - Instance lanes (several operating points per SIMD register, `batch_ok`),
   re-measured 2026-10-01 with vector exp/log/pow
-  (docs/measurements/batched-instances-2026-10-01.md): when every point of a
+  (`git show 6e59b3d4^:docs/measurements/batched-instances-2026-10-01.md`): when every point of a
   batch takes the same branches, 1.2-2.1× per instance on AVX2 (diode 1.35×,
   mos1 1.42×, bsim4va 1.58×, psp103 2.11× at W = 4; W = 8 spills its tiles
   and gains less). With points spread over regions, divergence and per-point
@@ -340,7 +345,7 @@ Measured and not built (2026-09):
   point has its own `Instance`, read per point through the family's
   `instLane` when the device declares `batch_inst` (held values, `$prev`
   latches; mos1, bsim4va, psp103). A host buckets on the region signatures
-  the previous batched call returned (docs/measurements/batched-lead-2026-10-02.md:
+  the previous batched call returned (`git show 6e59b3d4^:docs/measurements/batched-lead-2026-10-02.md`:
   1.06-1.30 runs per W = 4 batch on ARPice's generated decks; coherent
   batches 1.5-1.8× in instructions with per-point instances, mos1 about
   1.0-1.1× in cycles). AVX-512 W = 8 is estimated (llvm-mca,
@@ -611,7 +616,7 @@ Learned expensively, and none of it is style preference:
   finished agent's cache before the next wave. Six parallel agents filled the
   filesystem and killed a run mid-flight.
 - **Size goldens compose.** When two agents each move generated-device byte
-  counts in `tests/bench.zig`, the conflict is **regenerated**, not resolved to
+  counts in `tests/harness/sweep.zig`, the conflict is **regenerated**, not resolved to
   one side. Both deltas are real.
 
 **The shared build.** How several agents build one repository without racing
@@ -965,8 +970,8 @@ VerA today: `lib/backend/codegen/` and `lib/backend/tb/` share one module,
 `backend`, so the build cannot enforce this. No file under either imports the
 other directly, but `tb/exe.zig` reaches `codegen.zig` through
 `orchestrator.zig`, and `tb/runner.zig` re-spells the `__xz`/`__w{k}`/`__1b`
-field names lowering owns (inventory, 2026-10-17; the production pass's P3
-and P4 remove both). Both read `lib/backend/naming.zig`. New code adds no
+field names lowering owns (inventory, 2026-10-17; `ARCHITECTURE.md` Phases 7
+and 8 remove both). Both read `lib/backend/naming.zig`. New code adds no
 such edge; making the build enforce it is a refactor phase of its own (§4).
 
 ### 11.9 SIMD is for the emitted device
