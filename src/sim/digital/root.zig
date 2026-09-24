@@ -123,6 +123,10 @@ pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32 };
 /// One digital event term of an analog event control (`Run.watchEvent`).
 pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
 
+/// The events one time step may dispatch before `runUntil` calls it a
+/// zero-delay loop. Far above any design's settling activity per step.
+pub const max_events_per_tick: u64 = 10_000_000;
+
 /// The scheduler payload of the one analog macro-process. Not a `pending`
 /// row: the event carries no data, and the scheduler coalesces repeats of it
 /// (§8.5.3.7) by payload.
@@ -287,6 +291,10 @@ pub const Run = struct {
     d2a_sites: std.ArrayList(D2aSite) = .empty,
     d2a_fired: u64 = 0,
     d2a_pending: bool = false,
+    /// Events dispatched at `budget_time`, against `budget`.
+    budget_time: Tick = 0,
+    budget_used: u64 = 0,
+    budget: u64 = max_events_per_tick,
     /// VAMS §7.3.5 the analog events digital event controls wait on
     /// (`registerMonitor`). The mixed-signal kernel evaluates each against the
     /// analog solution and delivers its A2D events (`deliverA2d`).
@@ -443,6 +451,16 @@ pub const Run = struct {
         defer scratch.deinit();
         while (r.scheduler.nextUntil(limit)) |event| {
             _ = scratch.reset(.retain_capacity);
+            // A zero-delay loop (`always a = ~a;`) never lets time advance
+            // (IEEE 1364 §11.4 has nothing to stop it); refuse it by name
+            // instead of hanging the kernel at one tick.
+            if (event.time != r.budget_time) {
+                r.budget_time = event.time;
+                r.budget_used = 0;
+            }
+            r.budget_used += 1;
+            if (r.budget_used > r.budget)
+                return r.fail(0, "more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ r.budget, event.time });
             if (event.region == .analog) {
                 r.analog_pending = false;
                 return .analog;
@@ -1839,6 +1857,19 @@ pub fn expectRun(source: []const u8, expected: []const u8) !void {
         return e;
     };
     try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "a zero-delay loop fails by name instead of hanging at one tick" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\module m; reg a; initial a = 0; always #0 a = ~a; endmodule
+    , .{}, &bag, &output.writer);
+    r.budget = 1000;
+    try std.testing.expectError(error.DigitalFailed, r.runUntil(std.math.maxInt(Tick)));
+    try std.testing.expectEqual(@as(Tick, 0), r.scheduler.now);
 }
 
 test "elaborate + runUntil step the engine one bounded horizon at a time" {
