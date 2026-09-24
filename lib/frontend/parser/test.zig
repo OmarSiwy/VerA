@@ -741,6 +741,9 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = .E0235 },
         // A generate REGION has no scheme; its items are ordinary module items.
         .{ .src = head ++ "generate r u(p); endgenerate endmodule", .code = null },
+        // IEEE 1364 §19.6: `resetall is illegal within a module, legal between.
+        .{ .src = "`resetall\n" ++ head ++ "`resetall\nendmodule", .code = .E0236 },
+        .{ .src = "`resetall\n" ++ head ++ "endmodule\n`resetall\n", .code = null },
     };
     for (cases) |c| {
         const res = try parseForTest(arena, c.src);

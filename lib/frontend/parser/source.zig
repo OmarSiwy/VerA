@@ -56,6 +56,9 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                 if (e == error.OutOfMemory) return e;
                 recoverTopLevel(self, before);
             },
+            // IEEE 1364 §19.6: between design elements is where `resetall
+            // belongs; the preprocessor has already applied it.
+            .dir_resetall => self.pos += 1,
             // A.1.2 `module_keyword ::= module | macromodule`. §6.2: "The
             // keyword macromodule can be used interchangeably with the
             // keyword module TO DEFINE A MODULE. An implementation may

@@ -896,6 +896,14 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             try pp.mark(&pp.nettypes, NetType.default);
             try pp.mark(&pp.cells, false);
             try pp.mark(&pp.drives, Drive.default);
+            // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
+            // to be specified within a module or UDP declaration." Only the
+            // parser knows where a module is, so the directive is also passed
+            // through, like §10.6's pair below, for it to judge: the word
+            // itself, and the rest of its line collapsed as usual.
+            try pp.out.appendSlice(pp.arena, text[at..j]);
+            try pp.putNewlines(text[j..end]);
+            return end;
         },
         .default_discipline => try pp_directive.handleDefaultDiscipline(pp, text[j..end], j),
         .default_transition => try pp_directive.handleDefaultTransition(pp, text[j..end], j),

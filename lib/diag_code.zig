@@ -195,6 +195,8 @@ pub const Code = enum(u16) {
     /// assignment, gate or event declaration inside a generate block. VerA has no generate scope to select or repeat it in,
     /// so it is refused rather than elaborated once regardless of the scheme.
     E0235,
+    /// IEEE 1364 §19.6: `resetall inside a module.
+    E0236,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1779,6 +1781,18 @@ fn infoOf(c: Code) Info {
             \\The source is legal: this is a limitation of VerA, not an error in
             \\the model. Write the instance at module level, or select between
             \\instances with a parameter the child module reads.
+            ,
+        },
+        .E0236 => .{
+            .title = "`resetall inside a module",
+            .lrm = "10.1",
+            .explain =
+            \\LRM 10.1 takes `resetall from IEEE Std 1364, whose 19.6 says: "It
+            \\shall be illegal for the `resetall directive to be specified within
+            \\a module or UDP declaration." It resets every compiler directive to
+            \\its default, and a module whose directives change halfway through
+            \\has no single reading. 19.6 recommends placing it at the beginning
+            \\of each source file; put it before the module.
             ,
         },
         .E0234 => .{
