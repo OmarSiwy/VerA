@@ -661,6 +661,16 @@ pub const Code = enum(u16) {
     /// §7.8 a connect statement's two disciplines are not one discrete and
     /// one continuous.
     E0923,
+    /// §9.5/§9.7.1/§9.12 a system task or function called with an argument
+    /// count its syntax does not admit.
+    E0887,
+    /// §9.5.1/§9.5.2 a descriptor argument that is a real or a string.
+    E0888,
+    /// §9.5.1 Table 9-24 a literal `$fopen` type that is none of its forms.
+    E0889,
+    /// §9.18 Table 9-29 a hierarchical system parameter override outside the
+    /// table's "Allowed Values".
+    E0890,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -4564,6 +4574,69 @@ fn infoOf(c: Code) Info {
             \\An `initial` or `always` block is the digital context (7.2.2).
             \\Move the call into the analog block, or use a task both columns
             \\allow, such as $display or $finish.
+            ,
+        },
+        .E0887 => .{
+            .title = "wrong number of arguments to a system task or function",
+            .lrm = "9.5",
+            .explain =
+            \\Each Clause 9 call prints its argument list: Syntax 9-2 gives
+            \\`$fopen(filename)` and `$fopen(filename, type)` and `$fclose(fd)`;
+            \\Syntax 9-3 makes the descriptor the first argument of every file
+            \\output task; §9.5.4.1 `$fgets(str, fd)`, §9.5.4.2
+            \\`$fscanf(fd, format, args)`, §9.5.5 `$ftell(fd)`,
+            \\`$fseek(fd, offset, operation)` and `$rewind(fd)`, §9.5.6
+            \\`$fflush` with at most one descriptor, §9.5.7 `$ferror(fd, str)`,
+            \\§9.5.8 `$feof(fd)`, Syntax 9-5 `$finish [ ( n ) ]`, and §9.12's
+            \\IEEE 1364 §17.10 `$test$plusargs(string)` and
+            \\`$value$plusargs(user_string, variable)`.
+            \\
+            \\A call with more or fewer arguments has no defined meaning: an
+            \\argument the syntax has no slot for is not "ignored", and a
+            \\missing descriptor is not descriptor 0. Supply exactly the list
+            \\the clause prints.
+            ,
+        },
+        .E0888 => .{
+            .title = "descriptor argument is not an integer",
+            .lrm = "9.5.2",
+            .explain =
+            \\§9.5.1: "The multichannel descriptor mcd is a 32-bit integer" and
+            \\"The file descriptor fd is a 32-bit value" whose bit 31 is set.
+            \\§9.5.2: "The first argument shall be either a multichannel
+            \\descriptor or a file descriptor ... A multichannel descriptor is
+            \\either a variable or the result of an expression that takes the
+            \\form of a 32-bit unsigned integer value."
+            \\
+            \\A real has no bit 31 and a string is not a 32-bit value, so
+            \\neither names an open file. Pass the integer `$fopen` returned.
+            ,
+        },
+        .E0889 => .{
+            .title = "$fopen type is not one of Table 9-24's forms",
+            .lrm = "9.5.1",
+            .explain =
+            \\§9.5.1: "type is a string expression containing a character
+            \\string of one of the forms in Table 9-24": "r", "rb", "w", "wb",
+            \\"a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b"
+            \\or "ab+". Any other string opens the file in no mode the clause
+            \\defines. Only a type written as a literal can be judged at compile
+            \\time.
+            ,
+        },
+        .E0890 => .{
+            .title = "hierarchical system parameter outside its allowed values",
+            .lrm = "9.18",
+            .explain =
+            \\§9.18 Table 9-29's "Allowed Values" column: `$mfactor > 0`,
+            \\`$hflip = +1 or -1`, `$vflip = +1 or -1`, `0 <= $angle < 360`.
+            \\The resolved value is the product (or sum) of the values specified
+            \\down the hierarchy, so one out-of-range factor makes every value
+            \\below it out of range: a zero `$mfactor` would divide every branch
+            \\flow probe by zero under §6.3.6's automatic scaling rules, and a
+            \\negative one is not a count of parallel devices.
+            \\
+            \\Only a value that folds without the model card is judged here.
             ,
         },
         .E0822 => .{

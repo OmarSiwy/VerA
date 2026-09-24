@@ -284,6 +284,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         try self.err(tok, .E0807, "", .{});
         return;
     }
+    if (try lower_sysfunc.checkArity(self, tok, name, args)) return;
     // §9.13 Table 9-10 in statement position. They are FUNCTIONS, so a bare
     // `$random(s);` is only ever written for the seed's inout side effect — which
     // is exactly what `lowerRandom` performs; the variate is dropped.
@@ -325,9 +326,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     defer live.deinit(self.arena);
     var tys: std.ArrayList(Ty) = .empty;
     defer tys.deinit(self.arena);
-    for (args) |a| {
+    for (args, 0..) |a, i| {
         if (a == .none) continue; // A.6.9 empty argument slot
         const tv = try lower_sysfunc.lowerTaskArg(self, a, name);
+        if (try lower_sysfunc.checkDescriptor(self, name, i, a, tv)) return;
         try vals.append(self.arena, tv.v);
         try live.append(self.arena, a);
         try tys.append(self.arena, tv.ty);
@@ -610,7 +612,9 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
         return try self.mir.addIntConst(self.arena, 0);
     }
-    const fd = (try lower_sysfunc.lowerSysArg(self, args[fd_at], false)).v; // a descriptor, never a net
+    const fd_tv = try lower_sysfunc.lowerSysArg(self, args[fd_at], false); // a descriptor, never a net
+    if (try lower_sysfunc.checkDescriptor(self, name, fd_at, args[fd_at], fd_tv)) return try self.mir.addIntConst(self.arena, 0);
+    const fd = fd_tv.v;
     // §9.5.4.2 alone has a control string, and it is an operand of every reader
     // as well as of the count.
     const fmt: ?Mir.Value = if (scan) blk: {
