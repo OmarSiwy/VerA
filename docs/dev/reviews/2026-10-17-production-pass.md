@@ -51,4 +51,16 @@ Not planned (recorded): `Ast.ExprStore` has writers in elaboration and `src/sim`
 
 ## Results
 
-(filled in per package as it lands)
+### Wave 1 — P0, P1, P6 (gate 670b9254 against base 7ab21937)
+
+Built once, after merging (the user's rule: agents check syntax with `zig ast-check` + `zig fmt --check`; the gate builds).
+
+| Check | Result |
+|---|---|
+| `zig build check` | exit 0 |
+| `zig build test` (Debug) / `-Doptimize=ReleaseSafe` | exit 1 / exit 1: the same single step, P6's new `b7_sim_control_reset_every_run_rejected.c`, registered `cbEndOfReset` at startup, which §26.2.4 forbids (the fixture was wrong) → fixed in 59520d45. ReleaseSafe otherwise green: P0's #40 holds |
+| golden diff | 46 of 7542 files differ: 37 `.v` goldens move only by #36's `try s.loopIteration();` on loop back-edges (and `repeat` re-entry), 9 are new fixtures. Nothing else |
+| fixture suite | 2604/2604 → 2604/2605: the one FAIL is P6's new `cross_time_tol_below_time_resolution.va`, which lacked `//! solve` (the testbench read V = 0) → fixed in 76611ff8, 43/43 checks ok by hand-run; without the #35 guard it hangs, so it pins the bug |
+| `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
+
+P1: −10 net lines over 119 files (152 `pub` made private, 116 std renames, dead aliases). Issues: #35–#39 (P6), #40 (P0).
