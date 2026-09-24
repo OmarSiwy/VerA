@@ -67,6 +67,22 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = cond, .body = body, .kind = .level } }, tok);
     }
+    // A.6.2 `procedural_continuous_assignments` (IEEE 1364-2005 §9.3) —
+    // digital only: `assign`/`force lvalue = expr;`, `deassign`/`release lvalue;`.
+    if (self.digital) {
+        const kind: ?Ast.ProcContinuous = if (self.peek() == .kw_assign) .assign else if (parse_module.reservedIs(self, self.pos, "force")) .force else if (parse_module.reservedIs(self, self.pos, "deassign")) .deassign else if (parse_module.reservedIs(self, self.pos, "release")) .release else null;
+        if (kind) |k| {
+            self.pos += 1;
+            const target = try parse_expr.parsePostfix(self);
+            var value: Ast.ExprId = .none;
+            if (k == .assign or k == .force) {
+                _ = try self.expect(.assign_eq);
+                value = try parse_expr.parseExpr(self);
+            }
+            _ = try self.expect(.semicolon);
+            return self.file.addStmt(self.arena, .{ .assign = .{ .target = target, .value = value, .continuous = k } }, tok);
+        }
+    }
     // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2 — digital only.
     if (self.digital and parse_module.reservedIs(self, self.pos, "fork")) return parseSeqBlock(self);
     switch (self.peek()) {

@@ -207,6 +207,12 @@ pub const Run = struct {
     /// §9.8.2 one counter per lexical `fork`: the arms still running. One per
     /// SITE is enough for `repeats`' reason — the parent waits at the site.
     joins: std.ArrayList(u32) = .empty,
+    /// §9.3 the procedural continuous assignments in effect, by slot: the
+    /// process range of an `assign` and of a `force`. While one is, ordinary
+    /// writes to the slot do not land (`store`); a force outranks an assign.
+    overrides: std.AutoHashMapUnmanaged(u32, Overrides) = .empty,
+    /// `store` from an override's own process, which the guard lets through.
+    overriding: bool = false,
     // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
     // control. One cell per SITE is enough for the same reason `repeats` is:
     // the process that reached it is suspended there, so it cannot reach it
@@ -906,6 +912,14 @@ fn usesReal(t: *const Ast.Subroutine) bool {
 
 /// One activation's storage: a scope, a slot per formal, the result slot of
 /// a function, and the contiguous slot range an automatic activation saves.
+/// §9.3 one slot's procedural continuous assignments: the pc range of the
+/// process maintaining each.
+pub const Overrides = struct {
+    assign: ?PcRange = null,
+    force: ?PcRange = null,
+};
+pub const PcRange = struct { start: u32, end: u32 };
+
 pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u32, count: u32 };
 
 /// A fresh frame for `t` inside instance `inst`: its static one in pass one,

@@ -1222,6 +1222,10 @@ pub const Stmt = union(enum) {
         nonblocking: bool = false,
         timing: ExprId = .none,
         timing_is_delay: bool = false,
+        /// IEEE 1364-2005 §9.3 procedural continuous assignments, which only
+        /// a digital parse makes: `assign`/`force` (with a `value`) and
+        /// `deassign`/`release` (whose `value` is `.none`).
+        continuous: ProcContinuous = .none,
     },
     /// §5.6 contribution `V(a,b) <+ expr;` — `lhs` is a `.branch_access` or
     /// `.port_access` node (A.8.5 branch_lvalue).
@@ -1288,6 +1292,9 @@ pub const Stmt = union(enum) {
 
     pub const JumpKind = enum(u8) { ret, brk, cont };
 };
+
+/// IEEE 1364-2005 §9.3 A.6.2 `procedural_continuous_assignments`.
+pub const ProcContinuous = enum(u8) { none, assign, deassign, force, release };
 
 /// §5.8.3 A.6.7 — `case`, `casex`, `casez`. Only `.normal` is meaningful for
 /// real-valued analog scrutinees; `casex`/`casez` are kept so the parser can

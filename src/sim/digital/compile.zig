@@ -97,6 +97,13 @@ pub const Instruction = union(enum(u5)) {
     fork: struct { arms: []const u32, join: u32, end: u32 },
     // One `fork` arm finished; the last one resumes the parent at `end`.
     join_arm: struct { join: u32, end: u32 },
+    // §9.3 install a procedural continuous assignment on `slot`: its
+    // out-of-line process [start, end) keeps the slot equal to its expression.
+    override_on: struct { slot: u32, force: bool, start: u32, end: u32 },
+    // That process's one step: write `value` into `slot` past the guard.
+    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool },
+    // §9.3 `deassign` / `release`.
+    override_off: struct { slot: u32, force: bool },
     stop,
 };
 
@@ -652,7 +659,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (!have_default) self.code.items[dispatch].case_select.fallback = end;
             for (exits) |at| self.code.items[at].jump = end;
         },
-        .assign => |s| {
+        .assign => |s| if (s.continuous != .none) try compileProcContinuous(self, s.target, s.value, s.continuous, tok) else {
             // §10.4.4: "Functions shall not contain any time-controlled
             // statements" and "shall not have any nonblocking assignments".
             if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});
@@ -826,6 +833,36 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         },
         else => return self.fail(tok, "this digital statement is not implemented", .{}),
     }
+}
+
+/// IEEE 1364-2005 §9.3: `assign`/`force` compile an out-of-line process that
+/// re-writes the target whenever the expression's operands change, and an
+/// `.override_on` that starts it; `deassign`/`release` stop it. `assign`
+/// takes a variable (§9.3.1); `force` a variable or a net (§9.3.2).
+fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, tok: u32) Error!void {
+    if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain a procedural continuous assignment", .{});
+    const ex = &self.file.exprs;
+    // ponytail: a whole variable or net; A.8.5 also admits a concatenation
+    // of them (and, for `force`, net selects), which no fixture writes.
+    if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return self.exprFail(target, "a procedural continuous assignment names one whole variable or net");
+    const at = try self.scalarSlot(target);
+    const force = kind == .force or kind == .release;
+    if (!force and self.net_of.contains(at)) return self.exprFail(target, "§9.3.1: assign/deassign take a variable; a net is forced");
+    if (kind == .deassign or kind == .release) {
+        _ = try append(self, .{ .override_off = .{ .slot = at, .force = force } });
+        return;
+    }
+    try checkExpr(self, value);
+    var watched: std.ArrayList(u32) = .empty;
+    try sensitivity(self, value, &watched);
+    const skip = try append(self, .{ .jump = 0 });
+    const start = position(self);
+    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force } });
+    _ = try append(self, .{ .wait_slots = watched.items });
+    _ = try append(self, .{ .jump = start });
+    const end = position(self);
+    self.code.items[skip].jump = end;
+    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end } });
 }
 
 /// IEEE 1364-2005 §9.8.2 a parallel block: each statement is compiled as an
@@ -1029,7 +1066,7 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
             }
         },
         .assign => |s| {
-            try sensitivity(self, s.value, out);
+            if (s.value != .none) try sensitivity(self, s.value, out); // `deassign`/`release` read nothing
             // An element lvalue reads its subscript; `sensitivity` on the
             // whole `.index` would also add the array's own elements.
             var x = s.target;
