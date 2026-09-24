@@ -344,6 +344,9 @@ fn fireAll(reason: c_int) void {
 /// §12.31.4 cbEndOfCompile — "End of simulation data structure compilation
 /// or build": after the design is elaborated and the startup routines ran.
 pub fn endOfCompile() void {
+    // The build's last step before it is "end": the registered systfs'
+    // compiletf/sizetf/derivtf at each call site (§12.32.1, §12.33.1).
+    @import("systf.zig").buildCalls();
     fireAll(cbEndOfCompile);
 }
 

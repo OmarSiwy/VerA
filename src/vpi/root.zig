@@ -1537,13 +1537,13 @@ inline fn object(comptime who: []const u8, h: vpiHandle) ?*Obj {
 /// instance, and the top module has none — NULL, and NOT an error: "no such
 /// object" is this routine's ordinary answer at the root of the hierarchy.
 pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
-    // §11.6.16 NOTE 1: the call whose compiletf/calltf is running. None ever
-    // is in this process (see systf.zig), so the answer is "no such object",
-    // which is NULL and not an error — the same answer vpiScope gives at the
-    // root.
+    // §11.6.16 NOTE 1: the call whose compiletf/sizetf/derivtf is running
+    // (systf.buildCalls). Outside one the answer is "no such object", which
+    // is NULL and not an error — the same answer vpiScope gives at the root.
     if (obj_type == systf.vpiSysTfCall and ref == null) {
         clearError();
-        return null;
+        const at = systf.active orelse return null;
+        return handleOf(&design.?.objects[at]);
     }
     const d = enter("vpi_handle") orelse return null;
     const o = object("vpi_handle", ref) orelse return null;
