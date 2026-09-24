@@ -5,15 +5,17 @@
 //!
 //! LRM clauses this file's code cites: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1, §4.2.9, §4.2.11, §4.3, §4.7.2, §6.6.1, §6.6.2.
 //!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_constfold.f(self, ...)`; `lower.zig` aliases only what other modules call.
+//! The operator rules are the shared kernel's (`frontend/constfold.zig`); this
+//! file is lowering's `env` over it — identifiers through `consts` — plus the
+//! §4.2.9 signedness questions. Functions take `self: *Lower` and are called
+//! directly, `lower_constfold.f(self, ...)`.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_expr = @import("expr.zig");
 const Ast = @import("frontend").Ast;
-const Const = Lower.Const;
-const wrap32 = Lower.wrap32;
+const constfold = @import("frontend").constfold;
+const Const = constfold.Const;
 
 // ---------------------------------------------------------------------------
 // Class 9 — constant evaluation (LRM §4.2 constant_expression, §6.6.1)
@@ -30,225 +32,35 @@ pub fn constEval(self: *const Lower, e: Ast.ExprId) ?Const {
 /// a runtime branch — `p` is overridable by the model card, so folding it to
 /// its default would silently compile the wrong arm (§3.4 vs §6.6.2).
 pub fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
-    if (e == .none) return null;
-    const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .int_literal => return .{ .int = ex.intValue(e) },
-        .real_literal => return .{ .real = ex.realValue(e) },
-        .str_literal => return .{ .str = self.file.str(ex.strOf(e)) },
-        .pos_inf => return .{ .real = std.math.inf(f64) },
-        .neg_inf => return .{ .real = -std.math.inf(f64) },
-        .ident => {
-            const name = self.file.str(ex.strOf(e));
-            if (self.vars.contains(name)) return null; // a runtime variable
-            // A function-local parameter is NOT overridable by a model card
-            // (§4.7.2 — it never reaches the Model), so `foldExpr(..., false)`'s refusal
-            // to look through a parameter does not apply to a shadowing local.
-            if (!params and self.param_index.contains(name) and !lower_expr.funcParamShadows(self, name)) return null;
-            return self.consts.get(name);
-        },
-        .unary => {
-            const a = foldExpr(self, ex.lhs(e), params) orelse return null;
-            return switch (ex.unOp(e)) {
-                .plus => a,
-                .minus => switch (a) {
-                    .int => |i| .{ .int = -i },
-                    .real => |r| .{ .real = -r },
-                    .str => null,
-                },
-                .logical_not => Const{ .int = @intFromBool(!a.isTrue()) },
-                .bit_not => Const{ .int = ~a.asInt() },
-                .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => foldReduction(self, ex.unOp(e), ex.lhs(e), a),
-            };
-        },
-        .binary => return foldBinary(self, e, params),
-        .ternary => {
-            const c = foldExpr(self, ex.lhs(e), params) orelse return null;
-            return foldExpr(self, if (c.isTrue()) ex.rhs(e) else ex.ternaryElse(e), params);
-        },
-        // §4.3 math in a constant expression — the common subset only.
-        .builtin_call => {
-            const name = self.file.str(ex.strOf(e));
-            const args = ex.args(e);
-            if (args.len == 1) {
-                const a = foldExpr(self, args[0], params) orelse return null;
-                if (std.mem.eql(u8, name, "abs")) return switch (a) {
-                    .int => |i| .{ .int = @intCast(@abs(i)) },
-                    .real => |r| .{ .real = @abs(r) },
-                    .str => null,
-                };
-                const x = a.asReal();
-                const r: f64 = if (std.mem.eql(u8, name, "sqrt"))
-                    @sqrt(x)
-                else if (std.mem.eql(u8, name, "exp"))
-                    @exp(x)
-                else if (std.mem.eql(u8, name, "ln"))
-                    @log(x)
-                else if (std.mem.eql(u8, name, "log"))
-                    @log10(x)
-                else if (std.mem.eql(u8, name, "floor"))
-                    @floor(x)
-                else if (std.mem.eql(u8, name, "ceil"))
-                    @ceil(x)
-                else
-                    return null;
-                return .{ .real = r };
-            }
-            if (args.len == 2) {
-                const a = foldExpr(self, args[0], params) orelse return null;
-                const b = foldExpr(self, args[1], params) orelse return null;
-                const int = a == .int and b == .int;
-                if (std.mem.eql(u8, name, "min"))
-                    return if (int) Const{ .int = @min(a.asInt(), b.asInt()) } else Const{ .real = @min(a.asReal(), b.asReal()) };
-                if (std.mem.eql(u8, name, "max"))
-                    return if (int) Const{ .int = @max(a.asInt(), b.asInt()) } else Const{ .real = @max(a.asReal(), b.asReal()) };
-                if (std.mem.eql(u8, name, "pow"))
-                    return .{ .real = std.math.pow(f64, a.asReal(), b.asReal()) };
-                return null;
-            }
-            return null;
-        },
-        else => return null,
+    return constfold.fold(self.file, e, Env{ .self = self, .params = params });
+}
+
+/// What `constfold.fold` asks of lowering: identifiers through `consts`, the
+/// §4.2.9 mixed-signedness shift comparison it must not fold, and `>>>`'s
+/// operand signedness.
+const Env = struct {
+    self: *const Lower,
+    params: bool,
+
+    pub fn leaf(env: Env, e: Ast.ExprId) ?Const {
+        const self = env.self;
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .ident) return null;
+        const name = self.file.str(ex.strOf(e));
+        if (self.vars.contains(name)) return null; // a runtime variable
+        // A function-local parameter is NOT overridable by a model card
+        // (§4.7.2 — it never reaches the Model), so `foldExpr(..., false)`'s refusal
+        // to look through a parameter does not apply to a shadowing local.
+        if (!env.params and self.param_index.contains(name) and !lower_expr.funcParamShadows(self, name)) return null;
+        return self.consts.get(name);
     }
-}
-
-/// Table 3-3's string operators, folded. "Equality. Checks whether the two
-/// strings are equal. Result is 1 if they are equal and 0 if they are not" and
-/// "Relational operators return 1 if the corresponding condition is true using
-/// the lexicographical ordering of the two strings".
-///
-/// A MIXED pair declines to fold. §2.7 does make a string operand "unsigned
-/// integer constants" for an arithmetic context, but the conversion is
-/// `lowerBinary`'s (`strNum`) and duplicating it here to answer a constant
-/// expression is not worth a second copy of the rule; declining leaves the
-/// runtime path — which is correct — to answer, at the cost of a "not a
-/// constant expression" on a shape nothing in the suite writes.
-pub fn foldStrBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
-    if (a != .str or b != .str) return null;
-    const c = std.mem.order(u8, a.str, b.str);
-    return .{ .int = @intFromBool(switch (op) {
-        .eq => c == .eq,
-        .neq => c != .eq,
-        .lt => c == .lt,
-        .le => c != .gt,
-        .gt => c == .gt,
-        .ge => c != .lt,
-        else => return null,
-    }) };
-}
-
-pub fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
-    const ex = &self.file.exprs;
-    if (mixedShiftComparison(self, e)) return null;
-    const a = foldExpr(self, ex.lhs(e), params) orelse return null;
-    const b = foldExpr(self, ex.rhs(e), params) orelse return null;
-    const op = ex.binOp(e);
-    // Table 3-3, before anything numeric touches a string. `Const.asReal` is 0
-    // for EVERY string, so `"slow" == "fast"` folded as `0 == 0` and came out
-    // TRUE — silently, and only in the folder: `lowerBinary` compares strings
-    // properly at runtime, so the same expression answered differently
-    // depending on whether it was a constant expression. A `for` bound over
-    // `(mode == "fast") ? 3 : 1` ran three times with `mode` at "slow".
-    if (a == .str or b == .str) return foldStrBinary(op, a, b);
-    // §4.2.1 integer arithmetic only when BOTH operands are integer.
-    const int = a == .int and b == .int;
-    const x = a.asReal();
-    const y = b.asReal();
-    // §3.2's 32-bit 2's complement result — see `wrap32`. `%` needs none: a
-    // remainder is never wider than its operands.
-    return switch (op) {
-        .add => if (int) Const{ .int = wrap32(a.asInt() +% b.asInt()) } else Const{ .real = x + y },
-        .sub => if (int) Const{ .int = wrap32(a.asInt() -% b.asInt()) } else Const{ .real = x - y },
-        .mul => if (int) Const{ .int = wrap32(a.asInt() *% b.asInt()) } else Const{ .real = x * y },
-        // A literal can occupy the full i64 carrier before assignment. Its
-        // minInt/-1 quotient needs 65 bits before the current MIR's wrap32.
-        .div => if (int)
-            (if (b.asInt() == 0) null else Const{ .int = @as(i32, @truncate(@divTrunc(@as(i65, a.asInt()), @as(i65, b.asInt())))) })
-        else
-            Const{ .real = x / y },
-        .mod => if (int)
-            (if (b.asInt() == 0) null else Const{ .int = @intCast(@rem(@as(i65, a.asInt()), @as(i65, b.asInt()))) })
-        else
-            Const{ .real = @rem(x, y) },
-        // `Lower.ipow32`; its 'bx corner (0 ** negative) declines to fold.
-        .pow => if (int) (if (Lower.ipow32(a.asInt(), b.asInt())) |r| Const{ .int = r } else null) else Const{ .real = std.math.pow(f64, x, y) },
-        .eq => .{ .int = @intFromBool(if (int) a.int == b.int else x == y) },
-        .neq => .{ .int = @intFromBool(if (int) a.int != b.int else x != y) },
-        .lt => .{ .int = @intFromBool(if (int) a.int < b.int else x < y) },
-        .le => .{ .int = @intFromBool(if (int) a.int <= b.int else x <= y) },
-        .gt => .{ .int = @intFromBool(if (int) a.int > b.int else x > y) },
-        .ge => .{ .int = @intFromBool(if (int) a.int >= b.int else x >= y) },
-        .logical_and => .{ .int = @intFromBool(a.isTrue() and b.isTrue()) },
-        .logical_or => .{ .int = @intFromBool(a.isTrue() or b.isTrue()) },
-        .bit_and => .{ .int = a.asInt() & b.asInt() },
-        .bit_or => .{ .int = a.asInt() | b.asInt() },
-        .bit_xor => .{ .int = a.asInt() ^ b.asInt() },
-        .bit_xnor => .{ .int = ~(a.asInt() ^ b.asInt()) },
-        .shl, .shr => blk: {
-            const sh = b.asInt();
-            if (sh < 0 or sh > 63) break :blk null;
-            // §4.2.11 `<<` zero-fills from the right; §3.2's width is what makes
-            // `1 << 31` negative and `1 << 32` zero rather than 2^31 and 2^32.
-            if (op == .shl) break :blk Const{ .int = wrap32(a.asInt() << @as(u6, @intCast(sh))) };
-            // §4.2.11 `>>` fills the vacated positions with zeroes, over
-            // §3.2.1's 32-bit `integer` — same rule codegen's `shrLogical`
-            // emits, and the fold has to agree with it or a constant and a
-            // computed operand give different answers.
-            if (sh == 0) break :blk a;
-            if (sh > 31) break :blk Const{ .int = 0 };
-            const lo: u32 = @bitCast(@as(i32, @truncate(a.asInt())));
-            break :blk Const{ .int = lo >> @as(u5, @intCast(sh)) };
-        },
-        // §4.2.11 keeps `<<<`/`>>>` out of the analog BLOCK only; a constant
-        // expression outside it is IEEE 1364-2005 §5.1.12's: `<<<` is `<<`,
-        // and `>>>` fills with the sign bit "if the result type is signed",
-        // with zeroes otherwise — so an operand of unknown signedness declines.
-        .ashl, .ashr => blk: {
-            if (!int) break :blk null;
-            const sh = b.asInt();
-            if (sh < 0 or sh > 63) break :blk null;
-            if (op == .ashl) break :blk Const{ .int = wrap32(a.asInt() << @as(u6, @intCast(sh))) };
-            const signed = integerSourceSigned(self, ex.lhs(e), 0) orelse break :blk null;
-            const v: i32 = @truncate(a.asInt());
-            if (signed) break :blk Const{ .int = v >> @as(u5, @intCast(@min(sh, 31))) };
-            if (sh > 31) break :blk Const{ .int = 0 };
-            break :blk Const{ .int = @as(u32, @bitCast(v)) >> @as(u5, @intCast(sh)) };
-        },
-        // §4.2.5 case equality is four-state; `lowerBinary` refuses it (E0323),
-        // and a fold would answer a question the analog subset does not ask.
-        .case_eq, .case_neq => null,
-    };
-}
-
-/// IEEE 1364-2005 §5.1.11: "The unary reduction operators shall perform a
-/// bitwise operation on a single operand to produce a single-bit result", over
-/// the operand's bits — so the answer depends on the operand's WIDTH, which a
-/// `Const` does not carry. It is known for a literal: its size, and §3.2's 32
-/// bits for an unsized one. Any other operand declines rather than guessing a
-/// width. §4.2.10 bars these operators from the analog BLOCK, not from a
-/// parameter declaration.
-// ponytail: literal operands only. A parameter's width is 32 unless A.2.1.1's
-// `[ range ]` sized it, and an expression's is §5.4's sizing rules; carry a
-// width beside `Const` if a model ever reduces either.
-fn foldReduction(self: *const Lower, op: Ast.UnaryOp, operand: Ast.ExprId, a: Const) ?Const {
-    if (a != .int) return null;
-    const ex = &self.file.exprs;
-    if (ex.tag(operand) != .int_literal) return null;
-    const w = ex.intLiteral(operand).width;
-    const width: u7 = if (w == 0) 32 else if (w <= 64) @intCast(w) else return null;
-    const mask: u64 = if (width == 64) std.math.maxInt(u64) else (@as(u64, 1) << @as(u6, @intCast(width))) - 1;
-    const bits: u64 = @as(u64, @bitCast(a.int)) & mask;
-    const r: bool = switch (op) {
-        .reduce_and => bits == mask,
-        .reduce_nand => bits != mask,
-        .reduce_or => bits != 0,
-        .reduce_nor => bits == 0,
-        .reduce_xor => @popCount(bits) % 2 == 1,
-        .reduce_xnor => @popCount(bits) % 2 == 0,
-        .plus, .minus, .logical_not, .bit_not => unreachable, // `foldExpr` folds these itself
-    };
-    return .{ .int = @intFromBool(r) };
-}
+    pub fn refuse(env: Env, e: Ast.ExprId) bool {
+        return mixedShiftComparison(env.self, e);
+    }
+    pub fn signed(env: Env, e: Ast.ExprId) ?bool {
+        return integerSourceSigned(env.self, e, 0);
+    }
+};
 
 /// Only provenance present in the AST/declarations is evidence of signedness.
 /// This is a refusal guard, not general expression context/type propagation.
@@ -356,4 +168,3 @@ pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     const sb = integerSourceSigned(self, b, 0) orelse return false;
     return sa != sb;
 }
-
