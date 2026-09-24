@@ -744,6 +744,24 @@ fn describe(h: vpiHandle) []const u8 {
     return if (h == null) "NULL" else "that handle";
 }
 
+/// Every routine but `vpi_chk_error` starts here: §12.2 "the error status
+/// shall be reset by any VPI routine call", and no routine has an answer
+/// without an open design. Null means the error is recorded; the caller
+/// returns its own documented failure value.
+inline fn enter(comptime who: []const u8) ?*Design {
+    clearError();
+    if (design) |*d| return d;
+    fail("NODESIGN", who ++ ": no design is open", .{});
+    return null;
+}
+
+/// `h` as an object VerA issued, or null with the error recorded.
+inline fn object(comptime who: []const u8, h: vpiHandle) ?*Obj {
+    if (asObj(h)) |o| return o;
+    fail("BADHANDLE", who ++ ": {s} is not a handle to an object", .{describe(h)});
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // §12.19 vpi_handle — one-to-one traversal
 // ---------------------------------------------------------------------------
@@ -757,15 +775,8 @@ fn describe(h: vpiHandle) []const u8 {
 /// instance, and the top module has none — NULL, and NOT an error: "no such
 /// object" is this routine's ordinary answer at the root of the hierarchy.
 export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_handle: no design is open", .{});
-        return null;
-    });
-    const o = asObj(ref) orelse {
-        fail("BADHANDLE", "vpi_handle: {s} is not a handle to an object", .{describe(ref)});
-        return null;
-    };
+    const d = enter("vpi_handle") orelse return null;
+    const o = object("vpi_handle", ref) orelse return null;
     switch (obj_type) {
         vpiScope, vpiModule => {
             const owner = o.owner orelse return null;
@@ -793,21 +804,14 @@ export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
 /// against `vpiFullName` — the property §12.21 says the routine "can be applied
 /// to all objects with".
 export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_handle_by_name: no design is open", .{});
-        return null;
-    });
+    const d = enter("vpi_handle_by_name") orelse return null;
     if (name == null) {
         fail("BADNAME", "vpi_handle_by_name: the name is NULL", .{});
         return null;
     }
     const want = std.mem.span(name);
     if (scope) |s| {
-        const from = asObj(s) orelse {
-            fail("BADHANDLE", "vpi_handle_by_name: {s} is not a handle to an object", .{describe(s)});
-            return null;
-        };
+        const from = object("vpi_handle_by_name", s) orelse return null;
         // §6.7's upward search. `scope` need not be a module: the scope of a
         // non-module object is the one it is declared in, and the scope of a
         // module is itself.
@@ -861,15 +865,8 @@ const name_buf_len = 4096;
 /// holds the folded `[msb:lsb]` each of them needs — and this body becomes a
 /// bounds check against that range.
 export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
-    clearError();
-    if (design == null) {
-        fail("NODESIGN", "vpi_handle_by_index: no design is open", .{});
-        return null;
-    }
-    const o = asObj(obj) orelse {
-        fail("BADHANDLE", "vpi_handle_by_index: {s} is not a handle to an object", .{describe(obj)});
-        return null;
-    };
+    _ = enter("vpi_handle_by_index") orelse return null;
+    const o = object("vpi_handle_by_index", obj) orelse return null;
     fail(
         "NOINDEX",
         "vpi_handle_by_index: a {s} has no indexed object at {d} — bit-level objects are not modelled",
@@ -891,11 +888,7 @@ export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
 /// application that does not check errors sees the documented empty loop either
 /// way; one that does can tell a fact about the design from a limit of VerA's.
 export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_iterate: no design is open", .{});
-        return null;
-    });
+    const d = enter("vpi_iterate") orelse return null;
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
     if (ref == null) {
@@ -905,10 +898,7 @@ export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         }
         return newIter(d, d.top_modules);
     }
-    const o = asObj(ref) orelse {
-        fail("BADHANDLE", "vpi_iterate: {s} is not a handle to an object", .{describe(ref)});
-        return null;
-    };
+    const o = object("vpi_iterate", ref) orelse return null;
     if (o.kind != .module) {
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship", .{@tagName(o.kind)});
         return null;
@@ -955,11 +945,7 @@ fn newIter(d: *Design, items: []const u32) vpiHandle {
 /// the validation above rejects. That is the point of doing it this way: an
 /// application that scans a dead iterator gets an error, not a use-after-free.
 export fn vpi_scan(itr: vpiHandle) vpiHandle {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_scan: no design is open", .{});
-        return null;
-    });
+    const d = enter("vpi_scan") orelse return null;
     const it = asIter(itr) orelse {
         fail("BADHANDLE", "vpi_scan: {s} is not a handle to a live iterator", .{describe(itr)});
         return null;
@@ -989,11 +975,7 @@ fn destroyIter(d: *Design, it: *Iter) void {
 /// a module — is an error and not a zero: §11.6.8 simply gives a net no
 /// direction, and a 0 would be indistinguishable from `vpiNoDirection`.
 export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
-    clearError();
-    if (design == null) {
-        fail("NODESIGN", "vpi_get: no design is open", .{});
-        return vpiUndefined;
-    }
+    _ = enter("vpi_get") orelse return vpiUndefined;
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
@@ -1004,10 +986,7 @@ export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     }
     // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
     // which VerA answers, so a NULL object is an invalid handle like any other.
-    const o = asObj(obj) orelse {
-        fail("BADHANDLE", "vpi_get: {s} is not a handle to an object", .{describe(obj)});
-        return vpiUndefined;
-    };
+    const o = object("vpi_get", obj) orelse return vpiUndefined;
     switch (prop) {
         vpiType => return o.kind.objType(),
         // §11.6.1 — true for the root of the instance tree, the one module
@@ -1101,15 +1080,8 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 /// A failing call returns NULL. §12.12 does not say so in as many words; it is
 /// the only value that is not a string an application would go on to print.
 export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_get_str: no design is open", .{});
-        return null;
-    });
-    const o = asObj(obj) orelse {
-        fail("BADHANDLE", "vpi_get_str: {s} is not a handle to an object", .{describe(obj)});
-        return null;
-    };
+    const d = enter("vpi_get_str") orelse return null;
+    const o = object("vpi_get_str", obj) orelse return null;
     const s: []const u8 = switch (prop) {
         vpiName => o.name,
         vpiFullName => o.full,
@@ -1148,11 +1120,7 @@ var str_buf: [name_buf_len]u8 = undefined;
 /// through it. Two invalid handles are not "the same object": that is FALSE
 /// plus an error, not TRUE.
 export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
-    clearError();
-    if (design == null) {
-        fail("NODESIGN", "vpi_compare_objects: no design is open", .{});
-        return 0;
-    }
+    _ = enter("vpi_compare_objects") orelse return 0;
     const a = issued(obj1) orelse {
         fail("BADHANDLE", "vpi_compare_objects: {s} is not a handle VerA issued", .{describe(obj1)});
         return 0;
@@ -1183,11 +1151,7 @@ fn issued(h: vpiHandle) ?*anyopaque {
 /// design and live as long as it does — because an application is entitled to
 /// call this on one and must not be told it failed.
 export fn vpi_free_object(obj: vpiHandle) c_int {
-    clearError();
-    const d = &(design orelse {
-        fail("NODESIGN", "vpi_free_object: no design is open", .{});
-        return 0;
-    });
+    const d = enter("vpi_free_object") orelse return 0;
     if (asIter(obj)) |it| {
         destroyIter(d, it);
         return 1;
