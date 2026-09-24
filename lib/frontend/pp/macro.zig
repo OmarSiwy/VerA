@@ -78,7 +78,7 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
         return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0139, "`{s}` begins with __VAMS_", .{m.body});
 
     // §10.4: a redefinition silently replaces. Predefined macros keep their flag
-    // so `resetall does not drop them.
+    // so `undef still has no effect on them.
     if (pp.macros.get(name)) |old| m.predefined = old.predefined;
     try pp.macros.put(pp.arena, name, m);
 }

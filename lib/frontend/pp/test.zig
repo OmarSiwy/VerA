@@ -288,8 +288,10 @@ test "§10.5 predefined macros survive undef and resetall" {
         &.{"yes"},
         &.{},
     );
-    // ... but user macros do not (fixture ch10 20_resetall_clears_macro).
-    try expectFail("`define V 2.0\n`resetall\n`V\n", .E0115);
+    // ... and so do user macros: IEEE 1364 §19.3 "The text macro facility is
+    // not affected by the compiler directive `resetall" (fixture ch10
+    // audit_macro_resetall_preserves_user).
+    try expectPreserved("`define V 2.0\n`resetall\n`V\n", &.{"2.0"}, &.{});
     try expectPreserved("`resetall\n`ifdef __VAMS_ENABLE__\nyes\n`endif\n", &.{"yes"}, &.{});
 }
 
