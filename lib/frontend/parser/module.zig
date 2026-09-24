@@ -874,7 +874,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // rejected by the name list ("expected identifier"), which is
             // the wording the fixtures pin.
             if (!self.identLike(self.pos + 1) and self.peekAt(1) != .lbracket) {
-                return parse_specify.unsupportedItem(self);
+                return parse_specify.notAModuleItem(self);
             }
             const disc = try self.internTok(self.pos);
             self.pos += 1;
@@ -919,7 +919,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             if (std.mem.eql(u8, w, "wreal")) return parseWrealDecl(self, b);
             return parse_specify.unsupportedItem(self);
         },
-        else => return parse_specify.unsupportedItem(self), // else: not a module item: E0205
+        else => return parse_specify.notAModuleItem(self), // else: begins no A.1.4 module_item: E0240
     }
 }
 

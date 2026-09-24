@@ -206,6 +206,9 @@ pub const Code = enum(u16) {
     /// reported by elaboration, for the NAMED instance only it can tell from
     /// a module instance.
     E0239,
+    /// A.1.4: text that begins no `module_item` — a syntax error, where E0205
+    /// is a derivable item VerA does not implement.
+    E0240,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1301,10 +1304,13 @@ fn infoOf(c: Code) Info {
             .title = "unsupported module item",
             .lrm = "A.1.4",
             .explain =
-            \\This item is not one of the module_item alternatives the analog
-            \\subset admits: parameter, net/port declarations, branch and
-            \\variable declarations, analog function definitions, and the
-            \\analog block itself.
+            \\A.1.4 derives this module item, and VerA does not implement it in
+            \\this context: an annex B spelling with no production here yet, a
+            \\digital `task` in an analog compilation, a `case` generate with
+            \\no generate region above it, a `wreal` in a Verilog-A source
+            \\(annex C.4).
+            \\
+            \\Text that is not a module item at all is E0240, a syntax error.
             ,
         },
         .E0206 => .{
@@ -1892,6 +1898,23 @@ fn infoOf(c: Code) Info {
             \\
             \\A named `.x(…)` override is not a delay at all: a UDP has no
             \\parameters to override.
+            ,
+        },
+        .E0240 => .{
+            .title = "not a module item",
+            .lrm = "A.1.4",
+            .explain =
+            \\The text here begins none of A.1.4's `module_item` alternatives:
+            \\port, parameter, net, variable, branch and function declarations,
+            \\instances, generate constructs, `analog`/`initial`/`always`
+            \\blocks, continuous assignments, gates, specify blocks. It is a
+            \\syntax error, not a feature this compiler lacks — compare E0205,
+            \\which is a derivable item VerA does not implement.
+            \\
+            \\Common causes: a `nature` or `discipline` declared inside a
+            \\module (both are descriptions of the file, A.1.2), text left over
+            \\from a comment that was closed early, a statement written outside
+            \\the analog block, or a keyword in upper case.
             ,
         },
         .E0234 => .{

@@ -500,10 +500,17 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
     return params.items;
 }
 
-/// One shared diagnostic for everything VerA leaves out at module scope:
-/// gate and UDP instantiations, `task`, `specify`, generate-case …
+/// One shared diagnostic for what VerA leaves out at module scope although
+/// A.1.4 derives it: an annex B spelling with no production here, a digital
+/// `task` in an analog parse, a generate-case with no region above it …
 pub fn unsupportedItem(self: *Parser) Error {
     return self.failAt(self.pos, .E0205, "found {s}", .{self.found(self.pos)});
+}
+
+/// A.1.4: text no `module_item` alternative derives — a syntax error, not a
+/// missing feature, so it is not E0205.
+pub fn notAModuleItem(self: *Parser) Error {
+    return self.failAt(self.pos, .E0240, "found {s}", .{self.found(self.pos)});
 }
 
 /// A.3.1 `gate_instantiation` for A.3.4's computing gate types:

@@ -4,12 +4,13 @@
 // no-nesting rule, and it is what must be diagnosed: a compiler that nested
 // comments would swallow the whole line and accept the module.
 //
-// E0205 (`unsupported module item`) is a generic code -- VerA has no
-// nested-comment-specific diagnostic, because per 2.4 there is no such
-// construct to name. It is still the right pin: it is stable, and it fires
-// exactly where the non-nesting rule leaves the trailing tokens.
+// E0240 (`not a module item`) is the syntax code for text no A.1.4
+// module_item derives -- VerA has no nested-comment-specific diagnostic,
+// because per 2.4 there is no such construct to name. It fires exactly where
+// the non-nesting rule leaves the trailing tokens. (It was E0205 "unsupported
+// module item" until that code was kept for derivable items VerA lacks.)
 //! lrm 2.4
-//! reject E0205
+//! reject E0240
 module ch02_nested_comment_rejected;
     /* outer /* nested */ still_outer */
 endmodule
