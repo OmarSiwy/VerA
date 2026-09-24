@@ -157,11 +157,11 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
 /// reader, the operator call inside the core, and the accepted-step advance —
 /// and each used to re-derive it, folding and allocating the same polynomials.
 pub fn planAll(g: *Gen) Error!void {
-    g.filters = try g.arena.alloc(?FilterPlan, g.units.len);
+    g.filters = try g.arena.alloc(?FilterPlan, g.names.units.len);
     @memset(g.filters, null);
     const saved_tok = g.ctrl_tok;
     defer g.ctrl_tok = saved_tok;
-    for (g.units, 0..) |u, i| {
+    for (g.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.inst == .none) continue;
         const k = u.op;
         if (k != .laplace and k != .zi) continue;

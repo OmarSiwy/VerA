@@ -142,8 +142,8 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         .param_ref => |p| {
             self.uses_model = true;
             switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
-                .real => try self.b("S.con(model.{s})", .{self.p_names[p]}),
-                .int, .str => try self.b("model.{s}", .{self.p_names[p]}),
+                .real => try self.b("S.con(model.{s})", .{self.names.p_names[p]}),
+                .int, .str => try self.b("model.{s}", .{self.names.p_names[p]}),
             }
         },
         .block_param => |u| {
@@ -152,7 +152,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
             // op around it does with the lane is not looked at, so this is
             // the sound superset `deriv_reads` is.
             self.deriv_reads |= gen_dispatch.uBit(u);
-            try self.b("x[@intFromEnum(U.{s})]", .{self.u_names[u]});
+            try self.b("x[@intFromEnum(U.{s})]", .{self.names.u_names[u]});
         },
         .inst_result => |inst| try renderInst(self, inst),
     }

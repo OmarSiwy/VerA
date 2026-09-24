@@ -419,7 +419,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             .comment = unitComment(c, true),
         });
     }
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const inst = opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
@@ -447,7 +447,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // ONLY the arguments that do not fold are queued. A literal or a model
     // parameter still renders over Model and puts nothing in the core, so
     // every device that exists today is byte-identical.
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const inst = opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
@@ -598,7 +598,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // here, after the noise PSDs and before the §9.4 display job, for the
     // same insert-tolerance reason as every neighbour: a model that gains a
     // dynamic period appends a core field and renumbers none.
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .timer) continue;
         const args = opArgs(self, i);
         if (args.len < 2) continue;
@@ -658,7 +658,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     // normative ordering in naming.zig/proof.zig is untouched. It reads
     // `Model` alone, so it was never part of the residual slice and is
     // unaffected by the merge.
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const k = u.op;
         if (k != .laplace and k != .zi) continue;
@@ -666,8 +666,8 @@ pub fn emitUnits(self: *Gen) Error!void {
         const p = cg_filters.planOf(self, i);
         if (p.err != null) continue;
         const lo = self.out.items.len;
-        const nm = try std.fmt.allocPrint(self.arena, "{s}__sec", .{self.unit_names[i]});
-        const at = try cg_filters.emitFilterSections(self, self.unit_names[i], p, k == .zi);
+        const nm = try std.fmt.allocPrint(self.arena, "{s}__sec", .{self.names.unit_names[i]});
+        const at = try cg_filters.emitFilterSections(self, self.names.unit_names[i], p, k == .zi);
         try gen_file.recordUnitFile(self, nm, lo, at);
     }
     for (self.jobs) |job| {
@@ -788,7 +788,7 @@ pub fn emitCommon(self: *Gen) Error!void {
 
 /// The operator `call` unit `unit` was enumerated from — `naming` records it.
 pub fn opInstOf(self: *const Gen, unit: u32) ?Mir.Inst {
-    const inst = self.units[unit].inst;
+    const inst = self.names.units[unit].inst;
     return if (inst == .none) null else inst;
 }
 
@@ -796,7 +796,7 @@ pub fn opInstOf(self: *const Gen, unit: u32) ?Mir.Inst {
 // ponytail: a scan over the unit list (tens of entries), once per rendered
 // operator; an nv-sized reverse map is what this replaced.
 pub fn unitOfInst(self: *const Gen, inst: Mir.Inst) u32 {
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.inst == inst) return @intCast(i);
     }
     return none_u32;
