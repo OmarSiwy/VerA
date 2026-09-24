@@ -1314,6 +1314,12 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 else if (d.pull) |b|
                     try filled(scratch, d.current.width, false, b)
                 else blk: {
+                    if (d.slice) |sl| {
+                        const whole = try eval(self, scratch, d.value, sl.total);
+                        const part = try filled(scratch, d.current.width, false, .z);
+                        for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
+                        break :blk part;
+                    }
                     break :blk try evalFor(self, scratch, d.value, self.slotType(self.nets[d.net].slot));
                 };
                 // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,

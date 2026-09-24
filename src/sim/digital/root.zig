@@ -38,6 +38,7 @@ const Bridge = @import("net.zig").Bridge;
 const Net = @import("net.zig").Net;
 const Gate = @import("net.zig").Gate;
 const Udp = @import("net.zig").Udp;
+const Slice = @import("net.zig").Slice;
 const Driver = @import("net.zig").Driver;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
@@ -520,6 +521,8 @@ const Wire = struct {
     udp: ?*Udp = null,
     /// Set instead of `value` for IEEE 1364 §19.10's pull — see `Driver.pull`.
     pull: ?Int.Bit = null,
+    /// The driven net is bits [lo, lo+width) of `value` read `total` wide.
+    slice: ?Slice = null,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -538,7 +541,7 @@ const PortBind = union(enum) {
     /// The parent net index this port IS.
     collapse: u32,
     /// An input port fed by a parent expression that is not one whole net.
-    receive: struct { expr: Ast.ExprId, scope: u32, tok: u32 },
+    receive: struct { expr: Ast.ExprId, scope: u32, tok: u32, slice: ?Slice = null },
     /// An output port whose parent side is a concatenation: the operand nets,
     /// leftmost first (§6.5.7.1 joins them highest-order first).
     send: struct { operands: []const u32, tok: u32 },
@@ -728,7 +731,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 });
             },
             .collapse => {},
-            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .tok = c.tok }),
+            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .slice = c.slice, .tok = c.tok }),
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
@@ -792,10 +795,29 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
         for (inst.ports, 0..) |conn, i| {
-            const at = if (conn.name == .none) i else blk: {
-                for (child.ports, 0..) |p, k| if (p.name == conn.name) break :blk k;
-                return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
-            };
+            // IEEE 1364-2005 §12.3.2/§12.3.6: a header port `.name(expr)` is
+            // connected by its EXTERNAL name, and when its expression is a
+            // concatenation of internal ports every one of them is a slice
+            // of the one connection — leftmost the most significant.
+            if (conn.name != .none and portByName(child, conn.name) == null) {
+                const first = for (child.ports, 0..) |p, k| {
+                    if (p.external_name == conn.name) break k;
+                } else return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
+                var total: u32 = 0;
+                var last = first;
+                while (last < child.ports.len and child.ports[last].external_name == conn.name) : (last += 1)
+                    total += try portWidth(r, child.ports[last]);
+                var lo = total;
+                for (child.ports[first..last], first..) |p, k| {
+                    if (p.direction != .input) return r.fail(conn.main_tok, "only an input port may be a concatenation of internal ports", .{});
+                    const w = try portWidth(r, p);
+                    lo -= w;
+                    r.scope = scope;
+                    binds_out[k] = if (conn.expr == .none) .open else .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = total } } };
+                }
+                continue;
+            }
+            const at = if (conn.name == .none) i else portByName(child, conn.name).?;
             if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
             r.scope = scope;
             // A continuous port is the analog solver's on both sides (§7.2.1),
@@ -1010,6 +1032,22 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
     const udp = try r.arena.create(Udp);
     udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
     try e.wires.append(r.arena, .{ .net = net, .scope = scope, .udp = udp, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
+}
+
+/// A port by the name a named connection may use: its own, when the header
+/// gave it no external name.
+fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
+    for (m.ports, 0..) |p, k| if (p.name == name and p.external_name == .none) return k;
+    for (m.ports, 0..) |p, k| if (p.external_name == name and (k + 1 == m.ports.len or m.ports[k + 1].external_name != name) and (k == 0 or m.ports[k - 1].external_name != name)) return k;
+    return null;
+}
+
+/// A port's declared width, evaluated in the scope being elaborated.
+/// ponytail: a child port whose range names the child's parameters is sized
+/// before the child exists; the literal ranges every fixture writes are fine.
+fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
+    if (p.kind == .wreal) return 64;
+    return if (p.range orelse p.type_range) |range| r.declaredWidth(range, p.main_tok) else 1;
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
@@ -1238,6 +1276,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .gate = a.gate,
             .udp = a.udp,
             .pull = a.pull,
+            .slice = a.slice,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
             .current = try filled(arena, r.nets[a.net].resolved.width, false, if (a.udp) |u| (if (u.sequential) u.state else .z) else .z),
@@ -1532,6 +1571,17 @@ test "§12.2 parameters fold into bounds, delays and expressions" {
         \\end
         \\endmodule
     , "1111 7 -4 0001 z 1\n1\n");
+}
+
+// §12.3.2/§12.3.6: a named header port whose expression concatenates internal
+// ports takes one connection, split leftmost-most-significant; a header port
+// renamed `.ext(int)` is connected by the external name.
+test "§12.3.6 an external port name, alone or over a concatenation" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(.in({a, b}), .o(y)); input [1:0] a; input b; output y; assign y = a[1] ^ b; endmodule
+        \\module m; wire q; c u(.in(3'b101), .o(q)); initial #1 $display("%b %b%b", q, u.a, u.b); endmodule
+    , "0 101\n");
 }
 
 // §12.3.11: each side of a port reads the connected bits with ITS OWN

@@ -123,6 +123,10 @@ pub const Net = struct {
 /// — `bit` or high impedance — rather than `bit` itself.
 pub const GateOut = struct { bit: Int.Bit, or_z: bool = false };
 
+/// A window of a wider value: bits [lo, lo + the receiver's width) of it read
+/// `total` bits wide.
+pub const Slice = struct { lo: u32, total: u32 };
+
 /// One A.3.1 gate instance, reduced to what §7.8.5 needs to compute its output:
 /// the type and the input terminals in source order.
 pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId };
@@ -222,6 +226,9 @@ pub const Driver = struct {
     gate: ?Gate = null,
     /// Set instead of `value` for an IEEE 1364-2005 §8 UDP instance.
     udp: ?*Udp = null,
+    /// `value` is read `total` bits wide and this driver asserts the bits
+    /// from `lo` up — one internal port of a §12.3.6 concatenated port.
+    slice: ?Slice = null,
     /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
     /// directive pulls an unconnected input port to a logic level THROUGH A
     /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
