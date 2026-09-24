@@ -652,7 +652,9 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
     if (self.peek() == .lparen and parse_generate.strengthWord(self, self.pos + 1) != null) try parse_generate.parseDriveStrength(self, &s0, &s1);
     // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
     // `parseDelay3` already returns for a two-value list.
+    const delay_tok = self.pos;
     const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
+    if (delay.off != .none) try self.report(delay_tok, .E0239, "`{s} #(…)`: 3 values", .{self.file.str(module)});
     while (true) {
         const tok = self.pos;
         var name: Ast.StrId = .none;
