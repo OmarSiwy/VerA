@@ -58,7 +58,7 @@ pub fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
                 },
                 .logical_not => Const{ .int = @intFromBool(!a.isTrue()) },
                 .bit_not => Const{ .int = ~a.asInt() },
-                else => null,
+                .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => foldReduction(self, ex.unOp(e), ex.lhs(e), a),
             };
         },
         .binary => return foldBinary(self, e, params),
@@ -199,8 +199,55 @@ pub fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
             const lo: u32 = @bitCast(@as(i32, @truncate(a.asInt())));
             break :blk Const{ .int = lo >> @as(u5, @intCast(sh)) };
         },
-        else => null,
+        // §4.2.11 keeps `<<<`/`>>>` out of the analog BLOCK only; a constant
+        // expression outside it is IEEE 1364-2005 §5.1.12's: `<<<` is `<<`,
+        // and `>>>` fills with the sign bit "if the result type is signed",
+        // with zeroes otherwise — so an operand of unknown signedness declines.
+        .ashl, .ashr => blk: {
+            if (!int) break :blk null;
+            const sh = b.asInt();
+            if (sh < 0 or sh > 63) break :blk null;
+            if (op == .ashl) break :blk Const{ .int = wrap32(a.asInt() << @as(u6, @intCast(sh))) };
+            const signed = integerSourceSigned(self, ex.lhs(e), 0) orelse break :blk null;
+            const v: i32 = @truncate(a.asInt());
+            if (signed) break :blk Const{ .int = v >> @as(u5, @intCast(@min(sh, 31))) };
+            if (sh > 31) break :blk Const{ .int = 0 };
+            break :blk Const{ .int = @as(u32, @bitCast(v)) >> @as(u5, @intCast(sh)) };
+        },
+        // §4.2.5 case equality is four-state; `lowerBinary` refuses it (E0323),
+        // and a fold would answer a question the analog subset does not ask.
+        .case_eq, .case_neq => null,
     };
+}
+
+/// IEEE 1364-2005 §5.1.11: "The unary reduction operators shall perform a
+/// bitwise operation on a single operand to produce a single-bit result", over
+/// the operand's bits — so the answer depends on the operand's WIDTH, which a
+/// `Const` does not carry. It is known for a literal: its size, and §3.2's 32
+/// bits for an unsized one. Any other operand declines rather than guessing a
+/// width. §4.2.10 bars these operators from the analog BLOCK, not from a
+/// parameter declaration.
+// ponytail: literal operands only. A parameter's width is 32 unless A.2.1.1's
+// `[ range ]` sized it, and an expression's is §5.4's sizing rules; carry a
+// width beside `Const` if a model ever reduces either.
+fn foldReduction(self: *const Lower, op: Ast.UnaryOp, operand: Ast.ExprId, a: Const) ?Const {
+    if (a != .int) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(operand) != .int_literal) return null;
+    const w = ex.intLiteral(operand).width;
+    const width: u7 = if (w == 0) 32 else if (w <= 64) @intCast(w) else return null;
+    const mask: u64 = if (width == 64) std.math.maxInt(u64) else (@as(u64, 1) << @as(u6, @intCast(width))) - 1;
+    const bits: u64 = @as(u64, @bitCast(a.int)) & mask;
+    const r: bool = switch (op) {
+        .reduce_and => bits == mask,
+        .reduce_nand => bits != mask,
+        .reduce_or => bits != 0,
+        .reduce_nor => bits == 0,
+        .reduce_xor => @popCount(bits) % 2 == 1,
+        .reduce_xnor => @popCount(bits) % 2 == 0,
+        .plus, .minus, .logical_not, .bit_not => unreachable, // `foldExpr` folds these itself
+    };
+    return .{ .int = @intFromBool(r) };
 }
 
 /// Only provenance present in the AST/declarations is evidence of signedness.
