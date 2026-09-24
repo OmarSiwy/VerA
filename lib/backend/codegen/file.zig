@@ -111,7 +111,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (files) try depublish(self.gpa, &self.out, file_txt);
     if (tbl) try depublish(self.gpa, &self.out, table_txt);
     if (rng) try depublish(self.gpa, &self.out, rng_txt);
-    if (self.limits.len != 0) try depublish(self.gpa, &self.out, limit_txt);
+    if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
     try self.out.appendSlice(self.gpa, "\n");
     // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
     // they need `R` for the same reason `updateState` does. It stays out of
@@ -152,7 +152,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
-    try gen_dispatch.emitDerivReads(self, if (self.limits.len != 0) cg_limit.liveSets(self).writes else 0);
+    try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) cg_limit.liveSets(self).writes else 0);
     // Lane-parallel permission (see `lane_pinned`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.

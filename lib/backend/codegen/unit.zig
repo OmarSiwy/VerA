@@ -430,7 +430,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // Queued after the held variables and before the §9.4 display job for
     // the same insert-tolerance reason: a model that gains a `$limit`
     // appends core fields, it renumbers none.
-    for (self.limits) |lc| {
+    for (self.limits.calls) |lc| {
         for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
             if (v == .f_zero) continue;
             try jobs.append(self.arena, .{

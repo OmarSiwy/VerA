@@ -45,293 +45,13 @@ const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
+/// The pure half: which sites are honoured, and the questions both halves ask.
+const plan_limit = @import("codegen/plan/limit.zig");
+pub const Alg = plan_limit.Alg;
+pub const LimitCall = plan_limit.LimitCall;
+const Ladder = plan_limit.Ladder;
 
 const none_u32 = std.math.maxInt(u32);
-
-/// The three SPICE3 limiters the corpus names, plus one of our own. NOT an
-/// LRM taxonomy: §4.5.15 leaves the identifier implementation-defined; the
-/// first three are the spellings `devsup.c` established, which is what every
-/// `.va` in the corpus writes. An identifier that is not one of these is
-/// declined, which §4.5.15 permits ("the simulator may choose to ignore the
-/// limiting request").
-///
-/// `fetlimds` is OURS, naming a construct devsup.c has no word for: ngspice's
-/// MOS loads (mos1load.c:351-373, same in mos2/3/6/9, vdmos, b3ld) do not
-/// fetlim both gate legs — they fetlim the junction that CONTROLS the channel
-/// in the present mode, `vgs` when the OLD vds >= 0 and `vgd` when it is
-/// negative, run limvds, and derive the other leg. A static both-legs ladder
-/// clamps the non-controlling frame at a vds = 0 crossing, and Newton
-/// two-cycles against the mode-swapped Jacobian (ngspice/mosamp wedged at the
-/// seam). Spell BOTH gate legs `fetlimds` next to a `limvds` on the channel
-/// and the three emit as one mode ladder (`emitLadder`); jfet/hfet keep
-/// `fetlim`, because their ngspice loads really do clamp both legs.
-pub const Alg = enum {
-    pnjlim,
-    fetlim,
-    limvds,
-    fetlimds,
-    /// ngspice's per-model absolute step clamp (`B4SOIlimit`, hisim's
-    /// `limit_dx`): |vnew − vold| ≤ arg. Unlike `pnjlim` it carries NO
-    /// cold-start seed — B4SOI's MODEINITJCT starts every junction at
-    /// icVxS (0), and the vcrit seed is exactly what parked a floating
-    /// SOI body in the high-current basin.
-    steplim,
-
-    /// Numeric arguments that follow the algorithm name.
-    fn arity(a: Alg) usize {
-        return switch (a) {
-            .pnjlim => 2,
-            .fetlim, .fetlimds => 1,
-            .limvds => 0,
-            .steplim => 1,
-        };
-    }
-};
-
-const max_args = 2;
-
-/// One resolved `$limit` call site.
-pub const LimitCall = struct {
-    alg: Alg,
-    /// Unknowns the probe spans, `V(hi, lo)`. `none_u32` is §1.3.1.1 global
-    /// ground, which is not an unknown and reads as a hard 0.
-    hi: u32,
-    lo: u32,
-    /// The algorithm's numeric arguments as MIR values. `collect` queues these
-    /// as core jobs, so by emission time each has an `lo_idx` field.
-    argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
-    /// Optional trailing argument: the FRAME SIGN. All three devsup.c
-    /// limiters assume forward = positive; a PNP/PMOS model whose junction is
-    /// forward at NEGATIVE probe voltage passes its `type` parameter here and
-    /// the clamp runs on `sign·v` — exactly ngspice's habit of limiting
-    /// `type*vbe` in the load routine. `.f_zero` = unsigned (+1).
-    ///
-    /// This exists because the alternative spellings do not survive lowering:
-    /// `$limit` under `if (type > 0)` is declined (no CFG in the clamp list),
-    /// and `$limit(type*V(a,b), …)` has no node pair to correct.
-    sign: Mir.Value = .f_zero,
-};
-
-// ----------------------------------------------------------------- collect
-
-/// Resolve every `$limit` call. Runs in `prepare` BEFORE `buildJobs`, which
-/// queues `argv` into the shared core.
-pub fn collect(g: *Gen) Error!void {
-    var out: std.ArrayList(LimitCall) = .empty;
-    var declined: std.ArrayList([]const u8) = .empty;
-    // A block that dominates the exit is on every path to it, so a call there
-    // runs unconditionally. `limit` has no CFG of its own — it is a flat list
-    // of clamps — so a call under an `if` is one this cannot honour: its guard
-    // is bias-dependent and would have to be re-evaluated at the UNLIMITED x.
-    //
-    // The exit is the block with NO successors, not `rpo[last]`: with a loop
-    // upstream, DFS may visit the loop's after-block before its body, and
-    // reverse postorder then ends on the BODY — dominance against that
-    // declined every `$limit` in BSIMSOI (its temp section runs a `for` over
-    // fingers and a TOXP `while` before the probe block).
-    const exit = blk: {
-        for (g.an.rpo) |bi| {
-            if (g.an.succs[bi].len == 0) break :blk bi;
-        }
-        break :blk g.an.rpo[g.an.rpo.len - 1];
-    };
-    for (g.an.rpo) |bi| {
-        for (g.an.blockInstsFlat(bi)) |inst| {
-            if (g.mir.instOp(inst) != .call) continue;
-            const d = g.mir.instData(inst).call;
-            if (d.callee != .@"$limit") continue;
-
-            const alg = algOf(g, d.args) orelse continue; // §4.5.15 declining is conformant
-            const pair = probePair(g, d.args) orelse {
-                try decline(g, &declined, d.args, "its first argument is not a §4.4 potential probe of one or two nets");
-                continue;
-            };
-            if (!g.an.dominates(bi, exit)) {
-                try decline(g, &declined, d.args, "it is under an `if`, and the clamp list carries no control flow");
-                continue;
-            }
-            if (!writable(g, pair[0]) and !writable(g, pair[1])) {
-                try decline(g, &declined, d.args, "both nets are §6.5 ports, which the host masks — there is nothing private to correct");
-                continue;
-            }
-            const n = alg.arity();
-            if (d.args.len < 2 + n) {
-                try decline(g, &declined, d.args, "too few arguments for the algorithm named");
-                continue;
-            }
-            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1] };
-            var bad = false;
-            for (0..n) |k| {
-                const v = g.an.rv(d.args[2 + k]);
-                // The clamp is arithmetic on volts. An integer argument would
-                // land in the core as an `i64` field, and reading `.v` off it
-                // would not compile — refuse it here, where the reason is
-                // sayable, rather than emit code that does not build.
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
-                lc.argv[k] = v;
-            }
-            // One argument past the algorithm's arity is the frame sign.
-            // Integer is fine here — the emitted uses are comparisons
-            // (`< 0.0`), never arithmetic, and `parameter integer type` is
-            // the standard polarity spelling (bjt.va).
-            if (d.args.len > 2 + n) {
-                const v = g.an.rv(d.args[2 + n]);
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] == .str) bad = true;
-                lc.sign = v;
-            }
-            if (bad) {
-                try decline(g, &declined, d.args, "an algorithm argument is not real-valued");
-                continue;
-            }
-            try out.append(g.arena, lc);
-        }
-    }
-    g.limits = out.items;
-
-    // A `fetlimds` site is only honoured as a member of a COMPLETE mode
-    // ladder — dangling, it would clamp one leg with no frame authority,
-    // which is the static-order bug the algorithm exists to fix. The mask is
-    // computed over the unfiltered list first: validity is symmetric (both
-    // legs check both `lo`s, a >2-way gate share fails every member), so
-    // dropping the invalid sites never invalidates a surviving one.
-    var any_dangling = false;
-    for (g.limits, 0..) |lc, i| {
-        if (lc.alg == .fetlimds and ladderOf(g, i) == null) any_dangling = true;
-    }
-    if (any_dangling) {
-        const keep = try g.arena.alloc(bool, g.limits.len);
-        for (g.limits, 0..) |lc, i| {
-            keep[i] = lc.alg != .fetlimds or ladderOf(g, i) != null;
-            if (!keep[i]) try declineLc(g, &declined, lc, "no complete mode ladder — it needs a second fetlimds site on the same gate node and a limvds site across the two channel nodes, all channel sides internal");
-        }
-        var w_: usize = 0;
-        for (out.items, 0..) |lc, i| {
-            if (!keep[i]) continue;
-            out.items[w_] = lc;
-            w_ += 1;
-        }
-        g.limits = out.items[0..w_];
-    }
-    g.limits_declined = declined.items;
-}
-
-fn declineLc(g: *Gen, list: *std.ArrayList([]const u8), lc: LimitCall, why: []const u8) Error!void {
-    try list.append(g.arena, try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(g, lc.hi), uName(g, lc.lo), lc.alg, why }));
-}
-
-/// A resolved mode ladder: indices into `g.limits` of the vgs leg, the vgd
-/// leg, and the `limvds` site whose probe orients them — `limvds` reads
-/// V(di,si), so the leg landing on its `lo` is the source leg (vgs) and the
-/// one landing on its `hi` is the drain leg (vgd).
-const Ladder = struct { gs: u32, gd: u32, ds: u32 };
-
-/// The ladder `g.limits[i]` (a `fetlimds` site, either leg) belongs to:
-/// exactly two `fetlimds` sites share its first-named node (the gate), one
-/// `limvds` site spans their second-named nodes (the channel), and both
-/// channel nodes are the device's own to correct. Null otherwise. Derived on
-/// demand — collect and emit ask the same question of the same list, so
-/// storing the answer could only let the two fall out of agreement.
-fn ladderOf(g: *const Gen, i: usize) ?Ladder {
-    const me = g.limits[i];
-    var partner: usize = undefined;
-    var gate_legs: usize = 0;
-    for (g.limits, 0..) |lc, j| {
-        if (lc.alg != .fetlimds or lc.hi != me.hi) continue;
-        gate_legs += 1;
-        if (j != i) partner = j;
-    }
-    if (gate_legs != 2) return null;
-    const other = g.limits[partner];
-    if (!writable(g, me.lo) or !writable(g, other.lo)) return null;
-    for (g.limits, 0..) |lc, k| {
-        if (lc.alg != .limvds) continue;
-        if (lc.hi == me.lo and lc.lo == other.lo)
-            return .{ .gs = @intCast(partner), .gd = @intCast(i), .ds = @intCast(k) };
-        if (lc.hi == other.lo and lc.lo == me.lo)
-            return .{ .gs = @intCast(i), .gd = @intCast(partner), .ds = @intCast(k) };
-    }
-    return null;
-}
-
-/// Is this `limvds` site the channel rung of some ladder? Then `emitLadder`
-/// owns it and the flat list must not clamp it a second time.
-fn limvdsClaimed(g: *const Gen, k: usize) bool {
-    for (g.limits, 0..) |lc, i| {
-        if (lc.alg != .fetlimds) continue;
-        const lad = ladderOf(g, i) orelse continue;
-        if (lad.ds == k) return true;
-    }
-    return false;
-}
-
-fn decline(g: *Gen, list: *std.ArrayList([]const u8), args: []const Mir.Value, why: []const u8) Error!void {
-    try list.append(g.arena, try std.fmt.allocPrint(g.arena, "{s}: {s}", .{ spell(g, args), why }));
-}
-
-/// `$limit(V(a,b), "alg")` as it reads in the source, for the declined list.
-fn spell(g: *Gen, args: []const Mir.Value) []const u8 {
-    const alg: []const u8 = if (args.len >= 2) switch (g.mir.valueDef(g.an.rv(args[1]))) {
-        .str_const => |s| s,
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => "?",
-    } else "?";
-    const pair = probePair(g, args);
-    const hi: []const u8 = if (pair) |p| uName(g, p[0]) else "?";
-    const lo: []const u8 = if (pair) |p| uName(g, p[1]) else "?";
-    return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ hi, lo, alg }) catch "$limit(…)";
-}
-
-fn uName(g: *const Gen, u: u32) []const u8 {
-    return if (u == none_u32) "0" else g.names.u_names[u];
-}
-
-/// §4.4 `V(a,b)` lowers to `fsub` of two probes and `V(a)` to a bare probe
-/// (mir.zig:420-422). Anything else — a flow probe, an expression — has no
-/// node pair to correct.
-fn probePair(g: *const Gen, args: []const Mir.Value) ?[2]u32 {
-    if (args.len == 0) return null;
-    const v = g.an.rv(args[0]);
-    const pair: [2]u32 = switch (g.mir.valueDef(v)) {
-        .block_param => |u| .{ u, none_u32 },
-        .inst_result => |inst| blk: {
-            if (g.mir.instOp(inst) != .fsub) return null;
-            const d = g.mir.instData(inst).binary;
-            const a = g.mir.valueDef(g.an.rv(d.lhs));
-            const b = g.mir.valueDef(g.an.rv(d.rhs));
-            if (a != .block_param or b != .block_param) return null;
-            break :blk .{ a.block_param, b.block_param };
-        },
-        .undef, .float_const, .int_const, .str_const, .param_ref => return null,
-    };
-    // §5.4.2 a branch-flow unknown is an ampere. These limiters are voltage
-    // clamps; writing one back as if it were a potential is nonsense.
-    for (pair) |u| {
-        if (u != none_u32 and plan_topo.isFlowUnknown(g.input(), u)) return null;
-    }
-    return pair;
-}
-
-fn algOf(g: *const Gen, args: []const Mir.Value) ?Alg {
-    // §4.5.15 bare `$limit(V(a,b))` asks for the simulator's own choice of
-    // algorithm. Ours is none: inventing a clamp the model did not name would
-    // change its answers with no way to say so in the source.
-    if (args.len < 2) return null;
-    const s = switch (g.mir.valueDef(g.an.rv(args[1]))) {
-        .str_const => |s| s,
-        // §9.17.3 also allows a user analog function here. That is a call, not
-        // a string, and it needs the whole body — handled in lowering
-        // (`Lower.lowerLimitUser`), so it never reaches the clamp list.
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => return null,
-    };
-    return std.meta.stringToEnum(Alg, s);
-}
-
-/// Can the device correct this unknown? Only its own internal nets: the host
-/// masks writes to §6.5 ports, because a limiter moving a driven or shared
-/// node fights the sources and the other devices on it (`contract.zig`'s
-/// note on `limit`).
-fn writable(g: *const Gen, u: u32) bool {
-    return u != none_u32 and u >= g.lowered.num_ports;
-}
 
 // -------------------------------------------------------- the live sets
 
@@ -359,7 +79,7 @@ fn ubit(u: u32) u64 {
 
 fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
     lv.reads |= ubit(lc.hi) | ubit(lc.lo);
-    lv.writes |= ubit(if (writable(g, lc.lo)) lc.lo else lc.hi);
+    lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
 }
 
 pub fn liveSets(g: *const Gen) Live {
@@ -367,27 +87,27 @@ pub fn liveSets(g: *const Gen) Live {
     // A core re-entry is seeded from EVERY entry of `cur` (`emit`'s `xr` loop),
     // and n_u > 64 has no room in the mask — both answer "all of them".
     if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
-    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+    for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
-            const lad = ladderOf(g, i).?;
+            const lad = g.limits.ladderOf(i).?;
             if (i != @min(lad.gs, lad.gd)) continue;
             // The two mode arms unioned: the shared gate is read, and both
             // channel nodes are read AND written (which one takes the fetlim
             // correction and which the limvds one swaps with the mode).
-            const gs = g.limits[lad.gs];
-            const gd = g.limits[lad.gd];
+            const gs = g.limits.calls[lad.gs];
+            const gd = g.limits.calls[lad.gd];
             lv.reads |= ubit(gs.hi) | ubit(gs.lo) | ubit(gd.lo);
             lv.writes |= ubit(gs.lo) | ubit(gd.lo);
         },
-        .limvds => if (!limvdsClaimed(g, i)) unionSite(&lv, g, lc),
+        .limvds => if (!g.limits.limvdsClaimed(i)) unionSite(&lv, g, lc),
         else => unionSite(&lv, g, lc),
     };
     // `seed` corrects the same node `emitClamp` does, but OR it in rather than
     // rely on that: the host initialises `lim_x` through `seed` and reads it
     // back through `limit`, so a bit in one and not the other is a stale slot.
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
-        lv.writes |= ubit(if (writable(g, lc.lo)) lc.lo else lc.hi);
+        lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
     }
     lv.reads |= lv.writes;
     return lv;
@@ -614,7 +334,7 @@ pub fn planPrep(g: *Gen) Error!void {
     g.lp_idx = try g.arena.alloc(u32, g.an.nv);
     @memset(g.lp_idx, none_u32);
     if (g.lowered.table_samples.items.len != 0) return;
-    if (g.limits.len == 0) return;
+    if (g.limits.calls.len == 0) return;
 
     var sc: Sc = .{
         .g = g,
@@ -626,7 +346,7 @@ pub fn planPrep(g: *Gen) Error!void {
     @memset(sc.blk, .unknown);
 
     var vals: std.ArrayList(Mir.Value) = .empty;
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v0| {
             if (v0 == .f_zero) continue;
             const v = g.an.rv(v0);
@@ -751,7 +471,7 @@ fn emitPrepTest(g: *Gen) Error!void {
 /// case that matters — `planPrep` proved the argument solve-constant and
 /// `precompute` already latched it into `Instance.lp__<k>`.
 pub fn usesCore(g: *const Gen) bool {
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         if (needsCore(g, lc.sign)) return true;
         for (lc.argv[0..lc.alg.arity()]) |v| {
             if (needsCore(g, v)) return true;
@@ -763,7 +483,7 @@ pub fn usesCore(g: *const Gen) bool {
 /// `seed`'s narrower question: it reads only each pnjlim site's `vcrit` and
 /// that site's sign.
 fn seedUsesCore(g: *const Gen) bool {
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         if (needsCore(g, lc.argv[1]) or needsCore(g, lc.sign)) return true;
     }
@@ -785,13 +505,13 @@ pub fn needsR(g: *const Gen) bool {
 }
 
 pub fn emit(g: *Gen) Error!void {
-    if (g.limits_declined.len != 0) {
-        try g.w("// §4.5.15 `$limit` DECLINED at {d} call site(s) — the probe is\n", .{g.limits_declined.len});
+    if (g.limits.declined.len != 0) {
+        try g.w("// §4.5.15 `$limit` DECLINED at {d} call site(s) — the probe is\n", .{g.limits.declined.len});
         try g.w("// returned unchanged there, which §4.5.15 permits:\n", .{});
-        for (g.limits_declined) |d| try g.w("//   - {s}\n", .{d});
+        for (g.limits.declined) |d| try g.w("//   - {s}\n", .{d});
         try g.w("\n", .{});
     }
-    if (g.limits.len == 0) return;
+    if (g.limits.calls.len == 0) return;
 
     const needs_core = usesCore(g);
     // A prep field is an `inst.lp__k` read, so `inst` stays named even when the
@@ -827,17 +547,17 @@ pub fn emit(g: *Gen) Error!void {
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
     var any_pnjlim = false;
-    for (g.limits) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .steplim;
+    for (g.limits.calls) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .steplim;
     if (any_pnjlim) try g.w("    var ok = true;\n", .{});
     try emitSigns(g);
-    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+    for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         // Collect kept only complete ladders; the earlier leg speaks for all
         // three sites, the partner and the claimed limvds stay silent.
         .fetlimds => {
-            const lad = ladderOf(g, i).?;
+            const lad = g.limits.ladderOf(i).?;
             if (i == @min(lad.gs, lad.gd)) try emitLadder(g, lad);
         },
-        .limvds => if (!limvdsClaimed(g, i)) try emitClamp(g, lc),
+        .limvds => if (!g.limits.limvdsClaimed(i)) try emitClamp(g, lc),
         else => try emitClamp(g, lc),
     };
     try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
@@ -871,15 +591,15 @@ fn emitSigns(g: *Gen) Error!void {
     // clamp of its own but IS the ladder's channel rung, so its sign is still
     // referenced; a const with no reference is a Zig compile error, and one
     // referenced but not emitted is worse.
-    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+    for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
-            const lad = ladderOf(g, i).?;
+            const lad = g.limits.ladderOf(i).?;
             if (i != @min(lad.gs, lad.gd)) continue;
-            try oneSign(g, &seen, g.limits[lad.gs].sign);
-            try oneSign(g, &seen, g.limits[lad.gd].sign);
-            try oneSign(g, &seen, g.limits[lad.ds].sign);
+            try oneSign(g, &seen, g.limits.calls[lad.gs].sign);
+            try oneSign(g, &seen, g.limits.calls[lad.gd].sign);
+            try oneSign(g, &seen, g.limits.calls[lad.ds].sign);
         },
-        .limvds => if (!limvdsClaimed(g, i)) try oneSign(g, &seen, lc.sign),
+        .limvds => if (!g.limits.limvdsClaimed(i)) try oneSign(g, &seen, lc.sign),
         else => try oneSign(g, &seen, lc.sign),
     };
 }
@@ -901,7 +621,7 @@ fn signKey(g: *const Gen, v: Mir.Value) u32 {
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     const signed = lc.sign != .f_zero;
     try g.w("    {{ // $limit(V({s},{s}), \"{t}\"){s}\n", .{
-        uName(g, lc.hi),                                          uName(g, lc.lo), lc.alg,
+        plan_limit.uName(g.names.u_names, lc.hi),                                          plan_limit.uName(g.names.u_names, lc.lo), lc.alg,
         if (signed) " in the frame of its sign argument" else "",
     });
     try g.w("        const vn = ", .{});
@@ -953,7 +673,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     // whole correction to the second keeps every probe exactly its limited
     // value: model authors put the shared side first (V(bi,ei), V(b,si)),
     // which is also ngspice's frame (vbe state hangs off the emitter side).
-    const w_lo = writable(g, lc.lo);
+    const w_lo = g.limits.writable(lc.lo);
     if (w_lo) {
         try g.w("        x[@intFromEnum(U.{s})] -= vl - vn;\n", .{g.names.u_names[lc.lo]});
     } else {
@@ -985,9 +705,9 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
 /// `vds = -DEVlimvds(-vds,-vdso)` — and adds the write target the flat list
 /// cannot express.
 fn emitLadder(g: *Gen, lad: Ladder) Error!void {
-    const gs = g.limits[lad.gs];
-    const gd = g.limits[lad.gd];
-    const ds = g.limits[lad.ds];
+    const gs = g.limits.calls[lad.gs];
+    const gd = g.limits.calls[lad.gd];
+    const ds = g.limits.calls[lad.ds];
     const ng = g.names.u_names[gs.hi]; // shared gate
     const nd = g.names.u_names[gd.lo]; // drain-side channel node (the limvds hi)
     const ns = g.names.u_names[gs.lo]; // source-side channel node (the limvds lo)
@@ -1067,7 +787,7 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
 /// `fetlim`/`limvds` get nothing: a channel is well-conditioned at 0 V.
 fn emitSeed(g: *Gen) Error!void {
     var any = false;
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         if (lc.alg == .pnjlim and lc.argv[1] != .f_zero) any = true;
     }
     if (!any) return;
@@ -1096,14 +816,14 @@ fn emitSeed(g: *Gen) Error!void {
         \\
     , .{probe_inst});
     try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
-    for (g.limits) |lc| {
+    for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         // The junction sits across `V(hi, lo)`, and only the internal side is
         // ours to place. Two clamps on the same net leave the later one's
         // bias — they are the same junction seen twice, so either is right.
         // A signed clamp seeds V = sign·vcrit: the junction is forward at
         // NEGATIVE probe voltage when the sign argument is negative.
-        const on_lo = writable(g, lc.lo);
+        const on_lo = g.limits.writable(lc.lo);
         if (lc.sign != .f_zero) {
             try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.names.u_names[if (on_lo) lc.lo else lc.hi]});
             try writeArg(g, lc.sign);
@@ -1119,7 +839,7 @@ fn emitSeed(g: *Gen) Error!void {
             try writeArg(g, lc.argv[1]);
         }
         try g.w("; // V({s},{s}) = {s}vcrit\n", .{
-            uName(g, lc.hi), uName(g, lc.lo),
+            plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
             if (lc.sign != .f_zero) "±" else "",
         });
     }
