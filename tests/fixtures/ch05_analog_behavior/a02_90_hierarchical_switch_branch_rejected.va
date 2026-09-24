@@ -26,23 +26,16 @@
 // well defined. The two files differ in one access function, and a fix for
 // either has to keep the other's verdict.
 //
-// OBSERVED TODAY: accepted silently. The parent's flow contribution converts the
-// child's branch and the design solves with `x[drv.x] = 0` — no diagnostic, and
-// the number it produces belongs to neither a potential source nor a documented
-// switch. The neighbouring prohibition in the same clause IS implemented
-// (`E0409`, hierarchical contribution to an indirectly-contributed branch), so
-// this one is a hole in an otherwise-checked rule.
-//
-// The `//! reject` line below carries PROSE and not an `Exxxx` code because no
-// code is allocated for this rule yet. Whoever implements it should allocate one
-// and replace this line with it; the harness matches the directive as a plain
-// substring of the diagnostic, so the message must contain this phrase either
-// way for the fixture to be honest about which rule it is testing.
+// WHAT USED TO HAPPEN: accepted silently. The parent's flow contribution
+// converted the child's branch and the design solved with `x[drv.x] = 0` — no
+// diagnostic, and a number that belongs to neither a potential source nor a
+// documented switch. The neighbouring prohibition in the same clause was
+// already implemented (`E0409`); this one is now E0439, whose title is the
+// clause's own phrase, "changes the branch into a switch branch".
 //
 //! lrm 5.6.8.2
 //! lrm 5.6.5
-//! reject changes the branch into a switch branch
-//! xfail VerA accepts a parent flow contribution to a child branch the child potential-sources and solves the design silently; §5.6.8.2 lists "The hierarchical contribution changes the branch into a switch branch" as a reason the contribution shall not be allowed, and the neighbouring bullet in the same clause IS checked (E0409)
+//! reject E0439
 module a02_hier_switch_branch(g);
   inout g;
   electrical g;

@@ -111,6 +111,18 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         try b.emit();
         return;
     }
+    // §5.6.8.2: a hierarchical contribution is not allowed when it "changes
+    // the branch into a switch branch". A named branch belongs to one instance
+    // (§5.4.1), so the other access function on it from a DIFFERENT unit is
+    // exactly that, whichever of the two blocks lowers first. Inside one unit
+    // it is §5.6.1.3's value retention and stays legal (`discardOpposite`).
+    if (target.br != unnamed_branch) for (self.out.contributions.items) |c| {
+        if (c.kind != .direct or c.br != target.br or c.access == target.access or c.unit == self.cur_unit) continue;
+        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0439);
+        b.label(self.tokenSpan(c.tok), "the other module instance contributes the {s} here", .{if (c.access == .potential) "potential" else "flow"});
+        try b.emit();
+        return;
+    };
     if (target.access == .flow) try checkMfactorDoubleScaling(self, lhs, rhs);
     const idx = try contribIndex(self, target, self.file.exprs.mainTok(lhs));
 
