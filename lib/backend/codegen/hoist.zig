@@ -75,11 +75,7 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
                     // the ladder, an unhoistable condition makes the
                     // select unhoistable, and one unhoistable select
                     // strands every value downstream of it in the core.
-                    break :blk std.mem.eql(u8, d.name, "$temperature") or
-                        std.mem.eql(u8, d.name, "$param_given") or
-                        std.mem.eql(u8, d.name, "$port_connected") or
-                        (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0) or
-                        simparamFixed(self, d);
+                    break :blk paramOnlyCall(self, d);
                 },
                 // A phi is not one value; the path latches read Instance
                 // state `updateState`/commit have not written yet at
@@ -111,9 +107,21 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
 /// `inst.newton_iteration`, which moves every Newton step. A fallback argument
 /// renders through `f64Expr`, which reads Model alone.
 fn simparamFixed(self: *const Gen, d: anytype) bool {
-    if (!std.mem.eql(u8, d.name, "$simparam")) return false;
     const nm = self.strArg(d.args, 0) orelse return false;
     return !Lower.simparamIsRuntime(nm);
+}
+
+/// A call as parameter-only as a `param_ref` — `pcClass`'s and `hpPureInst`'s
+/// one answer. §9.10 `$temperature` and the argument-free `$vt` read the
+/// temperature the host sets with the card; §9.19's two queries and a
+/// non-iteration `$simparam` are above.
+fn paramOnlyCall(self: *const Gen, d: anytype) bool {
+    return switch (d.callee) {
+        .@"$temperature", .@"$param_given", .@"$port_connected" => true,
+        .@"$vt" => d.args.len == 0,
+        .@"$simparam" => simparamFixed(self, d),
+        else => false, // else: an ALLOWLIST — every other callee reads the solve, the time or state the host moves, until shown otherwise
+    };
 }
 
 pub fn libmClass(op: Mir.Opcode) bool {
@@ -277,11 +285,7 @@ pub fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
     switch (row.op) {
         .call => {
             const d = self.mir.instData(inst).call;
-            return std.mem.eql(u8, d.name, "$temperature") or
-                std.mem.eql(u8, d.name, "$param_given") or
-                std.mem.eql(u8, d.name, "$port_connected") or
-                (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0) or
-                simparamFixed(self, d);
+            return paramOnlyCall(self, d);
         },
         // `path_prev`/`path_acc` read the §5.6.1.2 latches, which move on
         // every accepted step — the one class of Instance state that looks

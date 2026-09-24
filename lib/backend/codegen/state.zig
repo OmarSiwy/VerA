@@ -585,13 +585,10 @@ pub fn buildFree(self: *const Gen, v0: Mir.Value, depth: u32) bool {
                     buildFree(self, @enumFromInt(row.c), depth + 1),
                 .call => {
                     const d = self.mir.instData(inst).call;
-                    const ok = std.StaticStringMap(void).initComptime(.{
-                        .{ "$temperature", {} },
-                        .{ "$vt", {} },
-                        .{ "$mfactor", {} },
-                        .{ "$param_given", {} },
-                    });
-                    if (!ok.has(d.name)) return false;
+                    switch (d.callee) {
+                        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given" => {},
+                        else => return false, // else: ALLOWLISTED (above) — a new callee is unsound here until shown otherwise
+                    }
                     for (d.args) |arg| {
                         if (!buildFree(self, arg, depth + 1)) return false;
                     }
