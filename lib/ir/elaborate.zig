@@ -112,13 +112,13 @@ pub const Design = struct {
     /// §6.7 hierarchical path → the flat name that path denotes. Ruling E point
     /// 3's table, and the piece a naive flatten omits.
     ///
-    /// Mostly the identity, because the mangling IS the path (`Elaborate.sep`) —
-    /// which is why a §6.7 reference costs lowering a string join and no tree
-    /// walk. The entries that are NOT the identity are the ones that make the
-    /// table necessary: a child port CONNECTED to a parent net is the same
-    /// signal as that net, so `u.a` has to resolve to `p` — there is no node
-    /// called `u.a` in the flattened design, and §6.7.1 still lets `V(u.a)` name
-    /// it.
+    /// Holds only the rows that are NOT the identity. The mangling IS the path
+    /// (`Elaborate.sep`), which is why a §6.7 reference costs lowering a string
+    /// join and no tree walk, and why every reader does `get(p) orelse p`. The
+    /// rows that make the table necessary: a child port CONNECTED to a parent
+    /// net is the same signal as that net, so `u.a` has to resolve to `p` —
+    /// there is no node called `u.a` in the flattened design, and §6.7.1 still
+    /// lets `V(u.a)` name it.
     ///
     /// Empty for a tree of one: with nothing renamed there is no path but the
     /// module's own names, and those resolve without it.
@@ -680,8 +680,7 @@ pub const Flatten = struct {
                 try unit.rename.put(self.ctx.arena, p.name, bound);
                 // §6.7.1 the port still HAS a hierarchical name, and probing it
                 // is legal — so the path has to resolve to the net it was joined
-                // to. This is the entry that makes `Design.names` more than an
-                // identity map.
+                // to. These are the only rows `Design.names` holds.
                 try self.names.put(
                     self.ctx.arena,
                     try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
