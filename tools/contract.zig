@@ -828,18 +828,6 @@ pub const PsdTerm = struct {
     coeff: f64 = 1,
 };
 
-/// Operating-point output variable metadata. Mirrors `noise_gens`: an optional
-/// comptime table a device may declare, describing internal quantities (gm,
-/// gds, vth, currents, ...) it exposes for post-solve inspection. Position k
-/// in `op_vars` corresponds to element k of the `opValues(...)` result. A
-/// Verilog-A `(* desc=... *) real x;` module variable (§3.2.1 output
-/// variables) becomes one entry.
-pub const OpVar = struct {
-    name: []const u8,
-    units: []const u8 = "",
-    desc: []const u8 = "",
-};
-
 /// §2.8.3 + §12.32: one `$name` the compiler could not resolve, which §2.8.3
 /// says may be "defined using the VPI as described in Clause 11 and Clause 12".
 /// Position k of `systf_calls` is what position k of `SystfHost.call` answers.
@@ -891,35 +879,6 @@ pub const SystfHost = struct {
     call: *const fn (ctx: *anyopaque, k: usize, args: []const f64, partials: []f64) f64,
 };
 
-/// Rectangular complex, for the small-signal stamp. Plain struct rather than
-/// std.math.Complex so the layout is fixed across the `.so` ABI boundary.
-pub const Complex = struct {
-    re: f64 = 0,
-    im: f64 = 0,
-};
-
-/// §4.5.11 / §4.5.12 small-signal stamp topology, sparse. Position k
-/// of `ac_stamps` describes element k of the `acStamp(...)` result:
-///   col == null — an independent complex SOURCE on `row`
-///   col != null — a complex Jacobian entry (row, col)
-///
-/// This exists for exactly the responses `G + jwC` cannot represent, i.e. the
-/// ones transcendental in s: `absdelay`/`transition` (e^-s·td) and `zi_*`
-/// (e^sT). A RATIONAL response (`laplace_*`) does NOT belong here — it is
-/// realizable as internal unknowns with real G/C, which is correct in
-/// tran/ac/noise/pss/pz alike.
-///
-/// §4.6.3's `ac_stim` is NOT this, and used to be listed here as the `col ==
-/// null` case. It is `ac_gens`/`acStim` below, for two reasons a source row
-/// cannot carry: a stimulus lives on a BRANCH, so it stamps `+I` on one row and
-/// `−I` on another and the two entries are ONE source whose sign relation a
-/// pair of independent rows cannot state; and it is active only in the analysis
-/// it NAMES, which there is nowhere here to put.
-pub const AcStamp = struct {
-    row: u8,
-    col: ?u8 = null,
-};
-
 /// §4.6.3 AC stimulus topology. Position k of `ac_gens` names one `ac_stim`
 /// call on the (row, col) branch, and position k of the `acStim(...)` result
 /// carries that call's phasor — exactly the `noise_gens`/`noisePsd` split, for
@@ -961,7 +920,7 @@ pub fn AcGen(comptime D: type) type {
 /// swept-amplitude source — `ac_stim("ac", k*V(ctrl))` — has a phasor that is
 /// a function of the operating point and not of the card alone.
 ///
-/// Polar and not `Complex`, because polar is what the clause states and what
+/// Polar and not rectangular, because polar is what the clause states and what
 /// the model wrote: converting here would round `cos(π/2)` to 6.1e-17 and hand
 /// a host a source that is 6.1e-17 out of quadrature for no reason.
 ///
@@ -1364,33 +1323,6 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "acStim"))
         expectFn(D, "acStim", fn ([n]f64, *const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
 
-    // Small-signal stamp: the complex contribution `G + jwC` cannot carry.
-    // Sparse — `ac_stamps` is the comptime pattern, `acStamp` the values at a
-    // frequency, same idiom as noise_gens/noisePsd.
-    expectArray(D, "ac_stamps", AcStamp);
-    requireWith(D, "ac_stamps", "acStamp");
-    requireWith(D, "acStamp", "ac_stamps");
-    if (@hasDecl(D, "ac_stamps")) {
-        for (D.ac_stamps) |s| {
-            if (s.row >= n or (s.col orelse 0) >= n)
-                @compileError(name ++ ".ac_stamps: row/col out of range 0..|U|-1");
-        }
-        expectFn(D, "acStamp", fn ([n]f64, *const D.Model, *const D.Instance, f64) [D.ac_stamps.len]Complex);
-    }
-
-    // Operating-point output variables (§3.2.1). Position k in op_vars
-    // describes element k of opValues's result. Twin metadata exactly like
-    // ac_stamps/acStamp above: the table and the hook require each other in
-    // BOTH directions, and the hook's shape is checked — it is generic over S
-    // (the engine reads op values off whichever scalar it is holding), so the
-    // check is `eval`'s, with the result sized by the table.
-    expectArray(D, "op_vars", OpVar);
-    requireWith(D, "op_vars", "opValues");
-    requireWith(D, "opValues", "op_vars");
-    if (@hasDecl(D, "opValues")) {
-        if (genericFnError(D, "opValues", "[op_vars.len]S")) |m| @compileError(m);
-    }
-
     // §2.8.3/§12.32 unresolved `$name`s. There is no device-side hook to pair
     // this table with — the implementation is the HOST's, which is the whole
     // point — so what is checked here is only that the device can be reached:
@@ -1599,13 +1531,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "noise_tables", {} },
-    .{ "ac_stamps", {} },
-    .{ "acStamp", {} },
     // §4.6.3 the AC stimulus sources and their phasors.
     .{ "ac_gens", {} },
     .{ "acStim", {} },
-    .{ "op_vars", {} },
-    .{ "opValues", {} },
     // §2.8.3/§12.32 the `$name`s left to a VPI application. Pub because the
     // HOST reads it — to know what it has to bind, and `validateHost` to refuse
     // when it has not.
@@ -1630,8 +1558,8 @@ fn rejectStrayPubDecls(comptime D: type) void {
         //
         // NOTE (§4.5.11/12): this exemption is
         // scheduled for removal. `laplace_*` is rational and belongs in the
-        // matrix as internal unknowns; `zi_*` is transcendental and belongs in
-        // `acStamp`. Neither needs a public coefficient table. The exemption
+        // matrix as internal unknowns; `zi_*` is transcendental and needs a
+        // complex AC stamp the contract does not carry yet. Neither needs a public coefficient table. The exemption
         // stays only until codegen stops emitting it — VerA's own fixtures
         // (066_laplace_dc_gain, 067_zi_sample_hold, 23_laplace_filters,
         // 24_z_transform_filters) depend on it today.
@@ -1650,7 +1578,7 @@ fn validatePhysicsFn(comptime D: type, comptime fn_name: []const u8) void {
 }
 
 /// The shape shared by every generic-over-S entry point (`eval`, `q`,
-/// `opValues`, `display`): five parameters, the first `comptime S: type`.
+/// `display`): five parameters, the first `comptime S: type`.
 /// `ret` only names the expected result in the complaint — a generic return
 /// cannot be checked without instantiating. Returns the message instead of
 /// raising it so the NEGATIVE half is testable; `validate` is the raiser.
@@ -1726,7 +1654,7 @@ fn rowMaskError(
 
 /// `decl` is meaningless without `needs` — a table with no hook to fill it, or
 /// a hook with no table to describe it. Declare it both ways for a pair that
-/// is mutually required (ac_stamps/acStamp, op_vars/opValues).
+/// is mutually required (ac_gens/acStim, noise_gens/noisePsd).
 fn requireWith(comptime D: type, comptime decl: []const u8, comptime needs: []const u8) void {
     if (requireWithError(D, decl, needs)) |m| @compileError(m);
 }
@@ -1937,24 +1865,9 @@ const MockTline = struct {
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
     pub const noise_gens = [_]NoiseGen(@This()){.{ .row = 0, .col = 1, .kind = .thermal }};
 
-    // e^-s·td is transcendental: G + jwC cannot carry it, so the delay's
-    // small-signal response comes through the stamp.
-    pub const ac_stamps = [_]AcStamp{
-        .{ .row = 0, .col = 1 },
-        .{ .row = 1, .col = 0 },
-    };
-
     pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, _: *const Instance, _: f64) [n_u]S {
         const y0 = 1.0 / @as(f64, model.z0);
         return .{ x[0].scale(y0), x[1].scale(y0) };
-    }
-
-    pub fn acStamp(_: [n_u]f64, model: *const Model, _: *const Instance, f: f64) [ac_stamps.len]Complex {
-        const w = 2.0 * std.math.pi * f;
-        const th = -w * @as(f64, model.td);
-        const y0 = 1.0 / @as(f64, model.z0);
-        const e: Complex = .{ .re = @cos(th) * y0, .im = @sin(th) * y0 };
-        return .{ e, e };
     }
 };
 
@@ -2014,11 +1927,9 @@ const MockAll = struct {
     pub fn noiseTablePoints(m: *const Model) [2][2]f64 {
         return .{ .{ 1, 1e-18 * @as(f64, m.g) }, .{ 1e6, 1e-24 } };
     }
-    pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     // §4.6.3: one stimulus on the (0,1) branch, so the `ac_gens`/`acStim`
     // pairing and `AcPhasor`'s polar shape are both somewhere `validate` sees.
     pub const ac_gens = [_]AcGen(Self){.{ .row = 0, .col = 1, .name = "ac" }};
-    pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
     // The over-approximate masks, plus their row-level companions. All-ones is
     // what a host must assume when a device omits them, so it is also the value
@@ -2047,9 +1958,6 @@ const MockAll = struct {
     }
     pub fn q(comptime S: type, x: [n_u]S, _: *const Model, _: *const Instance, _: f64) [n_u]S {
         return .{ x[0].scale(1e-12), x[1].scale(-1e-12) };
-    }
-    pub fn opValues(comptime S: type, _: [n_u]S, m: *const Model, _: *const Instance, _: f64) [op_vars.len]S {
-        return .{S.con(@as(f64, m.g))};
     }
     pub fn limit(_: *const Model, _: *const Instance, cur: [n_u]f64, _: [n_u]f64) LimitResult(n_u) {
         return .{ .x = cur, .converged = true };
@@ -2089,9 +1997,6 @@ const MockAll = struct {
         // its spectrum, so anything else here would be added to it.
         return .{ .{ .white = 4 * 1.38e-23 * 300.15 * @as(f64, m.g) }, .{ .white = 0 } };
     }
-    pub fn acStamp(_: [n_u]f64, _: *const Model, _: *const Instance, _: f64) [ac_stamps.len]Complex {
-        return .{ .{}, .{} };
-    }
     pub fn acStim(_: [n_u]f64, _: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
         return .{.{ .mag = 1, .phase = 0 }};
     }
@@ -2125,23 +2030,7 @@ test "validate: every contract member at once (allowlist cannot drift)" {
     };
 }
 
-test "op_vars/opValues are twins: each half is refused without the other" {
-    // The mirror of ac_stamps/acStamp. A hook with no table has positions
-    // nothing describes; a table with no hook describes values nothing fills.
-    const OnlyHook = struct {
-        pub fn opValues() void {}
-    };
-    const OnlyTable = struct {
-        pub const op_vars = [_]OpVar{.{ .name = "gm" }};
-    };
-    try testing.expect(comptime (requireWithError(OnlyHook, "opValues", "op_vars") != null));
-    try testing.expect(comptime (requireWithError(OnlyTable, "op_vars", "opValues") != null));
-    // MockAll declares both halves, so neither direction complains.
-    try testing.expect(comptime (requireWithError(MockAll, "op_vars", "opValues") == null));
-    try testing.expect(comptime (requireWithError(MockAll, "opValues", "op_vars") == null));
-}
-
-test "display/opValues shapes: the generic 5-param form, wrong arities refused" {
+test "display shapes: the generic 5-param form, wrong arities refused" {
     // The exact shape that used to slip through: MockAll's display was a
     // 2-arg `(Model, Instance)` fn no caller has ever used — tb.zig calls
     // `D.display(Dual, xd, model, inst, t)`, and a device declaring the
@@ -2151,18 +2040,12 @@ test "display/opValues shapes: the generic 5-param form, wrong arities refused" 
         pub const Model = struct {};
         pub const Instance = struct {};
         pub fn display(_: *const Model, _: *const Instance) void {}
-        pub fn opValues(_: f64) f64 {
-            return 0;
-        }
         pub fn eval(_: f64) void {} // not generic: first param is not `type`
     };
     try testing.expect(comptime (genericFnError(Bad, "display", "void") != null));
-    try testing.expect(comptime (genericFnError(Bad, "opValues", "[op_vars.len]S") != null));
     try testing.expect(comptime (genericFnError(Bad, "eval", "[n_u]S") != null));
-    // The real shapes pass: MockAll.display mirrors codegen's emitted decl,
-    // MockAll.opValues mirrors eval.
+    // The real shapes pass: MockAll.display mirrors codegen's emitted decl.
     try testing.expect(comptime (genericFnError(MockAll, "display", "void") == null));
-    try testing.expect(comptime (genericFnError(MockAll, "opValues", "[op_vars.len]S") == null));
     try testing.expect(comptime (genericFnError(MockAll, "eval", "[n_u]S") == null));
 }
 
@@ -2274,15 +2157,6 @@ test "limit reports its own convergence verdict" {
     const r = MockSw.limit(&m, &i, .{ 1.0, 0.0 }, .{ 0.0, 0.0 });
     try testing.expect(r.converged);
     try testing.expectEqual(@as(f64, 1.0), r.x[0]);
-}
-
-test "acStamp carries the delay phase G+jwC cannot" {
-    const m: MockTline.Model = .{};
-    const i: MockTline.Instance = .{};
-    // At f = 1/(4*td) the delay is a quarter period: e^-j(pi/2) -> -j.
-    const s = MockTline.acStamp(.{ 0, 0 }, &m, &i, 0.25 / @as(f64, m.td));
-    try testing.expectApproxEqAbs(@as(f64, 0), s[0].re, 1e-12);
-    try testing.expectApproxEqAbs(-1.0 / @as(f64, m.z0), s[0].im, 1e-12);
 }
 
 test "nU" {
