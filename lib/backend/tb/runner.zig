@@ -399,7 +399,9 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
         \\    /// §5.10.3.3 the device's next timer instant after `t`, if it has one.
         \\    pub fn breakpoint(a: *Analog, t: f64) ?f64 {
-        \\        return if (comptime @hasDecl(D, "nextBreakpoint")) D.nextBreakpoint(a.model, t) else null;
+        \\        const m: ?f64 = if (comptime @hasDecl(D, "nextBreakpoint")) D.nextBreakpoint(a.model, t) else null;
+        \\        const i: ?f64 = if (comptime @hasDecl(D, "pendingBreakpoint")) D.pendingBreakpoint(a.inst, t) else null;
+        \\        return if (m != null and i != null) @min(m.?, i.?) else m orelse i;
         \\    }
         \\
         \\    pub fn snapshot(a: *Analog, dig: *sim.digital.Run) !void {

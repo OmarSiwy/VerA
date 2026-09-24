@@ -1168,6 +1168,9 @@ test "codegen: §5.10.5 a timer whose start is a solved quantity emits NO hook" 
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "__next") != null); // the timer IS compiled
     try std.testing.expect(std.mem.indexOf(u8, src, "nextBreakpoint") == null);
+    // §5.10.3.3 but the LIVE schedule is: `updateState` re-arms `__next` from
+    // the start_time, so an Instance-reading hook can answer what this cannot.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn pendingBreakpoint(inst: *const Instance, t: f64) ?f64") != null);
 }
 
 test "codegen: §4.5 operator state is keyed to the stable unit id" {

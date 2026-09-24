@@ -1480,7 +1480,13 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // period computed during the solve is treated as periodic here, and
         // §5.10.5's `zNextTimer` reads a past start the same way ("a start
         // before the origin fires at the origin") for the periodic case.
-        .timer => try self.b("S.con(if (inst.abstime >= @max(inst.{s}__next, ({s}).val()){s} and ({s})) 1.0 else 0.0)", .{
+        //
+        // Once `updateState` has scheduled an event (`__start` is not NaN),
+        // `__next` IS the event: a start_time that moves during THIS
+        // evaluation schedules the NEXT event (§5.10.3.3, "the next event
+        // will be scheduled based on the latest value") and must not
+        // cancel the one this timepoint was placed for.
+        .timer => try self.b("S.con(if (inst.abstime >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
             n,
             in,
             if (timerIsOneShot(self, args))

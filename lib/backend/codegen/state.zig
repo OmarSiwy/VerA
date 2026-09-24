@@ -334,10 +334,21 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
             // §5.10.3.3 the schedule is absolute — "at start_time, and every
             // period after that" — so it advances past the accepted time
             // whether or not the enable let the event through.
+            //
+            // "If the start_time or period expressions change value during
+            // the evaluation of the analog block, the next event will be
+            // scheduled based on the latest value": a start_time other than
+            // the one `__next` was scheduled from replaces the schedule,
+            // EARLIER as well as later, and re-arms a spent one-shot. It
+            // used to be a clamp that only ever raised `__next`, so a
+            // re-armed LTRA wavefront timer landed on its first front only.
+            // A changed period takes effect at the next fire (a10_03).
             .timer => try self.w(
-                \\        if (inst.{0s}__next < in) inst.{0s}__next = in;
-                \\        if (inst.abstime >= inst.{0s}__next) {{
-                \\            const period = {1s};
+                \\        const period = {1s};
+                \\        if (inst.{0s}__start != in) {{
+                \\            inst.{0s}__start = in;
+                \\            inst.{0s}__next = zNextTimer(in, period, inst.abstime) orelse std.math.inf(f64);
+                \\        }} else if (inst.abstime >= inst.{0s}__next) {{
                 \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else std.math.inf(f64);
                 \\        }}
                 \\
@@ -700,6 +711,29 @@ pub fn emitDelays(self: *Gen) Error!void {
 
 pub fn emitNextBreakpoint(self: *Gen) Error!void {
     if (!gen_file.usesOp(self, .timer)) return;
+
+    // §5.10.3.3 the LIVE schedule, which `nextBreakpoint` cannot see: a
+    // start_time computed during the solve (the LTRA wavefront timer) exists
+    // only as the `__next` that `updateState` scheduled from it. Every timer
+    // is listed, whatever its arguments, because `__next` is always the
+    // truth; a disabled one costs the host a timepoint, never an answer.
+    try self.w(
+        \\/// §5.10.3.3 the earliest timer event this instance has scheduled
+        \\/// strictly after `t` — re-armed start times included.
+        \\pub fn pendingBreakpoint(inst: *const Instance, t: f64) ?f64 {{
+        \\    var best = std.math.inf(f64);
+        \\
+    , .{});
+    for (self.names.units, 0..) |u, i| {
+        if (u.role != .analog_op or u.op != .timer) continue;
+        try self.w("    if (inst.{0s}__next > t) best = @min(best, inst.{0s}__next);\n", .{self.names.unit_names[i]});
+    }
+    try self.w(
+        \\    return if (best == std.math.inf(f64)) null else best;
+        \\}}
+        \\
+        \\
+    , .{});
 
     // Render FIRST, emit second: `f64Const` is what sets `uses_model`, and
     // an unused `model` parameter does not compile.
