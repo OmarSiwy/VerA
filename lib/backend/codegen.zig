@@ -56,6 +56,7 @@ const plan_names = @import("codegen/plan/names.zig");
 const plan_topo = @import("codegen/plan/topology.zig");
 const plan_limit = @import("codegen/plan/limit.zig");
 const plan_noise = @import("codegen/plan/noise.zig");
+const plan_jobs = @import("codegen/plan/jobs.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -352,8 +353,8 @@ pub const Gen = struct {
     // ---- the shared core ("WHY THIS EXISTS", further down this struct) ----
     /// §4.6.3/§4.6.4 the small-signal source rows and tables — `plan/noise.zig`.
     noise: plan_noise.Noise = .{},
-    /// Every unit function to emit, resolved before any of them is written.
-    jobs: []gen_unit.Job = &.{},
+    /// Every unit target the core returns, in insert-tolerant order — `plan/jobs.zig`.
+    jobs: plan_jobs.Jobs = .{},
     /// Position of this Value in the core's returned struct, or `none_u32`.
     /// Only the unit TARGETS cross the declaration boundary; every one of the
     /// ~22 000 subexpressions behind them stays a local of the core.
@@ -444,10 +445,6 @@ pub const Gen = struct {
     jac_f32_host: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
-    /// `<module>__display__tasks`, or empty when the model prints nothing (or
-    /// when `display == .drop`). Set by `buildJobs`, which is also where the job
-    /// that renders it is queued.
-    display_name: []const u8 = "",
     /// Free branch flows and collapsible switch branches — `plan/topology.zig`.
     topo: plan_topo.Topology = .{},
     /// Structural Jacobian columns per residual ROW: `pat[react][ru]` has bit
@@ -549,6 +546,15 @@ pub const Gen = struct {
     /// snapshots it as the prefix region's size.
     stmt_count: u32 = 0,
 
+    /// The one fact `plan_jobs` needs from the renderer: does a §4.5 control
+    /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
+    const DynCtrl = struct {
+        g: *Gen,
+        pub fn isDynamic(d: DynCtrl, v: Mir.Value) Error!bool {
+            return gen_call.ctrlIsDynamic(d.g, v);
+        }
+    };
+
     /// What a `plan/` function reads — see `plan/input.zig`.
     pub fn input(self: *const Gen) plan_input.Input {
         return .{ .arena = self.arena, .mir = self.mir, .an = self.an, .lowered = self.lowered };
@@ -601,7 +607,13 @@ pub const Gen = struct {
             if (self.diags) |bag| try bag.add(.codegen, r.code, self.lowered.tokenSpan(r.tok), "{s}", .{r.msg});
             self.any_fatal = true;
         }
-        try gen_unit.buildJobs(self);
+        self.jobs = try plan_jobs.plan(self.input(), .{
+            .names = &self.names,
+            .unit_modes = self.verdict.unit_modes,
+            .limits = self.limits.calls,
+            .noise = &self.noise,
+            .emit_display = self.display == .emit,
+        }, DynCtrl{ .g = self });
         try gen_common.planCommon(self);
         try gen_hoist.planPrecompute(self);
         // After the two planners, which are what fill them. Stable for the
@@ -779,19 +791,6 @@ pub fn isAnalysisName(s: []const u8) bool {
     return false;
 }
 
-/// §4.5 Table 4-20 "Analog operator arguments": which argument positions the
-/// clause marks DYNAMIC (the input at position 0 is already a unit of its own,
-/// so it is not listed here). Everything absent from this table stays a
-/// `constant_expression` and is still E0515 when it is a solve result.
-pub fn dynCtrlArgs(k: OpKind) []const usize {
-    return switch (k) {
-        .absdelay => &.{1}, // td  ("dynamic: expr, td"; maxdelay is the constant one)
-        .idt => &.{ 1, 2 }, // ic, assert
-        .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
-        .none, .ddt, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
-    };
-}
-
 /// Length of the §4.5.7 absdelay history ring.
 // ponytail: a fixed 1024 samples with linear interpolation. The floor is set by
 // SPICE canon, not by the model: maxstep = min(tstep, span/50), so a fixture
@@ -806,16 +805,6 @@ pub fn dynCtrlArgs(k: OpKind) []const usize {
 // Upgrade path: host-owned growable history (the engine's dormant
 // HistoryBuffer channel), which is what ngspice does.
 pub const hist_len: usize = 1024;
-
-pub fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
-    if (react) return "§5.6.1.2 reactive part (charge/flux; q() differentiates it)";
-    if (c.kind == .indirect)
-        return "§5.6.7 indirect contribution — the constraint `<probe> − <equation>`";
-    return switch (c.access) {
-        .flow => "§5.6 flow contribution — current into `hi`, out of `lo` (§1.3.1.2)",
-        .potential => "§5.6 potential contribution — the branch constitutive relation",
-    };
-}
 
 // ===========================================================================
 // §4.5 analog operators — which ones own per-instance state
@@ -887,6 +876,7 @@ test {
     _ = plan_topo;
     _ = plan_limit;
     _ = plan_noise;
+    _ = plan_jobs;
     _ = Gen.gen_common;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;

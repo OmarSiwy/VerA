@@ -51,7 +51,7 @@ fn scanAccept(self: *Gen) Error!Accept {
         if (u.role != .analog_op) continue;
         const k = u.op;
         a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
-        if (k == .absdelay and try gen_call.absdelayFreezes(self, gen_unit.opArgs(self, i))) a.reads_t_prev = true;
+        if (k == .absdelay and try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) a.reads_t_prev = true;
         if (!opHasState(k)) continue;
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
@@ -221,7 +221,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
         const k = u.op;
         if (u.role != .analog_op or !opHasState(k)) continue;
         const n = self.names.unit_names[i];
-        const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
+        const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
         const args = self.mir.instData(inst).call.args;
         const lo = gen_unit.opInputIdx(self, @intCast(i));
@@ -660,7 +660,7 @@ pub fn emitDelays(self: *Gen) Error!void {
     var tds: std.ArrayList([]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .absdelay) continue;
-        const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
+        const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
         const td = try gen_call.f64Const(self, args[1], 0, false) orelse continue;
@@ -690,7 +690,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
     var timers: std.ArrayList([3]?[]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .timer) continue;
-        const inst = gen_unit.opInstOf(self, @intCast(i)) orelse return;
+        const inst = self.names.opInstOf(@intCast(i)) orelse return;
         const args = self.mir.instData(inst).call.args;
         // §5.10.3.3 "if enable is specified and it is zero, then timer() is
         // inactive": a constant-zero enable means this timer never fires, so

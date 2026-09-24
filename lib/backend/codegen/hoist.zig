@@ -193,7 +193,7 @@ pub fn planPrecompute(self: *Gen) Error!void {
             .jump => {},
         }
     }
-    for (self.jobs) |job| {
+    for (self.jobs.list) |job| {
         // §4.6.4 EXCEPT the noise PSDs. Hoisting one moves it out of the
         // `if (r > 0)` that declared it and evaluates it unconditionally —
         // `4kT/0` — where staying a core live-out gives it the zero seed
@@ -361,7 +361,7 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     self.hp_real = 0;
     // No shared core to cut.
     if (self.lo_vals.len == 0) return;
-    for (self.jobs) |job| {
+    for (self.jobs.list) |job| {
         if (job.kind != .display and job.pre_fatal != null) return;
     }
     const save_common = self.emitting_common;

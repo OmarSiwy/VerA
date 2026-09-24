@@ -9,6 +9,7 @@
 //! directly, `gen_dispatch.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_noise = @import("plan/noise.zig");
 const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -128,7 +129,7 @@ pub fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!vo
 /// The unit returns an `S` (every unit does); it is the sum of the display
 /// calls' zero results and is discarded here.
 pub fn emitDisplay(self: *Gen) Error!void {
-    if (self.display_name.len == 0) return;
+    if (self.jobs.display_name.len == 0) return;
     try self.w(
         \\/// §9.4 run this module's display tasks once, in source order.
         \\pub fn display(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) void {{
@@ -136,7 +137,7 @@ pub fn emitDisplay(self: *Gen) Error!void {
         \\}}
         \\
         \\
-    , .{self.display_name});
+    , .{self.jobs.display_name});
 }
 
 pub fn emitResidual(self: *Gen, react: bool) Error!void {
@@ -1200,21 +1201,12 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
     return if (k == none_u32) null else k;
 }
 
-/// `v` as a compile-time f64, or null when only the core can answer.
-pub fn psdConst(self: *const Gen, v: Mir.Value) ?f64 {
-    return switch (self.mir.valueDef(v)) {
-        .float_const => |x| x,
-        .int_const => |x| @floatFromInt(x),
-        .undef, .str_const, .param_ref, .block_param, .inst_result => null,
-    };
-}
-
 /// One PSD argument as an `f64` expression in `noisePsd`'s body. `is_exp`
 /// allows the inline-constant shortcut — see `buildJobs` for why only the
 /// exponent may take it.
 pub fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
     if (v == .f_zero) return "0";
-    if (is_exp) if (psdConst(self, v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
+    if (is_exp) if (plan_noise.psdConst(self.mir, v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
     const k = self.lo_idx[@intFromEnum(v)];
     // A live-out the planner dropped cannot happen (`buildJobs` queued it),
     // but a zero is the one answer that cannot invent noise.

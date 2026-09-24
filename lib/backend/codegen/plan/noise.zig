@@ -300,6 +300,15 @@ fn refuseNoise(
         out.fatal = try std.fmt.allocPrint(self.arena, "LRM 4.6.4: {s}", .{msg});
 }
 
+/// `v` as a compile-time f64, or null when only the core can answer.
+pub fn psdConst(mir: *const Mir, v: Mir.Value) ?f64 {
+    return switch (mir.valueDef(v)) {
+        .float_const => |x| x,
+        .int_const => |x| @floatFromInt(x),
+        .undef, .str_const, .param_ref, .block_param, .inst_result => null,
+    };
+}
+
 const Fixture = @import("fixture.zig").Fixture;
 
 test "a noise table is sorted, and a repeated frequency is refused" {
