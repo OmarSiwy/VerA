@@ -41,7 +41,7 @@ states the Verilog-A SUBSET; VerA targets Verilog-AMS, so a verdict resting on i
 demanding a diagnostic a conforming AMS compiler must not emit. `reg` and a constant
 `initial` block are accepted now, `analog_digital_initial_order.va` has been re-verdicted
 into a positive fixture, and the five procedural/timing files
-(`procedural_{assign,deassign,force,release}_unsupported.va`, `blocking_timing_unsupported.va`)
+(`procedural_{assign,deassign,force,release}_unsupported.va`; `blocking_timing_unsupported.va` is withdrawn — its timed `initial` runs on the mixed-signal kernel now, see ch07 m01_11)
 pin E0209 — the parser has no production for `force`, `assign`, `deassign`, `release` or a
 `#` delay — instead of the substring `reg`, which came only from E0205's own message prose.
 An `always` block stays E0205 for a reason that is not dialect: it re-runs on an event, so
@@ -70,14 +70,14 @@ coverage of the clause its construct belongs to.
 | `s8-4-5` | synchronization and communication algorithm | — open host integration requirement |
 | `s8-4-6` | `absdelta()` interpolated A2D events | — no fixture here. 5.10.3.4 allows `absdelta()` only in an `initial`/`always` block. Legal digital use remains open; `ch05_analog_behavior/absdelta_digital_only.va` rejects misuse in an analog block |
 | `s8-4-7` | digital granularity, analog solution accept/reject | — open host integration requirement |
-| `s8-5` | digital engine scheduling semantics | partial: scheduler tests plus the initial-process CLI transcript. `digital_process_unsupported.va` still records the analog device pipeline boundary; general digital execution remains open |
+| `s8-5` | digital engine scheduling semantics | partial: scheduler tests plus the initial-process CLI transcript. `digital_process_unsupported.va` is withdrawn — an `always` process in a compiled module runs on the mixed-signal kernel (`src/sim/mixed.zig`; ch07 m02_10) |
 | `s8-5-1` | the seven stratified event-queue regions | partial: `test-sim` checks region traces and future promotion; see the ordering interpretation above |
 | `s8-5-2` | digital reference-model loop | partial: queue tests and source initial-process execution check re-entry, cancellation, time advance and termination; general processes and mixed-signal integration remain open |
 | `s8-5-3` | scheduling implication of assignments | — lead-in sentence, "Assignments are translated into processes and events as follows"; every rule it announces is in 8.5.3.1–8.5.3.7 below |
 | `s8-5-3-1` | continuous assignment lands in the active region | — `digital_assignment_unsupported.va` refuses the `assign` module item |
 | `s8-5-3-2` | procedural continuous assign/deassign/force/release | the two sentences of the clause are `procedural_continuous_semantics.va` (`//! lrm 8.5.3.2`, **`//! xfail`**): the force is a process sensitive to its source, and the release deactivates it. Its literals separate a compiler whose release works from one whose release does nothing. Still refused as source forms: `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va` — rejection does not exercise the scheduling, and none of the five was credited here |
-| `s8-5-3-3` | blocking assignment delay and event control timing | the clause's first sentence, "computes the right-hand side value using the current values", is `blocking_assignment_delay.va` (`//! lrm 8.5.3.3`, **`//! xfail`**): `y = #5 x;` followed by `x = 2;` leaves y at 1, so a compiler that samples the right-hand side at resume time reads 2 and fails it. Also partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open; `blocking_timing_unsupported.va` records the analog pipeline boundary |
-| `s8-5-3-4` | nonblocking update region | partial: queue and source tests check NBA order, captured RHS values and inactive-before-NBA behavior. `nonblocking_unsupported.va` is still refused at `always`; general controls remain open |
+| `s8-5-3-3` | blocking assignment delay and event control timing | the clause's first sentence, "computes the right-hand side value using the current values", is `blocking_assignment_delay.va` (`//! lrm 8.5.3.3`, **`//! xfail`**): `y = #5 x;` followed by `x = 2;` leaves y at 1, so a compiler that samples the right-hand side at resume time reads 2 and fails it. Also partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open |
+| `s8-5-3-4` | nonblocking update region | partial: queue and source tests check NBA order, captured RHS values and inactive-before-NBA behavior. the region-3-before-3b rule is ch07 `m02_10_macro_process_runs_after_nba.va` (green; `nonblocking_unsupported.va` is withdrawn to it) |
 | `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing remains an open full-AMS requirement; syntax acceptance does not establish its behavior |
 | `s8-5-3-6` | explicit D2A events, region 1b | partial: `test-sim` checks D2A queue ordering; process evaluation and analog synchronization remain open |
 | `s8-5-3-7` | analog macro-process events, region 3b | partial: `test-sim` checks analog queue placement and duplicate pending-event suppression; no analog solver integration. `analog_macro_process.va` covers only the 8.1 definition |
@@ -90,7 +90,7 @@ with the literal a conforming compiler prints, and each says on its `//! xfail`
 line that VerA refuses the block instead — there is no statement production for
 `force` or for a `#` delay in an `initial` block, so the parser lands where an
 expression was expected (E0209) and no transcript exists to read.
-`procedural_release_unsupported.va` and `blocking_timing_unsupported.va` pin
+`procedural_release_unsupported.va` pins
 that same refusal as a `//! reject`; the pair is deliberate, because a fixture
 that only demands the diagnostic goes stale the day the diagnostic stops being
 the answer, while these two XPASS into a real claim on that day.

@@ -9,6 +9,7 @@
 const std = @import("std");
 const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
+const Lower = @import("ir").Lower;
 const Io = tb.Io;
 const Allocator = tb.Allocator;
 const Error = tb.Error;
@@ -28,6 +29,7 @@ const max_points = tb.max_points;
 /// own output with the harness's is deterministic and diffable. stdout is left
 /// alone for a caller that wants to pipe something else.
 pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
+    if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
 
     try out.appendSlice(arena, tb_runner_text.runner_head);
@@ -282,6 +284,188 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         try out.appendSlice(arena, "    }\n");
     }
 
+    try out.appendSlice(arena, if (d.print_residual)
+        \\}
+        \\
+        \\const print_residual = true;
+        \\
+    else
+        \\}
+        \\
+        \\const print_residual = false;
+        \\
+    );
+    return out.items;
+}
+
+/// The mixed-signal plan of a compile, or null for a module with no discrete
+/// half that needs the event queue (`Lower.mixed_signal`). Borrowed from the
+/// compile's arena.
+pub fn mixedPlan(lower: *const Lower) ?tb.Mixed {
+    if (!lower.mixed_signal) return null;
+    const ts = lower.directives.timescale();
+    return .{
+        .source = lower.src,
+        .top = lower.mir.name,
+        .unit = if (ts) |t| t.unit else null,
+        .precision = if (ts) |t| t.precision else null,
+        .inputs = lower.discrete_inputs.keys(),
+    };
+}
+
+/// VAMS §8 the mixed-signal testbench: the same device and solver, but the
+/// operating points come from `sim.mixed.run` — the declared `//! time`s plus
+/// every implicit D2A time — and the discrete inputs from the digital half of
+/// the same source, re-elaborated at startup (`sim.digital.elaborate`).
+///
+/// The adapter the coordinator drives is emitted per fixture, because the
+/// input names and the `//! wave` lines are. A `//! wave` is PIECEWISE LINEAR
+/// here: an inserted point falls between declared ones, and at every declared
+/// point the value is the one the fixed-grid runner's step-hold gives.
+pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, tb_runner_text.runner_head);
+    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.appendSlice(arena, tb_runner_text.runner_body);
+    try out.appendSlice(arena, tb_runner_text.mixed_body);
+    if (d.asserts_noise or d.asserts_acstim)
+        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise and //! acstim are not read by the mixed-signal runner\"); }\n");
+
+    try print(&out, arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
+    try print(&out, arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
+    try print(&out, arena, "const mixed_timescale: ?Timescale = {s};\n", .{if (mx.unit) |u|
+        try std.fmt.allocPrint(arena, ".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
+    else
+        "null"});
+    try out.appendSlice(arena, "const times = [_]f64{");
+    for (d.times, 0..) |t, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    try out.appendSlice(arena, " };\n");
+    for (d.waves, 0..) |wv, k| {
+        try print(&out, arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.appendSlice(arena, " };\n");
+    }
+
+    // The adapter: `sim.mixed.run`'s `A`.
+    try out.appendSlice(arena,
+        \\
+        \\const Analog = struct {
+        \\    model: *D.Model,
+        \\    inst: *D.Instance,
+        \\    x: *[n_u]f64,
+        \\    forced: *[n_u]?f64,
+        \\    state: *State,
+        \\    dout: *std.Io.Writer.Allocating,
+        \\    n: *usize,
+        \\    slots: [input_names.len]u32,
+        \\    t: f64 = 0.0,
+        \\    solved: bool = false,
+        \\
+        \\    /// §7.3.6.5 / Table 7-1: every input as the integer the digital
+        \\    /// engine holds for the latest tick. The fields are parameters to
+        \\    /// the device, so its parameter-only prep is redone after them.
+        \\    pub fn setInputs(a: *Analog, dig: *sim.digital.Run) !void {
+        \\        a.flush();
+        \\        inline for (input_names, 0..) |name, i| {
+        \\            const v = mixedInput(dig, a.slots[i], name);
+        \\            @field(a.model, name) = std.math.lossyCast(@TypeOf(@field(a.model, name)), v);
+        \\        }
+        \\        if (comptime @hasDecl(D, "precompute")) D.precompute(a.inst, a.model);
+        \\    }
+        \\
+        \\    pub fn solveAt(a: *Analog, t: f64, dt: f64, first: bool, last: bool) !void {
+        \\
+    );
+    for (d.waves, 0..) |wv, k|
+        try print(&out, arena, "        set(a.x, a.forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
+    try out.appendSlice(arena,
+        \\        a.inst.abstime = t;
+        \\        a.inst.dt = dt;
+        \\        a.inst.is_initial_step = first;
+        \\        a.inst.is_final_step = last;
+        \\        a.inst.is_analog_initial = first;
+        \\        a.solved = solve(a.x, a.forced, a.model, a.inst);
+        \\        a.t = t;
+        \\    }
+        \\
+        \\    pub fn finish(a: *Analog) !void {
+        \\        a.flush();
+        \\        point(a.n.*, a.x, a.t, a.model, a.inst);
+        \\        stepPost(a.model, a.inst, a.x, a.state, a.solved);
+        \\        a.n.* += 1;
+        \\    }
+        \\
+        \\    /// The digital half's own §17 output, in time order with the analog
+        \\    /// points: everything it printed up to the tick being solved.
+        \\    fn flush(a: *Analog) void {
+        \\        std.debug.print("{s}", .{a.dout.written()});
+        \\        a.dout.clearRetainingCapacity();
+        \\    }
+        \\};
+        \\
+        \\
+    );
+    try out.appendSlice(arena, "const input_names = [_][]const u8{");
+    for (mx.inputs, 0..) |name, i| try print(&out, arena, "{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(name) });
+    try out.appendSlice(arena, " };\n\n");
+
+    // --- main ---------------------------------------------------------------
+    try out.appendSlice(arena,
+        \\pub fn main() void {
+        \\    var model: D.Model = .{};
+        \\
+    );
+    for (d.params) |p| {
+        try print(&out, arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
+            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
+        });
+        try print(&out, arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n", .{
+            std.zig.fmtString(p.name), std.zig.fmtString(p.name),
+        });
+    }
+    try out.appendSlice(arena,
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
+        \\    var inst: D.Instance = .{};
+        \\
+    );
+    try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try print(&out, arena, "    inst.analysis_kind = .{t};\n", .{d.analysis});
+    try out.appendSlice(arena,
+        \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
+        \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
+        \\    std.debug.print("=== {s} ===\n", .{title});
+        \\    var n: usize = 0;
+        \\
+    );
+    // Each sweep point is its own analysis: a fresh digital elaboration, a
+    // fresh `State`, exactly as the fixed-grid runner restarts its time walk.
+    const points = try expand(arena, d);
+    const mdl = if (d.psweeps.len == 0) "model" else "pm";
+    for (points) |pt| {
+        try out.appendSlice(arena, "    {\n");
+        if (d.psweeps.len != 0) {
+            try out.appendSlice(arena, "        var pm = model;\n");
+            for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
+                try print(&out, arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{ std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v) });
+                try print(&out, arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
+            }
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+        }
+        try print(&out, arena,
+            \\        var x: [n_u]f64 = @splat(0.0);
+            \\        var forced: [n_u]?f64 = @splat({s});
+            \\        if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {{
+            \\            if (nodeset_i) |v| x[i] = v;
+            \\        }};
+            \\        var state = newState(&{s}, &inst);
+            \\
+        , .{ if (d.solve_free) "null" else "0.0", mdl });
+        for (d.bias) |b|
+            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+        for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
+            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+        try print(&out, arena, "        runMixed(&{s}, &inst, &x, &forced, &state, &n);\n    }}\n", .{mdl});
+    }
     try out.appendSlice(arena, if (d.print_residual)
         \\}
         \\

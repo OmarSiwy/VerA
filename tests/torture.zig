@@ -401,7 +401,10 @@ fn runAndCheck(
         return .unmet;
     }
 
-    const runner = try vera.tb.renderRunner(arena, f.stem, d);
+    // VAMS §7: a module with a discrete half gets the mixed-signal runner.
+    var dm = d;
+    dm.mixed = vera.tb.mixedPlan(result.lower);
+    const runner = try vera.tb.renderRunner(arena, f.stem, dm);
 
     // One work directory per fixture, keyed on the whole relative path: two
     // fixtures may declare the same module name AND share a file name, and a
@@ -416,6 +419,7 @@ fn runAndCheck(
         .work_dir = work,
         .contract = options.contract,
         .name = result.mir.name,
+        .mixed = dm.mixed != null,
         .zig_exe = options.zig_exe,
         .optimize = fixture_opt,
     }) catch |err| {

@@ -209,6 +209,25 @@ pub const Directives = struct {
     /// VerA lacks the construct inverts the test, since a CONFORMING compiler
     /// then fails it.
     xfail: ?[]const u8 = null,
+    /// Not a directive: set by the CALLER from the compile (`mixedPlan`) when
+    /// the module has a discrete half. The runner then drives the device from
+    /// `sim.mixed` instead of the straight-line operating points.
+    mixed: ?Mixed = null,
+};
+
+/// What a mixed-signal testbench needs from the compile besides the device:
+/// the digital half to re-elaborate at startup (VAMS §7.2.2), and which
+/// device parameters are its host-written discrete inputs.
+pub const Mixed = struct {
+    /// The compile's preprocessed text; `sim.digital.elaborate` parses it again.
+    source: []const u8,
+    /// The root module the device was lowered from.
+    top: []const u8,
+    /// The `timescale in force, in seconds; null when the source gave none.
+    unit: ?f64,
+    precision: ?f64,
+    /// Digital-owned names the analog block reads, each a `Model` field.
+    inputs: []const []const u8,
 };
 
 /// One `//! noise` line, split into the part that names the ROW and the parts
@@ -310,6 +329,7 @@ pub const parse = tb_directive.parse;
 // Runner generation: the testbench `main` for one fixture — tb/runner.zig
 const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
+pub const mixedPlan = tb_runner.mixedPlan;
 
 // The runner's fixed text: the Newton solver and the `@Vector(NL, f64)` lanes it drives — tb/runner_text.zig
 const tb_runner_text = @import("tb/runner_text.zig");

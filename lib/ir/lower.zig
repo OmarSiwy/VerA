@@ -660,6 +660,13 @@ uses_host_simparam: bool = false,
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
 /// variable starts every evaluation with is decided at its declaration.
+/// §7.3.6.5/§8.5 a mixed module's digital-owned values the analog block may
+/// read, name → declaring token, in first-write order. Each is also a hidden
+/// §3.4 parameter (a host-written `Model` field). See
+/// `lower_context.declareDiscreteInputs`.
+discrete_inputs: std.StringArrayHashMapUnmanaged(u32) = .empty,
+/// The module's discrete half needs the event queue (`lower_context.isMixed`).
+mixed_signal: bool = false,
 /// Empty for a module with no `initial` block. See `collectInitialState`.
 initial_state: std.StringArrayHashMapUnmanaged(struct { value: Ast.ExprId, tok: u32 }) = .empty,
 /// §5.10.4 named events, name -> the flag slot `-> ev` writes and `@(ev)` reads.
@@ -1268,6 +1275,9 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §3.4 defaults are constant expressions — so the two orders differ only
     // in what is already known, never in what is reachable.
     for (module.params) |*p| try lower_param.lowerParamDecl(self, p);
+    // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
+    // Before the ports and nets, so none of them becomes an analog node.
+    try lower_context.declareDiscreteInputs(self, module);
 
     // §6.5 ports first: this order IS the host device's terminal order.
     for (module.ports) |p| {
@@ -1295,6 +1305,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
+        if (self.discrete_inputs.contains(self.file.str(n.name))) continue;
         // §2.8.1 vs §3.6.3 — see `netKey`. A RANGED declaration is a vector and
         // its own name never reaches the node table, so the key is the scalar
         // path's and the `vectors` entry below keeps the declared spelling.
@@ -1408,7 +1419,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // nothing under it, leaving four natureless nets and four E0337s where
     // §10.2 supplied a discipline.
     for (module.ports) |p| try lower_node.applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
-    for (module.nets) |n| try lower_node.applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
+    for (module.nets) |n| if (!self.discrete_inputs.contains(self.file.str(n.name)))
+        try lower_node.applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
 
     // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
     // be bound to `input` or `output` ports of the module, not to `inout`
@@ -1574,6 +1586,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the whole of the difference.
     try lower_context.collectInitialState(self, module);
     for (module.vars) |*v| {
+        if (self.discrete_inputs.contains(self.file.str(v.name))) continue;
         var d = v.*;
         if (self.initial_state.get(self.file.str(d.name))) |a| {
             // §3.2.2 an array takes an assignment PATTERN, not a scalar, and

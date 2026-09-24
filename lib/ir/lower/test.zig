@@ -980,18 +980,19 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
     // The accepting side is six fixtures (ch07/digital_initial_accepted,
     // discrete_bus_narrow, discrete_bus_31, discrete_real_from_analog,
     // annex_c/13, ch08/analog_digital_initial_order), which pin the VALUE end to
-    // end. What no fixture reaches is E0433's own arms: the two that would state
-    // them (ch08/blocking_timing_unsupported, procedural_*) die in the parser
-    // first, because `#`, `force` and `assign` have no statement production and a
-    // parse error stops the pipeline before lowering. So they are stated here,
-    // one per reading a discrete kernel would be needed to pick between.
+    // end. What no fixture reaches is E0433's own arms: the procedural_*
+    // fixtures die in the parser first (`force`, `release` and a procedural
+    // `assign` have no statement production), and a TIMED initial is no longer
+    // E0433 at all — it makes the module mixed (`lower_context.isMixed`). So the
+    // arms are stated here, one per reading a kernel would be needed for.
     const cases = [_]struct { stmt: []const u8, code: diag.Code }{
         // A non-constant right-hand side: `v` is a runtime variable, so there is
         // nothing to install and nothing computed it before the analysis.
         .{ .stmt = "q = v;", .code = .E0433 },
-        // §5.10 event control — parses (it is an ordinary analog statement) and
-        // has nothing to suspend on.
-        .{ .stmt = "@(initial_step) q = 1;", .code = .E0433 },
+        // §5.10 event control: the block suspends, so it is a PROCESS and the
+        // module is mixed; what it suspends on is an ANALOG event, which is
+        // §7.3.6.1's A2D path the mixed-signal kernel does not have yet.
+        .{ .stmt = "@(initial_step) q = 1;", .code = .E0437 },
         // §5.9.2 a loop, and §5.8 a conditional over a runtime value: both are
         // only worth writing over something that changes during the run.
         .{ .stmt = "for (q = 0; q < 3; q = q + 1) q = 1;", .code = .E0433 },

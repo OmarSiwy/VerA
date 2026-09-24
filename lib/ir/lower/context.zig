@@ -11,6 +11,7 @@
 const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
+const lower_param = @import("param.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const init = Lower.init;
@@ -24,11 +25,12 @@ const call = Lower.call;
 
 /// §7.2.2's two contexts, and the four rules the LRM states across them.
 ///
-/// A `Ast.DiscreteBlock` is not lowered as CODE — an `always` block is refused
-/// outright (E0205) and an `initial` block contributes only its constant results
-/// (`collectInitialState`), because EXECUTING one needs an event queue and delta
-/// cycles, which is a simulator and not a compiler pass. What is done here is the
-/// other half: the LRM states rules ABOUT a discrete context, and while the
+/// A `Ast.DiscreteBlock` is not lowered as CODE: an `initial` block of constant
+/// assignments contributes its results (`collectInitialState`), and anything
+/// that needs an event queue and delta cycles makes the module MIXED — its
+/// digital half runs on the mixed-signal kernel beside the device, and what the
+/// analog block reads of it is a host-written input (`declareDiscreteInputs`).
+/// What is done here is the other half: the LRM states rules ABOUT a discrete context, and while the
 /// keyword was a hard syntax error not one of them could fire. All four are
 /// decidable from the AST alone, which is why this is a scan and not a lowering:
 ///
@@ -56,21 +58,185 @@ pub const DiscreteCtx = struct {
     /// Which block the scan is inside, for the E0422 wording (§4.5.15 names
     /// both spellings).
     where: []const u8 = "",
+    /// The module's discrete half runs on the mixed-signal kernel
+    /// (`Lower.mixed_signal`), so what that kernel cannot do yet is E0437.
+    mixed: bool = false,
+};
+
+/// §8.5: does this module's discrete half need the event queue? An `always`
+/// block and a continuous assignment are PROCESSES — each re-runs whenever
+/// what it reads changes — and an `initial` block that suspends (a delay, an
+/// event or level control, a nonblocking or intra-assignment-timed write) is
+/// one too. Anything else is `collectInitialState`'s constant shape, which
+/// needs no kernel and keeps its fast path.
+pub fn isMixed(self: *const Lower, module: *const Ast.ModuleDecl) bool {
+    if (module.assigns.len != 0) return true;
+    for (module.discrete) |blk| if (blk.is_always or suspends(self.file, blk.body)) return true;
+    return false;
+}
+
+fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
+    if (id == .none) return false;
+    switch (file.stmt(id)) {
+        .event_control => return true,
+        .assign => |a| if (a.nonblocking or a.timing != .none) return true,
+        else => {}, // else: a statement suspends only through its children
+    }
+    const Walk = struct {
+        file: *const Ast.SourceFile,
+        hit: *bool,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {}
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (suspends(w.file, s)) w.hit.* = true;
+        }
+    };
+    var hit = false;
+    file.stmtEdges(id, Walk{ .file = file, .hit = &hit }) catch unreachable;
+    return hit;
+}
+
+/// §7.3.1 / §7.3.6.5 / §8.5, the analog block's view of a mixed module's
+/// digital half. Every variable a discrete process writes and every net a
+/// continuous assignment drives is DIGITAL-OWNED (§7.2.2: "the domain of a
+/// variable is that of the context from which its value is assigned"), and
+/// when the analog block reads one it reads the value of "the greatest digital
+/// time tick which is less than or equal to the analog time" (§7.3.6.5) — a
+/// value only the digital kernel can compute. So each becomes a HOST-WRITTEN
+/// input: a hidden §3.4 parameter of the same name, i.e. a `Model` field the
+/// mixed-signal host writes before every solve (and re-runs `precompute`
+/// after). Table 7-1 reads a bit grouping, a net and an `integer` alike as an
+/// integer, which is the parameter's type.
+///
+/// Called before the ports and nets are interned, so a digital-owned net never
+/// becomes an analog node and a digital-owned variable never an analog one.
+///
+// ponytail: a Model field is per MODEL, and a discrete input is per INSTANCE.
+// That is exact for the testbench (one instance) and wrong for a host that
+// instantiates one mixed device twice; the right home is an `Instance` field,
+// which is codegen's to emit.
+pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    if (!isMixed(self, module)) return;
+    self.mixed_signal = true;
+    const ex = &self.file.exprs;
+    var owned: std.ArrayList(Ast.ExprId) = .empty;
+    for (module.assigns) |a| {
+        const t = self.file.lvalueBase(a.target);
+        if (t == .none or !netDecl(module, ex.strOf(t))) {
+            // IEEE 1364-2005 §6.1 (via VAMS §1.1): A.6.1's `net_assignment`
+            // drives a `net_lvalue` — a variable has no driver to add.
+            try self.err(a.main_tok, .E0438, "", .{});
+            continue;
+        }
+        try owned.append(self.arena, t);
+    }
+    for (module.discrete) |blk| try collectWrites(self, blk.body, &owned);
+    // Only what the analog block READS crosses: an owned value it never names
+    // is the digital engine's alone, and must not make a solve fail on an x
+    // (§7.3.2) that nothing analog ever sees.
+    var reads: Reads = .{ .l = self };
+    for (module.analog) |blk| try reads.stmt(blk.body);
+    for (owned.items) |t| {
+        const name = self.file.str(ex.strOf(t));
+        if (self.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
+        const ty: Ast.Type = for (module.vars) |v| {
+            if (v.name == ex.strOf(t)) break v.ty;
+        } else if (netDecl(module, ex.strOf(t))) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
+        if (ty != .integer) {
+            // VAMS Table 7-1's `real` row: a digital `real` is read as a real.
+            // The digital engine holds four-state bits only.
+            try self.err(ex.mainTok(t), .E0437, "`{s}` is a digital `real`, and the digital engine holds no real-valued variable yet", .{name});
+            continue;
+        }
+        try self.discrete_inputs.put(self.arena, name, ex.mainTok(t));
+        try lower_param.addParam(self, name, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
+    }
+}
+
+/// Every identifier an analog statement tree reads.
+const Reads = struct {
+    l: *Lower,
+    names: std.StringHashMapUnmanaged(void) = .empty,
+    pub fn stmt(w: *Reads, s: Ast.StmtId) Oom!void {
+        if (s != .none) try w.l.file.stmtEdges(s, w);
+    }
+    pub fn expr(w: *Reads, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+        if (e == .none) return;
+        const ex = &w.l.file.exprs;
+        if (ex.tag(e) == .ident) try w.names.put(w.l.arena, w.l.file.str(ex.strOf(e)), {});
+        var buf: [3]Ast.ExprId = undefined;
+        for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+    }
+};
+
+/// An undisciplined net of `module` — §7.2.1's discrete default.
+fn netDecl(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (module.nets) |n| if (n.name == name and n.discipline == .none) return true;
+    return false;
+}
+
+fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
+    if (id == .none) return;
+    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+    var writes: std.ArrayList(Ast.ExprId) = .empty;
+    try self.file.stmtWrites(funcs, id, self.arena, &writes);
+    for (writes.items) |w| {
+        const t = self.file.lvalueBase(w);
+        if (t != .none) try out.append(self.arena, t);
+    }
+    const Walk = struct {
+        l: *Lower,
+        out: *std.ArrayList(Ast.ExprId),
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            try collectWrites(w.l, s, w.out);
+        }
+    };
+    try self.file.stmtEdges(id, Walk{ .l = self, .out = out });
+}
+
+/// Every §5.10.4 named event of `module` a statement tree triggers or waits on,
+/// name → first token.
+const EventRefs = struct {
+    l: *Lower,
+    module: *const Ast.ModuleDecl,
+    names: std.StringArrayHashMapUnmanaged(u32) = .empty,
+    fn isEvent(w: *const EventRefs, s: Ast.StrId) bool {
+        for (w.module.events) |ev| if (ev == s) return true;
+        return false;
+    }
+    pub fn stmt(w: *EventRefs, s: Ast.StmtId) Oom!void {
+        if (s == .none) return;
+        switch (w.l.file.stmt(s)) {
+            .event_trigger => |t| if (w.isEvent(t.name)) try w.names.put(w.l.arena, w.l.file.str(t.name), w.l.file.stmtTok(s)),
+            else => {}, // else: only a trigger names an event outside an expression
+        }
+        try w.l.file.stmtEdges(s, w);
+    }
+    pub fn expr(w: *EventRefs, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+        if (e == .none) return;
+        const ex = &w.l.file.exprs;
+        if (ex.tag(e) == .ident and w.isEvent(ex.strOf(e))) try w.names.put(w.l.arena, w.l.file.str(ex.strOf(e)), ex.mainTok(e));
+        var buf: [3]Ast.ExprId = undefined;
+        for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+    }
 };
 
 pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    // §8.5: an `always` block and a continuous assignment are discrete
-    // PROCESSES — each re-runs whenever what it reads changes, so what its
-    // target holds is a function of the 8.5.1 event queue. That queue is the
-    // mixed-signal kernel's, and until the testbench can run it the answer is a
-    // refusal that names it (E0437), never a silent constant.
-    for (module.discrete) |blk| if (blk.is_always)
-        try self.err(blk.main_tok, .E0437, "an `always` block re-runs on §8.5.1's event queue, which VerA does not run beside a device yet", .{});
-    for (module.assigns) |a|
-        try self.err(a.main_tok, .E0437, "a continuous assignment is a §8.5.3.1 process on the event queue, which VerA does not run beside a device yet", .{});
     if (module.discrete.len == 0) return;
+    // §7.3.6.1/§7.3.6.2: a named event triggered in one context and waited on
+    // in the other crosses the A/D boundary — an A2D or an explicit D2A event,
+    // neither of which the mixed-signal kernel carries yet. Refused rather than
+    // lowered as two unrelated events that never meet.
+    if (self.mixed_signal and module.events.len != 0) {
+        var dig: EventRefs = .{ .l = self, .module = module };
+        for (module.discrete) |blk| try dig.stmt(blk.body);
+        var ana: EventRefs = .{ .l = self, .module = module };
+        for (module.analog) |blk| try ana.stmt(blk.body);
+        for (ana.names.keys(), ana.names.values()) |name, tok| if (dig.names.contains(name))
+            try self.err(tok, .E0437, "named event `{s}` is used in both contexts, and the kernel carries no event across the A/D boundary yet (§7.3.6.1, §7.3.6.2)", .{name});
+    }
 
-    var ctx: DiscreteCtx = .{};
+    var ctx: DiscreteCtx = .{ .mixed = self.mixed_signal };
     // ANALOG functions only. §4.7.3/§7.3.7's rule is that an *analog* function
     // may not be called from the discrete context; a DIGITAL function called
     // from a digital process is the ordinary case and must not be refused.
@@ -124,6 +290,9 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
 // discrete half in the engine, not a bigger version of this function — and if
 // one ever lands, this stays as its constant-folding fast path.
 pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // A mixed module's `initial` blocks run on the kernel, with the rest of
+    // its digital half: their writes are discrete inputs, not constants.
+    if (self.mixed_signal) return;
     for (module.discrete) |blk| {
         // `always` is refused at the keyword (E0205, parser): it re-runs on an
         // event, so it has no constant reading to collect. Reporting its body
@@ -210,7 +379,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
         if (t == .none) continue;
         const name = self.file.str(ex.strOf(t));
         if (discrete) {
-            if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, context);
+            if (self.vars.contains(name) or self.discrete_inputs.contains(name)) try ctx.assigned.put(self.arena, name, context);
         } else if (ctx.assigned.get(name)) |dtok| {
             var b = self.errWith(self.file.exprs.mainTok(t), .E0432);
             b.msg("`{s}`", .{name});
@@ -286,6 +455,14 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
         // contexts: an operator carries state from one accepted timepoint to the
         // next, and none of these has a timepoint to advance.
         if (tag == .filter_call) try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where});
+        // What the mixed-signal kernel cannot do yet, named by the clause that
+        // asks for it. Both are legal Verilog-AMS (§7.3.3/§7.3.5).
+        if (ctx.mixed) switch (tag) {
+            .event_function => try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel has no analog-event monitor yet", .{ self.file.str(ex.strOf(e)), ctx.where }),
+            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel has no analog-event monitor yet", .{ctx.where}),
+            .branch_access, .port_access => try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, which the kernel does not do yet", .{ctx.where}),
+            else => {}, // else: every other tag is executable or judged elsewhere
+        };
         if (tag == .call) {
             const name = self.file.str(ex.strOf(e));
             if (ctx.funcs.contains(name)) {
