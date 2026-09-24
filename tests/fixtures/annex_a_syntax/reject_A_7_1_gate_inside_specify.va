@@ -12,6 +12,11 @@
 //
 // VerA reports E0207 "found `buf`, which begins no A.7.1 specify_item".
 //
+// `A.7` (Specify section) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.7
 //! lrm A.7.1
 //! reject E0207
 //! reject begins no A.7.1 specify_item

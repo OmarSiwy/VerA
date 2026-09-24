@@ -38,6 +38,13 @@
 // README's CANNOT RUN case as well, which would have swallowed the whole file;
 // that verdict is retired — ch06_hierarchy/module_definition.va now runs.)
 //
+// `A` (the annex, whose first sentence is that source "is derived from the
+// starting symbol source_text") and `A.1` (Source text, the heading over
+// A.1.1–A.1.9) are cited as well: this file derives from `source_text`
+// through A.1.2 and states nothing either heading does not.
+//
+//! lrm A
+//! lrm A.1
 //! lrm A.1.2
 //! lrm A.1.3
 //! lrm 3.6.2.1

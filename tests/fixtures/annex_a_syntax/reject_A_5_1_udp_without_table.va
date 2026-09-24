@@ -13,6 +13,11 @@
 //
 // VerA reports E0207 "found endprimitive: a udp_body is a `table … endtable`".
 //
+// `A.5` (UDP declaration and instantiation) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.5
 //! lrm A.5.1
 //! reject E0207
 //! reject a udp_body is a

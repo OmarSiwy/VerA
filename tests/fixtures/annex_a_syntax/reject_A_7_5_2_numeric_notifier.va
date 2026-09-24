@@ -11,6 +11,11 @@
 // VerA refuses the argument with E0207 "the notifier argument of `$setup`
 // names a variable".
 //
+// `A.7.5` (System timing checks) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.7.5
 //! lrm A.7.5.2
 //! reject notifier
 module annex_a_numeric_notifier(o, a, clk);
