@@ -64,6 +64,8 @@ const Name = struct { scope: u32, str: Ast.StrId };
 // which address names which element.
 const Array = struct { count: u32, low: i64, high: i64 };
 
+pub const Watcher = enum { monitor };
+
 pub const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
@@ -155,10 +157,15 @@ pub const Run = struct {
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
-    /// What the monitor last printed. §17.1.3 fires "whenever any argument
-    /// changes", and comparing the rendered line is how that is decided —
-    /// see `monitorTick`.
-    monitor_last: ?[]const u8 = null,
+    /// The slots the standing monitor's arguments read — §17.1.3's "variable
+    /// or an expression in the argument list". Clock queries read no slot,
+    /// which is the clause's `$time`/`$stime`/`$realtime` exception.
+    monitor_slots: std.ArrayList(u32) = .empty,
+    /// Per slot, who is told when its value changes. `store` tests this on
+    /// every change and nothing else: it is the one value-change hook, whose
+    /// first watcher is §17.1.3's monitor. §18's VCD value changes and VAMS
+    /// §8.5's implicit D2A are the same event and would each add a member.
+    watch: []std.EnumSet(Watcher) = &.{},
 
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         const start = self.starts[@min(tok, self.starts.len - 1)];
@@ -665,6 +672,8 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     var e: Elab = .{};
     try declare(&r, &e, m, 0, &.{}, 0);
     r.values = e.values.items;
+    r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
+    @memset(r.watch, .initEmpty());
     r.nets = e.nets.items;
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
     @memset(r.types, .{ .width = 0, .signed = false });
@@ -753,7 +762,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             },
             .monitor_tick => {
                 r.monitor_pending = false;
-                try display.monitorPrint(&r, scratch.allocator(), false);
+                try display.monitorPrint(&r, scratch.allocator());
             },
             // §6.1.3: a cancelled transition never gets here — the scheduler
             // dropped it — so what arrives is the one still in flight.

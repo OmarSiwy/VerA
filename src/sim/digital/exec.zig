@@ -347,16 +347,20 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // Not copied when unchanged — which also covers `planes` BEING
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
-    // §17.1.3: a standing monitor reports at the end of a timestep in which
-    // something moved. One event however many values moved — the monitor
-    // prints its whole argument list, so a second tick could only reprint
-    // the same line.
-    if (changed and self.monitor != null and self.monitor_on and !self.monitor_pending) {
-        self.monitor_pending = true;
-        try enqueueMonitor(self, .monitor_tick);
-    }
     if (!changed) return;
+    // The value-change hook: every watcher of this slot hears it here.
+    if (self.watch[target].contains(.monitor)) try requestMonitor(self);
     return wake(self, target, before, dest.bit(0));
+}
+
+/// §17.1.3: "the entire argument list is displayed at the end of the time
+/// step". One event however many watched values moved, and however often —
+/// a value that changes and changes back within the step still "changes
+/// value", so it still prints, with the settled values.
+fn requestMonitor(self: *Run) Error!void {
+    if (self.monitor == null or !self.monitor_on or self.monitor_pending) return;
+    self.monitor_pending = true;
+    try enqueueMonitor(self, .monitor_tick);
 }
 
 /// Resume every process suspended on `target` whose edge matches. Split out
@@ -680,19 +684,26 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     // What it reports is the value at the end of the timestep,
                     // so evaluation waits for the `.monitor` region.
                     .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope } }),
+                    // §17.1.3 one standing monitor: a new one replaces the
+                    // old, watch list and all. Its first line is at the end
+                    // of this step like every other, so it shows settled
+                    // values.
                     .monitor => |sh| {
+                        for (self.monitor_slots.items) |at| self.watch[at].remove(.monitor);
+                        self.monitor_slots.clearRetainingCapacity();
+                        for (s.args) |arg| if (arg != .none and self.file.exprs.tag(arg) != .str_literal)
+                            try compile.sensitivity(self, arg, &self.monitor_slots);
+                        for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
                         self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope };
-                        self.monitor_last = null;
-                        try display.monitorPrint(self, scratch, true);
+                        try requestMonitor(self);
                     },
+                    // "$monitoron shall produce a display immediately after
+                    // it is invoked, regardless of whether a value change has
+                    // taken place" — so whether it was already on is not asked.
+                    // Turning it off is silent.
                     .monitor_enable => |on| {
-                        const was = self.monitor_on;
                         self.monitor_on = on;
-                        // "$monitoron ... produces a display immediately", so
-                        // the re-enable itself is an event. Turning it off is
-                        // silent, and turning on what was already on is not a
-                        // transition.
-                        if (on and !was) try display.monitorPrint(self, scratch, true);
+                        if (on) try display.monitorPrint(self, scratch);
                     },
                     .timeformat => {
                         const ex = &self.file.exprs;
