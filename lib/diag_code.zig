@@ -661,6 +661,15 @@ pub const Code = enum(u16) {
     /// §7.8 a connect statement's two disciplines are not one discrete and
     /// one continuous.
     E0923,
+    /// §7.6 Table 7-2 a connect statement designates a connect module whose
+    /// continuous/discrete port directions are not a supported combination.
+    E0982,
+    /// A.6.2 a blocking, nonblocking or procedural `assign`/`deassign`
+    /// statement whose target is a net, not a variable (§8.5.3.2–§8.5.3.4).
+    E0482,
+    /// A.3.3 a switch terminal the grammar makes a `net_lvalue` names a
+    /// variable (§8.5.3.5).
+    E0483,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5486,6 +5495,69 @@ fn infoOf(c: Code) Info {
             \\continuous and discrete ports. Two disciplines of one domain are the
             \\7.7.2 `resolveto` form's business, which resolves a net instead of
             \\bridging it.
+            ,
+        },
+        .E0982 => .{
+            .title = "connect module port directions are not a Table 7-2 combination",
+            .lrm = "7.6",
+            .explain =
+            \\LRM 7.6: "The directional qualifiers of the discrete port determine
+            \\the default scenarios where the module can be instantiated. The
+            \\following combinations of directional qualifiers are supported for
+            \\the continuous and discrete disciplines of a connect module:" and
+            \\Table 7-2 lists exactly three — continuous input with discrete
+            \\output, continuous output with discrete input, and inout with inout.
+            \\
+            \\A connect statement (7.7.1) designates a module to be a connect
+            \\module; with any other pair (two inputs, two outputs, one inout)
+            \\there is no scenario it can be inserted in. 7.7.1's direction
+            \\overrides "are used to define the type of connect module", so the
+            \\pair is judged after them.
+            \\
+            \\Declare the ports as one of the three pairs, or override them in
+            \\the connect statement: `connect cm input electrical, output
+            \\ddiscrete;`.
+            ,
+        },
+        .E0482 => .{
+            .title = "a procedural assignment writes a variable, not a net",
+            .lrm = "A.6.2",
+            .explain =
+            \\A.6.2 derives every procedural write from `variable_lvalue`:
+            \\`blocking_assignment ::= variable_lvalue = ...`,
+            \\`nonblocking_assignment ::= variable_lvalue <= ...`, and the
+            \\procedural continuous `assign variable_assignment` and `deassign
+            \\variable_lvalue`. Only `force` and `release` also take a
+            \\`net_lvalue`.
+            \\
+            \\LRM 8.5.3 says what each statement schedules — a blocking one
+            \\"performs the assignment to the left-hand side", a nonblocking one
+            \\"schedules the update as a nonblocking assign update event" — and
+            \\both are updates of a stored value. A net holds no stored value:
+            \\its value is the resolution of its drivers (E0438 is the mirror,
+            \\a continuous assignment to a variable).
+            \\
+            \\Declare the target as a `reg`/`integer`/`real`, drive the net
+            \\with a continuous assignment, or use `force`.
+            ,
+        },
+        .E0483 => .{
+            .title = "a switch terminal is a net, not a variable",
+            .lrm = "A.3.3",
+            .explain =
+            \\A.3.3 makes the terminals a switch drives nets:
+            \\`inout_terminal ::= net_lvalue` for both terminals of the pass
+            \\switches (`tran`, `tranif0`, `tranif1` and the `r` forms) and
+            \\`output_terminal ::= net_lvalue` for the output of a MOS or CMOS
+            \\switch.
+            \\
+            \\LRM 8.5.3.5: "Switch processing shall consider all the devices in
+            \\a bidirectional switch-connected net before it can determine the
+            \\appropriate value for any node on the net" — the switch is a
+            \\driver of a NET, resolved with the net's other drivers. A `reg`
+            \\has no drivers to resolve.
+            \\
+            \\Declare the terminal as a `wire`.
             ,
         },
 

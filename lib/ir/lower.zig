@@ -1160,6 +1160,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
     try lower_context.declareDiscreteInputs(self, module);
+    try lower_context.checkSwitchTerminals(self, module); // A.3.3, §8.5.3.5
     // §8.5.3.5 switch processing is the discrete cycle's; with no discrete
     // half to run it on, the device carries nothing for the switch.
     if (!self.out.mixed_signal) for (module.switches) |sw|
@@ -1506,7 +1507,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // Reported here because it is only knowable once every declaration is in —
     // and it has to be reported by somebody, since nothing else lowers the block.
     for (self.initial_state.keys(), self.initial_state.values()) |name, a| {
-        if (!self.vars.contains(name) and !self.arrays.contains(name))
+        // A net is declared: writing one is A.6.2's E0482 (`checkDiscreteContext`).
+        if (!self.vars.contains(name) and !self.arrays.contains(name) and !lower_context.isNetSpelling(self.file, module, name))
             try self.err(a.tok, .E0313, "`{s}`", .{name});
     }
 
