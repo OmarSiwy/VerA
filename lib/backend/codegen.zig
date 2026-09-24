@@ -967,7 +967,7 @@ pub fn dynCtrlArgs(k: OpKind) []const usize {
         .absdelay => &.{1}, // td  ("dynamic: expr, td"; maxdelay is the constant one)
         .idt => &.{ 1, 2 }, // ic, assert
         .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
-        else => &.{},
+        .none, .ddt, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
     };
 }
 

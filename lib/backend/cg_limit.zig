@@ -270,7 +270,7 @@ fn decline(g: *Gen, list: *std.ArrayList([]const u8), args: []const Mir.Value, w
 fn spell(g: *Gen, args: []const Mir.Value) []const u8 {
     const alg: []const u8 = if (args.len >= 2) switch (g.mir.valueDef(g.an.rv(args[1]))) {
         .str_const => |s| s,
-        else => "?",
+        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => "?",
     } else "?";
     const pair = probePair(g, args);
     const hi: []const u8 = if (pair) |p| uName(g, p[0]) else "?";
@@ -298,7 +298,7 @@ fn probePair(g: *const Gen, args: []const Mir.Value) ?[2]u32 {
             if (a != .block_param or b != .block_param) return null;
             break :blk .{ a.block_param, b.block_param };
         },
-        else => return null,
+        .undef, .float_const, .int_const, .str_const, .param_ref => return null,
     };
     // §5.4.2 a branch-flow unknown is an ampere. These limiters are voltage
     // clamps; writing one back as if it were a potential is nonsense.
@@ -318,7 +318,7 @@ fn algOf(g: *const Gen, args: []const Mir.Value) ?Alg {
         // §9.17.3 also allows a user analog function here. That is a call, not
         // a string, and it needs the whole body — handled in lowering
         // (`Lower.lowerLimitUser`), so it never reaches the clamp list.
-        else => return null,
+        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => return null,
     };
     return std.meta.stringToEnum(Alg, s);
 }

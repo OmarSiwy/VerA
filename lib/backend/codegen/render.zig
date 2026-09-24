@@ -100,7 +100,7 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
             if (self.an.tyOf(v) == .str) return switch (def) {
                 .str_const => |s| self.b("@as(i64, {d})", .{Lower.strToInt(s, 64)}),
                 // Not a literal, so §3.3 leaves it with no numeric value.
-                else => self.b("@as(i64, 0)", .{}),
+                .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => self.b("@as(i64, 0)", .{}),
             };
             pinLanes(self, v); // a real→int collapse is a scalar decision
             // Saturating (§4.2.1.1 only defines the rounding): the device
@@ -256,7 +256,7 @@ pub fn maskCmp(self: *Gen, cond: Mir.Value) ?Mir.Inst {
     if (def != .inst_result) return null;
     return switch (self.mir.instOp(def.inst_result)) {
         .flt, .fgt, .fle, .fge, .feq, .fne => def.inst_result,
-        else => null,
+        else => null, // else: only the six §4.2.5 REAL comparisons have an `S` mask form
     };
 }
 
@@ -321,7 +321,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
                     .flt, .fgt => "lt",
                     .fle, .fge => "le",
                     .feq, .fne => "eq",
-                    else => unreachable,
+                    else => unreachable, // else: `maskCmp` returns only the six real comparisons
                 };
                 try self.b("((", .{});
                 try renderVal(self, if (swap_ops) d.rhs else d.lhs, .real);
@@ -369,7 +369,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             .ile, .fle => "<= 0",
             .igt, .fgt => "> 0",
             .ige, .fge => ">= 0",
-            else => null,
+            else => null, // else: §3.3.1 relates strings with these six; any other op falls to its numeric form
         };
         if (rel) |r| {
             try self.b("@as(i64, @intFromBool(zStrCmp(", .{});
@@ -415,7 +415,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             try method2(self, a, switch (op) {
                 .fadd => "add",
                 .fsub => "sub",
-                else => "mul",
+                else => "mul", // else: the prong is `.fadd, .fsub, .fmul`
             }, b2);
         },
         // `fdiv` keeps the dual op (see above), and §4.3.1/§4.3.2 math is one
@@ -648,7 +648,7 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
         .unary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1),
         .binary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1) or
             foldHidesSlot(self, @enumFromInt(row.b), depth + 1),
-        else => true,
+        .ternary, .phi, .branch, .jump, .call => true,
     };
 }
 

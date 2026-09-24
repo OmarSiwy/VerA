@@ -187,7 +187,8 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             try self.ind(depth);
             try self.b("}}\n", .{});
         },
-        else => unreachable,
+        // `an.term` is the block's branch or jump, found by opcode.
+        .unary, .binary, .ternary, .phi, .call => unreachable,
     }
 }
 

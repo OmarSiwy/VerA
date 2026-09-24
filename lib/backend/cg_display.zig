@@ -246,7 +246,7 @@ fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {
     return switch (g.mir.valueDef(g.an.rv(args[0]))) {
         .int_const => |x| x,
         .float_const => |x| std.math.lossyCast(i64, x),
-        else => 1,
+        .undef, .str_const, .param_ref, .block_param, .inst_result => 1,
     };
 }
 
