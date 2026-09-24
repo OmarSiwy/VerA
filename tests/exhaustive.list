@@ -95,8 +95,6 @@ lib/ir/lower/constfold.zig integerSourceSigned Ast.UnaryOp
 lib/ir/lower/constfold.zig isShiftOperand Ast.ExprTag
 lib/ir/lower/constfold.zig mixedShiftComparison Ast.BinaryOp
 lib/ir/lower/context.zig collectInitialStmt Ast.Stmt
-lib/ir/lower/context.zig scanContextExpr Ast.ExprTag
-lib/ir/lower/context.zig scanContextExpr Ast.ExprTag
 lib/ir/lower/contrib.zig branchKey Ast.ExprTag
 lib/ir/lower/contrib.zig coeffIsConst Mir.DefKind
 lib/ir/lower/contrib.zig containsDdt Ast.ExprTag
@@ -122,7 +120,6 @@ lib/ir/lower/event.zig formatBits Ast.ExprTag
 lib/ir/lower/event.zig formatBits Ast.UnaryOp
 lib/ir/lower/event.zig lowerEventExpr Ast.ExprTag
 lib/ir/lower/expr.zig cmp Ast.BinaryOp
-lib/ir/lower/expr.zig hasStatefulOp Ast.ExprTag
 lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
 lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
 lib/ir/lower/expr.zig lowerConcat Mir.DefKind
@@ -131,12 +128,9 @@ lib/ir/lower/expr.zig lowerUnary Mir.DefKind
 lib/ir/lower/func.zig funcArrayIn Ast.ExprTag
 lib/ir/lower/func.zig funcArrayOut Ast.ExprTag
 lib/ir/lower/func.zig scanCallSites Ast.Stmt
-lib/ir/lower/func.zig scanCallSitesExpr Ast.ExprTag
 lib/ir/lower/hier_name.zig checkAliasCall Ast.ExprTag
 lib/ir/lower/node.zig nodeOf Ast.ExprTag
 lib/ir/lower/param.zig rangeBound Ast.ExprTag
-lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
-lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
 lib/ir/lower/stmt.zig arrayRef Ast.ExprTag
 lib/ir/lower/stmt.zig resolveLvalue Ast.ExprTag
 lib/ir/lower/table_model.zig isTableArray Ast.ExprTag
@@ -164,11 +158,9 @@ lib/ir/proof/prover.zig valueSpan Mir.DefKind
 lib/ir/proof/prover.zig warnNotFinite Mir.DefKind
 src/sim/digital/compile.zig checkEvent Ast.ExprTag
 src/sim/digital/compile.zig compileStmt Ast.Stmt
-src/sim/digital/compile.zig constantExpression Ast.ExprTag
 src/sim/digital/compile.zig infer Ast.ExprTag
 src/sim/digital/compile.zig leafType Ast.ExprTag
 src/sim/digital/compile.zig readSlots Ast.Stmt
-src/sim/digital/compile.zig sensitivity Ast.ExprTag
 src/sim/digital/compile.zig unsizedConcatOperand Ast.BinaryOp
 src/sim/digital/compile.zig unsizedConcatOperand Ast.ExprTag
 src/sim/digital/compile.zig unsizedConcatOperand Ast.UnaryOp

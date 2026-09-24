@@ -213,40 +213,21 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
             try b.emit();
         }
     }
+    // Every edge but the four arms below, which read less than all of them.
+    const Walk = struct {
+        l: *Lower,
+        context: if (discrete) u32 else bool,
+        ctx: *DiscreteCtx,
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+            try scanContextExpr(w.l, e, discrete, if (discrete) {} else w.context, w.ctx);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            try scanContext(w.l, s, discrete, w.context, w.ctx);
+        }
+    };
     switch (self.file.stmt(id)) {
+        // The target is a write, collected above; only the value is read.
         .assign => |a| try scanContextExpr(self, a.value, discrete, is_initial, ctx),
-        .block => |b| for (b.body) |s| try scanContext(self, s, discrete, context, ctx),
-        .if_stmt => |s| {
-            try scanContextExpr(self, s.cond, discrete, is_initial, ctx);
-            try scanContext(self, s.then_s, discrete, context, ctx);
-            try scanContext(self, s.else_s, discrete, context, ctx);
-        },
-        .case_stmt => |s| {
-            try scanContextExpr(self, s.scrutinee, discrete, is_initial, ctx);
-            for (s.arms) |arm| {
-                for (arm.labels) |l| try scanContextExpr(self, l, discrete, is_initial, ctx);
-                try scanContext(self, arm.body, discrete, context, ctx);
-            }
-        },
-        .for_stmt => |s| {
-            try scanContext(self, s.init, discrete, context, ctx);
-            try scanContextExpr(self, s.cond, discrete, is_initial, ctx);
-            try scanContext(self, s.step, discrete, context, ctx);
-            try scanContext(self, s.body, discrete, context, ctx);
-        },
-        .while_stmt => |s| {
-            try scanContextExpr(self, s.cond, discrete, is_initial, ctx);
-            try scanContext(self, s.body, discrete, context, ctx);
-        },
-        .repeat_stmt => |s| {
-            try scanContextExpr(self, s.count, discrete, is_initial, ctx);
-            try scanContext(self, s.body, discrete, context, ctx);
-        },
-        .event_control => |s| {
-            try scanContextExpr(self, s.event, discrete, is_initial, ctx);
-            try scanContext(self, s.body, discrete, context, ctx);
-        },
-        .sys_task => |s| for (s.args) |a| try scanContextExpr(self, a, discrete, is_initial, ctx),
         // §7.3, the write half: "Read operations of nets and variables in both
         // domains are allowed from both contexts. WRITE operations of nets and
         // variables are only allowed from the context of their domain." A `<+`
@@ -274,15 +255,12 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
             b.msg("indirectly contributed from {s}", .{ctx.where});
             try b.emit();
         } else try scanContextExpr(self, s.eqn, discrete, is_initial, ctx),
-        .empty, .event_trigger, .disable, .jump => {},
+        .jump => {},
+        else => try self.file.stmtEdges(id, Walk{ .l = self, .context = context, .ctx = ctx }), // else: stmtEdges is exhaustive
     }
 }
 
-/// Every expression reachable from a context statement. The child edges are the
-/// per-tag column usage documented on `Ast.ExprTag`; the `args` whitelist is the
-/// set of tags whose `extra` is an ExprId list offset — the others park a literal
-/// value or a StrId list there, and reading them as expressions would walk
-/// garbage.
+/// Every expression reachable from a context statement (`ExprStore.children`).
 /// §5.2.1: "digital values cannot be accessed from the analog initial block as
 /// they have not yet been assigned when the analog initial block is executed."
 /// Only the READ is diagnosed, and only inside an `analog initial` — the same
@@ -293,27 +271,24 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
     if (discrete) {
-        switch (tag) {
-            // §4.5.15, verbatim: analog operators "can not be used inside an initial
-            // or always block". Same code as the analog-function-body and
-            // analog-initial cases, because it is the same sentence's family of
-            // contexts: an operator carries state from one accepted timepoint to the
-            // next, and none of these has a timepoint to advance.
-            .filter_call => try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where}),
-            .call => {
-                const name = self.file.str(ex.strOf(e));
-                if (ctx.funcs.contains(name)) {
-                    var b = self.errWith(self.file.exprs.mainTok(e), .E0430);
-                    b.msg("`{s}`", .{name});
-                    b.note(
-                        "an analog function shall only be called from an analog block " ++
-                            "or from another analog function",
-                        .{},
-                    );
-                    try b.emit();
-                }
-            },
-            else => {},
+        // §4.5.15, verbatim: analog operators "can not be used inside an initial
+        // or always block". Same code as the analog-function-body and
+        // analog-initial cases, because it is the same sentence's family of
+        // contexts: an operator carries state from one accepted timepoint to the
+        // next, and none of these has a timepoint to advance.
+        if (tag == .filter_call) try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where});
+        if (tag == .call) {
+            const name = self.file.str(ex.strOf(e));
+            if (ctx.funcs.contains(name)) {
+                var b = self.errWith(self.file.exprs.mainTok(e), .E0430);
+                b.msg("`{s}`", .{name});
+                b.note(
+                    "an analog function shall only be called from an analog block " ++
+                        "or from another analog function",
+                    .{},
+                );
+                try b.emit();
+            }
         }
     } else if (tag == .ident) {
         const name = self.file.str(ex.strOf(e));
@@ -324,19 +299,6 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
             try b.emit();
         }
     }
-    try scanContextExpr(self, ex.lhs(e), discrete, is_initial, ctx);
-    try scanContextExpr(self, ex.rhs(e), discrete, is_initial, ctx);
-    if (tag == .ternary) try scanContextExpr(self, ex.ternaryElse(e), discrete, is_initial, ctx);
-    switch (tag) {
-        .call,
-        .builtin_call,
-        .sys_call,
-        .filter_call,
-        .noise_call,
-        .event_function,
-        .concat,
-        .assign_pattern,
-        => for (ex.args(e)) |a| try scanContextExpr(self, a, discrete, is_initial, ctx),
-        else => {},
-    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| try scanContextExpr(self, c, discrete, is_initial, ctx);
 }

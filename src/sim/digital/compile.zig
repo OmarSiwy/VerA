@@ -164,25 +164,20 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 
 fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
-    return switch (ex.tag(e)) {
-        .int_literal, .logic_literal => true,
-        .unary => constantExpression(self, ex.lhs(e)),
-        .binary, .multi_concat => constantExpression(self, ex.lhs(e)) and constantExpression(self, ex.rhs(e)),
-        .ternary => constantExpression(self, ex.lhs(e)) and constantExpression(self, ex.rhs(e)) and constantExpression(self, ex.ternaryElse(e)),
-        .sys_call, .concat => blk: {
-            // §17.7: a call that reads the clock is never constant, however
-            // constant its (absent) arguments are. Without this `$time`
-            // would be accepted as a replication count.
-            if (ex.tag(e) == .sys_call) {
-                if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
-                    if (f.readsClock()) break :blk false;
-                }
-            }
-            for (ex.args(e)) |arg| if (!constantExpression(self, arg)) break :blk false;
-            break :blk true;
+    switch (ex.tag(e)) {
+        .int_literal, .logic_literal => return true,
+        .unary, .binary, .multi_concat, .ternary, .concat => {},
+        // §17.7: a call that reads the clock is never constant, however
+        // constant its (absent) arguments are. Without this `$time`
+        // would be accepted as a replication count.
+        .sys_call => if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
+            if (f.readsClock()) return false;
         },
-        else => false,
-    };
+        else => return false, // else: not a form this executor folds
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (!constantExpression(self, c)) return false;
+    return true;
 }
 
 // Bare unsized numbers are prohibited by §5.1.14. Its application to
@@ -578,18 +573,11 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
             for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
             try sensitivity(self, ex.rhs(e), out);
         },
-        .unary => try sensitivity(self, ex.lhs(e), out),
-        .binary, .multi_concat => {
-            try sensitivity(self, ex.lhs(e), out);
-            try sensitivity(self, ex.rhs(e), out);
+        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat => {
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try sensitivity(self, c, out);
         },
-        .ternary => {
-            try sensitivity(self, ex.lhs(e), out);
-            try sensitivity(self, ex.rhs(e), out);
-            try sensitivity(self, ex.ternaryElse(e), out);
-        },
-        .sys_call, .concat => for (ex.args(e)) |arg| try sensitivity(self, arg, out),
-        else => unreachable, // checkExpr admitted only the forms above
+        else => unreachable, // else: checkExpr admitted only the forms above
     }
 }
 

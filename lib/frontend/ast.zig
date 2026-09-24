@@ -377,6 +377,32 @@ pub const ExprStore = struct {
     pub fn nameParts(self: *const ExprStore, id: ExprId) []const StrId {
         return @ptrCast(self.list(self.extraOf(id)));
     }
+
+    /// Every child-expression edge of `id`, in source order: the one
+    /// exhaustive statement of the per-tag column usage `ExprTag` documents, so
+    /// a new tag is a compile error here instead of a silent `else` in every
+    /// walker. Elements may be `.none` (an omitted argument, a one-terminal
+    /// probe). A list tag returns its pool slice; `buf` holds the others.
+    pub fn children(self: *const ExprStore, id: ExprId, buf: *[3]ExprId) []const ExprId {
+        switch (self.tag(id)) {
+            .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf, .ident => return &.{},
+            // StrId lists, not expressions.
+            .hier_ident, .event_initial_step, .event_final_step => return &.{},
+            .unary, .event_posedge, .event_negedge, .event_driver_update, .port_access => {
+                buf[0] = self.lhs(id);
+                return buf[0..1];
+            },
+            .binary, .index, .range, .multi_concat, .event_or, .branch_access => {
+                buf[0..2].* = .{ self.lhs(id), self.rhs(id) };
+                return buf[0..2];
+            },
+            .ternary => {
+                buf.* = .{ self.lhs(id), self.rhs(id), self.ternaryElse(id) };
+                return buf;
+            },
+            .call, .builtin_call, .sys_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => return self.args(id),
+        }
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -1430,6 +1456,75 @@ pub const SourceFile = struct {
         return self.stmt_toks.items[@intFromEnum(id)];
     }
 
+    /// What an expression edge of a statement is to that statement.
+    pub const Edge = enum {
+        /// Evaluated for its value.
+        read,
+        /// §5.7 an assignment target (A.6.2 `variable_lvalue`): written.
+        write,
+        /// §5.6 a contribution's `branch_lvalue` (A.8.5): the branch driven.
+        branch,
+    };
+
+    /// Every edge of statement `id` — `v.expr(e, edge)` for each of its own
+    /// expressions, `v.stmt(s)` for each child statement — in source order,
+    /// except that an assignment's intra-assignment timing comes after its
+    /// value. `.none` operands and children are passed through. `v` is
+    /// duck-typed at comptime; this is the one exhaustive statement of a
+    /// statement's edges, the `children` of `Stmt`.
+    pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
+        switch (self.stmt(id)) {
+            .empty, .event_trigger, .disable => {},
+            .block => |b| for (b.body) |s| try v.stmt(s),
+            .assign => |a| {
+                try v.expr(a.target, .write);
+                try v.expr(a.value, .read);
+                try v.expr(a.timing, .read);
+            },
+            .contribute => |c| {
+                try v.expr(c.lhs, .branch);
+                try v.expr(c.rhs, .read);
+            },
+            .indirect => |c| {
+                try v.expr(c.lhs, .branch);
+                try v.expr(c.probe, .read);
+                try v.expr(c.eqn, .read);
+            },
+            .if_stmt => |s| {
+                try v.expr(s.cond, .read);
+                try v.stmt(s.then_s);
+                try v.stmt(s.else_s);
+            },
+            .case_stmt => |s| {
+                try v.expr(s.scrutinee, .read);
+                for (s.arms) |arm| {
+                    for (arm.labels) |l| try v.expr(l, .read);
+                    try v.stmt(arm.body);
+                }
+            },
+            .for_stmt => |s| {
+                try v.stmt(s.init);
+                try v.expr(s.cond, .read);
+                try v.stmt(s.step);
+                try v.stmt(s.body);
+            },
+            .while_stmt => |s| {
+                try v.expr(s.cond, .read);
+                try v.stmt(s.body);
+            },
+            .repeat_stmt => |s| {
+                try v.expr(s.count, .read);
+                try v.stmt(s.body);
+            },
+            .event_control => |s| {
+                try v.expr(s.event, .read);
+                try v.stmt(s.body);
+            },
+            .sys_task => |s| for (s.args) |a| try v.expr(a, .read),
+            .jump => |j| try v.expr(j.value, .read),
+        }
+    }
+
     /// Every lvalue statement `id` writes through its OWN expressions, appended
     /// to `out` in source order. Child statements are not entered: every caller
     /// already walks them, with scope rules (named blocks, event bodies) of its
@@ -1453,65 +1548,36 @@ pub const SourceFile = struct {
     /// `lvalueBase` for the declaration it names.
     pub fn stmtWrites(self: *const SourceFile, funcs: []const FuncDecl, id: StmtId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
         if (id == .none) return;
-        switch (self.stmt(id)) {
-            .assign => |a| {
-                try self.addLvalue(a.target, gpa, out);
-                try self.exprWrites(funcs, a.value, gpa, out);
-                try self.exprWrites(funcs, a.timing, gpa, out);
-            },
-            .contribute => |s| try self.exprWrites(funcs, s.rhs, gpa, out),
-            .indirect => |s| {
-                try self.exprWrites(funcs, s.probe, gpa, out);
-                try self.exprWrites(funcs, s.eqn, gpa, out);
-            },
-            .if_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
-            .case_stmt => |s| {
-                try self.exprWrites(funcs, s.scrutinee, gpa, out);
-                for (s.arms) |arm| for (arm.labels) |l| try self.exprWrites(funcs, l, gpa, out);
-            },
-            .for_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
-            .while_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
-            .repeat_stmt => |s| try self.exprWrites(funcs, s.count, gpa, out),
-            .event_control => |s| try self.exprWrites(funcs, s.event, gpa, out),
-            .sys_task => |s| {
-                for (sysWrites(self.str(s.name), s.args)) |w| try self.addLvalue(w, gpa, out);
-                for (s.args) |a| try self.exprWrites(funcs, a, gpa, out);
-            },
-            .jump => |s| try self.exprWrites(funcs, s.value, gpa, out),
-            .empty, .block, .event_trigger, .disable => {},
+        if (self.stmt(id) == .sys_task) {
+            const s = self.stmt(id).sys_task;
+            for (sysWrites(self.str(s.name), s.args)) |w| try self.addLvalue(w, gpa, out);
         }
+        const Writes = struct {
+            file: *const SourceFile,
+            funcs: []const FuncDecl,
+            gpa: std.mem.Allocator,
+            out: *std.ArrayList(ExprId),
+            pub fn expr(w: @This(), e: ExprId, edge: Edge) std.mem.Allocator.Error!void {
+                switch (edge) {
+                    .write => try w.file.addLvalue(e, w.gpa, w.out),
+                    .read => try w.file.exprWrites(w.funcs, e, w.gpa, w.out),
+                    // A branch is driven, not a variable written.
+                    .branch => {},
+                }
+            }
+            pub fn stmt(_: @This(), _: StmtId) std.mem.Allocator.Error!void {}
+        };
+        try self.stmtEdges(id, Writes{ .file = self, .funcs = funcs, .gpa = gpa, .out = out });
     }
 
     /// The expression half of `stmtWrites`.
-    fn exprWrites(self: *const SourceFile, funcs: []const FuncDecl, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
+    fn exprWrites(self: *const SourceFile, funcs: []const FuncDecl, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) std.mem.Allocator.Error!void {
         if (e == .none) return;
         const ex = &self.exprs;
         switch (ex.tag(e)) {
-            .int_literal,
-            .logic_literal,
-            .real_literal,
-            .str_literal,
-            .pos_inf,
-            .neg_inf,
-            .ident,
-            .hier_ident,
-            .event_initial_step,
-            .event_final_step,
             // §4.4 a probe's operands are net and branch references, which no
             // expression writes.
-            .branch_access,
-            .port_access,
-            => {},
-            .unary, .event_posedge, .event_negedge, .event_driver_update => try self.exprWrites(funcs, ex.lhs(e), gpa, out),
-            .binary, .index, .range, .multi_concat, .event_or => {
-                try self.exprWrites(funcs, ex.lhs(e), gpa, out);
-                try self.exprWrites(funcs, ex.rhs(e), gpa, out);
-            },
-            .ternary => {
-                try self.exprWrites(funcs, ex.lhs(e), gpa, out);
-                try self.exprWrites(funcs, ex.rhs(e), gpa, out);
-                try self.exprWrites(funcs, ex.ternaryElse(e), gpa, out);
-            },
+            .branch_access, .port_access => return,
             .call => {
                 const args = ex.args(e);
                 for (funcs) |fd| {
@@ -1525,20 +1591,15 @@ pub const SourceFile = struct {
                     }
                     break;
                 }
-                for (args) |a| try self.exprWrites(funcs, a, gpa, out);
             },
-            .sys_call => {
-                const args = ex.args(e);
-                for (sysWrites(self.str(ex.strOf(e)), args)) |w| try self.addLvalue(w, gpa, out);
-                for (args) |a| try self.exprWrites(funcs, a, gpa, out);
-            },
-            .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
-                for (ex.args(e)) |a| try self.exprWrites(funcs, a, gpa, out);
-            },
+            .sys_call => for (sysWrites(self.str(ex.strOf(e)), ex.args(e))) |w| try self.addLvalue(w, gpa, out),
+            else => {}, // else: every other tag writes only through its children
         }
+        var buf: [3]ExprId = undefined;
+        for (ex.children(e, &buf)) |c| try self.exprWrites(funcs, c, gpa, out);
     }
 
-    fn addLvalue(self: *const SourceFile, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
+    fn addLvalue(self: *const SourceFile, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) std.mem.Allocator.Error!void {
         if (e == .none) return;
         if (self.exprs.tag(e) == .assign_pattern) {
             for (self.exprs.args(e)) |el| try self.addLvalue(el, gpa, out);

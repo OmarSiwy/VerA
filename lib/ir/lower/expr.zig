@@ -658,18 +658,9 @@ pub fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
     if (tag == .filter_call and !lower_analog_op.isHistoryless(self.file.str(ex.strOf(e)))) return true;
-    return switch (tag) {
-        .unary, .index, .range, .multi_concat, .binary, .event_or => hasStatefulOp(self, ex.lhs(e)) or
-            hasStatefulOp(self, ex.rhs(e)),
-        .ternary => hasStatefulOp(self, ex.lhs(e)) or
-            hasStatefulOp(self, ex.rhs(e)) or
-            hasStatefulOp(self, ex.ternaryElse(e)),
-        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern => blk: {
-            for (ex.args(e)) |a| if (hasStatefulOp(self, a)) break :blk true;
-            break :blk false;
-        },
-        else => false,
-    };
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (hasStatefulOp(self, c)) return true;
+    return false;
 }
 
 /// §4.2.7 `&&` / `||` with LRM short-circuit evaluation. The rhs gets its own

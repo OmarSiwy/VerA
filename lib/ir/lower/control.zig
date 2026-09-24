@@ -119,7 +119,6 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
             }
             break :blk false;
         },
-        .unary => isAnalysisOrConst(self, ex.lhs(e)),
         // A.8.4 `parameter_identifier [ constant_range_expression ]`: the base
         // has to name a §3.4.4 array PARAMETER, whose elements `param.zig`
         // scalarizes into `param_index` under `elemKey`'s `name[i]` spelling.
@@ -138,15 +137,13 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
             for (info.dims) |d| w.print("[{d}]", .{d.lo}) catch break :blk false;
             break :blk self.param_index.contains(w.buffered());
         },
-        .binary, .range, .multi_concat => isAnalysisOrConst(self, ex.lhs(e)) and isAnalysisOrConst(self, ex.rhs(e)),
-        .ternary => isAnalysisOrConst(self, ex.lhs(e)) and
-            isAnalysisOrConst(self, ex.rhs(e)) and
-            isAnalysisOrConst(self, ex.ternaryElse(e)),
-        // A.8.4 `constant_analog_built_in_function_call` and
+        // Operators, A.8.4 `constant_analog_built_in_function_call` and
         // `constant_concatenation`: constant when every operand is.
-        .builtin_call, .concat => for (ex.args(e)) |a| {
-            if (!isAnalysisOrConst(self, a)) break false;
-        } else true,
+        .unary, .binary, .range, .multi_concat, .ternary, .builtin_call, .concat => blk: {
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| if (!isAnalysisOrConst(self, c)) break :blk false;
+            break :blk true;
+        },
         // A.8.4 `nature_attribute_reference ::= net_identifier .
         // potential_or_flow . nature_attribute_identifier` — a nature's
         // attribute is fixed at declaration. Any other dotted name is a §6.8
