@@ -566,6 +566,10 @@ pub const VarDecl = struct {
     storage: enum { variable, reg, time } = .variable,
     packed_range: ?Dim = null,
     is_signed: bool = true,
+    /// §6.4.3 / §3.2.1 declared with a `(* desc = ... *)` attribute, which is
+    /// what makes a variable an OUTPUT variable. Recorded for paramset
+    /// variables, where §6.4.3's hiding rule turns on it.
+    desc: bool = false,
 };
 
 /// A.2.2.1 `net_type` — the wired-logic function a net's drivers resolve

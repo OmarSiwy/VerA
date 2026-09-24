@@ -142,6 +142,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
     var overrides: std.ArrayList(Ast.ParamsetOverride) = .empty;
 
     while (true) {
+        const mark = self.attrs.items.len;
         try self.skipAttributes();
         try parse_source.outsideDesignElement(self, "paramset");
         switch (self.peek()) {
@@ -159,8 +160,15 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                 try aliasparams.append(self.arena, .{ .alias = alias, .target = t });
             },
             .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => {
+                const first = vars.items.len;
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
+                // §6.4.3 "Integer or real variables in the paramset declared
+                // with descriptions are considered output variables".
+                const described = for (self.attrs.items[mark..]) |a| {
+                    if (std.mem.eql(u8, self.file.str(a.name), "desc")) break true;
+                } else false;
+                for (vars.items[first..]) |*v| v.desc = described;
             },
             // A.1.9 `paramset_statement ::= . module_parameter_identifier =
             // paramset_constant_expression ;` and its `. system_parameter_-
