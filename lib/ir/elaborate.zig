@@ -49,13 +49,15 @@
 //! one (E0917), and an UNKNOWN result with a mixed-port connection is the
 //! F.2.1/F.2.2 fourth-bullet error, E0903 (`resolveMultiCandidates`).
 //!
+//! §7.8 connect-module insertion is here too, per level of the walk
+//! (`elaborate/insert.zig`): a port whose two connections are of different
+//! domains and that one §7.7.1 statement matches is re-pointed at a segment,
+//! and the selected connect module is inlined between the two like any child.
+//! The bridge's ANALOG half is what that buys; a digital half that needs the
+//! event kernel is still E0920's.
+//!
 //! §6.5.7.1's vector-net distribution across an instance array is not here —
-//! a port connection has to be a scalar net reference. The
-//! §7.8 connect-module INSERTION phase is also not here, deliberately and
-//! without a fixture owed: VerA emits ONE analog device, §7.6 puts insertion
-//! after the resolution this file performs, and a bridge needs the digital
-//! kernel the artifact does not contain — so §7.7.1 insertion statements are
-//! validated (E0915) and then configure nothing.
+//! a port connection has to be a scalar net reference.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -632,7 +634,13 @@ pub const Flatten = struct {
             try self.ooc.put(self.ctx.arena, key, n);
         }
 
-        for (module.instances) |inst| {
+        // §7.8.4 connect modules are inserted "in the context of the ports
+        // upper connection", which is this module: `plan` re-points each mixed
+        // port at a digital segment and appends the bridges, which then inline
+        // like any child. Indices past `module.instances.len` are those.
+        const insts = try elab_insert.plan(self, module, path);
+        for (insts, 0..) |inst, idx| {
+            const auto = idx >= module.instances.len;
             // §3.6.5, the structural half: an actual that names nothing `module`
             // declared is an implicit net. Collected HERE and not in
             // `inlineInstance`, which is the only other place a connection list
@@ -641,14 +649,15 @@ pub const Flatten = struct {
             // down the names have been flattened and the answer is unrecoverable.
             //
             // Not an error and not a declaration: see `Design.implicit_nets`.
-            for (inst.ports) |c| {
+            // The source's own connections, not `plan`'s segments, which are.
+            if (!auto) for (module.instances[idx].ports) |c| {
                 const n = elab_names.netRefName(self, c.expr) orelse continue;
                 if (declares(module, n)) continue;
                 try self.implicit_nets.append(self.ctx.arena, .{
                     .name = self.ctx.file.str(n),
                     .main_tok = c.main_tok,
                 });
-            }
+            };
 
             // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`
             // — one production, two things it can name, and §6.4 says a paramset
@@ -659,15 +668,16 @@ pub const Flatten = struct {
                 ps = try elab_paramset.selectParamset(self, &inst) orelse continue;
                 break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
             };
+            if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
             // §7.1: connect modules "can be manually inserted (by the user) or
             // automatically inserted (by the simulator)", so naming one here is
             // legal. Refused rather than inlined because a bridge's digital
             // half is a PROCESS, and a flattened child's processes cannot reach
             // the event kernel (E0920) — so its continuous half would be
             // stamped into the device alone.
-            // connect_module_manually_inserted.va is the xfail.
-            if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
-            if (child.is_connect) {
+            // connect_module_manually_inserted.va is the xfail. One `plan`
+            // inserted is the automatic kind, and is inlined.
+            if (child.is_connect and !auto) {
                 try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`; §7.1 allows placing it by hand, but its digital half would not be carried into the device", .{
                     self.ctx.file.str(child.name),
                 });
@@ -1126,6 +1136,9 @@ pub const Flatten = struct {
     // Annex F.2 discipline resolution across the hierarchy — elaborate/resolve.zig
     const elab_resolve = @import("elaborate/resolve.zig");
     pub const checkConnectRules = elab_resolve.checkConnectRules;
+
+    // §7.8 automatic insertion of connect modules — elaborate/insert.zig
+    const elab_insert = @import("elaborate/insert.zig");
 
     // Hierarchical names: instance paths and the flat names they produce — elaborate/names.zig
     const elab_names = @import("elaborate/names.zig");

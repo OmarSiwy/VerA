@@ -1,5 +1,12 @@
 # M03 — Connectmodule insertion
 
+> **Status (names-wave1, 2026-09-24).** The analog half of §7.8 insertion
+> landed in `lib/ir/elaborate/insert.zig`. 01–06, 08, 13 and the new 14 pass;
+> 07 was corrected (its net `b` made `u2.din` match two statements under
+> §3.11.1, which §7.8.4 refuses) and passes; 09–11 are inserted but still
+> XFAIL on the digital half (E1100 / E0920); 12 is unchanged. The ground truth
+> below is the state BEFORE that, kept as the audit record.
+
 Pending conformance fixtures for the Verilog-AMS §7.8 connect-module
 auto-insertion phase. Nothing here is wired into `zig build torture` yet, and
 every file is expected to FAIL today. That is the deliverable.
@@ -102,7 +109,8 @@ assertion, not on a solver crash.
 | `04_merged_generated_name_defparam.va` | §7.8.5 `SigName__ModuleName__BottomDiscipline`; §6.3.1 defparam into a generated instance | `defparam a__m03_a2d__ddiscrete.rin = 2000` on the single merged bridge. `V·(1/1000+1/2000)=1e−3` → **V(a)=2/3=0.66666666666666663**. A misspelled generated name is a defparam onto a nonexistent target, i.e. a compile error, so it cannot pass silently |
 | `05_split_generated_names_defparam.va` | §7.8.5 `SigName__InstName__PortName`; the two split names must be DISTINCT | `defparam a__u1__din.rin = 3000`, `a__u2__din` left at 1000. `V·(3+1+3)/3000=1e−3` → **V(a)=3/7=0.42857142857142855**. Field order taken from §7.8.5.1's first two sentences — port name = the name of the signal at the port's lower connection, i.e. the formal port name — plus §7.8.4's definition of the upper connection for `SigName` |
 | `06_connect_rule_parameter_is_applied.va` | §7.7.3 — the override must REACH the inserted instance, not merely parse | one port, merged, `connect m03_a2d #(.rin(2500.0));`. `V·(1/1000+1/2500)=1e−3` → **V(a)=5/7=0.71428571428571430**. Dropped override → 0.5 |
-| `07_discipline_and_direction_overrides.va` | §7.7.1 both `connect_port_overrides` forms on ONE connect module | net `a`: `inout electrical, inout m03_cmos_io`, rio=4000 → **V(a)=0.8**. net `b`: `merged #(.rio(1500.0)) input electrical, output m03_cmos_in` re-directs the same inout/inout module into the a2d role → **V(b)=0.6**. Two distinct natureless discrete disciplines (§3.11.1) keep each statement matching exactly one port, avoiding the §7.8.4 ambiguity fixture 13 pins |
+| `07_discipline_and_direction_overrides.va` | §7.7.1 the discipline `connect_port_overrides` form | net `a`: `inout electrical, inout m03_cmos_io`, rio=4000 → **V(a)=0.8**. Nothing inserted → 1.0. The override does not change which port matches (m03_cmos_io is §3.11.1-compatible with ddiscrete), and the header says so. **Corrected:** net `b` used to share this file; the inout/inout statement also matched `u2.din` (all natureless discrete disciplines are compatible), so the port matched two statements and a conforming tool refuses the file (§7.8.4, E0922). Moved to 14 |
+| `14_direction_override_redirects_a_bridge.va` | §7.7.1 the direction `connect_port_overrides` form; §7.7.3 | `m03_a2d` (a2d role) re-directed `output electrical, input ddiscrete` into the d2a role bridges an OUTPUT port, rin=1500 → **V(b)=0.6**. Override ignored → no match → 1.0; parameter list dropped → 0.5 |
 | `08_inserted_at_upper_connection_level.va` | §7.8.4 "instantiated in the context of the port's upper connection"; §7.8.1 per-level insertion | `top → mid → leaf`; only `leaf.d` is mixed, so the bridge lands in `mid`. `defparam mid.n__m03_a2d__ddiscrete.rin = 3000;` — the leading `mid.` and the SigName `n` (not `a`) are both assertions. `V·(1/1000+1/3000)=1e−3` → **V(a)=0.75** |
 | `09_analog_signal_is_never_segmented.va` | §7.8.2 / §7.8.4 "a mixed signal is represented in the analog domain by a single node" | `ddiscrete` signal at top, two `electrical` input ports loaded 1 kΩ and 3 kΩ, one merged d2a (2 V behind 1 kΩ). One node: `(V−2)/1000+V/1000+V/3000=0` → **V(u1.p)=V(u2.p)=6/7=0.85714285714285710**. Segmented would give 1.0 and 1.5 — both the common value and the equality are the assertion |
 | `10_supply_sensitive_bridge_via_connect_rule.va` | §7.8.6 + §9.20: string parameter set by the connect rule, `$analog_node_alias` to a hierarchical supply, **and the aliased node being the same matrix position rather than the same value** | supply is 3.0 V behind `rs=100 Ω`; the bridge's pull-up is a branch `I(el,vdd) <+ V(el,vdd)/1000` through the aliased node, so its current is drawn from the supply. `V_vdd = 2·V_a` and `10(V_vdd−3)+(V_vdd−V_vdd/2)=0` → **V($root.m03_top.sup.vdd)=20/7=2.857142857142857** and **V(a)=10/7=1.4285714285714286**. Alias failed → 0.0 / 3.0; alias by value instead of by matrix position → 1.5 / 3.0; nothing inserted → 0.0 / 3.0 |
@@ -110,7 +118,7 @@ assertion, not on a solver crash.
 | `12_reject_two_continuous_disciplines.va` (reject) | §7.8 "when two disciplines are specified in a connect statement, one shall be discrete and the other continuous" | `connect m03_cm electrical, m03_elec2;` with both continuous. §7.7.2's `resolveto` form is the one that legitimately names two same-domain disciplines, so the two `connectrules_item` forms cannot be collapsed |
 | `13_reject_ambiguous_connect_statements.va` (reject) | §7.8.4 "the port shall match one (and only one) connect statement" | two connect modules with identical port disciplines and directions, both matching `u1.din`. Their `rin` differ (1 kΩ vs 4 kΩ) on purpose: silently picking one makes the node voltage depend on source order. §7.7.2.1's "first match wins with a warning" is stated for discipline RESOLUTION and does not reach the selection step |
 
-11 positive fixtures, 2 reject fixtures.
+12 positive fixtures, 2 reject fixtures.
 
 ### Reject-fixture expectation text
 
