@@ -87,6 +87,10 @@ pub const Parser = struct {
     /// §6.6.2 name space key — see `checkGenBlockNames`.
     gen_construct_depth: u32 = 0,
     gen_construct: u32 = 0,
+    /// Set by a loop generate for the one `parseGenerateBlock` call that reads
+    /// its body: §6.6.2's direct nesting is a CONDITIONAL construct's, so a loop
+    /// body is a scope even when it is one bare `if`.
+    gen_loop_body: bool = false,
     /// §2.9 every `attr_spec` of the module being parsed, flattened. Moved into
     /// the `ModuleDecl` at `endmodule` and cleared — see `parseAttributes`.
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,

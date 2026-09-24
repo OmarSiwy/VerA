@@ -524,6 +524,8 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
                     .params = params,
                     .vars = vars,
                     .body = body,
+                    // §6.6.3 an external name, relative to the unit: not renamed.
+                    .gen_name = b.gen_name,
                 },
             };
         },

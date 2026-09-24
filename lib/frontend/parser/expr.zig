@@ -497,6 +497,9 @@ pub fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.E
         .lhs = hi,
         .rhs = lo,
         .str = name,
+        // The rewrite above erases the spelling, and §5.6.8.1 vs §5.6.8.2 is
+        // decided by it: mark the node (`Ast.branch_ref_hier_unnamed`).
+        .extra = Ast.branch_ref_hier_unnamed,
     });
 }
 

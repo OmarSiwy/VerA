@@ -34,6 +34,12 @@
 //
 //! lrm 5.4.1
 //! lrm 5.4.2
+// §5.6.2.1 "The four controlled sources": the clause prints one skeleton
+// (`branch (ps,ns) in; branch (p,n) out;`) and the four statements above,
+// and says "Each statement creates a unique controlled source" — the four
+// answers asserted here are exactly those four statements' values.
+//! lrm 5.6.2
+//! lrm 5.6.2.1
 //! bias V(cp) = 0.7, V(cn) = 0.2
 //! sweep flowZ28cpZ2ccnZ29 = 1m
 `include "check.vh"

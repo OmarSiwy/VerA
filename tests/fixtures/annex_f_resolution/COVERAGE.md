@@ -143,3 +143,11 @@ Annex F sentence is reached.
   exists to override.
 
 Both are dc: seven fixtures carry `//! bias`, none carries `//! analysis`.
+
+## 2026-09-24 — classification
+
+`F` (heading only), `F.1` (implementation-defined: "It is also possible to
+develop and use other algorithms") and `F.2` (definitions of the traversal
+orders) are classified in `CLAUSES.tsv`; the annex's two "is an error" rules are
+F.2.1's and F.2.2's and are rejected under those numbers. `hierarchy_resolution.va`
+now also cites `F`.

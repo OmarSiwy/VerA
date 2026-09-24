@@ -12,6 +12,7 @@ const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
 const elab_resolve = @import("resolve.zig");
+const elab_paramset = @import("paramset.zig");
 const discipline = @import("../lower/discipline.zig");
 const Ast = @import("frontend").Ast;
 const Error = elaborate.Error;
@@ -79,7 +80,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
     for (module.instances, 0..) |inst, ii| {
-        const child = elab_names.findModule(self, inst.module) orelse continue;
+        const child = try moduleOf(self, &inst) orelse continue;
         if (child.is_connect) continue;
         for (child.ports, 0..) |p, pi| {
             const ci = connIndex(&inst, p, pi) orelse continue;
@@ -170,6 +171,39 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         });
     }
     return out.items;
+}
+
+/// The module `inst` elaborates to: the one it names, or — §6.9.3 — the module
+/// at the end of the paramset §6.4.2 selects for it. "Automatic insertion of
+/// connect modules is a post-elaboration operation ... It should also occur
+/// after the paramset selection as the choice for a particular module
+/// instantiation may affect the disciplines of the connected nets." The ports
+/// whose disciplines decide whether a connection is mixed are the SELECTED
+/// module's, so an instance naming a paramset is judged like any other.
+///
+/// Quiet: selection proper (`elab_paramset.selectParamset`) runs again when the
+/// instance is inlined and reports anything wrong there, once. A set that does
+/// not narrow to one paramset here inserts nothing.
+fn moduleOf(self: *Flatten, inst: *const Ast.Instance) Error!?*const Ast.ModuleDecl {
+    if (elab_names.findModule(self, inst.module)) |m| return m;
+    var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
+    for (self.ctx.file.paramsets) |*ps| {
+        if (ps.name == inst.module and elab_paramset.paramsetAdmits(self, inst, ps)) try live.append(self.ctx.arena, ps);
+    }
+    for ([_]elab_paramset.TieRule{ .un_overridden, .ranged_locals, .unconnected_ports }) |rule| {
+        if (live.items.len > 1) try elab_paramset.tieBreak(self, inst, &live, rule);
+    }
+    if (live.items.len != 1) return null;
+    // The chain, walked without `paramsetChain`'s diagnostics; a chain that
+    // never reaches a module is E0904 at inlining.
+    var link = live.items[0];
+    for (0..self.ctx.file.paramsets.len + 1) |_| {
+        if (elab_names.findModule(self, link.target)) |m| return m;
+        link = for (self.ctx.file.paramsets) |*p| {
+            if (p.name == link.target) break p;
+        } else return null;
+    }
+    return null;
 }
 
 /// §7.8.5's generated instance name, and the flat name of the segment it
