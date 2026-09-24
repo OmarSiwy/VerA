@@ -74,6 +74,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         p.is_local = true;
     };
     try parse_generate.checkGenBlockNames(self, &b);
+    try parse_generate.nameGenBlocks(self, &b);
     const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
     self.attrs.clearRetainingCapacity();
 
@@ -401,7 +402,19 @@ pub const Body = struct {
     /// a genvar — made at the end of the module, when every `genvar`
     /// declaration (hoisted out of nested blocks) is in `genvars`.
     gen_loops: std.ArrayList(GenBlock) = .empty,
+    /// §6.6.3 "Each generate construct in a given scope is assigned a number.
+    /// The number is 1 for the construct that appears textually first in that
+    /// scope and increases by 1 for each subsequent construct." This scope's
+    /// count so far; a generate block's own `Body` starts again at zero.
+    gen_count: u32 = 0,
+    /// The unnamed generate blocks of this scope still waiting for their
+    /// `genblk<n>`: the clash rule needs every declaration of the scope, and a
+    /// declaration may follow the construct (`parse_generate.nameGenBlocks`).
+    gen_auto: std.ArrayList(GenAuto) = .empty,
 };
+
+/// One unnamed generate block and the number of its construct.
+pub const GenAuto = struct { stmt: Ast.StmtId, n: u32 };
 
 /// One `begin : name` produced by the `generate_block` production — which
 /// is the only production whose name is a DECLARATION rather than a §5.3.2
