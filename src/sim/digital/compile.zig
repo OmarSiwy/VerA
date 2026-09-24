@@ -90,6 +90,10 @@ pub const Instruction = union(enum(u5)) {
     copy_out: struct { target: Ast.ExprId, slot: u32 },
     // §10.3 `disable` naming a task: every activation of it ends.
     disable_task: u32,
+    // §10.2.3 enable a task that suspends and reaches itself: a new
+    // activation of its out-of-line body (`Sub.body`), and its end.
+    call_timed: struct { sub: u32, args: []const Ast.ExprId },
+    task_return: u32,
     // §17.5 start an asynchronous PLA's own process at this pc.
     pla_start: u32,
     // §9.8.2 `fork`: start every arm as a process of its own, then wait for
@@ -950,6 +954,27 @@ pub fn compileSubs(self: *Run) Error!void {
     }
 }
 
+/// Task `idx`'s body compiled once, jumped over where it is emitted, for
+/// `.call_timed`. An automatic task gets a frame of its own, which each
+/// activation fills in turn; a static one shares its one frame (§10.2.3).
+/// ponytail: `disable` of the task stops its inlined copies, not these
+/// activations; and `repeat` counters and intra-assignment cells are per
+/// site, so a body that suspends inside one of them across its own
+/// recursion shares it.
+fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
+    if (self.subs.items[idx].body != null) return;
+    const decl = self.subs.items[idx].decl;
+    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
+    const skip = try append(self, .{ .jump = 0 });
+    self.subs.items[idx].body = .{ .entry = position(self), .frame = f };
+    const caller = self.scope;
+    self.scope = f.scope;
+    try compileStmt(self, decl.body, depth + 1);
+    _ = try append(self, .{ .task_return = idx });
+    self.scope = caller;
+    self.code.items[skip].jump = position(self);
+}
+
 /// Does task `idx` contain a timing control, directly or through a task it
 /// enables? Such a task can suspend, so it is inlined where it is enabled.
 /// A recursive enable is taken as untimed while it is being asked about.
@@ -1022,9 +1047,14 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
         _ = try append(self, .{ .call = .{ .sub = idx, .args = args, .tok = tok } });
         return;
     }
-    // ponytail: a timed task reaching itself would inline forever; a
-    // recursive task that can suspend needs per-activation frames on a stack.
-    if (self.subs.items[idx].inlining) return self.fail(tok, "a recursive task with timing controls is not implemented", .{});
+    // A timed task reaching itself would inline forever: that enable, and
+    // every later one inside the body, is an activation of one out-of-line
+    // copy instead, with a frame per activation (§10.2.3).
+    if (self.subs.items[idx].inlining) {
+        try outOfLine(self, idx, depth);
+        _ = try append(self, .{ .call_timed = .{ .sub = idx, .args = args } });
+        return;
+    }
     self.subs.items[idx].inlining = true;
     defer self.subs.items[idx].inlining = false;
     const f = if (decl.automatic) try @import("root.zig").frame(self, decl, inst) else self.subs.items[idx].frame;

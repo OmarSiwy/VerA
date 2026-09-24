@@ -41,6 +41,9 @@ const Overrides = @import("root.zig").Overrides;
 // lives in its row's own planes (see `Row`), never in mutable variable storage.
 pub const Pending = union(enum) {
     run_process: u32,
+    /// A resumption inside a §10.2.3 task activation (`Run.acts`): `pc`
+    /// runs with activation `ctx`'s storage resident.
+    @"resume": struct { pc: u32, ctx: u32 },
     write: struct { target: u32, value: Int.Literal, sel: ?Sel = null },
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
     /// not when the call executed — the whole point of the task is that it
@@ -97,7 +100,8 @@ const Edge = enum(u2) {
 // One suspended process, keyed by the variable it watches. `pc` is both the
 // resumption point and the process's identity while it is suspended: the terms
 // of one `or` share it, and retire together when any one of them fires.
-pub const Waiter = struct { slot: u32, edge: Edge, pc: u32 };
+/// `ctx` is the task activation the process is in, 0 for none.
+pub const Waiter = struct { slot: u32, edge: Edge, pc: u32, ctx: u32 = 0 };
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -436,8 +440,10 @@ pub fn evalFor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, target: Type) Er
 
 /// A slot's value converted for an assignment to `target`.
 fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!Int.Literal {
-    const v = self.values[slot];
-    const from_real = self.reals.contains(slot);
+    return convertValue(a, self.values[slot], self.reals.contains(slot), target);
+}
+
+fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
     if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
     const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
     return normalize(a, i, .{ .width = target.width, .signed = i.signed });
@@ -750,7 +756,7 @@ fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
             j -= 1;
             if (self.waiters.items[j].pc == w.pc) _ = self.waiters.swapRemove(j);
         }
-        _ = try enqueue(self, .{ .run_process = w.pc }, null, false);
+        _ = try enqueue(self, resumption(w.pc, w.ctx), null, false);
         i = 0;
     }
 }
@@ -1102,7 +1108,7 @@ fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
         else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc });
+    try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc, .ctx = self.ctx });
 }
 
 /// The `.monitor` region at the CURRENT time — §17.1.2/§17.1.3's "end of
@@ -1131,7 +1137,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
+        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
     }
     return at;
 }
@@ -1179,9 +1185,18 @@ fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
+        .@"resume" => |x| if (x.pc >= start and x.pc < end and self.scheduler.payloadOf(row.handle) != null) {
+            try cancel(self, row.handle);
+            hit = true;
+        },
         .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
     };
     return hit;
+}
+
+/// Where a process continues at `pc`: in the activation `ctx`, if any.
+fn resumption(pc: u32, ctx: u32) Pending {
+    return if (ctx == 0) .{ .run_process = pc } else .{ .@"resume" = .{ .pc = pc, .ctx = ctx } };
 }
 
 pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!Handle {
@@ -1231,7 +1246,10 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
         in.* = null;
         if (p.direction == .output) continue;
-        in.* = try evalFor(self, a, arg, self.slotType(slot));
+        // A copy: an actual that is the callee's own formal (`f(n)` inside
+        // `f`) is that frame's storage, which the automatic reset below
+        // overwrites.
+        in.* = try copyLiteral(a, try evalFor(self, a, arg, self.slotType(slot)));
     }
     const saved_len = self.saved_planes.items.len;
     if (decl.automatic) for (f.first..f.first + f.count) |s| {
@@ -1267,6 +1285,106 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     }
     if (self.unwind == idx and sub.active == 0) self.unwind = null;
     return result;
+}
+
+// ---- activations of a recursive timed task (IEEE 1364-2005 §10.2.3) ---------
+
+/// One activation of a task that suspends and reaches itself: where its
+/// caller resumes, the actuals its outputs copy back to, and — while another
+/// activation of the same automatic task is resident in the frame — its own
+/// storage, saved.
+pub const Act = struct { sub: u32, ret_pc: u32, ret_ctx: u32, args: []const Ast.ExprId, storage: []u64 = &.{} };
+
+/// §10.2.2 enable task `idx` as a new activation: the inputs are evaluated in
+/// the caller, an automatic task's frame is set aside for a fresh one
+/// ("initialized to the default initialization value whenever execution
+/// enters their scope"), and the body runs in this process from `Sub.body`.
+/// Returns the pc to continue at.
+fn callTimed(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId, pc: u32) Error!u32 {
+    const sub = &self.subs.items[idx];
+    const f = sub.body.?.frame;
+    const inputs = try a.alloc(?Int.Literal, args.len);
+    for (sub.decl.ports, args, inputs, f.ports) |p, arg, *in, slot|
+        in.* = if (p.direction == .output) null else try copyLiteral(a, try evalFor(self, a, arg, self.slotType(slot)));
+    if (self.acts.items.len == 0) try self.acts.append(self.arena, undefined); // 0 is "no activation"
+    const act: Act = .{ .sub = idx, .ret_pc = pc + 1, .ret_ctx = self.ctx, .args = args };
+    const id: u32 = if (self.free_acts.pop()) |k| blk: {
+        self.acts.items[k] = act;
+        break :blk k;
+    } else blk: {
+        try self.acts.append(self.arena, act);
+        break :blk @intCast(self.acts.items.len - 1);
+    };
+    if (sub.decl.automatic) {
+        try evict(self, idx);
+        for (f.first..f.first + f.count) |s| {
+            const v = self.values[s];
+            const fill: u64 = if (self.reals.contains(@intCast(s))) 0 else std.math.maxInt(u64);
+            @memset(v.values(), fill);
+            @memset(v.unknowns(), fill);
+        }
+        sub.resident = id;
+    }
+    for (inputs, f.ports) |in, slot| if (in) |v| @memcpy(self.values[slot].planes, v.planes);
+    self.ctx = id;
+    return sub.body.?.entry;
+}
+
+/// The end of an activation's body: its outputs are read while its storage
+/// is still resident, the caller's activation (if any) becomes resident, and
+/// the outputs are copied to the caller's actuals in the caller's scope.
+fn returnTimed(self: *Run, a: std.mem.Allocator, idx: u32) Error!u32 {
+    const sub = &self.subs.items[idx];
+    const f = sub.body.?.frame;
+    const done = self.ctx;
+    const act = self.acts.items[done];
+    const outs = try a.alloc(Int.Literal, f.ports.len);
+    for (f.ports, outs) |slot, *o| o.* = try copyLiteral(a, self.values[slot]);
+    if (sub.resident == done) sub.resident = 0; // dead: nothing to save
+    try self.free_acts.append(self.arena, done);
+    self.ctx = act.ret_ctx;
+    try makeResident(self, self.ctx);
+    self.scope = self.code_scope.items[act.ret_pc - 1];
+    for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input) {
+        const target = (try place(self, a, arg)) orelse continue;
+        try write(self, a, target, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)));
+    };
+    return act.ret_pc;
+}
+
+/// Save the resident activation of automatic task `idx`, freeing its frame.
+fn evict(self: *Run, idx: u32) Error!void {
+    const sub = &self.subs.items[idx];
+    if (sub.resident == 0) return;
+    const f = sub.body.?.frame;
+    const act = &self.acts.items[sub.resident];
+    var len: usize = 0;
+    for (f.first..f.first + f.count) |s| len += self.values[s].planes.len;
+    if (act.storage.len != len) act.storage = try self.arena.alloc(u64, len);
+    var at: usize = 0;
+    for (f.first..f.first + f.count) |s| {
+        const planes = self.values[s].planes;
+        @memcpy(act.storage[at..][0..planes.len], planes);
+        at += planes.len;
+    }
+    sub.resident = 0;
+}
+
+/// Put activation `ctx`'s storage in its task's frame, if it is not there.
+pub fn makeResident(self: *Run, ctx: u32) Error!void {
+    if (ctx == 0) return;
+    const act = self.acts.items[ctx];
+    const sub = &self.subs.items[act.sub];
+    if (!sub.decl.automatic or sub.resident == ctx) return;
+    try evict(self, act.sub);
+    const f = sub.body.?.frame;
+    var at: usize = 0;
+    for (f.first..f.first + f.count) |s| {
+        const planes = self.values[s].planes;
+        @memcpy(planes, act.storage[at..][0..planes.len]);
+        at += planes.len;
+    }
+    sub.resident = ctx;
 }
 
 fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
@@ -1316,7 +1434,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 continue;
             },
             .delay => |s| {
-                _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, s.amount, s.tok), false);
+                _ = try enqueue(self, resumption(pc + 1, self.ctx), try delayOf(self, scratch, s.amount, s.tok), false);
                 return;
             },
             .task => |s| {
@@ -1392,7 +1510,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .wait_event => |e| return suspendOn(self, e, pc + 1),
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
-                for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1 });
+                for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1, .ctx = self.ctx });
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
@@ -1403,7 +1521,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     pc += 1;
                     continue;
                 }
-                for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc });
+                for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc, .ctx = self.ctx });
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the
@@ -1440,7 +1558,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     continue;
                 }
                 if (a.timing_is_delay)
-                    _ = try enqueue(self, .{ .run_process = pc + 1 }, try delayOf(self, scratch, a.timing, tok), false)
+                    _ = try enqueue(self, resumption(pc + 1, self.ctx), try delayOf(self, scratch, a.timing, tok), false)
                 else
                     try suspendOn(self, a.timing, pc + 1);
                 return;
@@ -1577,12 +1695,12 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     continue;
                 }
                 self.joins.items[f.join] = @intCast(f.arms.len);
-                for (f.arms) |arm| _ = try enqueue(self, .{ .run_process = arm }, null, false);
+                for (f.arms) |arm| _ = try enqueue(self, resumption(arm, self.ctx), null, false);
                 return;
             },
             .join_arm => |j| {
                 self.joins.items[j.join] -= 1;
-                if (self.joins.items[j.join] == 0) _ = try enqueue(self, .{ .run_process = j.end }, null, false);
+                if (self.joins.items[j.join] == 0) _ = try enqueue(self, resumption(j.end, self.ctx), null, false);
                 return;
             },
             .pla_start => |loop| {
@@ -1598,6 +1716,14 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .copy_out => |s| {
                 try copyOut(self, scratch, s.target, s.slot);
                 pc += 1;
+                continue;
+            },
+            .call_timed => |c| {
+                pc = try callTimed(self, scratch, c.sub, c.args, pc);
+                continue;
+            },
+            .task_return => |idx| {
+                pc = try returnTimed(self, scratch, idx);
                 continue;
             },
             // §10.3 "disabling such a task shall disable all activations of
