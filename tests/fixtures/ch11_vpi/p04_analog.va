@@ -63,7 +63,7 @@ module p04_analog(p, n);
   branch (p, mid) b1;
   branch (mid, n) b2;
   analog begin
-    `CHECK("the two branches sum to V(p, n)", Vp(b1) + Vp(b2), Vp(p, n), 1e-15);
+    `CHECKEQ("the two branches sum to V(p, n)", Vp(b1) + Vp(b2), Vp(p, n), 1e-15);
     `CHECK("which is 0.75 - 0.125", Vp(p, n), 0.625, 1e-15);
     $p04_tap(Vp(b1), 2.5);
     Ip(b1) <+ Vp(b1) / 1k;
