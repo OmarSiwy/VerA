@@ -685,6 +685,8 @@ comptime {
     std.debug.assert(@sizeOf(ChargeSite) == 24);
     std.debug.assert(@sizeOf(HeldVar) == 56);
     std.debug.assert(@sizeOf(NoiseSrc) == 56);
+    // The node sentinels: `ground` is never "absent" (`none_u32`).
+    std.debug.assert(ground < none_u32);
 }
 
 // ---- the source, for diagnostics and host facts -----------------------------

@@ -66,9 +66,11 @@ pub fn pushCond(self: *Lower, c: Cond) Oom!void {
     if (self.in_analog_initial) try self.hier_name_state.conds.append(self.arena, c);
 }
 
-/// Leaves the arm `pushCond` entered.
+/// Leaves the arm `pushCond` entered. Asserts that one is open.
 pub fn popCond(self: *Lower) void {
-    if (self.in_analog_initial) _ = self.hier_name_state.conds.pop();
+    if (!self.in_analog_initial) return;
+    const left = self.hier_name_state.conds.pop();
+    std.debug.assert(left != null);
 }
 
 /// Returns the potential probe of node `idx`, following §9.20 aliases. For a net

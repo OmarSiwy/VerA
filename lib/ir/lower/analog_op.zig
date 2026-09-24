@@ -757,7 +757,10 @@ fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.bit_set.Dynamic {
     // Operands precede their users except along a phi's back edge or an
     // alias onto a later value; those need another pass.
     var changed = true;
-    while (changed) {
+    var passes: usize = 0;
+    while (changed) : (passes += 1) {
+        // Each pass that continues sets a bit, and there are `n` of them.
+        std.debug.assert(passes <= n);
         changed = false;
         for (fd..n) |i| {
             if (kinds[i - fd] != .inst_result or reach.isSet(i)) continue;

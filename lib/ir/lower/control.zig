@@ -122,6 +122,7 @@ fn hasIndirect(self: *Lower, id: Ast.StmtId) Oom!bool {
 fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
+    std.debug.assert(self.static_cond_depth <= self.cond_depth); // a static arm is still an arm
     defer {
         self.cond_depth -= 1;
         self.static_cond_depth -= @intFromBool(static);
@@ -488,7 +489,8 @@ pub fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
     self.cur = body_b;
     try lowerCondBody(self, body, false); // §5.9: a loop body is never static
     try self.gotoBlock(header);
-    _ = self.loops.pop();
+    const popped = self.loops.pop().?;
+    std.debug.assert(popped.brk == exit); // the body's loops popped their own
 
     try self.builder.sealBlock(header);
     try self.builder.sealBlock(exit);
@@ -516,7 +518,8 @@ pub fn lowerRepeat(self: *Lower, count: Ast.ExprId, body: Ast.StmtId) Oom!void {
     self.cur = body_b;
     try lowerCondBody(self, body, false); // §5.9: a loop body is never static
     try self.gotoBlock(step_b);
-    _ = self.loops.pop();
+    const popped = self.loops.pop().?;
+    std.debug.assert(popped.brk == exit); // the body's loops popped their own
 
     try self.builder.sealBlock(step_b);
     self.cur = step_b;
@@ -551,7 +554,8 @@ pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     self.cur = body_b;
     try lowerCondBody(self, body, false); // §5.9: a loop body is never static
     try self.gotoBlock(step_b);
-    _ = self.loops.pop();
+    const popped = self.loops.pop().?;
+    std.debug.assert(popped.brk == exit); // the body's loops popped their own
 
     try self.builder.sealBlock(step_b);
     self.cur = step_b;

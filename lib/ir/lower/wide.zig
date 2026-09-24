@@ -75,6 +75,10 @@ const Build = struct {
     ok: bool = true,
 
     fn node(b: *Build, n: WideNode) Oom!u32 {
+        // Operands are built first, so a node only reads rows below its own,
+        // which keeps the tree `codegen/wide.zig` recurses over acyclic.
+        const len = b.l.out.wide_nodes.items.len;
+        for ([_]u32{ n.a, n.b, n.c }) |k| if (k != none_u32) std.debug.assert(k < len);
         try b.l.out.wide_nodes.append(b.l.arena, n);
         return @intCast(b.l.out.wide_nodes.items.len - 1);
     }
@@ -91,6 +95,7 @@ const Build = struct {
 
     /// The call over the tree rooted at `root`.
     fn finish(b: *Build, callee: []const u8, root: u32) Oom!Mir.Value {
+        std.debug.assert(root < b.l.out.wide_nodes.items.len);
         const all = try b.l.arena.alloc(Mir.Value, b.args.items.len + 1);
         all[0] = try b.l.mir.addIntConst(b.l.arena, root);
         @memcpy(all[1..], b.args.items);

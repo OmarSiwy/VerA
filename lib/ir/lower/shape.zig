@@ -212,6 +212,7 @@ fn refuseHoles(self: *Lower, e: Ast.ExprId) Oom!void {
 
 fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {
     if (dims.len == 0) {
+        std.debug.assert(out.len == 1);
         out[0] = e;
         return;
     }
@@ -222,6 +223,7 @@ fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.Exp
     else
         &.{};
     const stride = shapeCells(dims[1..]);
+    std.debug.assert(out.len == stride * @as(usize, @intCast(dims[0].count()))); // `flattenPattern` sized it
     for (0..@intCast(dims[0].count())) |k| {
         const child = if (k < elems.len) elems[k] else Ast.ExprId.none;
         try fillPattern(self, child, dims[1..], out[k * stride ..][0..stride]);

@@ -263,6 +263,8 @@ pub fn inlineUserFuncPre(
         }}));
     }
 
+    std.debug.assert(actuals.items.len == fd.args.len); // one per formal, `pre` ones included
+
     // Timer scheduling captures caller dependencies, not this call's private
     // locals. Pure functions are recomputed with new actuals; effectful ones
     // keep their original result and never execute a second time.
@@ -382,7 +384,10 @@ pub fn inlineUserFuncPre(
     }
 
     // ---- leave the function scope ----
-    _ = self.inlining.pop();
+    const left = self.inlining.pop().?;
+    std.debug.assert(std.mem.eql(u8, left, name)); // a nested call popped its own
+    std.debug.assert(self.loops.items.len == 0); // the body's loops popped their own
+    std.debug.assert(log_mark <= self.scope_log.items.len);
     self.scope_log.shrinkRetainingCapacity(log_mark);
     self.vars.deinit(self.arena);
     self.arrays.deinit(self.arena);
@@ -422,6 +427,7 @@ pub fn inlineUserFuncPre(
         const slot = try lower_stmt.resolveLvalue(self, actual) orelse continue;
         try lower_stmt.writeLvalue(self, slot, vals[0]);
     }
+    std.debug.assert(w == writeback.items.len); // one writeback per output/inout formal
     return result;
 }
 

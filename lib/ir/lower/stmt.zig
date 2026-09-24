@@ -189,7 +189,8 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     // ponytail: the only statement-list caller keeps its source-order loop here.
     for (b.body) |s| try lowerStmt(self, s);
     if (exit) |e| {
-        _ = self.stmt_state.named_blocks.pop();
+        const popped = self.stmt_state.named_blocks.pop().?;
+        std.debug.assert(popped.exit == e); // the body's blocks popped their own
         try self.gotoBlock(e);
         try self.builder.sealBlock(e);
         self.cur = e;
@@ -304,10 +305,13 @@ fn timepointRefuses(self: *const Lower, id: Ast.StmtId) ?[]const u8 {
 /// cached `anew`). Each slot's value at the join is a core live-out `eval`
 /// stores (`Lowered.timepoints`), and the mark place says the statement ran.
 fn lowerTimepoint(self: *Lower, id: Ast.StmtId) Oom!void {
+    std.debug.assert(self.tp_cur == null); // `lowerStmt` caches only an outermost statement
+    std.debug.assert(self.tp_marks.items.len == self.out.timepoints.items.len);
     const b: u32 = @intCast(self.out.timepoints.items.len);
     var slots: std.ArrayList(Lower.TpSlot) = .empty;
     var places: std.ArrayList(Ssa.Place) = .empty;
     try timepointSlots(self, id, &slots, &places);
+    std.debug.assert(slots.items.len == places.items.len);
     const saved = self.tp_cur;
     self.tp_cur = b;
     defer self.tp_cur = saved;
@@ -347,6 +351,9 @@ fn lowerTimepoint(self: *Lower, id: Ast.StmtId) Oom!void {
     self.cur = join;
 
     for (slots.items, places.items) |*s, p| s.final = try self.builder.readVariable(p, join);
+    // The statement lowered with `tp_cur` set, so nothing inside cached itself:
+    // `b` is still the next row.
+    std.debug.assert(self.out.timepoints.items.len == b);
     try self.out.timepoints.append(self.arena, .{
         .tok = self.file.stmtTok(id),
         .miss = miss_b,
@@ -576,8 +583,10 @@ pub fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv:
 
 /// Flattens a full subscript tuple into one index in declaration order, checking
 /// each dimension so `[i][columns]` cannot alias `[i+1][0]`. An invalid tuple gives
-/// -1, which every masked write leaves untouched.
+/// -1, which every masked write leaves untouched. Asserts that `subs` has one
+/// subscript per dimension of `dims`.
 pub fn runtimeArrayIndex(self: *Lower, subs: []const Ast.ExprId, dims: []const lower_shape.Bounds) Oom!Mir.Value {
+    std.debug.assert(subs.len == dims.len);
     var flat = Mir.Value.zero;
     var valid = Mir.Value.one;
     for (subs, dims) |s, d| {
@@ -751,7 +760,11 @@ fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool 
 
 /// Reads every cell of `s`'s slice into `out`, in the row-major order
 /// `shapeSubscripts` walks. Returns false when a subscript is out of range.
+/// Asserts that `sd` is the dimensions `s.subs` leaves and that `out` has one
+/// slot per cell of them.
 pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const lower_shape.Bounds, out: []Mir.Value) Oom!bool {
+    std.debug.assert(s.subs.len + sd.len == s.info.dims.len);
+    std.debug.assert(out.len == lower_shape.shapeCells(sd));
     var full: [lower_shape.max_stack_dims]i64 = undefined;
     const idx = try lower_shape.subscriptBuf(self, &full, s.info.dims.len);
     const pdims = s.info.dims[0..s.subs.len];
@@ -800,8 +813,10 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
     return true;
 }
 
-/// The mirror image: writes `vals` into every cell of `d`'s slice.
+/// The mirror image: writes `vals` into every cell of `d`'s slice. Asserts
+/// that `dd` is the dimensions `d.subs` leaves.
 pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []const lower_shape.Bounds, vals: []const Mir.Value) Oom!bool {
+    std.debug.assert(d.subs.len + dd.len == d.info.dims.len);
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     var full: [lower_shape.max_stack_dims]i64 = undefined;
     const idx = try lower_shape.subscriptBuf(self, &full, d.info.dims.len);
@@ -1059,6 +1074,7 @@ fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId)
         },
         .brk, .cont => {
             const what = if (kind == .brk) "break" else "continue";
+            if (self.analog_for_base) |base| std.debug.assert(base <= self.loops.items.len);
             if (self.analog_for_base == self.loops.items.len) {
                 try self.err(tok, .E0440, "`{s}`", .{what});
                 return;

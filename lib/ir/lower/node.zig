@@ -640,11 +640,14 @@ fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: Node
         self.node_state.full = true;
         return 0; // stands in for the row, so lowering reports the rest
     }
+    assert(self.node_state.probe_cache.items.len == self.out.nodes.len); // one cache slot per row
     const idx: u32 = @intCast(self.out.nodes.len);
     const spelling = try uniqueSpelling(self, name);
     try self.node_state.spellings.put(self.arena, spelling, {});
     try self.out.nodes.append(self.arena, .{ .name = spelling, .kind = kind, .disc = discipline, .dir = .unspecified });
     try self.node_state.probe_cache.append(self.arena, .undef);
+    assert(self.node_state.probe_cache.items.len == self.out.nodes.len);
+    assert(idx < ground); // a row never spells the reference node
     return idx;
 }
 

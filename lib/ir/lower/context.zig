@@ -392,8 +392,9 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
 /// task bodies. Those run on the four-state kernel, so an x or z literal there
 /// is ordinary IEEE 1364. A non-mixed module's `initial` is not marked:
 /// `collectInitialState` folds it into analog initial values, where an x has
-/// nowhere to live. `marks` must have one slot per expression id.
+/// nowhere to live. Asserts that `marks` has one slot per expression id.
 pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
+    std.debug.assert(marks.len == file.exprs.nodes.len);
     const Mark = struct {
         file: *const Ast.SourceFile,
         marks: []bool,

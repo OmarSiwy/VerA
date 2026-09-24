@@ -845,6 +845,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// the block, sorted by row then unit, into `Lowered.contrib_shares`.
 fn readShareFinals(self: *Lower) Oom!void {
     const out = &self.out.contrib_shares;
+    assert(out.items.len == 0); // runs once, last: the capacity below is the whole table
     try out.ensureTotalCapacity(self.arena, self.unit_accum.count());
     var it = self.unit_accum.keyIterator();
     while (it.next()) |k| out.appendAssumeCapacity(.{ .row = k.row, .unit = k.unit });
@@ -858,11 +859,14 @@ fn readShareFinals(self: *Lower) Oom!void {
         sh.resist_val = try self.builder.readVariable(pa.resist, self.cur);
         sh.react_val = try self.builder.readVariable(pa.react, self.cur);
     }
+    assert(out.items.len == self.unit_accum.count());
 }
 
 /// Reads each contribution's accumulators from `from` on at the end of the
 /// block, beside its §5.6.1.3 retention flag.
 fn readContribFinals(self: *Lower, from: usize) Oom!void {
+    assert(self.accum.items.len == self.out.contributions.items.len); // `newContrib` keeps them parallel
+    assert(from <= self.accum.items.len);
     for (self.out.contributions.items[from..], self.accum.items[from..]) |*c, acc| {
         c.resist_val = try self.builder.readVariable(acc.resist, self.cur);
         c.react_val = try self.builder.readVariable(acc.react, self.cur);
@@ -872,6 +876,8 @@ fn readContribFinals(self: *Lower, from: usize) Oom!void {
 
 /// Reads each §5.6.1.2 charge site's charge from `from` on at the end of the block.
 fn readSiteFinals(self: *Lower, from: usize) Oom!void {
+    assert(self.site_places.items.len == self.out.charge_sites.items.len); // `addSite` keeps them parallel
+    assert(from <= self.site_places.items.len);
     for (self.out.charge_sites.items[from..], self.site_places.items[from..]) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
 }
 

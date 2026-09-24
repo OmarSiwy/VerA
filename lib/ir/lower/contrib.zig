@@ -40,6 +40,7 @@ const Kind = Lower.Kind;
 const NoiseKind = Lower.NoiseKind;
 const NoiseSrc = Lower.NoiseSrc;
 const Accum = Lower.Accum;
+const assert = std.debug.assert;
 
 /// This file's private state on `Lower` (`Lower.contrib_state`): the lookups
 /// `contribIndex` makes per `<+`, hashed so a module of n contributions
@@ -676,6 +677,8 @@ pub fn checkSourceLoops(self: *Lower) Oom!void {
                 try queue.append(self.arena, next);
             }
         }
+        // `ra == rb`: every union above appended its edge, so the forest joins them.
+        assert(via[b] != std.math.maxInt(u32));
         var other: ?u32 = null;
         var at = b;
         while (at != a and via[at] < edges.items.len) {
@@ -700,6 +703,7 @@ pub fn checkSourceLoops(self: *Lower) Oom!void {
 }
 
 fn find(root: []u32, x: u32) u32 {
+    assert(x < root.len);
     var r = x;
     while (root[r] != r) r = root[r];
     var y = x;
@@ -708,6 +712,7 @@ fn find(root: []u32, x: u32) u32 {
         root[y] = r;
         y = next;
     }
+    assert(root[x] == r); // compressed: `x` points straight at its root
     return r;
 }
 
@@ -831,10 +836,12 @@ pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u32 {
 }
 
 fn canonical(access: Access, hi: u32, lo: u32, br: u32, unit: u32) Target {
-    return if (hi <= lo)
+    const t: Target = if (hi <= lo)
         .{ .access = access, .hi = hi, .lo = lo, .br = br, .unit = unit }
     else
         .{ .access = access, .hi = lo, .lo = hi, .neg = true, .br = br, .unit = unit };
+    assert(t.hi <= t.lo);
+    return t;
 }
 
 /// The instance whose unnamed branch an access names. §5.6.8.2's
@@ -998,7 +1005,8 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
 /// Returns the contribution index for a target, creating its entry and
 /// accumulator on first use. A pair that receives both a potential and a flow
 /// contribution (in different arms) is the §5.6.5 switch branch: two entries,
-/// one per access.
+/// one per access. Asserts that a row already keyed for `t` is the
+/// `.direct` row of `t`'s access and branch.
 pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     // §5.6.7.2 an indirectly-assigned branch is never an accumulation target,
     // so its entry can never absorb a `<+` (which `lowerIndirect` rejects
@@ -1010,6 +1018,10 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     const key: State.Key = .{ .access = t.access, .hi = t.hi, .lo = t.lo, .br = t.br };
     if (st.direct.get(key)) |row| {
         const c = &self.out.contributions.items[row];
+        // Only `newContrib(.direct, t)` rows are keyed, under their own key.
+        assert(c.kind == .direct);
+        assert(c.access == t.access);
+        assert(c.br == t.br);
         if (c.unit != self.cur_unit) {
             c.shared = true;
             const gop = try st.sharers.getOrPut(self.arena, .{ .row = row, .unit = self.cur_unit });
@@ -1032,7 +1044,9 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
 /// Kept only once a row is shared (`Contribution.shared`): until then the row
 /// IS its one writer's branch. On first use the row's own writer gets a share
 /// holding everything the row accumulated so far, which was all its.
+/// Asserts that `row` is shared.
 pub fn unitAccum(self: *Lower, row: u32, unit: u32) Oom!Accum {
+    assert(self.out.contributions.items[row].shared);
     const first = self.out.contributions.items[row].unit;
     if (!self.unit_accum.contains(.{ .row = row, .unit = first })) {
         const full = self.accum.items[row];
@@ -1062,6 +1076,7 @@ fn unitAccumSeeded(self: *Lower, row: u32, unit: u32) Oom!Accum {
 /// a contribution's index is its accumulator's index.
 fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
     try lower_hier_name.refuseRuntime(self, tok, t.hi, t.lo);
+    assert(self.accum.items.len == self.out.contributions.items.len);
     const idx: u32 = @intCast(self.out.contributions.items.len);
     try self.out.contributions.append(self.arena, .{
         .access = t.access,
@@ -1084,6 +1099,8 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
     try self.builder.writeVariable(acc.react, .entry, .f_zero);
     try self.builder.writeVariable(acc.wrote, .entry, .f_zero);
     try self.accum.append(self.arena, acc);
+    assert(self.accum.items.len == idx + 1);
+    assert(self.out.contributions.items.len == idx + 1);
     return idx;
 }
 
@@ -1209,6 +1226,8 @@ fn accumulate(self: *Lower, slot: *?Mir.Value, v: Mir.Value, negate: bool) Oom!v
 /// seeded zero in the entry block, so a path that does not execute the site
 /// — or that §5.6.1.3 discards (`discardOpposite`) — reads a zero charge.
 fn addSite(self: *Lower, idx: u32, ps: PendingSite, neg: bool) Oom!void {
+    assert(idx < self.out.contributions.items.len);
+    assert(self.site_places.items.len == self.out.charge_sites.items.len);
     const p = self.builder.newPlace();
     try self.builder.writeVariable(p, .entry, .f_zero);
     try self.builder.writeVariable(p, self.cur, ps.charge);
@@ -1219,6 +1238,7 @@ fn addSite(self: *Lower, idx: u32, ps: PendingSite, neg: bool) Oom!void {
         .lte = ps.lte,
         .tok = ps.tok,
     });
+    assert(self.site_places.items.len == self.out.charge_sites.items.len);
 }
 
 /// The first `ddt` call in `e`, or `.none`.

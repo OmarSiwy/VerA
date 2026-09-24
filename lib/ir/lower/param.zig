@@ -356,12 +356,13 @@ pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom
     self.hier_params.set(kind, @intCast(self.out.params.items.len));
     const value = kind.initial();
     try addParam(self, alias, .real, try self.mir.addFloatConst(self.arena, value), .{ .real = value }, &.{}, false, Mir.no_tok);
+    std.debug.assert(self.hier_params.get(kind).? == self.out.params.items.len - 1);
     return true;
 }
 
 /// Appends a model-card parameter and binds `name` to its index. An integer
 /// localparam with a constant default reads as that constant; everything else
-/// reads the card.
+/// reads the card. Asserts that `out.params` and `param_values` stay parallel.
 pub fn addParam(
     self: *Lower,
     name: []const u8,
@@ -372,6 +373,7 @@ pub fn addParam(
     is_local: bool,
     tok: u32,
 ) Oom!void {
+    std.debug.assert(self.param_values.items.len == self.out.params.items.len);
     const idx: u32 = @intCast(self.out.params.items.len);
     try self.out.params.append(self.arena, .{
         .name = name,
@@ -396,6 +398,8 @@ pub fn addParam(
     };
     try self.param_values.append(self.arena, ref orelse try self.mir.addParamRef(self.arena, idx));
     try self.param_index.put(self.arena, name, idx);
+    std.debug.assert(self.param_values.items.len == idx + 1);
+    std.debug.assert(self.out.params.items.len == idx + 1);
 }
 
 /// Apply an explicit parameter type before a later default infers its own type.

@@ -385,8 +385,10 @@ pub fn suspendCapture(self: *Lower) ?*TimerCapture {
     return self.event_state.timer_capture;
 }
 
-/// Restores the capture `suspendCapture` returned.
+/// Restores the capture `suspendCapture` returned. Asserts that no capture
+/// opened meanwhile: an analog function body holds no event control (E0702).
 pub fn resumeCapture(self: *Lower, capture: ?*TimerCapture) void {
+    std.debug.assert(self.event_state.timer_capture == null);
     self.event_state.timer_capture = capture;
 }
 /// Record only arrays the timer expression actually reads. A function's local
@@ -655,8 +657,11 @@ fn timerInputReads(self: *Lower, e: Ast.ExprId, reads: *std.ArrayList(TimerRead)
 
 /// §5.10.3.3 schedule using controls after event bodies have run. The event
 /// condition itself keeps its original operands, so an already delivered
-/// event is neither canceled nor executed a second time.
+/// event is neither canceled nor executed a second time. Asserts that no
+/// capture or replay is open: it runs once, after every analog block.
 pub fn finishTimers(self: *Lower) Oom!void {
+    std.debug.assert(self.event_state.timer_capture == null);
+    std.debug.assert(self.event_state.timer_replay == null);
     for (self.event_state.timers.items) |tm| {
         const saved_unit = self.cur_unit;
         const saved_scope = self.scope_path;

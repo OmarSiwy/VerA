@@ -97,6 +97,7 @@ fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
 pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const t = try limitSlotKey(self, a) orelse return;
     if (findSlot(self, t) != null) return;
+    std.debug.assert(self.limit_places.items.len == self.out.limit_slots.items.len); // one place per slot
     const k: i64 = @intCast(self.out.limit_slots.items.len);
     // A `call`, so `analysis.foldConst` cannot fold the previous iterate into a constant.
     const seed = try self.call("$limit$old", &.{try self.mir.addIntConst(self.arena, k)});
@@ -114,6 +115,7 @@ pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
         .seed = seed,
     });
     try self.limit_places.append(self.arena, place);
+    std.debug.assert(self.limit_places.items.len == self.out.limit_slots.items.len);
 }
 
 /// §9.20's outcome for one `$analog_node_alias()` / `$analog_port_alias()`
