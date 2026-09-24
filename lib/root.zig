@@ -161,6 +161,9 @@ pub const Options = struct {
     /// permission on its CPU instantiation, not only where f32 is free. Implies
     /// `jac_f32`. See `codegen.Options.jac_f32_host`.
     jac_f32_host: bool = false,
+    /// Also emit `vpiContribs`, the §5.6 contribution rows a Clause 12
+    /// analog host reads. See `codegen.Options.vpi_contribs`.
+    vpi_contribs: bool = false,
 };
 
 // ---------------------------------------------------------------------------
@@ -449,6 +452,7 @@ fn compileInArena(
             .display = opts.display,
             .jac_f32 = opts.jac_f32,
             .jac_f32_host = opts.jac_f32_host,
+            .vpi_contribs = opts.vpi_contribs,
             .diags = opts.diags,
         },
     };

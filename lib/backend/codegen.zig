@@ -187,6 +187,12 @@ pub const Options = struct {
     /// runs. This is the caller's bag, and it is alive for as long as the
     /// `CompileResult` is.
     diags: ?*diag.Bag = null,
+    /// Emit `vpiContribs` and its row tables: every §5.6 contribution's two
+    /// halves by `Lowered.contributions` index, for a host that answers
+    /// Clause 12's analog routines (§12.10 `vpi_get_analog_value` of a
+    /// branch's flow is its row's value, not a solver unknown). Off by
+    /// default, so every other device is byte-for-byte what it was.
+    vpi_contribs: bool = false,
 };
 
 /// Emit the whole device.zig. LRM §5/§8.3.
@@ -233,6 +239,7 @@ pub fn generate(
         .float = .{ .jac = .of(opts.jac_f32, opts.jac_f32_host) },
         .diags = opts.diags,
         .su = .{ .on = opts.setup },
+        .vpi_contribs = opts.vpi_contribs,
     };
     errdefer g.out.deinit(gpa);
     try g.prepare();
@@ -407,6 +414,8 @@ pub const Gen = struct {
     ind_base: u32 = 0,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
+    /// `Options.vpi_contribs`.
+    vpi_contribs: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
     /// Free branch flows and collapsible switch branches — `plan/topology.zig`.
