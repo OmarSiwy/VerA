@@ -508,7 +508,7 @@ fn evalReal(self: *Run, e: Ast.ExprId) Error!f64 {
     if (ex.tag(e) != .sys_call or !std.mem.eql(u8, self.file.str(ex.strOf(e)), realtime_name))
         return self.exprFail(e, "a real display conversion takes a real expression, and `$realtime` is the only one implemented");
     if (ex.args(e).len != 0) return self.exprFail(e, "$realtime takes no arguments");
-    const scale = self.scale orelse return self.exprFail(e, "the time queries require an explicit valid timescale before the module");
+    const scale = self.scale.?; // elaborate always sets one (§19.8)
     return scale.realAt(self.scheduler.now);
 }
 
