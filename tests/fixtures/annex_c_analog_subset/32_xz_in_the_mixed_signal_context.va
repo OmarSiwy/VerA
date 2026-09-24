@@ -1,0 +1,56 @@
+// C.3 "With the exception of certain keywords required for Verilog-AMS HDL,
+// Clause 2 shall be applicable to both Verilog-A and Verilog-AMS HDL. ... From
+// 2.6, Numbers: support for X and Z values is limited in the analog block to the
+// mixed signal context, as defined in 7.3.2."
+//
+// §7.3.2 "Verilog-AMS HDL supports accessing of 4-state logic values within the
+// analog context. The x and z states must be translated to equivalent analog
+// real or integer values before being used within the analog context. The
+// language supports ... the case equality operator (===) ... binary, octal and
+// hexadecimal numeric constants which can contain x and z as digits."
+//
+// The positive half of C.3's limit: x/z digits are refused in PURELY analog
+// use (06_xz_rejected.va, 05_xz_integer_rejected.va pin that), but allowed in
+// the mixed-signal context the sentence names — an analog block comparing a
+// DISCRETE net against an x/z constant with `===`, which is §7.3.2's own first
+// example (`a2d`), transcribed with the digital driver made explicit.
+//
+// DERIVATION. `d` is a digital reg set to 1'bz at time zero by an `initial`
+// block. The analog block translates it exactly as §7.3.2's example does:
+//
+//   d === 1'b1  -> no     d === 1'b0 -> no     d === 1'bz -> yes: avar = 2.5
+//
+// 2.5 is exact. No x or z value is used as an analog operand — only as a
+// case-equality comparand — so none of §7.3.2's "it is an error if these
+// operands return x or z" cases arises. (The `1'bx` arm is omitted: §7.3.2's
+// second example labels `dnet === 1'bx` an error while its first example uses
+// it, and this fixture does not need to take a side.)
+//
+// The x_*/z_*/xz_* files in ch07_mixed_signal refuse this construct citing
+// Annex C.5 ("The case equality operators are not supported in Verilog-A"),
+// i.e. the Verilog-A SUBSET. This fixture is the full Verilog-AMS rule VerA
+// targets (see 13_digital_initial_accepted.va for the same scoping).
+//
+//! lrm C.3
+//! lrm 7.3.2
+//! bias V(p) = 0.5
+//! xfail VerA refuses the four-state literal 1'bz (E0130 "the analog backend cannot execute this 1-bit four-state literal") both in the digital `initial` and in the §7.3.2 mixed-signal comparison `d === 1'bz` that C.3 and §7.3.2 permit
+`include "check.vh"
+module annex_c_xz_in_the_mixed_signal_context(p);
+  inout p;
+  electrical p;
+  reg d;
+  real avar;
+  initial d = 1'bz;
+  analog begin
+    avar = 0.0;
+    if (d === 1'b1)
+      avar = 5.0;
+    else if (d === 1'b0)
+      avar = 0.0;
+    else if (d === 1'bz)
+      avar = 2.5;
+    `CHECKX("C.3/7.3.2 a z on a discrete net is translated by === in the analog block", avar, 2.5);
+    I(p) <+ V(p) * avar;
+  end
+endmodule
