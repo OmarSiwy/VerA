@@ -4,11 +4,11 @@
 // `begin : blk ... end` is a named block around an otherwise legal paramset
 // variable assignment. The same statement without the block label compiles.
 //
-// VerA accepts this file.
+// VerA refuses it with E0237 "a paramset statement uses what 6.4.1 forbids:
+// a named block".
 //
 //! lrm 6.4.1
 //! reject named block
-//! xfail VerA accepts a named block `begin : blk ... end` among a paramset's statements; §6.4.1 says a paramset "Shall not use named blocks"
 `include "disciplines.vams"
 module ch6_ps_block_res(p, n);
   inout p, n;
