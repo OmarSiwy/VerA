@@ -14,6 +14,7 @@ const Flatten = elaborate.Flatten;
 const elab_clone = @import("clone.zig");
 const elab_names = @import("names.zig");
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
 const Unit = Flatten.Unit;
@@ -297,37 +298,13 @@ pub fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange
 }
 
 /// A constant this pass can fold: §2.6 literals, the A.2.5 infinities, and
-/// the arithmetic over them. NOT parameter reads — the parameter table is
+/// every operator over them, through the one constant kernel — so `1/2` is
+/// §4.2.4's integer division, 0, exactly as lowering will compute the value
+/// the chosen paramset receives. NOT parameter reads — the parameter table is
 /// lowering's, and §6.4.2's ranges in every printed example are literals.
 pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
-    if (e == .none) return null;
-    const x = &self.ctx.file.exprs;
-    return switch (x.tag(e)) {
-        .int_literal => @floatFromInt(x.intValue(e)),
-        .real_literal => x.realValue(e),
-        .pos_inf => std.math.inf(f64),
-        .neg_inf => -std.math.inf(f64),
-        .unary => blk: {
-            const v = constReal(self, x.lhs(e)) orelse break :blk null;
-            break :blk switch (x.unOp(e)) {
-                .plus => v,
-                .minus => -v,
-                else => null,
-            };
-        },
-        .binary => blk: {
-            const l = constReal(self, x.lhs(e)) orelse break :blk null;
-            const r = constReal(self, x.rhs(e)) orelse break :blk null;
-            break :blk switch (x.binOp(e)) {
-                .add => l + r,
-                .sub => l - r,
-                .mul => l * r,
-                .div => l / r,
-                else => null,
-            };
-        },
-        else => null,
-    };
+    const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
+    return if (c == .str) null else c.asReal();
 }
 
 /// §6.4 the parameter values a paramset instance gives the module.

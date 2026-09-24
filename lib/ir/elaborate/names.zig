@@ -11,6 +11,7 @@ const std = @import("std");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const discipline = @import("../lower/discipline.zig");
 const Error = elaborate.Error;
 const Unit = Flatten.Unit;
@@ -240,33 +241,11 @@ pub fn mfactorScale(
     });
 }
 
-/// §6.2.2 an instance array bound. Integer literals and the arithmetic over
-/// them, which is what a range is written as; a bound reading a parameter is
-/// E0909, because the parameter table does not exist until lowering.
+/// §6.2.2 an instance array bound: a constant expression over literals,
+/// folded by the one constant kernel (§4.2's integer typing, every operator);
+/// a real-valued bound is not one. A bound reading a parameter is E0909,
+/// because the parameter table does not exist until lowering.
 pub fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
-    if (e == .none) return null;
-    const x = &self.ctx.file.exprs;
-    return switch (x.tag(e)) {
-        .int_literal => x.intValue(e),
-        .unary => blk: {
-            const v = constInt(self, x.lhs(e)) orelse break :blk null;
-            break :blk switch (x.unOp(e)) {
-                .plus => v,
-                .minus => -v,
-                else => null,
-            };
-        },
-        .binary => blk: {
-            const l = constInt(self, x.lhs(e)) orelse break :blk null;
-            const r = constInt(self, x.rhs(e)) orelse break :blk null;
-            break :blk switch (x.binOp(e)) {
-                .add => l + r,
-                .sub => l - r,
-                .mul => l * r,
-                .div => if (r == 0) null else @divTrunc(l, r),
-                else => null,
-            };
-        },
-        else => null,
-    };
+    const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
+    return if (c == .int) c.int else null;
 }

@@ -180,7 +180,9 @@ pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
     return switch (op) {
         .plus => a,
         .minus => switch (a) {
-            .int => |i| .{ .int = -i },
+            // Wrapping: a 64-bit literal can be minInt(i64), whose negation
+            // is itself rather than a panic.
+            .int => |i| .{ .int = 0 -% i },
             .real => |r| .{ .real = -r },
             .str => null,
         },
@@ -217,8 +219,13 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
             (if (b.asInt() == 0) null else Const{ .int = @as(i32, @truncate(@divTrunc(@as(i65, a.asInt()), @as(i65, b.asInt())))) })
         else
             Const{ .real = x / y },
+        // §4.2.4: "It shall be an error to pass zero (0) as the second
+        // argument to the modulus operator" — for either type, so a zero
+        // divisor has no value to fold to; the prover's E0601 reports it.
         .mod => if (int)
             (if (b.asInt() == 0) null else Const{ .int = @intCast(@rem(@as(i65, a.asInt()), @as(i65, b.asInt()))) })
+        else if (y == 0)
+            null
         else
             Const{ .real = @rem(x, y) },
         // `ipow32`; its 'bx corner (0 ** negative) declines to fold.
@@ -271,8 +278,94 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
     };
 }
 
+/// §4.3 Table 4-14 and Table 4-15: the built-in math functions, by their
+/// source spelling. `log` is the decimal logarithm (§4.3.1); `ln` the natural.
+pub const MathFn = enum {
+    abs,
+    min,
+    max,
+    pow,
+    hypot,
+    atan2,
+    sqrt,
+    exp,
+    expm1,
+    ln,
+    ln1p,
+    log,
+    floor,
+    ceil,
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+    sinh,
+    cosh,
+    tanh,
+    asinh,
+    acosh,
+    atanh,
+
+    pub fn fromName(name: []const u8) ?MathFn {
+        return std.meta.stringToEnum(MathFn, name);
+    }
+    pub fn arity(f: MathFn) usize {
+        return switch (f) {
+            .min, .max, .pow, .hypot, .atan2 => 2,
+            .abs, .sqrt, .exp, .expm1, .ln, .ln1p, .log, .floor, .ceil => 1,
+            .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
+        };
+    }
+};
+
+/// A §4.3 function over folded arguments. §4.3.1: `abs`, `min` and `max` are
+/// integer when every argument is; every other function is real, `pow`
+/// included (§4.2.1.3's integer power is the OPERATOR `**`). Out-of-domain
+/// arguments fold to what IEEE arithmetic gives (NaN, ±inf); the prover, not
+/// the folder, rules on domains.
+pub fn math(f: MathFn, args: []const Const) ?Const {
+    if (args.len != f.arity()) return null;
+    for (args) |a| if (a == .str) return null;
+    const x = args[0].asReal();
+    const y = if (args.len > 1) args[1].asReal() else 0;
+    const int = for (args) |a| {
+        if (a != .int) break false;
+    } else true;
+    return switch (f) {
+        // Wrapping, like unary minus: |minInt(i64)| is not an i64.
+        .abs => if (int) Const{ .int = if (args[0].int < 0) 0 -% args[0].int else args[0].int } else Const{ .real = @abs(x) },
+        .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = @min(x, y) },
+        .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = @max(x, y) },
+        .pow => .{ .real = std.math.pow(f64, x, y) },
+        .hypot => .{ .real = std.math.hypot(x, y) },
+        .atan2 => .{ .real = std.math.atan2(x, y) },
+        .sqrt => .{ .real = @sqrt(x) },
+        .exp => .{ .real = @exp(x) },
+        .expm1 => .{ .real = std.math.expm1(x) },
+        .ln => .{ .real = @log(x) },
+        .ln1p => .{ .real = std.math.log1p(x) },
+        .log => .{ .real = @log10(x) },
+        .floor => .{ .real = @floor(x) },
+        .ceil => .{ .real = @ceil(x) },
+        .sin => .{ .real = @sin(x) },
+        .cos => .{ .real = @cos(x) },
+        .tan => .{ .real = @tan(x) },
+        .asin => .{ .real = std.math.asin(x) },
+        .acos => .{ .real = std.math.acos(x) },
+        .atan => .{ .real = std.math.atan(x) },
+        .sinh => .{ .real = std.math.sinh(x) },
+        .cosh => .{ .real = std.math.cosh(x) },
+        .tanh => .{ .real = std.math.tanh(x) },
+        .asinh => .{ .real = std.math.asinh(x) },
+        .acosh => .{ .real = std.math.acosh(x) },
+        .atanh => .{ .real = std.math.atanh(x) },
+    };
+}
+
 /// Fold `e` over `file`'s expression store: literals, the A.2.5 infinities,
-/// the unary/binary operators, a lazy `?:`, and §4.3's common math subset.
+/// the unary/binary operators, a lazy `?:`, and §4.3's math functions.
 ///
 /// `env` answers what the structure cannot, as three methods:
 ///   leaf(e) ?Const     any tag this walk does not fold itself (an identifier)
@@ -307,47 +400,14 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
             const c = fold(file, ex.lhs(e), env) orelse return null;
             return fold(file, if (c.isTrue()) ex.rhs(e) else ex.ternaryElse(e), env);
         },
-        // §4.3 math in a constant expression — the common subset only.
+        // §4.3 Table 4-14/4-15 math in a constant expression.
         .builtin_call => {
-            const name = file.str(ex.strOf(e));
+            const f = MathFn.fromName(file.str(ex.strOf(e))) orelse return null;
             const args = ex.args(e);
-            if (args.len == 1) {
-                const a = fold(file, args[0], env) orelse return null;
-                if (std.mem.eql(u8, name, "abs")) return switch (a) {
-                    .int => |i| .{ .int = @intCast(@abs(i)) },
-                    .real => |r| .{ .real = @abs(r) },
-                    .str => null,
-                };
-                const x = a.asReal();
-                const r: f64 = if (std.mem.eql(u8, name, "sqrt"))
-                    @sqrt(x)
-                else if (std.mem.eql(u8, name, "exp"))
-                    @exp(x)
-                else if (std.mem.eql(u8, name, "ln"))
-                    @log(x)
-                else if (std.mem.eql(u8, name, "log"))
-                    @log10(x)
-                else if (std.mem.eql(u8, name, "floor"))
-                    @floor(x)
-                else if (std.mem.eql(u8, name, "ceil"))
-                    @ceil(x)
-                else
-                    return null;
-                return .{ .real = r };
-            }
-            if (args.len == 2) {
-                const a = fold(file, args[0], env) orelse return null;
-                const b = fold(file, args[1], env) orelse return null;
-                const int = a == .int and b == .int;
-                if (std.mem.eql(u8, name, "min"))
-                    return if (int) Const{ .int = @min(a.asInt(), b.asInt()) } else Const{ .real = @min(a.asReal(), b.asReal()) };
-                if (std.mem.eql(u8, name, "max"))
-                    return if (int) Const{ .int = @max(a.asInt(), b.asInt()) } else Const{ .real = @max(a.asReal(), b.asReal()) };
-                if (std.mem.eql(u8, name, "pow"))
-                    return .{ .real = std.math.pow(f64, a.asReal(), b.asReal()) };
-                return null;
-            }
-            return null;
+            if (args.len != f.arity()) return null;
+            var vals: [2]Const = undefined;
+            for (args, 0..) |a, i| vals[i] = fold(file, a, env) orelse return null;
+            return math(f, vals[0..args.len]);
         },
         else => return env.leaf(e), // else: every other tag names something only the caller can resolve
     }

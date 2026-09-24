@@ -12,6 +12,7 @@ const std = @import("std");
 const proof = @import("../proof.zig");
 const proof_lattice = @import("lattice.zig");
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const Mir = @import("../mir.zig");
 const Lower = @import("../lower.zig");
 const Analysis = @import("../analysis.zig");
@@ -251,38 +252,13 @@ pub const Prover = struct {
         return iv;
     }
 
-    /// Literal-only constant fold of a §3.4.2 range bound. Deliberately refuses
-    /// identifiers (see `paramInterval`); `inf` (§3.4.2) folds to ±infinity.
+    /// Literal-only constant fold of a §3.4.2 range bound, through the one
+    /// constant kernel, so a bound means what lowering enforces (`[1/2:1]` is
+    /// [0,1], §4.2.4). Deliberately refuses identifiers (see
+    /// `paramInterval`); `inf` (§3.4.2) folds to ±infinity.
     fn foldBound(self: *const Prover, e: Ast.ExprId) ?f64 {
-        if (e == .none) return null;
-        const ex = &self.lower.file.exprs;
-        return switch (ex.tag(e)) {
-            .int_literal => @floatFromInt(ex.intValue(e)),
-            .real_literal => ex.realValue(e),
-            .pos_inf => math.inf(f64),
-            .neg_inf => -math.inf(f64),
-            .unary => blk: {
-                const a = self.foldBound(ex.lhs(e)) orelse break :blk null;
-                break :blk switch (ex.unOp(e)) {
-                    .plus => a,
-                    .minus => -a,
-                    else => null,
-                };
-            },
-            .binary => blk: {
-                const a = self.foldBound(ex.lhs(e)) orelse break :blk null;
-                const b = self.foldBound(ex.rhs(e)) orelse break :blk null;
-                break :blk switch (ex.binOp(e)) {
-                    .add => a + b,
-                    .sub => a - b,
-                    .mul => a * b,
-                    .div => if (b == 0) null else a / b,
-                    .pow => math.pow(f64, a, b),
-                    else => null,
-                };
-            },
-            else => null,
-        };
+        const c = constfold.fold(self.lower.file, e, constfold.literal_env) orelse return null;
+        return if (c == .str) null else c.asReal();
     }
 
     // ------------------------------------------------------- guard evidence --
