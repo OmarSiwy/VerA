@@ -415,11 +415,27 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
             // §5.10 body on any reachable path, and the body's value is a
             // literal zero); nothing to carry.
             try self.w("    inst.{s} = 0;\n", .{n});
-        } else if (h.ty == .integer or h.array != none_u32) {
+        } else if (h.array != none_u32) {
             // §3.2.2 a held array's core field is already its plain values.
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
         } else {
-            try self.w("    inst.{s} = m.f{d}{s};\n", .{ n, k, val });
+            // The core field is typed `zigTy(vty)` (unit.zig), so the read
+            // side of this store is decided by that SAME `vty`, never by the
+            // declared type: the two disagreed once (a three-deep join left
+            // at `.real`, ARPice vera-gaps `heldint`) and the device did not
+            // compile. The declared type only picks the destination, with
+            // the §4.2.1 conversion between them.
+            const core_int = self.an.tyOf(self.core.lo_vals[k]) == .int;
+            switch (h.ty) {
+                .integer => if (core_int)
+                    try self.w("    inst.{s} = m.f{d};\n", .{ n, k })
+                else
+                    try self.w("    inst.{s} = std.math.lossyCast(i64, @round(m.f{d}{s}));\n", .{ n, k, val }),
+                .real, .string => if (core_int)
+                    try self.w("    inst.{s} = @floatFromInt(m.f{d});\n", .{ n, k })
+                else
+                    try self.w("    inst.{s} = m.f{d}{s};\n", .{ n, k, val }),
+            }
         }
     }
     if (acc.reads_t_prev) try self.w("    state.t_prev = inst.abstime;\n", .{});
