@@ -235,7 +235,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
 /// declaration may follow the generate construct in the text, and the clause
 /// is about one SCOPE, not about source order.
 ///
-/// Diagnosed and carried on (`catch {}`, like the E0222 width check) so that
+/// Diagnosed and carried on (`report`, like the E0222 width check) so that
 /// a second, unrelated mistake in the same module is still reported;
 /// `self.failed` is what refuses the file.
 ///
@@ -246,7 +246,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
 /// as well, which the clause does not license. Key on the construct itself
 /// rather than its root the day a fixture asks; that needs generate blocks to
 /// be real scope objects, which is also what §6.6.3 hierarchical names want.
-pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) void {
+pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
     for (b.gen_blocks.items, 0..) |g, i| {
         // Every ordinary declaration space of the module. A port is listed
         // as well as a net: §6.5's header names are declarations too.
@@ -270,9 +270,9 @@ pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) void {
                 }
                 break :other false;
             };
-        if (clash) _ = self.failAt(g.tok, .E0230, "`{s}`", .{
+        if (clash) try self.report(g.tok, .E0230, "`{s}`", .{
             self.file.strings.get(g.name),
-        }) catch {};
+        });
     }
 }
 
@@ -362,7 +362,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
             // that already has one was declared already — in the ANSI
             // header, or by an earlier body declaration (§6.8's duplicate).
             if (p.direction != .unspecified) {
-                _ = self.failAt(tok, .E0218, "`{s}`", .{self.file.str(name)}) catch {};
+                try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
             } else {
                 p.direction = dir;
                 if (disc != .none) p.discipline = disc;
@@ -370,7 +370,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
                 if (kind != .wire) p.kind = kind;
             }
         } else {
-            _ = self.failAt(tok, .E0206, "`{s}`", .{self.file.str(name)}) catch {};
+            try self.report(tok, .E0206, "`{s}`", .{self.file.str(name)});
         }
         if (!self.eat(.comma)) break;
     }
@@ -378,7 +378,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     // A.2.1.2's `wreal` alternative, refused AFTER the declaration is read
     // and recorded — see `parseWrealDecl` for the clause and for why
     // silence is the one answer that is not available.
-    if (kind == .wreal) _ = self.failAt(dir_tok, .E1100, parse_module.wreal_unimplemented, .{}) catch {};
+    if (kind == .wreal) try self.report(dir_tok, .E1100, parse_module.wreal_unimplemented, .{});
 }
 
 pub fn findPort(b: *parse_module.Body, name: Ast.StrId) ?*Ast.Port {

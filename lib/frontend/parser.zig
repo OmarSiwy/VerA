@@ -416,6 +416,16 @@ pub const Parser = struct {
     // Diagnostics
     // -----------------------------------------------------------------------
 
+    /// `failAt` for a site that reports and carries on: the file is refused
+    /// (`failed`) and parsing continues, but running out of memory still
+    /// aborts. `failAt(..) catch {}` swallowed that OOM along with ParseError.
+    pub fn report(self: *Parser, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) error{OutOfMemory}!void {
+        switch (self.failAt(tok, code, fmt, args)) {
+            error.ParseError => {},
+            error.OutOfMemory => |e| return e,
+        }
+    }
+
     pub fn failAt(self: *Parser, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error {
         self.failed = true;
         const span = lexer.tokenSpan(self.src, self.starts, tok);

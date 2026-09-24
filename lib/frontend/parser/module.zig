@@ -65,7 +65,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     _ = try self.expect(.semicolon);
     try parseModuleItems(self, &b, .kw_endmodule);
     _ = try self.expect(.kw_endmodule);
-    parse_generate.checkGenBlockNames(self, &b);
+    try parse_generate.checkGenBlockNames(self, &b);
     const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
     self.attrs.clearRetainingCapacity();
 
@@ -192,15 +192,12 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                         .kw_if, .kw_case, .kw_for, .kw_while, .kw_repeat, .kw_begin => true,
                         else => false,
                     };
-                // (`failAt` always errors, so its result is a bare error
-                // set — widened to a union so ParseError can be dropped
-                // for recovery while OOM still aborts.)
-                if (!legal) @as(Error!void, self.failAt(
+                if (!legal) try self.report(
                     self.pos,
                     .E0205,
                     "found {s} in a paramset body",
                     .{self.found(self.pos)},
-                )) catch |e| if (e == error.OutOfMemory) return e;
+                );
                 skipParamsetStatement(self);
             },
         }
@@ -728,7 +725,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             const signed = self.digital and self.eat(.kw_signed);
             const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
             if (!self.digital) if (range) |d| if (parse_decl.literalWidth(self, d)) |w| {
-                if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
+                if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
             };
             while (true) {
                 const name_tok = self.pos;
@@ -801,7 +798,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // inner one as if the keywords were absent is exact recovery —
             // bailing here instead left the stray `endgenerate` to arrive as
             // a second, meaningless E0205.
-            if (self.gen_depth > 0) _ = self.failAt(self.pos, .E0228, "", .{}) catch {};
+            if (self.gen_depth > 0) try self.report(self.pos, .E0228, "", .{});
             self.pos += 1;
             self.gen_depth += 1;
             defer self.gen_depth -= 1;
@@ -916,7 +913,7 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     var ignored: Ast.NetKind = .wire;
     const disc = try optPortType(self, &ignored);
     try parse_generate.parseNetNames(self, b, disc, .wreal, false, .{});
-    if (self.digital) _ = self.failAt(kw, .E1100, wreal_unimplemented, .{}) catch {};
+    try self.report(kw, .E1100, wreal_unimplemented, .{});
 }
 
 /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
