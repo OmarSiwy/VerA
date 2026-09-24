@@ -140,9 +140,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         // discrete context. A `ddiscrete` net (§3.6.2.2 `domain discrete`) is
         // a net exactly as `wire` is, and legal here.
         if (lower_discipline.isContinuous(self.file, n.?.discipline)) {
-            var b = self.errWith(a.main_tok, .E0435);
-            b.msg("`{s}` is driven by a continuous assignment", .{self.file.str(ex.strOf(t))});
-            try b.emit();
+            try self.err(a.main_tok, .E0435, "`{s}` is driven by a continuous assignment", .{self.file.str(ex.strOf(t))});
             continue;
         }
         try owned.append(self.arena, t);
@@ -496,14 +494,10 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
         // a variable with two writers and fires only when both exist. Here
         // there is one writer, in the wrong domain.
         .contribute => |s| if (discrete) {
-            var b = self.errWith(self.file.exprs.mainTok(s.lhs), .E0435);
-            b.msg("contributed from {s}", .{ctx.where});
-            try b.emit();
+            try self.err(self.file.exprs.mainTok(s.lhs), .E0435, "contributed from {s}", .{ctx.where});
         } else try scanContextExpr(self, s.rhs, discrete, is_initial, ctx),
         .indirect => |s| if (discrete) {
-            var b = self.errWith(self.file.exprs.mainTok(s.lhs), .E0435);
-            b.msg("indirectly contributed from {s}", .{ctx.where});
-            try b.emit();
+            try self.err(self.file.exprs.mainTok(s.lhs), .E0435, "indirectly contributed from {s}", .{ctx.where});
         } else try scanContextExpr(self, s.eqn, discrete, is_initial, ctx),
         .jump => {},
         else => try self.file.stmtEdges(id, Walk{ .l = self, .context = context, .ctx = ctx }), // else: stmtEdges is exhaustive

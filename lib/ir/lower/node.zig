@@ -334,9 +334,7 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
         .hier_ident => {
             const name = try lower_expr.flatName(self, e);
             if (!self.node_voltages.contains(name)) {
-                var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
-                b.msg("`{s}` names no net in the elaborated design", .{name});
-                try b.emit();
+                try self.err(self.file.exprs.mainTok(e), .E0901, "`{s}` names no net in the elaborated design", .{name});
                 return ground;
             }
             return internNode(self, name, "");

@@ -757,9 +757,7 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
     // rendering — so the supply is the slot count, not the non-empty one.
     const have = args.len - (at + 1);
     if (have >= need) return;
-    var b = self.errWith(tok, .E0810);
-    b.msg("the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
-    try b.emit();
+    try self.err(tok, .E0810, "the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
 }
 
 /// Preserve the source integer width before SSA replaces variables with their

@@ -88,9 +88,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // carry. Without this, `parameter real bad = $abstime;` compiled and the
     // card silently read 0.0. Reported and then lowered anyway, like E0347.
     if (simStateInDefault(self, decl.default)) |what| {
-        var b = self.errWith(decl.main_tok, .E0363);
-        b.msg("`{s}` reads `{s}`", .{ name, what });
-        try b.emit();
+        try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
 
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
@@ -230,17 +228,13 @@ pub fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u
                 if (above_lo and below_hi) in_from = true;
             },
             .exclude => if (above_lo and below_hi) {
-                var b = self.errWith(decl.main_tok, .E0361);
-                b.msg("`{s}` is {d}, which the declared range excludes", .{ name, v });
-                try b.emit();
+                try self.err(decl.main_tok, .E0361, "`{s}` is {d}, which the declared range excludes", .{ name, v });
                 return;
             },
         }
     }
     if (has_from and !in_from) {
-        var b = self.errWith(decl.main_tok, .E0361);
-        b.msg("`{s}` is {d}, outside the declared range", .{ name, v });
-        try b.emit();
+        try self.err(decl.main_tok, .E0361, "`{s}` is {d}, outside the declared range", .{ name, v });
     }
 }
 
@@ -470,9 +464,7 @@ pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
             .str => |sv| sv,
             // `desc = 7` fails on this arm: not a string at all.
             else => {
-                var b = self.errWith(a.main_tok, .E0358);
-                b.msg("`{s}` must be assigned a string", .{name});
-                try b.emit();
+                try self.err(a.main_tok, .E0358, "`{s}` must be assigned a string", .{name});
                 continue;
             },
         };

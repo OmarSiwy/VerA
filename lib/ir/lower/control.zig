@@ -350,9 +350,7 @@ pub fn lowerCase(
     // Reported once for the statement, and lowering carries on with the last
     // one so a second, unrelated mistake in the same case is still reported.
     if (defaults > 1) {
-        var b = self.errWith(tok, .E0427);
-        b.msg("{d} `default` arms", .{defaults});
-        try b.emit();
+        try self.err(tok, .E0427, "{d} `default` arms", .{defaults});
     }
     // §5.8.1 applies to `case` word for word: the arm LABELS are constants by
     // A.6.7, so whether an arm is decided before the solve turns entirely on
