@@ -12,6 +12,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
+const lower_control = @import("control.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
@@ -196,8 +197,31 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 try vals.append(self.arena, try self.mir.addFloatConst(self.arena, t));
                 continue;
             }
+            // Table 4-20 lists abstol among each operator's "Constant
+            // expression arguments": "The constant expressions remain static
+            // throughout an analysis" (§4.5.14). Judged on what the value
+            // depends on, as E0515 is, so a tolerance held in a variable
+            // that only literals and parameters reach still passes.
+            const tv = try lower_expr.lowerExpr(self, a);
+            if (tv.ty != .string and !try lower_control.isStaticValue(self, tv.v)) {
+                try self.err(self.file.exprs.mainTok(a), .E0515, "`{s}()` abstol is a constant expression argument (Table 4-20), and this one moves during the analysis", .{name});
+                return poison;
+            }
+            try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
+            continue;
         }
         if (try appendVectorArg(self, &vals, a)) continue;
+        // §4.5.1 "Certain analog operators require arrays or vectors to be
+        // passed as arguments: Laplace filters, Z-transform filters ... An
+        // array can either be passed as an array_identifier ... or an array
+        // assignment pattern." A scalar in a coefficient slot is neither; a
+        // part-select or multidimensional array is left to the ordinary path.
+        if ((i == 1 or i == 2) and (std.mem.startsWith(u8, name, "laplace_") or std.mem.startsWith(u8, name, "zi_")) and
+            !(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a))))))
+        {
+            try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
+            return poison;
+        }
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
@@ -482,6 +506,25 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
     }
+    // Syntax 4-4: each noise function's optional last argument is `string` —
+    // §4.6.4.1's "name argument [that] acts as a label for the noise source".
+    // A number there is no label, and read as a PSD operand it would be a
+    // second power the call does not have.
+    const label_at: ?usize = if (std.mem.eql(u8, name, "white_noise") or
+        std.mem.eql(u8, name, "noise_table") or std.mem.eql(u8, name, "noise_table_log"))
+        1
+    else if (std.mem.eql(u8, name, "flicker_noise"))
+        2
+    else
+        null;
+    if (label_at) |li| if (ex.args(e).len > li and ex.args(e)[li] != .none) {
+        const a = ex.args(e)[li];
+        const c = lower_constfold.constEval(self, a);
+        if (c == null or c.? != .str) {
+            try self.err(ex.mainTok(a), .E0573, "`{s}()` argument {d} is its label", .{ name, li + 1 });
+            return poison;
+        }
+    };
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     // §4.6.4 the PSD arguments, positionally: arg 0 is the power, arg 1 of

@@ -373,6 +373,10 @@ fn compileInArena(
     };
     file.builtin_modules = builtins;
     file.netlist_modules = netlist_modules;
+    // §3.7/§6.5.3 the wreal structure rules, on the parsed file — the same
+    // owner the digital runner calls, so both routes refuse the same wirings.
+    try @import("frontend").wreal.check(file, starts, bag);
+    if (bag.failed()) return error.CompileFailed;
 
     // --- stage 4: lower (classes 3,4,5,7,9) ---------------------------------
     const mir = try arena.create(Mir);

@@ -1666,7 +1666,7 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
 }
 
 /// VAMS §3.7's port merge: a wire or tri joined to a wreal port becomes one
-/// wreal net, for every other connection to it too. `wrealRules` has
+/// wreal net, for every other connection to it too. `Front.wreal.check` has
 /// already refused the net types §3.7 does not call compatible.
 fn promoteWreal(r: *Run, e: *Elab, net: u32) Error!void {
     const n = &e.nets.items[net];
