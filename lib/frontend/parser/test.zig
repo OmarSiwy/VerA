@@ -645,6 +645,38 @@ test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of an
     try std.testing.expectEqual(diag.Code.E0209, delay.code(0));
 }
 
+test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statement (G.2.1)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ok = try parseForTest(arena,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer k;
+        \\  initial forever #1 k = k + 1;
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), ok.count());
+    const body = ok.file.modules[0].discrete[0].body;
+    // Recorded as §9.6's `while (1)`: the condition is the literal 1.
+    const loop = ok.file.stmt(body).while_stmt;
+    try std.testing.expectEqual(Ast.ExprTag.int_literal, ok.file.exprs.tag(loop.cond));
+    try std.testing.expectEqual(@as(i64, 1), ok.file.exprs.intLiteral(loop.cond).value);
+    // The analog forever is the one G.2.1 retired: still "expected an expression".
+    const ana = try parseForTest(arena, "module m(p); inout p; electrical p; analog forever I(p) <+ V(p); endmodule");
+    try std.testing.expectEqual(diag.Code.E0209, ana.code(0));
+}
+
+test "A.3.4: a switch instance closed early is refused by its class" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const r = try parseForTest(arena, "module m; wire a, b, c; cmos g (a, b, c); endmodule");
+    try std.testing.expectEqual(diag.Code.E0209, r.code(0));
+    try std.testing.expect(std.mem.indexOf(u8, r.msg(0), "cmos_switchtype") != null);
+}
+
 test "errors are collected with locations and parsing continues" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
