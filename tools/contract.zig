@@ -1270,6 +1270,15 @@ pub fn validate(comptime D: type) void {
         if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
             @compileError(name ++ ".state_class = .path_latch requires stateCtl");
     }
+    // §5.6.1.2 + §4.5.2 the fused accepted-point pass: `q` and `updateState`
+    // from one core evaluation, so it needs both of them to be equivalent to.
+    if (@hasDecl(D, "acceptQ")) {
+        if (!@hasDecl(D, "q") or !@hasDecl(D, "updateState"))
+            @compileError(name ++ ".acceptQ requires q and updateState");
+        const info = @typeInfo(@TypeOf(D.acceptQ));
+        if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
+            @compileError(name ++ ".acceptQ: expected fn (comptime S: type, [n_u]S, *const Model, *Instance, *State) [n_u]S");
+    }
 
     if (@hasDecl(D, "beginSolve")) expectFn(D, "beginSolve", fn (*D.Instance) void);
     // §9.15/§9.17.3 iteration state is separate from accepted-time history.
@@ -1556,8 +1565,10 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "beginSolve", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
-    // What `State` carries (`StateClass`); checked in `validate`.
+    // What `State` carries (`StateClass`), and the fused accepted-point pass;
+    // both checked in `validate`.
     .{ "state_class", {} },
+    .{ "acceptQ", {} },
     // Single-precision-Jacobian permission — checked inline in `validate` (the
     // "`jac_f32` must be a bool" guard); the S note in the header is the story.
     // Optional; absent means f64, which is the default a host must assume.
@@ -2118,6 +2129,10 @@ const MockAll = struct {
         return .ok;
     }
     pub const state_class: StateClass = .history;
+    pub fn acceptQ(comptime S: type, x: [n_u]S, m: *const Model, inst: *Instance, s: *State) [n_u]S {
+        s.flips += 1;
+        return q(S, x, m, inst, 0);
+    }
     pub fn beginSolve(_: *Instance) void {}
 
     pub fn advanceIteration(_: *const Model, _: *Instance, _: [n_u]f64) void {}

@@ -224,6 +224,23 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
     }
 }
 
+test "codegen: acceptQ is q and updateState off ONE core evaluation" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module c(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ V(p, n) * ddt(V(p, n));
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const at = std.mem.indexOf(u8, src, "pub fn acceptQ(comptime S: type,") orelse return error.NoAcceptQ;
+    const body = src[at..][0 .. std.mem.indexOf(u8, src[at..], "\n}\n") orelse return error.NoEnd];
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "core("));
+    try std.testing.expect(std.mem.indexOf(u8, body, "inst.wq__0 = m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "return qq;") != null);
+}
+
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);

@@ -439,7 +439,26 @@ pub const runner_body =
     \\    for (0..n_u) |i| q_prev[i] = qq[i].v;
     \\}
     \\
+    \\/// `acceptQ` is `q` then `updateState` from one core evaluation, so its
+    \\/// charge must be `q`'s to the bit, lanes included. Run on copies: the
+    \\/// transcript keeps advancing through `updateState` exactly as before.
+    \\fn acceptCheck(model: *const D.Model, inst: *const D.Instance, x: *const [n_u]f64, state: *const State) void {
+    \\    if (comptime !@hasDecl(D, "acceptQ") or State == void) return;
+    \\    var iw = inst.*;
+    \\    const want = D.q(Dual, seed(x), model, &iw, inst.abstime);
+    \\    var ic = inst.*;
+    \\    var sc = state.*;
+    \\    const got = D.acceptQ(Dual, seed(x), model, &ic, &sc);
+    \\    for (0..n_u) |i| {
+    \\        if (@as(u64, @bitCast(got[i].v)) == @as(u64, @bitCast(want[i].v)) and
+    \\            std.mem.eql(u8, std.mem.asBytes(&got[i].d), std.mem.asBytes(&want[i].d))) continue;
+    \\        std.debug.print("acceptQ FAIL: q[{s}] {e} vs q() {e}\n", .{ u_names[i], got[i].v, want[i].v });
+    \\        std.process.exit(1);
+    \\    }
+    \\}
+    \\
     \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) void {
+    \\    acceptCheck(model, inst, x, state);
     \\    commitCharge(model, inst, x);
     \\    if (@hasDecl(D, "advanceIteration")) if (!solved) {
     \\        // Forced-point fixtures sample both lifetimes. Both updates must
