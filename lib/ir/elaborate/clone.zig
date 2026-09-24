@@ -1,0 +1,567 @@
+//! The clone: copying a child module's AST into the flat design.
+//!
+//! In: one child instance. Out: its statements and expressions re-rooted in the parent,
+//! with ports bound and parameters overridden (§6.3).
+//!
+//! LRM clauses this file's code cites: §4.4, §4.7.1, §5.3.2, §5.10.2, §6.2.1, §6.3, §6.3.6, §6.4, §6.4.1, §6.7, §9.13.1, §9.13.2.
+//!
+//! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
+//! directly, `elab_clone.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
+
+const std = @import("std");
+const elaborate = @import("../elaborate.zig");
+const Flatten = elaborate.Flatten;
+const elab_names = @import("names.zig");
+const elab_paramset = @import("paramset.zig");
+const Ast = @import("frontend").Ast;
+const Lower = @import("../lower.zig");
+const rng = @import("kernels").rng_kernels;
+const Error = elaborate.Error;
+const sep = elaborate.sep;
+
+// ---- the clone --------------------------------------------------------
+
+/// §6.3: a flattened child's parameter is not the DEVICE's parameter.
+/// The device is the top module, and its model card is the top's
+/// parameter list; a child's value was fixed here, at elaboration, so
+/// exposing it as overridable would offer the host a knob that can no
+/// longer move anything.
+pub inline fn cloneParams(
+    self: *Flatten,
+    params: []const Ast.ParamDecl,
+    aliases: []const Ast.AliasParam,
+    over: *const std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId),
+) Error!void {
+    for (params) |p| {
+        var out = p;
+        out.name = elab_names.flat(self, p.name);
+        out.ranges = try cloneRanges(self, p.ranges);
+        out.dims = try cloneDims(self, p.dims);
+        if (over.get(p.name)) |v| {
+            out.default = v; // already in the parent's flat namespace
+            out.is_override = true;
+        } else {
+            out.default = try cloneExpr(self, p.default);
+        }
+        out.is_local = true;
+        try self.params.append(self.ctx.arena, out);
+    }
+    for (aliases) |al| try self.aliasparams.append(self.ctx.arena, .{
+        .alias = elab_names.flat(self, al.alias),
+        .target = elab_names.flat(self, al.target),
+    });
+}
+
+pub fn cloneDim(self: *Flatten, d: ?Ast.Dim) Error!?Ast.Dim {
+    const dim = d orelse return null;
+    return .{ .msb = try cloneExpr(self, dim.msb), .lsb = try cloneExpr(self, dim.lsb) };
+}
+
+pub fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
+    if (dims.len == 0) return &.{};
+    const out = try self.ctx.arena.alloc(Ast.Dim, dims.len);
+    for (dims, out) |d, *o| o.* = (try cloneDim(self, d)).?;
+    return out;
+}
+
+pub fn cloneRanges(self: *Flatten, rs: []const Ast.ValueRange) Error![]const Ast.ValueRange {
+    if (rs.len == 0) return &.{};
+    const out = try self.ctx.arena.alloc(Ast.ValueRange, rs.len);
+    for (rs, out) |r, *o| {
+        o.* = r;
+        o.lo = try cloneExpr(self, r.lo);
+        o.hi = try cloneExpr(self, r.hi);
+    }
+    return out;
+}
+
+pub fn cloneVar(self: *Flatten, v: Ast.VarDecl) Error!Ast.VarDecl {
+    var out = v;
+    out.name = elab_names.flat(self, v.name);
+    out.dims = try cloneDims(self, v.dims);
+    out.init = try cloneExpr(self, v.init);
+    return out;
+}
+
+/// §4.7.1 a user function. Its formals and locals are NOT in the unit's
+/// rename map — they are the function's own scope — so they are hidden for
+/// the duration of the body, or a formal sharing a module-level name would
+/// be rewritten to the module's.
+pub fn cloneFunc(self: *Flatten, fd: Ast.FuncDecl) Error!Ast.FuncDecl {
+    var out = fd;
+    out.name = elab_names.flat(self, fd.name);
+    var hidden: std.ArrayList(HiddenName) = .empty;
+    for (fd.args) |arg| try hide(self, &hidden, arg.name);
+    for (fd.params) |p| try hide(self, &hidden, p.name);
+    for (fd.vars) |v| try hide(self, &hidden, v.name);
+    out.params = try cloneLocalParams(self, fd.params);
+    out.vars = try cloneLocalVars(self, fd.vars);
+    out.body = try cloneStmt(self, fd.body);
+    unhide(self, hidden.items);
+    return out;
+}
+
+pub const HiddenName = struct { name: Ast.StrId, was: ?Ast.StrId };
+
+pub fn hide(self: *Flatten, list: *std.ArrayList(HiddenName), name: Ast.StrId) Error!void {
+    try list.append(self.ctx.arena, .{ .name = name, .was = self.unit.rename.get(name) });
+    _ = self.unit.rename.remove(name);
+}
+
+pub fn unhide(self: *Flatten, list: []const HiddenName) void {
+    // Reverse, so a name hidden twice (a formal and a body local) comes back
+    // to the outermost saved binding.
+    var i = list.len;
+    while (i > 0) {
+        i -= 1;
+        if (list[i].was) |w| {
+            self.unit.rename.putAssumeCapacity(list[i].name, w);
+        } else {
+            _ = self.unit.rename.remove(list[i].name);
+        }
+    }
+}
+
+/// A block's or function's own declarations: cloned for their initializers
+/// and ranges, but NOT renamed — they are locals of a scope lowering already
+/// pushes and pops.
+pub fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const Ast.ParamDecl {
+    if (ps.len == 0) return &.{};
+    const out = try self.ctx.arena.alloc(Ast.ParamDecl, ps.len);
+    for (ps, out) |p, *o| {
+        o.* = p;
+        o.default = try cloneExpr(self, p.default);
+        o.dims = try cloneDims(self, p.dims);
+        o.ranges = try cloneRanges(self, p.ranges);
+    }
+    return out;
+}
+
+pub fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.VarDecl {
+    if (vs.len == 0) return &.{};
+    const out = try self.ctx.arena.alloc(Ast.VarDecl, vs.len);
+    for (vs, out) |v, *o| {
+        o.* = v;
+        o.dims = try cloneDims(self, v.dims);
+        o.init = try cloneExpr(self, v.init);
+    }
+    return out;
+}
+
+/// Copy one expression subtree into the store, renaming the names that
+/// belong to the unit being inlined. Every row is appended, never mutated:
+/// the child's own ids stay valid because a second instance of the same
+/// module clones the same source rows again, under its own map.
+/// The branch a `<+` or an indirect assignment DRIVES, as opposed to one it
+/// reads: §6.3.6's flow-probe division must not fire on it. Everything else
+/// about the clone is the same.
+pub fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
+    self.contrib_target = true;
+    defer self.contrib_target = false;
+    return cloneExpr(self, e);
+}
+
+/// §6.4.1: "The right-hand side can be composed of numbers, parameters, and
+/// hierarchical out-of-module references to local parameters of a different
+/// module. Hierarchical out-of-module references to non-local parameters are
+/// disallowed."
+///
+/// The clause's own example reads `semicoCMOS.tox` from a process-constant
+/// module that NOTHING instantiates, so the reference has no path in the
+/// instance tree and §6.7's ordinary flat-name lookup (E0901) can never
+/// resolve it. It names the DECLARATION, and its value is the declared
+/// default — substituted here, in the one context §6.4.1 licenses it.
+///
+/// ponytail: the default is cloned under an empty rename map, so a library
+/// localparam whose own default reads a SIBLING localparam leaves that name
+/// unresolved (E0901 at lowering) rather than silently capturing a
+/// same-named paramset parameter. §6.4.1's worked example does not nest.
+/// The upgrade path is a recursive substitution keyed on the owning module.
+pub fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+    if (!self.in_paramset) return null;
+    const parts = self.ctx.file.exprs.nameParts(e);
+    if (parts.len != 2) return null;
+    const m = elab_names.findModule(self, parts[0]) orelse return null;
+    const p = for (m.params) |*q| {
+        if (q.name == parts[1]) break q;
+    } else return null;
+    if (!p.is_local) {
+        try self.err(self.ctx.file.exprs.mainTok(e), .E0907, "`{s}.{s}` is a parameter, and §6.4.1 allows a paramset to reach out of module only to a LOCAL parameter", .{
+            self.ctx.file.str(parts[0]), self.ctx.file.str(parts[1]),
+        });
+        return null;
+    }
+    const saved = self.unit;
+    self.unit = .{ .mfactor = saved.mfactor };
+    defer self.unit = saved;
+    return try cloneExpr(self, p.default);
+}
+
+pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
+    if (e == .none) return .none;
+    const x = &self.ctx.file.exprs;
+    var n = x.get(e);
+    switch (n.tag) {
+        // Literals and the two infinities carry no reference; the side-table
+        // index in `extra` is shared, which is safe because `reals`/`ints`
+        // are append-only too.
+        .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => {},
+        .ident => n.str = elab_names.flat(self, n.str),
+        .hier_ident => {
+            if (try paramsetOomr(self, e)) |sub| return sub;
+            // §6.7 a dotted name. Only the FIRST part can be a local of this
+            // unit — an instance of it, usually — and the rest are inside
+            // whatever that names, so renaming part 0 is what turns `u.gain`
+            // written inside a child into the flat `mid.u.gain`. §6.2.1's
+            // "priority to the local scope" is exactly this rename; the
+            // `$root` prefix that opts out of it is not a name of any unit, so
+            // it passes through here and is stripped by `Lower.flatName`.
+            const parts = x.nameParts(e);
+            const out = try self.ctx.arena.alloc(Ast.StrId, parts.len);
+            for (parts, out, 0..) |p, *o, i| o.* = if (i == 0) elab_names.flat(self, p) else p;
+            n.extra = try self.ctx.file.exprs.addStrList(self.ctx.arena, out);
+        },
+        .unary => n.lhs = try cloneExpr(self, x.lhs(e)),
+        .binary, .index, .range, .event_or, .multi_concat => {
+            n.lhs = try cloneExpr(self, x.lhs(e));
+            n.rhs = try cloneExpr(self, x.rhs(e));
+        },
+        .ternary => {
+            const third = x.ternaryElse(e);
+            n.lhs = try cloneExpr(self, x.lhs(e));
+            n.rhs = try cloneExpr(self, x.rhs(e));
+            n.extra = @intFromEnum(try cloneExpr(self, third));
+        },
+        // A.6.5 `driver_update expression` sits with the digital edges: one
+        // signal operand. Unreachable in practice — it only occurs in a
+        // connect module, which is never instantiated (`pickTop`) and so
+        // never cloned — but the shape is the shape.
+        .event_posedge, .event_negedge, .event_driver_update => n.lhs = try cloneExpr(self, x.lhs(e)),
+        .event_initial_step, .event_final_step => {}, // §5.10.2 analysis NAMES
+        .branch_access, .port_access => {
+            // §4.4 `str` is the ACCESS function (`V`, `I`), not a name in
+            // this unit; the terminals are `lhs`/`rhs`.
+            n.lhs = try cloneExpr(self, x.lhs(e));
+            n.rhs = try cloneExpr(self, x.rhs(e));
+            if (self.unit.primitive) n.str = elab_names.primitiveAccess(self, n.str, n.lhs);
+            // §6.3.6 rule 2: a flow PROBE inside a scaled instance reads the
+            // branch's whole flow, which is $mfactor copies' worth, so the
+            // per-copy value the equation was written against is that over
+            // $mfactor. Not the branch a `<+` drives — see `contrib_target`.
+            if (!self.contrib_target) {
+                const probe = try self.ctx.file.exprs.add(self.ctx.arena, n);
+                return (try elab_names.mfactorScale(self, probe, n.str, n.lhs, .div, n.main_tok)) orelse probe;
+            }
+        },
+        .call => {
+            // §4.7 a user function was renamed with the declarations.
+            n.str = elab_names.flat(self, n.str);
+            n.extra = try cloneArgs(self, x.args(e));
+        },
+        .sys_call => {
+            if (try rewriteSysCall(self, e)) |lit| return lit;
+            if (self.in_paramset) if (try rewriteParamsetDist(self, e)) |out| return out;
+            n.extra = try cloneArgs(self, x.args(e));
+        },
+        .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
+            n.extra = try cloneArgs(self, x.args(e));
+        },
+    }
+    return self.ctx.file.exprs.add(self.ctx.arena, n);
+}
+
+pub inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
+    const out = try self.ctx.arena.alloc(Ast.ExprId, src.len);
+    for (src, out) |s, *o| o.* = try cloneExpr(self, s);
+    return self.ctx.file.exprs.addExprList(self.ctx.arena, out);
+}
+
+/// The three ch9 functions whose answer is a property of the INSTANTIATION
+/// and therefore known here, once, rather than at run time.
+///
+/// §9.19 `$port_connected` and `$param_given` both ask "what did the
+/// instantiation say?", which is a compile-time fact about a flattened unit
+/// — and it has to be answered here, because after the flatten a connected
+/// port IS the parent's net and nothing downstream can tell it from one.
+/// §9.18 `$mfactor` is the running product `collectOverrides` built.
+pub fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+    const x = &self.ctx.file.exprs;
+    const name = x.strOf(e);
+    const tok = x.mainTok(e);
+    if (self.ctx.file.strings.eql(name, "$mfactor")) {
+        if (self.unit.mfactor == .none) return null; // the top: Table 9-29's 1.0
+        return self.unit.mfactor;
+    }
+    const is_pc = self.ctx.file.strings.eql(name, "$port_connected");
+    const is_pg = self.ctx.file.strings.eql(name, "$param_given");
+    if (!is_pc and !is_pg) return null;
+    const args = x.args(e);
+    if (args.len != 1 or args[0] == .none or x.tag(args[0]) != .ident) return null;
+    const local = x.strOf(args[0]);
+    const table = if (is_pc) &self.unit.connected else &self.unit.given;
+    const answer = table.get(local) orelse return null;
+    return try self.ctx.file.exprs.addInt(self.ctx.arena, tok, @intFromBool(answer));
+}
+
+/// §9.13.1/§9.13.2 a distribution call written INSIDE a §6.4 paramset body
+/// — the one scope whose calls may carry the optional trailing
+/// `type_string`, and a compile-time fact about the paramset, so it sits
+/// with `rewriteSysCall`'s other elaboration-time answers. Two jobs:
+///
+///   1. The `type_string`. Syntax 9-8/9-9 admit it and §9.13.2 fences it:
+///      "The type_string provides support for Monte-Carlo analysis and
+///      shall only be used in calls to a distribution function from within
+///      a paramset." The grammar lists exactly two spellings —
+///      `type_string ::= "global" | "instance"` — so anything else is an
+///      error (E0816). Monte-Carlo trials are the HOST's loop ("one value
+///      is generated for each Monte-Carlo trial"); VerA compiles one
+///      trial, in which "global" and "instance" select the same single
+///      draw — so a valid string is validated and DROPPED, leaving the
+///      call behaving exactly as without it.
+///   2. The value. A paramset statement computes a module parameter at
+///      elaboration (§6.4), and §9.13.2 makes the draw a pure function of
+///      its seed ("shall always return the same value given the same
+///      seed") — so a call whose seed and parameters are literals is one
+///      kernel evaluation performed NOW, with the very functions every
+///      device embeds (`rng_kernels.zig`). The call becomes the literal it
+///      draws, which is what lets the value ride the ordinary §6.3
+///      override machinery into the model card.
+///
+/// Returns null when the callee is not one of Table 9-10's names (or is
+/// `$random`, whose Syntax 9-8 production has no `type_string`). A call
+/// whose arguments do not fold is returned with the string stripped and
+/// left to lowering, which owns the remaining argument rules — in a
+/// parameter position that path still ends in E0363, the same verdict the
+/// call had without a `type_string`.
+///
+/// ponytail: the fold takes a literal seed only. Syntax 9-9 also admits an
+/// integer parameter identifier, and a paramset's own parameters are fixed
+/// by the time this runs — folding through them needs the parameter values
+/// threaded in here; add when a model actually writes one.
+pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+    const x = &self.ctx.file.exprs;
+    const name = self.ctx.file.str(x.strOf(e));
+    const d = Lower.distOf(name) orelse return null;
+    if (std.mem.eql(u8, name, "$random")) return null;
+    const tok = x.mainTok(e);
+    const args = x.args(e);
+
+    var eff = args;
+    var stripped = false;
+    var bad = false;
+    if (eff.len > 0 and eff[eff.len - 1] != .none and x.tag(eff[eff.len - 1]) == .str_literal) {
+        const last = eff[eff.len - 1];
+        const ts = self.ctx.file.str(x.strOf(last));
+        if (!std.mem.eql(u8, ts, "global") and !std.mem.eql(u8, ts, "instance")) {
+            try self.err(x.mainTok(last), .E0816, "`{s}`'s `type_string` shall be \"global\" or \"instance\", got \"{s}\"", .{ name, ts });
+            bad = true;
+        }
+        eff = eff[0 .. eff.len - 1];
+        stripped = true;
+    }
+
+    // The fold: the seed plus §9.13.2's parameters, all literal, judged by
+    // the same domain rules `lowerRandom` applies on the runtime path.
+    fold: {
+        if (bad or eff.len != @as(usize, d.nparam) + 1) break :fold;
+        const seed = constIntLit(x, eff[0]) orelse break :fold;
+        var p = [2]f64{ 0, 0 };
+        for (eff[1..], 0..) |arg, i| {
+            p[i] = elab_paramset.constReal(self, arg) orelse break :fold;
+            if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, Lower.distParamName(d, i), p[i] });
+                bad = true;
+            }
+            if (d.count and i == 0 and p[i] > 0 and
+                (!(p[i] <= 2147483647.0) or p[i] != @trunc(p[i])))
+            {
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, Lower.distParamName(d, i) });
+                bad = true;
+            }
+        }
+        if (d.ordered and d.ty == .real and !(p[0] < p[1])) {
+            try self.err(x.mainTok(eff[1]), .E0816, "the start value shall be smaller than the end value, got {d} and {d}", .{ p[0], p[1] });
+            bad = true;
+        }
+        if (bad) break :fold; // report; nothing sound to draw
+        const v: f64 = if (std.mem.eql(u8, d.kernel, "$rng$rand"))
+            rng.zRngRand(seed)
+        else if (std.mem.eql(u8, d.kernel, "$rng$i_uniform"))
+            rng.zRngIUniform(seed, p[0], p[1])
+        else if (std.mem.eql(u8, d.kernel, "$rng$uniform"))
+            rng.zRngUniform(seed, p[0], p[1])
+        else if (std.mem.eql(u8, d.kernel, "$rng$normal"))
+            rng.zRngNormal(seed, p[0], p[1])
+        else if (std.mem.eql(u8, d.kernel, "$rng$exponential"))
+            rng.zRngExponential(seed, p[0])
+        else if (std.mem.eql(u8, d.kernel, "$rng$poisson"))
+            rng.zRngPoisson(seed, p[0])
+        else if (std.mem.eql(u8, d.kernel, "$rng$chi_square"))
+            rng.zRngChiSquare(seed, p[0])
+        else if (std.mem.eql(u8, d.kernel, "$rng$t"))
+            rng.zRngT(seed, p[0])
+        else if (std.mem.eql(u8, d.kernel, "$rng$erlang"))
+            rng.zRngErlang(seed, p[0], p[1])
+        else
+            break :fold;
+        if (d.ty == .integer and (!std.math.isFinite(v) or
+            @round(v) < -2147483648.0 or @round(v) > 2147483647.0))
+        {
+            try self.err(tok, .E0816, "`{s}`'s reference result cannot be represented as a signed 32-bit integer", .{name});
+            break :fold;
+        }
+        // §9.13.2 "$dist_ ... return integer values" — §4.2.1.1's rounding,
+        // the same conversion the runtime path's `toInt` performs.
+        return if (d.ty == .integer)
+            try x.addInt(self.ctx.arena, tok, @intFromFloat(@round(v)))
+        else
+            try x.addReal(self.ctx.arena, tok, v);
+    }
+
+    if (!stripped) return null; // the ordinary clone will do
+    // Unfoldable, but a `type_string` shall not survive to lowering, where
+    // it would read as the out-of-paramset scope error: rebuild the call
+    // over the remaining arguments, cloned as `cloneArgs` would have.
+    var n = x.get(e);
+    n.extra = try cloneArgs(self, eff);
+    return try self.ctx.file.exprs.add(self.ctx.arena, n);
+}
+
+/// §9.13.1 Syntax 9-8's literal seed form, `[ sign ] decimal_number`. A
+/// real is deliberately NOT one — "the seed argument shall be an integer"
+/// is lowering's E0816 to report, so a real seed just declines the fold.
+pub fn constIntLit(x: *const Ast.ExprStore, e: Ast.ExprId) ?i64 {
+    if (e == .none) return null;
+    return switch (x.tag(e)) {
+        .int_literal => x.intValue(e),
+        .unary => switch (x.unOp(e)) {
+            .plus => constIntLit(x, x.lhs(e)),
+            .minus => if (constIntLit(x, x.lhs(e))) |v| -v else null,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Copy one statement (and everything under it) into the pool.
+pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
+    if (id == .none) return .none;
+    const file = self.ctx.file;
+    const tok = file.stmtTok(id);
+    const s = file.stmt(id);
+    const out: Ast.Stmt = switch (s) {
+        .empty => .empty,
+        .block => |b| blk: {
+            // §5.3.2 a named block's declarations are LOCALS. Hidden for the
+            // body, for the same reason a function's formals are.
+            var hidden: std.ArrayList(HiddenName) = .empty;
+            for (b.params) |p| try hide(self, &hidden, p.name);
+            for (b.vars) |v| try hide(self, &hidden, v.name);
+            const params = try cloneLocalParams(self, b.params);
+            const vars = try cloneLocalVars(self, b.vars);
+            const body = try self.ctx.arena.alloc(Ast.StmtId, b.body.len);
+            for (b.body, body) |src, *o| o.* = try cloneStmt(self, src);
+            unhide(self, hidden.items);
+            break :blk .{
+                .block = .{
+                    // §6.7 a block label is a scope name. Renamed with the rest,
+                    // so `disable` inside the child still finds it and two
+                    // instances do not declare one name twice.
+                    .name = if (b.name == .none) .none else try joinLocal(self, b.name),
+                    .params = params,
+                    .vars = vars,
+                    .body = body,
+                },
+            };
+        },
+        .assign => |v| .{ .assign = .{
+            .target = try cloneExpr(self, v.target),
+            .value = try cloneExpr(self, v.value),
+        } },
+        .contribute => |v| blk: {
+            const lhs = try cloneTarget(self, v.lhs);
+            const rhs = try cloneExpr(self, v.rhs);
+            // §6.3.6 rule 1: "all contributions to a branch flow quantity in
+            // the analog block shall be multiplied by $mfactor", and the
+            // clause adds that "Verilog-AMS does not provide a method to
+            // disable" it. A potential contribution is left alone — the
+            // clause states the rule for flow, and $mfactor copies in
+            // parallel share a potential.
+            const x = &self.ctx.file.exprs;
+            const scaled = if (x.tag(lhs) == .branch_access or x.tag(lhs) == .port_access)
+                try elab_names.mfactorScale(self, rhs, x.strOf(lhs), x.lhs(lhs), .mul, x.mainTok(lhs))
+            else
+                null;
+            break :blk .{ .contribute = .{ .lhs = lhs, .rhs = scaled orelse rhs } };
+        },
+        .indirect => |v| .{ .indirect = .{
+            .lhs = try cloneTarget(self, v.lhs),
+            .probe = try cloneExpr(self, v.probe),
+            .eqn = try cloneExpr(self, v.eqn),
+        } },
+        .if_stmt => |v| .{ .if_stmt = .{
+            .cond = try cloneExpr(self, v.cond),
+            .then_s = try cloneStmt(self, v.then_s),
+            .else_s = try cloneStmt(self, v.else_s),
+            .is_generate = v.is_generate,
+        } },
+        .case_stmt => |v| blk: {
+            const arms = try self.ctx.arena.alloc(Ast.CaseArm, v.arms.len);
+            for (v.arms, arms) |src, *o| {
+                const labels = try self.ctx.arena.alloc(Ast.ExprId, src.labels.len);
+                for (src.labels, labels) |l, *ol| ol.* = try cloneExpr(self, l);
+                o.* = .{ .labels = labels, .body = try cloneStmt(self, src.body) };
+            }
+            break :blk .{ .case_stmt = .{
+                .kind = v.kind,
+                .scrutinee = try cloneExpr(self, v.scrutinee),
+                .arms = arms,
+                .is_generate = v.is_generate,
+            } };
+        },
+        .for_stmt => |v| .{ .for_stmt = .{
+            .init = try cloneStmt(self, v.init),
+            .cond = try cloneExpr(self, v.cond),
+            .step = try cloneStmt(self, v.step),
+            .body = try cloneStmt(self, v.body),
+        } },
+        .while_stmt => |v| .{ .while_stmt = .{
+            .cond = try cloneExpr(self, v.cond),
+            .body = try cloneStmt(self, v.body),
+        } },
+        .repeat_stmt => |v| .{ .repeat_stmt = .{
+            .count = try cloneExpr(self, v.count),
+            .body = try cloneStmt(self, v.body),
+        } },
+        .event_control => |v| .{ .event_control = .{
+            .event = try cloneExpr(self, v.event),
+            .body = try cloneStmt(self, v.body),
+        } },
+        .event_trigger => |v| .{ .event_trigger = .{ .name = elab_names.flat(self, v.name) } },
+        .disable => |v| .{ .disable = .{ .name = elab_names.flat(self, v.name) } },
+        .sys_task => |v| blk: {
+            // `name` is `$strobe`/`$discontinuity`/… — never a name of this
+            // unit.
+            const args = try self.ctx.arena.alloc(Ast.ExprId, v.args.len);
+            for (v.args, args) |src, *o| o.* = try cloneExpr(self, src);
+            break :blk .{ .sys_task = .{ .name = v.name, .args = args } };
+        },
+        .jump => |v| .{ .jump = .{ .kind = v.kind, .value = try cloneExpr(self, v.value) } },
+    };
+    return file.addStmt(self.ctx.arena, out, tok);
+}
+
+/// A name the unit declares but that `bind` never saw, because it is not a
+/// module-level declaration: a §5.3.2 block label. Joined against the unit's
+/// path on demand, which the rename map already carries for every other
+/// name of the unit.
+pub fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
+    if (self.unit.rename.get(name)) |flat_id| return flat_id;
+    // Derive the path from any binding the unit has; a unit with no
+    // declarations at all has nothing to collide with, so the label stands.
+    var it = self.unit.rename.iterator();
+    const sample = it.next() orelse return name;
+    const s = self.ctx.file.str(sample.value_ptr.*);
+    const cut = std.mem.lastIndexOfScalar(u8, s, sep) orelse return name;
+    return elab_names.join(self, s[0 .. cut + 1], name);
+}
