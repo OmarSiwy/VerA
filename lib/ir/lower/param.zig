@@ -349,7 +349,19 @@ pub fn addParam(
         .ranges = ranges, // §3.4.2 — MUST reach proof.zig
         .is_local = is_local,
     });
-    try self.param_values.append(self.arena, try self.mir.addParamRef(self.arena, idx));
+    // §3.4.5 a localparam "shall not be directly modified", and `derive`
+    // rewrites its field unconditionally: one whose default folds without
+    // reading a parameter (`parameterDefault` returned a constant) holds that
+    // number at every read. Reading an INTEGER one as the number is what lets
+    // a loop bounded by it (`for (i = 0; i < n; ...)`) and a subscript over
+    // it fold. ponytail: integers only — a real constant would also hand the
+    // prover a point interval, and a unit it newly proves finite changes float
+    // mode, so its bits; widen once that is wanted.
+    const ref = switch (self.mir.valueDef(default)) {
+        .int_const => if (is_local) default else null,
+        else => null, // else: a real or string, or a default that reads a parameter or the operating point, stays a card read
+    };
+    try self.param_values.append(self.arena, ref orelse try self.mir.addParamRef(self.arena, idx));
     try self.param_index.put(self.arena, name, idx);
 }
 
