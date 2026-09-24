@@ -1430,6 +1430,150 @@ pub const SourceFile = struct {
         return self.stmt_toks.items[@intFromEnum(id)];
     }
 
+    /// Every lvalue statement `id` writes through its OWN expressions, appended
+    /// to `out` in source order. Child statements are not entered: every caller
+    /// already walks them, with scope rules (named blocks, event bodies) of its
+    /// own. `funcs` is the enclosing module's §4.7.1 function list, which is
+    /// where an actual's direction is decided.
+    ///
+    /// ONE list, because there are five ways to write a variable and every
+    /// consumer that knew only the first was wrong about the other four:
+    ///   - §5.7 the assignment target;
+    ///   - §4.7.2.3/§4.7.2.4 an actual bound to an `output` or `inout` formal
+    ///     ("the last value assigned to the output argument is then assigned to
+    ///     the corresponding analog variable reference");
+    ///   - §9.13.1/§9.13.2 the seed of `$random`, `$arandom`, `$dist_*` and
+    ///     `$rdist_*` ("If the random_seed argument is specified it is an inout
+    ///     argument");
+    ///   - §9.5.3/§9.5.4 the destinations of `$sscanf`, `$fscanf`, `$fgets`,
+    ///     `$ferror`, and the string `$swrite`/`$sformat` write into.
+    /// An array actual written as an A.8.1 assignment pattern (§4.7.2.3 "an
+    /// array assignment pattern of analog variables") yields its elements.
+    /// The appended ids are the lvalues as written — `x[i]` stays `x[i]`; see
+    /// `lvalueBase` for the declaration it names.
+    pub fn stmtWrites(self: *const SourceFile, funcs: []const FuncDecl, id: StmtId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
+        if (id == .none) return;
+        switch (self.stmt(id)) {
+            .assign => |a| {
+                try self.addLvalue(a.target, gpa, out);
+                try self.exprWrites(funcs, a.value, gpa, out);
+                try self.exprWrites(funcs, a.timing, gpa, out);
+            },
+            .contribute => |s| try self.exprWrites(funcs, s.rhs, gpa, out),
+            .indirect => |s| {
+                try self.exprWrites(funcs, s.probe, gpa, out);
+                try self.exprWrites(funcs, s.eqn, gpa, out);
+            },
+            .if_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
+            .case_stmt => |s| {
+                try self.exprWrites(funcs, s.scrutinee, gpa, out);
+                for (s.arms) |arm| for (arm.labels) |l| try self.exprWrites(funcs, l, gpa, out);
+            },
+            .for_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
+            .while_stmt => |s| try self.exprWrites(funcs, s.cond, gpa, out),
+            .repeat_stmt => |s| try self.exprWrites(funcs, s.count, gpa, out),
+            .event_control => |s| try self.exprWrites(funcs, s.event, gpa, out),
+            .sys_task => |s| {
+                for (sysWrites(self.str(s.name), s.args)) |w| try self.addLvalue(w, gpa, out);
+                for (s.args) |a| try self.exprWrites(funcs, a, gpa, out);
+            },
+            .jump => |s| try self.exprWrites(funcs, s.value, gpa, out),
+            .empty, .block, .event_trigger, .disable => {},
+        }
+    }
+
+    /// The expression half of `stmtWrites`.
+    fn exprWrites(self: *const SourceFile, funcs: []const FuncDecl, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
+        if (e == .none) return;
+        const ex = &self.exprs;
+        switch (ex.tag(e)) {
+            .int_literal,
+            .logic_literal,
+            .real_literal,
+            .str_literal,
+            .pos_inf,
+            .neg_inf,
+            .ident,
+            .hier_ident,
+            .event_initial_step,
+            .event_final_step,
+            // §4.4 a probe's operands are net and branch references, which no
+            // expression writes.
+            .branch_access,
+            .port_access,
+            => {},
+            .unary, .event_posedge, .event_negedge, .event_driver_update => try self.exprWrites(funcs, ex.lhs(e), gpa, out),
+            .binary, .index, .range, .multi_concat, .event_or => {
+                try self.exprWrites(funcs, ex.lhs(e), gpa, out);
+                try self.exprWrites(funcs, ex.rhs(e), gpa, out);
+            },
+            .ternary => {
+                try self.exprWrites(funcs, ex.lhs(e), gpa, out);
+                try self.exprWrites(funcs, ex.rhs(e), gpa, out);
+                try self.exprWrites(funcs, ex.ternaryElse(e), gpa, out);
+            },
+            .call => {
+                const args = ex.args(e);
+                for (funcs) |fd| {
+                    if (fd.name != ex.strOf(e)) continue;
+                    for (fd.args, 0..) |formal, i| {
+                        if (i >= args.len) break;
+                        switch (formal.direction) {
+                            .output, .inout => try self.addLvalue(args[i], gpa, out),
+                            .input, .unspecified => {},
+                        }
+                    }
+                    break;
+                }
+                for (args) |a| try self.exprWrites(funcs, a, gpa, out);
+            },
+            .sys_call => {
+                const args = ex.args(e);
+                for (sysWrites(self.str(ex.strOf(e)), args)) |w| try self.addLvalue(w, gpa, out);
+                for (args) |a| try self.exprWrites(funcs, a, gpa, out);
+            },
+            .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
+                for (ex.args(e)) |a| try self.exprWrites(funcs, a, gpa, out);
+            },
+        }
+    }
+
+    fn addLvalue(self: *const SourceFile, e: ExprId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
+        if (e == .none) return;
+        if (self.exprs.tag(e) == .assign_pattern) {
+            for (self.exprs.args(e)) |el| try self.addLvalue(el, gpa, out);
+            return;
+        }
+        try out.append(gpa, e);
+    }
+
+    /// The arguments of system function or task `name` that it writes through.
+    /// The positions are the syntax boxes': Syntax 9-8/9-9 put the seed first,
+    /// §9.5.3/§9.5.4.2 put the destinations after the source and format, and
+    /// §9.5.4.1/§9.5.7 put `$fgets`'s string first and `$ferror`'s second.
+    fn sysWrites(name: []const u8, args: []const ExprId) []const ExprId {
+        const eq = std.mem.eql;
+        const first = args[0..@min(1, args.len)];
+        // §9.13 Table 9-10: all 17 names match one of these four spellings.
+        if (eq(u8, name, "$random") or eq(u8, name, "$arandom") or
+            std.mem.startsWith(u8, name, "$dist_") or std.mem.startsWith(u8, name, "$rdist_")) return first;
+        if (eq(u8, name, "$sscanf") or eq(u8, name, "$fscanf")) return args[@min(2, args.len)..];
+        if (eq(u8, name, "$ferror")) return args[@min(1, args.len)..];
+        if (eq(u8, name, "$fgets") or eq(u8, name, "$swrite") or eq(u8, name, "$sformat")) return first;
+        return &.{};
+    }
+
+    /// The declared name an lvalue writes: `x`, `x[i]`, `x[i][j]` and a part
+    /// select `x[3:0]` (an `.index` whose index is a `.range`) all write the
+    /// declaration `x`. `.none` when the lvalue is not rooted in a plain
+    /// identifier.
+    pub fn lvalueBase(self: *const SourceFile, e: ExprId) ExprId {
+        var t = e;
+        while (t != .none and self.exprs.tag(t) == .index) t = self.exprs.lhs(t);
+        if (t == .none or self.exprs.tag(t) != .ident) return .none;
+        return t;
+    }
+
     /// §2.8 resolve an interned name.
     pub fn str(self: *const SourceFile, id: StrId) []const u8 {
         return self.strings.get(id);
