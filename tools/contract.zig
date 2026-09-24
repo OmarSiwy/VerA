@@ -971,6 +971,74 @@ pub fn limitWrites(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_writes")) D.limit_writes else ~@as(u64, 0);
 }
 
+/// Which unknowns need a derivative lane, as a bit mask over `U` (bit i is
+/// `@intFromEnum` value i). A SOUND SUPERSET, and like `limitReads` it
+/// defaults to ALL when a device does not declare `deriv_reads` — the answer
+/// that costs performance rather than correctness.
+///
+/// THE PROMISE: for every unknown u outside the mask, every ∂eval[row]/∂x[u]
+/// and ∂q[row]/∂x[u] is a compile-time constant — the same at every x, every
+/// Model and every Instance — and `jacConst` holds its exact value. Such a
+/// column only ever enters the residual as a linear term with a constant
+/// coefficient: a §5.6 branch relation's ±V, KCL's ±x[flow], a §5.4.3
+/// port-probe row. The branch-flow unknowns are most of them; bsim4va's
+/// shared core differentiates 11 of its 18.
+///
+/// THE RULE FOR A HOST: seed derivative lanes only for the unknowns in the
+/// mask, and stamp `jacConst` for the rest. Every unknown still reaches
+/// `eval` with its VALUE; only its lane is gone. The width is the host's to
+/// pad — `Dual(next_pow2(popcount))` measured best — and the device declares
+/// only the mask. `ddxAt` reads a lane by unknown index; see `ddxReads`.
+///
+/// The constant entries stay in `jac_pattern`/`q_pattern` and
+/// `jac_rows`/`q_rows`: their matrix slots exist, only their values are known
+/// before the solve.
+///
+/// `validate` enforces four rules, each where a wrong mask would otherwise
+/// corrupt the Jacobian silently:
+///   (a) a declared `deriv_reads` needs |U| <= 64, the width of the mask;
+///   (b) `limitWrites ⊆ derivReads` on a device with a `limit`: the host's
+///       limiting correction `I(vlim) + g(vlim)·(v − vlim)` is lane-indexed,
+///       so every unknown the limiter moves needs a live lane;
+///   (c) `jac_const` is sorted by (row, col) with no duplicates, has no
+///       entry whose `g` and `c` are both zero, and names no column inside
+///       the mask;
+///   (d) `ddxReads ⊆ derivReads`, for the same reason as (b).
+pub fn derivReads(comptime D: type) u64 {
+    return if (@hasDecl(D, "deriv_reads")) D.deriv_reads else ~@as(u64, 0);
+}
+
+/// The unknowns whose partial §4.5.14 `ddx` reads, as a bit mask over `U`:
+/// device code calls `S.ddxAt(col)` with `col` an UNKNOWN index, so the VALUE
+/// it returns is a lane. Defaults to ALL when a device does not declare
+/// `ddx_reads`, and `validate` holds it inside `derivReads` (rule (d)).
+///
+/// THE RULE FOR A HOST: `ddxAt(col)` must go through the host's own
+/// unknown-to-lane map. On a narrow Dual, lane `col` is some other unknown's
+/// partial, or out of range — a wrong VALUE in the residual, not only a wrong
+/// Jacobian, and nothing downstream notices.
+pub fn ddxReads(comptime D: type) u64 {
+    return if (@hasDecl(D, "ddx_reads")) D.ddx_reads else ~@as(u64, 0);
+}
+
+/// One constant entry of the local Jacobian, for a column outside
+/// `derivReads`: `g` is ∂eval[row]/∂x[col] and `c` is ∂q[row]/∂x[col], both
+/// exact. Generic over the device's own `U`, because the unknown enum is per
+/// device: a device spells its table `[_]contract.JacConst(U){ ... }`.
+///
+/// An absent entry is exactly 0 in both halves, which is why an entry with
+/// `g == c == 0` is refused rather than tolerated — see `derivReads` (c).
+pub fn JacConst(comptime U: type) type {
+    return struct { row: U, col: U, g: f64, c: f64 };
+}
+
+/// The device's `jac_const` as a slice, sorted by (row, col); empty when the
+/// device declares none — which is also the only answer `derivReads`'
+/// all-ones default leaves room for.
+pub fn jacConst(comptime D: type) []const JacConst(D.U) {
+    return if (@hasDecl(D, "jac_const")) D.jac_const[0..] else &.{};
+}
+
 /// Constant-Jacobian declaration. `g`/`c` assert that the device's dF/dx and
 /// dQ/dx do not depend on x, so the engine can build the stamp once and memcpy
 /// it every Newton iteration. A wrong value silently freezes the Jacobian.
@@ -1122,6 +1190,8 @@ pub fn validate(comptime D: type) void {
     }
     if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
         @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
+    // The narrow-lane pair and its three rules — see `derivReads`.
+    if (derivReadsError(D, n)) |m| @compileError(m);
     if (@hasDecl(D, "seed"))
         expectFn(D, "seed", fn (*const D.Model, *const D.Instance) [n]?f64);
     // Node collapse (ngspice setup): for each internal unknown, return the
@@ -1444,6 +1514,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // behaviour every host had before they existed.
     .{ "limit_reads", {} },
     .{ "limit_writes", {} },
+    // The narrow-derivative pair: which unknowns need a lane, and the exact
+    // constant partials of the rest — see `derivReads`.
+    .{ "deriv_reads", {} },
+    .{ "ddx_reads", {} },
+    .{ "jac_const", {} },
     .{ "seed", {} },
     .{ "collapse", {} },
     // The same alias map with every retention flag set, at comptime — see the
@@ -1648,6 +1723,39 @@ fn rowMaskError(
         if ((mask >> @intCast(ru)) & 1 != 0) continue;
         return name ++ "." ++ decl ++ ": row " ++ std.fmt.comptimePrint("{d}", .{ru}) ++
             " has live " ++ pat ++ " columns but is not marked written";
+    }
+    return null;
+}
+
+/// `derivReads`' rules (a)–(d), returned rather than raised so each is
+/// testable — see `genericFnError`. `n` is |U|, passed in so rule (a) can be
+/// exercised without a 65-member enum.
+fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
+    const name = @typeName(D);
+    if (@hasDecl(D, "deriv_reads")) {
+        if (@TypeOf(D.deriv_reads) != u64) return name ++ ".deriv_reads must be a u64 mask over U";
+        if (n > 64) return name ++ ".deriv_reads with |U| > 64 — omit it, the all-lanes default is correct";
+    }
+    if (@hasDecl(D, "limit") and (limitWrites(D) & ~derivReads(D)) != 0)
+        return name ++ ".limit_writes has a bit deriv_reads does not: the limiting correction needs that lane";
+    if (@hasDecl(D, "ddx_reads") and @TypeOf(D.ddx_reads) != u64) return name ++ ".ddx_reads must be a u64 mask over U";
+    if ((ddxReads(D) & ~derivReads(D)) != 0)
+        return name ++ ".ddx_reads has a bit deriv_reads does not: ddx() reads that lane";
+    if (!@hasDecl(D, "jac_const")) return null;
+    const mask = derivReads(D);
+    const t = jacConst(D);
+    for (t, 0..) |e, k| {
+        const r: usize = @intFromEnum(e.row);
+        const c: usize = @intFromEnum(e.col);
+        if (c < 64 and (mask >> @intCast(c)) & 1 != 0)
+            return name ++ ".jac_const: column `" ++ @tagName(e.col) ++ "` is in deriv_reads, so its partials are not constant";
+        if (e.g == 0 and e.c == 0)
+            return name ++ ".jac_const: an all-zero entry — an absent entry already means exactly 0";
+        if (k == 0) continue;
+        const pr: usize = @intFromEnum(t[k - 1].row);
+        const pc: usize = @intFromEnum(t[k - 1].col);
+        if (r < pr or (r == pr and c <= pc))
+            return name ++ ".jac_const must be sorted by (row, col) with no duplicates";
     }
     return null;
 }
@@ -1948,6 +2056,11 @@ const MockAll = struct {
     pub const q_rows: u64 = 0b11;
     pub const limit_reads: u64 = 0b11;
     pub const limit_writes: u64 = 0b11;
+    // `eval` scales by the model's `g`, so neither column is constant — and
+    // rule (b) would demand both lanes anyway, since `limit` writes both.
+    pub const deriv_reads: u64 = 0b11;
+    pub const ddx_reads: u64 = 0b01;
+    pub const jac_const = [_]JacConst(U){};
 
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));
@@ -2075,6 +2188,127 @@ test "jac_rows: an empty pattern row may still be written; a live one may not be
         pub const q_rows: u64 = 0b11;
     };
     try testing.expect(comptime (rowMaskError(Orphan, "Orphan", "q_rows", "q", 2) != null));
+}
+
+/// A §5.6 potential source, `V(p,n) <+ vdc`: the shape whose every partial is
+/// constant. The branch flow `br` enters KCL as ±x[br] and the branch row is
+/// `x[p] − x[n] − vdc`, so no column needs a lane.
+const MockVsrc = struct {
+    pub const U = enum(u8) { p, n, br };
+    pub const num_ports: usize = 2;
+    const n_u = nU(@This());
+    pub const Model = struct { vdc: f64 = 1.5 };
+    pub const Instance = struct {};
+    pub const deriv_reads: u64 = 0;
+    pub const ddx_reads: u64 = 0;
+    pub const jac_const = [_]JacConst(U){
+        .{ .row = .p, .col = .br, .g = 1, .c = 0 },
+        .{ .row = .n, .col = .br, .g = -1, .c = 0 },
+        .{ .row = .br, .col = .p, .g = 1, .c = 0 },
+        .{ .row = .br, .col = .n, .g = -1, .c = 0 },
+    };
+    pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
+        return .{ x[2], x[2].neg(), x[0].sub(x[1]).addC(-m.vdc) };
+    }
+};
+
+/// The smallest f64 scalar `eval` accepts, for checking a mock's table
+/// against the function it describes.
+const F = struct {
+    v: f64,
+    fn addC(a: F, c: f64) F {
+        return .{ .v = a.v + c };
+    }
+    fn sub(a: F, b: F) F {
+        return .{ .v = a.v - b.v };
+    }
+    fn neg(a: F) F {
+        return .{ .v = -a.v };
+    }
+};
+
+test "deriv_reads/jac_const: a linear device needs no lane, and the table is its Jacobian" {
+    comptime validate(MockVsrc);
+    // The table is exact, so a unit step on a column moves each row by
+    // exactly the entry's `g` — a finite difference with no truncation error,
+    // because every term the column enters is linear.
+    const m: MockVsrc.Model = .{};
+    const base = [3]F{ .{ .v = 0.25 }, .{ .v = -0.5 }, .{ .v = 2e-3 } };
+    const r0 = MockVsrc.eval(F, base, &m, &.{}, 0);
+    for (0..3) |col| {
+        var xs = base;
+        xs[col].v += 1.0;
+        const r1 = MockVsrc.eval(F, xs, &m, &.{}, 0);
+        for (0..3) |row| {
+            var want: f64 = 0;
+            for (jacConst(MockVsrc)) |e| {
+                if (@intFromEnum(e.row) == row and @intFromEnum(e.col) == col) want = e.g;
+            }
+            try testing.expectEqual(want, r1[row].v - r0[row].v);
+        }
+    }
+}
+
+test "deriv_reads: the four rules each refuse their own mistake" {
+    // (a) the mask is one u64.
+    try testing.expect(comptime (derivReadsError(MockVsrc, 3) == null));
+    try testing.expect(comptime (derivReadsError(MockVsrc, 65) != null));
+    // (b) a limited unknown needs a live lane.
+    const Lim = struct {
+        pub const U = enum(u8) { a, b };
+        pub const deriv_reads: u64 = 0b01;
+        pub const limit_writes: u64 = 0b10;
+        pub fn limit() void {}
+    };
+    try testing.expect(comptime (derivReadsError(Lim, 2) != null));
+    // A `limit` with no `limit_writes` writes ALL, so it needs every lane.
+    const LimAll = struct {
+        pub const U = enum(u8) { a, b };
+        pub const deriv_reads: u64 = 0b01;
+        pub fn limit() void {}
+    };
+    try testing.expect(comptime (derivReadsError(LimAll, 2) != null));
+    // No `limit`, no constraint: `limitWrites`' all-ones default is not a write.
+    const NoLim = struct {
+        pub const U = enum(u8) { a, b };
+        pub const deriv_reads: u64 = 0;
+        pub const ddx_reads: u64 = 0;
+    };
+    try testing.expect(comptime (derivReadsError(NoLim, 2) == null));
+    // (d) a ddx() column needs a live lane, and an undeclared `ddx_reads` is
+    // ALL of them — so a device with a narrow mask must declare it.
+    const Ddx = struct {
+        pub const U = enum(u8) { a, b };
+        pub const deriv_reads: u64 = 0b01;
+        pub const ddx_reads: u64 = 0b10;
+    };
+    try testing.expect(comptime (derivReadsError(Ddx, 2) != null));
+    const DdxAll = struct {
+        pub const U = enum(u8) { a, b };
+        pub const deriv_reads: u64 = 0b01;
+    };
+    try testing.expect(comptime (derivReadsError(DdxAll, 2) != null));
+    // (c) unsorted, duplicated, all-zero, and a column that has a lane.
+    const U3 = MockVsrc.U;
+    const cases = [_][]const JacConst(U3){
+        &.{ .{ .row = .n, .col = .br, .g = -1, .c = 0 }, .{ .row = .p, .col = .br, .g = 1, .c = 0 } },
+        &.{ .{ .row = .p, .col = .br, .g = 1, .c = 0 }, .{ .row = .p, .col = .br, .g = 1, .c = 0 } },
+        &.{.{ .row = .p, .col = .br, .g = 0, .c = 0 }},
+        &.{.{ .row = .p, .col = .br, .g = 1, .c = 0 }},
+    };
+    const masks = [_]u64{ 0, 0, 0, 0b100 };
+    inline for (cases, masks) |t, mk| {
+        const Bad = struct {
+            pub const U = U3;
+            pub const deriv_reads: u64 = mk;
+            pub const ddx_reads: u64 = 0;
+            pub const jac_const = t;
+        };
+        try testing.expect(comptime (derivReadsError(Bad, 3) != null));
+    }
+    // And the defaults: nothing declared is all lanes and no table.
+    try testing.expectEqual(~@as(u64, 0), derivReads(MockR));
+    try testing.expectEqual(@as(usize, 0), jacConst(MockR).len);
 }
 
 test "validateHost: a systf is the host's to bind, and only when there is one" {
