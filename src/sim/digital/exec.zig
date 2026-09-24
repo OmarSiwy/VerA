@@ -149,6 +149,16 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
             break :blk self.values[at];
         },
         .logic_literal => ex.logicValue(e),
+        // §3.6 packed ASCII, the first character most significant.
+        .str_literal => blk: {
+            const text = self.file.str(ex.strOf(e));
+            const value = try filled(a, compile.stringWidth(text), false, .zero);
+            for (text, 0..) |c, i| {
+                const shift: u32 = @intCast((text.len - 1 - i) * 8);
+                value.values()[shift / 64] |= @as(u64, c) << @intCast(shift % 64);
+            }
+            break :blk value;
+        },
         .int_literal => blk: {
             const n = ex.intLiteral(e);
             const planes = try a.alloc(u64, 2);
@@ -197,7 +207,7 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
+        .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
         .unary => {
             const op = ex.unOp(e);
             switch (op) {

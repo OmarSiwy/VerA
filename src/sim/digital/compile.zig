@@ -139,8 +139,15 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             if (!n.sized) return self.exprFail(e, "unsized four-state literal context fill is not implemented; use an explicit size");
             break :blk .{ .width = n.width, .signed = n.signed };
         },
+        // IEEE 1364-2005 §3.6: a string operand is an unsigned number of
+        // eight bits per character, and §5.2.3.3's "" is one NUL byte.
+        .str_literal => .{ .width = stringWidth(self.file.str(ex.strOf(e))), .signed = false },
         else => self.exprFail(e, "this expression requires digital context typing beyond the implemented leaf operands"),
     };
+}
+
+pub fn stringWidth(text: []const u8) u32 {
+    return @intCast(@max(1, text.len) * 8);
 }
 
 pub fn common(a: Type, b: Type) Type {
@@ -166,7 +173,7 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
-        .int_literal, .logic_literal => return true,
+        .int_literal, .logic_literal, .str_literal => return true,
         .unary, .binary, .multi_concat, .ternary, .concat => {},
         // §17.7: a call that reads the clock is never constant, however
         // constant its (absent) arguments are. Without this `$time`
@@ -225,7 +232,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     if (entry.width != 0 or self.replications.contains(e)) return entry.*;
     const ex = &self.file.exprs;
     const ty: Type = switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .ident, .hier_ident => try leafType(self, e),
+        .int_literal, .logic_literal, .str_literal, .ident, .hier_ident => try leafType(self, e),
         // §3.9 an array element has the element's declared type; the index
         // is self-determined and never widens the result.
         .index => blk: {
@@ -578,7 +585,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
-        .int_literal, .logic_literal => {},
+        .int_literal, .logic_literal, .str_literal => {},
         .ident, .hier_ident => try watch(self, try self.slot(e), out),
         .index => {
             const base = try self.slot(ex.lhs(e));
@@ -719,6 +726,18 @@ test "an array element operand wakes a continuous assignment" {
         \\end
         \\endmodule
     , "0001\n0010\n0111\n");
+}
+
+test "§3.6 a string operand is packed ASCII, right-justified and truncated on the left" {
+    try expectRun(
+        \\module m;
+        \\reg [31:0] w; reg [15:0] n; reg [7:0] e;
+        \\initial begin
+        \\  w = "AZ"; n = "ABC"; e = "";
+        \\  $display("%h %h %h %b", w, n, e, "AB" == 16'h4142);
+        \\end
+        \\endmodule
+    , "0000415a 4243 00 1\n");
 }
 
 test "unsupported source is rejected before any process side effect" {
