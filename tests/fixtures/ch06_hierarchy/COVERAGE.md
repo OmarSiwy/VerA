@@ -190,6 +190,8 @@ Still missing under 6.4.3: the paramset's OWN output-variable values (`ft =
 3.0 * .gm;` statements are still dropped by the parser), so a described paramset
 variable is not yet what a probe reports. Also found and NOT fixed (outside this
 pass): an instance inside a generate block is flattened under its own name, so
-`g1.u` and `g2.u` collide (see `paramset_selected_after_generate.va`), and a
+`g1.u` and `g2.u` collide (see `paramset_selected_after_generate.va`), a
 module instance inside an if-generate gets no connect module (`elab_insert.plan`
-reads `module.instances` only).
+reads `module.instances` only), and a paramset instance in a generate block whose
+override reads a localparam of that block is refused with E0914 (§6.9.2: the
+selection cannot see the block's localparam).

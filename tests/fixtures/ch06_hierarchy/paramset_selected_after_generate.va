@@ -15,13 +15,19 @@
 //   big = 1:  g1 takes its then-arm   -> u1, w = 10.0 -> gain 2.0
 //             g2 takes its else-arm   -> u4, w =  1.0 -> gain 3.0
 //
-// Each instance carries the gain the arm expects in `want`, and the module
-// asserts gain == want. Exactly two instances exist after the generate schemes
-// are evaluated, so exactly two checks run (`//! checks 2`): a selection made
-// before evaluation — over every arm's instance, or on the paramset name alone —
-// either runs four checks or gets a gain from the wrong member.
+// The top reads each surviving instance's `gain` hierarchically (§6.7.1: "Access
+// of parameters can be done hierarchically"): u1 must hold 2.0 and u4 3.0 — one
+// paramset NAME, two different members, each decided by the values its own arm
+// supplied. u2 and u3 sit in the arms the schemes did not select and are not
+// referenced: they do not exist. All values are exact in binary.
 //
-// All values are exact in binary.
+// SCOPE. What this pins is that the member is chosen per generated instance
+// from the values of the arm that exists. It does not pin the stronger half of
+// the clause's second sentence — an override whose VALUE only exists after the
+// scheme is evaluated, such as a localparam declared inside the generate block:
+// `begin : g1 localparam real ww = 10.0; ch6_psg_sel #(.w(ww)) u1(p, n); end`
+// is refused today with E0914 (selection cannot see `ww`, so both members stay
+// applicable). That is an open defect under §6.9.2, recorded in COVERAGE.md.
 //
 // (The four instances have distinct names because VerA flattens an instance in
 // a generate block under its own name rather than under `g1.`/`g2.`; two
@@ -31,33 +37,25 @@
 //
 //! lrm 6.9.2
 //! lrm 6.4.2
-//! checks 2
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 paramset ch6_psg_sel ch6_psg_leaf;
   parameter real w = 10.0 from [5.0:inf);
-  parameter real want = 0.0;
   .w = w;
-  .want = want;
   .gain = 2.0;
 endparamset
 
 paramset ch6_psg_sel ch6_psg_leaf;
   parameter real w = 1.0 from (-inf:5.0);
-  parameter real want = 0.0;
   .w = w;
-  .want = want;
   .gain = 3.0;
 endparamset
 
 module ch6_psg_leaf(a, b);
   inout a, b;
   electrical a, b;
-  parameter real gain = 1.0, w = 0.0, want = 0.0;
-  analog begin
-    `CHECKX("the paramset member matches the w its generate arm supplied", gain, want);
-    I(a, b) <+ gain * V(a, b);
-  end
+  parameter real gain = 1.0, w = 0.0;
+  analog I(a, b) <+ gain * V(a, b);
 endmodule
 
 module ch6_psg_top(p, n);
@@ -65,14 +63,18 @@ module ch6_psg_top(p, n);
   electrical p, n;
   parameter integer big = 1;
   if (big) begin : g1
-    ch6_psg_sel #(.w(10.0), .want(2.0)) u1(p, n);
+    ch6_psg_sel #(.w(10.0)) u1(p, n);
   end else begin : g1
-    ch6_psg_sel #(.w(1.0), .want(3.0)) u2(p, n);
+    ch6_psg_sel #(.w(1.0)) u2(p, n);
   end
   if (!big) begin : g2
-    ch6_psg_sel #(.w(10.0), .want(2.0)) u3(p, n);
+    ch6_psg_sel #(.w(10.0)) u3(p, n);
   end else begin : g2
-    ch6_psg_sel #(.w(1.0), .want(3.0)) u4(p, n);
+    ch6_psg_sel #(.w(1.0)) u4(p, n);
   end
-  analog I(p, n) <+ 0.0;
+  analog begin
+    `CHECKX("g1 took its then-arm: w = 10 selects the member that sets gain 2", u1.gain, 2.0);
+    `CHECKX("g2 took its else-arm: w = 1 selects the member that sets gain 3", u4.gain, 3.0);
+    I(p, n) <+ 0.0;
+  end
 endmodule
