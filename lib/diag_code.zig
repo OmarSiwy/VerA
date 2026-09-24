@@ -360,6 +360,8 @@ pub const Code = enum(u16) {
     /// a NaN: the conversion is "rounding the real number to the nearest
     /// integer", and a non-finite real has none.
     E0368,
+    /// §4.2.1 `===`/`!==` with a real operand: Table 4-2 does not list them.
+    E0369,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2197,17 +2199,15 @@ fn infoOf(c: Code) Info {
             \\fractional shift distance has no meaning.
             ,
         },
-        .E0323 => .{
-            .title = "case equality is not in the analog subset",
-            .lrm = "C.5",
-            .explain =
-            \\`===` and `!==` compare x and z bit-for-bit, which requires the
-            \\four-state value system that annex C.5 removes from Verilog-A.
+        .E0323 => retiredInfo(
+            \\"case equality is not in the analog subset". Retired: annex C.5
+            \\removes `===` and `!==` from the Verilog-A SUBSET only, and 7.3.2
+            \\lists both among the features Verilog-AMS supports in the analog
+            \\context. On two-state operands they now lower as `==` and `!=`.
             \\
-            \\Use `==` and `!=`. For reals, prefer a tolerance comparison —
-            \\`abs(a - b) < tol` — over exact equality.
-            ,
-        },
+            \\What replaced it: E0369, for a case comparison with a real operand
+            \\(4.2.1). The number is not reused.
+        ),
         .E0324 => .{
             .title = "arithmetic shifts are not in the analog subset",
             .lrm = "C",
@@ -2927,6 +2927,19 @@ fn infoOf(c: Code) Info {
             \\    parameter real    r = 1.0/0.0;   // fine: +inf is a real
             \\
             \\Declare it `real`, or fix the expression that overflows.
+            ,
+        },
+        .E0369 => .{
+            .title = "case equality on a real operand",
+            .lrm = "4.2.1",
+            .explain =
+            \\`===` and `!==` compare x and z bit-for-bit (IEEE 1364 5.1.8), and
+            \\7.3.2 supports them in the analog context on integer and digital
+            \\operands. A real has no bits: 4.2.1's Table 4-2, the operators
+            \\legal on real operands, lists `==` and `!=` but not these two.
+            \\
+            \\Use `==` and `!=`. For reals, prefer a tolerance comparison —
+            \\`abs(a - b) < tol` — over exact equality.
             ,
         },
 

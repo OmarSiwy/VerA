@@ -160,24 +160,18 @@ The clause rows that used to say "no fixture" did not all become green fixtures;
 of them became `//! xfail` files, because the source they spell is derivable from Annex A,
 is required by §1.1, and VerA refused it. Each of the fifteen carried an assertion so the
 day the gap closed the file would XPASS and name itself rather than decaying into
-`unasserted`. **Thirteen have.** One more, `46_library_source_text.va` (`a-1-1`), was
-withdrawn: its want was unmeetable (below) and it is now `//! reject E0232`. One is open:
+`unasserted`. **Fourteen have.** The fifteenth, `46_library_source_text.va` (`a-1-1`), was
+withdrawn: its want was unmeetable (below) and it is now `//! reject E0232`. None is open.
 
-| Fixture | Section | First diagnostic VerA gives |
-|---|---|---|
-| `66_case_equality_in_analog.va` | `a-8-6` | E0323 "case equality is not in the analog subset" (lowering) |
-
-Neither `46` nor `66` is an unimplemented production. `46`'s
+`46` is not an unimplemented production: its
 `library_declaration` is reachable from `library_text` and from nothing else — the annex
 preamble gives a library map file its own starting symbol, and A.1.2's `description` list
 does not contain a `library_description` — so the text is read in full and then refused by
 a code that names the starting symbol rather than the subset. What is missing is a library
 map READER, a second front end; no growth of the analog subset makes this legal in a
-`.va`, which is why E0201 was the wrong verdict in both directions. `66`'s operator is in
-the grammar, in Clause 4 and in §7.3.2's list of what the analog context supports, and
-lowering refuses it by name.
+`.va`, which is why E0201 was the wrong verdict in both directions.
 
-The thirteen that closed, and what each does instead:
+The fourteen that closed, and what each does instead:
 
 | Fixture | Section | Was | Is now |
 |---|---|---|---|
@@ -194,6 +188,7 @@ The thirteen that closed, and what each does instead:
 | `59_udp_instantiation_unsupported.va` | `a-5-4` | E0205 at the identifier | Accepted. Told from A.4.1 by one token: `module_instance`'s name is mandatory, `udp_instance`'s is not. W0252 |
 | `63_specify_block_unsupported.va` | `a-7-1` … `a-7-4` | E0205 `specify` | Accepted, all five `specify_item` arms read. W0251 — its whole content is §8 scheduling |
 | `64_timing_checks_unsupported.va` | `a-7-5` … `a-7-5-3` | E0205 `specify` | Accepted. The name and the arity of A.7.5.1's twelve commands are checked; the argument union over-accepts and `64`'s header says where |
+| `66_case_equality_in_analog.va` | `a-8-6` | E0323 "case equality is not in the analog subset" (lowering) | Accepted. On two-state operands `===`/`!==` lower as `==`/`!=` (IEEE 1364 §5.1.8); the real-operand case is E0369 (§4.2.1); E0323 is retired |
 
 They were three shapes of one problem, and the closures split the same way. Nine were an
 unrecognised CONSTRUCT — `library`/`config`/`primitive` at the top level,
