@@ -558,6 +558,14 @@ test "§10.7 `__FILE__ and `__LINE__" {
     try expectPp("\n\"virtual.va\"\n", "`line 100 \"virtual.va\" 0\n`__FILE__\n");
     try expectFail("`line\n", .E0128);
     try expectFail("`line nope\n", .E0128);
+    // IEEE 1364 §19.7: "All parameters in the `line directive are required",
+    // the number is positive, the level is 0, 1 or 2, and nothing follows.
+    try expectFail("`line 5\n", .E0128);
+    try expectFail("`line 5 \"f.va\"\n", .E0128);
+    try expectFail("`line 0 \"f.va\" 0\n", .E0128);
+    try expectFail("`line 5 \"f.va\" 3\n", .E0128);
+    try expectFail("`line 5 \"f.va\" 1 x\n", .E0128);
+    try expectPp("\n6\n", "`line 6 \"f.va\" 2\n`__LINE__\n");
 }
 
 test "§10.2 `default_discipline Syntax 10-1" {

@@ -929,12 +929,14 @@ fn infoOf(c: Code) Info {
             .explain =
             \\LRM 10.7 defers to IEEE Std 1364 for `line, whose 19.7 spells it
             \\
-            \\    `line number ["filename" [level]]
+            \\    `line number "filename" level
             \\
-            \\The number is mandatory and is the line number given to the line
-            \\FOLLOWING the directive; it is what `__LINE__ then counts from.
-            \\A directive with no number remaps nothing, so it is a typo
-            \\rather than a no-op.
+            \\and says "All parameters in the `line directive are required".
+            \\The number is a positive integer, the line number given to the
+            \\line FOLLOWING the directive; it is what `__LINE__ then counts
+            \\from. The level is 0, 1 or 2 (1: the next line is the first of an
+            \\included file, 2: the first after one, 0: any other). Only white
+            \\space may follow it on the line.
             ,
         },
         .E0129 => .{
