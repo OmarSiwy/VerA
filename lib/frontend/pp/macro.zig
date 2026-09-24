@@ -33,8 +33,10 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     //   text_macro_identifier      ::= identifier
     // and A.9.3 makes `identifier` simple OR escaped. So the NAME may be
     // escaped and the formals may not — `escapedIdent` is used here and
-    // `ident` stays in the formal loop below.
-    const name = r.escapedIdent() orelse r.ident() orelse
+    // `ident` stays in the formal loop below. §2.8: "The first character of
+    // an identifier shall not be a digit or $" — `ident` admits the `$` of a
+    // system name, so a simple name is refused here.
+    const name = r.escapedIdent() orelse (if (r.peek() == '$') null else r.ident()) orelse
         return pp.fail(pp.spanAt(at, off), .E0109, "", .{});
     // IEEE 1364 §19.3.1: "All compiler directives shall be considered
     // predefined macro names; it shall be illegal to redefine a compiler
