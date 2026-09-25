@@ -308,6 +308,9 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
             cli.debug_info = true;
         } else if (std.mem.eql(u8, arg, "--zig")) {
             cli.zig_exe = args.next() orelse return try missing(err, "--zig", "a path");
+            // An empty path names no executable: refused here, not when the
+            // spawn fails later as `error.CompilerGone` (#47).
+            if (cli.zig_exe.len == 0) return try missing(err, "--zig", "a path");
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
             cli.optimize = optimize_names.get(arg["--optimize=".len..]) orelse {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
@@ -588,6 +591,14 @@ test "parse: a flag that takes a value refuses a line that ends before it" {
         .{ "-I", "error: -I needs a directory\n" },
     };
     for (cases) |c| try expectRefused(&.{c[0]}, c[1]);
+}
+
+test "parse: --zig refuses an empty path; any other is taken as typed" {
+    try expectRefused(&.{ "--zig", "" }, "error: --zig needs a path\n");
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "--zig", "/opt/zig-0.17/zig" });
+    try testing.expectEqualStrings("/opt/zig-0.17/zig", l.cli.zig_exe);
 }
 
 test "parse: the codegen flags set what they build and name themselves" {
