@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `vera --lsp`: a language server on stdin/stdout. Each open Verilog-A document is linted as `--lint` would (diagnostics in an `include land on that file), a fix-it becomes a quick-fix code action, and the workspace root's `.vera-flags` holds the flags; `editors/` has the Neovim and VS Code configurations.
 - Fix: a generate block whose last token in the file is an attribute instance (`if (1) begin (* a *)` at end of file) is refused with E0207 for the missing `end`, where the parser stepped past the end of its token stream (#48).
 - Internal cleanup, no change in what VerA accepts, emits or prints: the timing-check helpers `src/vpi` calls live in `sim/digital/vpi.zig`, two unused lowering aliases are gone, `tools/contract.zig` drops its last deprecated `std.fmt.bufPrint`, and the speed report cites the removed `docs/measurements/` notes by commit.
 - Fix: the §9.4.3 '#' flag is read as a flag, not as the conversion letter. `%#e`, `%#f` and `%#g` print C's alternative form (the point always prints, and `%g` keeps its trailing zeros) where they printed the value followed by a literal letter; a string under `%#g`/`%#e` is E0819; and '#' on any other conversion (`%#h`, `%#d`, `%#m`, `%#l`, `%#r`, ...), which used to print wrongly or raise a false E0810, is refused by the new E0825 (#41).

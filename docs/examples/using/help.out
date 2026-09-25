@@ -3,8 +3,12 @@ usage: vera [options] FILE.va
        vera --run|--emit-exe [options] FILE.v [MORE.v ...]
        vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
        vera --explain CODE
+       vera --lsp [options]
 
   --lint                  frontend only (parse, lower, prove); no codegen
+  --lsp                   a language server on stdin/stdout: --lint's
+                          diagnostics and fix-its for each open document;
+                          the options here, then the workspace's .vera-flags
   --emit-zig              generate the device; to stdout unless -o is given
   -o PATH                 write the generated device.zig here
   --expect-module=NAME    fail unless the compiled module is called NAME

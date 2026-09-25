@@ -31,8 +31,12 @@ pub const usage_text =
     \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
     \\       vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
+    \\       vera --lsp [options]
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
+    \\  --lsp                   a language server on stdin/stdout: --lint's
+    \\                          diagnostics and fix-its for each open document;
+    \\                          the options here, then the workspace's .vera-flags
     \\  --emit-zig              generate the device; to stdout unless -o is given
     \\  -o PATH                 write the generated device.zig here
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
@@ -168,6 +172,8 @@ pub const Cli = struct {
     // conflicting flags are refused by name after the loop, whatever their
     // order.
     lint_flag: bool = false,
+    /// `--lsp`: serve, and take no input file.
+    lsp: bool = false,
     display_drop_flag: bool = false,
     /// `--display=record`: with `--emit-exe`, the testbench prints what the
     /// device's `say` records instead of printing in the device.
@@ -229,6 +235,8 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
             return 0;
         } else if (std.mem.eql(u8, arg, "--lint")) {
             cli.lint_flag = true;
+        } else if (std.mem.eql(u8, arg, "--lsp")) {
+            cli.lsp = true;
         } else if (std.mem.eql(u8, arg, "--emit-zig")) {
             cli.emit_zig = true;
             cli.emit_zig_typed = true;
@@ -432,6 +440,18 @@ pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
         );
         return 2;
     };
+
+    if (cli.lsp) {
+        if (cli.lint_flag or cli.codegen_flag != null) {
+            try err.print("error: `--lsp` and `{s}` conflict: the server lints each open document itself\n", .{cli.codegen_flag orelse "--lint"});
+            return 2;
+        }
+        if (cli.paths.items.len != 0) {
+            try err.writeAll("error: `--lsp` takes no input file: the editor sends the documents\n");
+            return 2;
+        }
+        return null;
+    }
 
     if (cli.emit_verilog) if (cli.check or cli.emit_so or cli.exe_flag != null) {
         try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
@@ -776,11 +796,15 @@ test "resolve: each conflict is refused by name, in either order" {
         .{ .a = "--lint", .b = "--check", .says = "error: `--lint` and `--check` conflict: --lint stops after the frontend and `--check` needs codegen\n" },
         .{ .a = "--emit-verilog", .b = "--emit-so", .says = "error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n" },
         .{ .a = "--emit-osdi", .b = "--emit-zig", .says = "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n" },
+        .{ .a = "--lsp", .b = "--lint", .says = "error: `--lsp` and `--lint` conflict: the server lints each open document itself\n" },
+        .{ .a = "--lsp", .b = "--check", .says = "error: `--lsp` and `--check` conflict: the server lints each open document itself\n" },
     };
     for (cases) |c| {
         try expectSettled(&.{ c.a, c.b, "m.va" }, 2, c.says);
         try expectSettled(&.{ c.b, c.a, "m.va" }, 2, c.says);
     }
+    try expectSettled(&.{ "--lsp", "m.va" }, 2, "error: `--lsp` takes no input file: the editor sends the documents\n");
+    try expectSettled(&.{ "--lsp", "-I", "inc" }, null, "");
     try expectSettled(&.{ "--validate-contract", "m.va" }, 2, "error: `--validate-contract` turns the checks on in an --emit-exe or --run testbench; --check always runs them\n");
     try expectSettled(&.{ "--emit-osdi", "--dyn", "d.zig", "m.va" }, 2, "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
     try expectSettled(&.{ "--run", "--emit-osdi", "m.va" }, 2, "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");

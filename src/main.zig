@@ -7,7 +7,8 @@
 //! 2 on a usage error, including conflicting flags (never last-one-wins).
 //!
 //! `main` is the spine: read the command line (`cli/args.zig`), refuse the
-//! flags that conflict (`args.resolve`), read the source, then hand it to the `.v` path
+//! flags that conflict (`args.resolve`), serve `--lsp` (`cli/lsp.zig`) or
+//! read the source, then hand it to the `.v` path
 //! (`cli/digital.zig`) or to `compileAnalog` below. Flags, streams, exit
 //! codes and messages are user-visible and frozen: `--emit-exe` prints the
 //! artifact's path on stdout and every diagnostic on stderr.
@@ -26,6 +27,7 @@ const diag = vera.diag;
 const Io = std.Io;
 const args = @import("cli/args.zig");
 const digital_cli = @import("cli/digital.zig");
+const lsp = @import("cli/lsp.zig");
 const cli_report = @import("cli/report.zig");
 const report = cli_report.report;
 const readFailed = cli_report.readFailed;
@@ -62,6 +64,11 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("warning: --zig-backend=native does not optimise; the {t} artifact is unoptimised\n", .{opt});
     // Conflicting flags are refused by name, whatever order they came in.
     if (try args.resolve(&cli, err)) |code| return code;
+    if (cli.lsp) {
+        var stdin_buf: [1 << 16]u8 = undefined;
+        var stdin = Io.File.stdin().readerStreaming(io, &stdin_buf);
+        return lsp.serve(gpa, io, &cli, &stdin.interface, out, err);
+    }
     const in_path = cli.paths.items[0];
 
     // Decided once: `isTty` can fail, and an error path should not re-ask.
@@ -626,6 +633,7 @@ test {
     _ = args;
     _ = digital_cli;
     _ = cli_report;
+    _ = lsp;
 }
 
 test compileFailed {

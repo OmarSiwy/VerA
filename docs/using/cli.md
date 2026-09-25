@@ -37,6 +37,7 @@ flag never silently wins over an earlier one of another kind.
 | `--emit-so` | build the device as a shared library for your simulator, through your `--dyn` module | yes |
 | `--emit-osdi` | build the device (of a `.va`, or a `.v` design's top module) as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `tools/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
 | `--explain CODE` | print the long explanation of a diagnostic code | no |
+| `--lsp` | a language server for an editor, on stdin/stdout (below) | no |
 
 With no mode flag, `vera FILE.va` is `vera --lint FILE.va`.
 
@@ -46,6 +47,28 @@ Testbenches are covered in [Testbenches and `//!` directives](testbenches.md),
 `--emit-so` in [Shared libraries, validation and GPUs](../host/linking.md),
 `--emit-osdi` in [OSDI interoperability](../host/osdi.md), and
 `--emit-verilog` below.
+
+## Editors: `--lsp`
+
+`vera --lsp` speaks the Language Server Protocol on stdin and stdout. Every
+open Verilog-A document is linted as `--lint` would lint it, on open and on
+every change, and its diagnostics appear in the editor: one inside an
+`` `include `` file lands on that file, and a diagnostic with a fix-it (a
+missing `;`, a misspelt name) offers it as a quick fix. An included file is
+read from disk, so save a header to see its edits.
+
+The options on the command line apply, then the ones in a `.vera-flags` file
+at the workspace root: `vera` flags separated by spaces or newlines, with a
+relative `-I` taken from the root. For example:
+
+```text
+-I include
+--deny=W0650
+```
+
+Neovim 0.11 and later needs `editors/nvim` on its runtime path and
+`vim.lsp.enable('vera')`; VS Code takes the extension in `editors/vscode`.
+`.v` documents get no diagnostics yet.
 
 ## Source options
 
