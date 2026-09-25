@@ -1028,21 +1028,8 @@ pub const Run = struct {
     pub const vpiConstantIndex = vpi.vpiConstantIndex;
     pub const vpiPutUdp = vpi.vpiPutUdp;
     pub const vpiAttributeValue = vpi.vpiAttributeValue;
-
-    /// IEEE 1364-2005 §27.31 / VAMS 12.29 vpi_put_delays on the timing check
-    /// whose command token is `tok` in instance `scope`: `ticks` are its
-    /// limits in A.7.5.1's written order, from the next event it judges.
-    /// False when the run holds no such check.
-    pub fn tchkLimits(self: *Run, scope: u32, tok: u32, ticks: []const u64) bool {
-        return tchk.putLimits(self, scope, tok, ticks);
-    }
-
-    /// The instance scope and command token of timing check `check` (a
-    /// `Run.tchk_hook` argument), which a host's object for it carries.
-    pub fn tchkSite(self: *const Run, check: u32) struct { scope: u32, tok: u32 } {
-        const c = self.tchks.items[check];
-        return .{ .scope = c.scope, .tok = c.tok };
-    }
+    pub const tchkLimits = vpi.tchkLimits;
+    pub const tchkSite = vpi.tchkSite;
 
     /// IEEE 1364-2005 C.7 `$reset`: "return the processing of the design to
     /// its logical state at time 0": every process, override and scheduled
