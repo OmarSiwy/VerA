@@ -1,0 +1,33 @@
+{
+  "name": "vera",
+  "displayName": "VerA",
+  "description": "Verilog-A diagnostics and quick fixes from the VerA compiler (`vera --lsp`).",
+  "version": "0.0.1",
+  "publisher": "omarsiwy",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "repository": { "type": "git", "url": "https://github.com/OmarSiwy/VerA" },
+  "engines": { "vscode": "^1.82.0" },
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "verilog-ams",
+        "aliases": ["Verilog-AMS", "Verilog-A"],
+        "extensions": [".va", ".vams"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "VerA",
+      "properties": {
+        "vera.path": {
+          "type": "string",
+          "default": "vera",
+          "description": "The `vera` executable the language server runs as `vera --lsp`."
+        }
+      }
+    }
+  },
+  "dependencies": { "vscode-languageclient": "^9.0.1" }
+}
