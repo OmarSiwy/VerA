@@ -891,6 +891,34 @@ pub fn simparamValue(self: *const Lowered, name: []const u8) ?f64 {
     return lower_sysfunc.simparamValueIn(&self.directives, name);
 }
 
+/// Where a §9.15 `$simparam(name [, expression])` gets its value. One owner,
+/// so the analog block (`call.zig`), the parameter-default fold
+/// (`Analysis.foldStep`) and the `derive()` renderer (`host_expr.f64Const`)
+/// answer in the same order.
+pub const SimparamAnswer = union(enum) {
+    /// `iteration`, `dt`: `SimState`, which changes during a run, so no
+    /// card-time value exists (a parameter default over one stays W1050).
+    runtime,
+    /// A host-written `Model` field; `default` is its declared value.
+    host: struct { field: []const u8, default: f64 },
+    /// VerA's own answer (`scale`, `shrink`, `timeUnit`, ...).
+    value: f64,
+    /// "If param_name is not known": the second argument.
+    fallback,
+    /// Not known and no second argument: E0811 refused a literal name.
+    unknown,
+};
+
+/// Classifies `$simparam(name)` per §9.15: known names first (run-time,
+/// host field, VerA's constant), then the fallback when the call has one.
+pub fn simparamAnswer(self: *const Lowered, name: []const u8, has_fallback: bool) SimparamAnswer {
+    if (lower_sysfunc.simparamIsRuntime(name)) return .runtime;
+    const v = self.simparamValue(name);
+    if (lower_sysfunc.simparamHostField(name)) |f| return .{ .host = .{ .field = f, .default = v.? } };
+    if (v) |x| return .{ .value = x };
+    return if (has_fallback) .fallback else .unknown;
+}
+
 test VecRange {
     // §3.6.3: `[msb:lsb]` in either order, over every pair in [-3, 3]. The
     // oracle is the definition: |msb - lsb| + 1 elements, the first one msb,
@@ -920,4 +948,24 @@ test nodeName {
     // §1.3.1.1 the reference node is no row, and prints as `gnd`.
     const l: Lowered = .{ .file = undefined };
     try std.testing.expectEqualStrings("gnd", l.nodeName(ground));
+}
+
+test simparamAnswer {
+    // §9.15: a known name answers whether or not a fallback is written; an
+    // unknown one returns the fallback, else is not known. Values are
+    // VD-072's (`specification/Vague_Decisions.md`), not this table's.
+    const l: Lowered = .{ .file = undefined };
+    const t = std.testing;
+    for ([_]bool{ false, true }) |fb| {
+        try t.expectEqual(SimparamAnswer.runtime, l.simparamAnswer("iteration", fb));
+        try t.expectEqual(SimparamAnswer.runtime, l.simparamAnswer("dt", fb));
+        try t.expectEqual(@as(f64, 1.0), l.simparamAnswer("scale", fb).value);
+        try t.expectEqual(@as(f64, 1.0), l.simparamAnswer("shrink", fb).value);
+        const h = l.simparamAnswer("tnom", fb).host;
+        try t.expectEqualStrings("nom_temp__", h.field);
+        try t.expectEqual(@as(f64, 27.0), h.default);
+        try t.expectEqual(@as(f64, 1e-12), l.simparamAnswer("gmin", fb).host.default);
+    }
+    try t.expectEqual(SimparamAnswer.fallback, l.simparamAnswer("minr", true));
+    try t.expectEqual(SimparamAnswer.unknown, l.simparamAnswer("minr", false));
 }

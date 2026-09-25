@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: a `$simparam` parameter default answers as the analog block does (§9.15): a host field, then VerA's own answer (`scale`, `shrink`, `timeUnit`, ...), then the call's fallback, so `parameter real minr = $simparam("minr", 1e-3);` (HICUM/L2 3.2, MVSG 5.0) is 1e-3 where it was 0 with W1050. A run-time name (`dt`, `iteration`) in a default is still W1050 (#51).
 - `vera --lsp`: a language server on stdin/stdout. Each open Verilog-A document is linted as `--lint` would (diagnostics in an `include land on that file), a fix-it becomes a quick-fix code action, and the workspace root's `.vera-flags` holds the flags; `editors/` has the Neovim and VS Code configurations.
 - Fix: a generate block whose last token in the file is an attribute instance (`if (1) begin (* a *)` at end of file) is refused with E0207 for the missing `end`, where the parser stepped past the end of its token stream (#48).
 - Internal cleanup, no change in what VerA accepts, emits or prints: the timing-check helpers `src/vpi` calls live in `sim/digital/vpi.zig`, two unused lowering aliases are gone, `tools/contract.zig` drops its last deprecated `std.fmt.bufPrint`, and the speed report cites the removed `docs/measurements/` notes by commit.

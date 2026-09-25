@@ -685,22 +685,21 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // `Lowered.simparamValue`, the same one E0811 checks.
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
-            if (Lower.simparamIsRuntime(nm)) {
-                self.uses.sim = true;
-                if (std.mem.eql(u8, nm, "dt")) return self.b("S.con(sim.dt)", .{});
-                return self.b("S.con(@floatFromInt(sim.iteration))", .{});
+            switch (self.lowered.simparamAnswer(nm, args.len > 1)) {
+                .runtime => {
+                    self.uses.sim = true;
+                    if (std.mem.eql(u8, nm, "dt")) return self.b("S.con(sim.dt)", .{});
+                    return self.b("S.con(@floatFromInt(sim.iteration))", .{});
+                },
+                .host => |h| {
+                    self.uses.model = true;
+                    return self.b("S.con(model.{s})", .{h.field});
+                },
+                .value => |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)}),
+                .fallback => return self.b("S.con({s})", .{try gen_host.f64Expr(self, args[1])}),
+                // E0811 refused it unless the name was not a literal.
+                .unknown => return self.b("S.con(0.0)", .{}),
             }
-            // Host-published first: `simparamValue` answers `tnom` only as
-            // the declared default.
-            if (Lower.simparamHostField(nm)) |f| {
-                self.uses.model = true;
-                return self.b("S.con(model.{s})", .{f});
-            }
-            if (self.lowered.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
-            if (args.len > 1) return self.b("S.con({s})", .{try gen_host.f64Expr(self, args[1])});
-            // Unknown with no fallback: E0811 refused it unless the name was
-            // not a literal.
-            return self.b("S.con(0.0)", .{});
         },
         // §9.15 Table 9-28 `$simparam$str`: "analysis_type" and "module" are
         // answered here, "cwd" and "analysis_name" from what the host wrote

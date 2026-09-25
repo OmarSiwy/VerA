@@ -1433,9 +1433,6 @@ const lower_analog_op = @import("lower/analog_op.zig");
 const lower_sysfunc = @import("lower/sysfunc.zig");
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
-/// Returns the `Model` field that answers a §9.15 simulation parameter the
-/// card supplies (`tnom`), or null.
-pub const simparamHostField = lower_sysfunc.simparamHostField;
 /// The §9.15 simulation parameters a host supplies, in `Model` field order.
 pub const host_simparams = lower_sysfunc.host_simparams;
 

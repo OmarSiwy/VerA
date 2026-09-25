@@ -1097,20 +1097,25 @@ fn foldStep(self: *const Analysis, v: Mir.Value, col: *const FoldColumn, resolve
                 const c = at(col, d.cond) orelse return null;
                 return at(col, if (c.isTrue()) d.then_val else d.else_val);
             },
-            // §9.15 a host-published `$simparam` under the same rule as
-            // `.param_ref` above: only a Model default may look through it,
-            // and what it sees is Table 9-27's declared value. That is what
-            // `Model{}` means to a host that writes nothing; every other
-            // reader gets `model.<field>` (codegen's `f64Const`), so the
-            // §3.4 field initializer and the §6.3.4 `derive()` assignment
-            // split cleanly on `resolve_params`.
+            // §9.15 `$simparam` in `Lowered.simparamAnswer`'s order. A host
+            // field follows `.param_ref`'s rule: only a Model default may
+            // look through it, and sees Table 9-27's declared value (what
+            // `Model{}` means to a host that writes nothing); every other
+            // reader gets `model.<field>` (codegen's `f64Const`), so the §3.4
+            // field initializer and the §6.3.4 `derive()` assignment split on
+            // `resolve_params`. VerA's own answer is a constant everywhere,
+            // and an unknown name is its fallback's fold. A run-time name
+            // has no card-time value.
             .call => |d| {
-                if (!resolve_params) return null;
                 if (d.callee != .@"$simparam" or d.args.len == 0) return null;
                 const arg = self.mir.valueDef(self.rv(d.args[0]));
                 if (arg != .str_const) return null;
-                if (Lower.simparamHostField(arg.str_const) == null) return null;
-                return .{ .real = self.lowered.simparamValue(arg.str_const) orelse return null };
+                switch (self.lowered.simparamAnswer(arg.str_const, d.args.len > 1)) {
+                    .host => |h| return if (resolve_params) .{ .real = h.default } else null,
+                    .value => |x| return .{ .real = x },
+                    .fallback => return at(col, d.args[1]),
+                    .runtime, .unknown => return null,
+                }
             },
             // §3.2.2 an array element is not a constant expression.
             .phi, .branch, .jump, .anew, .load, .store => return null,

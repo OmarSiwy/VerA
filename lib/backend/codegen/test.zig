@@ -2511,12 +2511,13 @@ test "codegen: an unsupported dependent default diagnoses instead of freezing" {
 
 test "codegen: §3.4 a default with no compile-time value is W1050, a derived one is silent" {
     // The guard on the `0` field initializer, and the line it must NOT cross.
-    // `hot` reads §9.18's simulator table, which has no value until the host
-    // runs: nothing folds it and nothing derives it, so `Model{}.hot` ships as
-    // 0 and the host has to write the field. `warm` is 2*`base`, which §6.3.4
-    // makes a `derive()` line; the same `0` initializer is honest there because
+    // `hot` reads §9.15's `dt`, the host's step, which changes during a run:
+    // nothing folds it and nothing derives it, so `Model{}.hot` ships as 0 and
+    // the host has to write the field. `warm` is 2*`base`, which §6.3.4 makes
+    // a `derive()` line; the same `0` initializer is honest there because
     // `derive` overwrites it, so warning about it would be noise on every
-    // dependent parameter in the suite.
+    // dependent parameter in the suite. `shr` reads `shrink`, which VerA
+    // knows (1, VD-072), so §9.15 returns 1 and never the fallback (#51).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module pd(p, n);
@@ -2524,8 +2525,9 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
         \\  electrical p, n;
         \\  parameter real base = 3.0;
         \\  parameter real warm = 2.0 * base;
-        \\  parameter real hot  = $simparam("shrink", 1e-12);
-        \\  analog I(p, n) <+ V(p, n) * (warm + hot);
+        \\  parameter real hot  = $simparam("dt");
+        \\  parameter real shr = $simparam("shrink", 1e-12);
+        \\  analog I(p, n) <+ V(p, n) * (warm + hot + shr);
         \\endmodule
     , &h);
     defer h.deinit();
@@ -2543,6 +2545,7 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
     // A warning, never a refusal: the device still compiles, because §9.18 says
     // nothing that makes this source illegal.
     try std.testing.expect(std.mem.find(u8, src, "@compileError") == null);
+    try std.testing.expect(std.mem.find(u8, src, "shr: f64 = 1.0,") != null);
     // And `warm` is the derived half of the claim: initializer 0.0, `derive`
     // writing the §6.3.4 value over it.
     try std.testing.expect(std.mem.find(u8, src, "model.warm = (2.0) * (model.base);") != null);

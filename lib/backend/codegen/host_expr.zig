@@ -19,7 +19,6 @@ const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -336,14 +335,23 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             const row = self.mir.instRow(inst);
             if (in_unit and !devSafe(row.op)) return null;
             if (!in_unit and (row.op == .select or row.op == .phi)) return hostConditionalExpr(self, inst, depth, .real);
-            // §9.15 a host-published `$simparam` is a Model field, so a
-            // parameter default over it renders here for `emitDerive`.
+            // §9.15 a parameter default over `$simparam`, in the analog
+            // block's order (`Lowered.simparamAnswer`): a host field is a
+            // Model read, so `emitDerive` renders it.
             if (row.op == .call) {
                 const d = self.mir.instData(inst).call;
                 if (d.callee != .@"$simparam") return null;
-                const f = Lower.simparamHostField(gen_call.strArg(self, d.args, 0) orelse "") orelse return null;
-                self.uses.model = true;
-                return try self.arena.print("model.{s}", .{f});
+                const name = gen_call.strArg(self, d.args, 0) orelse return null;
+                switch (self.lowered.simparamAnswer(name, d.args.len > 1)) {
+                    .host => |h| {
+                        self.uses.model = true;
+                        return try self.arena.print("model.{s}", .{h.field});
+                    },
+                    .value => |x| return try gen_file.fmtF64(self, x),
+                    .fallback => return try f64Const(self, d.args[1], depth + 1, in_unit),
+                    // No card-time value: W1050, the host's field to write.
+                    .runtime, .unknown => return null,
+                }
             }
             switch (Mir.opClass(row.op)) {
                 // Fragments from `opcode_zig`'s `host_f64` column, because
