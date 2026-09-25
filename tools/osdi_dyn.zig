@@ -269,6 +269,17 @@ fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
     f(handle, z.ptr, lvl);
 }
 
+/// The most `$simparam` names a host's `OsdiSimParas.names` may hold before
+/// its NULL (ngspice-45 passes 10, osdiload.c): `hostParams` reads no further.
+const max_sim_paras = 256;
+
+/// Whether C string `z` is `s`, reading at most `s.len + 1` bytes of `z`
+/// (its NUL ends the match at the first byte that differs).
+fn eqlZ(z: [*:0]const u8, comptime s: []const u8) bool {
+    for (s, 0..) |c, i| if (z[i] != c) return false;
+    return z[s.len] == 0;
+}
+
 /// The `dyn` hook `vera --emit-so` calls: exports device `D` as the one
 /// OSDI descriptor, named `name` (the module's name, which a `.model` card
 /// names).
@@ -423,24 +434,31 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         };
 
         /// Copies the simulator's `$simparam` values into `m`'s host fields;
-        /// returns whether one changed.
-        fn hostParams(m: *D.Model, p: SimParas) bool {
+        /// returns whether one changed. `names` is the host's NULL-terminated
+        /// list, which OSDI does not count: one with no NULL among its first
+        /// `max_sim_paras + 1` entries is refused before `m` is written, and
+        /// each name is read only as far as it can match a host field.
+        fn hostParams(m: *D.Model, p: SimParas) error{SimParasUnterminated}!bool {
             @setEvalBranchQuota(10_000_000);
             const names = p.names orelse return false;
             const vals = p.vals orelse return false;
+            const len = for (0..max_sim_paras + 1) |i| {
+                if (names[i] == null) break i;
+            } else return error.SimParasUnterminated;
+            assert(len <= max_sim_paras);
             var changed = false;
-            var i: usize = 0;
-            // ponytail: `names` is the host's NUL-terminated list (OSDI's
-            // contract) and is not bounded here; an unterminated one reads
-            // past its end.
-            while (names[i]) |nm| : (i += 1) {
-                inline for (host_fields) |h| if (@hasField(D.Model, h[1]) and std.mem.eql(u8, std.mem.span(nm), h[0])) {
-                    if (@field(m, h[1]) != vals[i]) changed = true;
-                    @field(m, h[1]) = vals[i];
+            for (names[0..len], vals[0..len]) |nm, v| {
+                inline for (host_fields) |h| if (@hasField(D.Model, h[1]) and eqlZ(nm.?, h[0])) {
+                    if (@field(m, h[1]) != v) changed = true;
+                    @field(m, h[1]) = v;
                 };
             }
             return changed;
         }
+
+        /// What `setup_model`, `setup_instance` and `eval` log, fatal, when
+        /// `hostParams` refuses the host's list.
+        const sim_paras_refusal = std.fmt.comptimePrint("vera osdi: the simulator's $simparam names list has no NULL in its first {d} entries", .{max_sim_paras + 1});
 
         // ---- Jacobian entries ----------------------------------------------
 
@@ -608,7 +626,11 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             const m: *Model = @ptrCast(@alignCast(mp));
             res.* = .{ .flags = 0, .num_errors = 0, .errors = null };
             m.card = .{};
-            _ = hostParams(&m.card, paras.*);
+            _ = hostParams(&m.card, paras.*) catch {
+                log(handle, log_lvl_fatal, sim_paras_refusal);
+                res.flags |= eval_ret_flag_fatal;
+                return;
+            };
             overlay(&m.card, &m.vals, &m.given);
             var d = m.card;
             if (!derive(handle, &d)) res.flags |= eval_ret_flag_fatal;
@@ -620,8 +642,21 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             const self: *Instance = @ptrCast(@alignCast(ip));
             const m: *Model = @ptrCast(@alignCast(mp));
             res.* = .{ .flags = 0, .num_errors = 0, .errors = null };
+            // Fallible first: both refusals return before the instance is
+            // touched. ngspice passes `num_terminals` less the unconnected
+            // trailing ones (osdisetup.c), never more.
+            if (connected > D.num_ports) {
+                var buf: [128]u8 = undefined;
+                log(handle, log_lvl_fatal, std.mem.print(&buf, "vera osdi: setup_instance connects {d} terminals; the device has {d}", .{ connected, D.num_ports }) catch unreachable);
+                res.flags |= eval_ret_flag_fatal;
+                return;
+            }
             self.row = m.card;
-            _ = hostParams(&self.row, paras.*);
+            _ = hostParams(&self.row, paras.*) catch {
+                log(handle, log_lvl_fatal, sim_paras_refusal);
+                res.flags |= eval_ret_flag_fatal;
+                return;
+            };
             overlay(&self.row, &self.vals, &self.given);
             if (@hasField(D.Model, "temperature__")) self.row.temperature__ = temperature;
             // §9.19 `$port_connected`: ngspice connects the first
@@ -662,13 +697,26 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
                 // ponytail: OSDI passes no step, so dt is the distance to the
                 // last earlier time evaluated; a rejected-and-retried step
                 // sees the right one, a later retry at a time past the
-                // rejected one does not. Only `$simparam("dt")` reads it.
+                // rejected one does not.
+                //
+                // OSDI 0.4 promises nothing about the order of `abstime`, and
+                // a host can move behind the point taken as accepted: one
+                // that starts a second transient without `setup_instance`
+                // (ngspice re-runs it only on a reset, cktdojob.c), or
+                // ngspice's own shared-sync bug (dctran.c, "CKTtime becomes
+                // less than last_accepted_time"). That time is no step from
+                // `t_prev`, and `sim.dt` feeds laplace, zi, idtmod and
+                // absdelay, so the history restarts as `setup_instance`
+                // leaves it: the step is from 0 (or from `abstime` itself
+                // if the host passes a negative time), never negative.
+                if (info.abstime < self.t_prev) self.t_prev = @min(0, info.abstime);
                 if (info.abstime > self.t_last) {
                     self.t_prev = self.t_last;
                     self.t_last = info.abstime;
                 } else if (info.abstime < self.t_last) self.t_last = info.abstime;
                 s.kind = .tran;
                 s.dt = info.abstime - self.t_prev;
+                assert(!(s.dt < 0)); // a NaN `abstime` is the host's, and passes through
             } else {
                 // A transient's own operating point is §4.6.1's IC analysis.
                 s.kind = if (f & analysis_tran != 0) .ic else .dc;
@@ -683,7 +731,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             const self: *Instance = @ptrCast(@alignCast(ip));
             var ret: u32 = 0;
             // Gmin and source stepping move a `$simparam` mid-solve.
-            if (hostParams(&self.row, info.paras)) {
+            if (hostParams(&self.row, info.paras) catch {
+                log(handle, log_lvl_fatal, sim_paras_refusal);
+                return eval_ret_flag_fatal;
+            }) {
                 if (@hasDecl(D, "setup")) D.setup(Val, &self.row);
                 if (@hasDecl(D, "setupInstance")) D.setupInstance(&self.row, &self.inst);
             }
@@ -1331,6 +1382,85 @@ test "a static request is one more iterate (LIM); breakpoints bound the step aft
     tran.at(d, &inst, &model, 7);
     try testing.expectEqual(@as(f64, 10), inst.inst.next);
     try testing.expectEqual(@as(f64, 3), inst.bound);
+}
+
+test "a $simparam list with no NULL within max_sim_paras is refused fatal; one at the cap is read" {
+    const H = Osdi(Rc, "rc");
+    const d = &H.descriptors[0];
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    inst.node_mapping = .{ 0, 1 };
+    var info: InitInfo = undefined;
+    // max_sim_paras + 1 names, then the NULL: one past the cap. (Terminated,
+    // so the unbounded walk this replaces read it all and set no flag.)
+    var names: [max_sim_paras + 2]Str = @splat("x");
+    names[max_sim_paras + 1] = null;
+    const vals: [max_sim_paras + 1]f64 = @splat(0);
+    const long: SimParas = .{ .names = &names, .vals = &vals, .names_str = null, .vals_str = null };
+    d.setup_model(null, &model, &long, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &long, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    const x = [2]f64{ 1, 0 };
+    var si: SimInfo = .{ .paras = long, .abstime = 0, .prev_solve = &x, .prev_state = null, .next_state = null, .flags = 0 };
+    try testing.expectEqual(eval_ret_flag_fatal, d.eval(null, &inst, &model, &si));
+    // The legal neighbour: max_sim_paras names, then the NULL.
+    names[max_sim_paras] = null;
+    d.setup_model(null, &model, &long, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    d.setup_instance(null, &inst, &model, 300.15, 2, &long, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    si.paras = long;
+    try testing.expectEqual(@as(u32, 0), d.eval(null, &inst, &model, &si));
+}
+
+test "eqlZ: a host field name matches only whole, and a shorter C string stops at its NUL" {
+    try testing.expect(eqlZ("gmin", "gmin"));
+    try testing.expect(!eqlZ("gmi", "gmin"));
+    try testing.expect(!eqlZ("gminx", "gmin"));
+    try testing.expect(!eqlZ("", "gmin"));
+}
+
+test "setup_instance refuses more connected terminals than the device has, fatal" {
+    const H = Osdi(Rc, "rc");
+    const d = &H.descriptors[0];
+    var model: H.Model = std.mem.zeroes(H.Model);
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    var info: InitInfo = undefined;
+    d.setup_model(null, &model, &no_paras, &info);
+    d.setup_instance(null, &inst, &model, 300.15, 3, &no_paras, &info);
+    try testing.expectEqual(eval_ret_flag_fatal, info.flags);
+    // The legal neighbours: every terminal, and fewer (§9.19, the rest internal).
+    d.setup_instance(null, &inst, &model, 300.15, 2, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+    d.setup_instance(null, &inst, &model, 300.15, 1, &no_paras, &info);
+    try testing.expectEqual(@as(u32, 0), info.flags);
+}
+
+test "a transient time behind the accepted point restarts dt from 0, never negative" {
+    const H = Osdi(Rc, "rc");
+    var inst: H.Instance = std.mem.zeroes(H.Instance);
+    const x = [2]f64{ 0, 0 };
+    const at = struct {
+        fn dt(i: *H.Instance, xx: *const [2]f64, t: f64) f64 {
+            const si: SimInfo = .{ .paras = no_paras, .abstime = t, .prev_solve = xx, .prev_state = null, .next_state = null, .flags = analysis_tran | calc_react_residual };
+            return H.simState(i, &si).dt;
+        }
+    };
+    // 1 s then 2 s: steps of 1 s from 0 and from 1 s.
+    try testing.expectEqual(@as(f64, 1), at.dt(&inst, &x, 1));
+    try testing.expectEqual(@as(f64, 1), at.dt(&inst, &x, 2));
+    // A retry at 1.5 s after 2 s is rejected: the step from 1 s.
+    try testing.expectEqual(@as(f64, 0.5), at.dt(&inst, &x, 1.5));
+    // 0.25 s is behind 1 s, the accepted point (0.25 - 1 = -0.75 before the
+    // fix): the history restarts, the step is from 0.
+    try testing.expectEqual(@as(f64, 0.25), at.dt(&inst, &x, 0.25));
+    // And runs on from there: 0.75 s is a step of 0.5 s from 0.25 s.
+    try testing.expectEqual(@as(f64, 0.5), at.dt(&inst, &x, 0.75));
+    // A negative time (no transient's) steps 0, not below.
+    try testing.expectEqual(@as(f64, 0), at.dt(&inst, &x, -1));
 }
 
 test "the module and noise names are the source's, not undone escapes" {
