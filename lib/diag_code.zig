@@ -64,11 +64,7 @@ pub const Code = enum(u16) {
     E0111,
     E0112,
     E0113,
-    // E0114 was "unsupported compiler directive". Retired: it had exactly two
-    // subjects left, §10.7's `__FILE__ and `__LINE__, and both are now
-    // expanded (preprocessor.zig `expand`). Every other backtick word VerA
-    // does not know is an undefined MACRO, which is E0115. The number is not
-    // reused.
+    E0114,
     E0115,
     E0116,
     E0117,
@@ -96,10 +92,7 @@ pub const Code = enum(u16) {
     E0134,
     E0135,
     E0136,
-    // E0137 was "unterminated `begin_keywords". Retired: §10.6 gives the
-    // directive scope "even across source code file boundaries", so an open
-    // pair at end of file is the clause working, not an error. The number is
-    // not reused.
+    E0137,
     E0138,
     /// §10.4: the macro TEXT may not begin with __VAMS_.
     E0139,
@@ -893,6 +886,12 @@ fn infoOf(c: Code) Info {
             \\this error is only about the missing name.
             ,
         },
+        .E0114 => retiredInfo(
+            \\"unsupported compiler directive". Retired: it had exactly two
+            \\subjects left, 10.7's `__FILE__ and `__LINE__, and both are now
+            \\expanded. Every other backtick word VerA does not know is an
+            \\undefined macro, which is E0115. The number is not reused.
+        ),
         .E0115 => .{
             .title = "undefined macro",
             .lrm = "10.4",
@@ -1151,6 +1150,12 @@ fn infoOf(c: Code) Info {
             \\This one has nothing to pop.
             ,
         },
+        .E0137 => retiredInfo(
+            \\"unterminated `begin_keywords". Retired: 10.6 gives the directive
+            \\scope "even across source code file boundaries", so an open pair
+            \\at end of file is the clause working, not an error. The number is
+            \\not reused.
+        ),
         .E0138 => .{
             .title = "a string literal may not span lines",
             .lrm = "2.7",
