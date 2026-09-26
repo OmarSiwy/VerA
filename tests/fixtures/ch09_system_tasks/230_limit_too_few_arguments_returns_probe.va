@@ -7,14 +7,16 @@
 // declines this site: it compiles, warns W0853 (too few arguments for the
 // algorithm), and returns the probe unchanged. The warning is asserted by the
 // unit test "a declined $limit is W0853 naming why"
-// (lib/backend/codegen/test.zig); the analog harness has no warning directive,
-// so this file asserts what the clause fixes about the value.
+// (lib/backend/codegen/test.zig) and by `//! warn` below; the checks assert
+// what the clause fixes about the value.
 //
 // Two 100 ohm resistors divide V(p) = 1 V, so V(a) = 0.5 V, independent of any
 // limiting; the returned value is used in the contribution, so a return other
 // than the probe would move the root.
 //
 //! lrm 9.17.3
+//! warn W0853
+//! warn too few arguments for the algorithm
 //! solve
 //! bias V(p) = 1, V(n) = 0
 `include "check.vh"
