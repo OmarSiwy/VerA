@@ -2038,6 +2038,10 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         try compile.sensitivity(&r, t.tran.ctrl, &watched);
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .switch_ctrl = .{ .tran = @intCast(i), .slots = watched.items } }) }, null, false);
     }
+    for (r.drivers) |d| if (d.mos) |mo| if (file.exprs.tag(mo.data) == .ident) {
+        r.scope = d.scope;
+        if (r.net_of.get(try r.slot(mo.data))) |net| r.nets[net].strength_read = true;
+    };
     for (r.nets, on_net) |*n, t| n.trans = t.items;
     for (r.nets, grouped) |*n, g| {
         // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a

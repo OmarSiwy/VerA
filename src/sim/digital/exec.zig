@@ -950,7 +950,15 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     // enough to show up, not before.
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
-    for (0..n.resolved.width) |i| {
+    if (plainCopy(self, n)) {
+        // The fold below would reproduce the one driver bit for bit:
+        // `Signal.of` at strong/strong, then `collapse`, is the identity.
+        const src = self.drivers[n.drivers[0]].current;
+        @memcpy(n.resolved.planes, src.planes);
+        const last = n.resolved.values().len - 1;
+        n.resolved.values()[last] &= wordMask(n.resolved.width, last);
+        n.resolved.unknowns()[last] &= wordMask(n.resolved.width, last);
+    } else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var bit: Int.Bit = .z;
         if (tables) |table| {
@@ -988,6 +996,19 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         return;
     }
     try store(self, n.slot, n.resolved.planes);
+}
+
+/// Whether `n` shows its one driver unchanged: a strong, unambiguous driver
+/// on a net type with no wired logic and no pull of its own (§7.9, §7.10),
+/// whose per-bit `signal` no MOS switch reads.
+fn plainCopy(self: *const Run, n: @import("net.zig").Net) bool {
+    const plain = switch (n.kind) {
+        .wire, .tri, .uwire => true,
+        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
+    };
+    if (!plain or n.drivers.len != 1 or n.strength_read) return false;
+    const d = self.drivers[n.drivers[0]];
+    return !d.or_z and d.s0 == .strong and d.s1 == .strong;
 }
 
 /// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
