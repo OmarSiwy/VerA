@@ -112,10 +112,9 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 
     const p = opts.palette;
 
-    // Rendering scratch (line indices, the per-entry placed list, the
-    // seen-codes set) is freed here rather than left on `bag.arena`: after
-    // `detach` that arena IS the caller's gpa, so leaving it would leak on
-    // every render of a detached bag.
+    // Rendering scratch (the line indices) is freed here rather than left on
+    // `bag.arena`: after `detach` that arena IS the caller's gpa, so leaving it
+    // would leak on every render of a detached bag.
     var scratch_state = std.heap.ArenaAllocator.init(bag.arena);
     defer scratch_state.deinit();
     const scratch = scratch_state.allocator();
@@ -126,7 +125,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
-    var explained: std.AutoHashMapUnmanaged(Code, void) = .empty;
+    var explained: std.EnumSet(Code) = .initEmpty();
 
     for (bag.messages()) |mi| {
         try renderOne(bag, scratch, w, opts, bag.get(mi), indices, &explained);
@@ -221,7 +220,7 @@ pub fn renderOne(
     opts: RenderOptions,
     e: diag_entry.Entry,
     indices: []?diag_location.LineIndex,
-    explained: *std.AutoHashMapUnmanaged(Code, void),
+    explained: *std.EnumSet(Code),
 ) !void {
     const p = opts.palette;
     const sev = p.forSeverity(e.severity);
@@ -296,8 +295,8 @@ pub fn renderOne(
 
     // --- `--explain` hint, once per code ------------------------------------
     if (opts.explain_hint) {
-        const gop = try explained.getOrPut(scratch, e.code);
-        if (!gop.found_existing) {
+        if (!explained.contains(e.code)) {
+            explained.insert(e.code);
             try w.print("{s}{s} ={s} {s}help{s}: run `vera --explain {s}` for a detailed explanation\n", .{
                 spaces(width), p.gutter, p.reset, p.help, p.reset, e.code.name(),
             });
