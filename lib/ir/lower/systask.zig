@@ -676,9 +676,10 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
     try self.err(tok, .E0810, "the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
 }
 
-/// One conversion `nextConv` found: its letter, lowercased, and whether its
-/// flags carried '#'.
-const Conv = struct { letter: u8, alt: bool };
+/// One conversion `nextConv` found: its letter, lowercased, whether its
+/// flags carried '#', and whether anything (a flag, a width, a precision)
+/// stood between the `%` and the letter.
+const Conv = struct { letter: u8, alt: bool, prefixed: bool = false };
 
 /// §9.4.3 `%[flags][width][.precision]conv`: the next conversion at or after
 /// `i.*`, `%%` included (letter '%'), with `i.*` moved past it; null when
@@ -698,13 +699,15 @@ fn nextConv(fmt: []const u8, i: *usize) ?Conv {
     }
     if (i.* >= fmt.len) return null;
     const letter = std.ascii.toLower(fmt[i.*]);
+    const prefixed = i.* > p + 1;
     i.* += 1;
-    return .{ .letter = letter, .alt = alt };
+    return .{ .letter = letter, .alt = alt, .prefixed = prefixed };
 }
 
 /// §9.4.3: "for each % character (except %m, %% and %l) ... a corresponding
-/// expression argument shall be supplied". A `%` that ends a flag run
-/// (`%5%`) consumes nothing either, as `%%` does.
+/// expression argument shall be supplied". `%5%` is refused (E0826, #42)
+/// and counted as `%%` is, consuming nothing, so E0810 does not add a
+/// second finding for it.
 fn consumes(letter: u8) bool {
     return letter != '%' and letter != 'm' and letter != 'l';
 }
@@ -794,6 +797,13 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
         var next = at + 1;
         var i: usize = 0;
         while (nextConv(fmt, &i)) |cv| {
+            // #42: §9.4.2 Table 9-21's `%%` is two characters, and C11
+            // 7.21.6.1p8 says the same ("The complete conversion
+            // specification shall be %%"), so neither gives `%5%` a meaning.
+            if (cv.letter == '%' and cv.prefixed) {
+                try self.err(tok, .E0826, "a flag, width or precision before the second `%` of `%%`", .{});
+                continue;
+            }
             // §9.4.3 grants C's '#' to Table 9-23's real conversions only.
             if (cv.alt and !str_k.zcAltOk(cv.letter))
                 try self.err(tok, .E0825, "`%#{c}`: '#' is C's alternative form, which §9.4.3 grants only to %e, %f and %g", .{cv.letter});
@@ -1376,6 +1386,11 @@ test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neigh
         .{ .src = "analog begin $strobe(\"%#x\", iv); I(p) <+ V(p); end", .code = .E0825 },
         .{ .src = "analog begin $strobe(\"%#m%d\", 1); I(p) <+ V(p); end", .code = .E0825 },
         .{ .src = "analog begin $strobe(\"%#r\", 1.5); I(p) <+ V(p); end", .code = .E0825 },
+        // #42: §9.4.2's `%%` takes no flag, width or precision (E0826),
+        // and the refused `%-%` consumes nothing (no E0810 beside it).
+        .{ .src = "analog begin $strobe(\"%5%\"); I(p) <+ V(p); end", .code = .E0826 },
+        .{ .src = "analog begin $strobe(\"%-%%d\", 1); I(p) <+ V(p); end", .code = .E0826 },
+        .{ .src = "analog begin $strobe(\"%#%\"); I(p) <+ V(p); end", .code = .E0826 },
         // §9.5.3: `$swrite` writes into a string variable.
         .{ .src = "analog begin $swrite(x, \"a\"); I(p) <+ V(p); end", .code = .E0813 },
         // §9.5.4.2's six conversion codes, and nothing else.
@@ -1389,11 +1404,17 @@ test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neigh
 test "§9.4.3 nextConv: C11 7.21.6.1's five flags, '#' included, never read as the letter (#41)" {
     const cases = [_]struct { fmt: []const u8, want: []const Conv }{
         .{ .fmt = "%g", .want = &.{.{ .letter = 'g', .alt = false }} },
-        .{ .fmt = "%#g", .want = &.{.{ .letter = 'g', .alt = true }} },
-        .{ .fmt = "%-+ 0#12.3E", .want = &.{.{ .letter = 'e', .alt = true }} },
-        .{ .fmt = "a%#xb", .want = &.{.{ .letter = 'x', .alt = true }} },
-        .{ .fmt = "%#m %#l", .want = &.{ .{ .letter = 'm', .alt = true }, .{ .letter = 'l', .alt = true } } },
+        .{ .fmt = "%#g", .want = &.{.{ .letter = 'g', .alt = true, .prefixed = true }} },
+        .{ .fmt = "%-+ 0#12.3E", .want = &.{.{ .letter = 'e', .alt = true, .prefixed = true }} },
+        .{ .fmt = "a%#xb", .want = &.{.{ .letter = 'x', .alt = true, .prefixed = true }} },
+        .{ .fmt = "%#m %#l", .want = &.{ .{ .letter = 'm', .alt = true, .prefixed = true }, .{ .letter = 'l', .alt = true, .prefixed = true } } },
         .{ .fmt = "100%% %d", .want = &.{ .{ .letter = '%', .alt = false }, .{ .letter = 'd', .alt = false } } },
+        // #42: `%5%`, `%-%` and `%.%` end in '%' with something before it.
+        .{ .fmt = "%5% %-% %.%", .want = &.{
+            .{ .letter = '%', .alt = false, .prefixed = true },
+            .{ .letter = '%', .alt = false, .prefixed = true },
+            .{ .letter = '%', .alt = false, .prefixed = true },
+        } },
         .{ .fmt = "%#", .want = &.{} }, // the format ends inside the flags
         .{ .fmt = "", .want = &.{} },
     };
@@ -1403,6 +1424,7 @@ test "§9.4.3 nextConv: C11 7.21.6.1's five flags, '#' included, never read as t
             const got = nextConv(c.fmt, &i) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqual(w.letter, got.letter);
             try std.testing.expectEqual(w.alt, got.alt);
+            try std.testing.expectEqual(w.prefixed, got.prefixed);
         }
         try std.testing.expect(nextConv(c.fmt, &i) == null);
     }

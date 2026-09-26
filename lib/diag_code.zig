@@ -515,6 +515,8 @@ pub const Code = enum(u16) {
     W1051,
     /// §9.4.3 the '#' flag on a conversion that has no alternative form.
     E0825,
+    /// §9.4.2 Table 9-21's `%%` written with a flag, width or precision.
+    E0826,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -6002,6 +6004,25 @@ fn infoOf(c: Code) Info {
             \\what '#' does to any of them. Rather than guess (C's `0x` prefix on
             \\an auto-sized %h?), VerA refuses the flag. Drop the '#', or format
             \\the value with %e, %f or %g.
+            ,
+        },
+        .E0826 => .{
+            .title = "a flag, width or precision written on `%%`",
+            .lrm = "9.4.2",
+            .explain =
+            \\9.4.1: "The special character string %% indicates the display of
+            \\the percent sign character (%)", and Table 9-21 (9.4.2) lists `%%`
+            \\as an escape sequence: two characters, nothing between them. A
+            \\flag, a width or a precision there (`%5%`, `%-%`, `%.2%`) is no
+            \\escape of Table 9-21 and no format specification of Tables 9-22 and
+            \\9-23. The real conversions' grant of "the full formatting
+            \\capabilities available in the C language" (9.4.3) does not cover it
+            \\either: C11 7.21.6.1p8 says "The complete conversion specification
+            \\shall be %%", so `%5%` has no meaning in C.
+            \\
+            \\Rather than guess whether the width pads the `%` or whether the
+            \\specification takes an argument, VerA refuses it. Write `%%` for a
+            \\percent sign, or `%5s` over "%" for a padded one.
             ,
         },
         .E0817 => .{

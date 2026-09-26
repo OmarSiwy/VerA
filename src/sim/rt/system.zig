@@ -170,6 +170,7 @@ fn scanSpec(self: *State, f: *Format, scope: []const u8, lib: []const u8) Error!
         const conv = t[f.i];
         f.i += 1;
         switch (conv) {
+            '%' => return self.fail("§9.4.2 (E0826): a width or precision before the second `%` of `%%`", .{}),
             'm', 'M' => try self.out.writeAll(scope),
             'l', 'L' => try self.out.writeAll(lib),
             'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R', 't', 'T', 's', 'S', 'c', 'C', 'v', 'V' => return .{ .conv = conv, .width = width, .precision = precision },

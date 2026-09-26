@@ -961,6 +961,10 @@ pub fn translateFormat(
         if (i >= src.len) break;
         const conv = src[i];
         i += 1;
+        // §9.4.2's `%%` is two characters; lowering refuses a flag, width or
+        // precision before the second `%` (E0826, #42), so none reaches here
+        // to be taken for a consuming conversion.
+        assert(conv != '%');
         // §9.4.3 `%m` names the enclosing module, and `%l` consumes no operand
         // either: "for each % character (except %m, %% and %l) … a
         // corresponding expression argument shall be supplied".

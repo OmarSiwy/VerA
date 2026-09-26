@@ -5396,7 +5396,9 @@ test "formatC: the C11 7.21.6.1 corners a model's format can reach" {
         .{ .fmt = "%-5s|", .args = &.{}, .want = "?    |" },
         .{ .fmt = "%3m|", .args = &.{}, .want = "  x|" },
         .{ .fmt = "%l", .args = &.{}, .want = "x" },
-        .{ .fmt = "%5%", .args = &.{}, .want = "%" }, // `%%` takes no width
+        // `%%` takes no width: VerA refuses `%5%` (E0826), so no device
+        // records one; a host handed it anyway prints the one `%`.
+        .{ .fmt = "%5%", .args = &.{}, .want = "%" },
         .{ .fmt = "%t", .args = &.{0.5}, .want = "0.5" },
         .{ .fmt = "%05.1f", .args = &.{-2.3}, .want = "-02.3" }, // zeros after the sign
         .{ .fmt = "%-+4d|", .args = &.{5}, .want = "+5  |" },

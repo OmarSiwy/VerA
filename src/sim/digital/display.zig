@@ -577,6 +577,9 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             }
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
             const radix: ?Radix = switch (format[i]) {
+                // #42: §9.4.2's `%%` is two characters (`%%` above); one
+                // with a width or precision between them is no escape.
+                '%' => return self.failWith(.E0826, ex.mainTok(e), "a width or precision before the second `%` of `%%`", .{}),
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
                 'h', 'H' => .hex,
@@ -1097,6 +1100,8 @@ test "§17.1.1 a malformed format is refused before anything prints" {
     try @import("root.zig").expectRejected("module m; initial $display(\"%\"); endmodule", "unterminated display format");
     try @import("root.zig").expectRejected("module m; initial $display(\"%q\", 1); endmodule", "only the §9.4.3 Table 9-22 conversions");
     try @import("root.zig").expectRejected("module m; initial $display(\"%d\"); endmodule", "missing display argument");
+    // #42: `%5%` is no §9.4.2 escape, and is refused rather than printed.
+    try @import("root.zig").expectRejected("module m; initial $display(\"%5%\"); endmodule", "second `%` of `%%`");
 }
 
 test "§17.1.1.2 no field width or precision is too large" {
