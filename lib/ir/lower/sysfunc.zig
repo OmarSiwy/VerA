@@ -333,7 +333,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
     // $feof): ordinary values, but each one moves or creates state the NEXT call
     // observes, so it is sequenced into the I/O phase like the tasks.
-    if (lower_event.isFileFunc(name)) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
+    if (Mir.callee.family(.fromName(name)) == .file_func) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
 }
 
@@ -450,7 +450,7 @@ pub fn lowerFormatArg(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 }
 
 pub fn lowerTaskArg(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
-    if (lower_event.isDisplayTask(name) or lower_event.isFileOutTask(name)) return lowerFormatArg(self, e);
+    if (Mir.callee.takesFormat(.fromName(name))) return lowerFormatArg(self, e);
     return lowerSysArg(self, e, takesNetRef(name));
 }
 

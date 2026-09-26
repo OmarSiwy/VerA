@@ -1776,11 +1776,6 @@ const lower_control = @import("lower/control.zig");
 
 // §5.10 analog events: `@(...)`, cross/above/timer, initial_step/final_step — lower/event.zig
 const lower_event = @import("lower/event.zig");
-pub const isSimCtlTask = lower_event.isSimCtlTask;
-pub const isFileOutTask = lower_event.isFileOutTask;
-pub const isFileCall = lower_event.isFileCall;
-pub const isDisplayTask = lower_event.isDisplayTask;
-pub const isMonitor = lower_event.isMonitor;
 pub const distOf = lower_event.distOf;
 pub const distParamName = lower_event.distParamName;
 

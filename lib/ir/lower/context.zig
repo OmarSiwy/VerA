@@ -16,6 +16,7 @@ const lower_discipline = @import("discipline.zig");
 const lower_event = @import("event.zig");
 const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
+const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const init = Lower.init;
 const tokenSpan = Lower.tokenSpan;
@@ -93,7 +94,7 @@ fn usesFiles(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
         file: *const Ast.SourceFile,
         hit: *bool,
         fn isFile(name: []const u8) bool {
-            return lower_event.isFileCall(name) or std.mem.eql(u8, name, "$ungetc") or
+            return Mir.callee.isFileCall(.fromName(name)) or std.mem.eql(u8, name, "$ungetc") or
                 (std.mem.startsWith(u8, name, "$f") and lower_event.isDigitalOnlySysFunc(name));
         }
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
@@ -861,7 +862,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
         // the digital context too, where §9.4.7 adds %r to the letters it
         // counts. Judged here, before the digital kernel would meet the gap at
         // run time.
-        else if (lower_event.isDisplayTask(n) or lower_event.isFileOutTask(n))
+        else if (Mir.callee.takesFormat(.fromName(n)))
             try lower_event.checkFormatPairing(self, self.file.stmtTok(id), st.args);
     };
     switch (self.file.stmt(id)) {
