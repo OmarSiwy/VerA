@@ -1080,11 +1080,15 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
-    var native = false;
+    var native: ?[]const u8 = null;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
-        if (std.mem.eql(u8, a, "--native")) {
-            native = true;
+        if (std.mem.eql(u8, a, "--native") or std.mem.eql(u8, a, "--native=fifo")) {
+            native = "--schedule=fifo";
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--native=static")) {
+            native = "--schedule=static";
             continue;
         }
         if (std.mem.eql(u8, a, "--fuzz")) {
@@ -1116,7 +1120,7 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer scratch_dir.close(io);
     try std.process.setCurrentDir(io, scratch_dir);
 
-    if (native) return nativeDevices(gpa, io, exe, cases, filter, w);
+    if (native) |schedule| return nativeDevices(gpa, io, exe, schedule, cases, filter, w);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1627,6 +1631,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 // name, and a fallback that hides a regression shows up as a moved name.
 //
 //   zig build test-1364 -- --native            # all of IEEE 1364
+//   zig build test-1364 -- --native=static     # combinational logic levelized
 //   zig build test-devices -- --native d04     # the cases whose name has d04
 // ---------------------------------------------------------------------------
 
@@ -1634,6 +1639,7 @@ const NativeJob = struct {
     gpa: Allocator,
     io: Io,
     vera_exe: []const u8,
+    schedule: []const u8,
     cases: []const []const u8,
     slots: []NativeSlot,
     next: std.atomic.Value(usize) = .init(0),
@@ -1646,7 +1652,7 @@ const NativeJob = struct {
             if (i >= job.cases.len) return;
             _ = arena_state.reset(.retain_capacity);
             var aw: Io.Writer.Allocating = .init(job.gpa);
-            const v = nativeCase(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
+            const v = nativeCase(arena_state.allocator(), job.io, job.vera_exe, job.schedule, job.cases[i], &aw.writer) catch |e| blk: {
                 aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
                 break :blk NativeVerdict{ .pass = false, .fallback = null };
             };
@@ -1665,7 +1671,7 @@ const NativeJob = struct {
 const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false };
 const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
 
-fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
+fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
     var picked: std.ArrayList([]const u8) = .empty;
     defer picked.deinit(gpa);
     for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
@@ -1676,7 +1682,7 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
     const slots = try gpa.alloc(NativeSlot, picked.items.len);
     defer gpa.free(slots);
     @memset(slots, .{});
-    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .cases = picked.items, .slots = slots };
+    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .schedule = schedule, .cases = picked.items, .slots = slots };
     var group: Io.Group = .init;
     const jobs = std.Thread.getCpuCount() catch 1;
     var hands: usize = 0;
@@ -1712,13 +1718,13 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
 /// `digitalCase` through the executable. A rejection may come from `vera
 /// --emit-exe` (the shared elaboration) or from the executable at run time;
 /// either way its stderr is judged, the build's and the run's together.
-fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
     try Io.Dir.cwd().createDirPath(io, work);
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--work-dir", work });
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", schedule, "--work-dir", work });
     if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
     const built = try capture(arena, io, argv.items);
