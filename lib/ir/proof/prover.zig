@@ -1417,30 +1417,30 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
 }
 
 /// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics.
-pub const opLabel = Mir.opcode.label;
+const opLabel = Mir.opcode.label;
 
 // --- endpoint arithmetic: NaN (inf-inf) folds to the wide side. A UNARY NaN
 // endpoint is never folded any more: it means "operand straddles the domain
 // edge" and the transfer answers ⊤ (see the monotone path) — the old fold to
 // +inf sat on the WRONG side for ln/sqrt/asin and produced narrow intervals.
 
-pub fn addLo(a: f64, b: f64) f64 {
+fn addLo(a: f64, b: f64) f64 {
     const r = a + b;
     return if (math.isNan(r)) -math.inf(f64) else r;
 }
 
-pub fn addHi(a: f64, b: f64) f64 {
+fn addHi(a: f64, b: f64) f64 {
     const r = a + b;
     return if (math.isNan(r)) math.inf(f64) else r;
 }
 
-pub fn mulOp(a: f64, b: f64) f64 {
+fn mulOp(a: f64, b: f64) f64 {
     return a * b;
 }
-pub fn divOp(a: f64, b: f64) f64 {
+fn divOp(a: f64, b: f64) f64 {
     return a / b;
 }
-pub fn powOp(a: f64, b: f64) f64 {
+fn powOp(a: f64, b: f64) f64 {
     return math.pow(f64, a, b);
 }
 
@@ -1455,7 +1455,7 @@ pub fn powOp(a: f64, b: f64) f64 {
 ///     integer y"), which corners at integer endpoints never see;
 ///   - negative exponent: pole at x = 0, and IEEE pow(+0,-odd) = +inf is the
 ///     WRONG side of the two-sided pole a base interval reaching 0 straddles.
-pub fn powIv(x: proof_lattice.Interval, y: proof_lattice.Interval) proof_lattice.Interval {
+fn powIv(x: proof_lattice.Interval, y: proof_lattice.Interval) proof_lattice.Interval {
     // x >= 0: pow = exp(y·ln x) is monotone in x for fixed y and in y for
     // fixed x, so box extrema sit at corners; IEEE fills the x = 0 edge
     // (pow(0,neg)=+inf, pow(0,0)=1) on the corners too. `combine`'s NaN guard
@@ -1511,7 +1511,7 @@ pub fn combine(x: proof_lattice.Interval, y: proof_lattice.Interval, f: *const f
     return .{ .lo = lo, .hi = hi };
 }
 
-pub fn absIv(a: proof_lattice.Interval) proof_lattice.Interval {
+fn absIv(a: proof_lattice.Interval) proof_lattice.Interval {
     if (a.ge(0)) return a;
     if (a.le(0)) return .{ .lo = -a.hi, .hi = -a.lo, .lo_open = a.hi_open, .hi_open = a.lo_open };
     return .{ .lo = 0, .hi = @max(@abs(a.lo), @abs(a.hi)) };

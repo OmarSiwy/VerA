@@ -814,7 +814,7 @@ pub fn inLoop(self: *const Analysis, block: u32) bool {
 }
 
 /// A phi whose result survives aliasing — the `phi_pool` filter, CFG-wide.
-pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
+fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
     if (self.i_op[@intFromEnum(inst)] != .phi) return false;
     const r = self.i_res[@intFromEnum(inst)];
     return self.rv(r) == r;
@@ -823,7 +823,7 @@ pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
 /// The `stmt_pool` filter: everything a unit body may emit as a statement.
 /// Phis are block headers, terminators are `emitTerm`'s, and an aliased
 /// result was rewritten away by ssa.zig.
-pub fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
+fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
     switch (Mir.opClass(self.i_op[@intFromEnum(inst)])) {
         .phi, .branch, .jump => return false,
         .unary, .binary, .ternary, .call, .anew, .load, .store => {},
@@ -858,7 +858,7 @@ pub fn tyOfParam(t: Ast.Type) VTy {
 /// A call's value type, by NAME: the `callee.zig` table's `ty` column, which
 /// `Lower.sysFuncTy` reads too, so the two sides of the MIR cannot disagree.
 /// For readers holding only a name; a MIR reader has `call.callee`.
-pub fn callTy(name: []const u8) VTy {
+fn callTy(name: []const u8) VTy {
     return Mir.callee.ty(Mir.Callee.fromName(name));
 }
 

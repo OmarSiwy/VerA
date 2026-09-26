@@ -325,7 +325,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
 /// `cands` as a SET (order-free, duplicate-free on both sides — 4.b's
 /// "the contents of the list match"). First match across every
 /// `connectrules` block in source order, which is §7.7.2.1's tie-break.
-pub fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const Ast.ConnectResolution {
+fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const Ast.ConnectResolution {
     // §7.7.2.1: an exact set wins even over an earlier subset match.
     // In the fallback, the candidate set is a subset of the rule's list.
     for ([_]bool{ true, false }) |want_exact| {

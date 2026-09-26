@@ -228,7 +228,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 }
 
 /// Is this argument part of `table_data_source` rather than a lookup input?
-pub fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
+fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
     if (isTableArray(self, a)) return true;
     const c = lower_constfold.constEval(self, a) orelse return false;
     return c == .str;
@@ -238,7 +238,7 @@ pub fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
 /// variable names") or a pattern (". Arrays may be specified directly via the
 /// concatenation operator"). The same two shapes §4.5.11's coefficient slot
 /// takes, so `appendVectorArg` is the reader for both.
-pub fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
+fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     return switch (ex.tag(a)) {
         .assign_pattern, .concat => true,
@@ -251,7 +251,7 @@ pub const TableFile = struct { vals: []const f64, cols: usize };
 
 /// A sample table is text; 16 MiB is ~700k rows of three columns, well past what
 /// a device that re-sorts its block per evaluation can afford anyway.
-pub const max_table_bytes: usize = 16 << 20;
+const max_table_bytes: usize = 16 << 20;
 
 /// §4.6.4.3's file input, flattened to `f0, p0, f1, p1, …` — the same layout the
 /// vector form produces, so the caller's two spellings converge here.
@@ -301,7 +301,7 @@ pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]
 // ponytail: so an unexecuted site naming a MALFORMED file is still refused,
 // where an unexecuted site naming an ABSENT one is not. Give the parse failures
 // the same treatment when a fixture asks; nothing in the suite does today.
-pub fn readTableFile(
+fn readTableFile(
     self: *Lower,
     e: Ast.ExprId,
     name: []const u8,
@@ -376,7 +376,7 @@ pub fn readTableFile(
 /// Column N+1 is taken as the dependent", with N the number of `table_inputs`.
 /// Both are the one rule `leading = nd + (ignored columns)`: a dimension without
 /// a sub-string still owns a column.
-pub fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8, cmap: []usize) Oom!?usize {
+fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8, cmap: []usize) Oom!?usize {
     // "the function defaults to performing linear interpolation and linear
     // extrapolation in both dimensions" (§9.21.5), which Table 9-32's first row
     // states for every dimension: `""` is "default linear interpolation and

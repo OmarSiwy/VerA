@@ -224,7 +224,7 @@ pub const Arity = struct {
     min: u8 = 0,
     max: u8 = std.math.maxInt(u8),
 
-    pub const unchecked: Arity = .{};
+    const unchecked: Arity = .{};
     pub fn exactly(n: u8) Arity {
         return .{ .min = n, .max = n };
     }

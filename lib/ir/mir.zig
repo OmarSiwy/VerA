@@ -353,7 +353,7 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
 // ---------------------------------------------------------------- values ----
 
 /// Register a new dynamic Value. Prefer the typed helpers below.
-pub fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Value {
+fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Value {
     const i = self.defs.len + Value.first_dynamic;
     assert(i < std.math.maxInt(u32));
     const v: Value = @enumFromInt(@as(u32, @intCast(i)));
@@ -630,7 +630,7 @@ pub fn splice(self: *Mir, to: Block, from: Block) void {
 
 /// Append `row` to the end of `block` and link it in. Caller sets row.result
 /// (use `emit` to get a fresh result Value automatically).
-pub fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst {
+fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst {
     const i = self.insts.len;
     assert(i < std.math.maxInt(u32) - 1); // maxInt is Inst.none
     var stamped = row;
@@ -831,7 +831,7 @@ pub fn addExtra(self: *Mir, gpa: std.mem.Allocator, words: []const u32) !u32 {
     return @intCast(start);
 }
 
-pub fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair) !u32 {
+fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair) !u32 {
     const start = self.extra.items.len;
     assert(start < std.math.maxInt(u32));
     try self.extra.ensureUnusedCapacity(gpa, pairs.len * 2);

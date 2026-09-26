@@ -75,7 +75,7 @@ pub const DiscreteCtx = struct {
 /// needs no kernel and keeps its fast path.
 ///
 /// Takes the FILE rather than the `Lower`: it is a question about the AST.
-pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
+fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
     // §3.7 a wreal is a digital net, and only the digital kernel holds its
     // value — 0.0 undriven, or its single driver's.
@@ -482,7 +482,7 @@ const Edge = @FieldType(Lower.Lowered.DiscreteEvent, "edge");
 /// §7.3.4 a digital event term over one name: `posedge d`, `negedge d`, or a
 /// bare `d` (a change of a digital value, or a digitally triggered named
 /// event). Null for anything else, which stays an analog event.
-pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.StringHashMapUnmanaged(void)) ?struct { name: []const u8, edge: Edge } {
+fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.StringHashMapUnmanaged(void)) ?struct { name: []const u8, edge: Edge } {
     const ex = &file.exprs;
     const tag = ex.tag(e);
     const operand = switch (tag) {
@@ -716,7 +716,7 @@ pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void
     }
 }
 
-pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
+fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     if (id == .none) return;
     const ex = &self.file.exprs;
     switch (self.file.stmt(id)) {
@@ -784,7 +784,7 @@ pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// ever recording a name the module itself declared. A block-local `integer x`
 /// shadowing a module-level `real x` would still be recorded; give
 /// `Ast.SeqBlock` a scope walk here if a model ever does that.
-pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
+fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
     if (id == .none or (!discrete and ctx.assigned.count() == 0)) return;
     const is_initial = if (discrete) {} else context;
     const ex = &self.file.exprs;
@@ -902,7 +902,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
 /// Only the READ is diagnosed, and only inside an `analog initial` — the same
 /// read from the ordinary analog block is what §7.3.1 Table 7-1 is the
 /// conversion table for.
-pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
+fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
     if (e == .none or (!discrete and !is_initial)) return;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);

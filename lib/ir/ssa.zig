@@ -461,7 +461,7 @@ pub const SsaBuilder = struct {
     /// `Mir.setAlias`, `setAlias` is monotonic (an alias is never cleared), and a
     /// popped phi that `hasAlias` is dropped. So each phi pushes its users at most
     /// once and total pushes are bounded by `user_pool.len`.
-    pub fn tryRemoveTrivialPhi(self: *SsaBuilder, phi: Mir.Value) Error!Mir.Value {
+    fn tryRemoveTrivialPhi(self: *SsaBuilder, phi: Mir.Value) Error!Mir.Value {
         // Stack discipline like `scratch`: this runs under re-entrant lowering.
         const top = self.phi_work.items.len;
         defer self.phi_work.shrinkRetainingCapacity(top);

@@ -82,7 +82,7 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
 /// `static` is the WEAKER §5.8.1 carve-out — an `analysis_or_constant_expression`
 /// rather than a constant one. It relaxes E0514 alone; `cond_depth` still rises,
 /// so the two constant-only rules keep rejecting the same code they did.
-pub fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
+fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
     defer {
@@ -383,7 +383,7 @@ pub fn lowerCase(
     try lowerCaseChain(self, sv, scrutinee, if (four) scrutinee else null, kind, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
 }
 
-pub fn lowerCaseChain(
+fn lowerCaseChain(
     self: *Lower,
     sv: TypedValue,
     /// The source subject, for §9.20's parameter-chosen alias (`pushCond`).
@@ -535,13 +535,13 @@ pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
 
 /// Bound on §6.6.1 unrolling: a runaway genvar loop is a source bug, not a
 /// reason to emit a million instructions.
-pub const max_unroll: u32 = 4096;
+const max_unroll: u32 = 4096;
 
 /// §3.5/§6.6.1 genvar loop-generate. Returns false when this is an ordinary
 /// procedural `for` (which `lowerFor` then lowers as a CFG loop). The bounds
 /// fold with `shapeEval`: a parameter in them fixes how many copies of the body
 /// exist, so it is a §3.4 shape parameter like an array bound.
-pub fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!bool {
+fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!bool {
     const gv = genvarOf(self, init_s) orelse return false;
     const start = lower_constfold.shapeEval(self, assignValueOf(self, init_s).?) orelse {
         try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
@@ -588,7 +588,7 @@ pub fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
     return null;
 }
 
-pub fn assignValueOf(self: *const Lower, s: Ast.StmtId) ?Ast.ExprId {
+fn assignValueOf(self: *const Lower, s: Ast.StmtId) ?Ast.ExprId {
     if (s == .none) return null;
     const st = self.file.stmt(s);
     return if (st == .assign) st.assign.value else null;

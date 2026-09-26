@@ -1164,7 +1164,7 @@ fn lowered(self: *Lower) Lowered {
 /// LRM §6.2/§6.9. Register ports (§6.5) into `nodes`, elaborate the
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
-pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     self.out.module = module;
     self.mir.name = self.file.str(module.name);
     // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
