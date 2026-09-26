@@ -601,6 +601,17 @@ pub const KeywordSet = enum(u8) {
     pub fn fromSpecifier(text: []const u8) ?KeywordSet {
         return specifier_map.get(text);
     }
+
+    /// Inverse of `fromSpecifier`.
+    pub fn specifier(self: KeywordSet) []const u8 {
+        return switch (self) {
+            .v1364_1995 => "1364-1995",
+            .v1364_2001 => "1364-2001",
+            .v1364_2005 => "1364-2005",
+            .vams_2_3 => "VAMS-2.3",
+            .vams_2023 => "VAMS-2023",
+        };
+    }
 };
 
 /// The implementation's default set when no `begin_keywords is in effect

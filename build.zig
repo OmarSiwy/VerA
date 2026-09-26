@@ -67,16 +67,12 @@ pub fn build(b: *std.Build) void {
 
     const mods = defineModules(b, target);
 
-    // The CLI takes the engine as MODULES. It used to `@import("root.zig")` by
-    // path, which compiled the entire engine a SECOND time into this module's
-    // file set — 62k lines built twice per build.
-    const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = mods,
-    });
-    const exe = b.addExecutable(.{ .name = "vera", .root_module = cli_mod });
+    // `verilog` is an IEEE 1364-2005 tool: default `--std=1364-2005`, and the
+    // analog pipeline (lowering, codegen, tb, orchestrator) is never analysed,
+    // so it is not in the binary. The module graph is the same either way.
+    const Language = enum { verilog, ams };
+    const language = b.option(Language, "language", "verilog: an IEEE 1364-2005 `vera` without the analog backend; ams (default): the Verilog-AMS compiler") orelse .ams;
+    const exe = cliExe(b, target, optimize, mods, "vera", language == .ams);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -103,8 +99,10 @@ pub fn build(b: *std.Build) void {
     }
     // The CLI has no tests of its own; what `test` owes it is that it COMPILES.
     // A test artifact over main.zig analysed nothing (Zig is lazy and there was
-    // no test to reach it), so the dependency is on the executable itself.
+    // no test to reach it), so the dependency is on the executable itself —
+    // in BOTH languages, since only main.zig reads the option.
     test_step.dependOn(&exe.step);
+    test_step.dependOn(&cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams).step);
     // `tests/test_all.zig` is the one compilation that has every module at once,
     // and it owns the claims that span two of them.
     const all_mod = b.createModule(.{
@@ -320,6 +318,28 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&r.step);
         test_vpi.dependOn(&r.step);
     }
+}
+
+/// The `vera` CLI. It takes the engine as MODULES: an `@import("root.zig")` by
+/// path would compile the entire engine a second time into its file set.
+fn cliExe(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    mods: []const std.Build.Module.Import,
+    name: []const u8,
+    ams: bool,
+) *std.Build.Step.Compile {
+    const o = b.addOptions();
+    o.addOption(bool, "ams", ams);
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = mods,
+    });
+    mod.addOptions("build_options", o);
+    return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
 /// A C application at `c`, compiled against src/vpi/vpi_user.h (and its own

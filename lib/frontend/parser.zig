@@ -60,6 +60,12 @@ pub const Parser = struct {
     /// directives it was pushed by. See `keywordsDirective` / `identLike`.
     kw_set: token.KeywordSet = token.default_keyword_set,
     kw_stack: std.ArrayList(token.KeywordSet) = .empty,
+    /// The language this parse accepts (`vera --std=`), which is also §10.6's
+    /// "implementation's default set of reserved keywords". Unlike `kw_set` it
+    /// does change semantics: under a 1364 set a Verilog-AMS construct is
+    /// E0242, because IEEE 1364-2005 annex A has no production for it. Set it
+    /// with `setLanguage`.
+    language: token.KeywordSet = token.default_keyword_set,
     /// Inside an `analog function` body (§4.7.1). Two of that clause's bullets
     /// are restrictions on statements the ordinary statement parser also parses
     /// for module scope, so the position is the only thing that tells them
@@ -172,6 +178,26 @@ pub const Parser = struct {
         try p.file.seedFrom(arena, &s.file);
         for (s.access_names) |n| try p.access_names.put(arena, n, {});
         return p;
+    }
+
+    /// Parse as `set`'s language: it becomes the §10.6 default keyword set and
+    /// the ceiling on `begin_keywords` and on Verilog-AMS constructs (E0242).
+    pub fn setLanguage(self: *Parser, set: token.KeywordSet) void {
+        self.language = set;
+        self.kw_set = set;
+    }
+
+    /// Reports E0242 if the token at `pos` opens a Verilog-AMS design element
+    /// or module item and `language` is a 1364 set. Called where a description
+    /// or a module item is dispatched, which is where every AMS construct
+    /// starts; below that, such a keyword can only be an identifier. The
+    /// construct is then parsed anyway, so the one error is the only one.
+    pub fn refuseAms(self: *Parser) error{OutOfMemory}!void {
+        const t = self.peek();
+        if (@intFromEnum(self.language) >= @intFromEnum(token.KeywordSet.vams_2_3) or !token.isKeyword(t)) return;
+        const w = parse_expr.tokenText(self, self.pos);
+        if (token.isReserved(w, self.language)) return;
+        try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });
     }
 
     // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations, A.5 UDPs — parser/source.zig

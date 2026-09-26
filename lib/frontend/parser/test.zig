@@ -192,6 +192,40 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
     try std.testing.expectEqualStrings("`begin_keywords inside a module", g.msg(0));
 }
 
+test "--std=1364-2005 frees AMS keywords as identifiers and refuses AMS constructs (E0242)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Case = struct {
+        fn parse(a: std.mem.Allocator, src: []const u8, set: token.KeywordSet) !TestResult {
+            var list = try lexer.Lexer.tokenize(a, src);
+            const bag = try newBag(a, src);
+            var p = Parser.init(a, src, list.items(.tag), list.items(.start), bag);
+            p.setLanguage(set);
+            const file = p.parseSourceFile() catch |e| switch (e) {
+                error.ParseError => p.file,
+                else => return e,
+            };
+            return .{ .file = file, .bag = bag };
+        }
+    };
+    const verilog = "module m; reg analog; wire sin; endmodule\n";
+    try std.testing.expectEqual(@as(usize, 0), (try Case.parse(arena, verilog, .v1364_2005)).count());
+    try std.testing.expectEqual(diag.Code.E0208, (try Case.parse(arena, verilog, .vams_2023)).code(0));
+
+    // One error per construct, and the construct is still read past.
+    const ams = try Case.parse(arena, "nature N; endnature\nmodule m; analog begin end\nreg r; endmodule\n", .v1364_2005);
+    try std.testing.expectEqual(@as(usize, 2), ams.count());
+    try std.testing.expectEqual(diag.Code.E0242, ams.code(0));
+    try std.testing.expectEqualStrings("`nature` under \"1364-2005\"", ams.msg(0));
+    try std.testing.expectEqual(diag.Code.E0242, ams.code(1));
+
+    // A 1364 tool knows no Verilog-AMS keyword set.
+    const spec = try Case.parse(arena, "`begin_keywords \"VAMS-2.3\"\n`end_keywords\n", .v1364_2005);
+    try std.testing.expectEqual(diag.Code.E0135, spec.code(0));
+}
+
 test "§2.6.1 based literals decode to the right VALUE, not just to a token" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();

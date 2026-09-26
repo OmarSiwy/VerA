@@ -51,6 +51,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     while (true) {
         try self.skipAttributes();
         const before = self.pos;
+        try self.refuseAms();
         switch (self.peek()) {
             .eof => break,
             // §10.6: legal ONLY here — "outside of a design element".
@@ -192,7 +193,9 @@ pub fn keywordsDirective(self: *Parser) Error!void {
     const str = try self.expect(.string_literal);
     const raw = parse_expr.tokenText(self, str);
     const spec = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
-    const set = token.KeywordSet.fromSpecifier(spec) orelse return self.failAt(
+    const known = token.KeywordSet.fromSpecifier(spec);
+    // A 1364 language has no Verilog-AMS specifier to name.
+    const set = if (known != null and @intFromEnum(known.?) <= @intFromEnum(self.language)) known.? else return self.failAt(
         str,
         .E0135,
         "`{s}`",
