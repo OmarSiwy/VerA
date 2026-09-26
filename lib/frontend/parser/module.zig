@@ -15,11 +15,11 @@ const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_generate = @import("generate.zig");
 const parse_source = @import("source.zig");
+const parse_inst = @import("inst.zig");
 const parse_specify = @import("specify.zig");
 const token = @import("../token.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.1.2 module_declaration — LRM §6.2
@@ -173,11 +173,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                 const tok = self.pos;
                 self.pos += 1;
                 const is_sys = self.peek() == .system_identifier;
-                const pname = if (is_sys) blk: {
-                    const s = try self.internTok(self.pos);
-                    self.pos += 1;
-                    break :blk s;
-                } else try self.expectIdent();
+                const pname = try self.expectIdentOrSys();
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 _ = try self.expect(.semicolon);
@@ -286,7 +282,7 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
             } else if (self.eat(.kw_split)) {
                 ins.mode = .split;
             }
-            ins.params = try parse_specify.parseParamValueAssignment(self);
+            ins.params = try parse_inst.parseParamValueAssignment(self);
             if (self.peek() != .semicolon) {
                 // A.1.8 connect_port_overrides. The grammar admits exactly
                 // four direction shapes — none/none, input/output,
@@ -349,12 +345,12 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
 /// not use access functions. Shall not use contribution statements or event
 /// control statements. Shall not use named blocks." — because those are
 /// visible in the tokens, and dropping them silently would accept them.
-pub fn skipParamsetStatement(self: *Parser) Error!void {
+fn skipParamsetStatement(self: *Parser) Error!void {
     var depth: u32 = 0;
     while (true) : (self.pos += 1) {
         const what: ?[]const u8 = switch (self.peek()) {
             .kw_potential, .kw_flow => if (self.peekAt(1) == .lparen) "an access function" else null,
-            .identifier => if (self.peekAt(1) == .lparen and self.access_names.contains(parse_expr.tokenText(self, self.pos))) "an access function" else null,
+            .identifier => if (self.peekAt(1) == .lparen and self.access_names.contains(self.tokenText(self.pos))) "an access function" else null,
             .kw_begin => if (self.peekAt(1) == .colon) "a named block" else null,
             .contribute => "a contribution statement",
             .at => "an event control",
@@ -454,7 +450,7 @@ pub const GenBlock = struct {
 /// A.1.3 list_of_ports / list_of_port_declarations (§6.5). Both styles fall
 /// out of one loop: a direction keyword starts a new declaration and its
 /// direction+discipline stick to the following comma-separated names.
-pub fn parsePortList(self: *Parser, b: *Body) Error!void {
+fn parsePortList(self: *Parser, b: *Body) Error!void {
     _ = try self.expect(.lparen);
     if (self.eat(.rparen)) return;
     var dir: Ast.Direction = .unspecified;
@@ -472,7 +468,7 @@ pub fn parsePortList(self: *Parser, b: *Body) Error!void {
             // the range belongs to the declaration, so it sticks to every
             // name in the list exactly as the direction and the discipline
             // do (§6.5.2 "electrical [3:0] a, b" declares two 4-bit ports).
-            range = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+            range = try parse_decl.optDim(self);
         }
         // A.1.3 `port ::= [ port_expression ] | . port_identifier (
         // [ port_expression ] )`. The second alternative gives the port an
@@ -538,10 +534,10 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.S
         disc = try self.internTok(self.pos);
         self.pos += 1;
     }
-    if (parse_generate.netKind(self.peek())) |k| {
+    if (parse_decl.netKind(self.peek())) |k| {
         kind.* = k;
         self.pos += 1;
-    } else if (reservedIs(self, self.pos, "wreal")) {
+    } else if (self.reservedIs(self.pos, "wreal")) {
         // A.2.1.2's `[ net_type | wreal ]`. Annex C.4/C.8 remove it from the
         // Verilog-A SUBSET only; VerA compiles Verilog-AMS, where §6.5.3
         // makes a wreal port the way a real value crosses a module boundary.
@@ -556,7 +552,7 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.S
 // A.1.4 module_item — LRM §6.2, ch3
 // -----------------------------------------------------------------------
 
-pub fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
+fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
     while (true) {
         try self.skipAttributes();
         const t = self.peek();
@@ -603,7 +599,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_case => if (self.gen_depth > 0)
             try parse_generate.parseGenerate(self, b, .kw_case)
         else
-            return parse_specify.unsupportedItem(self),
+            return parse_inst.unsupportedItem(self),
         // Not an item: a generate_block is only ever the body of the two
         // above (E0221). Kept as its own arm so the diagnostic can cite
         // Syntax 6-8 rather than blaming the analog subset.
@@ -639,7 +635,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
                 // `true`: A.9.3 admits `u[0].g` — the parameter of ONE
                 // element of an instance array, which is a flat name
                 // elaboration really mints.
-                const path = try parse_generate.parseDottedName(self, true);
+                const path = try parse_decl.parseDottedName(self, true);
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 try b.defparams.append(self.arena, .{
@@ -681,15 +677,15 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             _ = try self.expect(.semicolon);
         },
         // §3.12 branch declaration (A.2.1.3)
-        .kw_branch => try parse_generate.parseBranchDecl(self, b),
+        .kw_branch => try parse_decl.parseBranchDecl(self, b),
         // §3.6.4 ground declaration (A.2.1.3 net_declaration)
         .kw_ground => {
             self.pos += 1;
             const disc = try optDiscipline(self);
-            try parse_generate.parseNetNames(self, b, disc, .wire, true, .{}, false);
+            try parse_decl.parseNetNames(self, b, disc, .wire, true, .{}, false);
         },
         // §6.5.2 non-ANSI port declarations
-        .kw_input, .kw_output, .kw_inout => try parse_generate.parsePortDecl(self, b),
+        .kw_input, .kw_output, .kw_inout => try parse_decl.parsePortDecl(self, b),
         // A.2.1.3 net_declaration with an explicit net type
         .kw_wire,
         .kw_tri,
@@ -704,7 +700,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_supply0,
         .kw_supply1,
         => {
-            const kind = parse_generate.netKind(self.peek()).?;
+            const kind = parse_decl.netKind(self.peek()).?;
             self.pos += 1;
             // A.2.1.3: `charge_strength` sits right after the net type, and
             // only `trireg`'s alternatives have one. §3.8's default for a
@@ -731,15 +727,15 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // needs no flag to say the bracket was absent.
             var st: Ast.NetStrength = .{};
             if (self.peek() == .lparen) {
-                if (parse_generate.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma)
-                    try parse_generate.parseDriveStrength(self, &st.strength0, &st.strength1)
+                if (parse_decl.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma)
+                    try parse_decl.parseDriveStrength(self, &st.strength0, &st.strength1)
                 else
-                    st.charge = try parse_generate.parseChargeStrength(self, kind);
+                    st.charge = try parse_decl.parseChargeStrength(self, kind);
             }
             var signed = false;
             var ignored: Ast.NetKind = .wire;
             const disc = try optPortType(self, &ignored, &signed);
-            try parse_generate.parseNetNames(self, b, disc, kind, false, st, signed);
+            try parse_decl.parseNetNames(self, b, disc, kind, false, st, signed);
         },
         // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
         // list_of_net_assignments ;` — a module item of every module (A.1.4).
@@ -751,8 +747,8 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // `(`, so the parenthesis is unambiguously A.2.2.2's.
             var s0: Ast.Strength = .strong;
             var s1: Ast.Strength = .strong;
-            if (self.peek() == .lparen) try parse_generate.parseDriveStrength(self, &s0, &s1);
-            const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
+            if (self.peek() == .lparen) try parse_decl.parseDriveStrength(self, &s0, &s1);
+            const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
             while (true) {
                 const tok = self.pos;
                 const target = try parse_expr.parseExpr(self);
@@ -770,7 +766,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             const tok = self.pos;
             self.pos += 1;
             const signed = self.digital and self.eat(.kw_signed);
-            const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+            const range: ?Ast.Dim = try parse_decl.optDim(self);
             if (!self.digital) if (range) |d| if (parse_decl.literalWidth(self, d)) |w| {
                 if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
             };
@@ -812,13 +808,13 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // pass_switch_instance { , pass_switch_instance } ;` — the two
         // A.3.4 switch spellings with tags of their own. The other eight
         // reach `parseSwitch` through the `.kw_reserved` arm below.
-        .kw_tran, .kw_rtran => try parse_specify.parseSwitch(self, b),
+        .kw_tran, .kw_rtran => try parse_inst.parseSwitch(self, b),
         // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
         // compute a logic value.
-        .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try parse_specify.parseGates(self, b),
+        .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try parse_inst.parseGates(self, b),
         // A.6.2 `initial_construct` / `always_construct` — §7.2.2's discrete
         // context.
-        .kw_initial, .kw_always => try parse_specify.parseDiscrete(self, b),
+        .kw_initial, .kw_always => try parse_inst.parseDiscrete(self, b),
         // §5.2 analog construct / §4.7.1 analog function
         .kw_analog => try parse_decl.parseAnalog(self, b),
         // §4.7, opening paragraph: "Each function can be an analog
@@ -871,7 +867,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             if ((self.peekAt(1) == .hash and self.peekAt(2) == .lparen) or
                 (self.identLike(self.pos + 1) and
                     (self.peekAt(2) == .lparen or self.peekAt(2) == .lbracket)))
-                return parse_specify.parseInstantiation(self, b);
+                return parse_inst.parseInstantiation(self, b);
             if (self.peekAt(1) == .hash) return parse_source.parseUdpInst(self, b);
             // A.5.4 `udp_instantiation`, whose `udp_instance` makes
             // `name_of_udp_instance` OPTIONAL where A.4.1's `module_instance
@@ -883,11 +879,11 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // rejected by the name list ("expected identifier"), which is
             // the wording the fixtures pin.
             if (!self.identLike(self.pos + 1) and self.peekAt(1) != .lbracket) {
-                return parse_specify.notAModuleItem(self);
+                return parse_inst.notAModuleItem(self);
             }
             const disc = try self.internTok(self.pos);
             self.pos += 1;
-            try parse_generate.parseNetNames(self, b, disc, .wire, false, .{}, false);
+            try parse_decl.parseNetNames(self, b, disc, .wire, false, .{}, false);
         },
         // Annex B reserves a family of 1364 spellings that this compiler
         // has no tag for — `specify`, `specparam`, `primitive`, `pulldown`
@@ -895,7 +891,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // them unusable as identifiers. The spelling is therefore the
         // dispatch, and the two below are the ones with a production here.
         .kw_reserved => {
-            const w = parse_expr.tokenText(self, self.pos);
+            const w = self.tokenText(self.pos);
             if (std.mem.eql(u8, w, "specify")) return parse_specify.parseSpecifyBlock(self, b);
             // A.2.1.1 `specparam_declaration ::= specparam [ range ]
             // list_of_specparam_assignments ;`, reached BOTH as a module
@@ -916,19 +912,19 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // A.3.1's last two arms. They have no tags of their own because
             // A.3.2 gives them a strength set no other gate takes.
             if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
-                return parse_specify.parsePullGate(self, b);
+                return parse_inst.parsePullGate(self, b);
             // A.3.1's cmos/mos/pass-enable switch arms — A.3.4's eight
             // remaining `*_switchtype` spellings, none of which has a tag
             // because `Ast.GateKind` has nothing to put them in. See
             // `parseSwitch` for what refuses them and why it is no longer
             // E0205.
-            if (parse_specify.switch_arms.has(w)) return parse_specify.parseSwitch(self, b);
+            if (parse_inst.switch_arms.has(w)) return parse_inst.parseSwitch(self, b);
             // A.2.1.3's two `wreal` arms — §3.7's real net, which the
             // annex gives arms of its own rather than a `net_type`.
             if (std.mem.eql(u8, w, "wreal")) return parseWrealDecl(self, b);
-            return parse_specify.unsupportedItem(self);
+            return parse_inst.unsupportedItem(self);
         },
-        else => return parse_specify.notAModuleItem(self), // else: begins no A.1.4 module_item: E0240
+        else => return parse_inst.notAModuleItem(self), // else: begins no A.1.4 module_item: E0240
     }
 }
 
@@ -955,23 +951,7 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     var ignored: Ast.NetKind = .wire;
     var signed = false;
     const disc = try optPortType(self, &ignored, &signed);
-    try parse_generate.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
+    try parse_decl.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
 }
 
-/// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
-/// keywords share one tag, so every grammar that needs one of them by name
-/// asks here.
-pub fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
-    return self.tags[i] == .kw_reserved and std.mem.eql(u8, parse_expr.tokenText(self, i), w);
-}
 
-/// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
-/// recognises as single tokens and tags `.invalid`, because outside a
-/// specify block none of them is an operator at all (`lexer.zig` spells
-/// exactly that at each of the three). So the spelling is the test, and
-/// the tag is what keeps them from meaning anything anywhere else.
-pub fn eatSymbol(self: *Parser, w: []const u8) bool {
-    if (self.peek() != .invalid or !std.mem.eql(u8, parse_expr.tokenText(self, self.pos), w)) return false;
-    self.pos += 1;
-    return true;
-}

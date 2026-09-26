@@ -19,6 +19,7 @@ const indexOfString = Preprocessor.indexOfString;
 const isSpace = Preprocessor.isSpace;
 const isIdentStart = Preprocessor.isIdentStart;
 const isIdentChar = Preprocessor.isIdentChar;
+const escapedEnd = Preprocessor.escapedEnd;
 
 // ---------------------------------------------------------------------------
 // §10.4 `define / `undef
@@ -115,7 +116,7 @@ pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 
 /// A macro body is one logical line: `\`+newline collapses to a space. The
 /// newlines it swallowed are re-emitted by the caller, so lines still line up.
-pub fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
+fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, body, '\n') == null) return body;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, body.len);
@@ -292,7 +293,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
 /// inside the argument, `__LINE__`, and the no-segment rule all behave exactly
 /// as they do for a body rescan. Backtick-free text expands to itself and is
 /// returned unscanned.
-pub fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
+fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
     const saved_site = pp.expand_site;
@@ -327,9 +328,7 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
             '"' => i = stringStop(text, i),
             // §2.8.1: an escaped identifier runs to white space, commas and
             // brackets included.
-            '\\' => while (i + 1 < text.len and !isSpace(text[i + 1])) {
-                i += 1;
-            },
+            '\\' => i = escapedEnd(text, i + 1) - 1,
             '(', '[', '{' => try opens.append(pp.arena, c),
             ')', ']', '}' => {
                 // Non-empty: the first iteration pushes the '(' at `lparen`,
@@ -391,8 +390,7 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             // INSIDE one is part of that identifier, not a use of the formal —
             // `` `define M(x) real \sig-x ; `` declares `\sig-x`, not `\sig-1`.
             const start = i;
-            i += 1;
-            while (i < body.len and !isSpace(body[i])) i += 1;
+            i = escapedEnd(body, i + 1);
             try out.appendSlice(pp.arena, body[start..i]);
             continue;
         }
@@ -440,9 +438,7 @@ fn splitsString(text: []const u8) bool {
                 i = stringStop(text, i);
                 if (i >= text.len or text[i] != '"') return true;
             },
-            '\\' => while (i + 1 < text.len and !isSpace(text[i + 1])) {
-                i += 1;
-            },
+            '\\' => i = escapedEnd(text, i + 1) - 1,
             else => {},
         }
     }
@@ -458,7 +454,7 @@ fn endsInEscapedIdent(text: []const u8) bool {
         switch (text[i]) {
             '"' => i = stringStop(text, i),
             '\\' => {
-                while (i < text.len and !isSpace(text[i])) i += 1;
+                i = escapedEnd(text, i + 1);
                 if (i == text.len) return true;
             },
             else => {},

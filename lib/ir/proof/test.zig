@@ -68,8 +68,8 @@ pub const Harness = struct {
     }
 
     fn find(self: *const Harness, code: diag.Code) ?diag.Entry {
-        for (self.bag.messages()) |mi| {
-            const e = self.bag.get(mi);
+        for (0..self.bag.count()) |i| {
+            const e = self.bag.at(i);
             if (e.code == code) return e;
         }
         return null;

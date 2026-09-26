@@ -296,13 +296,8 @@ pub const Lexer = struct {
     /// Neither the backslash nor the terminator is part of the identifier, but
     /// both are inside the token span (the parser strips them).
     fn lexEscapedIdentifier(self: *Lexer) token.Tag {
-        self.pos += 1;
-        const body = self.pos;
-        while (self.pos < self.src.len) {
-            const c = self.src[self.pos];
-            if (c < 33 or c > 126) break;
-            self.pos += 1;
-        }
+        const body = self.pos + 1;
+        self.pos = @intCast(escapedEnd(self.src, body));
         return if (self.pos == body) .invalid else .escaped_identifier;
     }
 
@@ -417,9 +412,17 @@ pub fn isSpace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0c;
 }
 
-fn isIdentChar(c: u8) bool {
-    // §2.8: letters, digits, `$` and `_` (only the first character is restricted).
+/// §2.8: letters, digits, `$` and `_` (only the first character is restricted).
+pub fn isIdentChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
+}
+
+/// §2.8.1: where the escaped identifier whose body starts at `i` (just past
+/// the `\`) ends. The body is printable ASCII 33–126; any other byte ends it.
+pub fn escapedEnd(s: []const u8, i: usize) usize {
+    var k = i;
+    while (k < s.len and s[k] >= 33 and s[k] <= 126) k += 1;
+    return k;
 }
 
 /// §2.6.1 binary/octal/hex/decimal digit for `radix`, plus `_`, plus the

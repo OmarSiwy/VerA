@@ -6,6 +6,7 @@
 //! LRM clauses this file's code cites: §1, §2.6, §2.8.2, §4.5.8, §7.4, §9.15.
 
 const std = @import("std");
+const diag = @import("diag");
 const Preprocessor = @import("../preprocessor.zig");
 const Lexer = @import("../lexer.zig");
 const Error = Preprocessor.Error;
@@ -138,14 +139,7 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
     }
     // Anything after the qualifier is not in Syntax 10-1 either. Reported with
     // the same code so the rule reads as one rule.
-    r.skipSpace();
-    if (r.i < r.s.len and std.mem.trim(u8, r.s[r.i..], " \t\r").len != 0) {
-        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0127);
-        b.msg("`{s}` follows the qualifier", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
-        b.note("Syntax 10-1 is `default_discipline [ discipline_identifier [ qualifier ] ], and nothing more", .{});
-        try b.emit();
-        return error.PreprocessFailed;
-    }
+    try expectEnd(pp, &r, off, .E0127, "qualifier", "Syntax 10-1 is `default_discipline [ discipline_identifier [ qualifier ] ], and nothing more");
     try pp.defaults.append(pp.arena, .{
         .at = @intCast(pp.out.items.len),
         .qualifier = qual,
@@ -191,14 +185,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
     if (!(t >= 0.0) or !std.math.isFinite(t)) {
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "a transition time cannot be `{s}`", .{text});
     }
-    r.skipSpace();
-    if (r.i < r.s.len and std.mem.trim(u8, r.s[r.i..], " \t\r").len != 0) {
-        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0129);
-        b.msg("`{s}` follows the transition time", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
-        b.note("Syntax 10-2 is `default_transition transition_time, and nothing more", .{});
-        try b.emit();
-        return error.PreprocessFailed;
-    }
+    try expectEnd(pp, &r, off, .E0129, "transition time", "Syntax 10-2 is `default_transition transition_time, and nothing more");
     try pp.mark(&pp.transitions, t);
 }
 
@@ -245,7 +232,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
 /// E0142 at the cursor, naming what §19.9's grammar wanted there. `r.i` is
 /// undefined after a failed `timeLiteral`, so the span is the whole operand
 /// list — which is the thing the user has to rewrite anyway.
-pub fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
+fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     const wrote = std.mem.trim(u8, r.s, " \t\r");
     var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
     if (wrote.len == 0) {
@@ -290,14 +277,7 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
         try b.emit();
         return error.PreprocessFailed;
     };
-    r.skipSpace();
-    if (r.i < r.s.len) {
-        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0140);
-        b.msg("`{s}` follows the net type", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
-        b.note("§19.2 is `default_nettype default_nettype_value, and nothing more", .{});
-        try b.emit();
-        return error.PreprocessFailed;
-    }
+    try expectEnd(pp, &r, off, .E0140, "net type", "§19.2 is `default_nettype default_nettype_value, and nothing more");
     try pp.mark(&pp.nettypes, value);
 }
 
@@ -325,21 +305,26 @@ pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void 
         try b.emit();
         return error.PreprocessFailed;
     };
-    r.skipSpace();
-    if (r.i < r.s.len) {
-        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0141);
-        b.msg("`{s}` follows the pull value", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
-        b.note("§19.10 takes one operand and nothing more", .{});
-        try b.emit();
-        return error.PreprocessFailed;
-    }
+    try expectEnd(pp, &r, off, .E0141, "pull value", "§19.10 takes one operand and nothing more");
     try pp.mark(&pp.drives, value);
+}
+
+/// `code` if anything but white space is left on the directive line: the
+/// operand, named by `what`, was the last thing `syntax` allows.
+fn expectEnd(pp: *Pp, r: *Rest, off: usize, code: diag.Code, what: []const u8, syntax: []const u8) Error!void {
+    r.skipSpace();
+    if (r.i == r.s.len) return;
+    var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), code);
+    b.msg("`{s}` follows the {s}", .{ std.mem.trim(u8, r.s[r.i..], " \t\r"), what });
+    b.note("{s}", .{syntax});
+    try b.emit();
+    return error.PreprocessFailed;
 }
 
 /// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
 /// `s ms us ns ps fs` — as a count of SECONDS, which is the unit §9.15
 /// Table 9-27 asks for. Null (cursor undefined) on anything else.
-pub fn timeLiteral(r: *Rest) ?f64 {
+fn timeLiteral(r: *Rest) ?f64 {
     r.skipSpace();
     const start = r.i;
     while (r.i < r.s.len and r.s[r.i] >= '0' and r.s[r.i] <= '9') r.i += 1;

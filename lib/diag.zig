@@ -13,28 +13,18 @@
 //! and one renderer.
 //!
 //! DOD
-//!   - TWO POOLS, `string_bytes` and `extra`, exactly as the Zig compiler
-//!     stores its own errors (std/zig/ErrorBundle.zig). A diagnostic is a run
-//!     of `u32` words in `extra` — its labels and notes trailing it in the
-//!     same run — plus NUL-terminated text in `string_bytes`. No per-entry
-//!     allocation, no side tables, no pointers to fix up.
-//!
-//!     WHY THAT FORMAT AND NOT A NICER ONE OF OUR OWN: orchestrator.zig
-//!     already receives a real `std.zig.ErrorBundle` from the resident `zig`
-//!     child, describing errors in the GENERATED Zig (see `Result.failed`).
-//!     Keeping a second, incompatible shape for errors in the Verilog-A meant
-//!     two representations of one concept and two ways to serialise them. One
-//!     format, one renderer, and a bag is now `{[]u8, []u32}` — memcpy-able
-//!     down that same pipe with no bespoke encoding.
+//!   - One `Record` row per diagnostic, its labels and notes inline, plus
+//!     NUL-terminated text in one string pool. No per-entry allocation and
+//!     no pointers to fix up.
 //!   - Diagnostics are COLD by construction (capped at 64 per run, written
 //!     once, read once). So this file optimises for one thing only: never
 //!     paying anything on the path where no diagnostic is produced. The line
-//!     index, the dedupe set and the sort all happen lazily, after the first
+//!     index and the sort happen lazily, after the first
 //!     entry exists.
 //!   - Everything the stages allocate lives in the compilation arena. The one
 //!     gpa copy happens in `detach`, at the API boundary, because a failed
-//!     compilation frees its arena on the way out — and with the pools that
-//!     copy is three `appendSlice`s instead of a walk over every string.
+//!     compilation frees its arena on the way out — and that copy is two
+//!     `appendSlice`s instead of a walk over every string.
 //!
 //! SEVERITY comes from the code's first letter (`E`/`W`) — see diag_code.zig.
 //! There is no second table to desynchronise.

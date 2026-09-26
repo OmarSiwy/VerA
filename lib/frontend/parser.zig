@@ -195,7 +195,7 @@ pub const Parser = struct {
     pub fn refuseAms(self: *Parser) error{OutOfMemory}!void {
         const t = self.peek();
         if (@intFromEnum(self.language) >= @intFromEnum(token.KeywordSet.vams_2_3) or !token.isKeyword(t)) return;
-        const w = parse_expr.tokenText(self, self.pos);
+        const w = self.tokenText(self.pos);
         if (token.isReserved(w, self.language)) return;
         try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });
     }
@@ -210,10 +210,13 @@ pub const Parser = struct {
     // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1) — parser/specify.zig
     const parse_specify = @import("parser/specify.zig");
 
+    // Annex A.4.1 module instantiation (LRM §6.2.2), A.3 gates and switches, A.6.2 initial/always — parser/inst.zig
+    const parse_inst = @import("parser/inst.zig");
+
     // Annex A.4.2 generate constructs (LRM §6.6) — parser/generate.zig
     const parse_generate = @import("parser/generate.zig");
 
-    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6) — parser/decl.zig
+    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port, net and branch declarations — parser/decl.zig
     const parse_decl = @import("parser/decl.zig");
 
     // Annex A.6.4 analog_statement (LRM Clause 5) — parser/stmt.zig
@@ -248,6 +251,43 @@ pub const Parser = struct {
         return true;
     }
 
+    /// Source text of a token. `token.Stored` has no length (DOD: recompute,
+    /// don't store), so the lexeme is re-scanned from `start` — by the LEXER,
+    /// which is what makes it exact: `lexer.tokenEnd` re-runs `next()`, and
+    /// `next()` is a pure function of (src, pos) (see lexer.zig's header).
+    ///
+    /// A parser-side copy of the scanners used to live here and it had drifted:
+    /// its escaped-identifier arm stopped at white space, where §2.8.1 and
+    /// `lexer.lexEscapedIdentifier` stop at any byte outside printable ASCII
+    /// 33–126 — so a non-ASCII byte (a UTF-8 comment character pasted into a
+    /// name) ended the identifier for the lexer and not for the parser, and the
+    /// two disagreed about where the next token began.
+    pub fn tokenText(self: *const Parser, i: u32) []const u8 {
+        const lx: lexer.Lexer = .{ .src = self.src };
+        const text = lx.tokenText(self.starts[i]);
+        // §2.8.1: the `\` opens the identifier but is not part of the name.
+        // The terminator is not in the span, so only the head is stripped.
+        return if (self.tags[i] == .escaped_identifier) text[1..] else text;
+    }
+
+    /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
+    /// keywords share one tag, so every grammar that needs one of them by name
+    /// asks here.
+    pub fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
+        return self.tags[i] == .kw_reserved and std.mem.eql(u8, self.tokenText(i), w);
+    }
+
+    /// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
+    /// recognises as single tokens and tags `.invalid`, because outside a
+    /// specify block none of them is an operator at all (`lexer.zig` spells
+    /// exactly that at each of the three). So the spelling is the test, and
+    /// the tag is what keeps them from meaning anything anywhere else.
+    pub fn eatSymbol(self: *Parser, w: []const u8) bool {
+        if (self.peek() != .invalid or !std.mem.eql(u8, self.tokenText(self.pos), w)) return false;
+        self.pos += 1;
+        return true;
+    }
+
     /// Byte just past the previous token: where a missing terminator has to be
     /// typed, and so where `expect`'s machine-applicable insertion is anchored.
     ///
@@ -260,7 +300,7 @@ pub const Parser = struct {
         const i = self.pos - 1;
         if (self.tags[i] == .eof) return self.starts[i];
         const backslash: u32 = @intFromBool(self.tags[i] == .escaped_identifier);
-        return self.starts[i] + backslash + @as(u32, @intCast(parse_expr.tokenText(self, i).len));
+        return self.starts[i] + backslash + @as(u32, @intCast(self.tokenText(i).len));
     }
 
     pub fn expect(self: *Parser, t: token.Tag) Error!u32 {
@@ -313,7 +353,7 @@ pub const Parser = struct {
             // Default set ⇒ every keyword is reserved: no text to fetch.
             else => |t| self.kw_set != token.default_keyword_set and // else: a keyword is an identifier only when the keyword set frees it
                 token.isKeyword(t) and
-                !token.isReserved(parse_expr.tokenText(self, j), self.kw_set),
+                !token.isReserved(self.tokenText(j), self.kw_set),
         };
     }
 
@@ -321,6 +361,15 @@ pub const Parser = struct {
     pub fn expectIdent(self: *Parser) Error!Ast.StrId {
         if (!self.identLike(self.pos))
             return self.failAt(self.pos, .E0208, "found {s}", .{self.found(self.pos)});
+        const s = try self.internTok(self.pos);
+        self.pos += 1;
+        return s;
+    }
+
+    /// `expectIdent`, or a §9.18 system name (`$mfactor`) where the grammar
+    /// admits one as a parameter identifier.
+    pub fn expectIdentOrSys(self: *Parser) Error!Ast.StrId {
+        if (self.peek() != .system_identifier) return self.expectIdent();
         const s = try self.internTok(self.pos);
         self.pos += 1;
         return s;
@@ -354,7 +403,7 @@ pub const Parser = struct {
         // The two bytes are spelled out rather than imported from `ir/`, for the
         // same reason `parseDottedName`'s `.` is: the frontend owns the source
         // half of a two-sided convention and does not depend on the IR.
-        const text = parse_expr.tokenText(self, i);
+        const text = self.tokenText(i);
         if (self.tags[i] != .escaped_identifier) return self.file.intern(self.arena, text);
         if (std.mem.indexOfScalar(u8, text, '.') == null)
             return self.file.intern(self.arena, text);
@@ -558,7 +607,7 @@ pub const Parser = struct {
             .real_literal,
             .string_literal,
             .kw_reserved,
-            => parse_expr.tokenText(self, i),
+            => self.tokenText(i),
             else => |t| tagDesc(t), // else: every other tag implies its own text
         };
     }
@@ -603,6 +652,7 @@ test {
     _ = Parser.parse_module;
     _ = Parser.parse_specify;
     _ = Parser.parse_generate;
+    _ = Parser.parse_inst;
     _ = Parser.parse_decl;
     _ = Parser.parse_stmt;
     _ = Parser.parse_expr;

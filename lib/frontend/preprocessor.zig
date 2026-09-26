@@ -67,9 +67,6 @@ pub const Error = Allocator.Error || error{PreprocessFailed};
 pub const Output = struct {
     /// The preprocessed bytes: the cache identity and the lexer's input.
     text: []const u8,
-    /// Byte length of the prepended std-def prelude, so a caller mapping an
-    /// output offset back to a user source line can subtract it.
-    prelude_len: u32 = 0,
     /// How many modules `Options.spice_netlist` contributed, so the caller can
     /// tell the netlist-derived tail of the prelude from Table E.1's own rows —
     /// E.2.1's case-insensitive fallback applies to the tail only.
@@ -416,7 +413,6 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
             netlist_modules = cards.modules;
         }
     }
-    const prelude_len: u32 = @intCast(pp.out.items.len);
 
     try pp.runFile(source, opts.file_name, root);
 
@@ -442,19 +438,9 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         .cells = try pp.cells.toOwnedSlice(arena),
         .drives = try pp.drives.toOwnedSlice(arena),
     };
-    opts.bag.map = .{
-        .segs = try pp.segs.toOwnedSlice(arena),
-        // ZERO, not the prelude's newline count: `prelude_lines` corrects a
-        // root line number that was measured in the PREPROCESSED text, and the
-        // segments above already resolve a root offset to root's own text.
-        // Subtracting twice would put every user error ~100 lines too early.
-        // `Output.prelude_len` still reports the byte length for callers that
-        // slice the output themselves.
-        .prelude_lines = 0,
-    };
+    opts.bag.map = .{ .segs = try pp.segs.toOwnedSlice(arena) };
     return .{
         .text = try pp.out.toOwnedSlice(arena),
-        .prelude_len = prelude_len,
         .netlist_modules = netlist_modules,
         .directives = directives,
     };
@@ -793,8 +779,7 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         // §2.8.1 escaped identifiers are opaque too (they may contain '`').
         if (c == '\\') {
             const start = i;
-            i += 1;
-            while (i < text.len and !isSpace(text[i])) i += 1;
+            i = escapedEnd(text, i + 1);
             if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[start..i]);
             continue;
         }
@@ -836,9 +821,8 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     // directive is spelled with a backslash, so this can only be a macro use
     // and goes straight to `expand`.
     if (j < text.len and text[j] == '\\') {
-        j += 1;
-        const body = j;
-        while (j < text.len and !isSpace(text[j]) and text[j] >= 33 and text[j] <= 126) j += 1;
+        const body = j + 1;
+        j = escapedEnd(text, body);
         if (j == body) {
             if (!pp.emitting()) return at + 1;
             return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
@@ -1030,8 +1014,7 @@ pub const Rest = struct {
         r.skipSpace();
         if (r.i >= r.s.len or r.s[r.i] != '\\') return null;
         const start = r.i + 1;
-        var k = start;
-        while (k < r.s.len and !isSpace(r.s[k]) and r.s[k] >= 33 and r.s[k] <= 126) k += 1;
+        const k = escapedEnd(r.s, start);
         if (k == start) return null;
         r.i = k;
         return r.s[start..k];
@@ -1072,12 +1055,11 @@ pub fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
 }
 
 pub const isSpace = @import("lexer.zig").isSpace;
+pub const isIdentChar = @import("lexer.zig").isIdentChar;
+pub const escapedEnd = @import("lexer.zig").escapedEnd;
 pub fn isIdentStart(c: u8) bool {
     // ponytail: stdlib ASCII classes; `_` and `$` are Verilog's extensions.
     return std.ascii.isAlphabetic(c) or c == '_' or c == '$';
-}
-pub fn isIdentChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
 }
 
 // Annex D standard definitions: disciplines.vams and constants.vams, transcribed verbatim — pp/annex_d.zig

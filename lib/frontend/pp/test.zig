@@ -706,16 +706,15 @@ test "annex D prelude is deterministic and self-guarded" {
     const out_b = try process(arena, src, .{ .bag = &bag2 });
     const a = out_a.text;
     const b = out_b.text;
-    const n1 = out_a.prelude_len;
-    const n2 = out_b.prelude_len;
     try testing.expectEqualStrings(a, b); // determinism == cache identity
-    try testing.expectEqual(n1, n2);
 
     // annex D.1 reached the output exactly once, annex D.2 defined its macros.
     try testing.expectEqual(
         @as(usize, 1),
         std.mem.count(u8, a, "discipline electrical;"),
     );
+    // The replayed prelude is the snapshot's text, byte for byte.
+    const n1 = (try pp_prelude.preludeSnapshot()).text.len;
     try testing.expect(std.mem.indexOf(u8, a[0..n1], "nature Voltage;") != null);
     // The re-`include collapses to just the newlines it consumed (line numbers
     // inside an included file are preserved even when its guard empties it).
@@ -966,7 +965,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
         try testing.expectEqual(lp.pos, sp.pos);
         try testing.expectEqual(lp.gen_construct, sp.gen_construct);
         try testing.expectEqual(lp.failed, sp.failed);
-        try testing.expectEqual(@as(usize, 0), lbag.list.items.len + sbag.list.items.len);
+        try testing.expectEqual(@as(usize, 0), lbag.count() + sbag.count());
     }
 }
 

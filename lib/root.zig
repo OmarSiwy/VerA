@@ -556,7 +556,7 @@ test "diagnostics outlive the compilation arena" {
     // The arena is gone by now; reading the messages must still be valid.
     try std.testing.expect(!bag.isEmpty());
     try std.testing.expect(bag.failed());
-    for (bag.messages()) |mi| try std.testing.expect(diag.info(bag.get(mi).code).title.len != 0);
+    for (0..bag.count()) |i| try std.testing.expect(diag.info(bag.at(i).code).title.len != 0);
 
     // And so must rendering, which reads the FILE TEXT the bag detached.
     var aw: std.Io.Writer.Allocating = .init(gpa);
