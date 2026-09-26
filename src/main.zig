@@ -28,6 +28,9 @@
 //! a testbench exists to print, so dropping its prints is a contradiction.
 
 const std = @import("std");
+/// `-Dlanguage=ams`. False is an IEEE 1364-2005 tool: every path past the
+/// digital one is comptime-dead, so the analog backend is never compiled in.
+const ams = @import("build_options").ams;
 const vera = @import("vera");
 const digital = @import("sim").digital;
 const diag = vera.diag;
@@ -65,9 +68,9 @@ const usage_text =
     \\  --no-std-defs           do not prepend the annex D prelude
     \\  --std=SPEC              source language, a `begin_keywords specifier:
     \\                          1364-1995|1364-2001|1364-2005|VAMS-2.3|VAMS-2023
-    \\                          (default). A 1364 language frees every AMS
-    \\                          keyword as an identifier and refuses AMS
-    \\                          constructs (E0242)
+    \\                          (default; 1364-2005 under -Dlanguage=verilog).
+    \\                          A 1364 language frees every AMS keyword as an
+    \\                          identifier and refuses AMS constructs (E0242)
     \\  --diagnostics=text|json how to report (default: text)
     \\  --color=auto|always|never
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
@@ -104,7 +107,7 @@ pub fn main(init: std.process.Init) !u8 {
     var color: enum { auto, always, never } = .auto;
     var unknown_bound: ?f64 = null;
     var std_defs = true;
-    var language: vera.KeywordSet = .vams_2023;
+    var language: vera.KeywordSet = if (ams) .vams_2023 else .v1364_2005;
     var out_path: ?[]const u8 = null;
     var expect_module: ?[]const u8 = null;
     var check = false;
@@ -320,6 +323,11 @@ pub fn main(init: std.process.Init) !u8 {
         };
         try report(&digital_bag, err, json, use_color);
         return 0;
+    }
+
+    if (!ams) {
+        try err.print("error: {s}: this vera is built with -Dlanguage=verilog; it runs .v sources only\n", .{in_path});
+        return 2;
     }
 
     // E.1.1's antecedent, made true from the command line: "if a simulator which
