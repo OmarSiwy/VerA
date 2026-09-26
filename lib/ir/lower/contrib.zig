@@ -343,19 +343,25 @@ pub fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
 /// contains a probe, so `bad + 0.0*V(p)` folds to nothing as a unit; the scan
 /// folds every subtree it can and accuses the first one that is not finite.
 pub fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void {
+    self.finite_scan.clearRetainingCapacity();
     var bad: ?f64 = null;
-    _ = scanFinite(self, v, 0, &bad);
+    _ = try scanFinite(self, v, &bad);
     const x = bad orelse return;
     try self.err(self.file.exprs.mainTok(lhs), .E0424, "{s}", .{
         if (std.math.isNan(x)) "contribution of a NaN" else "contribution of an infinite value",
     });
 }
 
+/// One visited value: its fold, and the first non-finite fold met in its
+/// subtree, in the scan's order.
+pub const FiniteScan = struct { r: ?Const, bad: ?f64 };
+
 /// Fold `v0` where it is constant, recording the first non-finite result in
 /// `bad`. Returns null for anything not constant — a probe, a parameter (the
 /// host overrides it, so its declared default proves nothing), a call — but
 /// keeps walking into it, because the offending constant is normally one
-/// operand of a sum that is not constant.
+/// operand of a sum that is not constant. Visits each value once per
+/// `self.finite_scan` clear.
 ///
 /// Not `analysis.foldConst`: that wants a built `Analysis`, which does not
 /// exist until lowering has finished, and this rule has to be reported on the
@@ -365,22 +371,28 @@ pub fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!
 /// but §7.3.2.1's examples are IEEE division and every operator added here
 /// widens the surface for a false accusation. Add the transcendentals the day a
 /// model writes one.
-pub fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?Const {
-    if (depth > 32) return null;
+pub fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
     const v = self.mir.resolveAlias(v0);
+    if (self.finite_scan.get(v)) |s| {
+        if (bad.* == null) bad.* = s.bad;
+        return s.r;
+    }
+    // ponytail: recursion as deep as the DAG; an explicit stack if a model
+    // ever chains deep enough to exhaust it.
+    var sub: ?f64 = null;
     const r: ?Const = switch (self.mir.valueDef(v)) {
         .float_const => |x| .{ .real = x },
         .int_const => |x| .{ .int = x },
         .inst_result => |inst| switch (self.mir.instData(inst)) {
             .unary => |u| blk: {
-                const a = scanFinite(self, u.operand, depth + 1, bad) orelse break :blk null;
+                const a = try scanFinite(self, u.operand, &sub) orelse break :blk null;
                 break :blk if (accuses(u.op)) Mir.opcode.fold(u.op, &.{a}) else null;
             },
             // Both sides walked before either is tested: the scan is the
             // point, the fold is only how it gets there.
             .binary => |bn| blk: {
-                const a = scanFinite(self, bn.lhs, depth + 1, bad);
-                const b = scanFinite(self, bn.rhs, depth + 1, bad);
+                const a = try scanFinite(self, bn.lhs, &sub);
+                const b = try scanFinite(self, bn.rhs, &sub);
                 if (!accuses(bn.op)) break :blk null;
                 break :blk Mir.opcode.fold(bn.op, &.{ a orelse break :blk null, b orelse break :blk null });
             },
@@ -390,8 +402,10 @@ pub fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?Co
     };
     if (r) |c| {
         const x = c.asReal();
-        if (!std.math.isFinite(x) and bad.* == null) bad.* = x;
+        if (!std.math.isFinite(x) and sub == null) sub = x;
     }
+    try self.finite_scan.put(self.arena, v, .{ .r = r, .bad = sub });
+    if (bad.* == null) bad.* = sub;
     return r;
 }
 

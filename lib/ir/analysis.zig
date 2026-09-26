@@ -157,6 +157,9 @@ deps_folded: bool = false,
 /// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
 /// Its `vty` is the ELEMENT type. Every version of one array is one storage.
 arr_of: []u32 = &.{},
+/// `foldConst`'s answer per Value: `[0]` sees a parameter as the host sets
+/// it, `[1]` looks through it to its declared default.
+folds: [2][]?Const = .{ &.{}, &.{} },
 
 /// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
 /// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
@@ -168,6 +171,7 @@ pub fn build(
     var self = try buildStructure(arena, mir, lowered);
     try self.buildValueTypes();
     try self.buildDeps();
+    try self.buildFolds();
     return self;
 }
 
@@ -874,43 +878,59 @@ pub const Folded = struct { f: f64 };
 /// §4.2 constant expression folding over MIR, used for parameter defaults
 /// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
 /// arguments. Anything touching an unknown or a call is not constant.
-///
-/// The operators are the one constant kernel's, applied per instruction by
-/// `opcode.fold` (the table's `fold` column): this walk only decides which
-/// values are leaves. `Folded` is the f64 the emitter renders.
-pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: bool) ?Folded {
-    const c = self.foldValue(v0, depth, resolve_params) orelse return null;
+/// `resolve_params` looks through a parameter to its declared default, which
+/// only a Model DEFAULT may do. O(1): a load from `folds`.
+pub fn foldConst(self: *const Analysis, v: Mir.Value, resolve_params: bool) ?Folded {
+    const c = self.folds[@intFromBool(resolve_params)][@intFromEnum(v)] orelse return null;
     return .{ .f = c.asReal() };
 }
 
-fn foldValue(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: bool) ?Const {
-    if (depth > 32) return null;
-    const v = self.rv(v0);
-    switch (self.mir.valueDef(v)) {
+fn buildFolds(self: *Analysis) Error!void {
+    for (&self.folds, [_]bool{ false, true }) |*col, resolve_params| {
+        col.* = try self.arena.alloc(?Const, self.nv);
+        @memset(col.*, null);
+        // An answer only ever goes from null to a constant, so this
+        // terminates; operands precede their users except through an alias
+        // or a parameter default defined later, which cost another pass.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (col.*, 0..) |*c, v| {
+                if (c.* != null) continue;
+                c.* = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), col.*, resolve_params) orelse continue;
+                changed = true;
+            }
+        }
+    }
+}
+
+/// `v`'s fold GIVEN the current answers for its operands. The operators are
+/// the one constant kernel's (`opcode.fold`); this only decides which values
+/// are leaves.
+fn foldStep(self: *const Analysis, v: Mir.Value, col: []const ?Const, resolve_params: bool) ?Const {
+    const at = struct {
+        fn f(c: []const ?Const, x: Mir.Value) ?Const {
+            return c[@intFromEnum(x)];
+        }
+    }.f;
+    switch (self.mir.valueDef(self.rv(v))) {
         .float_const => |x| return .{ .real = x },
         .int_const => |x| return .{ .int = x },
         // Only a Model DEFAULT may look through a parameter: everywhere
         // else the value is whatever the host overrode it with.
-        .param_ref => |p| return if (resolve_params)
-            self.foldValue(self.lowered.params.items[p].default, depth + 1, true)
-        else
-            null,
+        .param_ref => |p| return if (resolve_params) at(col, self.lowered.params.items[p].default) else null,
         .inst_result => |inst| switch (self.mir.instData(inst)) {
-            .unary => |u| {
-                const a = self.foldValue(u.operand, depth + 1, resolve_params) orelse return null;
-                return Mir.opcode.fold(u.op, &.{a});
-            },
-            .binary => |bn| {
-                const a = self.foldValue(bn.lhs, depth + 1, resolve_params) orelse return null;
-                const b2 = self.foldValue(bn.rhs, depth + 1, resolve_params) orelse return null;
-                return Mir.opcode.fold(bn.op, &.{ a, b2 });
-            },
+            .unary => |u| return Mir.opcode.fold(u.op, &.{at(col, u.operand) orelse return null}),
+            .binary => |bn| return Mir.opcode.fold(bn.op, &.{
+                at(col, bn.lhs) orelse return null,
+                at(col, bn.rhs) orelse return null,
+            }),
             // §4.2.12 `?:`. Lazy, as the kernel's `fold` is: only the taken
             // arm has to be foldable, so `w > 0 ? 1/w : 0` folds for w = 0
             // instead of declining on a division it never performs.
             .ternary => |d| {
-                const c = self.foldValue(d.cond, depth + 1, resolve_params) orelse return null;
-                return self.foldValue(if (c.isTrue()) d.then_val else d.else_val, depth + 1, resolve_params);
+                const c = at(col, d.cond) orelse return null;
+                return at(col, if (c.isTrue()) d.then_val else d.else_val);
             },
             // §9.15 a host-published `$simparam` under the SAME rule as
             // `.param_ref` above: only a Model DEFAULT may look through it,

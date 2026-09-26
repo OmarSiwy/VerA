@@ -745,7 +745,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         var guard: ?[]const u8 = null;
         if (enableArgIdx(.timer)) |ei| {
             if (ei < args.len) {
-                if (self.an.foldConst(args[ei], 0, false)) |c| {
+                if (self.an.foldConst(args[ei], false)) |c| {
                     if (c.f == 0.0) continue;
                 } else if (try gen_call.f64Const(self, args[ei], 0, false)) |e| {
                     guard = e;

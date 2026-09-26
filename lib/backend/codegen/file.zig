@@ -513,7 +513,7 @@ pub fn emitModel(self: *Gen) Error!void {
     // NaN otherwise, so a host that skips `derive` does not get a plausible 0.
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
-        const d = if (self.an.foldConst(p.flag, 0, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
+        const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
         try self.w("    {s}: f64 = {s}, // §5.6.5 retention flag — `derive` writes it\n", .{ try gen_dispatch.guardField(self, @intCast(k)), d });
     }
     if (self.lowered.params.items.len == 0 and !self.lowered.uses.contains(.host_simparam)) {
@@ -573,13 +573,13 @@ pub fn emitDerive(self: *Gen) Error!void {
         if (ty == .str) continue;
         // `resolve_params = false` ⇒ this folds only if the default is
         // self-contained, which is exactly "not derived from a parameter".
-        if (self.an.foldConst(p.default, 0, false) != null and !p.is_local) continue;
+        if (self.an.foldConst(p.default, false) != null and !p.is_local) continue;
         // Render in the parameter's numeric domain. A known initializer
         // cannot stand in for a dependency that changes after a host write.
         const e = (if (ty == .int) try gen_call.i64Const(self, p.default, 0) else try gen_call.f64Const(self, p.default, 0, false)) orelse {
             // Defaults with no compile-time value retain W1050's explicit
             // host-supplied-value contract (for example $simparam("gmin")).
-            if (!p.is_local and p.folded == null and self.an.foldConst(p.default, 0, true) == null) continue;
+            if (!p.is_local and p.folded == null and self.an.foldConst(p.default, true) == null) continue;
             if (self.diags) |bag| try bag.add(.codegen, .E1004, self.lowered.tokenSpan(p.tok), "host derivation of `{s}` uses an unsupported expression; its declared value cannot be frozen after parameter overrides", .{p.name});
             return error.UnsupportedParameterDefault;
         };
@@ -633,7 +633,7 @@ pub fn emitShapeCheck(self: *Gen) Error!void {
         if (ty == .str) continue; // a string shapes nothing
         // `derive` rewrites a localparam from its default; one that reads no
         // parameter is that constant every time and cannot disagree.
-        if (p.is_local and self.an.foldConst(p.default, 0, false) != null) continue;
+        if (p.is_local and self.an.foldConst(p.default, false) != null) continue;
         try self.w("    if (model.{s} != {s}) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) });
     }
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
@@ -694,7 +694,7 @@ fn deriveFlags(self: *Gen) Error!void {
 pub fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     const bag = self.diags orelse return;
     if (!bag.enabled(.W1050)) return;
-    if (p.folded != null or self.an.foldConst(p.default, 0, true) != null) return;
+    if (p.folded != null or self.an.foldConst(p.default, true) != null) return;
     if (try gen_call.f64Const(self, p.default, 0, false) != null) return;
     var d = bag.build(.codegen, .W1050, self.lowered.tokenSpan(p.tok));
     d.msg("`{s}`", .{p.name});
@@ -723,7 +723,7 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
         };
         return std.fmt.allocPrint(self.arena, "{d}", .{if (p.integer32 and k == .int) Lower.wrap32(value) else value});
     };
-    const c = self.an.foldConst(p.default, 0, true);
+    const c = self.an.foldConst(p.default, true);
     if (c == null) if (p.folded) |k| return switch (want) {
         .real => try fmtF64(self, k.asReal()),
         // From the i64 side rather than through the f64 carrier: `folded`
@@ -985,7 +985,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
             continue;
         }
-        const init = self.an.foldConst(self.an.rv(h.init), 0, true);
+        const init = self.an.foldConst(self.an.rv(h.init), true);
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
             try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
@@ -1009,7 +1009,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try emitHeldArrayField(self, h, try std.fmt.allocPrint(self.arena, "{s}__acc", .{self.names.held_names[i]}), "// stateCtl accepted copy");
                 continue;
             }
-            const init = self.an.foldConst(self.an.rv(h.init), 0, true);
+            const init = self.an.foldConst(self.an.rv(h.init), true);
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
                 try self.w("    {s}__acc: i64 = {d}, // stateCtl accepted copy\n", .{
@@ -1050,13 +1050,13 @@ fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: [
     const ty: []const u8 = if (m.ty == .integer) "i64" else "f64";
     var all_zero = true;
     for (h.inits) |iv| {
-        const c = self.an.foldConst(self.an.rv(iv), 0, true) orelse continue;
+        const c = self.an.foldConst(self.an.rv(iv), true) orelse continue;
         if (c.f != 0.0) all_zero = false;
     }
     if (all_zero) return self.w("    {s}: [{d}]{s} = @splat(0), {s}\n", .{ name, m.len, ty, comment });
     try self.w("    {s}: [{d}]{s} = .{{", .{ name, m.len, ty });
     for (0..m.len) |k| {
-        const c = if (k < h.inits.len) self.an.foldConst(self.an.rv(h.inits[k]), 0, true) else null;
+        const c = if (k < h.inits.len) self.an.foldConst(self.an.rv(h.inits[k]), true) else null;
         const v: f64 = if (c) |x| x.f else 0.0;
         if (k != 0) try self.w(", ", .{});
         if (m.ty == .integer) try self.w("{d}", .{std.math.lossyCast(i64, @round(v))}) else try self.w("{s}", .{try fmtF64(self, v)});

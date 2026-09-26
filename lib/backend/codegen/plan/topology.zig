@@ -303,7 +303,7 @@ pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
     if (depth > 16) return false;
     const v = self.an.rv(v0);
     if (v == .f_zero) return true;
-    if (self.an.foldConst(v, 0, false)) |k| return k.f == 0.0;
+    if (self.an.foldConst(v, false)) |k| return k.f == 0.0;
     const def = self.mir.valueDef(v);
     if (def != .inst_result) return false;
     const op = self.mir.instRow(def.inst_result).op;

@@ -157,7 +157,7 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     // condition `emitDerive` selects assignments on.
     for (lowered.params.items, 0..) |p, i| {
         if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
-        if (an.foldConst(p.default, 0, false) == null) self.p_given[i] = true;
+        if (an.foldConst(p.default, false) == null) self.p_given[i] = true;
     }
     // §9.19 $param_given(p): the flag lives in Model, but only for the
     // parameters actually asked about.
