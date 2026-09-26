@@ -132,6 +132,14 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 return try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round({s}))", .{f});
             }
             if (row.op == .select or row.op == .phi) return hostConditionalExpr(self, inst, depth, .int);
+            // §9.12.1 `$clog2` is a constant system function, so a §6.3.4
+            // dependent default may call it over an overridable parameter.
+            if (row.op == .call) {
+                const d = self.mir.instData(inst).call;
+                if (d.callee != .@"$clog2" or d.args.len != 1) return null;
+                const a = try i64Const(self, d.args[0], depth + 1) orelse return null;
+                return try std.fmt.allocPrint(self.arena, "zClog2({s})", .{a});
+            }
             if (row.op == .feq or row.op == .fne or row.op == .flt or row.op == .fle or row.op == .fgt or row.op == .fge) {
                 const a = try f64Const(self, av, depth + 1, false) orelse return null;
                 const rhs = try f64Const(self, bv, depth + 1, false) orelse return null;
