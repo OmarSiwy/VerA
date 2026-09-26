@@ -33,7 +33,7 @@
 //! Physics is written generic over an opaque scalar S:
 //!
 //!   pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) [n_u]S;
-//!   pub fn q   (comptime S: type, x, m, i, t) [n_u]S;   // optional: charges
+//!   pub fn q   (comptime S: type, x, m, i, t) [n_q]S;   // optional: one charge per q site
 //!
 //! The engine instantiates S — a plain-f64 value form for residuals, a
 //! derivative-carrying dual for the Jacobian. The S primitive set devices may
