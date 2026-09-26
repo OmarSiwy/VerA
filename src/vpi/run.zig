@@ -28,6 +28,7 @@ const std = @import("std");
 const sim = @import("sim");
 const root = @import("root.zig");
 const callback = @import("callback.zig");
+const analog = @import("analog.zig");
 
 const digital = sim.digital;
 const Time = callback.Time;
@@ -190,6 +191,8 @@ pub const vpiStop: c_int = 66;
 pub const vpiFinish: c_int = 67;
 pub const vpiReset: c_int = 68;
 pub const vpiSetInteractiveScope: c_int = 69;
+/// VAMS §12.36 names it and gives no number; VerA allocates it (vpi_user.h).
+pub const vpiRejectTransientStep: c_int = 730;
 
 /// "shall return 1 (true) if successful; 0 (false) on a failure".
 ///
@@ -203,9 +206,12 @@ pub const vpiSetInteractiveScope: c_int = 69;
 ///
 /// ponytail: vpiStop, vpiReset and vpiSetInteractiveScope all need an
 /// interactive mode or a restartable run, and VerA's engine has neither, so
-/// they fail with vpiError rather than pretending. The VAMS analog controls
-/// (vpiRejectTransientStep, vpiTransientFailConverge) need an analog solver
-/// in this process, which there is not.
+/// they fail with vpiError rather than pretending.
+///
+/// vpiRejectTransientStep (one double: the current timestep) rejects the
+/// analog solution being attempted (`analog.rejectStep`), and fails when none
+/// is. vpiTransientFailConverge is not answered: the walk's solver has no
+/// iteration an application can extend.
 pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
     root.clearError();
     var ap = @cVaStart();
@@ -219,6 +225,12 @@ pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
             };
             r.scheduler.finish();
             return 1;
+        },
+        vpiRejectTransientStep => {
+            _ = @cVaArg(&ap, f64); // the current timestep, as vpi_get_analog_delta
+            if (analog.rejectStep()) return 1;
+            root.fail("NOSTEP", "vpi_sim_control(vpiRejectTransientStep): no analog solution after the first is awaiting acceptance", .{});
+            return 0;
         },
         vpiStop, vpiReset, vpiSetInteractiveScope => {
             root.fail("NOCONTROL", "vpi_sim_control: operation {d} needs an interactive mode VerA does not have", .{operation});

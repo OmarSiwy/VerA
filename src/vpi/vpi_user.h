@@ -780,6 +780,10 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
  * vpiStop, vpiReset and vpiSetInteractiveScope need an interactive mode VerA
  * does not have and are deliberately absent. */
 #define vpiFinish              67
+/* VAMS §12.36 vpiRejectTransientStep (one double: the current timestep)
+ * rejects the analog solution awaiting acceptance, as a non-zero
+ * acbConvergenceTest return does. The LRM gives it no number; this is VerA's. */
+#define vpiRejectTransientStep 730
 extern PLI_INT32  vpi_sim_control(PLI_INT32 operation, ...);
 
 /* §12.31 register, §12.34 remove, §12.6 read back. A removed callback's
