@@ -161,6 +161,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §5.6.1.2 the exported charge sites ---------------------------------
     if (d.asserts_qsite) try emitQSites(arena, &out, d);
 
+    // --- §9.17.3 the published cold start -----------------------------------
+    if (d.asserts_seed) try emitSeedCheck(arena, &out, d);
+
     // --- one straight-line block per operating point ------------------------
     //
     // The SWEEP is the outer loop and TIME the inner one, and the §4.5 operator
@@ -288,6 +291,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // `mdl`; `//! psweep` gives each point its own and the first point
             // is the one a fixture states, exactly as for the PSD above.
             if (n == 0) try emitAcStim(arena, &out, d, mdl);
+            // §9.17.3 the published clamp, with this point's `x` as `cur`.
+            if (n == 0) try emitLimitCheck(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
@@ -392,14 +397,67 @@ fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!vo
     );
 }
 
+/// `//! seed` — see `tb.Directives.seeds`. Once, after `setup`: `seed` is
+/// the host's pre-solve call.
+fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §9.17.3 the cold start a host writes into its limited image.
+        \\    {
+        \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(&model, &inst) else @splat(null);
+        \\        var want: [n_u]?f64 = @splat(null);
+        \\
+    );
+    for (d.seeds) |b| try print(out, arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+    try out.appendSlice(arena,
+        \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
+        \\        for (got, want, 0..) |g, w, i| {
+        \\            if (g == null and w == null) continue;
+        \\            const ok = g != null and w != null and near(g.?, w.?);
+        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @enumFromInt(i))), g, w, @intFromBool(ok) });
+        \\            if (g != null) std.debug.print("seed[{s}] in limit_writes ok={d}\n", .{
+        \\                @tagName(@as(D.U, @enumFromInt(i))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
+        \\            });
+        \\        }
+        \\    }
+        \\
+    );
+}
+
+/// `//! limit` — see `tb.Directives.limits`. At the first point, after the
+/// solve, so `x` is the bias the fixture states.
+fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+    for (d.limits, 0..) |c, k| {
+        try out.appendSlice(arena, "        {\n            var old = x;\n            _ = &old;\n");
+        for (c.old) |b| try print(out, arena, "            old[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+        try print(out, arena,
+            \\            if (comptime !@hasDecl(D, "limit")) {{
+            \\                std.debug.print("limit[{d}] got=none want=limit ok=0\n", .{{}});
+            \\            }} else {{
+            \\                const r = D.limit(&{s}, &inst, x, old);
+            \\
+        , .{ k, mdl });
+        for (c.want) |b| {
+            if (std.mem.eql(u8, b.name, "converged")) {
+                try print(out, arena, "                std.debug.print(\"limit[{d}].converged got={{d}} want={d} ok={{d}}\\n\", .{{ @intFromBool(r.converged), @intFromBool(r.converged == {}) }});\n", .{ k, @intFromBool(b.value != 0), b.value != 0 });
+            } else {
+                try print(out, arena, "                std.debug.print(\"limit[{d}].{f} got={{d}} want={{d}} ok={{d}}\\n\", .{{ r.x[ix(\"{f}\")], @as(f64, {f}), @intFromBool(near(r.x[ix(\"{f}\")], {f})) }});\n", .{
+                    k, std.zig.fmtString(b.name), std.zig.fmtString(b.name), fmtF64(b.value), std.zig.fmtString(b.name), fmtF64(b.value),
+                });
+            }
+        }
+        try out.appendSlice(arena, "            }\n        }\n");
+    }
+}
+
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
-    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite)
-        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim and //! qsite are not read by the mixed-signal runner\"); }\n");
+    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0)
+        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed and //! limit are not read by the mixed-signal runner\"); }\n");
 
     try print(&out, arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try print(&out, arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});

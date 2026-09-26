@@ -56,6 +56,33 @@ pub const Limits = struct {
         return null;
     }
 
+    /// The bulk rung `calls[i]` (a `pnjlimds` site, either leg) belongs to:
+    /// exactly two `pnjlimds` sites share its first-named node (the bulk), and
+    /// one `limvds` site spans their second-named nodes (the channel). Null
+    /// otherwise, or when any of the three nets is ground. Derived on demand,
+    /// for `ladderOf`'s reason.
+    pub fn rungOf(g: Limits, i: usize) ?Rung {
+        const me = g.calls[i];
+        var partner: usize = undefined;
+        var legs: usize = 0;
+        for (g.calls, 0..) |lc, j| {
+            if (lc.alg != .pnjlimds or lc.hi != me.hi) continue;
+            legs += 1;
+            if (j != i) partner = j;
+        }
+        if (legs != 2 or me.hi == none_u32) return null;
+        const other = g.calls[partner];
+        if (me.lo == none_u32 or other.lo == none_u32) return null;
+        for (g.calls, 0..) |lc, k| {
+            if (lc.alg != .limvds) continue;
+            if (lc.hi == me.lo and lc.lo == other.lo)
+                return .{ .bs = @intCast(partner), .bd = @intCast(i), .ds = @intCast(k) };
+            if (lc.hi == other.lo and lc.lo == me.lo)
+                return .{ .bs = @intCast(i), .bd = @intCast(partner), .ds = @intCast(k) };
+        }
+        return null;
+    }
+
     /// Is this `limvds` site the channel rung of some ladder? Then `emitLadder`
     /// owns it and the flat list must not clamp it a second time.
     pub fn limvdsClaimed(g: Limits, k: usize) bool {
@@ -98,6 +125,15 @@ pub const Alg = enum {
     fetlim,
     limvds,
     fetlimds,
+    /// OURS too, the bulk rung of the same loads (mos1load.c:376-384, same in
+    /// mos2/3/6/9 and b1ld/b2ld/b3ld): pnjlim ONE junction, vbs when the
+    /// LIMITED vds >= 0 and vbd otherwise, and derive the other through vds.
+    /// Two static pnjlim sites limit both junctions and move the channel the
+    /// ladder already set. Spell BOTH bulk legs `pnjlimds` next to a `limvds`
+    /// on the channel and they emit as one rung that writes only the bulk
+    /// (`emitRung`), port or not: a host that masks ports only loses the clamp,
+    /// which §9.17.3 permits.
+    pnjlimds,
     /// ngspice's per-model absolute step clamp (`B4SOIlimit`, hisim's
     /// `limit_dx`): |vnew − vold| ≤ arg. Unlike `pnjlim` it carries NO
     /// cold-start seed — B4SOI's MODEINITJCT starts every junction at
@@ -108,7 +144,7 @@ pub const Alg = enum {
     /// Numeric arguments that follow the algorithm name.
     pub fn arity(a: Alg) usize {
         return switch (a) {
-            .pnjlim => 2,
+            .pnjlim, .pnjlimds => 2,
             .fetlim, .fetlimds => 1,
             .limvds => 0,
             .steplim => 1,
@@ -209,7 +245,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 try at.decline("it is under an `if`, and the clamp list carries no control flow", "move the call out of the `if`; a polarity guard such as `if (type > 0)` is the trailing sign argument: `$limit(V(a,b), \"pnjlim\", vte, vcrit, type)`");
                 continue;
             }
-            if (!lim.writable(pair[0]) and !lim.writable(pair[1])) {
+            if (alg != .pnjlimds and !lim.writable(pair[0]) and !lim.writable(pair[1])) {
                 try at.decline("both nets are §6.5 ports, which the host masks — there is nothing private to correct", "limit across an internal node, such as the one behind a series resistance");
                 continue;
             }
@@ -249,22 +285,24 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
 
     // A `fetlimds` site is only honoured as a member of a COMPLETE mode
     // ladder — dangling, it would clamp one leg with no frame authority,
-    // which is the static-order bug the algorithm exists to fix. The mask is
-    // computed over the unfiltered list first: validity is symmetric (both
-    // legs check both `lo`s, a >2-way gate share fails every member), so
-    // dropping the invalid sites never invalidates a surviving one.
+    // which is the static-order bug the algorithm exists to fix — and a
+    // `pnjlimds` site as a member of a complete bulk rung, for the same
+    // reason. The mask is computed over the unfiltered list first: validity
+    // is symmetric (both legs check both `lo`s, a >2-way share fails every
+    // member), so dropping the invalid sites never invalidates a surviving one.
     var any_dangling = false;
-    for (lim.calls, 0..) |lc, i| {
-        if (lc.alg == .fetlimds and lim.ladderOf(i) == null) any_dangling = true;
+    for (lim.calls, 0..) |_, i| {
+        if (dangling(lim, i) != null) any_dangling = true;
     }
     if (any_dangling) {
         const keep = try g.arena.alloc(bool, lim.calls.len);
         for (lim.calls, 0..) |lc, i| {
-            keep[i] = lc.alg != .fetlimds or lim.ladderOf(i) != null;
-            if (!keep[i]) try declined.append(g.arena, .{
+            const why = dangling(lim, i);
+            keep[i] = why == null;
+            if (why) |w| try declined.append(g.arena, .{
                 .tok = lc.tok,
-                .msg = try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): no complete mode ladder", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg }),
-                .help = "write a second fetlimds site on the same gate node and a limvds site across the two channel nodes, both channel nodes internal",
+                .msg = try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg, w[0] }),
+                .help = w[1],
             });
         }
         var w_: usize = 0;
@@ -278,6 +316,26 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     lim.declined = declined.items;
     return lim;
 }
+
+/// Why `lim.calls[i]` cannot be honoured on its own, and the help line; null
+/// when it can.
+fn dangling(lim: Limits, i: usize) ?[2][]const u8 {
+    return switch (lim.calls[i].alg) {
+        .fetlimds => if (lim.ladderOf(i) == null) .{
+            "no complete mode ladder",
+            "write a second fetlimds site on the same gate node and a limvds site across the two channel nodes, both channel nodes internal",
+        } else null,
+        .pnjlimds => if (lim.rungOf(i) == null) .{
+            "no complete bulk rung",
+            "write a second pnjlimds site on the same bulk node and a limvds site across the two channel nodes",
+        } else null,
+        .pnjlim, .fetlim, .limvds, .steplim => null,
+    };
+}
+
+/// A resolved bulk rung: indices into `calls` of the vbs leg, the vbd leg,
+/// and the `limvds` site whose probe orients them, as `Ladder` does.
+pub const Rung = struct { bs: u32, bd: u32, ds: u32 };
 
 /// A resolved mode ladder: indices into `calls` of the vgs leg, the vgd
 /// leg, and the `limvds` site whose probe orients them — `limvds` reads

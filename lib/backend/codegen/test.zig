@@ -2960,6 +2960,43 @@ test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`"
     try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
 }
 
+test "codegen: §9.17.3 two pnjlimds legs + limvds emit ngspice's bulk rung" {
+    // mos1load.c:376-384: after the ladder, pnjlim ONE junction chosen by the
+    // LIMITED vds, from its raw value, and move only the bulk — a port here,
+    // written anyway (a host that masks ports only loses the clamp).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(d, g, s, b);
+        \\  inout d, g, s, b; electrical d, g, s, b, di, si;
+        \\  parameter real vt = 0.025, vcs = 0.6, vcd = 0.61, type = -1.0;
+        \\  real vds, vbs, vbd;
+        \\  analog begin
+        \\    vds = $limit(V(di, si), "limvds", type);
+        \\    vbs = $limit(V(b, si), "pnjlimds", vt, vcs, type);
+        \\    vbd = $limit(V(b, di), "pnjlimds", vt, vcd, type);
+        \\    I(d, di) <+ V(d, di) / 10.0;
+        \\    I(s, si) <+ V(s, si) / 10.0;
+        \\    I(di, si) <+ 1e-3 * vds;
+        \\    I(b, si) <+ 1e-14 * (limexp(vbs / vt) - 1.0);
+        \\    I(b, di) <+ 1e-14 * (limexp(vbd / vt) - 1.0);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "if (sgt * (x[@intFromEnum(U.di)] - x[@intFromEnum(U.si)]) >= 0.0) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "const vn = cur[@intFromEnum(U.b)] - cur[@intFromEnum(U.si)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.b)] = x[@intFromEnum(U.si)] + vl;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.b)] = x[@intFromEnum(U.di)] + vl;") != null);
+    // Neither channel node takes a junction's correction: the one write to
+    // si is the flat limvds clamp's own.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, s, "x[@intFromEnum(U.si)] -= vl - vn;"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, s, "x[@intFromEnum(U.di)] -= vl - vn;"));
+    // U = d, g, s, b, di, si: the rung writes b (bit 3), limvds si (bit 5).
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_writes: u64 = 0x28;") != null);
+    for (0..h.bag.count()) |i| try std.testing.expect(h.bag.at(i).code != .W0853);
+}
+
 /// Does the bag carry a W0853 whose message contains `why`?
 fn limitDeclined(h: *Harness, why: []const u8) bool {
     for (0..h.bag.count()) |i| {

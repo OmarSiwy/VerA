@@ -41,6 +41,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var noise: std.ArrayList(NoiseWant) = .empty;
     var qsites: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
+    var seeds: std.ArrayList(Binding) = .empty;
+    var limits: std.ArrayList(tb.LimitCase) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -130,6 +132,18 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             if (rest.len == 0) return error.BadSyntax;
             if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
             d.asserts_qsite = true;
+        } else if (std.mem.eql(u8, kw, "seed")) {
+            if (rest.len == 0) return error.BadSyntax;
+            if (!std.mem.eql(u8, rest, "none")) try parseBindings(arena, rest, &seeds);
+            d.asserts_seed = true;
+        } else if (std.mem.eql(u8, kw, "limit")) {
+            const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
+            var old: std.ArrayList(Binding) = .empty;
+            var want: std.ArrayList(Binding) = .empty;
+            try parseBindings(arena, rest[0..at], &old);
+            try parseBindings(arena, rest[at + 2 ..], &want);
+            if (want.items.len == 0) return error.BadSyntax;
+            try limits.append(arena, .{ .old = old.items, .want = want.items });
         } else if (std.mem.eql(u8, kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
@@ -173,6 +187,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.noise = noise.items;
     d.qsites = qsites.items;
     d.acstim = acstim.items;
+    d.seeds = seeds.items;
+    d.limits = limits.items;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
