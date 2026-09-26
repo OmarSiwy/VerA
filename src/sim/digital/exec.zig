@@ -948,11 +948,11 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var bit: Int.Bit = .z;
-        if (tables) {
+        if (tables) |table| {
             // Each driver collapses on its own first, so that a strength
             // that suppresses a value (`highz0` holding 0) drops out of the
             // fold entirely instead of voting as a 0.
-            for (n.drivers) |d| bit = wired(n.kind, bit, contribution(self.drivers[d], at).collapse());
+            for (n.drivers) |d| bit = wired(table, bit, contribution(self.drivers[d], at).collapse());
             if (bit == .z) bit = undriven(n.kind);
         } else {
             var acc: Signal = .{};
@@ -969,7 +969,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
             n.signal[at] = acc;
             bit = acc.collapse();
         }
-        if (tables) n.signal[at] = .of(bit, .strong, .strong);
+        if (tables != null) n.signal[at] = .of(bit, .strong, .strong);
         setBit(n.resolved, at, bit);
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
