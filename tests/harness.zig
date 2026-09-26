@@ -169,6 +169,8 @@ pub const Config = struct {
     /// it went across as the tag name and came back through `stringToEnum`
     /// with an `.?` on the end. Three moving parts for a default nobody moved.
     fixture_opt: std.builtin.OptimizeMode = .Debug,
+    /// `--fixture-backend=llvm|native`; null is `Backend.auto(fixture_opt, <host>)`.
+    fixture_backend: ?vera.orchestrator.Backend = null,
 
     pub fn init() Config {
         return .{ .jobs = std.Thread.getCpuCount() catch 1 };
@@ -186,6 +188,12 @@ pub fn takeArg(cfg: *Config, a: []const u8) bool {
         const name = a["--fixture-opt=".len..];
         cfg.fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
             std.debug.print("suite: not an optimize mode: {s}\n", .{name});
+            std.process.exit(2);
+        };
+    } else if (std.mem.startsWith(u8, a, "--fixture-backend=")) {
+        const name = a["--fixture-backend=".len..];
+        cfg.fixture_backend = if (std.mem.eql(u8, name, "llvm")) .llvm else if (std.mem.eql(u8, name, "native")) .self_hosted else {
+            std.debug.print("suite: not llvm|native: {s}\n", .{name});
             std.process.exit(2);
         };
     } else if (numeric(a, "-j") orelse numeric(a, "--jobs=")) |n| cfg.jobs = @max(n, 1) //
