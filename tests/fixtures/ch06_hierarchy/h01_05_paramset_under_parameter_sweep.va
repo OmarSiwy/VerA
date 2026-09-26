@@ -4,9 +4,8 @@
 // §8.2: "It is important to note that for parametric sweep type analyses like dc
 // sweep, the tool SHALL RE-EVALUATE the Elaboration and Pre-simulation steps as
 // outlined in Figure 8-1 FOR EACH SWEEP POINT to ensure that all parameter value
-// changes are captured." §6.9.2 puts paramset selection inside that elaboration:
-// "the paramset for each instance is selected after generate statements have
-// been evaluated". §6.4.1 makes the module's value a function of the paramset's
+// changes are captured." Paramset selection is part of that elaboration. §6.4.1
+// makes the module's value a function of the paramset's
 // parameter, and §6.3.4 makes the instance's override a function of the
 // enclosing module's parameter.
 //
@@ -33,7 +32,6 @@
 // plain module.
 //
 //! lrm 8.2
-//! lrm 6.9.2
 //! lrm 6.4.1
 //! psweep k = 1.0, 3.0
 //! analysis dc
