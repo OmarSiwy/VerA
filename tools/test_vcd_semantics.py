@@ -6,7 +6,7 @@ import unittest
 from vcd_semantics import VcdError, compare_artifacts, parse_vcd
 
 ROOT = Path(__file__).resolve().parents[1]
-GOLDENS = ROOT / "tests/fixtures/ch09_system_tasks"
+GOLDENS = ROOT / "tests/fixtures/ieee1364/18_vcd"
 
 
 def header(declarations, metadata=""):

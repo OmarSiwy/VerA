@@ -20,9 +20,10 @@ fi
 PATH=$(printf '%s/bin:' $bins)$PATH
 
 designs=()
-for f in audit_expr_signed_boundaries audit_function_return_variable audit_ieee_math_clog2_unsigned \
-  audit_type_multidimensional_array d04_09_task_argument_passing d09_01_display_radix; do
-  designs+=("tests/fixtures/digital/$f.v")
+for f in 05_expressions/audit_expr_signed_boundaries 10_tasks_functions/audit_function_return_variable \
+  17_system_tasks/audit_ieee_math_clog2_unsigned 04_data_types/audit_type_multidimensional_array \
+  10_tasks_functions/d04_09_task_argument_passing 17_system_tasks/d09_01_display_radix; do
+  designs+=("tests/fixtures/ieee1364/$f.v")
 done
 for nc in 64:1000 1024:10000; do
   f=$W/lfsr_chain_${nc/:/x}.v

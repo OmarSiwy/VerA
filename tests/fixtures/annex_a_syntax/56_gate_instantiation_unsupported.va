@@ -60,7 +60,7 @@
 // subclauses this file exercises and states no production of its own. What
 // this file proves for it is the GRAMMAR — the gate parses and the file runs its
 // analog assertion — not a behaviour: the gate reaches no device (W0252). The behaviour is
-// run under the discrete engine by tests/fixtures/digital/d08_gates_ninput.v.
+// run under the discrete engine by tests/fixtures/ieee1364/07_gate_switch_level/d08_gates_ninput.v.
 //
 //! lrm A.3
 //! lrm A.3.1

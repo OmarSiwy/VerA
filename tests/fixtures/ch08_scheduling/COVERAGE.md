@@ -25,7 +25,7 @@ are never reached by those rejection fixtures.
 Additional execution evidence: `zig build test-sim` passes 39 tests: fourteen
 scheduler tests, nine time-conversion tests and sixteen source-runner tests.
 `zig build test-digital` checks the actual CLI scheduling transcript in
-`tests/digital/scheduling.v`. Initial processes now exercise captured NBA values,
+`tests/ieee1364/11_scheduling/scheduling.v`. Initial processes now exercise captured NBA values,
 lexical NBA order, inactive-region resumption, integral delays and finish.
 General processes and analog synchronization remain open; see the
 [source scope](../../../docs/digital-source-execution.md) and
