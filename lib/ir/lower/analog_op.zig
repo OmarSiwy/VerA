@@ -1,7 +1,7 @@
 //! §4.5 analog operators and filters.
 //!
-//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s plus the
-//! operator state rows `lib/ir/op.zig` describes.
+//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s for
+//! the stateful operators `op.OpKind` names.
 //!
 //! LRM clauses this file's code cites: §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
 //!
@@ -241,7 +241,7 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// Every one is the LAST slot, but they are written out rather than computed
 /// from `args.len` because a call that has dropped a trailing argument would
 /// then read its `assert` or its `offset` as a tolerance.
-pub fn abstolSlot(name: []const u8) ?usize {
+fn abstolSlot(name: []const u8) ?usize {
     if (std.mem.eql(u8, name, "ddt")) return 1;
     if (std.mem.eql(u8, name, "idt")) return 3;
     if (std.mem.eql(u8, name, "idtmod")) return 4;
@@ -267,7 +267,7 @@ pub fn lowerAbstolArg(self: *Lower, e: Ast.ExprId) Oom!?f64 {
     return null;
 }
 
-pub fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
+fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
     const ex = &self.file.exprs;
     // §5.5.3's other spelling of the same value, `n1.potential.abstol`. Its last
     // sentence makes the two interchangeable in this slot: "The abstol attribute
@@ -365,7 +365,7 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
 /// Here and not in codegen because this is a claim about the ARGUMENT: by the
 /// time a filter is a `call` its arguments are positional values and the LRM's
 /// own names for them — the words the diagnostic has to say — are gone.
-pub fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId) Oom!void {
+fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId) Oom!void {
     const Bound = enum {
         positive,
         non_negative,
@@ -440,7 +440,7 @@ pub fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.Ex
 /// list stays self-describing. Returns false when `a` is an ordinary scalar.
 /// §4.5.11/§4.5.12: does this filter take its ZEROS as a root vector, so that
 /// the null form `f(x, , poles, …)` reads as the empty product 1?
-pub fn nullZerosOk(name: []const u8) bool {
+fn nullZerosOk(name: []const u8) bool {
     const forms = [_][]const u8{ "laplace_zp", "laplace_zd", "zi_zp", "zi_zd" };
     for (forms) |f| {
         if (std.mem.eql(u8, name, f)) return true;
@@ -632,7 +632,7 @@ pub fn coeffNeg(self: *Lower, v: Mir.Value) Oom!Mir.Value {
 /// `a · b`, with the identity folded away. The derivative of `c * n` is
 /// `c * 1`, and emitting that multiply would hide the constant from
 /// `psdConst`.
-pub fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
+fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
     if (a == .f_one) return b;
     if (b == .f_one) return a;
     return self.emit(.fmul, &.{ a, b });
@@ -882,7 +882,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
             if (!any) return .absent;
             // One value on every edge is available at the join already.
             if (same) return .{ .value = coeffs[0].value };
-            return .{ .value = try self.mir.emitPhi(self.arena, blockOf(self, inst), coeffs) };
+            return .{ .value = try self.mir.emitPhi(self.arena, self.mir.instBlock(inst), coeffs) };
         },
         // A call's arguments are reachable, so "does the generator occur in
         // here at all" is answerable even though the derivative is not.
@@ -902,15 +902,4 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
             try coeffAt(self, st.index, gen, reach, depth + 1, path) == .absent and
             try coeffAt(self, st.value, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
     }
-}
-
-/// The block `inst` was appended to. A linear scan — the coefficient phi is
-/// the one caller, and it runs once per differing-arm noise use.
-fn blockOf(self: *Lower, inst: Mir.Inst) Mir.Block {
-    for (0..self.mir.blockCount()) |b| {
-        const blk: Mir.Block = @enumFromInt(@as(u32, @intCast(b)));
-        var it = self.mir.blockInsts(blk);
-        while (it.next()) |i| if (i == inst) return blk;
-    }
-    unreachable; // every instruction is linked into exactly one block
 }

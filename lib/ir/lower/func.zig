@@ -109,7 +109,7 @@ pub fn scanCallSites(
     try self.file.stmtEdges(id, Walk{ .l = self, .fns = fns, .out = out });
 }
 
-pub fn scanCallSitesExpr(
+fn scanCallSitesExpr(
     self: *Lower,
     e: Ast.ExprId,
     comptime limits: bool,
@@ -452,7 +452,7 @@ fn arrayActualCells(self: *Lower, actual: Ast.ExprId) Oom!?usize {
 /// The pattern arm lowers each element as an EXPRESSION and not as an lvalue:
 /// copy-in has no reason to require storage, and `funcArrayOut` is where the
 /// clause's write-back needs one. `'{y, z}` satisfies both.
-pub fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!bool {
+fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(actual)) {
         .ident => {
@@ -504,7 +504,7 @@ pub fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) O
 /// ordinary lvalue, so a pattern element that is not writable collects the usual
 /// E0313/E0316 from `resolveLvalue` — which is the right verdict: §4.7.2.3 says
 /// "analog variables", and a literal there has nowhere to receive the result.
-pub fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!void {
+fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!void {
     const ex = &self.file.exprs;
     switch (ex.tag(actual)) {
         .ident => {

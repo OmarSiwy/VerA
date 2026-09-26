@@ -235,7 +235,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
 /// some ancestor actually specified a `.$mfactor(...)` — with none specified the
 /// read is left as-is and this check sees it. The upgrade is to run this scan in
 /// the clone, which needs the discipline table elaboration does not have.
-pub fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
+fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
     if (!scalesByMfactor(self, rhs)) return;
     var b = self.errWith(self.file.exprs.mainTok(lhs), .E0912);
     b.msg("this flow contribution multiplies by `$mfactor`", .{});
@@ -260,7 +260,7 @@ pub fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId)
 /// state. The known hole is `I <+ V/r * $mfactor + off`, which is a misuse this
 /// does not catch; the LRM gives no rule for the mixed case and `badres` is not
 /// it.
-pub fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
+fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
@@ -280,7 +280,7 @@ pub fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
 /// A read of §9.18's `$mfactor`, under either of its two spellings: the system
 /// function itself, or the §3.4.7 `aliasparam m = $mfactor;` name for it — the
 /// alias is a second name for one location, so it is the same read.
-pub fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
+fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
@@ -312,7 +312,7 @@ pub fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
 /// An absent τ is not a zero one: it means the sampler's own default, which is
 /// the simulator's business (§4.5.12 leaves it unstated) and is not the
 /// "specified as zero" the sentence conditions on.
-pub fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
+fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
     const ex = &self.file.exprs;
     if (ex.tag(rhs) != .filter_call) return;
     if (!std.mem.startsWith(u8, self.file.str(ex.strOf(rhs)), "zi_")) return;
@@ -342,7 +342,7 @@ pub fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
 /// SUBEXPRESSIONS, not the whole contribution. A branch value almost always
 /// contains a probe, so `bad + 0.0*V(p)` folds to nothing as a unit; the scan
 /// folds every subtree it can and accuses the first one that is not finite.
-pub fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void {
+fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void {
     self.finite_scan.clearRetainingCapacity();
     var bad: ?f64 = null;
     _ = try scanFinite(self, v, &bad);
@@ -371,7 +371,7 @@ pub const FiniteScan = struct { r: ?Const, bad: ?f64 };
 /// but §7.3.2.1's examples are IEEE division and every operator added here
 /// widens the surface for a false accusation. Add the transcendentals the day a
 /// model writes one.
-pub fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
+fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
     const v = self.mir.resolveAlias(v0);
     if (self.finite_scan.get(v)) |s| {
         if (bad.* == null) bad.* = s.bad;
@@ -675,7 +675,7 @@ fn find(root: []u32, x: u32) u32 {
 
 /// Is anything contributed to this node pair — directly (§5.6.1) or indirectly
 /// (§5.6.7)? That is exactly §1.3.1's test for "not a probe".
-pub fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
+fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
     for (self.out.contributions.items) |c| {
         if (samePair(c.hi, c.lo, hi, lo)) return true;
     }
@@ -685,11 +685,11 @@ pub fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
 /// §5.6.7.2 "the same pair of analog nets (or any of its parallel branches)" —
 /// unordered, since (a,b) and (b,a) are the same pair with opposite reference
 /// directions (§1.3.1.2).
-pub fn samePair(a_hi: u16, a_lo: u16, b_hi: u16, b_lo: u16) bool {
+fn samePair(a_hi: u16, a_lo: u16, b_hi: u16, b_lo: u16) bool {
     return (a_hi == b_hi and a_lo == b_lo) or (a_hi == b_lo and a_lo == b_hi);
 }
 
-pub fn indirectOn(self: *const Lower, hi: u16, lo: u16) bool {
+fn indirectOn(self: *const Lower, hi: u16, lo: u16) bool {
     for (self.out.contributions.items) |c| {
         if (c.kind == .indirect and samePair(c.hi, c.lo, hi, lo)) return true;
     }
@@ -699,7 +699,7 @@ pub fn indirectOn(self: *const Lower, hi: u16, lo: u16) bool {
 /// A.8.3 `indirect_expression`: a branch/port probe, or ddt/idt/idtmod of one.
 /// The optional tolerance/initial-condition arguments are ordinary expressions
 /// and are not restricted.
-pub fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
+fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     if (e == .none) return false;
     switch (ex.tag(e)) {
@@ -754,7 +754,7 @@ pub const Target = struct {
 /// expression cannot name a branch at all (a two-terminal access, a
 /// non-constant index), which is not an error here — `nodeOf` reads the same
 /// expression as a net reference and reports whatever is wrong with it.
-pub fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u8 {
+fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u8 {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .ident => self.file.str(ex.strOf(e)),
@@ -794,7 +794,7 @@ pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
     return self.port_branches.get(key);
 }
 
-pub fn canonical(access: Access, hi: u16, lo: u16, br: u32) Target {
+fn canonical(access: Access, hi: u16, lo: u16, br: u32) Target {
     return if (hi <= lo)
         .{ .access = access, .hi = hi, .lo = lo, .br = br }
     else
@@ -993,7 +993,7 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
 
 /// Append a fresh contribution + its accumulator pair. The two tables stay
 /// parallel; see the UNIT ORDERING note in proof.zig.
-pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
+fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
     try lower_hier_name.refuseRuntime(self, tok, t.hi, t.lo);
     const idx: u32 = @intCast(self.out.contributions.items.len);
     try self.out.contributions.append(self.arena, .{
@@ -1041,7 +1041,7 @@ pub fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// switch branch: codegen reads both ends' flags and selects the branch row's
 /// content at run time (retained potential → potential source, retained flow →
 /// flow source, neither → §5.6.1.3's open circuit).
-pub fn discardOpposite(self: *Lower, t: Target) Oom!void {
+fn discardOpposite(self: *Lower, t: Target) Oom!void {
     const other: Access = if (t.access == .potential) .flow else .potential;
     for (self.out.contributions.items, self.accum.items, 0..) |c, acc, ci| {
         if (c.kind != .direct or c.access != other or c.hi != t.hi or c.lo != t.lo) continue;
@@ -1086,13 +1086,13 @@ pub const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok
 /// which is what §5.6.1.2's charge formulation means. Anything else (`ddt`
 /// inside a call, two `ddt`s multiplied) is a diagnostic — never silently the
 /// wrong physics.
-pub fn splitContribution(self: *Lower, rhs: Ast.ExprId) Oom!Split {
+fn splitContribution(self: *Lower, rhs: Ast.ExprId) Oom!Split {
     var out: Split = .{ .resist = null, .react = null };
     try splitTerm(self, rhs, false, &out);
     return out;
 }
 
-pub fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!void {
+fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
@@ -1134,7 +1134,7 @@ pub fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!voi
     }
 }
 
-pub fn accumulate(self: *Lower, slot: *?Mir.Value, v: Mir.Value, negate: bool) Oom!void {
+fn accumulate(self: *Lower, slot: *?Mir.Value, v: Mir.Value, negate: bool) Oom!void {
     if (slot.*) |old| {
         slot.* = try self.emit(if (negate) .fsub else .fadd, &.{ old, v });
     } else {
@@ -1208,7 +1208,7 @@ pub fn lteValue(self: *Lower, a: Ast.LteAttr) Oom!bool {
 
 /// Does this subtree contain a `ddt` (§4.5.3)? Every child edge is searched
 /// (`ExprStore.children`), assignment-pattern elements included.
-pub fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
+fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) return true;
@@ -1248,7 +1248,7 @@ pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
 ///    the product-form residual with the dA term deleted from the Jacobian:
 ///    a quasi-Newton whose error gain grows with α = 1/dt, which is exactly
 ///    the mesa_oscillator/hfet_inverter/mos6_inverter timestep wedge.
-pub fn finishReactive(self: *Lower, t: ReactiveTerm) Oom!Mir.Value {
+fn finishReactive(self: *Lower, t: ReactiveTerm) Oom!Mir.Value {
     const c = t.coeff orelse return t.b; // plain ddt(B): q = B, exact
     // Constant/param coefficient: dA ≡ 0, the plain product IS the
     // capacitance form (and pq/pb with zero init would reproduce it).
@@ -1258,7 +1258,7 @@ pub fn finishReactive(self: *Lower, t: ReactiveTerm) Oom!Mir.Value {
     return try self.emit(.fadd, &.{ try self.emit(.path_acc, &.{d}), d });
 }
 
-pub fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oom!void {
+fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oom!void {
     t.coeff = if (t.coeff) |old|
         try self.emit(op, &.{ old, c })
     else if (op == .fdiv)
@@ -1271,7 +1271,7 @@ pub fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oo
 /// The charge/flux of a reactive term: strip exactly one `ddt` from a
 /// multiplicative spine (§5.6.1.2), collecting the spine's coefficients
 /// LIVE (no gradient suppression — `finishReactive` decides the form).
-pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
+fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
     const ex = &self.file.exprs;
     spine: switch (ex.tag(e)) {
         .filter_call => {
@@ -1394,7 +1394,7 @@ pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
 /// `flicker_noise(pwr, exp, name)`, `noise_table(input, name)`. The arity test
 /// is what keeps §4.6.4.3's one-argument `noise_table("file.tbl")` a FILENAME
 /// and not a label.
-pub fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
+fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
     const ex = &self.file.exprs;
     const args = ex.args(e);
     if (args.len < 2) return "";
@@ -1413,7 +1413,7 @@ pub fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
 /// analysis name is leading and selects the analysis. Sharing one reader would
 /// have read `ac_stim("ac", 2.0, 0.0)` as unnamed and `ac_stim("noise")` as a
 /// noise LABEL rather than as the analysis it names.
-pub fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
+fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
     const ex = &self.file.exprs;
     const args = ex.args(e);
     if (args.len == 0 or args[0] == .none or ex.tag(args[0]) != .str_literal) return "ac";

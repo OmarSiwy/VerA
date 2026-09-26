@@ -251,7 +251,7 @@ pub const SsaBuilder = struct {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);
         if (p >= self.place_cap or b >= self.block_stride) return absent;
-        return self.defs[p * self.block_stride + b];
+        return self.defs[@as(usize, p) * self.block_stride + b];
     }
 
     fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
@@ -284,7 +284,7 @@ pub const SsaBuilder = struct {
     /// still re-allocate per place. Exact growth on either axis is quadratic — it
     /// was measured on the block axis at 4.6 GB and 4× slower, on the foundry
     /// corpus `defs` names (not vendored here; see its CORPUS note).
-    fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!u32 {
+    fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);
 
@@ -293,7 +293,7 @@ pub const SsaBuilder = struct {
             const new_cap = @max(self.place_cap, 1);
             const grown = try mapZeroed(@as(usize, new_cap) * new_stride);
             // Unminted rows are zero already; copying them would fault in pages.
-            var row: u32 = 0;
+            var row: usize = 0;
             while (row < @min(self.place_cap, self.next_place)) : (row += 1) {
                 const src = self.defs[row * self.block_stride ..][0..self.block_stride];
                 @memcpy(grown[row * new_stride ..][0..self.block_stride], src);
@@ -314,7 +314,7 @@ pub const SsaBuilder = struct {
             self.defs = grown;
             self.place_cap = new_cap;
         }
-        return p * self.block_stride + b;
+        return @as(usize, p) * self.block_stride + b;
     }
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
@@ -461,7 +461,7 @@ pub const SsaBuilder = struct {
     /// `Mir.setAlias`, `setAlias` is monotonic (an alias is never cleared), and a
     /// popped phi that `hasAlias` is dropped. So each phi pushes its users at most
     /// once and total pushes are bounded by `user_pool.len`.
-    pub fn tryRemoveTrivialPhi(self: *SsaBuilder, phi: Mir.Value) Error!Mir.Value {
+    fn tryRemoveTrivialPhi(self: *SsaBuilder, phi: Mir.Value) Error!Mir.Value {
         // Stack discipline like `scratch`: this runs under re-entrant lowering.
         const top = self.phi_work.items.len;
         defer self.phi_work.shrinkRetainingCapacity(top);

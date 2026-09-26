@@ -449,9 +449,8 @@ pub const Prover = struct {
             .int_const => |c| @floatFromInt(c),
             .float_const => |c| c,
             .inst_result => |inst| blk: {
-                const row = self.mir.instRow(inst);
-                if (row.op != .if_cast) break :blk null;
-                const def = self.mir.valueDef(self.mir.resolveAlias(@enumFromInt(row.a)));
+                if (self.mir.instOp(inst) != .if_cast) break :blk null;
+                const def = self.mir.valueDef(self.mir.resolveAlias(self.mir.instData(inst).unary.operand));
                 break :blk if (def == .int_const) @as(f64, @floatFromInt(def.int_const)) else null;
             },
             .undef, .str_const, .param_ref, .block_param => null,
@@ -1391,6 +1390,17 @@ pub const Prover = struct {
 pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
+    // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
+    // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
+    // unit — the only kind `proof` rates — the emitter renders it as the literal 0
+    // §9.5.1 reserves, because the descriptor operation itself happens only in the
+    // display unit (`codegen.Gen.emitting_display`). Without this line a model
+    // that reads a file into its contribution compiled `.strict` on account of a
+    // call the emitter had already folded to a constant.
+    //
+    // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
+    // rather than a small one, and there is nothing useful to bound.
+    if (Mir.callee.isFileCall(c)) return .{ .iv = .top, .finite = true };
     return switch (c) {
         // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
         // not here: its range is its argument's (`Prover.callTransfer`).
@@ -1399,38 +1409,6 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
         .@"$mfactor", // multiplicity factor > 0
         => .{ .iv = positive, .finite = true },
         .@"$abstime", .@"$realtime" => .{ .iv = non_negative, .finite = true },
-        // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
-        // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
-        // unit — the only kind `proof` rates — the emitter renders it as the literal 0
-        // §9.5.1 reserves, because the descriptor operation itself happens only in the
-        // display unit (`codegen.Gen.emitting_display`). Without this line a model
-        // that reads a file into its contribution compiled `.strict` on account of a
-        // call the emitter had already folded to a constant.
-        //
-        // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
-        // rather than a small one, and there is nothing useful to bound.
-        // `Lower.isFileCall`'s set; the test below holds the two together.
-        .@"$fopen",
-        .@"$fclose",
-        .@"$fflush",
-        .@"$fdisplay",
-        .@"$fwrite",
-        .@"$fstrobe",
-        .@"$fmonitor",
-        .@"$fdebug",
-        .@"$fgets",
-        .@"$fscanf",
-        .@"$ftell",
-        .@"$fseek",
-        .@"$rewind",
-        .@"$ferror",
-        .@"$feof",
-        .@"$fgets$str",
-        .@"$ferror$str",
-        .@"$fscanf$int",
-        .@"$fscanf$real",
-        .@"$fscanf$str",
-        => .{ .iv = .top, .finite = true },
         // §9.13 reference algorithms can overflow or underflow (Erlang's product,
         // Student-t's divisor, and unbounded real scale parameters). A distribution
         // name alone proves no finite value; retain strict floating-point mode.
@@ -1438,42 +1416,31 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     };
 }
 
-test "callAbstract's §9.5 prong is exactly Lower.isFileCall" {
-    for (std.meta.tags(Mir.Callee)) |c| {
-        const env = switch (c) {
-            .@"$vt", .@"$temperature", .@"$mfactor", .@"$abstime", .@"$realtime" => true,
-            else => false, // else: the file prong is the question
-        };
-        if (env) continue;
-        try std.testing.expectEqual(Lower.isFileCall(@tagName(c)), callAbstract(c).finite);
-    }
-}
-
 /// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics.
-pub const opLabel = Mir.opcode.label;
+const opLabel = Mir.opcode.label;
 
 // --- endpoint arithmetic: NaN (inf-inf) folds to the wide side. A UNARY NaN
 // endpoint is never folded any more: it means "operand straddles the domain
 // edge" and the transfer answers ⊤ (see the monotone path) — the old fold to
 // +inf sat on the WRONG side for ln/sqrt/asin and produced narrow intervals.
 
-pub fn addLo(a: f64, b: f64) f64 {
+fn addLo(a: f64, b: f64) f64 {
     const r = a + b;
     return if (math.isNan(r)) -math.inf(f64) else r;
 }
 
-pub fn addHi(a: f64, b: f64) f64 {
+fn addHi(a: f64, b: f64) f64 {
     const r = a + b;
     return if (math.isNan(r)) math.inf(f64) else r;
 }
 
-pub fn mulOp(a: f64, b: f64) f64 {
+fn mulOp(a: f64, b: f64) f64 {
     return a * b;
 }
-pub fn divOp(a: f64, b: f64) f64 {
+fn divOp(a: f64, b: f64) f64 {
     return a / b;
 }
-pub fn powOp(a: f64, b: f64) f64 {
+fn powOp(a: f64, b: f64) f64 {
     return math.pow(f64, a, b);
 }
 
@@ -1488,7 +1455,7 @@ pub fn powOp(a: f64, b: f64) f64 {
 ///     integer y"), which corners at integer endpoints never see;
 ///   - negative exponent: pole at x = 0, and IEEE pow(+0,-odd) = +inf is the
 ///     WRONG side of the two-sided pole a base interval reaching 0 straddles.
-pub fn powIv(x: proof_lattice.Interval, y: proof_lattice.Interval) proof_lattice.Interval {
+fn powIv(x: proof_lattice.Interval, y: proof_lattice.Interval) proof_lattice.Interval {
     // x >= 0: pow = exp(y·ln x) is monotone in x for fixed y and in y for
     // fixed x, so box extrema sit at corners; IEEE fills the x = 0 edge
     // (pow(0,neg)=+inf, pow(0,0)=1) on the corners too. `combine`'s NaN guard
@@ -1544,7 +1511,7 @@ pub fn combine(x: proof_lattice.Interval, y: proof_lattice.Interval, f: *const f
     return .{ .lo = lo, .hi = hi };
 }
 
-pub fn absIv(a: proof_lattice.Interval) proof_lattice.Interval {
+fn absIv(a: proof_lattice.Interval) proof_lattice.Interval {
     if (a.ge(0)) return a;
     if (a.le(0)) return .{ .lo = -a.hi, .hi = -a.lo, .lo_open = a.hi_open, .hi_open = a.lo_open };
     return .{ .lo = 0, .hi = @max(@abs(a.lo), @abs(a.hi)) };

@@ -17,6 +17,7 @@ const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
+const dist = @import("../dist.zig");
 const assert = Lower.assert;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
@@ -127,7 +128,7 @@ fn hasD2aTerm(self: *Lower, e: Ast.ExprId) bool {
 }
 
 /// §5.10.1 or-lists, §5.10.2 initial_step/final_step, §5.10.3 cross/above/timer.
-pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
+fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     const ex = &self.file.exprs;
     // §7.3.4 / §7.3.6.2 a digital event term: the explicit D2A flag the host
     // raises for the solve at the tick the event occurred in (§8.5.3.6).
@@ -272,6 +273,9 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
 /// §5.12/ch9 analog system task. Display/file tasks are void calls codegen may
 /// drop; the deliberately-unsupported set is rejected by exact name.
 pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    const c: Mir.Callee = .fromName(name);
+    const family = Mir.callee.family(c);
+    const formats = Mir.callee.takesFormat(c);
     if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.err(tok, .E0806, "`{s}`", .{name});
         return;
@@ -293,7 +297,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // the file ones as "the same as their counterparts", so it covers both — and
     // `checkFormatPairing` picks the format as "the first argument that folds to a
     // string", which steps over the descriptor without being told about it.
-    if (isDisplayTask(name) or isFileOutTask(name)) try checkFormatPairing(self, tok, args);
+    if (formats) try checkFormatPairing(self, tok, args);
     // §9.5.3/§9.5.4.2: all three of these write through an argument, which is
     // not something a `call` result can do — see `lowerStringWrite`/`lowerScan`.
     if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat"))
@@ -308,7 +312,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (try lowerKernelCtl(self, tok, name, args)) return; // §9.17
     // §9.4.1 `$monitor` and its §9.5.2 file twin: registered HERE, reported at
     // the end of every accepted step from then on — see `armMonitor`.
-    const mon: ?Mir.Value = if (isMonitor(name)) try armMonitor(self, name) else null;
+    const mon: ?Mir.Value = if (c == .@"$monitor" or c == .@"$fmonitor") try armMonitor(self, name) else null;
     if (mon != null and self.restrict == null) return queueDisplay(self, tok, name, args, mon);
     // §9.4.1 the display/severity/control family on the unconditional spine:
     // its call is minted at the end of the block, and an operand that reads a
@@ -317,7 +321,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // STATEMENT IS: a guarded call has to stay in its arm to be guarded, and a
     // restricted context owns the diagnostic (E0421 fires at the statement,
     // where `restrict` is still set).
-    if ((isDisplayTask(name) or isSimCtlTask(name)) and
+    if ((family == .display or family == .simctl) and
         self.cond_depth == 0 and self.restrict == null)
         return queueDisplay(self, tok, name, args, null);
     var vals: std.ArrayList(Mir.Value) = .empty;
@@ -334,13 +338,13 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         try live.append(self.arena, a);
         try tys.append(self.arena, tv.ty);
     }
-    if (isFileOutTask(name)) {
+    if (family == .file_out) {
         self.out.uses.insert(.file_tasks);
         // The §9.4.3 formatter renders into a scratch row before the write, so a
         // module with a §9.5.2 output task needs the string kernels too.
         self.out.uses.insert(.str_tasks);
     }
-    if (isDisplayTask(name) or isFileOutTask(name)) {
+    if (formats) {
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
         try prepareFormatArgs(self, live.items, tys.items, vals.items);
@@ -350,7 +354,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (mon) |k| try vals.insert(self.arena, 0, k);
     const v = try self.call(name, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
-    if (isDisplayTask(name) or isFileOutTask(name) or isSimCtlTask(name)) {
+    if (formats or family == .simctl) {
         // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
         // side-effect phase as the display tasks: both clauses tie the task to
         // the SOLVE ("during an accepted iteration"), which is exactly what the
@@ -413,7 +417,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 /// step whether or not the statement ran in it, so no at-statement value
 /// exists to capture — and it is on the unconditional spine even when the
 /// statement is guarded, which is why this path takes a guarded one too.
-pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
+fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
     const pre = try self.arena.alloc(?TypedValue, args.len);
     var any_deferred = false;
     for (args, pre) |a, *p| {
@@ -455,12 +459,6 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     });
 }
 
-/// §9.4.1 `$monitor` and §9.5.2's `$fmonitor`, the two members of the display
-/// family that report on a CHANGE rather than when executed.
-pub fn isMonitor(name: []const u8) bool {
-    return std.mem.eql(u8, name, "$monitor") or std.mem.eql(u8, name, "$fmonitor");
-}
-
 /// §9.4.1: "When a $monitor task is invoked with one or more arguments, the
 /// simulator SETS UP A MECHANISM whereby for each accepted step, if the variable
 /// or an expression in the argument list changes value compared with the last
@@ -480,7 +478,7 @@ pub fn isMonitor(name: []const u8) bool {
 /// The arm rides `display_cond_place` and NOT `displays`: it is part of the
 /// same source statement as the report, which already has its `displays` row,
 /// and W0850 is one warning per statement.
-pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
+fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
     if (std.mem.eql(u8, name, "$fmonitor")) {
         self.out.uses.insert(.file_tasks);
         self.out.uses.insert(.str_tasks);
@@ -497,7 +495,7 @@ pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
 /// resolve to solver unknowns and read the same value everywhere, so they do
 /// not force an operand to the end. Every child edge is searched
 /// (`ExprStore.children`), assignment-pattern elements included.
-pub fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
+fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     if (ex.tag(e) == .branch_access) {
@@ -542,15 +540,6 @@ pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
     }
 }
 
-/// §9.7.1 `$finish` and §9.7.2 `$stop` — the two IEEE 1364 simulation-control
-/// tasks the analog context inherits. NOT `isDisplayTask`: they print only
-/// their Table 9-25 diagnostics, take no §9.4.3 format, and what defines them
-/// is what they do to the RUN. The §9.7.3 severity family ($fatal included) is
-/// in `isDisplayTask`, because its whole content is a formatted message.
-pub fn isSimCtlTask(name: []const u8) bool {
-    return std.mem.eql(u8, name, "$finish") or std.mem.eql(u8, name, "$stop");
-}
-
 /// §9.5 Sequence one file-family call into the per-point I/O phase.
 ///
 /// Every §9.5 call has a side effect on a descriptor — an open, a position, a
@@ -561,7 +550,7 @@ pub fn isSimCtlTask(name: []const u8) bool {
 /// cannot run per Newton iteration.
 ///
 /// So a file call joins the chain whether or not its value is read. That is the
-/// difference between this and `isDisplayTask`'s append, whose calls are void by
+/// difference between this and a display task's append, whose calls are void by
 /// nature: `$fgets` returns a count `049_ftell.va` throws away, and the READ it
 /// performed is what the `$ftell` two lines later measures.
 ///
@@ -675,65 +664,6 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
     return n;
 }
 
-/// §9.5.2's five output tasks: `$display`/`$write`/`$strobe`/`$monitor`/`$debug`
-/// "with one additional argument, which is either a multichannel descriptor or a
-/// file descriptor", plus the two §9.5.1/§9.5.6 tasks that take a descriptor and
-/// return nothing. Every one of them is a STATEMENT, so its value is dead and it
-/// only survives into the emitted device by joining the display chain.
-pub fn isFileOutTask(name: []const u8) bool {
-    const tasks = [_][]const u8{
-        "$fdisplay", "$fwrite", "$fstrobe", "$fmonitor",
-        "$fdebug",   "$fclose", "$fflush",
-    };
-    for (tasks) |t| if (std.mem.eql(u8, name, t)) return true;
-    return false;
-}
-
-/// The §9.5 names that RETURN something: §9.5.1 `$fopen`, §9.5.4 `$fgets` and
-/// `$fscanf`, §9.5.5 `$ftell`/`$fseek`/`$rewind`, §9.5.7 `$ferror`, §9.5.8
-/// `$feof`. Every one is integer-valued (`sysFuncTy`), and every one has a SIDE
-/// EFFECT on the descriptor — so each joins the display chain too, whether or not
-/// anything reads its value: `049_ftell.va` drops the `$fgets` count on the floor
-/// and then asserts the position that read moved to.
-pub fn isFileFunc(name: []const u8) bool {
-    const fns = [_][]const u8{
-        "$fopen", "$fgets",  "$fscanf", "$ftell",
-        "$fseek", "$rewind", "$ferror", "$feof",
-    };
-    for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
-    return false;
-}
-
-/// Every §9.5 spelling that reaches the emitter: the two classifications above,
-/// plus the synthetic readers `lowerFileRead` splits out of the three calls that
-/// write through an argument. One predicate, because three consumers ask the same
-/// question — the emitter's dispatch, its live-operand rule, and `proof`.
-pub fn isFileCall(name: []const u8) bool {
-    if (isFileOutTask(name) or isFileFunc(name)) return true;
-    const synth = [_][]const u8{
-        "$fgets$str", "$ferror$str", "$fscanf$int", "$fscanf$real", "$fscanf$str",
-    };
-    for (synth) |s| if (std.mem.eql(u8, name, s)) return true;
-    return false;
-}
-
-/// §9.4.1 display family + §9.7.3 severity family: the tasks whose whole content
-/// is text on the simulator's output. The §9.5 file family is NOT here — it is
-/// `isFileOutTask`/`isFileFunc`, because a descriptor operation is sequenced with
-/// the prints but rendered by different kernels — and neither is
-/// `$monitoron`/`$monitoroff`, which toggle a mode rather than print.
-pub fn isDisplayTask(name: []const u8) bool {
-    const printing = [_][]const u8{
-        "$display", "$displayb", "$displayo", "$displayh",
-        "$write",   "$writeb",   "$writeo",   "$writeh",
-        "$strobe",  "$strobeb",  "$strobeo",  "$strobeh",
-        "$monitor", "$debug",    "$fatal",    "$error",
-        "$warning", "$info",
-    };
-    for (printing) |p| if (std.mem.eql(u8, name, p)) return true;
-    return false;
-}
-
 /// §9.4.3: "for each % character (except %m, %% and %l) that appears in a
 /// string, a corresponding expression argument shall be supplied after the
 /// string."
@@ -781,7 +711,7 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 /// Preserve the source integer width before SSA replaces variables with their
 /// values. The synthetic identity is consumed by the display formatter only;
 /// other conversions still see the same numeric value.
-pub fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
+fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
     const bits = formatBits(self, e) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0819, "numeric `%s` needs a preserved integral width; this expression's sizing is not implemented", .{});
         return tv.v;
@@ -791,7 +721,7 @@ pub fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value 
 
 /// Only return widths the current analog IR preserves. A guessed carrier width
 /// can silently truncate a wide conditional or sign-extend a small operand.
-pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
+fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .int_literal => @intCast(if (ex.intLiteral(e).width == 0) 64 else ex.intLiteral(e).width),
@@ -844,7 +774,7 @@ pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
 /// operands so a string used by `%s` does not become a new format. Numeric
 /// `%s` operands also retain their source width through an identity call.
 /// A shortfall stops where the operands stop; E0810 already owns it.
-pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
+fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
     std.debug.assert(live.len == tys.len);
     var at: usize = 0;
     while (at < live.len) {
@@ -956,7 +886,7 @@ fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
 /// unit out of the MIR — which is precisely how the old stub could return
 /// `S.con(0.0)` and lose the text. Rendering the formatter is then the same job
 /// as rendering a `$display`, and `cg_display` does both.
-pub fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
     if (args.len == 0 or args[0] == .none) {
         try self.err(tok, .E0813, "`{s}` needs a string variable to write into", .{name});
         return;
@@ -1069,72 +999,6 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
 // §9.13 probabilistic distributions
 // ---------------------------------------------------------------------------
 
-/// One row of Table 9-10's probabilistic family: the source spelling, the
-/// synthetic kernel `rng_kernels.zig` implements, and the argument rules
-/// §9.13.1/§9.13.2 state for it. Pub because `elaborate.rewriteParamsetDist`
-/// judges the same argument rules for a call written inside a §6.4 paramset.
-pub const Dist = struct {
-    /// Source spelling, `$` included.
-    name: []const u8,
-    /// `rng_kernels.zig` entry point.
-    kernel: []const u8,
-    /// Arguments AFTER the seed. §9.13.1's two take none and their seed is
-    /// itself optional; every §9.13.2 distribution requires its seed.
-    nparam: u8,
-    /// §9.13.2: "$dist_ ... return integer values", "$rdist_ ... All functions
-    /// return a real value."
-    ty: Ty,
-    /// Bit i set = parameter i "shall be greater than zero (0). Otherwise an
-    /// error shall be reported." (§9.13.2 for the $rdist_ family; IEEE 1364
-    /// §17.9.2 states the same domain for the integer twins.)
-    positive: u8 = 0,
-    /// First parameter is df/stages, whose reference algorithm uses a count.
-    count: bool = false,
-    /// §9.13.2 "The start value shall be smaller than the end value." Only the
-    /// uniform pair, and it is a relation between two arguments rather than a
-    /// domain on one, which is why it is a separate flag.
-    ordered: bool = false,
-};
-
-/// Table 9-10, all 17 names. `$simprobe` is §9.16 and stays out.
-pub const dists = [_]Dist{
-    // §9.13.1. `kernel` is the same for both: "$arandom is upwardly compatible
-    // with $random ... and has the same behavior."
-    .{ .name = "$random", .kernel = "$rng$rand", .nparam = 0, .ty = .integer },
-    .{ .name = "$arandom", .kernel = "$rng$rand", .nparam = 0, .ty = .integer },
-    // §9.13.2, the integer family (IEEE 1364 §17.9.2).
-    .{ .name = "$dist_uniform", .kernel = "$rng$i_uniform", .nparam = 2, .ty = .integer, .ordered = true },
-    .{ .name = "$dist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .integer },
-    .{ .name = "$dist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .integer, .positive = 0b01 },
-    .{ .name = "$dist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .integer, .positive = 0b01 },
-    .{ .name = "$dist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .integer, .positive = 0b01, .count = true },
-    .{ .name = "$dist_t", .kernel = "$rng$t", .nparam = 1, .ty = .integer, .positive = 0b01, .count = true },
-    .{ .name = "$dist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .integer, .positive = 0b11, .count = true },
-    // §9.13.2, the real family.
-    .{ .name = "$rdist_uniform", .kernel = "$rng$uniform", .nparam = 2, .ty = .real, .ordered = true },
-    .{ .name = "$rdist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .real },
-    .{ .name = "$rdist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .real, .positive = 0b01 },
-    .{ .name = "$rdist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .real, .positive = 0b01 },
-    .{ .name = "$rdist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .real, .positive = 0b01, .count = true },
-    .{ .name = "$rdist_t", .kernel = "$rng$t", .nparam = 1, .ty = .real, .positive = 0b01, .count = true },
-    .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11, .count = true },
-};
-
-pub fn distOf(name: []const u8) ?*const Dist {
-    for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
-    return null;
-}
-
-/// The name §9.13.2 gives parameter `i` of `d`, for the diagnostics.
-pub fn distParamName(d: *const Dist, i: usize) []const u8 {
-    if (d.ordered) return if (i == 0) "start" else "end";
-    if (std.mem.endsWith(u8, d.name, "chi_square") or std.mem.endsWith(u8, d.name, "_t"))
-        return "degree_of_freedom";
-    if (std.mem.endsWith(u8, d.name, "erlang")) return if (i == 0) "k_stage" else "mean";
-    if (std.mem.endsWith(u8, d.name, "normal")) return if (i == 0) "mean" else "standard_deviation";
-    return "mean";
-}
-
 /// §9.13 Table 9-10, whose "supported in analog context" column reads Yes for
 /// every one of the 17 names. One source call becomes TWO pure calls over the
 /// seed's incoming value — the variate, and the updated seed §9.13.1/§9.13.2
@@ -1150,7 +1014,7 @@ pub fn distParamName(d: *const Dist, i: usize) []const u8 {
 ///
 /// Returns null when `name` is not one of the 17.
 pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?TypedValue {
-    const d = distOf(name) orelse return null;
+    const d = dist.of(name) orelse return null;
     const ex = &self.file.exprs;
     self.out.uses.insert(.rng);
 
@@ -1254,11 +1118,11 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         if (c == .str) continue;
         if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(c.asReal() > 0))
             try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{
-                name, distParamName(d, i), c.asReal(),
+                name, dist.paramName(d, i), c.asReal(),
             });
         if (d.count and i == 0 and c.asReal() > 0 and
             (!(c.asReal() <= 2147483647.0) or c.asReal() != @trunc(c.asReal())))
-            try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, distParamName(d, i) });
+            try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, dist.paramName(d, i) });
     }
     if (eager and d.ordered and d.ty == .real and vals.items.len == 3) {
         const lo = lower_constfold.foldExpr(self, given.items[1], false);
@@ -1315,7 +1179,10 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         const next = try self.call(next_name, vals.items);
         try self.builder.writeVariable(s.place, self.cur, try self.toInt(.{ .v = next, .ty = .real }));
     }
-    return .{ .v = if (d.ty == .integer) try self.toInt(.{ .v = v, .ty = .real }) else v, .ty = d.ty };
+    return .{ .v = if (d.ty == .integer) try self.toInt(.{ .v = v, .ty = .real }) else v, .ty = switch (d.ty) {
+        .real => .real,
+        .integer => .integer,
+    } };
 }
 
 /// §9.5.4.2's conversion codes, and nothing else. True when the format was
@@ -1330,7 +1197,7 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 /// compares the raw byte, matches nothing, and returns zero items — no
 /// diagnostic and no data. Refusing is the implementation-dependent result
 /// worth having.
-pub fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
+fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
     while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
@@ -1363,7 +1230,7 @@ pub fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
 /// call because both tasks WRITE TO THE HOST: a plain call would render as
 /// `S.con(0.0)` in an eval unit and the request would be silently dropped.
 /// Returns true when `name` was one of them.
-pub fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
+fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
     // §9.17.2 `$bound_step ( expression ) ;` — "the simulator shall ensure that
     // the next time step taken is no larger than the smallest $bound_step()
     // argument currently active", so the accumulation is a running minimum.

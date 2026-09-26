@@ -303,7 +303,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 /// topology is a function of its model card, which is not what `U` is; the
 /// upgrade path is to refuse a parameter-valued string whose default and
 /// override could resolve differently, once a host exists that can tell us.
-pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, target: []const u8) Oom!lower_limit.AliasResult {
+fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, target: []const u8) Oom!lower_limit.AliasResult {
     const hit = resolveAliasNode(self, target) orelse return .unresolved;
     // §1.3.1.1 ground is not an unknown, but it IS a valid continuous node and
     // the clause's own example aliases to it ("node n1 will be aliased to
@@ -378,7 +378,7 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
 ///   "the ambiguity ... resolved by giving priority to the local scope" — hence
 ///   the unstripped lookup FIRST, and the device's own module name stripped
 ///   only after it fails.
-pub fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
+fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
     if (lookupFlatNode(self, path)) |h| return h;
     var p = path;
     if (std.mem.startsWith(u8, p, "$root.")) p = p["$root.".len..];
@@ -391,7 +391,7 @@ pub fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
     return lookupFlatNode(self, p);
 }
 
-pub fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
+fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
     if (self.node_voltages.get(p)) |i| return .{ .idx = i, .direct = true };
     // A child port bound to a parent net is the same signal as that net, and
     // `Design.names` holds exactly those aliases (`flatName`'s one exception).
@@ -427,7 +427,7 @@ pub fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
 /// §9.16 "the parent of the current instance": the caller's own instance path
 /// with its last segment dropped, separator included, "" at the top. Joined to
 /// an `inst_name` it gives the flat name of a SIBLING.
-pub fn callerParentPath(self: *const Lower) []const u8 {
+fn callerParentPath(self: *const Lower) []const u8 {
     if (self.cur_unit >= self.out.unit_paths.len) return "";
     const p = self.out.unit_paths[self.cur_unit].path;
     if (p.len == 0) return p;

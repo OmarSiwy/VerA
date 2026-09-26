@@ -121,7 +121,7 @@ const Env = struct {
 /// the operators over them (VAMS §4.2.9 leaves expression signedness to 1364).
 /// Null is "no evidence", never a guess: a real, a string, or a name whose type
 /// only the host decides.
-pub fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
+fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
     if (e == .none or depth > 32) return null;
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
@@ -215,7 +215,7 @@ pub fn unsignedCompareMask(self: *const Lower, e: Ast.ExprId) ?i64 {
 }
 
 /// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
-pub fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
+fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
     const ex = &self.file.exprs;
     if (e != .none and ex.tag(e) == .int_literal) {
         const w = ex.intLiteral(e).width;
@@ -224,7 +224,7 @@ pub fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
     return 32;
 }
 
-pub fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
+fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
     if (e == .none or depth > 32) return false;
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
