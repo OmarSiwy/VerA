@@ -350,7 +350,7 @@ fn skipParamsetStatement(self: *Parser) Error!void {
     while (true) : (self.pos += 1) {
         const what: ?[]const u8 = switch (self.peek()) {
             .kw_potential, .kw_flow => if (self.peekAt(1) == .lparen) "an access function" else null,
-            .identifier => if (self.peekAt(1) == .lparen and self.access_names.contains(parse_expr.tokenText(self, self.pos))) "an access function" else null,
+            .identifier => if (self.peekAt(1) == .lparen and self.access_names.contains(self.tokenText(self.pos))) "an access function" else null,
             .kw_begin => if (self.peekAt(1) == .colon) "a named block" else null,
             .contribute => "a contribution statement",
             .at => "an event control",
@@ -537,7 +537,7 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.S
     if (parse_decl.netKind(self.peek())) |k| {
         kind.* = k;
         self.pos += 1;
-    } else if (reservedIs(self, self.pos, "wreal")) {
+    } else if (self.reservedIs(self.pos, "wreal")) {
         // A.2.1.2's `[ net_type | wreal ]`. Annex C.4/C.8 remove it from the
         // Verilog-A SUBSET only; VerA compiles Verilog-AMS, where §6.5.3
         // makes a wreal port the way a real value crosses a module boundary.
@@ -891,7 +891,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // them unusable as identifiers. The spelling is therefore the
         // dispatch, and the two below are the ones with a production here.
         .kw_reserved => {
-            const w = parse_expr.tokenText(self, self.pos);
+            const w = self.tokenText(self.pos);
             if (std.mem.eql(u8, w, "specify")) return parse_specify.parseSpecifyBlock(self, b);
             // A.2.1.1 `specparam_declaration ::= specparam [ range ]
             // list_of_specparam_assignments ;`, reached BOTH as a module
@@ -954,20 +954,4 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     try parse_decl.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
 }
 
-/// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
-/// keywords share one tag, so every grammar that needs one of them by name
-/// asks here.
-pub fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
-    return self.tags[i] == .kw_reserved and std.mem.eql(u8, parse_expr.tokenText(self, i), w);
-}
 
-/// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
-/// recognises as single tokens and tags `.invalid`, because outside a
-/// specify block none of them is an operator at all (`lexer.zig` spells
-/// exactly that at each of the three). So the spelling is the test, and
-/// the tag is what keeps them from meaning anything anywhere else.
-pub fn eatSymbol(self: *Parser, w: []const u8) bool {
-    if (self.peek() != .invalid or !std.mem.eql(u8, parse_expr.tokenText(self, self.pos), w)) return false;
-    self.pos += 1;
-    return true;
-}

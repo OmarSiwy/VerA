@@ -79,7 +79,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     // digital statements only: `assign`/`force lvalue = expr;`,
     // `deassign`/`release lvalue;`. §8.5.3.2 gives each its process.
     if (self.discreteGrammar()) {
-        const kind: ?Ast.ProcContinuous = if (self.peek() == .kw_assign) .assign else if (parse_module.reservedIs(self, self.pos, "force")) .force else if (parse_module.reservedIs(self, self.pos, "deassign")) .deassign else if (parse_module.reservedIs(self, self.pos, "release")) .release else null;
+        const kind: ?Ast.ProcContinuous = if (self.peek() == .kw_assign) .assign else if (self.reservedIs(self.pos, "force")) .force else if (self.reservedIs(self.pos, "deassign")) .deassign else if (self.reservedIs(self.pos, "release")) .release else null;
         if (kind) |k| {
             self.pos += 1;
             const target = try parse_expr.parsePostfix(self);
@@ -114,7 +114,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
         return self.file.addStmt(self.arena, .{ .while_stmt = .{ .cond = always, .body = body } }, tok);
     }
     // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2 — digital only.
-    if (self.digital and parse_module.reservedIs(self, self.pos, "fork")) return parseSeqBlock(self);
+    if (self.digital and self.reservedIs(self.pos, "fork")) return parseSeqBlock(self);
     switch (self.peek()) {
         .semicolon => {
             self.pos += 1;
@@ -241,7 +241,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     }
 
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    while (!(if (parallel) parse_module.reservedIs(self, self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
+    while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
         const before = self.pos;
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
         // — no null alternative, so a stray `;` here is E0219.
@@ -253,7 +253,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
         try body.append(self.arena, s);
     }
     if (parallel) {
-        if (!parse_module.reservedIs(self, self.pos, "join")) return self.failAt(self.pos, .E0207, "found {s}: no `join` closes the fork", .{self.found(self.pos)});
+        if (!self.reservedIs(self.pos, "join")) return self.failAt(self.pos, .E0207, "found {s}: no `join` closes the fork", .{self.found(self.pos)});
         self.pos += 1;
     } else _ = try self.expect(.kw_end);
 

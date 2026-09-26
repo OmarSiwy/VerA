@@ -319,7 +319,7 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
     try gateNotModelled(self);
     // A.3.2's `strength0`/`strength1` name the side the gate pulls toward:
     // 0 for `pulldown`, 1 for `pullup`, which is also `StrengthWord.side`.
-    const side: u8 = if (parse_module.reservedIs(self, self.pos, "pulldown")) 0 else 1;
+    const side: u8 = if (self.reservedIs(self.pos, "pulldown")) 0 else 1;
     const main_tok = self.pos;
     self.pos += 1;
     // §7.8: "pull strength in the absence of a strength specification", and
@@ -431,7 +431,7 @@ pub const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
 /// the module has no discrete half to carry it.
 pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
-    const spelling = parse_expr.tokenText(self, main_tok);
+    const spelling = self.tokenText(main_tok);
     const arm = switch_arms.get(spelling).?; // the caller dispatched on exactly these
     const kind = std.meta.stringToEnum(Ast.SwitchKind, spelling).?;
     self.pos += 1;
