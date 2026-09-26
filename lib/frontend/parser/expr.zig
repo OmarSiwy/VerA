@@ -15,7 +15,6 @@ const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.8.3 expressions — LRM §4.1, §4.2 (precedence climbing)

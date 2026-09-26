@@ -16,7 +16,6 @@ const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.6.4 analog_statement — LRM ch5
