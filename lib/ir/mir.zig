@@ -450,10 +450,13 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
     };
 }
 
-/// Cheap kind test without decoding the payload.
+/// Kind of `value`, read from the `kind` column without decoding the payload.
 pub fn valueKind(self: *const Mir, value: Value) DefKind {
-    return switch (self.valueDef(value)) {
-        inline else => |_, tag| tag,
+    return switch (value) {
+        .undef => .undef,
+        .f_zero, .f_one, .f_neg_one, .f_two, .f_ten, .f_inf => .float_const,
+        .zero, .one, .neg_one, .false_, .true_ => .int_const,
+        _ => self.defs.items(.kind)[@intFromEnum(value) - Value.first_dynamic],
     };
 }
 
