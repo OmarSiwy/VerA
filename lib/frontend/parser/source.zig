@@ -666,7 +666,7 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
             name = try self.internTok(self.pos);
             self.pos += 1;
             // `name_of_udp_instance ::= udp_instance_identifier [ range ]`
-            if (self.peek() == .lbracket) range = try parse_decl.parseDim(self);
+            range = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         var ports: std.ArrayList(Ast.PortConn) = .empty;

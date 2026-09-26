@@ -410,7 +410,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     // "port direction declaration", the half of the clause that carries
     // the direction. Its range is compared against the port TYPE
     // declaration's in lowering, so it lands in its own field.
-    const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+    const range: ?Ast.Dim = try parse_decl.optDim(self);
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
@@ -675,7 +675,7 @@ fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
 }
 
 pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength, signed: bool) Error!void {
-    const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+    const range: ?Ast.Dim = try parse_decl.optDim(self);
     // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
     // belongs to the NET, not to the declaration's optional assignment:
     // `wire #3 y = ~a;` delays y's own transition.
@@ -807,7 +807,7 @@ pub fn parseBranchDecl(self: *Parser, b: *parse_module.Body) Error!void {
             .hi = hi,
             .lo = lo,
             .is_port_branch = is_port_branch,
-            .range = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null,
+            .range = try parse_decl.optDim(self),
             .main_tok = name_tok,
         });
         if (!self.eat(.comma)) break;
