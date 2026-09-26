@@ -277,34 +277,39 @@ fn logicBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
 // of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
 // are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
 // the value it currently holds.
+/// What one driver asserts, decided at elaboration: exactly one source.
+pub const Source = union(enum) {
+    /// A.6.1 an expression. With `slice`, it is read `total` bits wide and the
+    /// driver asserts the bits from `lo` up — one internal port of a §12.3.6
+    /// concatenated port.
+    expr: struct { e: Ast.ExprId, slice: ?Slice = null },
+    /// A port connection that cannot collapse — see `Bridge`.
+    bridge: Bridge,
+    /// An A.3.1 gate instance. A gate is a driver (§7.1) but not an
+    /// expression: §7.8.5's tables read z on an input as x, which no operator
+    /// does.
+    gate: Gate,
+    /// An IEEE 1364-2005 §8 UDP instance.
+    udp: *Udp,
+    /// A §7.6 MOS switch, whose `s0`/`s1` are the strengths it passes, set at
+    /// each evaluation.
+    mos: Mos,
+    /// IEEE 1364 §19.10's `unconnected_drive`: the directive pulls an
+    /// unconnected input port to a logic level THROUGH A PULL-STRENGTH
+    /// DRIVER, so it is a driver among drivers and argues with the net's own
+    /// type through `Signal` like any other. A constant, hence an empty
+    /// sensitivity list — it is evaluated once, at the initial `.continuous`
+    /// dispatch, and never re-runs.
+    pull: Int.Bit,
+};
+
 pub const Driver = struct {
     net: u32,
-    value: Ast.ExprId,
-    /// The §6.2.2 instance `value` is written in. A port connection expression
-    /// belongs to the PARENT, which is not the scope of the net it feeds.
+    source: Source,
+    /// The §6.2.2 instance the source is written in. A port connection
+    /// expression belongs to the PARENT, which is not the scope of the net it
+    /// feeds.
     scope: u32 = 0,
-    /// Set instead of `value` (which is then `.none`) for a port connection
-    /// that cannot collapse — see `Bridge`.
-    bridge: ?Bridge = null,
-    /// Set instead of `value` for an A.3.1 gate instance. A gate is a driver
-    /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
-    /// which no operator does.
-    gate: ?Gate = null,
-    /// Set instead of `value` for an IEEE 1364-2005 §8 UDP instance.
-    udp: ?*Udp = null,
-    /// `value` is read `total` bits wide and this driver asserts the bits
-    /// from `lo` up — one internal port of a §12.3.6 concatenated port.
-    slice: ?Slice = null,
-    /// Set instead of `value` for a §7.6 MOS switch, whose `s0`/`s1` are the
-    /// strengths it passes, set at each evaluation.
-    mos: ?Mos = null,
-    /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
-    /// directive pulls an unconnected input port to a logic level THROUGH A
-    /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
-    /// the net's own type through `Signal` like any other. A constant, hence no
-    /// expression and an empty sensitivity list — it is evaluated once, at the
-    /// initial `.continuous` dispatch, and never re-runs.
-    pull: ?Int.Bit = null,
     sensitivity: []const u32,
     current: Int.Literal,
     /// A gate's `current` is §7.10.2's H/L: its one bit, or high impedance.
