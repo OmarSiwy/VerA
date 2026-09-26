@@ -529,11 +529,11 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // collapses to lane 0. `UnitPlan.foldedExponent` still marks the
             // exponent live here (it only skips a LITERAL fold), so the
             // "change both or neither" mirror is intact.
-            const par_exp: ?[]const u8 = if (self.an.foldConst(b2, 0, false) == null and self.an.dFree(b2))
+            const par_exp: ?[]const u8 = if (self.an.foldConst(b2, false) == null and self.an.dFree(b2))
                 try gen_call.f64Const(self, b2, 1, true)
             else
                 null;
-            if (self.an.foldConst(b2, 0, false)) |k| {
+            if (self.an.foldConst(b2, false)) |k| {
                 try self.b("(", .{});
                 try renderVal(self, a, .real);
                 try self.b(").pow({s})", .{try gen_file.fmtF64(self, k.f)});
@@ -738,7 +738,7 @@ pub fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
     // Same guard as `f64Const`: negating the folded number is only legal
     // where the fold itself is.
     if (!foldHidesSlot(self, v, 0)) {
-        if (self.an.foldConst(v, 0, false)) |k| return self.b("{s}", .{try gen_file.fmtF64(self, -k.f)});
+        if (self.an.foldConst(v, false)) |k| return self.b("{s}", .{try gen_file.fmtF64(self, -k.f)});
     }
     try self.b("-(", .{});
     try writeConst(self, v);

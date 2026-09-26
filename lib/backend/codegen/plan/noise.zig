@@ -225,10 +225,10 @@ fn planNoiseTable(
         // answered before "what is it by default?" — a table with no
         // parameter in it must not gain an accessor, because that would
         // oblige every host of every existing device to read one.
-        const lit = self.an.foldConst(fv, 0, false) != null and
-            self.an.foldConst(pv, 0, false) != null;
-        const f = self.an.foldConst(fv, 0, true);
-        const pwr = self.an.foldConst(pv, 0, true);
+        const lit = self.an.foldConst(fv, false) != null and
+            self.an.foldConst(pv, false) != null;
+        const f = self.an.foldConst(fv, true);
+        const pwr = self.an.foldConst(pv, true);
         if (f == null or pwr == null) {
             try refuseNoise(self, out, .E0519, s.tok, "the table has no value at compile " ++
                 "time: a knot is computed during the solve, and 4.6.4.3's input is " ++

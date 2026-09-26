@@ -693,7 +693,7 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
 /// there. Folding through the declared default on either side — this one used
 /// `true` — freezes an overridden exponent at its default.
 fn foldedExponent(self: *const UnitPlan, d: anytype) bool {
-    return d.op == .pow and self.an.foldConst(d.rhs, 0, false) != null;
+    return d.op == .pow and self.an.foldConst(d.rhs, false) != null;
 }
 
 /// True when the slice lives entirely in the entry block and uses no phi —

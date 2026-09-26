@@ -114,7 +114,7 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         if (dv.next >= args.len) return .{
             .err = "LRM 4.5.12: the sampling period T of a zi_* filter is mandatory",
         };
-        if (g.an.foldConst(args[dv.next], 0, true)) |c| {
+        if (g.an.foldConst(args[dv.next], true)) |c| {
             if (!(c.f > 0.0)) return .{
                 .err = "LRM 4.5.12: the sampling period T of a zi_* filter shall be positive",
             };
@@ -134,7 +134,7 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         // the other half of the clause, and it is a property of the STATEMENT
         // rather than of the call — `lower.checkZeroTransitionZFilter` (E0518).
         for (args[@min(dv.next + 1, args.len)..]) |a| {
-            const c = g.an.foldConst(a, 0, true) orelse return .{
+            const c = g.an.foldConst(a, true) orelse return .{
                 .err = "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
             };
             if (c.f < 0.0) return .{
@@ -225,7 +225,7 @@ pub fn filterSide(
         var all_zero = true;
         for (elems, 0..) |e, i| {
             poly[i] = try g.f64Expr(e);
-            const c = g.an.foldConst(e, 0, true);
+            const c = g.an.foldConst(e, true);
             if (c == null or c.?.f != 0.0) all_zero = false;
         }
         if (is_den and all_zero)
@@ -247,11 +247,11 @@ pub fn filterSide(
         // The conjugate PAIRING is structural — it decides how many
         // sections exist and of what degree — so the imaginary part has to
         // be known here. The real part may stay a runtime parameter.
-        const im = g.an.foldConst(elems[2 * k + 1], 0, true) orelse
+        const im = g.an.foldConst(elems[2 * k + 1], true) orelse
             return "LRM 4.5.11/4.5.12: the imaginary part of a filter root must be a constant expression " ++
                 "(the conjugate pairing decides the section structure)";
         const re = try g.f64Expr(elems[2 * k]);
-        const re_c = g.an.foldConst(elems[2 * k], 0, true);
+        const re_c = g.an.foldConst(elems[2 * k], true);
         if (im.f == 0.0) {
             // "If a root is zero, then the term associated with it is
             // implemented as s, rather than (1 − s/r)". In z⁻¹ the LRM's
@@ -310,7 +310,7 @@ pub fn filterSide(
 pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
     for (used, 0..) |u, j| {
         if (u) continue;
-        const jm = g.an.foldConst(elems[2 * j + 1], 0, true) orelse continue;
+        const jm = g.an.foldConst(elems[2 * j + 1], true) orelse continue;
         if (jm.f != -im) continue;
         // `f64Const`, not `f64Expr`: this is a SPECULATIVE render used only
         // to pair roots, so a root that does not resolve is "not the
