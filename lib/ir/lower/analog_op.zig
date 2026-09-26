@@ -882,7 +882,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
             if (!any) return .absent;
             // One value on every edge is available at the join already.
             if (same) return .{ .value = coeffs[0].value };
-            return .{ .value = try self.mir.emitPhi(self.arena, blockOf(self, inst), coeffs) };
+            return .{ .value = try self.mir.emitPhi(self.arena, self.mir.instBlock(inst), coeffs) };
         },
         // A call's arguments are reachable, so "does the generator occur in
         // here at all" is answerable even though the derivative is not.
@@ -902,15 +902,4 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
             try coeffAt(self, st.index, gen, reach, depth + 1, path) == .absent and
             try coeffAt(self, st.value, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
     }
-}
-
-/// The block `inst` was appended to. A linear scan — the coefficient phi is
-/// the one caller, and it runs once per differing-arm noise use.
-fn blockOf(self: *Lower, inst: Mir.Inst) Mir.Block {
-    for (0..self.mir.blockCount()) |b| {
-        const blk: Mir.Block = @enumFromInt(@as(u32, @intCast(b)));
-        var it = self.mir.blockInsts(blk);
-        while (it.next()) |i| if (i == inst) return blk;
-    }
-    unreachable; // every instruction is linked into exactly one block
 }

@@ -275,6 +275,7 @@ fn splice(mir: *Mir, dst: Mir.Block, arm: Mir.Block) void {
     while (it.next()) |inst| {
         if (mir.instOp(inst) == .jump) continue; // classifyArm proved it's last
         mir.insts.items(.next)[@intFromEnum(inst)] = .none;
+        mir.insts.items(.block)[@intFromEnum(inst)] = dst;
         const bi = @intFromEnum(dst);
         const last = mir.blocks.items(.last)[bi];
         if (last == .none) {
