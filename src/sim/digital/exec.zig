@@ -473,7 +473,7 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 // IEEE1364-2005 §5.5.2: propagate context before evaluating operands.
 // Fixed one-bit results stop propagation; their operands get the separate
 // self-determined or common comparison context prescribed by Table 5-22.
-fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
+pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
     if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     // §4.8: a real context is a double; a real operand in an integral

@@ -365,6 +365,7 @@ const tb_runner_text = @import("tb/runner_text.zig");
 // Building the executable: device.zig + runner into one `zig build-exe` — tb/exe.zig
 const tb_exe = @import("tb/exe.zig");
 pub const buildExe = tb_exe.buildExe;
+pub const BuildOptions = tb_exe.BuildOptions;
 
 // Testbench self-checks — tb/test.zig
 const tb_test = @import("tb/test.zig");

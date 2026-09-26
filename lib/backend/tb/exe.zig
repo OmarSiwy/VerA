@@ -54,7 +54,9 @@ pub const BuildResult = union(enum) {
     }
 };
 
-/// device.zig + runner.zig → one native binary.
+/// device.zig + runner.zig → one native binary. A null `device_zig` builds
+/// `runner_zig` alone over `sim` and `diag` (`opts.mixed` must be set): an
+/// IEEE 1364 design's executable, which has no analog device.
 ///
 /// `build-exe` directly rather than through orchestrator.zig: that path exists
 /// to produce a hot-reloadable `.so` with a generation counter and an incremental
@@ -71,7 +73,7 @@ pub const BuildResult = union(enum) {
 pub fn buildExe(
     gpa: Allocator,
     io: Io,
-    device_zig: []const u8,
+    device_zig: ?[]const u8,
     runner_zig: []const u8,
     opts: BuildOptions,
 ) !BuildResult {
@@ -93,8 +95,8 @@ pub fn buildExe(
         try std.fs.path.join(gpa, &.{ opts.work_dir, opts.name });
     errdefer gpa.free(bin);
 
+    std.debug.assert(device_zig != null or opts.mixed);
     const m_root = try bind(arena, io, dir, opts, "tb", "root", runner_zig);
-    const m_dev = try bind(arena, io, dir, opts, "device", "device", device_zig);
 
     // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
     var argv: std.ArrayList([]const u8) = .empty;
@@ -111,10 +113,12 @@ pub fn buildExe(
         .llvm => &.{"-fllvm"},
     });
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
-    try argv.appendSlice(arena, &.{ "--dep", "device" });
+    if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
-    try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
-    try argv.appendSlice(arena, &.{ "--dep", "contract", m_dev });
+    if (device_zig) |text| {
+        try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
+        try argv.appendSlice(arena, &.{ "--dep", "contract", try bind(arena, io, dir, opts, "device", "device", text) });
+    } else try argv.append(arena, m_root);
     try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
     if (opts.mixed) {
         // build.zig's `module_specs` rows for these four, spelled for build-exe.
