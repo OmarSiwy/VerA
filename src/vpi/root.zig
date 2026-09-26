@@ -595,6 +595,8 @@ const Building = struct {
     def_name: []const u8,
     path: []const u8,
     parent: ?u32,
+    /// A digital model's `digital.Run` scope id for this instance.
+    engine: u32 = 0,
     children: std.ArrayList(u32) = .empty,
     ports: std.ArrayList(u32) = .empty,
     nets: std.ArrayList(u32) = .empty,
@@ -1278,11 +1280,11 @@ fn literalDim(file: *const Ast.SourceFile, dim: Ast.Dim) ?struct { low: i64, hig
 // cbValueChange read and write through.
 //
 // The SHAPE is the engine's own elaboration, read back rather than redone:
-// `digital.Run` numbers instance scopes in depth-first pre-order (the root is
-// 0, and each child's scope is minted just before its body is declared), and
-// keys every declared name by (scope, name). Walking the same definitions in
-// the same order yields the same scope numbers, so `Run.names` answers each
-// declaration's slot and nothing here decides what an instance IS.
+// every instance is a non-lexical row of `Run.scope_info`, in depth-first
+// pre-order with the root at 0, and `Run.names` keys each declared name by
+// that row's engine scope id. Task frames, named-block scopes and
+// loop-generate iterations are lexical rows: not instances, but a generate
+// iteration is a component of the path of an instance inside it.
 // ---------------------------------------------------------------------------
 
 /// Build the object model over an elaborated digital run and install it. The
@@ -1291,24 +1293,6 @@ pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     if (design != null) close();
     design = try buildDigital(gpa, r);
     run.attach(r);
-}
-
-/// §6.2.2: the root is the description nothing instantiates — the engine's
-/// own `pickTop` rule, which elaboration has already enforced to be unique.
-fn digitalTop(file: *const Ast.SourceFile) Error!*const Ast.ModuleDecl {
-    outer: for (file.modules) |*candidate| {
-        if (candidate.is_connect) continue;
-        for (file.modules) |other| for (other.instances) |inst| {
-            if (inst.module == candidate.name) continue :outer;
-        };
-        return candidate;
-    }
-    return error.NotElaborated;
-}
-
-fn isUdp(file: *const Ast.SourceFile, name: Ast.StrId) bool {
-    for (file.udps) |u| if (u.name == name) return true;
-    return false;
 }
 
 fn digitalModule(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
@@ -1329,15 +1313,34 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     errdefer d.deinit();
     const arena = d.arena.allocator();
     const file = r.file;
-    const top = try digitalTop(file);
-    const top_name = try arena.dupe(u8, file.str(top.name));
+    const top_name = try arena.dupe(u8, file.str(r.scope_info.items[0].name));
 
     var scopes: std.ArrayList(Building) = .empty;
     defer {
         for (scopes.items) |*s| s.deinit(gpa);
         scopes.deinit(gpa);
     }
-    try walkDigital(gpa, arena, r, &scopes, top, null, "");
+    // The VPI scope of each engine instance scope; a lexical row has none.
+    const vpi_of = try gpa.alloc(u32, r.scope_info.items.len);
+    defer gpa.free(vpi_of);
+    for (r.scope_info.items, 0..) |info, e| {
+        if (info.lexical) continue;
+        const at: u32 = @intCast(scopes.items.len);
+        vpi_of[e] = at;
+        var parent: ?u32 = null;
+        var path: []const u8 = "";
+        if (e != 0) {
+            path = try pathComponent(arena, file, info);
+            var p = info.parent;
+            while (r.scope_info.items[p].lexical) : (p = r.scope_info.items[p].parent)
+                path = try joinPath(arena, try pathComponent(arena, file, r.scope_info.items[p]), path);
+            parent = vpi_of[p];
+            path = try joinPath(arena, scopes.items[vpi_of[p]].path, path);
+        }
+        const m = digitalModule(file, info.module) orelse return error.NotElaborated;
+        try scopes.append(gpa, .{ .decl = m, .def_name = try arena.dupe(u8, file.str(m.name)), .path = path, .parent = parent, .engine = @intCast(e) });
+        if (parent) |p| try scopes.items[p].children.append(gpa, at);
+    }
 
     var objects: std.ArrayList(Obj) = .empty;
     defer objects.deinit(gpa);
@@ -1351,21 +1354,22 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
 
     for (scopes.items, 0..) |*s, i| {
         const scope: u32 = @intCast(i);
+        const eng = s.engine;
         const m = s.decl;
         for (m.ports, 0..) |p, k| {
-            const at = r.names.get(.{ .scope = scope, .str = p.name });
+            const at = r.names.get(.{ .scope = eng, .str = p.name });
             try s.ports.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));
             objects.items[objects.items.len - 1].direction = p.direction;
             objects.items[objects.items.len - 1].port_index = @intCast(k);
         }
         for (m.nets) |n| {
-            const at = r.names.get(.{ .scope = scope, .str = n.name }) orelse continue;
+            const at = r.names.get(.{ .scope = eng, .str = n.name }) orelse continue;
             try s.nets.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at));
         }
         for (m.vars) |v| {
-            const at = r.names.get(.{ .scope = scope, .str = v.name }) orelse continue;
+            const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
             // §3.9 arrays: §11.6.11's classes, over the engine's own element
             // slots.
             if (r.arrays.get(at)) |a| {
@@ -1389,7 +1393,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         // parameter after all module instantiation overrides and defparams
         // have been resolved" is that slot, read like any other value.
         for (m.params) |p| {
-            const at = r.names.get(.{ .scope = scope, .str = p.name }) orelse continue;
+            const at = r.names.get(.{ .scope = eng, .str = p.name }) orelse continue;
             if (!r.params.contains(at)) continue;
             try s.params.append(gpa, @intCast(objects.items.len));
             var o = try digitalObj(r, arena, top_name, s.path, scope, p.name, .parameter, at);
@@ -1481,43 +1485,12 @@ fn digitalObj(
     };
 }
 
-/// The engine's instance order: this scope, then each child in source order,
-/// each child's subtree before the next child.
-fn walkDigital(
-    gpa: std.mem.Allocator,
-    arena: std.mem.Allocator,
-    r: *const sim.digital.Run,
-    scopes: *std.ArrayList(Building),
-    m: *const Ast.ModuleDecl,
-    parent: ?u32,
-    path: []const u8,
-) Error!void {
-    const file = r.file;
-    const at: u32 = @intCast(scopes.items.len);
-    try scopes.append(gpa, .{
-        .decl = m,
-        .def_name = try arena.dupe(u8, file.str(m.name)),
-        .path = path,
-        .parent = parent,
-    });
-    if (parent) |p| try scopes.items[p].children.append(gpa, at);
-    for (m.instances) |inst| {
-        // A UDP instance is a primitive (§11.6.13), not a scope.
-        if (isUdp(file, inst.module)) continue;
-        const child = digitalModule(file, inst.module) orelse return error.NotElaborated;
-        const name = file.str(inst.name);
-        if (inst.range == null) {
-            try walkDigital(gpa, arena, r, scopes, child, at, try joinPath(arena, path, name));
-            continue;
-        }
-        // IEEE 1364 §12.1.2: the elements the engine minted for the array,
-        // in its order; `addModuleArrays` groups the `u[k]` siblings.
-        for (r.scope_info.items) |info| {
-            if (info.parent != at or info.lexical or info.name != inst.name) continue;
-            const k = info.index orelse continue;
-            try walkDigital(gpa, arena, r, scopes, child, at, try joinPath(arena, path, try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k })));
-        }
-    }
+/// One `scope_info` row's path component: its name, and `[k]` for an
+/// instance array element or a loop-generate iteration (§12.4.1).
+fn pathComponent(arena: std.mem.Allocator, file: *const Ast.SourceFile, info: anytype) Error![]const u8 {
+    const name = file.str(info.name);
+    const k = info.index orelse return arena.dupe(u8, name);
+    return std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k });
 }
 
 /// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`
@@ -3337,6 +3310,42 @@ test "a digital memory is a vpiRegArray of vpiReg words, each bound to its engin
     try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, samples));
     try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiArray, samples));
     try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, samples));
+}
+
+test "a digital scope is the engine's instance, past a task frame and a loop generate (§11.2.2)" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module leaf #(parameter V = 0); reg [7:0] r; initial r = V; endmodule
+        \\module top;
+        \\  task t; begin end endtask
+        \\  genvar i;
+        \\  generate for (i = 0; i < 2; i = i + 1) begin : g
+        \\    leaf #(i + 1) u();
+        \\  end endgenerate
+        \\  leaf #(8'h11) c();
+        \\  initial t;
+        \\endmodule
+    );
+    defer h.deinit();
+    try run.simulate();
+
+    var v: callback.Value = std.mem.zeroes(callback.Value);
+    v.format = value.vpiIntVal;
+    for ([_]struct { []const u8, c_int }{ .{ "top.c.r", 0x11 }, .{ "top.g[0].u.r", 1 }, .{ "top.g[1].u.r", 2 } }) |want| {
+        const name = try std.testing.allocator.dupeZ(u8, want[0]);
+        defer std.testing.allocator.free(name);
+        const r = vpi_handle_by_name(name, null) orelse return error.TestUnexpectedResult;
+        value.vpi_get_value(r, &v);
+        try std.testing.expectEqual(want[1], v.value.integer);
+    }
+    const g0 = vpi_handle_by_name("top.g[0].u", null);
+    try std.testing.expectEqualStrings("leaf", std.mem.span(vpi_get_str(vpiDefName, g0)));
+    // The generate iterations are path components, not scopes: all three
+    // instances are children of `top`.
+    var children: u32 = 0;
+    const itr = vpi_iterate(vpiModule, vpi_handle_by_name("top", null));
+    while (vpi_scan(itr)) |_| children += 1;
+    try std.testing.expectEqual(@as(u32, 3), children);
 }
 
 test "an analog real array and real variable are §11.6.10's classes" {
