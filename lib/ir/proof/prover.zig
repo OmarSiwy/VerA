@@ -449,9 +449,8 @@ pub const Prover = struct {
             .int_const => |c| @floatFromInt(c),
             .float_const => |c| c,
             .inst_result => |inst| blk: {
-                const row = self.mir.instRow(inst);
-                if (row.op != .if_cast) break :blk null;
-                const def = self.mir.valueDef(self.mir.resolveAlias(@enumFromInt(row.a)));
+                if (self.mir.instOp(inst) != .if_cast) break :blk null;
+                const def = self.mir.valueDef(self.mir.resolveAlias(self.mir.instData(inst).unary.operand));
                 break :blk if (def == .int_const) @as(f64, @floatFromInt(def.int_const)) else null;
             },
             .undef, .str_const, .param_ref, .block_param => null,
