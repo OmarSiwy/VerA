@@ -155,7 +155,10 @@ pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update };
 pub const Stop = enum { idle, analog, explicit_d2a };
 
 /// One analog event a digital event control waits on (`Run.registerMonitor`).
-pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32 };
+pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: MonitorKind };
+
+/// A.6.5 `analog_event_functions`, the four VAMS §5.10.3 events a monitor is.
+pub const MonitorKind = enum { cross, above, timer, absdelta };
 
 /// One digital event term of an analog event control (`Run.watchEvent`).
 pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
@@ -452,9 +455,7 @@ pub const Run = struct {
     /// The process waits on a slot no variable owns (counted down from the
     /// top of the slot space), which `deliverA2d` wakes.
     pub fn registerMonitor(r: *Run, e: Ast.ExprId) Error!void {
-        const ex = &r.file.exprs;
-        const name = r.file.str(ex.strOf(e));
-        if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above") or std.mem.eql(u8, name, "absdelta")))
+        if (!r.mixed or monitorKind(r, e) == .timer)
             return r.exprFail(e, "only cross(), above() and absdelta() are monitored in a digital event control");
         const scope = r.instanceOf(r.scope);
         if (r.monitorSlot(e, scope) != null) return;
@@ -466,7 +467,12 @@ pub const Run = struct {
         const args = r.file.exprs.args(e);
         if (args.len == 0 or args[0] == .none) return r.exprFail(e, "an analog event needs its expression");
         for (args) |arg| if (arg != .none) try compile.checkExpr(r, arg);
-        try r.monitors.append(r.arena, .{ .expr = e, .scope = r.instanceOf(r.scope), .slot = wakes });
+        try r.monitors.append(r.arena, .{ .expr = e, .scope = r.instanceOf(r.scope), .slot = wakes, .kind = monitorKind(r, e) });
+    }
+
+    fn monitorKind(r: *const Run, e: Ast.ExprId) MonitorKind {
+        // The parser admits exactly A.6.5's four names as an event function.
+        return std.meta.stringToEnum(MonitorKind, r.file.str(r.file.exprs.strOf(e))).?;
     }
 
     /// VAMS §5.10.4 / §7.3.6.1: `@(timer(..)) -> ev;` (or `cross`/`above`) in
