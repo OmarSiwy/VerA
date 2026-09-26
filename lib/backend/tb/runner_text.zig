@@ -75,6 +75,8 @@ pub const runner_body =
     \\/// §3.4 this host refuses a card that moves a shape parameter: `shapeCheck`
     \\/// runs after every `derive`.
     \\pub const shape_check = true;
+    \\/// The testbench calls `setup` after every card it writes (`tb/runner.zig`).
+    \\pub const calls_setup = true;
     \\fn shapeCheck(m: *const D.Model) void {
     \\    if (comptime !@hasDecl(D, "checkShape")) return;
     \\    const name = D.checkShape(m) orelse return;

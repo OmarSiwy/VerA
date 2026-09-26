@@ -28,6 +28,11 @@ const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
+
+/// `tools/contract.zig`'s `abi_version`, which `backend` cannot import. Every
+/// device the torture suite runs meets the testbench's `validateHost`, so the
+/// two cannot drift past one run.
+const contract_abi = 4;
 const VTy = codegen.VTy;
 const hist_len = codegen.hist_len;
 const OpKind = codegen.OpKind;
@@ -327,6 +332,7 @@ pub fn emitTopology(self: *Gen) Error!void {
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
     try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
+    try self.w("/// The contract ABI this device was generated for (`contract.abi_version`).\npub const contract_abi: u32 = {d};\n\n", .{contract_abi});
 
     if (self.float.jac != .off) try self.w(
         \\/// This device permits a single-precision DERIVATIVE half in the
