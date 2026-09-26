@@ -620,7 +620,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     defer h.deinit();
     // root.zig runs this between lower and prove; the harness does the same.
     // The MIR is arena-owned, so the pass must append with the same arena.
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
     try std.testing.expect(n >= 1);
     const src = try h.gen(std.testing.allocator);
     // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
@@ -651,7 +651,7 @@ test "codegen: a value shared by select arms is computed once, not once per use"
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir) >= 1);
     const src = try h.gen(std.testing.allocator);
     const unit = src[std.mem.indexOf(u8, src, "fn sh__").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
@@ -669,7 +669,7 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
         \\endmodule
     , &h);
     defer h.deinit();
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
     const src = try h.gen(std.testing.allocator);
     // What this protects is §4.2.12 laziness, not a spelling: `ln` runs only
     // on the path `V > vmin` selects. The guard may come out as a lazy
@@ -714,7 +714,7 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
     // The guard's evidence only survives conversion on exclusively-owned
     // slices; a shared `ln` result must refuse, or the model silently drops
     // to `.strict` (and an integer `/` in the same shape turns REJECTED).
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
     try std.testing.expectEqual(@as(u32, 0), n);
     // Still compiles and proves through the CFG dominance path.
     const src = try h.gen(std.testing.allocator);
@@ -1967,7 +1967,7 @@ test "codegen: a zero short still collapses after if-conversion makes its join a
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir) >= 1);
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse(") != null);
     try std.testing.expect(std.mem.indexOf(
@@ -2918,7 +2918,7 @@ test "codegen: §5.2.1 an `analog initial` variable is a setup root, not a per-e
     , &h);
     defer h.deinit();
     try std.testing.expectEqual(Lower.HeldVar.Why.retained, h.lowered.held_vars.items[0].why);
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "inst.su.r[0] = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "if (inst.is_analog_initial)") == null);
