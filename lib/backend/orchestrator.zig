@@ -386,8 +386,7 @@ fn pieceNames(arena: Allocator, chunks: u32) ![]const []const u8 {
 /// `zig build-lib --listen=- -dynamic` over the parts' objects. The link
 /// takes `-O` and `-fstrip` for the compiler_rt it adds.
 fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []const u8 {
-    // One object per `Part` at least (`pieceNames`).
-    assert(objs.len >= std.enums.values(Part).len);
+    assert(objs.len > 0);
     const head = [_][]const u8{
         o.zig_exe,
         "build-lib",
@@ -579,6 +578,9 @@ pub fn compileRelease(
         return .{ .failed = b };
     }
 
+    // One object per `Part` at least (`pieceNames`); `linkArgv` itself
+    // only formats, and its test links two.
+    assert(objs.len >= std.enums.values(Part).len);
     var link: Server = undefined;
     try link.spawn(io, arena, try linkArgv(arena, o, objs));
     defer link.close(io);
