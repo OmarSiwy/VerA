@@ -1,8 +1,23 @@
-// This legal literal survives the frontend exactly. The current analog
-// backend explicitly rejects it; this is tracked implementation debt.
+// §2.6.1: "The first token, a size constant, shall specify the size of the
+// constant in terms of its exact number of bits. It shall be specified as a
+// non-zero unsigned decimal number." No clause caps the size, so `128'h1` is a
+// legal 128-bit constant whose value is 1.
+//
+// IEEE 1364 §5.6: "If the width of the right-hand expression is larger than the
+// width of the left-hand side in an assignment, the MSBs of the right-hand
+// expression will always be discarded". The low 32 bits of 128'h1 are 32'h1:
+//
+//   value = 1
+//
 //! lrm 2.6.1
-//! reject E0130
-module ch02_wide_literal_backend_boundary;
+//! xfail E0130: the analog backend stores integers in 64 bits and refuses a wider literal instead of truncating it
+`include "check.vh"
+module ch02_wide_literal_backend_boundary(p);
+    inout p; electrical p;
     integer value;
-    analog value = 128'h1;
+    analog begin
+        value = 128'h1;
+        `CHECKI("§2.6.1 128'h1 assigned to an integer", value, 1);
+        I(p) <+ V(p);
+    end
 endmodule
