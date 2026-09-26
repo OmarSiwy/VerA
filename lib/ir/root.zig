@@ -1,11 +1,10 @@
 //! IR — AST to proven MIR, and the top of this layer's file DAG.
 //!
-//! Re-export only. The leaves import each other directly, and they have to:
-//! `lower.zig` and `elaborate.zig` are mutually recursive, because elaboration
-//! (AST → flat design, §6.2.2) and lowering (design → MIR) are two halves of
-//! one transformation, not two passes in sequence. That cycle is why this
-//! layer is ONE module — it is a boundary around the cycle, not a claim that
-//! no cycle exists.
+//! Re-export only. The leaves import each other directly. Elaboration imports
+//! no lowering file: its closure is `elaborate/`, `dist.zig` and
+//! `discipline_rules.zig`, which lowering imports too. It stays in this module
+//! because a module of its own would own those two shared leaves and add a
+//! `module_specs` row, a minor release, to enforce one edge nothing crosses.
 //!
 //!   AST
 //!     → elaborate.zig  (class 9)     AST → flat design (§6.2.2)
