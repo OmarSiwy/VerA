@@ -375,6 +375,7 @@ pub const Code = enum(u16) {
     E1003,
     E1004,
     E1100,
+    E1101,
     W1150,
     W1050,
     W0950,
@@ -5675,6 +5676,25 @@ fn infoOf(c: Code) Info {
             .title = "digital source execution failed",
             .lrm = "8.5",
             .explain = "The digital executor supports a documented subset of source processes. Unsupported forms are diagnosed before simulation; timing and capacity failures stop execution explicitly. This does not make legal unsupported Verilog-AMS forms illegal.",
+        },
+        .E1101 => .{
+            .title = "design refused under --two-state",
+            .lrm = "IEEE 1364-2005 4.1",
+            .explain =
+            \\`vera --emit-exe --two-state` builds a native executable in which
+            \\every x or z the design would create is 0: an uninitialised
+            \\variable, an undriven net, an x or z literal bit, an out-of-range
+            \\select, a division by zero. That is not the 4-state logic of IEEE
+            \\1364-2005 §3.2 and §4.1, and its output differs wherever an x or z
+            \\would have arisen.
+            \\
+            \\A design is refused where an x or z carries meaning, which a run
+            \\without them cannot keep: `===` or `!==` against an x or z, a `case`
+            \\label with an x or z bit, and any design the native code generator
+            \\does not compile (strength and multi-driver nets, gates, switches
+            \\and the rest run only in the 4-state interpreter). Drop
+            \\`--two-state` to run it with 4-state logic.
+            ,
         },
         .W1150 => .{
             .title = "memory file word count mismatch",
