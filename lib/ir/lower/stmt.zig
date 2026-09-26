@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
+const lower_analog_op = @import("analog_op.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_control = @import("control.zig");
@@ -64,10 +65,16 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     // VerA's `vera_lte` statement attribute (A.6.4 prefix): every charge site
     // inside this statement, nested ones included, unless a nearer one says
     // otherwise (`lower_contrib.siteLte`).
-    const lte = self.file.stmtLte(id);
+    const lte = self.file.stmtLte(id, .vera_lte);
     if (lte) |a| try self.lte_stack.append(self.arena, try lower_contrib.lteValue(self, a));
     defer if (lte != null) {
         _ = self.lte_stack.pop();
+    };
+    // `vera_interp`, the same way, for every `absdelay` inside.
+    const interp = self.file.stmtLte(id, .vera_interp);
+    if (interp) |a| try self.interp_stack.append(self.arena, try lower_analog_op.interpQuad(self, a));
+    defer if (interp != null) {
+        _ = self.interp_stack.pop();
     };
     switch (self.file.stmt(id)) {
         .empty => {},

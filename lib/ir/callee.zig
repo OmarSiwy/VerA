@@ -147,6 +147,9 @@ pub const Callee = enum(u8) {
     @"$discontinuity",
     @"$limit",
     @"$table_model",
+    // VerA-synthetic: `absdelay` under `(* vera_interp = 2 *)` — the same
+    // §4.5.7 operator and state, read by 3-point Lagrange interpolation.
+    @"absdelay$quad",
     // VerA-synthetic: lowering's rewrites of one source call into several.
     @"$held_int",
     @"$held_real",
@@ -419,7 +422,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .ddt => .ddt,
         .idt => .idt,
         .idtmod => .idtmod,
-        .absdelay => .absdelay,
+        .absdelay, .@"absdelay$quad" => .absdelay,
         .transition => .transition,
         .slew => .slew,
         .last_crossing => .last_crossing,

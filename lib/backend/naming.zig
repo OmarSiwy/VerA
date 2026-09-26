@@ -285,7 +285,11 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
             // user identifier can be.
             const spelling = @tagName(callee);
             const bare = if (spelling[0] == '$') spelling[1..] else spelling;
-            const t = try gpa.dupe(u8, try sanitize(&scratch, bare));
+            // A synthetic variant `op$variant` (`absdelay$quad`) is `op`'s
+            // operator and state, so it takes `op`'s name: a host finds state
+            // by these Instance field names.
+            const op_name = bare[0 .. std.mem.indexOfScalar(u8, bare, '$') orelse bare.len];
+            const t = try gpa.dupe(u8, try sanitize(&scratch, op_name));
             try units.append(gpa, .{ .role = .analog_op, .target = t, .inst = inst, .op = k });
         }
     }
