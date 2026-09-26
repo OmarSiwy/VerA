@@ -65,13 +65,11 @@ pub const Delay = struct {
     /// The caller supplies the published driver value, not a pending target.
     pub fn continuous(self: Delay, from: Int.Literal, value: Int.Literal) u64 {
         if (value.width == 1) return self.to(value.bit(0));
-        var all_z = true;
-        for (0..value.width) |bit| {
-            if (value.bit(@intCast(bit)) != .z) {
-                all_z = false;
-                break;
-            }
-        }
+        // z is (value 0, unknown 1): one plane word tests 64 bits.
+        const all_z = for (0..(value.width + 63) / 64) |w| {
+            const m = wordMask(value.width, w);
+            if (value.unknowns()[w] & ~value.values()[w] & m != m) break false;
+        } else true;
         if (all_z) return self.off;
         if (from.truth() == .one and value.truth() == .zero) return self.fall;
         return self.rise;
@@ -118,8 +116,11 @@ pub const Net = struct {
     /// The §3.8 decay countdown in flight, cancelled on leaving the state.
     decay_event: ?Handle = null,
     /// Per bit, the §7.10 signal the last resolution found — its strength is
-    /// what a MOS switch reading this net passes on (§7.12).
+    /// what a MOS switch reading this net passes on (§7.12). Kept current only
+    /// where `strength_read` or the net resolves through a fold.
     signal: []Signal = &.{},
+    /// A MOS switch's data terminal is this net, so `signal` is read.
+    strength_read: bool = false,
     /// The §7.6 pass switches with this net as a terminal.
     trans: []const u32 = &.{},
 };
@@ -276,34 +277,39 @@ fn logicBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
 // of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
 // are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
 // the value it currently holds.
+/// What one driver asserts, decided at elaboration: exactly one source.
+pub const Source = union(enum) {
+    /// A.6.1 an expression. With `slice`, it is read `total` bits wide and the
+    /// driver asserts the bits from `lo` up — one internal port of a §12.3.6
+    /// concatenated port.
+    expr: struct { e: Ast.ExprId, slice: ?Slice = null },
+    /// A port connection that cannot collapse — see `Bridge`.
+    bridge: Bridge,
+    /// An A.3.1 gate instance. A gate is a driver (§7.1) but not an
+    /// expression: §7.8.5's tables read z on an input as x, which no operator
+    /// does.
+    gate: Gate,
+    /// An IEEE 1364-2005 §8 UDP instance.
+    udp: *Udp,
+    /// A §7.6 MOS switch, whose `s0`/`s1` are the strengths it passes, set at
+    /// each evaluation.
+    mos: Mos,
+    /// IEEE 1364 §19.10's `unconnected_drive`: the directive pulls an
+    /// unconnected input port to a logic level THROUGH A PULL-STRENGTH
+    /// DRIVER, so it is a driver among drivers and argues with the net's own
+    /// type through `Signal` like any other. A constant, hence an empty
+    /// sensitivity list — it is evaluated once, at the initial `.continuous`
+    /// dispatch, and never re-runs.
+    pull: Int.Bit,
+};
+
 pub const Driver = struct {
     net: u32,
-    value: Ast.ExprId,
-    /// The §6.2.2 instance `value` is written in. A port connection expression
-    /// belongs to the PARENT, which is not the scope of the net it feeds.
+    source: Source,
+    /// The §6.2.2 instance the source is written in. A port connection
+    /// expression belongs to the PARENT, which is not the scope of the net it
+    /// feeds.
     scope: u32 = 0,
-    /// Set instead of `value` (which is then `.none`) for a port connection
-    /// that cannot collapse — see `Bridge`.
-    bridge: ?Bridge = null,
-    /// Set instead of `value` for an A.3.1 gate instance. A gate is a driver
-    /// (§7.1) but not an expression: §7.8.5's tables read z on an input as x,
-    /// which no operator does.
-    gate: ?Gate = null,
-    /// Set instead of `value` for an IEEE 1364-2005 §8 UDP instance.
-    udp: ?*Udp = null,
-    /// `value` is read `total` bits wide and this driver asserts the bits
-    /// from `lo` up — one internal port of a §12.3.6 concatenated port.
-    slice: ?Slice = null,
-    /// Set instead of `value` for a §7.6 MOS switch, whose `s0`/`s1` are the
-    /// strengths it passes, set at each evaluation.
-    mos: ?Mos = null,
-    /// Set instead of `value` for IEEE 1364 §19.10's `unconnected_drive`: the
-    /// directive pulls an unconnected input port to a logic level THROUGH A
-    /// PULL-STRENGTH DRIVER, so it is a driver among drivers and argues with
-    /// the net's own type through `Signal` like any other. A constant, hence no
-    /// expression and an empty sensitivity list — it is evaluated once, at the
-    /// initial `.continuous` dispatch, and never re-runs.
-    pull: ?Int.Bit = null,
     sensitivity: []const u32,
     current: Int.Literal,
     /// A gate's `current` is §7.10.2's H/L: its one bit, or high impedance.
@@ -419,25 +425,25 @@ pub fn netPull(kind: Ast.NetKind) Signal {
     };
 }
 
+/// The two §7.9 value tables a wired-logic net folds its drivers through:
+/// wired AND (`wand`, `triand`) and wired OR (`wor`, `trior`).
+pub const Wired = enum { @"and", @"or" };
+
 /// §7.9 Tables 7-4/7-6/7-7 are VALUE tables: a wired-logic net combines what
 /// its drivers say, and a strength decides only whether a driver says anything
-/// (a 0 driven through `highz0` is a z, and z is the tables' identity).
-pub fn wiredLogic(kind: Ast.NetKind) bool {
+/// (a 0 driven through `highz0` is a z, and z is the tables' identity). Null
+/// for every other net type, which resolves through `Signal` (§7.10).
+pub fn wiredLogic(kind: Ast.NetKind) ?Wired {
     return switch (kind) {
-        .wand, .triand, .wor, .trior => true,
-        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => false,
+        .wand, .triand => .@"and",
+        .wor, .trior => .@"or",
+        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => null,
     };
 }
 
 /// IEEE1364-2005 §7.9 wired logic, Tables 7-4/7-6/7-7: fold one more driver's
 /// bit into a net's accumulated bit. `z` is the identity of all three tables,
 /// which is exactly why an undriven net reads z.
-///
-/// Only the wired-logic net types reach this now: `wire`/`tri`/`tri0`/`tri1`/
-/// `trireg` and the supply nets resolve through `Signal`, which is clause 7's
-/// strength model, and the `else` arm below survives for the one thing the
-/// value tables still do there — deciding what a fold with no contribution at
-/// all reads as.
 ///
 /// ponytail: the wired-logic result carries no strength onward. §7.10 gives
 /// the combination a strength of its own (the stronger of the two on the
@@ -446,14 +452,12 @@ pub fn wiredLogic(kind: Ast.NetKind) bool {
 /// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Signal`
 /// fold with the table applied to the collapsed values and the strength taken
 /// alongside.
-pub fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
+pub fn wired(table: Wired, acc: Int.Bit, b: Int.Bit) Int.Bit {
     if (acc == .z) return b;
     if (b == .z) return acc;
-    return switch (kind) {
-        .wand, .triand => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
-        .wor, .trior => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
-        // Agreement, else conflict.
-        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => if (acc == b) acc else .x,
+    return switch (table) {
+        .@"and" => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
+        .@"or" => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
     };
 }
 
@@ -616,6 +620,13 @@ pub fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
     const word = index / 64;
     if (@intFromEnum(b) & 1 != 0) value.values()[word] |= at else value.values()[word] &= ~at;
     if (@intFromEnum(b) >> 1 != 0) value.unknowns()[word] |= at else value.unknowns()[word] &= ~at;
+}
+
+/// The bits of plane word `w` that lie inside a `width`-bit value; the ones
+/// above it carry nothing and may hold anything.
+pub fn wordMask(width: u32, w: usize) u64 {
+    const rest = width - @as(u32, @intCast(w * 64));
+    return if (rest >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(rest)) - 1;
 }
 
 // ---- tests ------------------------------------------------------------------
