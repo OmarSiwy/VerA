@@ -243,7 +243,7 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     // function and no connect module that outlives its own `end*`. A prelude
     // file that breaks one of these must extend `Parser.Seed` rather than lose
     // the event — which is exactly the shape of `Pp`'s four asserts above.
-    std.debug.assert(!parser.failed and bag.list.items.len == 0);
+    std.debug.assert(!parser.failed and bag.isEmpty());
     std.debug.assert(parser.pos == toks.len - 1);
     std.debug.assert(parser.kw_set == token.default_keyword_set);
     std.debug.assert(parser.kw_stack.items.len == 0);

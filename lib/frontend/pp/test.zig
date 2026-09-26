@@ -965,7 +965,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
         try testing.expectEqual(lp.pos, sp.pos);
         try testing.expectEqual(lp.gen_construct, sp.gen_construct);
         try testing.expectEqual(lp.failed, sp.failed);
-        try testing.expectEqual(@as(usize, 0), lbag.list.items.len + sbag.list.items.len);
+        try testing.expectEqual(@as(usize, 0), lbag.count() + sbag.count());
     }
 }
 
