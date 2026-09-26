@@ -76,6 +76,12 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     defer if (interp != null) {
         _ = self.interp_stack.pop();
     };
+    // `vera_seed`, the same way, for every string `$limit` inside.
+    const seed = self.file.stmtLte(id, .vera_seed);
+    if (seed) |a| try self.seed_stack.append(self.arena, a);
+    defer if (seed != null) {
+        _ = self.seed_stack.pop();
+    };
     // `vera_nodiff`, the same way, for every assignment inside.
     const nodiff = self.file.stmtLte(id, .vera_nodiff);
     if (nodiff) |a| try self.nodiff_stack.append(self.arena, try nodiffValue(self, a));

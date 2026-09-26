@@ -199,8 +199,8 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // the same insert-tolerance reason: a model that gains a `$limit`
     // appends core fields, it renumbers none.
     for (from.limits) |lc| {
-        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
-            if (v == .f_zero) continue;
+        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign, lc.seed }) |v| {
+            if (v == .f_zero or v == .undef) continue;
             try jobs.append(self.arena, .{
                 .kind = .limit_arg,
                 .target = v,

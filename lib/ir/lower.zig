@@ -587,6 +587,9 @@ interp_stack: std.ArrayList(bool) = .empty,
 /// The same for `vera_nodiff`: true where assignments store no derivative
 /// (`lower_stmt.lowerAssign`).
 nodiff_stack: std.ArrayList(bool) = .empty,
+/// The same for `vera_seed`, kept whole: its value is lowered at each string
+/// `$limit` inside (`lower_limit.recordSeed`).
+seed_stack: std.ArrayList(Ast.LteAttr) = .empty,
 /// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
 /// `fadd`-chained directly: a call inside an `if` arm does not dominate the
 /// chain root at the end of the block. An SSA place does — seeded `.f_zero` in
@@ -714,6 +717,16 @@ pub const MemArray = struct {
 /// means and what ngspice's `MOS1vgs` state field IS. When each site names a
 /// distinct access function the two readings coincide, so this is a strict
 /// generalisation of per-site state, never a weakening.
+/// VerA's `vera_seed` (§2.9) on one string `$limit` site: the cold-start
+/// value `seed` gives the site's branch, in the frame of its sign argument.
+pub const LimitSeed = struct {
+    /// The `$limit` call's result, which names the site.
+    call: Mir.Value,
+    value: Mir.Value,
+    /// The attribute's token, for diagnostics.
+    tok: u32,
+};
+
 pub const LimitSlot = struct {
     /// `V(g,s)` as it reads in the source, for the `Instance` field comment.
     label: []const u8,
