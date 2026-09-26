@@ -630,6 +630,13 @@ test "§10.3 `default_transition Syntax 10-2" {
         try testing.expectEqual(@as(f64, 4e-9), e[0].value.?);
     }
 
+    // IEEE 1364 §19.6: `resetall returns the directive to its default, which
+    // §10.3 leaves to the simulator — a null event after the 4n.
+    const reset = try T.ev("`default_transition 4n\n`resetall\n");
+    defer testing.allocator.free(reset);
+    try testing.expectEqual(@as(usize, 2), reset.len);
+    try testing.expectEqual(@as(?f64, null), reset[1].value);
+
     // fixture ch10 48: the operand is not bracketed in Syntax 10-2, so it is
     // mandatory — and the bare form is NOT a request for the simulator default.
     try expectFail("`default_transition\n", .E0129);
