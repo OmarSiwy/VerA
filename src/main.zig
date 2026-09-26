@@ -47,8 +47,11 @@ const usage_text =
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
     \\  --check                 type-check the generated device with zig
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
-    \\  --emit-exe              build a runnable Verilog-A testbench, or a .v design's
-    \\                          executable (needs --contract); print its path
+    \\  --emit-exe              build a runnable Verilog-A testbench (needs --contract),
+    \\                          or a .v design's executable; print its path
+    \\  --schedule=static|fifo  a .v executable's order of same-time events:
+    \\                          combinational logic levelized (static, the
+    \\                          default; IEEE 1364 §11.4.1), or the interpreter's
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
@@ -135,6 +138,7 @@ pub fn main(init: std.process.Init) !u8 {
     var optimize: ?std.builtin.OptimizeMode = null;
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
+    var schedule: digital.emit.Schedule = .static;
 
     var args = init.minimal.args.iterate();
     _ = args.skip();
@@ -197,6 +201,11 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
             optimize = std.meta.stringToEnum(std.builtin.OptimizeMode, arg["--optimize=".len..]) orelse {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
+                return 2;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--schedule=")) {
+            schedule = std.meta.stringToEnum(digital.emit.Schedule, arg["--schedule=".len..]) orelse {
+                try err.print("error: `{s}`: not static|fifo\n", .{arg});
                 return 2;
             };
         } else if (std.mem.startsWith(u8, arg, "--zig-backend=")) {
@@ -342,21 +351,19 @@ pub fn main(init: std.process.Init) !u8 {
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
         const opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
-            .work_dir = work_dir orelse ".zig-cache/vera-tb",
-            .contract = contract_path orelse {
-                try err.writeAll(
-                    "error: --emit-exe needs --contract PATH (the root of the `contract` " ++
-                        "module; the executable is built from the VerA tree beside it)\n",
-                );
-                return 2;
+            .work_dir = wd,
+            .contract = contract_path orelse simTree(io, arena.allocator(), wd) catch |e| {
+                try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
+                return 1;
             },
             .name = std.fs.path.stem(in_path),
             .zig_exe = zig_exe,
             .mixed = true,
             .optimize = opt,
             .backend = backend,
-        }, out, err, json, use_color);
+        }, schedule, out, err, json, use_color);
         digital.run(arena.allocator(), source, opts, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
@@ -605,6 +612,23 @@ pub fn main(init: std.process.Init) !u8 {
     return 0;
 }
 
+/// Write the sources `sim` compiles from (`sim_sources`, embedded at build
+/// time) under `dir`, and return the `contract` root among them: the path
+/// `tb.buildExe` finds the tree from. Each file lands atomically, so a
+/// concurrent `vera` writing the same tree never exposes half a file.
+fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
+    const root = try std.fs.path.join(arena, &.{ dir, "vera-src" });
+    var d = try Io.Dir.cwd().createDirPathOpen(io, root, .{});
+    defer d.close(io);
+    for (@import("sim_sources").files) |f| {
+        var af = try d.createFileAtomic(io, f[0], .{ .make_path = true, .replace = true });
+        defer af.deinit(io);
+        try af.file.writeStreamingAll(io, f[1]);
+        try af.replace(io);
+    }
+    return std.fs.path.join(arena, &.{ root, "tools", "contract.zig" });
+}
+
 /// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
 /// is refused now with `vera --run`'s diagnostics; then build the executable
 /// `digital.emit` writes and print its path. A design that is not native says
@@ -617,6 +641,7 @@ fn emitDigital(
     source: []const u8,
     opts: digital.Options,
     build: vera.tb.BuildOptions,
+    schedule: digital.emit.Schedule,
     out: *Io.Writer,
     err: *Io.Writer,
     json: bool,
@@ -634,7 +659,7 @@ fn emitDigital(
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,
         .language = opts.language,
-    });
+    }, schedule);
     if (prog.fallback) |why| try err.print("note: {s}: not native ({s})\n", .{ opts.file_name, why });
     const built = vera.tb.buildExe(gpa, io, null, prog.text, build) catch |e| {
         try err.print("error: {s}: building the executable failed: {t}\n", .{ opts.file_name, e });

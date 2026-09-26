@@ -11,6 +11,13 @@
 //! nonblocking update rows (§9.2.2), so a native process wakes and is woken
 //! in exactly `vera --run`'s order. Only the process bodies are compiled.
 //!
+//! That is the `fifo` schedule. The `static` one keeps the queue only for
+//! what needs it: a combinational node (a continuous assignment, an
+//! `always @*`) is marked dirty when an operand changes and every dirty node
+//! runs in one `settle` event, in topological order; an `always @(event)`
+//! whose body never suspends waits on a static per-slot watcher list, not on
+//! a suspension record. Both are orders §11.4.1 leaves to the simulator.
+//!
 //! `interpret` is the executable of a design `digital/emit.zig` did not make
 //! native: the embedded source through the interpreter, exactly `vera --run`.
 const std = @import("std");
@@ -56,9 +63,12 @@ pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const 
 
 /// A native design's static half, emitted as constants.
 pub const Design = struct {
-    /// Every slot's initial value, one word per plane (`Run.values`).
+    /// Every slot's initial value (`Run.values`), `logic.words(width)`
+    /// words per plane, slot after slot.
     v: []const u64,
     x: []const u64,
+    /// `Run.values.len`.
+    slots: u32,
     /// `Run.fan_start`/`Run.fan`: the continuous drivers reading each slot.
     fan_start: []const u32,
     fan: []const u32,
@@ -68,7 +78,25 @@ pub const Design = struct {
     repeats: u32,
     /// `Run.pending`'s time-0 queue, as the pcs each process starts at.
     order: []const u32,
+    /// Static schedule: per slot, the combinational nodes reading it
+    /// (`comb[comb_start[slot]..comb_start[slot + 1]]`), numbered in
+    /// topological order, and how many nodes there are.
+    comb_start: []const u32 = &.{},
+    comb: []const u32 = &.{},
+    nodes: u32 = 0,
+    /// Static schedule: per slot, the event-control terms of the processes
+    /// that wait at one fixed place (`watchers[watch_start[slot]..]`), and
+    /// how many such processes there are.
+    watch_start: []const u32 = &.{},
+    watchers: []const Watcher = &.{},
+    triggered: u32 = 0,
 };
+
+/// One term of a triggered process: it resumes at `pc` on `edge`.
+pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
+
+/// What `State.next` returns for a settle event.
+pub const settle_pc: u32 = std.math.maxInt(u32);
 
 /// `exec.Edge`: §5.10.1 an edge is a change toward 1 or away from 1.
 pub const Edge = enum(u2) {
@@ -92,11 +120,16 @@ pub const Error = error{Failed} || std.mem.Allocator.Error || std.Io.Writer.Erro
 /// `exec.Susp` without the task activation, which no native process has.
 const Susp = struct { pc: u32, gen: u32, alive: bool };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
-/// One §9.2.2 nonblocking update: the bits `m` of `slot` become `v`/`x`
-/// when it matures, merged into the value the slot holds THEN.
-const Nba = struct { slot: u32, v: u64, x: u64, m: u64 };
-/// A scheduler payload with this bit is an `Nba` row; else it is a pc.
-const nba_bit: u32 = 1 << 31;
+/// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
+/// `off`) become `v`/`x` when it matures, merged into the value the slot
+/// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`.
+const Nba = struct { slot: u32, off: u32, n: u32, at: u32 };
+/// The scheduler payload of the one NBA-region event that applies every
+/// row in `rows`, in order: the interpreter's one event per row, which the
+/// scheduler promotes together, with nothing between them.
+const nba_payload: u32 = 1 << 31;
+/// The payload of a settle event; every other payload is a pc.
+const settle_payload: u32 = nba_payload | 1;
 
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
@@ -106,14 +139,31 @@ pub const State = struct {
     v: []u64,
     x: []u64,
     sched: Scheduler,
+    /// The NBA region's rows, in the order they were queued.
     rows: std.ArrayList(Nba) = .empty,
-    free_rows: std.ArrayList(u32) = .empty,
+    words: std.ArrayList(u64) = .empty,
     susps: std.ArrayList(Susp) = .empty,
     free_susps: std.ArrayList(u32) = .empty,
     terms: []std.ArrayList(Term),
     fan_start: []const u32,
     fan: []const u32,
     armed: []bool,
+    comb_start: []const u32,
+    comb: []const u32,
+    /// The slots with node readers that changed since the settle event was
+    /// queued, each once (`pending`): a slot written many times before the
+    /// settle costs its fan-out once.
+    changed: std.ArrayList(u32) = .empty,
+    pending: []bool,
+    /// One bit per combinational node, set while the settle event runs; it
+    /// runs them from `cursor` up.
+    dirty: []u64,
+    cursor: u32 = 0,
+    settle: enum { idle, queued, running } = .idle,
+    watch_start: []const u32,
+    watchers: []const Watcher,
+    /// Per triggered process: it is waiting at its event control.
+    waiting: []bool,
     repeats: []u64,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
@@ -131,10 +181,17 @@ pub const State = struct {
             .v = try gpa.dupe(u64, d.v),
             .x = try gpa.dupe(u64, d.x),
             .sched = .init(gpa),
-            .terms = try gpa.alloc(std.ArrayList(Term), d.v.len),
+            .terms = try gpa.alloc(std.ArrayList(Term), d.slots),
             .fan_start = d.fan_start,
             .fan = d.fan,
             .armed = try gpa.alloc(bool, d.code_len),
+            .comb_start = d.comb_start,
+            .comb = d.comb,
+            .pending = try gpa.alloc(bool, if (d.nodes == 0) 0 else d.slots),
+            .dirty = try gpa.alloc(u64, (d.nodes + 63) / 64),
+            .watch_start = d.watch_start,
+            .watchers = d.watchers,
+            .waiting = try gpa.alloc(bool, d.triggered),
             .repeats = try gpa.alloc(u64, d.repeats),
             .time_format = .{ .units = time_units },
             .stdout = undefined,
@@ -146,29 +203,90 @@ pub const State = struct {
         self.out = &self.stdout.interface;
         @memset(self.terms, .empty);
         @memset(self.armed, false);
+        @memset(self.pending, false);
+        @memset(self.dirty, 0);
+        @memset(self.waiting, false);
         @memset(self.repeats, 0);
         for (d.order) |pc| try self.run(pc, null);
     }
 
-    /// The next process to dispatch, at the pc it resumes at; null once the
-    /// queue is empty or `$finish` ran. Nonblocking updates are applied here.
+    /// The next process to dispatch, at the pc it resumes at, or
+    /// `settle_pc`; null once the queue is empty or `$finish` ran.
+    /// Nonblocking updates are applied here.
     pub fn next(self: *State) Error!?u32 {
         while (self.sched.next()) |event| {
-            // `Run.runUntil`'s zero-delay-loop guard, counted the same way.
-            if (event.time != self.budget_time) {
-                self.budget_time = event.time;
-                self.budget_used = 0;
+            try self.count(event.time);
+            if (event.payload == settle_payload) {
+                for (self.changed.items) |slot| {
+                    self.pending[slot] = false;
+                    for (self.comb[self.comb_start[slot]..self.comb_start[slot + 1]]) |node| self.markDirty(node);
+                }
+                self.changed.clearRetainingCapacity();
+                self.settle = .running;
+                return settle_pc;
             }
-            self.budget_used += 1;
-            if (self.budget_used > budget)
-                return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, event.time });
-            if (event.payload & nba_bit == 0) return event.payload;
-            const at = event.payload & ~nba_bit;
-            const row = self.rows.items[at];
-            try self.free_rows.append(self.gpa, at);
-            try self.put(row.slot, .{ .v = row.v, .x = row.x }, row.m);
+            if (event.payload != nba_payload) return event.payload;
+            for (self.rows.items, 0..) |row, i| {
+                if (i != 0) try self.count(event.time);
+                const w = self.words.items[row.at..][0 .. 3 * row.n];
+                try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+            }
+            self.rows.clearRetainingCapacity();
+            self.words.clearRetainingCapacity();
         }
         return null;
+    }
+
+    /// `Run.runUntil`'s zero-delay-loop guard, counted the same way: one
+    /// event per nonblocking row.
+    fn count(self: *State, at: u64) Error!void {
+        if (at != self.budget_time) {
+            self.budget_time = at;
+            self.budget_used = 0;
+        }
+        self.budget_used += 1;
+        if (self.budget_used > budget)
+            return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
+    }
+
+    /// The next dirty combinational node of this settle event, in
+    /// topological order, or null when none is left.
+    pub fn nextDirty(self: *State) ?u32 {
+        while (self.cursor < self.dirty.len) : (self.cursor += 1) {
+            const w = self.dirty[self.cursor];
+            if (w != 0) {
+                self.dirty[self.cursor] = w & (w - 1);
+                return self.cursor * 64 + @ctz(w);
+            }
+        }
+        self.cursor = 0;
+        self.settle = .idle;
+        return null;
+    }
+
+    fn markDirty(self: *State, node: u32) void {
+        self.dirty[node / 64] |= @as(u64, 1) << @intCast(node % 64);
+        // A node's successors come after it, so a running settle only ever
+        // gains bits above its cursor; this keeps it right regardless.
+        self.cursor = @min(self.cursor, node / 64);
+    }
+
+    /// `slot` changed: its node readers run in the settle event, which is
+    /// queued now if it is not already.
+    fn dirtyReaders(self: *State, slot: u32) Error!void {
+        switch (self.settle) {
+            .running => for (self.comb[self.comb_start[slot]..self.comb_start[slot + 1]]) |node| self.markDirty(node),
+            .queued => if (!self.pending[slot]) {
+                self.pending[slot] = true;
+                try self.changed.append(self.gpa, slot);
+            },
+            .idle => {
+                self.pending[slot] = true;
+                try self.changed.append(self.gpa, slot);
+                self.settle = .queued;
+                _ = self.sched.schedule(.active, settle_payload) catch |e| return self.schedFail(e);
+            },
+        }
     }
 
     /// Exit status, after flushing the transcript.
@@ -192,34 +310,74 @@ pub const State = struct {
         e.interface.flush() catch {};
     }
 
-    pub inline fn get(self: *const State, slot: u32) W {
-        return .{ .v = self.v[slot], .x = self.x[slot] };
+    /// The value of at most 64 bits at word `off`.
+    pub inline fn get(self: *const State, off: u32) W {
+        return .{ .v = self.v[off], .x = self.x[off] };
     }
 
-    /// `exec.store` of the bits `m` of `slot`: nothing happens unless the
-    /// value changes; then every waiter it matches wakes.
-    pub fn put(self: *State, slot: u32, a: W, m: u64) Error!void {
-        const ov = self.v[slot];
-        const ox = self.x[slot];
-        const nv = (ov & ~m) | (a.v & m);
-        const nx = (ox & ~m) | (a.x & m);
+    /// The `n`-word value at word `off`.
+    pub inline fn getw(self: *const State, off: u32, comptime n: u32) logic.Wide(n) {
+        return .{ .v = self.v[off..][0..n].*, .x = self.x[off..][0..n].* };
+    }
+
+    /// The bits `m` of the value at word `off` become `a`'s, for a slot no
+    /// event control, driver or node can be waiting on.
+    pub inline fn set(self: *State, off: u32, a: anytype, m: anytype) void {
+        if (@TypeOf(a) != W) {
+            for (self.v[off..][0..a.v.len], self.x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
+                ov.* = (ov.* & ~am) | (av & am);
+                ox.* = (ox.* & ~am) | (ax & am);
+            }
+            return;
+        }
+        const bits: u64 = m;
+        self.v[off] = (self.v[off] & ~bits) | (a.v & bits);
+        self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
+    }
+
+    /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
+    /// nothing happens unless the value changes; then every waiter it
+    /// matches wakes. `a` is a `logic.T`, `m` the `logic.M` of its width.
+    pub inline fn put(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        if (@TypeOf(a) != W) return self.store(slot, off, &a.v, &a.x, &m);
+        const bits: u64 = m;
+        const ov = self.v[off];
+        const ox = self.x[off];
+        const nv = (ov & ~bits) | (a.v & bits);
+        const nx = (ox & ~bits) | (a.x & bits);
         if (nv == ov and nx == ox) return;
-        self.v[slot] = nv;
-        self.x[slot] = nx;
-        try self.wake(slot, logic.low(.{ .v = ov, .x = ox }), logic.low(.{ .v = nv, .x = nx }));
+        self.v[off] = nv;
+        self.x[off] = nx;
+        try self.wake(slot, logic.low(W{ .v = ov, .x = ox }), logic.low(W{ .v = nv, .x = nx }));
     }
 
-    /// §9.2.2: schedule the bits `m` of `slot` to become `a` in the NBA region.
-    pub fn nba(self: *State, slot: u32, a: W, m: u64) Error!void {
-        const row: Nba = .{ .slot = slot, .v = a.v, .x = a.x, .m = m };
-        const at: u32 = if (self.free_rows.pop()) |i| blk: {
-            self.rows.items[i] = row;
-            break :blk i;
-        } else blk: {
-            try self.rows.append(self.gpa, row);
-            break :blk @intCast(self.rows.items.len - 1);
-        };
-        _ = self.sched.schedule(.nba, at | nba_bit) catch |e| return self.schedFail(e);
+    fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
+        const sv = self.v[off..][0..v.len];
+        const sx = self.x[off..][0..v.len];
+        const before = logic.low(W{ .v = sv[0], .x = sx[0] });
+        var changed: u64 = 0;
+        for (sv, sx, v, x, m) |*ov, *ox, av, ax, am| {
+            const nv = (ov.* & ~am) | (av & am);
+            const nx = (ox.* & ~am) | (ax & am);
+            changed |= (nv ^ ov.*) | (nx ^ ox.*);
+            ov.* = nv;
+            ox.* = nx;
+        }
+        if (changed == 0) return;
+        try self.wake(slot, before, logic.low(W{ .v = sv[0], .x = sx[0] }));
+    }
+
+    /// §9.2.2: schedule the bits `m` of `slot` (words from `off`) to become
+    /// `a` in the NBA region.
+    pub fn nba(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
+        const at: u32 = @intCast(self.words.items.len);
+        if (@TypeOf(a) == W)
+            try self.words.appendSlice(self.gpa, &.{ a.v, a.x, m })
+        else
+            try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
+        try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = n, .at = at });
+        if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
 
     /// Queue the process at `pc`: now (active), or `ticks` later (inactive).
@@ -235,11 +393,18 @@ pub const State = struct {
     }
 
     /// `exec.wake`: the continuous drivers reading `slot` first, then the
-    /// event controls in the order they suspended.
+    /// event controls in the order they suspended. Under the static
+    /// schedule the nodes and triggered processes reading it come between.
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);
+        };
+        if (slot + 1 < self.comb_start.len and self.comb_start[slot] != self.comb_start[slot + 1]) try self.dirtyReaders(slot);
+        if (slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+            if (!self.waiting[w.proc] or !w.edge.matches(before, after)) continue;
+            self.waiting[w.proc] = false;
+            try self.run(w.pc, null);
         };
         const list = &self.terms[slot];
         var keep: usize = 0;
@@ -319,29 +484,29 @@ pub const State = struct {
         self.sched.finish();
     }
 
-    fn literal(a: *const W, buf: *[2]u64, w: u32, signed: bool) Int.Literal {
-        buf.* = .{ a.v, a.x };
+    /// `a`'s planes as the `Literal` the interpreter formats.
+    fn literal(buf: []u64, w: u32, signed: bool) Int.Literal {
         return .{ .width = w, .signed = signed, .sized = true, .planes = buf };
     }
 
     /// One `%b`/`%o`/`%h`/`%d` operand (§17.1.1.3).
-    pub fn value(self: *State, a: W, w: u32, signed: bool, radix: fmt.Radix, width: ?u32) Error!void {
-        var buf: [2]u64 = undefined;
-        fmt.value(self.out, literal(&a, &buf, w, signed), radix, width) catch |e| return switch (e) {
-            error.TooWide => unreachable, // a native operand is at most 64 bits
+    pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u32) Error!void {
+        var buf = logic.planesOf(a);
+        fmt.value(self.out, literal(&buf, w, signed), radix, width) catch |e| return switch (e) {
+            error.TooWide => self.fail("decimal display of an operand wider than 64 bits is not implemented", .{}),
             error.WriteFailed => error.WriteFailed,
         };
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
-    pub fn time(self: *State, a: W, w: u32, signed: bool, unit_exp: i32) Error!void {
-        var buf: [2]u64 = undefined;
-        try fmt.time(self.out, literal(&a, &buf, w, signed), self.time_format, unit_exp);
+    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32) Error!void {
+        var buf = logic.planesOf(a);
+        try fmt.time(self.out, literal(&buf, w, signed), self.time_format, unit_exp);
     }
 
     /// One `%s` or `%c` operand (§17.1.1.7).
-    pub fn text(self: *State, a: W, w: u32, char: bool, width: ?u32) Error!void {
-        var buf: [2]u64 = undefined;
-        try fmt.text(self.out, literal(&a, &buf, w, false), char, width);
+    pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u32) Error!void {
+        var buf = logic.planesOf(a);
+        try fmt.text(self.out, literal(&buf, w, false), char, width);
     }
 };

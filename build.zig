@@ -357,7 +357,44 @@ fn cliExe(
         .imports = mods,
     });
     mod.addOptions("build_options", o);
+    mod.addImport("sim_sources", simSources(b));
     return b.addExecutable(.{ .name = name, .root_module = mod });
+}
+
+/// The `sim_sources` module: `files`, every source `sim` compiles from (the
+/// `@import`/`@embedFile` closure of its `module_specs` row and that row's
+/// imports), as `.{ path, bytes }`. `vera --emit-exe design.v` writes them
+/// out and builds the design's executable over them, so it needs no tree.
+fn simSources(b: *std.Build) *std.Build.Module {
+    const io = b.graph.io;
+    const wf = b.addWriteFiles();
+    var root: std.Io.Writer.Allocating = .init(b.allocator);
+    root.writer.writeAll("pub const files = [_][2][]const u8{\n") catch @panic("OOM");
+    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    for (module_specs) |spec| if (std.mem.eql(u8, spec.name, "sim")) {
+        seen.put(b.allocator, spec.path, {}) catch @panic("OOM");
+        for (spec.imports) |dep| for (module_specs) |d| if (std.mem.eql(u8, d.name, dep)) seen.put(b.allocator, d.path, {}) catch @panic("OOM");
+    };
+    var i: usize = 0;
+    while (i < seen.count()) : (i += 1) {
+        const path = seen.keys()[i];
+        const text = b.build_root.handle.readFileAlloc(io, path, b.allocator, .unlimited) catch |e| std.debug.panic("{s}: {t}", .{ path, e });
+        var it = std.mem.tokenizeAny(u8, text, "\"");
+        var before: []const u8 = "";
+        while (it.next()) |tok| : (before = tok) {
+            if (!(std.mem.endsWith(u8, before, "@import(") or std.mem.endsWith(u8, before, "@embedFile("))) continue;
+            if (std.mem.indexOfScalar(u8, tok, '.') == null) continue; // a module name
+            const dep = b.pathJoin(&.{ std.fs.path.dirname(path) orelse ".", tok });
+            const norm = std.fs.path.resolvePosix(b.allocator, &.{dep}) catch @panic("OOM");
+            // A path in prose, not code: nothing to ship.
+            b.build_root.handle.access(io, norm, .{}) catch continue;
+            seen.put(b.allocator, norm, {}) catch @panic("OOM");
+        }
+        _ = wf.addCopyFile(b.path(path), path);
+        root.writer.print("    .{{ \"{s}\", @embedFile(\"{s}\") }},\n", .{ path, path }) catch @panic("OOM");
+    }
+    root.writer.writeAll("};\n") catch @panic("OOM");
+    return b.createModule(.{ .root_source_file = wf.add("sim_sources.zig", root.written()) });
 }
 
 /// A C application at `c`, compiled against src/vpi/vpi_user.h (and its own
