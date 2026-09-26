@@ -34,7 +34,6 @@ const driver = @import("driver.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
-const Waiter = exec.Waiter;
 const Delay = @import("net.zig").Delay;
 const Bridge = @import("net.zig").Bridge;
 const Net = @import("net.zig").Net;
@@ -297,7 +296,22 @@ pub const Run = struct {
     /// `free_rows`, so this is bounded by the most events queued at once.
     pending: std.ArrayList(Row) = .empty,
     free_rows: std.ArrayList(u32) = .empty,
-    waiters: std.ArrayList(Waiter) = .empty,
+    /// §9.7 the processes suspended on an event control. A row is recycled
+    /// once its process resumes or is disabled.
+    susps: std.ArrayList(exec.Susp) = .empty,
+    free_susps: std.ArrayList(u32) = .empty,
+    /// §5.10.1 per slot, the terms of the event controls waiting on it; a
+    /// slot no variable owns (`driver.key`, `registerMonitor`) is in
+    /// `far_terms`.
+    terms: []std.ArrayList(exec.Term) = &.{},
+    far_terms: std.AutoHashMapUnmanaged(u32, std.ArrayList(exec.Term)) = .empty,
+    /// §6.1 / §7.6 the static fan-out (`exec.buildFanout`): per slot
+    /// `fan[fan_start[slot]..fan_start[slot + 1]]` are the pcs of the
+    /// continuous drivers and controlled switches reading it, and `armed[pc]`
+    /// says that process is suspended on its operands right now.
+    fan_start: []u32 = &.{},
+    fan: []u32 = &.{},
+    armed: []bool = &.{},
     scheduler: Scheduler,
     /// The source's own path, so §17.2.9's memory file resolves beside the
     /// module that names it.
@@ -2096,6 +2110,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .initEmpty());
+    try exec.buildFanout(&r);
     try driver.arm(&r);
     return r;
 }
