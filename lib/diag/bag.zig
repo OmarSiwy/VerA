@@ -362,26 +362,52 @@ pub const Bag = struct {
     /// of the source per clean compile, which is what every compile that emits
     /// a single warning already paid.
     ///
-    /// After this the bag must be released with `deinit(gpa)`.
+    /// After this the bag must be released with `deinit(gpa)`. On
+    /// `OutOfMemory` nothing is allocated and the bag is unchanged, still on
+    /// its arena.
     pub fn detach(self: *Bag, gpa: Allocator) Allocator.Error!void {
         var string_bytes: std.ArrayList(u8) = .empty;
+        errdefer string_bytes.deinit(gpa);
         try string_bytes.appendSlice(gpa, self.string_bytes.items);
         var extra: std.ArrayList(u32) = .empty;
+        errdefer extra.deinit(gpa);
         try extra.appendSlice(gpa, self.extra.items);
         var list: std.ArrayList(diag_entry.MessageIndex) = .empty;
+        errdefer list.deinit(gpa);
         try list.appendSlice(gpa, self.list.items);
 
         var files: std.ArrayList(diag_location.File) = .empty;
+        errdefer files.deinit(gpa);
         try files.appendSlice(gpa, self.files.items);
+        var files_done: usize = 0;
+        errdefer for (files.items[0..files_done]) |f| {
+            gpa.free(f.name);
+            gpa.free(f.text);
+            gpa.free(f.raw);
+            gpa.free(f.to_src);
+        };
         for (files.items) |*f| {
-            f.name = try gpa.dupe(u8, f.name);
-            f.text = try gpa.dupe(u8, f.text);
-            f.raw = try gpa.dupe(u8, f.raw);
+            const name = try gpa.dupe(u8, f.name);
+            errdefer gpa.free(name);
+            const text = try gpa.dupe(u8, f.text);
+            errdefer gpa.free(text);
+            const raw = try gpa.dupe(u8, f.raw);
+            errdefer gpa.free(raw);
             f.to_src = try gpa.dupe(diag_location.StripMark, f.to_src);
+            f.name = name;
+            f.text = text;
+            f.raw = raw;
+            files_done += 1;
         }
 
         const segs = try gpa.dupe(diag_location.Segment, self.map.segs);
-        for (segs) |*sg| sg.macro = try gpa.dupe(u8, sg.macro);
+        errdefer gpa.free(segs);
+        var segs_done: usize = 0;
+        errdefer for (segs[0..segs_done]) |sg| gpa.free(sg.macro);
+        for (segs) |*sg| {
+            sg.macro = try gpa.dupe(u8, sg.macro);
+            segs_done += 1;
+        }
 
         self.string_bytes = string_bytes;
         self.extra = extra;

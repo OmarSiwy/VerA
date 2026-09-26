@@ -73,6 +73,9 @@ pub fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
 /// A.8.6 unary_operator (§4.2.1, §4.2.7–§4.2.10). Unary binds tighter than
 /// every binary operator (Table 4-3, top row).
 pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
+    // Every expression recursion (parentheses, unary chains, `?:`) passes here.
+    try self.enter();
+    defer self.depth -= 1;
     const tok = self.pos;
     const op: Ast.UnaryOp = switch (self.peek()) {
         .plus => .plus,

@@ -376,10 +376,8 @@ pub const Lexer = struct {
             '^' => if (self.eat('~')) .caret_tilde else .caret,
             '?' => .question,
             ':' => .colon,
-            // §2.9 attribute instance. IEEE 1364 also spells a wildcard
-            // sensitivity list `@(*)`, which would need a third character of
-            // lookahead — it is digital-only (annex C), so it just lexes as
-            // `attr_open` `)` and the parser rejects it.
+            // §2.9 attribute instance. A.6.5's `@(*)` lexes as `attr_open`
+            // `)`, and the parser's event control reads it back.
             '(' => if (self.eat('*')) .attr_open else .lparen,
             ')' => .rparen,
             '[' => .lbracket,

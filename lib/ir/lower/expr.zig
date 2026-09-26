@@ -492,8 +492,8 @@ pub fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // is a constant however the grammar spells it, so the fix belongs
             // where the constant is built, not in a second range rule.
             switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
-                .int_const => |x| if (x != std.math.minInt(i64))
-                    return .{ .v = try self.mir.addIntConst(self.arena, -x), .ty = a.ty },
+                // §3.2 through the one constant kernel: -(-2^31) is -2^31.
+                .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, @import("frontend").constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
                 .float_const => |x| return .{ .v = try self.mir.addFloatConst(self.arena, -x), .ty = a.ty },
                 .undef, .str_const, .param_ref, .block_param, .inst_result => {},
             }

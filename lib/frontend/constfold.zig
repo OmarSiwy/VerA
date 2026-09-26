@@ -7,7 +7,8 @@
 //!
 //! The rules, and the clause each comes from:
 //!   §4.2.1.3  an operator is integer iff BOTH operands are integer.
-//!   §3.2      integer `+ - *` (and `<<`, `**`) wrap at 32 bits: `wrap32`.
+//!   §3.2      integer `+ - *` (and `<<`, `**`) wrap at 32 bits: `wrap32`;
+//!             unary `-` and `abs` of a 32-bit operand too: `wrapFrom`.
 //!   §4.2.4    integer `/` truncates toward zero; a zero divisor declines.
 //!   Table 3-3 string relations compare bytes; a mixed pair declines.
 //!   §4.2.12   `?:` is lazy: only the taken arm must fold.
@@ -103,6 +104,14 @@ pub fn wrap32(x: i64) i64 {
     return @as(i32, @truncate(x));
 }
 
+/// §3.2's wrap for unary `-` and `abs`, whose result `r` comes from operand
+/// `a`: -(-2^31) is -2^31. An operand wider than 32 bits is a §2.6.1 literal
+/// ("at least 32" bits), and its negation keeps that width, as the literal
+/// itself does.
+fn wrapFrom(a: i64, r: i64) i64 {
+    return if (std.math.cast(i32, a) != null) wrap32(r) else r;
+}
+
 /// §4.2.1.3 `b ** n` with both operands integer: "a common data type for each
 /// operand is determined before the operator is applied", and with neither
 /// real that type is integer. IEEE 1364-2005 §5.1.5 supplies the values: for
@@ -180,9 +189,8 @@ pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
     return switch (op) {
         .plus => a,
         .minus => switch (a) {
-            // Wrapping: a 64-bit literal can be minInt(i64), whose negation
-            // is itself rather than a panic.
-            .int => |i| .{ .int = 0 -% i },
+            // `-%` because a 64-bit literal can be minInt(i64).
+            .int => |i| .{ .int = wrapFrom(i, 0 -% i) },
             .real => |r| .{ .real = -r },
             .str => null,
         },
@@ -337,7 +345,7 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
     } else true;
     return switch (f) {
         // Wrapping, like unary minus: |minInt(i64)| is not an i64.
-        .abs => if (int) Const{ .int = if (args[0].int < 0) 0 -% args[0].int else args[0].int } else Const{ .real = @abs(x) },
+        .abs => if (int) Const{ .int = wrapFrom(args[0].int, if (args[0].int < 0) 0 -% args[0].int else args[0].int) } else Const{ .real = @abs(x) },
         .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = @min(x, y) },
         .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = @max(x, y) },
         .pow => .{ .real = std.math.pow(f64, x, y) },
@@ -466,4 +474,12 @@ test "case equality folds on integers like ==, and declines on reals" {
     try std.testing.expectEqual(@as(i64, 1), (binary(.case_eq, a, b, null) orelse unreachable).int);
     try std.testing.expectEqual(@as(i64, 0), (binary(.case_neq, a, b, null) orelse unreachable).int);
     try std.testing.expect(binary(.case_eq, a, r, null) == null);
+}
+
+test "negate and abs wrap a 32-bit operand and keep a wider literal's width" {
+    const min32: i64 = std.math.minInt(i32);
+    try std.testing.expectEqual(min32, unary(.minus, .{ .int = min32 }).?.int);
+    try std.testing.expectEqual(min32, math(.abs, &.{.{ .int = min32 }}).?.int);
+    try std.testing.expectEqual(@as(i64, -5000000000), unary(.minus, .{ .int = 5000000000 }).?.int);
+    try std.testing.expectEqual(@as(i64, 5000000000), math(.abs, &.{.{ .int = -5000000000 }}).?.int);
 }
