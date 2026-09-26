@@ -11,7 +11,9 @@
 //
 // 72 pins the wrap of `+` and `-` on variables. This pins negate and abs in a
 // constant expression, where the comparison consumes the value before the
-// narrowing store to the integer parameter could hide it.
+// narrowing store to the integer parameter could hide it, and on the variable
+// `lo`, whose negation the compiler may fold because `lo` never changes. Both
+// must give the 32-bit answer.
 //
 //! lrm 3.2
 `include "check.vh"
@@ -20,10 +22,13 @@ module ch03_integer_negate_and_abs_wrap_in_a_constant(p, n);
     electrical p, n;
     parameter integer neg_pos = (-(-2147483647-1) > 0);
     parameter integer abs_pos = (abs(-2147483647-1) > 0);
+    integer lo = -2147483648;
 
     analog begin
         `CHECKI("-(-2^31) is -2^31 in a constant expression", neg_pos, 0);
         `CHECKI("abs(-2^31) is -2^31 in a constant expression", abs_pos, 0);
+        `CHECKI("-(-2^31) is -2^31 on a variable", (-lo > 0), 0);
+        `CHECKI("abs(-2^31) is -2^31 on a variable", (abs(lo) > 0), 0);
         I(p, n) <+ V(p, n);
     end
 endmodule
