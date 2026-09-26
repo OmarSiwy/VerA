@@ -104,7 +104,7 @@ pub const Prelude = struct {
     };
 };
 
-pub var prelude_snapshot: std.atomic.Value(?*const Prelude) = .init(null);
+var prelude_snapshot: std.atomic.Value(?*const Prelude) = .init(null);
 
 /// Stage 2's half of the snapshot: the prelude's tokens, ready to be handed to
 /// `Lexer.tokenizeSeeded` so a compilation lexes only the bytes AFTER the

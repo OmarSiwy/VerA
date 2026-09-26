@@ -42,7 +42,7 @@ pub const TestResult = struct {
 pub fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
     const bag = try arena.create(diag.Bag);
     bag.* = diag.Bag.init(arena);
-    try bag.setSingleFile("test.va", src, 0);
+    try bag.setSingleFile("test.va", src);
     return bag;
 }
 

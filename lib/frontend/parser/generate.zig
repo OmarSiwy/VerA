@@ -363,7 +363,7 @@ pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemor
 /// Is `name` the name of one of `decls`? One helper for eight declaration
 /// slices, which all carry a `.name: StrId` — and a StrId comparison is a
 /// name comparison because §2.8 identifiers are interned.
-pub fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
+fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
     for (decls) |d| if (d.name == name) return true;
     return false;
 }
@@ -538,7 +538,7 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
 /// indices select from. Not parameter reads: the parameter table is
 /// elaboration's, and a value not in hand here cannot be spelled into
 /// interned text. A real-valued index is not one.
-pub fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
+fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(&self.file, e, constfold.literal_env) orelse return null;
     return if (c == .int) c.int else null;
 }
@@ -573,7 +573,7 @@ pub fn netKind(tag: token.Tag) ?Ast.NetKind {
 /// parser that accepted any parenthesised strength after any net type would
 /// make `wire (small) w;` legal, and A.2.2.1 has no such derivation.
 pub const StrengthWord = struct { level: Ast.Strength, side: u8 };
-pub const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
+const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
     .{ "supply0", StrengthWord{ .level = .supply, .side = 0 } },
     .{ "strong0", StrengthWord{ .level = .strong, .side = 0 } },
     .{ "pull0", StrengthWord{ .level = .pull, .side = 0 } },
@@ -676,7 +676,7 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
 /// A.2.2.3 `delay_value`. `mintypmax_expression` is not admitted: A.2.2.3
 /// spells it `mintypmax_expression` only inside `delay_control`, and the
 /// `:`-separated form has no selector in this compiler to choose from.
-pub fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
+fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }
 

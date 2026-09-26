@@ -232,7 +232,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
 /// E0142 at the cursor, naming what §19.9's grammar wanted there. `r.i` is
 /// undefined after a failed `timeLiteral`, so the span is the whole operand
 /// list — which is the thing the user has to rewrite anyway.
-pub fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
+fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     const wrote = std.mem.trim(u8, r.s, " \t\r");
     var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
     if (wrote.len == 0) {
@@ -324,7 +324,7 @@ fn expectEnd(pp: *Pp, r: *Rest, off: usize, code: diag.Code, what: []const u8, s
 /// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
 /// `s ms us ns ps fs` — as a count of SECONDS, which is the unit §9.15
 /// Table 9-27 asks for. Null (cursor undefined) on anything else.
-pub fn timeLiteral(r: *Rest) ?f64 {
+fn timeLiteral(r: *Rest) ?f64 {
     r.skipSpace();
     const start = r.i;
     while (r.i < r.s.len and r.s[r.i] >= '0' and r.s[r.i] <= '9') r.i += 1;

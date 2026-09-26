@@ -167,7 +167,7 @@ test "ipow32 is IEEE 1364-2005 Table 5-6 at 32 bits" {
 /// expression is not worth a second copy of the rule; declining leaves the
 /// runtime path — which is correct — to answer, at the cost of a "not a
 /// constant expression" on a shape nothing in the suite writes.
-pub fn strBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
+fn strBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
     if (a != .str or b != .str) return null;
     const c = std.mem.order(u8, a.str, b.str);
     return .{

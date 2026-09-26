@@ -103,10 +103,6 @@ pub const StripMark = struct { out: u32, src: u32 };
 /// check.
 pub const SourceMap = struct {
     segs: []const Segment = &.{},
-    /// Newlines contributed by the annex-D prelude, which is prepended to the
-    /// text but is not part of anyone's source. Subtracted from every reported
-    /// line of `root`.
-    prelude_lines: u32 = 0,
 
     pub const empty: SourceMap = .{};
 

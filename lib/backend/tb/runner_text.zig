@@ -978,7 +978,7 @@ pub const mixed_body =
     \\    defer arena_state.deinit();
     \\    const arena = arena_state.allocator();
     \\    var bag = diag.Bag.init(arena);
-    \\    bag.setSingleFile(title, mixed_source, 0) catch {};
+    \\    bag.setSingleFile(title, mixed_source) catch {};
     \\    var dout = std.Io.Writer.Allocating.init(arena);
     \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
     \\    // VAMS §9.5.1.2 one descriptor table for both contexts: the device's,

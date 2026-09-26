@@ -279,14 +279,9 @@ pub const Bag = struct {
     }
 
     /// The no-include, no-macro case: spans index straight into `text`.
-    pub fn setSingleFile(
-        self: *Bag,
-        name: []const u8,
-        text: []const u8,
-        prelude_lines: u32,
-    ) Allocator.Error!void {
+    pub fn setSingleFile(self: *Bag, name: []const u8, text: []const u8) Allocator.Error!void {
         _ = try self.addFile(name, text);
-        self.map = .{ .segs = &.{}, .prelude_lines = prelude_lines };
+        self.map = .empty;
     }
 
     /// Where a span really points. `Entry.file` short-circuits the segment
@@ -408,7 +403,7 @@ pub const Bag = struct {
         self.extra = extra;
         self.list = list;
         self.files = files;
-        self.map = .{ .segs = segs, .prelude_lines = self.map.prelude_lines };
+        self.map = .{ .segs = segs };
         self.arena = gpa;
     }
 
@@ -720,7 +715,7 @@ pub fn didYouMeanMap(name: []const u8, map: anytype) ?[]const u8 {
 /// The running minimum of `(editDistance(name, c), c)` under the lexicographic
 /// order on that pair. Order-independent by construction, which is what lets the
 /// map form above avoid materialising the candidate set.
-pub const Nearest = struct {
+const Nearest = struct {
     name: []const u8,
     limit: usize,
     best: ?[]const u8 = null,

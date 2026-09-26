@@ -67,9 +67,6 @@ pub const Error = Allocator.Error || error{PreprocessFailed};
 pub const Output = struct {
     /// The preprocessed bytes: the cache identity and the lexer's input.
     text: []const u8,
-    /// Byte length of the prepended std-def prelude, so a caller mapping an
-    /// output offset back to a user source line can subtract it.
-    prelude_len: u32 = 0,
     /// How many modules `Options.spice_netlist` contributed, so the caller can
     /// tell the netlist-derived tail of the prelude from Table E.1's own rows —
     /// E.2.1's case-insensitive fallback applies to the tail only.
@@ -416,7 +413,6 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
             netlist_modules = cards.modules;
         }
     }
-    const prelude_len: u32 = @intCast(pp.out.items.len);
 
     try pp.runFile(source, opts.file_name, root);
 
@@ -442,19 +438,9 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         .cells = try pp.cells.toOwnedSlice(arena),
         .drives = try pp.drives.toOwnedSlice(arena),
     };
-    opts.bag.map = .{
-        .segs = try pp.segs.toOwnedSlice(arena),
-        // ZERO, not the prelude's newline count: `prelude_lines` corrects a
-        // root line number that was measured in the PREPROCESSED text, and the
-        // segments above already resolve a root offset to root's own text.
-        // Subtracting twice would put every user error ~100 lines too early.
-        // `Output.prelude_len` still reports the byte length for callers that
-        // slice the output themselves.
-        .prelude_lines = 0,
-    };
+    opts.bag.map = .{ .segs = try pp.segs.toOwnedSlice(arena) };
     return .{
         .text = try pp.out.toOwnedSlice(arena),
-        .prelude_len = prelude_len,
         .netlist_modules = netlist_modules,
         .directives = directives,
     };

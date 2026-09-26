@@ -68,9 +68,9 @@ pub const RenderOptions = struct {
 
 /// Tabs are expanded to this many spaces before a snippet is drawn, so a caret
 /// lands under the character it means. (rustc does the same.)
-pub const tab_width = 4;
+const tab_width = 4;
 
-pub fn displayCol(line: []const u8, byte_col: u32) u32 {
+fn displayCol(line: []const u8, byte_col: u32) u32 {
     var col: u32 = 0;
     const upto = @min(byte_col, line.len);
     for (line[0..upto]) |c| {
@@ -86,14 +86,14 @@ pub fn displayCol(line: []const u8, byte_col: u32) u32 {
     return col;
 }
 
-pub fn writeExpanded(w: *std.Io.Writer, line: []const u8) !void {
+fn writeExpanded(w: *std.Io.Writer, line: []const u8) !void {
     for (line) |c| {
         if (c == '\t') try w.splatByteAll(' ', tab_width) else try w.writeByte(c);
     }
 }
 
 /// One span, resolved all the way to something printable.
-pub const Placed = struct {
+const Placed = struct {
     file: diag_location.FileId,
     /// 1-based line in the ORIGINAL file.
     line: u32,
@@ -155,7 +155,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 /// derives from an index (line text, columns) is shown to the user, and what
 /// the user recognises is what the user wrote. Offsets go through
 /// `toSourceOffset` before they meet one of these.
-pub fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_location.LineIndex, file: diag_location.FileId) !diag_location.LineIndex {
+fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_location.LineIndex, file: diag_location.FileId) !diag_location.LineIndex {
     const i = @min(@intFromEnum(file), indices.len - 1);
     if (indices[i]) |idx| return idx;
     const idx = try diag_location.LineIndex.build(scratch, bag.sourceText(file));
@@ -163,14 +163,7 @@ pub fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_loc
     return idx;
 }
 
-/// Line number a human should see: the prelude is prepended to the root file's
-/// text but is nobody's source, so its newlines come back off.
-pub fn userLine(bag: *const diag_bag.Bag, file: diag_location.FileId, line: u32) u32 {
-    if (file != .root) return line;
-    return line -| bag.map.prelude_lines;
-}
-
-pub fn place(
+fn place(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     indices: []?diag_location.LineIndex,
@@ -213,7 +206,7 @@ pub fn place(
     };
 }
 
-pub fn renderOne(
+fn renderOne(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -239,10 +232,9 @@ pub fn renderOne(
     // --- location: `  --> file.va:12:5` -------------------------------------
     var width: u32 = 1;
     if (primary) |pr| {
-        const shown = userLine(bag, pr.file, pr.line);
-        width = digits(shown);
+        width = digits(pr.line);
         try w.print("{s}{s}-->{s} {s}:{d}:{d}\n", .{
-            spaces(width), p.gutter, p.reset, bag.fileName(pr.file), shown, pr.col + 1,
+            spaces(width), p.gutter, p.reset, bag.fileName(pr.file), pr.line, pr.col + 1,
         });
     }
 
@@ -264,7 +256,7 @@ pub fn renderOne(
         }
         const placed = pbuf[0..n];
         // Widen the gutter to the largest line number that will be printed.
-        for (placed) |q| width = @max(width, digits(userLine(bag, q.file, q.line)));
+        for (placed) |q| width = @max(width, digits(q.line));
         try renderSnippet(bag, scratch, w, opts, indices, placed, e.severity, width);
     }
 
@@ -307,7 +299,7 @@ pub fn renderOne(
 
 /// The ` 12 | source text` / `    | ^^^ label` block. Placed spans are grouped
 /// by line; a gap between printed lines becomes `...`, like rustc.
-pub fn renderSnippet(
+fn renderSnippet(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -340,9 +332,8 @@ pub fn renderSnippet(
 
         const idx = try lineIndexFor(bag, scratch, indices, file);
         const text = idx.lineText(bag.sourceText(file), line);
-        const shown = userLine(bag, file, line);
 
-        try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
+        try w.print("{s}{d}{s} |{s} ", .{ p.gutter, line, spaces(width -| digits(line)), p.reset });
         try writeExpanded(w, text);
         try w.writeByte('\n');
 
@@ -366,7 +357,7 @@ pub fn renderSnippet(
 
 /// Show a machine-applicable rewrite as the patched line, with `+` under an
 /// insertion and `~` under a replacement.
-pub fn renderFix(
+fn renderFix(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -387,13 +378,12 @@ pub fn renderFix(
     const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + fix.span.len()));
     const loc = idx.loc(src_off);
     const line = idx.lineText(file_text, loc.line);
-    const shown = userLine(bag, r.file, loc.line);
 
     const cut = @min(loc.col - 1, line.len);
     const cut_end = @min(cut + (src_end - src_off), line.len);
 
     try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
-    try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
+    try w.print("{s}{d}{s} |{s} ", .{ p.gutter, loc.line, spaces(width -| digits(loc.line)), p.reset });
     try writeExpanded(w, line[0..cut]);
     try w.print("{s}{s}{s}", .{ p.good, fix.replacement, p.reset });
     try writeExpanded(w, line[cut_end..]);
@@ -417,20 +407,20 @@ pub fn renderFix(
 /// pointer. One test on the first byte; the citations are the fixed set in
 /// `diag_code.zig` and every one of them starts with either a digit or an
 /// annex letter.
-pub fn annexWord(lrm: []const u8) []const u8 {
+fn annexWord(lrm: []const u8) []const u8 {
     return if (lrm.len != 0 and lrm[0] >= 'A' and lrm[0] <= 'H') "annex " else "";
 }
 
-pub fn digits(n: u32) u32 {
+fn digits(n: u32) u32 {
     var v = n;
     var d: u32 = 1;
     while (v >= 10) : (v /= 10) d += 1;
     return d;
 }
 
-pub const spaces_pad = " " ** 24;
+const spaces_pad = " " ** 24;
 
-pub fn spaces(n: u32) []const u8 {
+fn spaces(n: u32) []const u8 {
     return spaces_pad[0..@min(n, spaces_pad.len)];
 }
 
@@ -507,7 +497,7 @@ pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     }
 }
 
-pub fn writeJsonSpan(
+fn writeJsonSpan(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -527,7 +517,7 @@ pub fn writeJsonSpan(
     try w.writeAll("{\"file\":");
     try writeJsonString(w, bag.fileName(r.file));
     try w.print(",\"line\":{d},\"col\":{d},\"byte_start\":{d},\"byte_end\":{d}}}", .{
-        userLine(bag, r.file, loc.line), loc.col, span.start, span.end,
+        loc.line, loc.col, span.start, span.end,
     });
 }
 

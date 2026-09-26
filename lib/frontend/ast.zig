@@ -362,7 +362,7 @@ pub const ExprStore = struct {
 
     /// Store a variable-arity list; returns the offset to put in a row's
     /// `extra`. Deterministic: offsets are assigned in append order.
-    pub fn addList(self: *ExprStore, gpa: std.mem.Allocator, items: []const u32) !u32 {
+    fn addList(self: *ExprStore, gpa: std.mem.Allocator, items: []const u32) !u32 {
         const off: u32 = @intCast(self.pool.items.len);
         try self.pool.ensureUnusedCapacity(gpa, items.len + 1);
         self.pool.appendAssumeCapacity(@intCast(items.len));
@@ -1888,7 +1888,7 @@ pub const SourceFile = struct {
     }
 
     /// Convenience: append an expression row.
-    pub fn addExpr(self: *SourceFile, gpa: std.mem.Allocator, node: Node) !ExprId {
+    fn addExpr(self: *SourceFile, gpa: std.mem.Allocator, node: Node) !ExprId {
         return self.exprs.add(gpa, node);
     }
 };

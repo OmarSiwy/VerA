@@ -116,7 +116,7 @@ pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 
 /// A macro body is one logical line: `\`+newline collapses to a space. The
 /// newlines it swallowed are re-emitted by the caller, so lines still line up.
-pub fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
+fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, body, '\n') == null) return body;
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, body.len);
@@ -293,7 +293,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
 /// inside the argument, `__LINE__`, and the no-segment rule all behave exactly
 /// as they do for a body rescan. Backtick-free text expands to itself and is
 /// returned unscanned.
-pub fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
+fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
     const saved_site = pp.expand_site;
