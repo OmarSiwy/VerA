@@ -639,7 +639,65 @@ pub fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
 }
 
 pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
-    return coeffAt(self, v, self.mir.resolveAlias(n), 0, null);
+    const gen = self.mir.resolveAlias(n);
+    var reach = try reachOf(self, gen);
+    defer reach.deinit(self.arena);
+    return coeffAt(self, v, gen, &reach, 0, null);
+}
+
+/// The Values whose operands, along the edges `coeffAt` follows, lead to
+/// `gen`: off this set the walk answers `.absent` without descending, so its
+/// cost is the generator-bearing paths and not every path of the DAG. An
+/// unsealed phi (no operands yet) is kept in, since what it will carry is
+/// unknown. Indexed by `@intFromEnum(value)`; O(values) per fixpoint pass.
+fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.DynamicBitSetUnmanaged {
+    const mir = self.mir;
+    const fd = Mir.Value.first_dynamic;
+    const n = fd + mir.defs.len;
+    var reach = try std.DynamicBitSetUnmanaged.initEmpty(self.arena, n);
+    reach.set(@intFromEnum(gen));
+    const kinds = mir.defs.items(.kind);
+    const payloads = mir.defs.items(.payload);
+    // Operands precede their users except along a phi's back edge or an
+    // alias onto a later value; those need another pass.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (fd..n) |i| {
+            if (kinds[i - fd] != .inst_result or reach.isSet(i)) continue;
+            const inst: Mir.Inst = @enumFromInt(@as(u32, @truncate(payloads[i - fd])));
+            if (operandReaches(mir, inst, &reach)) {
+                reach.set(i);
+                changed = true;
+            }
+        }
+    }
+    return reach;
+}
+
+fn reached(mir: *const Mir, reach: *const std.DynamicBitSetUnmanaged, v: Mir.Value) bool {
+    return reach.isSet(@intFromEnum(mir.resolveAlias(v)));
+}
+
+fn operandReaches(mir: *const Mir, inst: Mir.Inst, reach: *const std.DynamicBitSetUnmanaged) bool {
+    return switch (mir.instData(inst)) {
+        .unary => |u| reached(mir, reach, u.operand),
+        .binary => |b| reached(mir, reach, b.lhs) or reached(mir, reach, b.rhs),
+        // `coeffAt` differentiates the arms; the condition selects, it is not scaled.
+        .ternary => |t| reached(mir, reach, t.then_val) or reached(mir, reach, t.else_val),
+        .phi => |p| {
+            if (p.count == 0) return true;
+            for (0..p.count) |k| if (reached(mir, reach, mir.phiPair(inst, @intCast(k)).value)) return true;
+            return false;
+        },
+        .call => |c| {
+            for (c.args) |arg| if (reached(mir, reach, arg)) return true;
+            return false;
+        },
+        .anew, .branch, .jump => false,
+        .load => |l| reached(mir, reach, l.arr) or reached(mir, reach, l.index),
+        .store => |st| reached(mir, reach, st.arr) or reached(mir, reach, st.index) or reached(mir, reach, st.value),
+    };
 }
 
 /// The phis the walk is inside, innermost first. A loop-header phi reaches
@@ -647,10 +705,11 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
 /// generator fed back into itself, which no single factor describes.
 const PhiPath = struct { inst: Mir.Inst, up: ?*const PhiPath };
 
-fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const PhiPath) Oom!Coeff {
+fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.DynamicBitSetUnmanaged, depth: u16, path: ?*const PhiPath) Oom!Coeff {
     if (depth == 64) return .nonlinear;
     const value = self.mir.resolveAlias(v);
     if (value == gen) return .{ .value = .f_one };
+    if (!reach.isSet(@intFromEnum(value))) return .absent;
     const inst = switch (self.mir.valueDef(value)) {
         .inst_result => |i| i,
         // A constant, a parameter or a probe cannot contain the generator.
@@ -658,14 +717,14 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
     };
     switch (self.mir.instData(inst)) {
         .unary => |u| {
-            const d = try coeffAt(self, u.operand, gen, depth + 1, path);
+            const d = try coeffAt(self, u.operand, gen, reach, depth + 1, path);
             if (d == .absent) return .absent;
             if (u.op != .fneg or d == .nonlinear) return .nonlinear;
             return .{ .value = try coeffNeg(self, d.value) };
         },
         .binary => |b| {
-            const da = try coeffAt(self, b.lhs, gen, depth + 1, path);
-            const db = try coeffAt(self, b.rhs, gen, depth + 1, path);
+            const da = try coeffAt(self, b.lhs, gen, reach, depth + 1, path);
+            const db = try coeffAt(self, b.rhs, gen, reach, depth + 1, path);
             if (da == .absent and db == .absent) return .absent;
             if (da == .nonlinear or db == .nonlinear) return .nonlinear;
             switch (b.op) {
@@ -776,8 +835,8 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
         // §4.2.12 `?:` — either arm may carry the generator, and which arm runs
         // is a solve-time question, so the coefficient is the same conditional.
         .ternary => |t| {
-            const dy = try coeffAt(self, t.then_val, gen, depth + 1, path);
-            const dn = try coeffAt(self, t.else_val, gen, depth + 1, path);
+            const dy = try coeffAt(self, t.then_val, gen, reach, depth + 1, path);
+            const dn = try coeffAt(self, t.else_val, gen, reach, depth + 1, path);
             if (dy == .absent and dn == .absent) return .absent;
             if (dy == .nonlinear or dn == .nonlinear) return .nonlinear;
             return .{ .value = try self.emit(.select, &.{
@@ -803,7 +862,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
             for (coeffs, 0..) |*c, k| {
                 const pair = self.mir.phiPair(inst, @intCast(k));
                 const before = self.mir.blockLast(self.cur);
-                const d = try coeffAt(self, pair.value, gen, depth + 1, &here);
+                const d = try coeffAt(self, pair.value, gen, reach, depth + 1, &here);
                 // What that walk EMITTED (`x/r` has coefficient `1/r`) landed in
                 // `self.cur`, after the join, where the edge from `pair.block`
                 // cannot carry it. Its operands are sub-terms of `pair.value`,
@@ -828,7 +887,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
         // A call's arguments are reachable, so "does the generator occur in
         // here at all" is answerable even though the derivative is not.
         .call => |c| {
-            for (c.args) |arg| if (try coeffAt(self, arg, gen, depth + 1, path) != .absent) return .nonlinear;
+            for (c.args) |arg| if (try coeffAt(self, arg, gen, reach, depth + 1, path) != .absent) return .nonlinear;
             return .absent;
         },
         // Terminators define no value, so no Value resolves to one.
@@ -837,11 +896,11 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
         // scaled by a factor of this expression: like a call's argument, it
         // can only be detected, not differentiated through the storage.
         .anew => return .absent,
-        .load => |l| return if (try coeffAt(self, l.arr, gen, depth + 1, path) == .absent and
-            try coeffAt(self, l.index, gen, depth + 1, path) == .absent) .absent else .nonlinear,
-        .store => |st| return if (try coeffAt(self, st.arr, gen, depth + 1, path) == .absent and
-            try coeffAt(self, st.index, gen, depth + 1, path) == .absent and
-            try coeffAt(self, st.value, gen, depth + 1, path) == .absent) .absent else .nonlinear,
+        .load => |l| return if (try coeffAt(self, l.arr, gen, reach, depth + 1, path) == .absent and
+            try coeffAt(self, l.index, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
+        .store => |st| return if (try coeffAt(self, st.arr, gen, reach, depth + 1, path) == .absent and
+            try coeffAt(self, st.index, gen, reach, depth + 1, path) == .absent and
+            try coeffAt(self, st.value, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
     }
 }
 
