@@ -351,13 +351,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // rides along as part 0 of the path and `Lower.flatName` is where
             // it means something — one site, and it is the site that already
             // knows which module is the root.
-            if (self.peek() == .dot) {
-                var parts: std.ArrayList(Ast.StrId) = .empty;
-                try parts.append(self.arena, name);
-                while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
-                const off = try self.file.exprs.addStrList(self.arena, parts.items);
-                return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
-            }
+            if (self.eat(.dot)) return hierTerminal(self, &.{name}, tok);
             const args: []const Ast.ExprId = if (self.peek() == .lparen)
                 try parseCallArgs(self)
             else
@@ -505,7 +499,9 @@ fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprI
     });
 }
 
-/// One `branch_terminal` of the production above, rewritten onto `prefix`.
+/// `prefix . id { . id }` as one `.hier_ident`, the cursor on the first `id`:
+/// a `branch_terminal` of the production above, or any dotted name whose head
+/// is already read.
 fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
     var parts: std.ArrayList(Ast.StrId) = .empty;
     try parts.appendSlice(self.arena, prefix);
@@ -547,15 +543,12 @@ pub fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         self.pos += 1;
         break :blk root;
     } else try self.expectIdent();
-    const base = if (self.peek() == .dot) hier: {
-        var parts: std.ArrayList(Ast.StrId) = .empty;
-        try parts.append(self.arena, name);
-        while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
-        const off = try self.file.exprs.addStrList(self.arena, parts.items);
-        // §6.7 + §5.5.2: `V(u.v[1])`, one element of a child's vector net —
-        // the select below applies to the whole path.
-        break :hier try self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
-    } else try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
+    // §6.7 + §5.5.2: `V(u.v[1])`, one element of a child's vector net — the
+    // select below applies to the whole path.
+    const base = if (self.eat(.dot))
+        try hierTerminal(self, &.{name}, tok)
+    else
+        try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
     if (self.peek() != .lbracket) return base;
     self.pos += 1;
     const idx = try parseExpr(self);
