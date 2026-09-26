@@ -150,6 +150,9 @@ live: std.ArrayList(Mir.Value) = .empty,
 eager_use: []u32 = &.{},
 arm_use: []u32 = &.{},
 inlined: []bool = &.{},
+/// Per value: the longest chain of inlined operands rendering it recurses
+/// through. Written by `boundInlineDepth` for the values it visits.
+inl_depth: []u16 = &.{},
 /// The slice fits in the entry block with no phi (the common case).
 straight: bool = false,
 /// Blocks this unit defines something in, and blocks it needs a phi of.
@@ -185,6 +188,7 @@ pub fn init(
     self.eager_use = try arena.alloc(u32, an.nv);
     self.arm_use = try arena.alloc(u32, an.nv);
     self.inlined = try arena.alloc(bool, an.nv);
+    self.inl_depth = try arena.alloc(u16, an.nv);
     self.slot = try arena.alloc(u32, an.nv);
     // Cleared by `analyzeUnitOnce`, which every read is behind.
     // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few KB,
@@ -418,6 +422,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     }
 
     self.fuseSingleUse();
+    self.boundInlineDepth();
 
     // Slots for everything that survives as a statement, in ascending value
     // order — a UNIT-LOCAL dense index, never a MIR value index.
@@ -598,6 +603,42 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
             bump(self, d.index, false, undo);
             bump(self, d.value, false, undo);
         },
+    }
+}
+
+/// The deepest chain of inlined operands one statement may render.
+const max_inline_depth = 256;
+
+/// The renderer recurses once per inlined operand, so a fused chain as long
+/// as the source (4096 summed contributions) overflows the compiler's stack.
+/// Past `max_inline_depth` a FUSED value keeps its own statement, which is
+/// where it stood before `fuseSingleUse` moved it. An arm-inlined value stays
+/// inlined: it is lazy on purpose (§4.2.12).
+fn boundInlineDepth(self: *UnitPlan) void {
+    // Ascending value order is a topological order for everything that
+    // inlines (operands are created before their results; a phi never
+    // inlines), so every inlined operand's depth is already written.
+    for (self.live.items) |lv| {
+        const v = @intFromEnum(lv);
+        if (v < Mir.Value.first_dynamic or !self.inlined[v]) continue;
+        const ops: [3]Mir.Value = switch (self.mir.instData(self.mir.valueDef(lv).inst_result)) {
+            .unary => |d| .{ d.operand, .undef, .undef },
+            .binary => |d| .{ d.lhs, d.rhs, .undef },
+            .ternary => |d| .{ d.cond, d.then_val, d.else_val },
+            .load => |d| .{ d.arr, d.index, .undef },
+            // A storage version renders as its array's name.
+            .call, .phi, .branch, .jump, .anew, .store => @splat(.undef),
+        };
+        var d: u16 = 1;
+        for (ops) |o0| {
+            const o = @intFromEnum(self.an.rv(o0));
+            if (o >= Mir.Value.first_dynamic and self.inlined[o]) d = @max(d, self.inl_depth[o] + 1);
+        }
+        if (d > max_inline_depth and self.eager_use[v] != 0) {
+            self.inlined[v] = false;
+            d = 0;
+        }
+        self.inl_depth[v] = d;
     }
 }
 
