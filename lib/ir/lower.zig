@@ -1776,8 +1776,6 @@ const lower_control = @import("lower/control.zig");
 
 // §5.10 analog events: `@(...)`, cross/above/timer, initial_step/final_step — lower/event.zig
 const lower_event = @import("lower/event.zig");
-pub const distOf = lower_event.distOf;
-pub const distParamName = lower_event.distParamName;
 
 // §4.2 expressions, §4.3 math functions, §4.4 signal access — lower/expr.zig
 const lower_expr = @import("lower/expr.zig");
