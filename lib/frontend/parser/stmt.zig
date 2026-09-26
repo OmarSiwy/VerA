@@ -318,16 +318,19 @@ pub fn parseEventControl(self: *Parser) Error!Ast.StmtId {
     self.pos += 1; // '@'
     // A.6.5 `event_control ::= … | @* | @ (*)`. Both spellings mean the same
     // implicit list, and neither carries an expression at all, so the
-    // statement records `.none` — see `Ast.StmtKind.event_control`.
-    if (self.peek() == .star) {
-        self.pos += 1;
+    // statement records `.none` — see `Ast.StmtKind.event_control`. The §2.9
+    // attribute tokens split `(*)` three ways: `(*` `)`, `(` `*)`, `(` `*` `)`.
+    const star_toks: u32 = switch (self.peek()) {
+        .star => 1,
+        .attr_open => if (self.peekAt(1) == .rparen) 2 else 0,
+        .lparen => if (self.peekAt(1) == .attr_close) 2 else if (self.peekAt(1) == .star and self.peekAt(2) == .rparen) 3 else 0,
+        else => 0, // else: any other token after `@` starts an event expression or a name
+    };
+    if (star_toks != 0) {
+        self.pos += star_toks;
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
     }
     const event = if (self.eat(.lparen)) blk: {
-        if (self.peek() == .star and self.peekAt(1) == .rparen) {
-            self.pos += 2;
-            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
-        }
         const e = try parseEventExpr(self);
         _ = try self.expect(.rparen);
         break :blk e;
