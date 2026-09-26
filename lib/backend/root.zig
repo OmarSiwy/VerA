@@ -2,14 +2,14 @@
 //! file DAG.
 //!
 //! Re-export only. The leaves import each other directly and mutually:
-//! `codegen.zig` calls into `cg_display`/`cg_filters`/`cg_limit`/`unit_plan`
+//! `codegen.zig` calls into `cg_display`/`cg_filters`/`cg_limit`/`codegen/plan/unit.zig`
 //! and each of them reads `codegen.Gen` back. That cycle is why this is ONE
 //! module — the same reasoning as `ir`, where the boundary goes around the
 //! cycle rather than pretending it is absent.
 //!
 //!   MIR
-//!     → naming.zig + codegen.zig   (classes 4,5,8,10)  MIR → device.zig
-//!     → unit_plan/cg_*             per-unit emission strategy
+//!     → naming.zig + codegen.zig   MIR → device.zig
+//!     → codegen/plan/unit.zig, cg_* per-unit emission strategy
 //!     → tb.zig                     the Verilog-A testbench artifact
 //!     → orchestrator.zig           (§8.3 ABI) device.zig → .so + GPU kernels
 //!

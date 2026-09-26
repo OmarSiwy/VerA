@@ -27,13 +27,6 @@ const gen_render = @import("../render.zig");
 const Mir = @import("ir").Mir;
 const proof = @import("ir").proof;
 
-/// May `v`'s inline-rendered subtree run UNCONDITIONALLY in a `.strict`
-/// unit? True for anything already materialized (slots/cache/phi vars are
-/// computed before the select either way), leaves, and trees of ops that
-/// are total on all of R under IEEE semantics: no call, and
-/// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
-/// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
-/// "inline" here is exactly what `renderVal` would inline.
 /// Would evaluating this arm eagerly run a libm call that the branch would
 /// have skipped? `eagerSafe` answers whether both arms MAY be evaluated;
 /// this answers whether they SHOULD.
@@ -79,6 +72,13 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
     };
 }
 
+/// May `v`'s inline-rendered subtree run UNCONDITIONALLY in a `.strict`
+/// unit? True for anything already materialized (slots/cache/phi vars are
+/// computed before the select either way), leaves, and trees of ops that
+/// are total on all of R under IEEE semantics: no call, and
+/// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
+/// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
+/// "inline" here is exactly what `renderVal` would inline.
 pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (depth > 64) return false;
     const v = self.an.rv(v0);
