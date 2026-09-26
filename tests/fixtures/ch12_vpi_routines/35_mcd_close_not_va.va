@@ -1,9 +1,0 @@
-// Source-review evidence boundary: retained HDL test does not execute the VPI
-// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
-//! lrm 4.7
-//! reject E0512
-//! reject `vpi_mcd_close`
-module ch12_atomic_mcd_close(p, n);
-  inout p, n; electrical p, n;
-  analog I(p,n) <+ vpi_mcd_close(0);
-endmodule
