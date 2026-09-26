@@ -43,6 +43,10 @@
 // SEED. A "pnjlimds" leg is a branch of VerA's seed tree (`vera_seed`), the
 // vbs leg at its default vcrit (vbd is derived through vds). Its nets are b
 // and si; b is the lowest port, so b = 0 and b - si = vcrit gives si = -0.6.
+// At the bias the model evaluates, §9.17.3's "When the simulator has
+// converged, the return value of the $limit() function is the value of the
+// access function reference, within appropriate tolerances" is the CHECK
+// (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 9.17.3
 //! bias V(g) = 0.5, V(si) = 0.5, V(di) = 0.0, V(b) = 1.5
 //! print none
@@ -50,6 +54,7 @@
 //! limit V(g) = 0, V(si) = 0, V(di) = 0, V(b) = 0 -> V(b) = 0.10235861405555252, V(si) = 0.5, V(di) = 0.0, converged = 0
 //! limit V(di) = 4.0, V(g) = 0.5, V(b) = 0.8, V(si) = 0 -> V(b) = 1.3947939867307014, V(di) = 2.5, V(si) = 0.5, converged = 0
 //! limit -> V(b) = 1.5, V(si) = 0.5, V(di) = 0.0, V(g) = 0.5, converged = 1
+`include "check.vh"
 module limit_pnjlimds_bulk_rung(d, g, s, b);
   inout d, g, s, b; electrical d, g, s, b, di, si;
   parameter real vt = 0.025, vcrit = 0.6, vto = 0.7;
@@ -65,5 +70,6 @@ module limit_pnjlimds_bulk_rung(d, g, s, b);
     I(di, si) <+ 1e-3 * (vds + 0.1 * (vgs + vgd));
     I(b, si) <+ 1e-14 * (limexp(vbs / vt) - 1.0);
     I(b, di) <+ 1e-14 * (limexp(vbd / vt) - 1.0);
+    `CHECK("$limit returns its access function at the answer", vbs, 1.0, 1e-6);
   end
 endmodule

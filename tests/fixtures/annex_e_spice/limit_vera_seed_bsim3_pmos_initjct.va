@@ -20,10 +20,16 @@
 //   type (b - si)  = 0    ->  b  = 0.7
 // The seed value reads the card (vth0), which `seed` may: it runs before any
 // solve, but after the card is set.
+// At the bias the model evaluates, §9.17.3's "When the simulator has
+// converged, the return value of the $limit() function is the value of the
+// access function reference, within appropriate tolerances" is the CHECK
+// (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 2.9
 //! lrm 9.17.3
+//! bias V(g) = 0.0, V(si) = 0.7, V(di) = 0.6, V(b) = 0.7
 //! print none
 //! seed V(g) = 0.0, V(si) = 0.7, V(di) = 0.6, V(b) = 0.7
+`include "check.vh"
 module limit_vera_seed_bsim3_pmos_initjct(d, g, s, b);
   inout d, g, s, b; electrical d, g, s, b, di, si;
   parameter real type = -1.0, vth0 = -0.6, vt = 0.025, vcrit = 0.6;
@@ -39,5 +45,6 @@ module limit_vera_seed_bsim3_pmos_initjct(d, g, s, b);
     I(di, si) <+ type * 1e-3 * (vds + 0.1 * (vgs + vgd));
     I(b, si) <+ type * 1e-14 * (limexp(vbs / vt) - 1.0);
     I(b, di) <+ type * 1e-14 * (limexp(vbd / vt) - 1.0);
+    `CHECK("$limit returns its access function at the answer", vgs, 0.7, 1e-6);
   end
 endmodule

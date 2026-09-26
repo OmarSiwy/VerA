@@ -12,10 +12,16 @@
 // site; the pnjlim default (vcrit = 0.6) and the later explicit 0.3 are the
 // same branch and lose:  g - sp = -1.0  ->  sp = 1.0.
 // Were the default applied instead, sp = -0.6; were the later seed, sp = -0.3.
+// At the bias the model evaluates, §9.17.3's "When the simulator has
+// converged, the return value of the $limit() function is the value of the
+// access function reference, within appropriate tolerances" is the CHECK
+// (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 2.9
 //! lrm 9.17.3
+//! bias V(g) = 0.0, V(sp) = 1.0
 //! print none
 //! seed V(g) = 0.0, V(sp) = 1.0
+`include "check.vh"
 module limit_vera_seed_explicit_beats_default(d, g, s);
   inout d, g, s; electrical d, g, s, dp, sp;
   parameter real vto = -2.0, vt = 0.025, vcrit = 0.6;
@@ -28,5 +34,6 @@ module limit_vera_seed_explicit_beats_default(d, g, s);
     I(s, sp) <+ V(s, sp) / 10.0;
     I(dp, sp) <+ 1e-3 * V(dp, sp) * (vgs - vto);
     I(g, sp) <+ 1e-14 * (limexp(vgj / vt) - 1.0) + 1e-15 * vgk;
+    `CHECK("$limit returns its access function at the answer", vgs, -1.0, 1e-6);
   end
 endmodule
