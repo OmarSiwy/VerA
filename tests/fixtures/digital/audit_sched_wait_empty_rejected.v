@@ -1,6 +1,6 @@
 // IEEE1364-2005 9.7.6 Syntax9-11 requires an expression inside wait(...).
-// Only the missing expression is invalid; a matching flag expression control
-// runs and prints ready. Diagnostic must identify the expression syntax error.
+// Only the missing expression is invalid; the legal twin
+// audit_sched_wait_expression.v runs and prints ready. Diagnostic must identify the expression syntax error.
 // digital-runner: reject
 //! lrm A.6.5
 //! inherited IEEE 1364-2005 9.7.6
