@@ -398,6 +398,34 @@ pub const Signal = struct {
         };
     }
 
+    /// §7.10.4, one more contributor folded into a wired-logic net: the
+    /// table decides only between levels of the SAME strength ("resolve
+    /// conflicts when multiple drivers have the same strength"), and
+    /// otherwise "the stronger signal shall dominate" (§7.10.1). An ambiguous
+    /// signal takes "all combinations of each of the strength levels in the
+    /// first signal with each of the strength levels in the second", and the
+    /// result spans every level those produce. HiZ is a level of a range
+    /// that crosses it, which is how §7.10.2's H with a Sm0 on a `wor` may
+    /// still be 0.
+    pub fn combineWired(a: Signal, b: Signal, table: Wired) Signal {
+        if (a.none()) return b;
+        if (b.none()) return a;
+        var out: Signal = .{ .lo = std.math.maxInt(i8), .hi = std.math.minInt(i8) };
+        var p = a.lo;
+        while (p <= a.hi) : (p += 1) {
+            var q = b.lo;
+            while (q <= b.hi) : (q += 1) {
+                // At equal strength `and` is decided by a 0 and `or` by a 1.
+                const r = if (@abs(p) != @abs(q))
+                    (if (@abs(p) > @abs(q)) p else q)
+                else if (table == .@"and") @min(p, q) else @max(p, q);
+                out.lo = @min(out.lo, r);
+                out.hi = @max(out.hi, r);
+            }
+        }
+        return out;
+    }
+
     /// The one place the range becomes a printable value again: wholly on
     /// one side is that side's value, HiZ alone is z, and anything that
     /// straddles HiZ — including §7.10.2's H and L — is x.
@@ -429,35 +457,13 @@ pub fn netPull(kind: Ast.NetKind) Signal {
 /// wired AND (`wand`, `triand`) and wired OR (`wor`, `trior`).
 pub const Wired = enum { @"and", @"or" };
 
-/// §7.9 Tables 7-4/7-6/7-7 are VALUE tables: a wired-logic net combines what
-/// its drivers say, and a strength decides only whether a driver says anything
-/// (a 0 driven through `highz0` is a z, and z is the tables' identity). Null
-/// for every other net type, which resolves through `Signal` (§7.10).
+/// Which §7.9 table a net folds its drivers through, null for every net type
+/// that resolves through `Signal.combine` alone.
 pub fn wiredLogic(kind: Ast.NetKind) ?Wired {
     return switch (kind) {
         .wand, .triand => .@"and",
         .wor, .trior => .@"or",
         .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => null,
-    };
-}
-
-/// IEEE1364-2005 §7.9 wired logic, Tables 7-4/7-6/7-7: fold one more driver's
-/// bit into a net's accumulated bit. `z` is the identity of all three tables,
-/// which is exactly why an undriven net reads z.
-///
-/// ponytail: the wired-logic result carries no strength onward. §7.10 gives
-/// the combination a strength of its own (the stronger of the two on the
-/// winning side), which nothing can observe here because a wired-logic net is
-/// never itself a driver of another net and `%v` does not exist. When gate
-/// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Signal`
-/// fold with the table applied to the collapsed values and the strength taken
-/// alongside.
-pub fn wired(table: Wired, acc: Int.Bit, b: Int.Bit) Int.Bit {
-    if (acc == .z) return b;
-    if (b == .z) return acc;
-    return switch (table) {
-        .@"and" => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
-        .@"or" => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
     };
 }
 
@@ -767,6 +773,16 @@ test "IEEE1364-2005 section 7.9 wired logic resolves all drivers of one net" {
         \\z z z z z
         \\
     );
+}
+
+test "IEEE1364-2005 Figure 7-25 wired logic over an ambiguous strength" {
+    // Signal 1 is St0..Pu0, signal 2 is Pu1. `and`: Pu0 & Pu1 = Pu0 and St0
+    // dominates, so St0..Pu0. `or`: Pu0 | Pu1 = Pu1 but St0 still dominates,
+    // so the result spans St0..Pu1.
+    const s1: Signal = .{ .lo = -6, .hi = -5 };
+    const s2: Signal = .of(.one, .pull, .pull);
+    try std.testing.expectEqual(Signal{ .lo = -6, .hi = -5 }, s1.combineWired(s2, .@"and"));
+    try std.testing.expectEqual(Signal{ .lo = -6, .hi = 5 }, s1.combineWired(s2, .@"or"));
 }
 
 // IEEE 1364-2005 clause 7 via §1.1, annex A.2.2.2 and A.6.1. The boundary the
