@@ -65,6 +65,8 @@ pub const Options = struct {
     io: ?std.Io = null,
     /// VAMS §7: elaborate the DIGITAL half of a mixed-signal module. See `Mixed`.
     mixed: ?Mixed = null,
+    /// The source language, `vera --std=`. See `Parser.setLanguage`.
+    language: Front.token.KeywordSet = Front.token.default_keyword_set,
 };
 
 /// The digital half of a design an analog compile already accepted (VAMS
@@ -1819,6 +1821,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     var tokens = try Front.Lexer.Lexer.tokenize(arena, text);
     var parser = Front.Parser.Parser.init(arena, text, tokens.items(.tag), tokens.items(.start), bag);
     parser.digital = true;
+    parser.setLanguage(opts.language);
     // A failed parse still leaves every recovered module in `parser.file`, and
     // the `wreal` refusal is itself a parse error, so the rules read that.
     // Arena-owned, not a local: the returned `Run` points at it.

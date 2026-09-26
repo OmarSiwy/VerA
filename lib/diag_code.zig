@@ -211,6 +211,8 @@ pub const Code = enum(u16) {
     E0240,
     /// Nesting past the parser's depth limit: an engine limit.
     E0241,
+    /// `--std=1364-*`: a Verilog-AMS design element or module item.
+    E0242,
     /// A.6.8 `loop_statement ::= forever statement`: a `forever` whose body
     /// is a null statement. `statement`, not `statement_or_null`.
     E0296,
@@ -1965,6 +1967,30 @@ fn infoOf(c: Code) Info {
             \\module (both are descriptions of the file, A.1.2), text left over
             \\from a comment that was closed early, a statement written outside
             \\the analog block, or a keyword in upper case.
+            ,
+        },
+        .E0242 => .{
+            .title = "a Verilog-AMS construct under an IEEE 1364 language",
+            .lrm = "10.6",
+            .explain =
+            \\`vera --std=1364-1995|1364-2001|1364-2005` compiles plain IEEE
+            \\1364 Verilog. That makes
+            \\the 1364 set the "implementation's default set of reserved
+            \\keywords" of LRM 10.6, so every Verilog-AMS keyword -- `analog`,
+            \\`discipline`, `ddt`, `sin` ... -- is an ordinary identifier:
+            \\
+            \\    reg [3:0] analog;      // legal under --std=1364-2005
+            \\
+            \\It also means the language has no Verilog-AMS construct. IEEE
+            \\1364-2005 annex A has no production for an `analog` block, a
+            \\`discipline`, a `nature`, a `branch`, a `paramset` or the rest,
+            \\so one of those opening a description or a module item is this
+            \\error rather than a confusing syntax error further on.
+            \\
+            \\Compile Verilog-AMS with the default --std=VAMS-2023. A
+            \\`begin_keywords "1364-2005" region inside a Verilog-AMS source is
+            \\different: LRM 10.6 says it changes only which words are reserved,
+            \\so `analog` still opens an analog block there.
             ,
         },
         .E0241 => .{
