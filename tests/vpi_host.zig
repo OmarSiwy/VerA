@@ -168,7 +168,7 @@ fn spiceNumber(w: []const u8) !f64 {
 /// at once under `zig build`, and two compilers writing one directory race.
 fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path: []const u8, app_stem: []const u8, source: []const u8, include: []const []const u8) ![]const u8 {
     var bag = vera.diag.Bag.init(arena);
-    var res = vera.compileSourceOpts(gpa, source, .release_fast, .{
+    var res = vera.compileSourceOpts(gpa, source, .build, .{
         .file_name = path,
         .include_dirs = include,
         .display = .emit,

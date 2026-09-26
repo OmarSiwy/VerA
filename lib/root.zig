@@ -91,17 +91,14 @@ const cg_filters = @import("backend").cg_filters;
 pub const orchestrator = @import("backend").orchestrator;
 pub const tb = @import("backend").tb;
 
-/// The three build targets. Frontend is identical for all three; the backend
-/// and float behavior differ.
+/// How far the pipeline runs. The Zig optimize mode and backend are not
+/// here: they are `orchestrator.Options.optimize`/`.backend`, independently.
 pub const Target = enum {
     /// Frontend only: parse + lower + finiteness proof, emit diagnostics.
     /// No codegen, no `zig` spawn. Microseconds.
     lint,
-    /// Self-hosted backend, incremental (resident `zig --listen` + -fincremental),
-    /// strict float mode, CPU .so only. Fast edit→run loop.
-    debug,
-    /// LLVM backend, no incremental, per-unit float mode, CPU .so.
-    release_fast,
+    /// Through codegen; `buildArtifact` can make a `.so`.
+    build,
 };
 
 pub const Error = codegen.Error || error{
@@ -112,9 +109,6 @@ pub const Error = codegen.Error || error{
     NoModule,
     /// `.lint` produces no artifact by definition.
     NoArtifact,
-    /// `.debug` builds through a session-scoped resident `zig build --listen=-`
-    /// child; cross-process -fincremental does not exist on ELF 0.16.
-    NoResidentChild,
 };
 
 // ---------------------------------------------------------------------------
@@ -479,8 +473,8 @@ fn compileInArena(
 /// Stage 6 then 7–8. VerA's responsibility ends at the artifact: the host
 /// owns dlopen/dlclose and simulation state.
 ///
-/// `resident` is the session-scoped `zig build --listen=-` child required by
-/// `.debug`; pass `null` for `.release_fast`, which always builds cold.
+/// `resident` is a session-scoped incremental child (`o` is ignored: it was
+/// spawned with its own); `null` builds cold under `o`.
 pub fn buildArtifact(
     gpa: Allocator,
     io: std.Io,
@@ -494,11 +488,8 @@ pub fn buildArtifact(
 ) !orchestrator.Result {
     if (result.target == .lint) return error.NoArtifact;
     const device = try result.generateOutput();
-    return switch (result.target) {
-        .lint => unreachable,
-        .debug => (resident orelse return error.NoResidentChild).rebuild(gpa, device, generation),
-        .release_fast => orchestrator.compileRelease(gpa, io, o, device, generation),
-    };
+    if (resident) |r| return r.rebuild(gpa, device, generation);
+    return orchestrator.compileRelease(gpa, io, o, device, generation);
 }
 
 // ---------------------------------------------------------------------------
@@ -673,9 +664,9 @@ test "lint levels: --deny promotes a warning into a hard failure" {
 
 test "determinism: a no-op recompile reproduces identical device.zig" {
     const gpa = std.testing.allocator;
-    var a = try compileSource(gpa, test_resistor, .debug);
+    var a = try compileSource(gpa, test_resistor, .build);
     defer a.deinit();
-    var b = try compileSource(gpa, test_resistor, .debug);
+    var b = try compileSource(gpa, test_resistor, .build);
     defer b.deinit();
     try std.testing.expectEqualStrings(try a.generateDevice(), try b.generateDevice());
 }

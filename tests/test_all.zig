@@ -96,7 +96,7 @@ fn inComment(text: []const u8, at: usize) bool {
 
 test "every `contract.<name>` the backend emits is a decl contract.zig has" {
     const gpa = std.testing.allocator;
-    var res = try vera.compileSource(gpa, wide_device, .debug);
+    var res = try vera.compileSource(gpa, wide_device, .build);
     defer res.deinit();
     const device = try res.generateDevice();
 
