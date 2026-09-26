@@ -123,17 +123,8 @@ fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
 fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     const name = try self.expectIdent();
-    var e = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
-    if (!self.eat(.lbracket)) return e;
-    const at = self.pos - 1;
-    var idx = try parse_expr.parseExpr(self);
-    if (self.eat(.colon)) {
-        const lsb = try parse_expr.parseExpr(self);
-        idx = try self.file.exprs.add(self.arena, .{ .tag = .range, .main_tok = at, .lhs = idx, .rhs = lsb });
-    }
-    _ = try self.expect(.rbracket);
-    e = try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = at, .lhs = e, .rhs = idx });
-    return e;
+    const e = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
+    return if (self.peek() == .lbracket) parse_expr.parseSelect(self, e) else e;
 }
 
 /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
