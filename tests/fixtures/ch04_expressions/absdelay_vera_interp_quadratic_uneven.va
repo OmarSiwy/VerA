@@ -40,17 +40,19 @@
 module absdelay_vera_interp_quadratic_uneven(p, n);
     inout p, n;
     electrical p, n;
-    real tn, y1, y3, d1;
+    real y1, y3, d1;
     analog begin
-        tn = floor($abstime / 1n + 0.5);
         (* vera_interp = 2 *) begin
             y1 = absdelay(V(p, n), 1.5n);
             y3 = absdelay(V(p, n), 3.5n);
         end
         d1 = ddx(y1, V(p));
-        `CHECK("td 1.5n", y1, tn >= 3 ? (tn - 1.5) * (tn - 1.5) : 0.0, 1e-9);
-        `CHECK("td 1.5n, d/dinput", d1, tn == 0 ? 1.0 : (tn == 3 || tn == 6 ? 0.125 : 0.0), 1e-9);
-        `CHECK("td 3.5n", y3, tn >= 4 ? (tn - 3.5) * (tn - 3.5) : 0.0, 1e-9);
+        `CHECK("td 1.5n", y1,
+            $abstime < 0.5n ? 0.0 : ($abstime < 2n ? 0.0 : ($abstime < 3.5n ? 2.25 : ($abstime < 5n ? 6.25 : ($abstime < 6.5n ? 20.25 : ($abstime < 7.5n ? 30.25 : 42.25))))), 1e-9);
+        `CHECK("td 1.5n, d/dinput", d1,
+            $abstime < 0.5n ? 1.0 : ($abstime < 2n ? 0.0 : ($abstime < 3.5n ? 0.125 : ($abstime < 5n ? 0.0 : ($abstime < 6.5n ? 0.125 : ($abstime < 7.5n ? 0.0 : 0.0))))), 1e-9);
+        `CHECK("td 3.5n", y3,
+            $abstime < 0.5n ? 0.0 : ($abstime < 2n ? 0.0 : ($abstime < 3.5n ? 0.0 : ($abstime < 5n ? 0.25 : ($abstime < 6.5n ? 6.25 : ($abstime < 7.5n ? 12.25 : 20.25))))), 1e-9);
         I(p, n) <+ 0.0;
     end
 endmodule
