@@ -229,7 +229,7 @@ const Emitter = struct {
                     const qv = try in.get(c.react_val);
                     s += sign * rv.c.asReal();
                     q += sign * qv.c.asReal();
-                    td = @max(td, @max(rv.d, qv.d));
+                    td = later(td, later(rv.d, qv.d));
                 }
                 S[m * states.len + si] = s;
                 Q[m * states.len + si] = q;
@@ -509,6 +509,12 @@ fn staticRetention(mir: *const Mir, v: Mir.Value) ?bool {
 /// `transition`/`absdelay` delay (s) on any path into it.
 const Val = struct { c: Const, d: f64 = 0 };
 
+/// The later of two delays, NaN if either is: `@max` returns the other
+/// operand of a NaN, which would drop a NaN `td` to 0 ns and print it (#47).
+fn later(a: f64, b: f64) f64 {
+    return if (std.math.isNan(a) or std.math.isNan(b)) std.math.nan(f64) else @max(a, b);
+}
+
 /// Runs the analog block once over `volts` (one potential per `nodes` row).
 const Interp = struct {
     e: *Emitter,
@@ -615,7 +621,7 @@ const Interp = struct {
         for (operands, 0..) |x, i| {
             const v = try self.get(x);
             cs[i] = v.c;
-            d = @max(d, v.d);
+            d = later(d, v.d);
         }
         const c = Mir.opcode.fold(o, cs[0..operands.len]) orelse
             return self.e.refuse("`{s}` has no value here", .{Mir.opcode.label(o)});
@@ -630,7 +636,7 @@ const Interp = struct {
                 const x = try self.get(args[0]);
                 const td = if (args.len > 1) (try self.get(args[1])).c.asReal() else 0;
                 // A NaN td stays NaN (`@max` would drop it to 0) so `run`
-                // refuses it.
+                // refuses it; `later` carries it through every operator.
                 break :blk .{ .c = x.c, .d = x.d + if (std.math.isNan(td)) td else @max(td, 0) };
             },
             // §4.5.9: the settled value; a slew's time depends on the swing.
