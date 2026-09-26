@@ -11,14 +11,10 @@
 // The `highz0` driver's 0 asserts NOTHING: it is z, and z is the identity of
 // all three wired tables, so it cannot pull a wand down.
 //
-// WITHDRAWN CELLS. This file used to assert wa=0 at t=1 and wo=1 at t=2 by
+// CORRECTED GOLDEN. This file used to assert wa=0 at t=1 and wo=1 at t=2 by
 // reading the tables across unequal strengths. Under 7.10.1 both are wrong:
 // St1 against We0 on the wand is 1, St0 against We1 on the wor is 0. VerA
-// prints the withdrawn (wrong) values, since its wired resolution ignores
-// strength. The two cells are no longer displayed. The corrected claim has
-// no row yet: `zig build test-devices` does not read `//! xfail`, so a fixture
-// asserting 1 and 0 would fail the digital gate. It belongs in an xfail row
-// once that runner reads the marker.
+// prints the old values, hence the xfail.
 //
 // Only the resolved VALUE is asserted here. The strength of a wired-logic
 // result is not observable from this runner: `%v` is not implemented (see
@@ -29,15 +25,16 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
-//! inherited IEEE 1364-2005 4.6.2 6.1.4 7.10.1
+//! inherited IEEE 1364-2005 4.6.2 6.1.4 7.10.1 7.10.4
+//! xfail VerA's wired-net resolution applies the wand/wor tables across unequal strengths instead of letting the stronger driver dominate
 //
 // HAND DERIVATION
 //   wa : wand, drivers (strong1, highz0) a  and (weak1, weak0) b
 //   wo : wor,  drivers (strong1, strong0) a and (weak1, weak0) b
 //
-//   t=1  a=1, b=0:  wa not shown (withdrawn)    wo: St1 dominates We0 -> 1
+//   t=1  a=1, b=0:  wa: St1 dominates We0 -> 1  wo: St1 dominates We0 -> 1
 //   t=2  a=0, b=1:  a is z through highz0, and z is the wand identity,
-//                   so wa = We1 -> 1            wo not shown (withdrawn)
+//                   so wa = We1 -> 1            wo: St0 dominates We1 -> 0
 //   t=3  a=0, b=0:  wa = z AND 0 = 0            wo: St0 and We0 agree -> 0
 //   t=4  a=z, b=1:  wa = z AND 1 = 1            wo = z OR 1 = 1
 
@@ -54,9 +51,9 @@ module d03_wired_logic_under_strength;
 
   initial begin
     a = 1'b1; b = 1'b0;
-    #1 $display("one_zero %b", wo);
+    #1 $display("one_zero %b %b", wa, wo);
     a = 1'b0; b = 1'b1;
-    #1 $display("suppressed_zero %b", wa);
+    #1 $display("suppressed_zero %b %b", wa, wo);
     a = 1'b0; b = 1'b0;
     #1 $display("zero_zero %b %b", wa, wo);
     a = 1'bz; b = 1'b1;
