@@ -15,6 +15,9 @@
 //! and macOS libc keeps the trailing zeros on a `%g` tie, which C11 removes
 //! (`%g` of 1347705: "1.34770e+06", not "1.3477e+06").
 //!
+//! One glibc defect is routed around, not matched: '#' %g of a value that
+//! rounds up to 10^P (`Tally.see` has the rule and its C11 derivation).
+//!
 //! One deliberate gap: `%g` with an explicit precision. Both clauses' own
 //! example reads `%10.3g` as "3 fractional digits" where C reads significant
 //! digits, and VerA follows the example (`zCReal`'s comment, and the
@@ -57,7 +60,22 @@ const Tally = struct {
         var cb: [8192]u8 = undefined;
         const n = snprintf(&cb, cb.len, f.ptr, v);
         if (n < 0 or n >= cb.len) return error.SnprintfFailed;
-        const want = cb[0..@intCast(n)];
+        var want: []const u8 = cb[0..@intCast(n)];
+        // glibc defect (2.42 at least): under '#', a %g whose value rounds up
+        // to 10^P at P significant digits (999999.5 at P = 6) prints "1.e+06",
+        // keeping the zero fraction digits it chose for style f before the
+        // carry. C11 7.21.6.1p8 takes X after rounding (X = P, so style e at
+        // precision P - 1) and '#' keeps the zeros: "1.00000e+06". With P > 1
+        // C11 never prints "1.e", so there the oracle is C11's own rule run
+        // through snprintf: the same flags and width as %e at precision P - 1.
+        const p_g: i64 = if (s.prec < 0) 6 else @max(s.prec, 1);
+        if (s.flags & 16 != 0 and s.conv | 0x20 == 'g' and p_g > 1 and std.mem.find(u8, want, if (s.conv == 'G') "1.E" else "1.e") != null) {
+            var eb: [48]u8 = undefined;
+            const ef = try cFormat(&eb, .{ .conv = s.conv - ('g' - 'e'), .flags = s.flags, .width = s.width, .prec = p_g - 1 });
+            const en = snprintf(&cb, cb.len, ef.ptr, v);
+            if (en < 0 or en >= cb.len) return error.SnprintfFailed;
+            want = cb[0..@intCast(en)];
+        }
         var zb: [8192]u8 = undefined;
         const got = zCReal(&zb, v, s.conv, s.flags, s.width, s.prec);
         t.ran += 1;
