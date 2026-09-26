@@ -224,8 +224,10 @@ pub fn formatSay(comptime D: type, s: *Say, name: []const u8, w: *std.Io.Writer)
 /// `%o` and `%b` print its 64-bit two's complement, `%c` its low byte, `%r`
 /// is §2.6.2 engineering notation (a mantissa in [1, 1000) and one scale
 /// letter, the mantissa's shortest digits, or a precision's fractional
-/// digits, as the device's display kernels print it), `%t` is `%g`, `%s`
-/// writes `?`, and `%m`/`%l` write `name`. Precision past 64 is cut to 64.
+/// digits, as the device's display kernels print it), a `%g` precision
+/// counts fractional digits (§9.4.3's `%10.3g` example, as the device
+/// prints it: `%.3g` is `%.3f`), `%t` is `%g`, `%s` writes `?`, and
+/// `%m`/`%l` write `name`. Precision past 64 is cut to 64.
 /// A `%` that ends `fmt` is written as is; one cut off after its flags,
 /// width or precision writes nothing.
 fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -359,6 +361,12 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
         'e' => return cPoint(alt, buf, cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?")),
         'r' => return cEng(buf, v, prec),
         else => {
+            // An explicit %g precision counts FRACTIONAL digits, as the
+            // device's `str_kernels.zCReal` prints it: §9.4.3's own example
+            // reads "%10.3g" as "three (3) fractional digits", where C11
+            // counts significant ones, and VerA follows the example (#44).
+            // So `%.3g` of 1234.5678 is `1234.568`, the `%.3f` text.
+            if (prec != null) return cReal(buf, v, 'f', prec, alt);
             // C11 7.21.6.1 %g: P significant digits; X the exponent %e would
             // print; %f with P - 1 - X decimals when P > X >= -4, else %e.
             const sig = @max(p, 1);

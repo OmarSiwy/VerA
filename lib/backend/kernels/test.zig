@@ -937,6 +937,50 @@ test "§9.4.3 zCReal: special values, zero, the extremes, flags and widths (C11 
     }
 }
 
+test "§9.4.3 a %g precision: the device's zCReal and the host's formatSay print one text (#44)" {
+    // §9.4.3's example reads "%10.3g" as "a minimum field width of 10 with
+    // three (3) fractional digits"; VerA follows it on the device (zCReal)
+    // and, since #44, on the host rendering a recorded `Say` (formatC), where
+    // C11 would count significant digits. Each `want` is worked by hand as
+    // `%f` at that precision:
+    //   %.3g    1234.5678  to 3 places, the 0.0008 past 1234.567 rounds up:
+    //                      "1234.568" (C11: "1.23e+03")
+    //   %10.3g  1234.5678  the same 8 characters right-justified in 10
+    //   %.2g    0.012345   0.01|2345 rounds down: "0.01" (C11: "0.012")
+    //   %.0g    7.25       no fractional digit, .25 rounds down: "7"
+    //   %.6g    1.5        six places, kept: "1.500000" (C11: "1.5")
+    //   %#.0g   3.0        '#' keeps the point: "3." (C11: "3.")
+    //   %-8.1G  2.375      2.3|75 rounds up to "2.4", left in 8 columns
+    //   %+.2g   0.5        the sign, two places: "+0.50"
+    //   %g      1234.5678  no precision: C's six significant digits, "1234.57"
+    const contract = @import("contract");
+    const rows = .{
+        // fmt, value, conv, flags (`str_kernels.zc_*`), width, precision, want
+        .{ "%.3g", 1234.5678, 'g', @as(u8, 0), @as(usize, 0), @as(i64, 3), "1234.568" },
+        .{ "%10.3g", 1234.5678, 'g', 0, 10, 3, "  1234.568" },
+        .{ "%.2g", 0.012345, 'g', 0, 0, 2, "0.01" },
+        .{ "%.0g", 7.25, 'g', 0, 0, 0, "7" },
+        .{ "%.6g", 1.5, 'g', 0, 0, 6, "1.500000" },
+        .{ "%#.0g", 3.0, 'g', str_k.zc_alt, 0, 0, "3." },
+        .{ "%-8.1G", 2.375, 'G', str_k.zc_left, 8, 1, "2.4     " },
+        .{ "%+.2g", 0.5, 'g', str_k.zc_plus, 0, 2, "+0.50" },
+        .{ "%g", 1234.5678, 'g', 0, 0, -1, "1234.57" },
+    };
+    inline for (rows) |row| {
+        var b: [64]u8 = undefined;
+        try std.testing.expectEqualStrings(row[6], str_k.zCReal(&b, row[1], row[2], row[3], row[4], row[5]));
+        const D = struct {
+            pub const say_sites = [_]contract.SaySite{.{ .fmt = row[0], .file = "", .line = 0, .nargs = 1 }};
+        };
+        var store = [_]f64{ 0, row[1] };
+        var s: contract.Say = .{ .buf = &store, .len = store.len };
+        var out: [64]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&out);
+        try contract.formatSay(D, &s, "", &w);
+        try std.testing.expectEqualStrings(row[6], w.buffered());
+    }
+}
+
 test "§9.4.3 zCReal %r: §2.6.2 Table 2-1 engineering notation" {
     var b: [64]u8 = undefined;
     const rows = .{
