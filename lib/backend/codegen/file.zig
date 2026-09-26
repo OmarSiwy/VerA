@@ -19,7 +19,7 @@ const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const gen_setup = @import("setup.zig");
-const opdb = @import("ir").op;
+const opdb = @import("op_zig.zig");
 const Analysis = @import("ir").Analysis;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
@@ -897,7 +897,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         const n = self.names.unit_names[i];
         // The nine operators whose Instance shape is FIXED are a table
         // read — the per-operator prose that used to live in these arms is
-        // now beside the row it explains, in ir/op.zig.
+        // now beside the row it explains, in op_zig.zig.
         for (opdb.get(u.op).slots) |s| {
             if (s.note.len == 0) {
                 try self.w("    {s}__{s}: f64 = {s},\n", .{ n, s.suffix, s.default });

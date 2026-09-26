@@ -1,7 +1,7 @@
 //! §4.5 analog operators and filters.
 //!
-//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s plus the
-//! operator state rows `lib/ir/op.zig` describes.
+//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s for
+//! the stateful operators `op.OpKind` names.
 //!
 //! LRM clauses this file's code cites: §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
 //!
