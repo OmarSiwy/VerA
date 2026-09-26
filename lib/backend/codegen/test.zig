@@ -418,8 +418,8 @@ test "codegen: the unit prologue aliases the helper API and not its internals" {
     // thing standing between the prologue and a kernel file's private names, and
     // relaxing it changes the emitted bytes of every unit file. Pin both sides.
     const has = std.mem.indexOf;
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "const zScan = h.zScan;\n") != null);
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "const zFOpen = h.zFOpen;\n") != null);
+    try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "const zScan = zh.zScan;\n") != null);
+    try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "const zFOpen = zh.zFOpen;\n") != null);
     // str_kernels.zig's `pub const ZScan` and `const zstd`, file_kernels.zig's
     // `fn zfIo` and `const zf_max`: public in h.zig, never named by an emitted
     // body, so aliasing them would be legal, unreferenced, and pure noise.
@@ -427,6 +427,46 @@ test "codegen: the unit prologue aliases the helper API and not its internals" {
     try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "zstd") == null);
     try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "zfIo") == null);
     try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "zf_max") == null);
+}
+
+test "codegen: every split unit file passes AstGen, hoist arrays included" {
+    // A `u/<key>.zig` is the prelude ++ its unit, so a body local that shares a
+    // prelude name is a shadowing error in the split form alone: `--emit-so`
+    // failed on every model whose core hoists into `var h` while the
+    // single-file form compiled. `ln` keeps the diamond out of ifconv, so `y`
+    // is a two-assignment phi and lands in the hoist array.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module hoist(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real k = 2.0;
+        \\  real y;
+        \\  analog begin
+        \\    if (V(p, n) > 0.0)
+        \\      y = ln(V(p, n) * k);
+        \\    else
+        \\      y = -V(p, n);
+        \\    I(p, n) <+ y * y;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const o = try h.genOut(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    try std.testing.expect(o.names.len != 0);
+    try std.testing.expect(std.mem.indexOf(u8, o.text, "var h: [") != null);
+    for (o.unit_lo, o.unit_fn, o.unit_hi) |lo, fn_at, hi| {
+        // `orchestrator.writeTree`'s unit file.
+        const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
+        defer gpa.free(file);
+        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        defer tree.deinit(gpa);
+        var zir = try std.zig.AstGen.generate(gpa, tree);
+        defer zir.deinit(gpa);
+        if (zir.hasCompileErrors()) std.debug.print("{s}\n", .{file});
+        try std.testing.expect(!zir.hasCompileErrors());
+    }
 }
 
 test "codegen: identical MIR yields a byte-identical file (determinism)" {

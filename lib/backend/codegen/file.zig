@@ -220,7 +220,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
     if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
     if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
-    if (f.stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
+    if (f.stateful) try p.appendSlice(self.arena, "const R = zh.R;\n");
     // The shared core is a unit file like any other and sits beside the
     // units that call it; device.zig's own alias for it is private to
     // device.zig, so it is not in scope here. The alias is spelled `core`
