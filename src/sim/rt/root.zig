@@ -13,8 +13,8 @@
 //!
 //! That is the `fifo` schedule. The `static` one keeps the queue only for
 //! what needs it: a combinational node (a continuous assignment, an
-//! `always @*`) is marked dirty when an operand changes and every dirty node
-//! runs in one `settle` event, in topological order; an `always @(event)`
+//! `always @*`) is marked dirty when a bit it reads changes and every dirty
+//! node runs in one `settle` event, in topological order; an `always @(event)`
 //! whose body never suspends waits on a static per-slot watcher list, not on
 //! a suspension record. Both are orders §11.4.1 leaves to the simulator.
 //!
@@ -78,11 +78,11 @@ pub const Design = struct {
     repeats: u32,
     /// `Run.pending`'s time-0 queue, as the pcs each process starts at.
     order: []const u32,
-    /// Static schedule: per slot, the combinational nodes reading it
-    /// (`comb[comb_start[slot]..comb_start[slot + 1]]`), numbered in
-    /// topological order, and how many nodes there are.
+    /// Static schedule: per slot, the bits each combinational node reads
+    /// (`comb[comb_start[slot]..comb_start[slot + 1]]`, ascending by word),
+    /// nodes numbered in topological order, and how many nodes there are.
     comb_start: []const u32 = &.{},
-    comb: []const u32 = &.{},
+    comb: []const Sense = &.{},
     nodes: u32 = 0,
     /// Static schedule: per slot, the event-control terms of the processes
     /// that wait at one fixed place (`watchers[watch_start[slot]..]`), and
@@ -91,6 +91,9 @@ pub const Design = struct {
     watchers: []const Watcher = &.{},
     triggered: u32 = 0,
 };
+
+/// Node `node` reads the bits `mask` of plane word `word`.
+pub const Sense = struct { node: u32, word: u32, mask: u64 };
 
 /// One term of a triggered process: it resumes at `pc` on `edge`.
 pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
@@ -149,12 +152,15 @@ pub const State = struct {
     fan: []const u32,
     armed: []bool,
     comb_start: []const u32,
-    comb: []const u32,
+    comb: []const Sense,
     /// The slots with node readers that changed since the settle event was
     /// queued, each once (`pending`): a slot written many times before the
     /// settle costs its fan-out once.
     changed: std.ArrayList(u32) = .empty,
     pending: []bool,
+    /// Per plane word of a slot with node readers: the bits that changed
+    /// since its readers were last marked.
+    diff: []u64,
     /// One bit per combinational node, set while the settle event runs; it
     /// runs them from `cursor` up.
     dirty: []u64,
@@ -188,6 +194,7 @@ pub const State = struct {
             .comb_start = d.comb_start,
             .comb = d.comb,
             .pending = try gpa.alloc(bool, if (d.nodes == 0) 0 else d.slots),
+            .diff = try gpa.alloc(u64, if (d.nodes == 0) 0 else d.v.len),
             .dirty = try gpa.alloc(u64, (d.nodes + 63) / 64),
             .watch_start = d.watch_start,
             .watchers = d.watchers,
@@ -204,6 +211,7 @@ pub const State = struct {
         @memset(self.terms, .empty);
         @memset(self.armed, false);
         @memset(self.pending, false);
+        @memset(self.diff, 0);
         @memset(self.dirty, 0);
         @memset(self.waiting, false);
         @memset(self.repeats, 0);
@@ -219,7 +227,7 @@ pub const State = struct {
             if (event.payload == settle_payload) {
                 for (self.changed.items) |slot| {
                     self.pending[slot] = false;
-                    for (self.comb[self.comb_start[slot]..self.comb_start[slot + 1]]) |node| self.markDirty(node);
+                    self.markReaders(slot);
                 }
                 self.changed.clearRetainingCapacity();
                 self.settle = .running;
@@ -264,18 +272,30 @@ pub const State = struct {
         return null;
     }
 
-    fn markDirty(self: *State, node: u32) void {
-        self.dirty[node / 64] |= @as(u64, 1) << @intCast(node % 64);
-        // A node's successors come after it, so a running settle only ever
-        // gains bits above its cursor; this keeps it right regardless.
-        self.cursor = @min(self.cursor, node / 64);
+    /// Mark dirty the nodes that read a bit of `slot` changed since the
+    /// last call, then forget those changes.
+    fn markReaders(self: *State, slot: u32) void {
+        const senses = self.comb[self.comb_start[slot]..self.comb_start[slot + 1]];
+        for (senses) |e| {
+            const hit = self.diff[e.word] & e.mask != 0;
+            self.dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
+            // A node's successors come after it, so a running settle only
+            // ever gains bits above its cursor; this keeps it right regardless.
+            self.cursor = @min(self.cursor, if (hit) e.node / 64 else self.cursor);
+        }
+        if (senses.len != 0) @memset(self.diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
+    }
+
+    /// Whether a node reads some bit of `slot`.
+    inline fn sensed(self: *const State, slot: u32) bool {
+        return slot + 1 < self.comb_start.len and self.comb_start[slot] != self.comb_start[slot + 1];
     }
 
     /// `slot` changed: its node readers run in the settle event, which is
     /// queued now if it is not already.
     fn dirtyReaders(self: *State, slot: u32) Error!void {
         switch (self.settle) {
-            .running => for (self.comb[self.comb_start[slot]..self.comb_start[slot + 1]]) |node| self.markDirty(node),
+            .running => self.markReaders(slot),
             .queued => if (!self.pending[slot]) {
                 self.pending[slot] = true;
                 try self.changed.append(self.gpa, slot);
@@ -340,26 +360,39 @@ pub const State = struct {
     /// matches wakes. `a` is a `logic.T`, `m` the `logic.M` of its width.
     pub inline fn put(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         if (@TypeOf(a) != W) return self.store(slot, off, &a.v, &a.x, &m);
-        const bits: u64 = m;
-        const ov = self.v[off];
-        const ox = self.x[off];
-        const nv = (ov & ~bits) | (a.v & bits);
-        const nx = (ox & ~bits) | (a.x & bits);
-        if (nv == ov and nx == ox) return;
-        self.v[off] = nv;
-        self.x[off] = nx;
-        try self.wake(slot, logic.low(W{ .v = ov, .x = ox }), logic.low(W{ .v = nv, .x = nx }));
+        return self.putWord(slot, off, 0, a, m);
+    }
+
+    /// `put` of the bits `m` of word `j` alone: a bit-select of a wide slot
+    /// touches one word. An edge is its least significant bit's (§9.7.2),
+    /// which only word 0 holds.
+    pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+        const at = off + j;
+        const ov = self.v[at];
+        const ox = self.x[at];
+        const nv = (ov & ~m) | (a.v & m);
+        const nx = (ox & ~m) | (a.x & m);
+        const d = (nv ^ ov) | (nx ^ ox);
+        if (d == 0) return;
+        const before = logic.low(W{ .v = self.v[off], .x = self.x[off] });
+        self.v[at] = nv;
+        self.x[at] = nx;
+        if (self.sensed(slot)) self.diff[at] |= d;
+        try self.wake(slot, before, logic.low(W{ .v = self.v[off], .x = self.x[off] }));
     }
 
     fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
         const before = logic.low(W{ .v = sv[0], .x = sx[0] });
+        const sense = self.sensed(slot);
         var changed: u64 = 0;
-        for (sv, sx, v, x, m) |*ov, *ox, av, ax, am| {
+        for (sv, sx, v, x, m, 0..) |*ov, *ox, av, ax, am, i| {
             const nv = (ov.* & ~am) | (av & am);
             const nx = (ox.* & ~am) | (ax & am);
-            changed |= (nv ^ ov.*) | (nx ^ ox.*);
+            const d = (nv ^ ov.*) | (nx ^ ox.*);
+            changed |= d;
+            if (sense) self.diff[off + i] |= d;
             ov.* = nv;
             ox.* = nx;
         }
