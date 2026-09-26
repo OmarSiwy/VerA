@@ -76,56 +76,21 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             // same `endmodule` — so it is the same arm, and the ONE thing
             // that distinguishes it is recorded on the decl rather than
             // here: see `Ast.ModuleDecl.is_connect`.
-            .kw_module, .kw_macromodule, .kw_connectmodule => {
-                const m = parse_module.parseModule(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try modules.append(self.arena, m);
-            },
-            .kw_discipline => {
-                const d = parse_decl.parseDiscipline(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try disciplines.append(self.arena, d);
-            },
-            .kw_nature => {
-                const n = parse_decl.parseNature(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try natures.append(self.arena, n);
-            },
+            .kw_module, .kw_macromodule, .kw_connectmodule => try element(self, before, &modules, parse_module.parseModule(self)),
+            .kw_discipline => try element(self, before, &disciplines, parse_decl.parseDiscipline(self)),
+            .kw_nature => try element(self, before, &natures, parse_decl.parseNature(self)),
             // §6.4 / Syntax 6-4 `paramset`, A.1.9 paramset_declaration.
             // Parsed for real now: §6.4 makes a paramset instantiable
             // "exactly like a module", so its parameters and its
             // `.name = expr;` statements are what an instance that names it
             // elaborates to (`ir/elaborate.zig`).
-            .kw_paramset => {
-                const ps = parse_module.parseParamset(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try paramsets.append(self.arena, ps);
-            },
+            .kw_paramset => try element(self, before, &paramsets, parse_module.parseParamset(self)),
             // §7.7 / A.1.8 connectrules_declaration, the last A.1.2
             // description alternative VerA parses. Its content is consumed
             // by annex F.2 discipline resolution (`ir/elaborate.zig`);
             // refusing it here was refusing the one design element step
             // 4.b's third bullet reads.
-            .kw_connectrules => {
-                const cr = parse_module.parseConnectRules(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try connectrules.append(self.arena, cr);
-            },
+            .kw_connectrules => try element(self, before, &connectrules, parse_module.parseConnectRules(self)),
             // A.1.2's `description` has three more alternatives, and they
             // share one token tag: annex B reserves `primitive`, `config`,
             // `library` and `include` and this compiler gives none of them
@@ -217,6 +182,17 @@ pub fn outsideDesignElement(self: *Parser, what: []const u8) Error!void {
     const t = self.peek();
     if (t != .dir_begin_keywords and t != .dir_end_keywords) return;
     return self.failAt(self.pos, .E0202, "{s} inside a {s}", .{ token.Tag.lexeme(t).?, what });
+}
+
+/// Append one parsed design element to `list`, or on a syntax error recover
+/// to the next element and append nothing.
+fn element(self: *Parser, before: u32, list: anytype, parsed: anytype) error{OutOfMemory}!void {
+    const x = parsed catch |e| {
+        if (e == error.OutOfMemory) return error.OutOfMemory;
+        recoverTopLevel(self, before);
+        return;
+    };
+    try list.append(self.arena, x);
 }
 
 /// Skip to the next thing that can start a top-level description (A.1.2),
