@@ -3,6 +3,7 @@
 // The value is independently set/read; punctuation must remain inside the name.
 //! lrm 2.8.1
 //! expect stdout audit_ams_lexical_escaped_ascii.expected.txt
+//! inherited IEEE 1364-2005 3.7.1
 module audit_ams_lexical_escaped_ascii;
 integer \!"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ;
 initial begin

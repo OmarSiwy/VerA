@@ -19,6 +19,7 @@
 //! lrm annex A.6.1
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 7.14
 //
 // Hand derivation for `assign #(2, 4, 6) y = en ? d : 1'bz;`
 // (rise = 2, fall = 4, turn-off = 6):

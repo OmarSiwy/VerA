@@ -35,6 +35,7 @@
 //
 //! lrm A.2.6
 //! lrm 1.1
+//! inherited IEEE 1364-2005 10.4.1
 module d04_function_automatic_recursion;
   reg [15:0] r;
 

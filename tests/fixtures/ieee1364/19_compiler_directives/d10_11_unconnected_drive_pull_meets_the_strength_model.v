@@ -67,6 +67,7 @@
 // So this file fails for three independent reasons and will keep failing until
 // D03's strength model exists. It is here to state the target, not to pass.
 
+//! inherited IEEE 1364-2005 4.6.4 4.6.6 7.10.1 19.9
 `unconnected_drive pull1
 module d10_pulled(w, t, s);
   input w;
@@ -80,5 +81,6 @@ endmodule
 
 module d10_unconnected_drive_pull_meets_the_strength_model;
   d10_pulled u( , , );
-  initial $display("w=%b t=%b s=%b", u.w, u.t, u.s);
+  // #1: at t=0 the read races the pulls' own time-0 evaluation (11.5).
+  initial #1 $display("w=%b t=%b s=%b", u.w, u.t, u.s);
 endmodule

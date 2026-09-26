@@ -36,6 +36,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.4 7.10.1 7.10.3
 //
 // HAND DERIVATION — driver A is (strong1, strong0) a, driver B is (weak1, weak0) b.
 //   t=1  a=1 -> s1=6; b=0 -> s0=3.  6 > 3            -> w = 1

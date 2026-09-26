@@ -11,12 +11,16 @@
 // destination-poke witness audit_sched_implicit_write_only.v.
 //
 // HAND DERIVATION — q = x and r = q.
-//   t=0   x<-0011 (leaves x, both blocks' names change)   q = 0011, r = 0011
-//   t=1   display                                         "stage 0011 0011"
+//   t=0   nothing is written: an `always` and an `initial` both start at t=0
+//         in either order (IEEE 1364-2005 11.4.2), and @* does not fire at
+//         time zero (9.7.5), so a write at t=0 could land before the block
+//         waits on it and leave the result at x.
+//   t=1   x<-0011 (leaves x, both blocks' names change)   q = 0011, r = 0011
+//   t=2   display                                         "stage 0011 0011"
 //         x<-1100                                         q = 1100, r = 1100
-//   t=2   display                                         "moved 1100 1100"
+//   t=3   display                                         "moved 1100 1100"
 //         x<-0101                                         q = 0101, r = 0101
-//   t=3   display                                         "again 0101 0101"
+//   t=4   display                                         "again 0101 0101"
 //
 // A cascade that needs a second timestep per stage prints "moved 1100 0011".
 // A cascade that never propagates past the first stage prints "moved 1100 xxxx".
@@ -24,6 +28,7 @@
 //! lrm A.6.5
 //! lrm 1.2
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.5
 `timescale 1ns/1ps
 module d04_implicit_sensitivity_cascade;
   reg [3:0] x, q, r;
@@ -32,7 +37,7 @@ module d04_implicit_sensitivity_cascade;
   always @* r = q;
 
   initial begin
-    x = 4'b0011;
+    #1 x = 4'b0011;
     #1 $display("stage %b %b", q, r);
     x = 4'b1100;
     #1 $display("moved %b %b", q, r);

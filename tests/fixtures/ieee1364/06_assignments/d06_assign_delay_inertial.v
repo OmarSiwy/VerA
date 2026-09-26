@@ -16,6 +16,7 @@
 //! lrm 8.5.3.1
 //! lrm annex A.6.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 11.6.1
 //
 // Hand derivation for `assign #5 y = a;`:
 //   t=0   a := 0.  Delivered at t=5                             -> y = 0

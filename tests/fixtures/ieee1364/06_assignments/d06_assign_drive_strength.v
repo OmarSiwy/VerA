@@ -26,6 +26,7 @@
 //! lrm 9.22.4
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.4 7.10.1
 //
 // Hand derivation.
 //   y has two drivers:  (pull1, pull0) a   and   (weak1, weak0) b

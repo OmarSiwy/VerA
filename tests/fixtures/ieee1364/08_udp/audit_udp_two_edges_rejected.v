@@ -6,6 +6,7 @@
 //! lrm A.5.3
 //! reject E0234
 //! reject at most one input transition descriptor
+//! inherited IEEE 1364-2005 8.1.4 8.4
 primitive shape_udp(q, a, b);
   output q; reg q;
   input a, b;

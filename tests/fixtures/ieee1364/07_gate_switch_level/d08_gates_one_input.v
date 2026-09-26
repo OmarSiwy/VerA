@@ -23,6 +23,7 @@
 //
 //! lrm A.3.1
 //! lrm 1.1
+//! inherited IEEE 1364-2005 7.2
 `timescale 1ns/1ns
 module d08_gates_one_input;
   reg a;

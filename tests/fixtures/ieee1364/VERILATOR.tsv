@@ -140,7 +140,7 @@ fixture	expect	verilator	exit	agrees	note
 11_scheduling/audit_sched_constant_ports.v	transcript	accepts	0	yes	
 11_scheduling/audit_sched_task_copy_timing.v	transcript	accepts	0	yes	
 11_scheduling/scheduling.v	transcript	accepts	0	no	stdout differs; golden shows x/z
-12_hierarchy/audit_generate_block_continuous_assign_rejected.v	reject	accepts	0	no	accepts and exits 0
+12_hierarchy/audit_generate_block_continuous_assign.v	transcript	accepts	0	yes	
 12_hierarchy/audit_generate_loop_and_case.v	transcript	accepts	0	yes	
 12_hierarchy/audit_generate_loop_repeated_genvar_rejected.v	reject	refuses	-	yes	%Error: tests/fixtures/ieee1364/12_hierarchy/audit_generate_loop_repeated_genvar_rejected.v:12:5: Unrolling generate loop took too long; probably this is an inf
 12_hierarchy/audit_generate_select_per_iteration.v	transcript	accepts	0	yes	

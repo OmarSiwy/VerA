@@ -29,6 +29,7 @@
 //! lrm 8.5.3.3
 //! lrm 8.5.3.4
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 9.2.1 9.2.2 9.7.7 11.3 11.6.3 11.6.4
 //
 // Hand derivation.  All of the following happens at t=0, in order:
 //   r := 1, s := 0, b := 1
