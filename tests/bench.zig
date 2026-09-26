@@ -131,7 +131,7 @@ pub fn main(init: std.process.Init) !u8 {
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
-    // `devices`, `vpi` and `spice` are the THREE remaining words in argument
+    // `devices`, `ieee1364`, `vpi` and `spice` are the remaining words in argument
     // position 2, and none is a mode of the benchmark: they are the other runs of this
     // executable, whose cases need the BINARY (or a C compiler) rather than the
     // engine. Everything else is a benchmark argument, including a bare filter
@@ -139,6 +139,7 @@ pub fn main(init: std.process.Init) !u8 {
     const first = args.next();
     if (first) |a| {
         if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args, &digital_dirs);
+        if (std.mem.eql(u8, a, ieee1364_dir)) return devices(init, vera_exe, &args, &.{ieee1364_dir});
         if (std.mem.eql(u8, a, "vpi")) return vpiFixtures(init, &args);
         if (std.mem.eql(u8, a, "spice")) return spiceDecks(init, vera_exe, &args);
     }
@@ -149,7 +150,7 @@ fn usage(io: Io, why: []const u8) !u8 {
     var buf: [256]u8 = undefined;
     var e = Io.File.stderr().writer(io, &buf);
     try e.interface.print(
-        "suite: {s}\nusage: <vera-exe> [devices | vpi | spice | benchmark args]\n",
+        "suite: {s}\nusage: <vera-exe> [devices | ieee1364 | vpi | spice | benchmark args]\n",
         .{why},
     );
     try e.interface.flush();
