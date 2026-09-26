@@ -12,15 +12,18 @@
 // third line wrong.
 //
 // HAND DERIVATION — `c` is `a | b`, recomputed whenever a or b changes.
-//   t=0   a<-0000, b<-0000 (both leave x, so the block runs under any reading
-//         of whether @* also fires once at time zero)      c = 0000
-//   t=1   display                                          "zeros 0000"
+//   t=0   nothing is written: an `always` and an `initial` both start at t=0
+//         in either order (IEEE 1364-2005 11.4.2), and @* does not fire at
+//         time zero (9.7.5), so a write at t=0 could land before the block
+//         waits on it and leave the result at x.
+//   t=1   a<-0000, b<-0000 (both leave x)                  c = 0000
+//   t=2   display                                          "zeros 0000"
 //         a<-0011                                          c = 0011|0000 = 0011
-//   t=2   display                                          "a_set 0011"
+//   t=3   display                                          "a_set 0011"
 //         b<-0100                                          c = 0011|0100 = 0111
-//   t=3   display                                          "b_set 0111"
+//   t=4   display                                          "b_set 0111"
 //         a<-0000, b<-0000                                 c = 0000
-//   t=4   display                                          "cleared 0000"
+//   t=5   display                                          "cleared 0000"
 //
 // Every value is read one full nanosecond after the write that causes it, so no
 // line depends on the order simultaneous processes are entered in.
@@ -41,7 +44,7 @@ module d04_implicit_sensitivity_star;
   always @* c = a | b;
 
   initial begin
-    a = 4'b0000;
+    #1 a = 4'b0000;
     b = 4'b0000;
     #1 $display("zeros %b", c);
     a = 4'b0011;

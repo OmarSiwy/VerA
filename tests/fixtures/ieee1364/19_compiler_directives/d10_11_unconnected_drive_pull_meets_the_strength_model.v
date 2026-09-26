@@ -81,5 +81,6 @@ endmodule
 
 module d10_unconnected_drive_pull_meets_the_strength_model;
   d10_pulled u( , , );
-  initial $display("w=%b t=%b s=%b", u.w, u.t, u.s);
+  // #1: at t=0 the read races the pulls' own time-0 evaluation (11.5).
+  initial #1 $display("w=%b t=%b s=%b", u.w, u.t, u.s);
 endmodule
