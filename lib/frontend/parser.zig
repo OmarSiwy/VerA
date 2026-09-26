@@ -32,12 +32,19 @@ const diag = @import("diag");
 
 pub const Error = error{ OutOfMemory, ParseError };
 
+/// E0241's nesting limit. A Debug build's parser overflows an 8 MB stack
+/// between 3000 and 5000 nested parentheses, and the later tree walks
+/// recurse too.
+pub const max_depth = 1024;
+
 pub const Parser = struct {
     arena: std.mem.Allocator,
     src: []const u8,
     tags: []const token.Tag,
     starts: []const u32,
     pos: u32 = 0,
+    /// Open `enter` calls: expression, statement and generate-block nesting.
+    depth: u16 = 0,
     file: Ast.SourceFile = .empty,
     /// Shared collector. The cap, the dedupe and the rendering all live there.
     bag: *diag.Bag,
@@ -452,6 +459,14 @@ pub const Parser = struct {
             error.ParseError => {},
             error.OutOfMemory => |e| return e,
         }
+    }
+
+    /// Opens one level of nesting; the caller pairs it with
+    /// `defer self.depth -= 1`. Fails with E0241 past `max_depth`, so nested
+    /// source is refused before it overflows the native stack.
+    pub fn enter(self: *Parser) Error!void {
+        if (self.depth == max_depth) return self.failAt(self.pos, .E0241, "", .{});
+        self.depth += 1;
     }
 
     pub fn failAt(self: *Parser, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error {

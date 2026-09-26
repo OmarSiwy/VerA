@@ -46,6 +46,8 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 /// they are not analog statements. `casex`/`casez` ARE dispatched, to
 /// `parseCase`: §7.3.2 makes them analog statements in Verilog-AMS.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
+    try self.enter();
+    defer self.depth -= 1;
     const mark = self.attrs.items.len;
     try self.skipAttributes();
     // A.6.4 `{ attribute_instance } <statement>`: VerA's `vera_lte` is the one
