@@ -50,12 +50,13 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     defer self.depth -= 1;
     const mark = self.attrs.items.len;
     try self.skipAttributes();
-    // A.6.4 `{ attribute_instance } <statement>`: VerA's `vera_lte` is the one
-    // attribute a statement keeps (`Ast.SourceFile.lte_attrs`). Read BEFORE
-    // the body, whose own nested statements append their attributes after.
+    // A.6.4 `{ attribute_instance } <statement>`: VerA's `vera_lte` and
+    // `vera_interp` are the attributes a statement keeps
+    // (`Ast.SourceFile.lte_attrs`). Read BEFORE the body, whose own nested
+    // statements append their attributes after.
     const lte = self.lteSince(mark);
     const id = try parseStmtBody(self);
-    if (lte) |a| try self.file.lte_attrs.append(self.arena, .{ .stmt = id, .value = a.value, .main_tok = a.main_tok });
+    try self.keepLte(lte, id, .none);
     return id;
 }
 

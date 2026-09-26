@@ -1186,7 +1186,7 @@ fn lteSuffix(self: *const Lower, e: Ast.ExprId) ?Ast.LteAttr {
     if (e == .none) return null;
     const ex = &self.file.exprs;
     if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) {
-        if (self.file.exprLte(e)) |a| return a;
+        if (self.file.exprLte(e, .vera_lte)) |a| return a;
     }
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (lteSuffix(self, c)) |a| return a;

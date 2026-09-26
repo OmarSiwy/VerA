@@ -508,6 +508,9 @@ pub const Code = enum(u16) {
     /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
     /// independent of the model card.
     E0523,
+    /// §2.9 VerA's `vera_interp` attribute with a value other than 1 or 2, or
+    /// one that depends on the model card.
+    E0524,
     /// §4.5.1 a Laplace or Z-transform coefficient argument that is a scalar,
     /// not an array identifier or an assignment pattern.
     E0572,
@@ -4304,6 +4307,23 @@ fn infoOf(c: Code) Info {
             \\    (* vera_lte *)     I(g, s) <+ ddt(qgs);   // 1: included
             \\
             \\The attribute is ignored and the site keeps the default (included).
+            ,
+        },
+        .E0524 => .{
+            .title = "vera_interp is 1 or 2",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_interp = <value> *)` is VerA's attribute for choosing how an
+            \\`absdelay` (4.5.7) reads its history between accepted timepoints:
+            \\1 is the clause's linear interpolation, 2 is 3-point Lagrange
+            \\(quadratic), the reading SPICE's lossless transmission line uses.
+            \\The value picks the emitted kernel, so it must fold before the model
+            \\card exists and may not name a parameter:
+            \\
+            \\    y = absdelay (* vera_interp = 2 *) (V(a), td);   // quadratic
+            \\    (* vera_interp *) y = absdelay(V(a), td);        // 1: linear
+            \\
+            \\The attribute is ignored and the site keeps linear interpolation.
             ,
         },
         .E0572 => .{
