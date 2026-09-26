@@ -1085,6 +1085,10 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
             native = true;
             continue;
         }
+        if (std.mem.eql(u8, a, "--fuzz")) {
+            const n = std.fmt.parseInt(u32, args.next() orelse "", 10) catch return usage(init.io, "--fuzz takes a count");
+            return fuzz(init, vera_exe, n);
+        }
         filter = a;
     }
 
@@ -1745,6 +1749,241 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, 
     const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
     return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
 }
+
+// ---------------------------------------------------------------------------
+// `--fuzz N`: N random expressions, each printed by `vera --run` and by the
+// native executable of the same source; the two transcripts must be equal
+// and the executable must be native. The fixtures pin the §5.5 context
+// rules at the points someone thought of; this is the check on the rule
+// being implemented twice (`exec.evalContext`, `emit_expr.value`).
+//
+//   zig build test-devices -- --fuzz 2000
+// ---------------------------------------------------------------------------
+
+const FuzzVar = struct { width: u32, signed: bool };
+const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64 };
+const fuzz_vars = 12;
+const fuzz_per_file = 400;
+
+fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    var buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writer(io, &buf);
+    const w = &stderr.interface;
+    defer w.flush() catch {};
+    const exe = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, gpa);
+    defer gpa.free(exe);
+    const work = options.work_root ++ "/fuzz";
+    try Io.Dir.cwd().createDirPath(io, work);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    var prng = std.Random.DefaultPrng.init(0x5eed_1364);
+    const rand = prng.random();
+    var done: u32 = 0;
+    var file: u32 = 0;
+    var failed = false;
+    while (done < count) : (file += 1) {
+        _ = arena_state.reset(.retain_capacity);
+        const a = arena_state.allocator();
+        const n = @min(fuzz_per_file, count - done);
+        const src = try fuzzSource(a, rand, n);
+        const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
+        try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
+        const want = try capture(a, io, &.{ exe, "--run", path });
+        const built = try capture(a, io, &.{ exe, "--emit-exe", "--contract", options.contract, "--work-dir", work, path });
+        if (want.exit != 0 or built.exit != 0) {
+            try w.print("FAIL {s}: --run exited {d}, --emit-exe exited {d}\n{s}{s}\n", .{ path, want.exit, built.exit, want.stderr, built.stderr });
+            return 1;
+        }
+        if (std.mem.indexOf(u8, built.stderr, "not native (") != null) {
+            try w.print("FAIL {s}: not native\n{s}\n", .{ path, built.stderr });
+            return 1;
+        }
+        const got = try capture(a, io, &.{std.mem.trimEnd(u8, built.stdout, "\n")});
+        if (!std.mem.eql(u8, want.stdout, got.stdout)) {
+            failed = true;
+            var wl = std.mem.splitScalar(u8, want.stdout, '\n');
+            var gl = std.mem.splitScalar(u8, got.stdout, '\n');
+            while (wl.next()) |x| {
+                const y = gl.next() orelse "";
+                if (!std.mem.eql(u8, x, y)) try w.print("FAIL {s}: --run `{s}`, native `{s}`\n", .{ path, x, y });
+            }
+        }
+        done += n;
+    }
+    try w.print("fuzz: {d} expressions in {d} files, native {s} --run\n", .{ count, file, if (failed) "DIFFERS from" else "equals" });
+    return if (failed) 1 else 0;
+}
+
+/// One design: `fuzz_vars` random four-state operands, then `n` lines, each
+/// one random expression printed self-determined or through an assignment
+/// to a random-width target (so its context width and signedness vary).
+fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
+    var out: Io.Writer.Allocating = .init(a);
+    const o = &out.writer;
+    var vars: [fuzz_vars]FuzzVar = undefined;
+    try o.writeAll("module fuzz;\n");
+    for (&vars, 0..) |*v, i| {
+        v.* = .{ .width = fuzz_widths[rand.uintLessThan(usize, fuzz_widths.len)], .signed = rand.boolean() };
+        try o.print("  reg {s}[{d}:0] v{d};\n", .{ if (v.signed) "signed " else "", v.width - 1, i });
+    }
+    try o.writeAll("  reg [7:0] mem [2:5];\n");
+    for (fuzz_widths, 0..) |tw, i| try o.print("  reg {s}[{d}:0] t{d};\n", .{ if (i % 2 == 0) "signed " else "", tw - 1, i });
+    try o.writeAll("  initial begin\n");
+    // Half the operands fully known, or arithmetic would almost always see
+    // an x and never reach its known-value path.
+    for (vars, 0..) |v, i| try o.print("    v{d} = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = v.width, .known = i % 2 == 0 } });
+    for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8 } });
+    for (0..n) |_| {
+        var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o };
+        if (rand.boolean()) {
+            try o.writeAll("    $display(\"%b ");
+            try o.writeAll(if (rand.boolean()) "%d\", " else "%h\", ");
+            const cut = out.written().len;
+            _ = try g.expr(3);
+            const e = try a.dupe(u8, out.written()[cut..]);
+            try o.print(", {s});\n", .{e});
+        } else {
+            const t = rand.uintLessThan(usize, fuzz_widths.len);
+            try o.print("    t{d} = ", .{t});
+            _ = try g.expr(3);
+            try o.print(";\n    $display(\"%b %d\", t{d}, t{d});\n", .{ t, t });
+        }
+    }
+    try o.writeAll("  end\nendmodule\n");
+    return out.written();
+}
+
+/// A sized binary literal of `width` random bits, mostly known.
+const FuzzBits = struct {
+    rand: std.Random,
+    width: u32,
+    known: bool = false,
+    pub fn format(self: FuzzBits, o: *Io.Writer) Io.Writer.Error!void {
+        try o.print("{d}'b", .{self.width});
+        for (0..self.width) |_| try o.writeByte(if (!self.known and self.rand.uintLessThan(u8, 8) == 0) "xz"[self.rand.uintLessThan(u8, 2)] else "01"[self.rand.uintLessThan(u8, 2)]);
+    }
+};
+
+/// Random expressions whose every operand and result is at most 64 bits,
+/// so the native executable takes all of them.
+const FuzzGen = struct {
+    rand: std.Random,
+    vars: []const FuzzVar,
+    out: *Io.Writer,
+
+    /// Writes one expression; returns its self-determined width.
+    fn expr(g: *FuzzGen, depth: u32) Io.Writer.Error!u32 {
+        const o = g.out;
+        const r = g.rand;
+        if (depth == 0 or r.uintLessThan(u8, 5) == 0) return g.leaf();
+        switch (r.uintLessThan(u8, 12)) {
+            0 => {
+                try o.writeAll(([_][]const u8{ "-", "~", "!", "&", "|", "^", "~&", "~^", "+" })[r.uintLessThan(usize, 9)]);
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            1, 2, 3 => {
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " + ", " - ", " * ", " / ", " % ", " & ", " | ", " ^ ", " ~^ " })[r.uintLessThan(usize, 9)]);
+                const wb = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return @max(wa, wb);
+            },
+            4 => {
+                try o.writeByte('(');
+                _ = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " == ", " != ", " === ", " !== ", " < ", " <= ", " > ", " >= ", " && ", " || " })[r.uintLessThan(usize, 10)]);
+                _ = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return 1;
+            },
+            5 => {
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " << ", " >> ", " <<< ", " >>> ", " ** " })[r.uintLessThan(usize, 5)]);
+                if (r.boolean()) try o.print("{d}", .{r.uintLessThan(u32, 70)}) else _ = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            6 => {
+                try o.writeByte('(');
+                _ = try g.expr(depth - 1);
+                try o.writeAll(" ? ");
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(" : ");
+                const wb = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return @max(wa, wb);
+            },
+            7 => {
+                // A concatenation of narrow operands only, so it stays within 64.
+                const i = r.uintLessThan(usize, g.vars.len);
+                const j = r.uintLessThan(usize, g.vars.len);
+                if (g.vars[i].width + g.vars[j].width > 64) return g.leaf();
+                try o.print("{{v{d}, v{d}}}", .{ i, j });
+                return g.vars[i].width + g.vars[j].width;
+            },
+            8 => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                const k = 64 / g.vars[i].width;
+                const n = 1 + r.uintLessThan(u32, @min(k, 4));
+                try o.print("{{{d}{{v{d}}}}}", .{ n, i });
+                return n * g.vars[i].width;
+            },
+            9 => {
+                try o.writeAll(if (r.boolean()) "$signed(" else "$unsigned(");
+                const wa = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            10 => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                const vw = g.vars[i].width;
+                if (r.boolean()) {
+                    try o.print("v{d}[", .{i});
+                    _ = try g.expr(0);
+                    try o.writeByte(']');
+                    return 1;
+                }
+                const lo = r.uintLessThan(u32, vw);
+                const hi = lo + r.uintLessThan(u32, vw - lo);
+                try o.print("v{d}[{d}:{d}]", .{ i, hi, lo });
+                return hi - lo + 1;
+            },
+            else => {
+                try o.writeAll("mem[");
+                _ = try g.expr(0);
+                try o.writeByte(']');
+                return 8;
+            },
+        }
+    }
+
+    fn leaf(g: *FuzzGen) Io.Writer.Error!u32 {
+        const o = g.out;
+        const r = g.rand;
+        switch (r.uintLessThan(u8, 6)) {
+            0 => {
+                try o.print("{d}", .{r.uintLessThan(u32, 300)});
+                return 32;
+            },
+            1 => {
+                try o.writeAll(([_][]const u8{ "'bx", "'bz", "'hx1", "'b1", "-4'sd3", "4'sb1x01", "'sd7", "3'bz0x" })[r.uintLessThan(usize, 8)]);
+                return 32;
+            },
+            else => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                try o.print("v{d}", .{i});
+                return g.vars[i].width;
+            },
+        }
+    }
+};
 
 // orchestrator.zig's claim, and the whole basis of the incremental story:
 // writing a tree that is already on disk touches nothing. It is a `test` and
