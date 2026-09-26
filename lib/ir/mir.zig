@@ -150,6 +150,10 @@ pub const Opcode = enum(u8) {
     /// Optimization fence (no LRM basis, engine-internal): stops
     /// codegen from folding/reassociating across it. Unary, value-preserving.
     opt_barrier,
+    /// Derivative stop (no LRM basis; VerA's `vera_nodiff` attribute, §2.9):
+    /// the operand's value with every derivative lane zero. So its `deps` is
+    /// empty although the value still varies with x (`Analysis.xDep`).
+    dstop,
     /// Committed-value latch (no LRM basis, engine-internal): reads the
     /// Instance field `pb__<k>` holding the OPERAND's value at the last
     /// accepted solve (`stateCtl(.commit)`); gradient zero. Exists for

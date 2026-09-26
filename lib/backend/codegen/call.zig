@@ -252,6 +252,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .fi_cast,
                 .if_cast,
                 .opt_barrier,
+                .dstop,
                 .path_prev,
                 .path_acc,
                 .select,
