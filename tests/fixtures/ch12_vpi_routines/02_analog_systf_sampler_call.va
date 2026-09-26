@@ -48,8 +48,11 @@
 // compiler refuses elsewhere — where the LRM fixes a number a substitute would
 // contradict it, and here it fixes none (see the paragraph above), so the only
 // thing to report is the absent host. `--deny=W0852` turns it back into a
-// refusal for a build that must have one.
+// refusal for a build that must have one. The two `//! warn` lines pin both
+// halves: the code, and that it names the name.
 //
+//! warn W0852
+//! warn `$sampler`
 `include "check.vh"
 module ch12_analog_systf_sampler_call(out, in);
   inout out, in; electrical out, in;

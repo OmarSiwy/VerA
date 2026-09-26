@@ -406,6 +406,21 @@ test "expected runtime check count is positive, unique and not a rejection" {
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! checks 1\n//! reject E0208\n"));
 }
 
+test "warn is a named substring on a compiling fixture; nowarn stands alone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, "//! warn W0853\n//! warn not applied at this call\n");
+    try testing.expectEqual(@as(usize, 2), d.warn.len);
+    try testing.expectEqualStrings("not applied at this call", d.warn[1]);
+    try testing.expect((try tb_directive.parse(arena, "//! nowarn\n")).nowarn);
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! warn\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! nowarn W0853\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! warn W0853\n//! nowarn\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! warn W0853\n//! reject E0208\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! nowarn\n//! reject E0208\n"));
+}
+
 test "sweep expansion is the cartesian product, last fastest" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

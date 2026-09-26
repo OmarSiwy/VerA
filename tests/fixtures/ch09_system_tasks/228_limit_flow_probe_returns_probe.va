@@ -7,13 +7,15 @@
 // VerA declines this site: it compiles, warns W0853 (the first argument is not
 // a potential probe), and returns the probe unchanged. The warning is asserted
 // by the unit test "a declined $limit is W0853 naming why"
-// (lib/backend/codegen/test.zig); the analog harness has no warning directive,
-// so this file asserts what the clause fixes about the value.
+// (lib/backend/codegen/test.zig) and by `//! warn` below; the checks assert
+// what the clause fixes about the value.
 //
 // Two 100 ohm resistors in series with a 0 V source across V(p) = 1 V carry
 // 1 / 200 = 5 mA, which is I(a,b), independent of any limiting.
 //
 //! lrm 9.17.3
+//! warn W0853
+//! warn its first argument is not a §4.4 potential probe
 //! solve
 //! bias V(p) = 1, V(n) = 0
 `include "check.vh"
