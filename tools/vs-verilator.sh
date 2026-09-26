@@ -75,7 +75,6 @@ if [ "${1:-}" = --oracle ]; then
   exit 0
 fi
 VERA=$(realpath "${1:-zig-out/bin/vera}")
-CONTRACT=$PWD/tools/contract.zig
 
 designs=()
 for f in 05_expressions/audit_expr_signed_boundaries 10_tasks_functions/audit_function_return_variable \
@@ -113,8 +112,8 @@ for d in "${designs[@]}"; do
   if timed "$W/vera.out" "$VERA" --std=1364-2005 --run "$d"; then vs=$secs vm=$mb; else vs=error vm=-; fi
   # Native: a cold cache per design, so the build column is a whole build.
   mkdir -p "$W/vn_$n"
-  if timed "$W/vn.path" bash -c 'cd "$1" && "$2" --std=1364-2005 --emit-exe --contract "$3" --optimize=ReleaseFast --zig-backend=llvm --work-dir . "$4"' _ \
-    "$W/vn_$n" "$VERA" "$CONTRACT" "$(realpath "$d")"; then
+  if timed "$W/vn.path" bash -c 'cd "$1" && "$2" --std=1364-2005 --emit-exe --optimize=ReleaseFast --zig-backend=llvm --work-dir . "$3"' _ \
+    "$W/vn_$n" "$VERA" "$(realpath "$d")"; then
     nb=$secs nexe=$W/vn_$n/$(head -1 "$W/vn.path")
     grep -q 'not native (' "$W/err" && nb="$nb (interp)"
     if timed "$W/vn.out" "$nexe"; then nr=$secs nm=$mb nk=$(kb "$nexe"); else nr=error nm=- nk=-; fi

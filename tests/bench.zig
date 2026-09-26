@@ -1718,7 +1718,7 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, 
     const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
     try Io.Dir.cwd().createDirPath(io, work);
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--contract", options.contract, "--work-dir", work });
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--work-dir", work });
     if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
     const built = try capture(arena, io, argv.items);
@@ -1793,7 +1793,7 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
         const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
         try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
         const want = try capture(a, io, &.{ exe, "--run", path });
-        const built = try capture(a, io, &.{ exe, "--emit-exe", "--contract", options.contract, "--work-dir", work, path });
+        const built = try capture(a, io, &.{ exe, "--emit-exe", "--work-dir", work, path });
         if (want.exit != 0 or built.exit != 0) {
             try w.print("FAIL {s}: --run exited {d}, --emit-exe exited {d}\n{s}{s}\n", .{ path, want.exit, built.exit, want.stderr, built.stderr });
             return 1;
