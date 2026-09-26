@@ -2,12 +2,14 @@
 // can be connected to a vector net or concatenated net expression of the
 // matching width. The sizes of the ports and net must match."
 //
-// This fixture tests the matching size rule by attempting to connect a 3-bit
-// vector port to a scalar net, which violates the requirement that port width
-// must equal net width at the connection.
+// A 3-bit vector port connected to a scalar net: the sizes do not match. The
+// child's body is empty on purpose, so nothing but the connection can be wrong
+// — an earlier version indexed `port_vec[0]` and was refused for that (E0351)
+// while the width went unchecked. Declaring the parent's net `electrical [2:0]`
+// makes the file legal (lrm_6_5_7_1_matching_width.va).
 //
 //! lrm 6.5.7.1
-//! reject DiagnosticsReported
+//! reject E0925
 module ch6_port_net_size_mismatch_parent(p);
   inout p; electrical p;
   ch6_port_net_size_mismatch_child u(p);
@@ -16,5 +18,5 @@ endmodule
 module ch6_port_net_size_mismatch_child(port_vec);
   inout [2:0] port_vec;
   electrical [2:0] port_vec;
-  analog I(port_vec[0]) <+ 0.0;
+  analog begin end
 endmodule
