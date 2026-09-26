@@ -61,11 +61,7 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
 fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     if (self.discreteGrammar() and self.eat(.hash)) {
-        const delay = if (self.eat(.lparen)) blk: {
-            const value = try parse_expr.parseExpr(self);
-            _ = try self.expect(.rparen);
-            break :blk value;
-        } else try parse_expr.parsePrimary(self);
+        const delay = try parseDelay(self);
         const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = delay, .body = body, .kind = .delay } }, tok);
     }
@@ -331,18 +327,31 @@ fn parseEventControl(self: *Parser) Error!Ast.StmtId {
         self.pos += star_toks;
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
     }
-    const event = if (self.eat(.lparen)) blk: {
-        const e = try parseEventExpr(self);
-        _ = try self.expect(.rparen);
-        break :blk e;
-    } else blk: {
-        // `@ hierarchical_event_identifier`
-        const id_tok = self.pos;
-        const name = try self.expectIdent();
-        break :blk try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name });
-    };
+    const event = try parseEvent(self);
     const body = try parseStmt(self);
     return self.file.addStmt(self.arena, .{ .event_control = .{ .event = event, .body = body } }, tok);
+}
+
+/// A.6.5 `delay_control` after the `#`: `( mintypmax_expression )` or a
+/// `delay_value`.
+fn parseDelay(self: *Parser) Error!Ast.ExprId {
+    if (!self.eat(.lparen)) return parse_expr.parsePrimary(self);
+    const value = try parse_expr.parseExpr(self);
+    _ = try self.expect(.rparen);
+    return value;
+}
+
+/// A.6.5 `event_control` after the `@`: `( event_expression )` or
+/// `hierarchical_event_identifier`.
+fn parseEvent(self: *Parser) Error!Ast.ExprId {
+    if (self.eat(.lparen)) {
+        const e = try parseEventExpr(self);
+        _ = try self.expect(.rparen);
+        return e;
+    }
+    const id_tok = self.pos;
+    const name = try self.expectIdent();
+    return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name });
 }
 
 /// A.6.5 analog_event_expression — `or` and `,` both build `.event_or`
@@ -505,23 +514,11 @@ fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bo
     switch (self.peek()) {
         .hash => {
             self.pos += 1;
-            if (self.eat(.lparen)) {
-                const value = try parse_expr.parseExpr(self);
-                _ = try self.expect(.rparen);
-                return .{ .expr = value, .is_delay = true };
-            }
-            return .{ .expr = try parse_expr.parsePrimary(self), .is_delay = true };
+            return .{ .expr = try parseDelay(self), .is_delay = true };
         },
         .at => {
             self.pos += 1;
-            if (self.eat(.lparen)) {
-                const e = try parseEventExpr(self);
-                _ = try self.expect(.rparen);
-                return .{ .expr = e, .is_delay = false };
-            }
-            const id_tok = self.pos;
-            const name = try self.expectIdent();
-            return .{ .expr = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name }), .is_delay = false };
+            return .{ .expr = try parseEvent(self), .is_delay = false };
         },
         else => return .{ .expr = .none, .is_delay = false }, // else: no intra-assignment timing control
     }
