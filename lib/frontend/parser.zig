@@ -326,6 +326,15 @@ pub const Parser = struct {
         return s;
     }
 
+    /// `expectIdent`, or a §9.18 system name (`$mfactor`) where the grammar
+    /// admits one as a parameter identifier.
+    pub fn expectIdentOrSys(self: *Parser) Error!Ast.StrId {
+        if (self.peek() != .system_identifier) return self.expectIdent();
+        const s = try self.internTok(self.pos);
+        self.pos += 1;
+        return s;
+    }
+
     /// Intern a token's text as a NAME — and the one place §2.8.1 is normalized
     /// away, which is why the period substitution belongs here and nowhere else.
     ///

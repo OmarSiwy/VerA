@@ -34,11 +34,7 @@ pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
     // clause states in prose only — one token tag here, not a second
     // production. WHICH system parameters have storage to alias is
     // `Lower.aliasSystemParam`'s question, not the grammar's.
-    const target = if (self.peek() == .system_identifier) blk: {
-        const s = try self.internTok(self.pos);
-        self.pos += 1;
-        break :blk s;
-    } else try self.expectIdent();
+    const target = try self.expectIdentOrSys();
     _ = try self.expect(.semicolon);
     return .{ .alias = alias, .target = target };
 }
