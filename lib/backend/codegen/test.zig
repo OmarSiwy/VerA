@@ -2939,8 +2939,8 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
 
 /// Does the bag carry a W0853 whose message contains `why`?
 fn limitDeclined(h: *Harness, why: []const u8) bool {
-    for (h.bag.messages()) |mi| {
-        const e = h.bag.get(mi);
+    for (0..h.bag.count()) |i| {
+        const e = h.bag.at(i);
         if (e.code == .W0853 and std.mem.indexOf(u8, e.message, why) != null) return true;
     }
     return false;
@@ -2982,7 +2982,7 @@ test "codegen: §9.17.3 a declined $limit is W0853 naming why, an honoured one i
             try std.testing.expect(limitDeclined(&h, why));
             try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") == null);
         } else {
-            for (h.bag.messages()) |mi| try std.testing.expect(h.bag.get(mi).code != .W0853);
+            for (0..h.bag.count()) |i| try std.testing.expect(h.bag.at(i).code != .W0853);
             try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") != null);
         }
     }
