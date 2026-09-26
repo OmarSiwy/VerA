@@ -6,12 +6,11 @@
 // domain binding of discrete", and a discrete net is not something an analog
 // contribution can drive.
 //
-// As in 79, no code is pinned: VerA accepts the contribution, so there is no
-// code to pin that would still mean this rule later.
+// As in 79, VerA refuses it with E0501: `V` is not an access function of `link`.
 //
 //! lrm 3.6.3
 //! lrm 3.6.2.3
-//! reject DiagnosticsReported
+//! reject E0501
 discipline ch3_domainless_beh;
 enddiscipline
 
