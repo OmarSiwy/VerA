@@ -1,0 +1,312 @@
+//! One expression -> one Zig expression over `rt.logic`, for `emit.zig`.
+//!
+//! In: an AST expression in the scope `Emitter.r.scope` names, and the type
+//! its context gives it. Out: Zig text of type `rt.logic.W`, whose value is
+//! what `exec.evalContext` computes for the same expression in the same
+//! context. The walk is `evalContext`'s, arm for arm: which operand is
+//! context-determined, which self-determined and which takes the common type
+//! of a comparison is decided here exactly as there (IEEE 1364-2005 §5.5.1
+//! Table 5-22, §5.5.2), and every constant is folded by `evalContext` itself.
+//!
+//! Clauses: §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
+//! concatenation, §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
+const std = @import("std");
+const Ast = @import("frontend").Ast;
+const compile = @import("compile.zig");
+const exec = @import("exec.zig");
+const emit = @import("emit.zig");
+const Emitter = emit.Emitter;
+const Error = emit.Error;
+const Type = compile.Type;
+
+/// The natural type of `e` (§5.5.1), refused unless a native value holds it.
+pub fn natural(self: *Emitter, e: Ast.ExprId) Error!Type {
+    const t = compile.typeOf(self.r, e);
+    try self.fits(t);
+    return t;
+}
+
+/// `exec.eval(e, 0)`: `e` in its own type. Returns that type.
+pub fn selfDetermined(self: *Emitter, e: Ast.ExprId) Error!Type {
+    const t = try natural(self, e);
+    try value(self, e, t);
+    return t;
+}
+
+/// `exec.truthOf(e)` as a `logic.Bit` (§9.4).
+pub fn truth(self: *Emitter, e: Ast.ExprId) Error!void {
+    try self.print("L.truth(", .{});
+    _ = try selfDetermined(self, e);
+    try self.print(")", .{});
+}
+
+/// `exec.evalFor(e, target)` of an integral target: `e` in the context the
+/// assignment gives it, truncated to the target (§5.5.3).
+pub fn assigned(self: *Emitter, e: Ast.ExprId, target: Type) Error!void {
+    try self.fits(target);
+    const n = try natural(self, e);
+    const ctx: Type = .{ .width = @max(n.width, target.width), .signed = n.signed };
+    try self.print("L.rs(", .{});
+    try value(self, e, ctx);
+    try self.print(", {d}, {d}, false)", .{ ctx.width, target.width });
+}
+
+/// `exec.evalContext(e, ty)`.
+pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    try self.fits(ty);
+    _ = try natural(self, e);
+    const w = ty.width;
+    const sg = ty.signed;
+    if (compile.constantExpression(r, e)) {
+        const v = exec.evalContext(r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
+        return self.print("L.k(0x{x}, 0x{x})", .{ v.values()[0], v.unknowns()[0] });
+    }
+    switch (ex.tag(e)) {
+        .ident, .hier_ident => {
+            const at = try self.slot(e);
+            try self.print("L.rs(s.get({d}), {d}, {d}, {})", .{ at, try self.slotWidth(at), w, sg });
+        },
+        .index => try index(self, e, ty),
+        .unary => switch (ex.unOp(e)) {
+            .plus => try value(self, ex.lhs(e), ty),
+            .minus, .bit_not => |op| {
+                try self.print("L.{s}(", .{if (op == .minus) "neg" else "not"});
+                try value(self, ex.lhs(e), ty);
+                try self.print(", {d})", .{w});
+            },
+            .logical_not => {
+                try self.print("L.ctx(L.invert(", .{});
+                try truth(self, ex.lhs(e));
+                try self.print("), {d}, {})", .{ w, sg });
+            },
+            .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => |op| {
+                try self.print("L.ctx(L.reduce(.{s}, ", .{switch (op) {
+                    .reduce_and => "@\"and\"",
+                    .reduce_nand => "nand",
+                    .reduce_or => "@\"or\"",
+                    .reduce_nor => "nor",
+                    .reduce_xor => "xor",
+                    else => "xnor", // else: `~^`, the sixth reduction
+                }});
+                const t = try selfDetermined(self, ex.lhs(e));
+                try self.print(", {d}), {d}, {})", .{ t.width, w, sg });
+            },
+        },
+        .binary => {
+            const op = ex.binOp(e);
+            switch (op) {
+                .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
+                    const ot = compile.common(compile.typeOf(r, ex.lhs(e)), compile.typeOf(r, ex.rhs(e)));
+                    try self.fits(ot);
+                    const eq = op == .eq or op == .neq or op == .case_eq or op == .case_neq;
+                    try self.print("L.ctx(L.{s}(.{s}, ", .{ if (eq) "eq" else "rel", @tagName(op) });
+                    try value(self, ex.lhs(e), ot);
+                    try self.print(", ", .{});
+                    try value(self, ex.rhs(e), ot);
+                    if (eq) try self.print(")", .{}) else try self.print(", {d}, {})", .{ ot.width, ot.signed });
+                    try self.print(", {d}, {})", .{ w, sg });
+                },
+                // Both truths are read: with no side effect in either operand
+                // the short circuit is not observable, and `logical` of a
+                // deciding left side is what the short circuit returns.
+                .logical_and, .logical_or => {
+                    try self.print("L.ctx(L.logical(.{s}, ", .{if (op == .logical_and) "@\"and\"" else "@\"or\""});
+                    try truth(self, ex.lhs(e));
+                    try self.print(", ", .{});
+                    try truth(self, ex.rhs(e));
+                    try self.print("), {d}, {})", .{ w, sg });
+                },
+                .shl, .shr, .ashl, .ashr => {
+                    try self.print("L.shift(.{s}, ", .{switch (op) {
+                        .shl => "left",
+                        .shr => "right",
+                        .ashl => "arithmetic_left",
+                        else => "arithmetic_right", // else: `>>>`, the fourth shift
+                    }});
+                    try value(self, ex.lhs(e), ty);
+                    try self.print(", {d}, {}, ", .{ w, sg });
+                    _ = try selfDetermined(self, ex.rhs(e));
+                    try self.print(")", .{});
+                },
+                .pow => {
+                    try self.print("L.pow(", .{});
+                    try value(self, ex.lhs(e), ty);
+                    try self.print(", {d}, {}, ", .{ w, sg });
+                    const t = try selfDetermined(self, ex.rhs(e));
+                    try self.print(", {d}, {})", .{ t.width, t.signed });
+                },
+                .add, .sub, .mul, .div, .mod => {
+                    try self.print("L.arith(.{s}, ", .{@tagName(op)});
+                    try value(self, ex.lhs(e), ty);
+                    try self.print(", ", .{});
+                    try value(self, ex.rhs(e), ty);
+                    try self.print(", {d}, {})", .{ w, sg });
+                },
+                .bit_and, .bit_or, .bit_xor, .bit_xnor => {
+                    try self.print("L.bitwise(.{s}, ", .{switch (op) {
+                        .bit_and => "@\"and\"",
+                        .bit_or => "@\"or\"",
+                        .bit_xor => "xor",
+                        else => "xnor", // else: `~^`, the fourth bitwise operator
+                    }});
+                    try value(self, ex.lhs(e), ty);
+                    try self.print(", ", .{});
+                    try value(self, ex.rhs(e), ty);
+                    try self.print(", {d})", .{w});
+                },
+            }
+        },
+        // §5.1.13: both arms are read; `cond` keeps the one the truth picks,
+        // or merges them under an x or z condition.
+        .ternary => {
+            try self.print("L.cond(", .{});
+            try truth(self, ex.lhs(e));
+            try self.print(", ", .{});
+            try value(self, ex.rhs(e), ty);
+            try self.print(", ", .{});
+            try value(self, ex.ternaryElse(e), ty);
+            try self.print(")", .{});
+        },
+        .sys_call => {
+            const args = ex.args(e);
+            switch (r.sys_calls[@intFromEnum(e)].?) {
+                .make_signed, .make_unsigned => {
+                    try self.print("L.rs(", .{});
+                    const t = try selfDetermined(self, args[0]);
+                    try self.print(", {d}, {d}, {})", .{ t.width, w, sg });
+                },
+                .time, .stime => |f| {
+                    const n = compile.typeOf(r, e);
+                    const scale = r.timeOf(r.scope).scale;
+                    try self.print("L.rs(L.k(s.units(.{{ .local_per_unit = {d}, .global_per_local = {d} }}){s}, 0), {d}, {d}, {})", .{
+                        scale.local_per_unit, scale.global_per_local, if (f == .stime) " & 0xffffffff" else "", n.width, w, sg,
+                    });
+                },
+                // §17.10: `vera` takes no plusargs, so every query is "no
+                // match" — an integer zero, the variable left alone.
+                .test_plusargs, .value_plusargs => try self.print("L.rs(L.k(0, 0), 32, {d}, {})", .{ w, sg }),
+                .clog2 => {
+                    try self.print("L.rs(L.k(L.clog2(", .{});
+                    const t = try selfDetermined(self, args[0]);
+                    try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
+                },
+                else => return self.refuse("a §17.2 file, §17.6 queue, VAMS driver or real system function"), // else: files, queues, driver access and the real functions stay with the interpreter
+            }
+        },
+        .concat => {
+            // §5.1.14: self-determined operands, leftmost most significant;
+            // a zero replication contributes no bits.
+            var parts: std.ArrayList(Ast.ExprId) = .empty;
+            for (ex.args(e)) |arg| if (compile.typeOf(r, arg).width != 0) try parts.append(self.arena, arg);
+            const n = try natural(self, e);
+            try self.print("L.rs(", .{});
+            for (parts.items[1..]) |_| try self.print("L.join(", .{});
+            _ = try selfDetermined(self, parts.items[0]);
+            for (parts.items[1..]) |arg| {
+                try self.print(", ", .{});
+                const t = try selfDetermined(self, arg);
+                try self.print(", {d})", .{t.width});
+            }
+            try self.print(", {d}, {d}, {})", .{ n.width, w, sg });
+        },
+        .multi_concat => {
+            const n = try natural(self, e);
+            const count = r.replications.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
+            try self.print("L.rs(L.rep(", .{});
+            const t = try selfDetermined(self, ex.rhs(e));
+            try self.print(", {d}, {d}), {d}, {d}, {})", .{ t.width, count, n.width, w, sg });
+        },
+        .call => return self.refuse("a function call"),
+        else => return self.refuse("this expression form"), // else: every other form infer admits is a constant (folded above) or real (refused by `fits`)
+    }
+}
+
+/// §3.9 an array element, or §5.2.1 a bit- or part-select of a vector.
+fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    const w = ty.width;
+    const sg = ty.signed;
+    const n = compile.typeOf(r, e);
+    if (try self.element(e)) {
+        // An out-of-range or x/z address reads x of the element's type.
+        const lb = self.label();
+        try self.print("L.rs(if (", .{});
+        try address(self, e, lb);
+        try self.print(") |a{d}| s.get(a{d}) else L.k(0x{x}, 0x{x}), {d}, {d}, {})", .{ lb, lb, maskOf(n.width), maskOf(n.width), n.width, w, sg });
+        return;
+    }
+    const at = try self.slot(ex.lhs(e));
+    const sw = try self.slotWidth(at);
+    const range = vecRange(r, at, sw);
+    const rg = ex.rhs(e);
+    if (ex.tag(rg) == .range) {
+        const p = try partPlace(self, e, range, sw);
+        try self.print("L.rs(L.part(s.get({d}), {d}, 0x{x}, {d}), {d}, {d}, {})", .{ at, p.shift, p.valid, n.width, n.width, w, sg });
+        return;
+    }
+    try self.print("L.rs(L.bitAt(s.get({d}), L.asInt(", .{at});
+    const t = try selfDetermined(self, rg);
+    try self.print(", {d}, {}), {d}, {d}, {d}), 1, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, sw, w, sg });
+}
+
+/// `exec.address` as a Zig `?u32`: the element's slot, or null. `label`
+/// (from `Emitter.label`) names its block and locals.
+pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    const c = r.chainBase(e);
+    const base = try self.slot(c.base);
+    const arr = r.arrays.get(base).?;
+    try self.print("b{d}: {{", .{label});
+    // §4.9 row-major: the innermost select is the last dimension.
+    var selects: std.ArrayList(Ast.ExprId) = .empty;
+    var x = e;
+    while (ex.tag(x) == .index) : (x = ex.lhs(x)) try selects.insert(self.arena, 0, ex.rhs(x));
+    try self.print(" var o{d}: u64 = 0;", .{label});
+    for (selects.items, 0..) |sel, d| {
+        const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
+        try self.print(" const i{d}_{d} = L.asInt(", .{ label, d });
+        const t = try selfDetermined(self, sel);
+        try self.print(", {d}, {}) orelse break :b{d} null;", .{ t.width, t.signed, label });
+        try self.print(" if (i{d}_{d} < {d} or i{d}_{d} > {d}) break :b{d} null;", .{ label, d, span.low, label, d, span.high, label });
+        try self.print(" o{d} = o{d} * {d} + @as(u64, @intCast(i{d}_{d} - {d}));", .{ label, label, span.high - span.low + 1, label, d, span.low });
+    }
+    try self.print(" break :b{d} @as(?u32, {d} + @as(u32, @intCast(o{d}))); }}", .{ label, base, label });
+}
+
+pub const VecRange = @import("root.zig").VecRange;
+
+/// A slot's declared `[msb:lsb]`, `[w-1:0]` when it declares none.
+pub fn vecRange(r: anytype, at: u32, width: u32) VecRange {
+    return r.vec_ranges.get(at) orelse .{ .msb = @as(i64, width) - 1, .lsb = 0 };
+}
+
+/// A constant part-select as a shift: select bit i is slot bit `i + shift`
+/// where bit i of `valid` is set, and names no bit elsewhere (§5.2.1).
+pub const Place = struct { shift: i64, valid: u64, count: u32 };
+
+pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange, sw: u32) Error!Place {
+    const r = self.r;
+    const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
+    const count: u32 = @intCast(@abs(b.msb - b.lsb) + 1);
+    if (count > 64) return self.refuse("a part-select wider than 64 bits");
+    const step: i64 = if (b.msb >= b.lsb) 1 else -1;
+    const up = range.msb >= range.lsb;
+    // `exec.position` of declared index `lsb + i*step` is `p0 + i*d`.
+    const d: i64 = if (up) step else -step;
+    if (d != 1 and count > 1) return self.refuse("a part-select against its vector's direction");
+    const p0: i64 = if (up) b.lsb - range.lsb else range.lsb - b.lsb;
+    var valid: u64 = 0;
+    for (0..count) |i| {
+        const p = p0 + @as(i64, @intCast(i));
+        if (p >= 0 and p < sw) valid |= @as(u64, 1) << @intCast(i);
+    }
+    return .{ .shift = p0, .valid = valid, .count = count };
+}
+
+pub fn maskOf(w: u32) u64 {
+    return if (w >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(w)) - 1;
+}
