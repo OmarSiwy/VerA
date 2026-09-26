@@ -1,0 +1,822 @@
+# IEEE Std 1364-2005 clause list: every numbered heading of the standard, the
+# denominator of `zig build test-1364 -- --coverage`. The PDF is licensed and
+# not in git, so this file is its committed stand-in; titles are headings, no
+# body text is reproduced. 672 rows are the table of contents
+#   tools/ieee1364_audit.py | awk -F'\t' 'NR>1 {sub(/^IEEE1364-2005:/, "", $1); print $1 "\t-\t" $5}'
+# and 136 are the body's depth-4+ headings the contents omit (4.6.3.1,
+# 17.1.1.2, ...): lines of `pdftotext -layout` matching
+#   ^ {0,8}([0-9]+|[A-G])(\.[0-9]+){3,} +[A-Z`$]
+# The second column is reviewed and never regenerated.
+# Format: <clause>\t<kind>\t<title>[\t<evidence>]
+#   kind  `-`: an ordinary clause, counted by its fixtures' cites.
+#         otherwise the CLAUSE-AUDIT §5 kinds the AMS CLAUSES.tsv files use
+#         (non-normative, no-prohibition, optional, implementation-defined,
+#         resource-limit, unspecified), with the evidence column required.
+1	non-normative	Overview	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.1	non-normative	Scope	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.2	non-normative	Conventions used in this standard	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.3	non-normative	Syntactic description	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.4	non-normative	Use of color in this standard	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.5	non-normative	Contents of this standard	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.6	non-normative	Deprecated clauses	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.7	non-normative	Header file listings	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.8	non-normative	Examples	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+1.9	non-normative	Prerequisites	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
+2	non-normative	Normative references	Normative references: a bibliography of other standards.
+3	-	Lexical conventions
+3.1	-	Lexical tokens
+3.2	-	White space
+3.3	-	Comments
+3.4	-	Operators
+3.5	-	Numbers
+3.5.1	-	Integer constants
+3.5.2	-	Real constants
+3.5.3	-	Conversion
+3.6	-	Strings
+3.6.1	-	String variable declaration
+3.6.2	-	String manipulation
+3.6.3	-	Special characters in strings
+3.7	-	Identifiers, keywords, and system names
+3.7.1	-	Escaped identifiers
+3.7.2	-	Keywords
+3.7.3	-	System tasks and functions
+3.7.4	-	Compiler directives
+3.8	-	Attributes
+3.8.1	-	Examples
+3.8.2	-	Syntax
+4	-	Data types
+4.1	-	Value set
+4.2	-	Nets and variables
+4.2.1	-	Net declarations
+4.2.2	-	Variable declarations
+4.3	-	Vectors
+4.3.1	-	Specifying vectors
+4.3.2	-	Vector net accessibility
+4.4	-	Strengths
+4.4.1	-	Charge strength
+4.4.2	-	Drive strength
+4.5	-	Implicit declarations
+4.6	-	Net types
+4.6.1	-	Wire and tri nets
+4.6.2	-	Wired nets
+4.6.3	-	Trireg net
+4.6.3.1	-	Capacitive networks
+4.6.3.2	-	Ideal capacitive state and charge decay
+4.6.4	-	Tri0 and tri1 nets
+4.6.5	-	Unresolved nets
+4.6.6	-	Supply nets
+4.7	-	Regs
+4.8	-	Integers, reals, times, and realtimes
+4.8.1	-	Operators and real numbers
+4.8.2	-	Conversion
+4.9	-	Arrays
+4.9.1	-	Net arrays
+4.9.2	-	reg and variable arrays
+4.9.3	-	Memories
+4.9.3.1	-	Array examples
+4.9.3.1.1	-	Array declarations
+4.9.3.1.2	-	Assignment to array elements
+4.9.3.1.3	-	Memory differences
+4.10	-	Parameters
+4.10.1	-	Module parameters
+4.10.2	-	Local parameters (localparam)
+4.10.3	-	Specify parameters
+4.11	-	Name spaces
+5	-	Expressions
+5.1	-	Operators
+5.1.1	-	Operators with real operands
+5.1.2	-	Operator precedence
+5.1.3	-	Using integer numbers in expressions
+5.1.4	-	Expression evaluation order
+5.1.5	-	Arithmetic operators
+5.1.6	-	Arithmetic expressions with regs and integers
+5.1.7	-	Relational operators
+5.1.8	-	Equality operators
+5.1.9	-	Logical operators
+5.1.10	-	Bitwise operators
+5.1.11	-	Reduction operators
+5.1.12	-	Shift operators
+5.1.13	-	Conditional operator
+5.1.14	-	Concatenations
+5.2	-	Operands
+5.2.1	-	Vector bit-select and part-select addressing
+5.2.2	-	Array and memory addressing
+5.2.3	-	Strings
+5.2.3.1	-	String operations
+5.2.3.2	-	String value padding and potential problems
+5.2.3.3	-	Null string handling
+5.3	-	Minimum, typical, and maximum delay expressions
+5.4	-	Expression bit lengths
+5.4.1	-	Rules for expression bit lengths
+5.4.2	-	Example of expression bit-length problem
+5.4.3	-	Example of self-determined expressions
+5.5	-	Signed expressions
+5.5.1	-	Rules for expression types
+5.5.2	-	Steps for evaluating an expression
+5.5.3	-	Steps for evaluating an assignment
+5.5.4	-	Handling X and Z in signed expressions
+5.6	-	Assignments and truncation
+6	-	Assignments
+6.1	-	Continuous assignments
+6.1.1	-	The net declaration assignment
+6.1.2	-	The continuous assignment statement
+6.1.3	-	Delays
+6.1.4	-	Strength
+6.2	-	Procedural assignments
+6.2.1	-	Variable declaration assignment
+6.2.2	-	Variable declaration syntax
+7	-	Gate- and switch-level modeling
+7.1	-	Gate and switch declaration syntax
+7.1.1	-	The gate type specification
+7.1.2	-	The drive strength specification
+7.1.3	-	The delay specification
+7.1.4	-	The primitive instance identifier
+7.1.5	-	The range specification
+7.1.6	-	Primitive instance connection list
+7.2	-	and, nand, nor, or, xor, and xnor gates
+7.3	-	buf and not gates
+7.4	-	bufif1, bufif0, notif1, and notif0 gates
+7.5	-	MOS switches
+7.6	-	Bidirectional pass switches
+7.7	-	CMOS switches
+7.8	-	pullup and pulldown sources
+7.9	-	Logic strength modeling
+7.10	-	Strengths and values of combined signals
+7.10.1	-	Combined signals of unambiguous strength
+7.10.2	-	Ambiguous strengths: sources and combinations
+7.10.3	-	Ambiguous strength signals and unambiguous signals
+7.10.4	-	Wired logic net types
+7.11	-	Strength reduction by nonresistive devices
+7.12	-	Strength reduction by resistive devices
+7.13	-	Strengths of net types
+7.13.1	-	tri0 and tri1 net strengths
+7.13.2	-	trireg strength
+7.13.3	-	supply0 and supply1 net strengths
+7.14	-	Gate and net delays
+7.14.1	-	min:typ:max delays
+7.14.2	-	trireg net charge decay
+7.14.2.1	-	Charge decay process
+7.14.2.2	-	Delay specification for charge decay time
+8	-	User-defined primitives (UDPs)
+8.1	-	UDP definition
+8.1.1	-	UDP header
+8.1.2	-	UDP port declarations
+8.1.3	-	Sequential UDP initial statement
+8.1.4	-	UDP state table
+8.1.5	-	Z values in UDP
+8.1.6	-	Summary of symbols
+8.2	-	Combinational UDPs
+8.3	-	Level-sensitive sequential UDPs
+8.4	-	Edge-sensitive sequential UDPs
+8.5	-	Sequential UDP initialization
+8.6	-	UDP instances
+8.7	-	Mixing level-sensitive and edge-sensitive descriptions
+8.8	-	Level-sensitive dominance
+9	-	Behavioral modeling
+9.1	-	Behavioral model overview
+9.2	-	Procedural assignments
+9.2.1	-	Blocking procedural assignments
+9.2.2	-	The nonblocking procedural assignment
+9.3	-	Procedural continuous assignments
+9.3.1	-	The assign and deassign procedural statements
+9.3.2	-	The force and release procedural statements
+9.4	-	Conditional statement
+9.4.1	-	If-else-if construct
+9.5	-	Case statement
+9.5.1	-	Case statement with do-not-cares
+9.5.2	-	Constant expression in case statement
+9.6	-	Looping statements
+9.7	-	Procedural timing controls
+9.7.1	-	Delay control
+9.7.2	-	Event control
+9.7.3	-	Named events
+9.7.4	-	Event or operator
+9.7.5	-	Implicit event_expression list
+9.7.6	-	Level-sensitive event control
+9.7.7	-	Intra-assignment timing controls
+9.8	-	Block statements
+9.8.1	-	Sequential blocks
+9.8.2	-	Parallel blocks
+9.8.3	-	Block names
+9.8.4	-	Start and finish times
+9.9	-	Structured procedures
+9.9.1	-	Initial construct
+9.9.2	-	Always construct
+10	-	Tasks and functions
+10.1	-	Distinctions between tasks and functions
+10.2	-	Tasks and task enabling
+10.2.1	-	Task declarations
+10.2.2	-	Task enabling and argument passing
+10.2.3	-	Task memory usage and concurrent activation
+10.3	-	Disabling of named blocks and tasks
+10.4	-	Functions and function calling
+10.4.1	-	Function declarations
+10.4.2	-	Returning a value from a function
+10.4.3	-	Calling a function
+10.4.4	-	Function rules
+10.4.5	-	Use of constant functions
+11	-	Scheduling semantics
+11.1	-	Execution of a model
+11.2	-	Event simulation
+11.3	-	The stratified event queue
+11.4	-	Verilog simulation reference model
+11.4.1	-	Determinism
+11.4.2	-	Nondeterminism
+11.5	-	Race conditions
+11.6	-	Scheduling implication of assignments
+11.6.1	-	Continuous assignment
+11.6.2	-	Procedural continuous assignment
+11.6.3	-	Blocking assignment
+11.6.4	-	Nonblocking assignment
+11.6.5	-	Switch (transistor) processing
+11.6.6	-	Port connections
+11.6.7	-	Functions and tasks
+12	-	Hierarchical structures
+12.1	-	Modules
+12.1.1	-	Top-level modules
+12.1.2	-	Module instantiation
+12.2	-	Overriding module parameter values
+12.2.1	-	defparam statement
+12.2.2	-	Module instance parameter value assignment
+12.2.2.1	-	Parameter value assignment by ordered list
+12.2.2.2	-	Parameter value assignment by name
+12.2.3	-	Parameter dependence
+12.3	-	Ports
+12.3.1	-	Port definition
+12.3.2	-	List of ports
+12.3.3	-	Port declarations
+12.3.4	-	List of ports declarations
+12.3.5	-	Connecting module instance ports by ordered list
+12.3.6	-	Connecting module instance ports by name
+12.3.7	-	Real numbers in port connections
+12.3.8	-	Connecting dissimilar ports
+12.3.9	-	Port connection rules
+12.3.9.1	-	Rule 1
+12.3.9.2	-	Rule 2
+12.3.9.3	-	Rule 3
+12.3.10	-	Net types resulting from dissimilar port connections
+12.3.10.1	-	Net type resolution rule
+12.3.10.2	-	Net type table
+12.3.11	-	Connecting signed values via ports
+12.4	-	Generate constructs
+12.4.1	-	Loop generate constructs
+12.4.2	-	Conditional generate constructs
+12.4.3	-	External names for unnamed generate blocks
+12.5	-	Hierarchical names
+12.6	-	Upwards name referencing
+12.7	-	Scope rules
+12.8	-	Elaboration
+12.8.1	-	Order of elaboration
+12.8.2	-	Early resolution of hierarchical names
+13	-	Configuring the contents of a design
+13.1	-	Introduction
+13.1.1	-	Library notation
+13.1.2	-	Basic configuration elements
+13.2	-	Libraries
+13.2.1	-	Specifying libraries—the library map file
+13.2.1.1	-	File path resolution
+13.2.2	-	Using multiple library map files
+13.2.3	-	Mapping source files to libraries
+13.3	-	Configurations
+13.3.1	-	Basic configuration syntax
+13.3.1.1	-	Design statement
+13.3.1.2	-	The default clause
+13.3.1.3	-	The instance clause
+13.3.1.4	-	The cell clause
+13.3.1.5	-	The liblist clause
+13.3.1.6	-	The use clause
+13.3.2	-	Hierarchical configurations
+13.4	-	Using libraries and configs
+13.4.1	-	Precompiling in a single-pass use model
+13.4.2	-	Elaboration-time compiling in a single-pass use model
+13.4.3	-	Precompiling using a separate compilation tool
+13.4.4	-	Command line considerations
+13.5	-	Configuration examples
+13.5.1	-	Default configuration from library map file
+13.5.2	-	Using default clause
+13.5.3	-	Using cell clause
+13.5.4	-	Using instance clause
+13.5.5	-	Using hierarchical config
+13.6	-	Displaying library binding information
+13.7	-	Library mapping examples
+13.7.1	-	Using the command line to control library searching
+13.7.2	-	File path specification examples
+13.7.3	-	Resolving multiple path specifications
+14	-	Specify blocks
+14.1	-	Specify block declaration
+14.2	-	Module path declarations
+14.2.1	-	Module path restrictions
+14.2.2	-	Simple module paths
+14.2.3	-	Edge-sensitive paths
+14.2.4	-	State-dependent paths
+14.2.4.1	-	Conditional expression
+14.2.4.2	-	Simple state-dependent paths
+14.2.4.3	-	Edge-sensitive state-dependent paths
+14.2.4.4	-	The ifnone condition
+14.2.5	-	Full connection and parallel connection paths
+14.2.6	-	Declaring multiple module paths in a single statement
+14.2.7	-	Module path polarity
+14.2.7.1	-	Unknown polarity
+14.2.7.2	-	Positive polarity
+14.2.7.3	-	Negative polarity
+14.3	-	Assigning delays to module paths
+14.3.1	-	Specifying transition delays on module paths
+14.3.2	-	Specifying x transition delays
+14.3.3	-	Delay selection
+14.4	-	Mixing module path delays and distributed delays
+14.5	-	Driving wired logic
+14.6	-	Detailed control of pulse filtering behavior
+14.6.1	-	Specify block control of pulse limit values
+14.6.2	-	Global control of pulse limit values
+14.6.3	-	SDF annotation of pulse limit values
+14.6.4	-	Detailed pulse control capabilities
+14.6.4.1	-	On-event versus on-detect pulse filtering
+14.6.4.2	-	Negative pulse detection
+15	-	Timing checks
+15.1	-	Overview
+15.2	-	Timing checks using a stability window
+15.2.1	-	$setup
+15.2.2	-	$hold
+15.2.3	-	$setuphold
+15.2.4	-	$removal
+15.2.5	-	$recovery
+15.2.6	-	$recrem
+15.3	-	Timing checks for clock and control signals
+15.3.1	-	$skew
+15.3.2	-	$timeskew
+15.3.3	-	$fullskew
+15.3.4	-	$width
+15.3.5	-	$period
+15.3.6	-	$nochange
+15.4	-	Edge-control specifiers
+15.5	-	Notifiers: user-defined responses to timing violations
+15.5.1	-	Requirements for accurate simulation
+15.5.2	-	Conditions in negative timing checks
+15.5.3	-	Notifiers in negative timing checks
+15.5.4	-	Option behavior
+15.6	-	Enabling timing checks with conditioned events
+15.7	-	Vector signals in timing checks
+15.8	-	Negative timing checks
+16	-	Backannotation using the standard delay format (SDF)
+16.1	-	The SDF annotator
+16.2	-	Mapping of SDF constructs to Verilog
+16.2.1	-	Mapping of SDF delay constructs to Verilog declarations
+16.2.2	-	Mapping of SDF timing check constructs to Verilog
+16.2.3	-	SDF annotation of specparams
+16.2.4	-	SDF annotation of interconnect delays
+16.3	-	Multiple annotations
+16.4	-	Multiple SDF files
+16.5	-	Pulse limit annotation
+16.6	-	SDF to Verilog delay value mapping
+17	-	System tasks and functions
+17.1	-	Display system tasks
+17.1.1	-	The display and write tasks
+17.1.1.1	-	Escape sequences for special characters
+17.1.1.2	-	Format specifications
+17.1.1.3	-	Size of displayed data
+17.1.1.4	-	Unknown and high-impedance values
+17.1.1.5	-	Strength format
+17.1.1.6	-	Hierarchical name format
+17.1.1.7	-	String format
+17.1.2	-	Strobed monitoring
+17.1.3	-	Continuous monitoring
+17.2	-	File input-output system tasks and functions
+17.2.1	-	Opening and closing files
+17.2.2	-	File output system tasks
+17.2.3	-	Formatting data to a string
+17.2.4	-	Reading data from a file
+17.2.4.1	-	Reading a character at a time
+17.2.4.2	-	Reading a line at a time
+17.2.4.3	-	Reading formatted data
+17.2.4.4	-	Reading binary data
+17.2.5	-	File positioning
+17.2.6	-	Flushing output
+17.2.7	-	I/O error status
+17.2.8	-	Detecting EOF
+17.2.9	-	Loading memory data from a file
+17.2.10	-	Loading timing data from an SDF file
+17.3	-	Timescale system tasks
+17.3.1	-	$printtimescale
+17.3.2	-	$timeformat
+17.4	-	Simulation control system tasks
+17.4.1	-	$finish
+17.4.2	-	$stop
+17.5	-	Programmable logic array (PLA) modeling system tasks
+17.5.1	-	Array types
+17.5.2	-	Array logic types
+17.5.3	-	Logic array personality declaration and loading
+17.5.4	-	Logic array personality formats
+17.6	-	Stochastic analysis tasks
+17.6.1	-	$q_initialize
+17.6.2	-	$q_add
+17.6.3	-	$q_remove
+17.6.4	-	$q_full
+17.6.5	-	$q_exam
+17.6.6	-	Status codes
+17.7	-	Simulation time system functions
+17.7.1	-	$time
+17.7.2	-	$stime
+17.7.3	-	$realtime
+17.8	-	Conversion functions
+17.9	-	Probabilistic distribution functions
+17.9.1	-	$random function
+17.9.2	-	$dist_ functions
+17.9.3	-	Algorithm for probabilistic distribution functions
+17.10	-	Command line input
+17.10.1	-	$test$plusargs (string)
+17.10.2	-	$value$plusargs (user_string, variable)
+17.11	-	Math functions
+17.11.1	-	Integer math functions
+17.11.2	-	Real math functions
+18	-	Value change dump (VCD) files
+18.1	-	Creating four-state VCD file
+18.1.1	-	Specifying name of dump file ($dumpfile)
+18.1.2	-	Specifying variables to be dumped ($dumpvars)
+18.1.3	-	Stopping and resuming the dump ($dumpoff/$dumpon)
+18.1.4	-	Generating a checkpoint ($dumpall)
+18.1.5	-	Limiting size of dump file ($dumplimit)
+18.1.6	-	Reading dump file during simulation ($dumpflush)
+18.2	-	Format of four-state VCD file
+18.2.1	-	Syntax of four-state VCD file
+18.2.2	-	Formats of variable values
+18.2.3	-	Description of keyword commands
+18.2.3.1	-	$comment
+18.2.3.2	-	$date
+18.2.3.3	-	$enddefinitions
+18.2.3.4	-	$scope
+18.2.3.5	-	$timescale
+18.2.3.6	-	$upscope
+18.2.3.7	-	$var
+18.2.3.8	-	$version
+18.2.3.9	-	$dumpall
+18.2.3.10	-	$dumpoff
+18.2.3.11	-	$dumpon
+18.2.3.12	-	$dumpvars
+18.2.4	-	Four-state VCD file format example
+18.3	-	Creating extended VCD file
+18.3.1	-	Specifying dump file name and ports to be dumped ($dumpports)
+18.3.2	-	Stopping and resuming the dump ($dumpportsoff/$dumpportson)
+18.3.3	-	Generating a checkpoint ($dumpportsall)
+18.3.4	-	Limiting size of dump file ($dumpportslimit)
+18.3.5	-	Reading dump file during simulation ($dumpportsflush)
+18.3.6	-	Description of keyword commands
+18.3.6.1	-	$vcdclose
+18.3.7	-	General rules for extended VCD system tasks
+18.4	-	Format of extended VCD file
+18.4.1	-	Syntax of extended VCD file
+18.4.2	-	Extended VCD node information
+18.4.3	-	Value changes
+18.4.3.1	-	State characters
+18.4.3.2	-	Drivers
+18.4.4	-	Extended VCD file format example
+19	-	Compiler directives
+19.1	-	`celldefine and `endcelldefine
+19.2	-	`default_nettype
+19.3	-	`define and `undef
+19.3.1	-	`define
+19.3.2	-	`undef
+19.4	-	`ifdef, `else, `elsif, `endif, `ifndef
+19.5	-	`include
+19.6	-	`resetall
+19.7	-	`line
+19.8	-	`timescale
+19.9	-	`unconnected_drive and `nounconnected_drive
+19.10	-	`pragma
+19.10.1	-	Standard pragmas
+19.11	-	`begin_keywords, `end_keywords
+20	-	Programming language interface (PLI) overview
+20.1	-	PLI purpose and history
+20.2	-	User-defined system task/function names
+20.3	-	User-defined system task/function types
+20.4	-	Overriding built-in system task/function names
+20.5	-	User-supplied PLI applications
+20.6	-	PLI mechanism
+20.7	-	User-defined system task/function arguments
+20.8	-	PLI include files
+21	non-normative	PLI TF and ACC interface mechanism (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+22	non-normative	Using ACC routines (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+23	non-normative	ACC routine definitions (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+24	non-normative	Using TF routines (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+25	non-normative	TF routine definitions (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+26	-	Using Verilog procedural interface (VPI) routines
+26.1	-	VPI system tasks and functions
+26.1.1	-	sizetf VPI application routine
+26.1.2	-	compiletf VPI application routine
+26.1.3	-	calltf VPI application routine
+26.1.4	-	Arguments to sizetf, compiletf, and calltf application routines
+26.2	-	VPI mechanism
+26.2.1	-	VPI callbacks
+26.2.2	-	VPI access to Verilog HDL objects and simulation objects
+26.2.3	-	Error handling
+26.2.4	-	Function availability
+26.2.5	-	Traversing expressions
+26.3	-	VPI object classifications
+26.3.1	-	Accessing object relationships and properties
+26.3.2	-	Object type properties
+26.3.3	-	Object file and line properties
+26.3.4	-	Delays and values
+26.3.5	-	Object protection properties
+26.4	-	List of VPI routines by functional category
+26.5	-	Key to data model diagrams
+26.5.1	-	Diagram key for objects and classes
+26.5.2	-	Diagram key for accessing properties
+26.5.3	-	Diagram key for traversing relationships
+26.6	-	Object data model diagrams
+26.6.1	-	Module
+26.6.2	-	Instance arrays
+26.6.3	-	Scope
+26.6.4	-	IO declaration
+26.6.5	-	Ports
+26.6.6	-	Nets and net arrays
+26.6.7	-	Regs and reg arrays
+26.6.8	-	Variables
+26.6.9	-	Memory
+26.6.10	-	Object range
+26.6.11	-	Named event
+26.6.12	-	Parameter, specparam
+26.6.13	-	Primitive, prim term
+26.6.14	-	UDP
+26.6.15	-	Module path, path term
+26.6.16	-	Intermodule path
+26.6.17	-	Timing check
+26.6.18	-	Task, function declaration
+26.6.19	-	Task/function call
+26.6.20	-	Frames
+26.6.21	-	Delay terminals
+26.6.22	-	Net drivers and loads
+26.6.23	-	Reg drivers and loads
+26.6.24	-	Continuous assignment
+26.6.25	-	Simple expressions
+26.6.26	-	Expressions
+26.6.27	-	Process, block, statement, event statement
+26.6.28	-	Assignment
+26.6.29	-	Delay control
+26.6.30	-	Event control
+26.6.31	-	Repeat control
+26.6.32	-	While, repeat, wait
+26.6.33	-	For
+26.6.34	-	Forever
+26.6.35	-	If, if-else
+26.6.36	-	Case
+26.6.37	-	Assign statement, deassign, force, release
+26.6.38	-	Disable
+26.6.39	-	Callback
+26.6.40	-	Time queue
+26.6.41	-	Active time format
+26.6.42	-	Attributes
+26.6.43	-	Iterator
+26.6.44	-	Generates
+27	-	VPI routine definitions
+27.1	-	vpi_chk_error()
+27.2	-	vpi_compare_objects()
+27.3	-	vpi_control()
+27.4	-	vpi_flush()
+27.5	-	vpi_free_object()
+27.6	-	vpi_get()
+27.7	-	vpi_get_cb_info()
+27.8	-	vpi_get_data()
+27.9	-	vpi_get_delays()
+27.10	-	vpi_get_str()
+27.11	-	vpi_get_systf_info()
+27.12	-	vpi_get_time()
+27.13	-	vpi_get_userdata()
+27.14	-	vpi_get_value()
+27.15	-	vpi_get_vlog_info()
+27.16	-	vpi_handle()
+27.17	-	vpi_handle_by_index()
+27.18	-	vpi_handle_by_multi_index()
+27.19	-	vpi_handle_by_name()
+27.20	-	vpi_handle_multi()
+27.21	-	vpi_iterate()
+27.22	-	vpi_mcd_close()
+27.23	-	vpi_mcd_flush()
+27.24	-	vpi_mcd_name()
+27.25	-	vpi_mcd_open()
+27.26	-	vpi_mcd_printf()
+27.27	-	vpi_mcd_vprintf()
+27.28	-	vpi_printf()
+27.29	-	vpi_put_data()
+27.30	-	vpi_put_delays()
+27.31	-	vpi_put_userdata()
+27.32	-	vpi_put_value()
+27.33	-	vpi_register_cb()
+27.33.1	-	Simulation event callbacks
+27.33.1.1	-	Callbacks on individual statements
+27.33.1.2	-	Behavior by statement type
+27.33.1.3	-	Registering callbacks on module-wide basis
+27.33.2	-	Simulation time callbacks
+27.33.3	-	Simulator action or feature callbacks
+27.34	-	vpi_register_systf()
+27.34.1	-	System task/function callbacks
+27.34.2	-	Initializing VPI system task/function callbacks
+27.34.3	-	Registering multiple system tasks and functions
+27.35	-	vpi_remove_cb()
+27.36	-	vpi_scan()
+27.37	-	vpi_vprintf()
+28	-	Protected envelopes
+28.1	-	General
+28.2	-	Processing protected envelopes
+28.2.1	-	Encryption
+28.2.2	-	Decryption
+28.3	-	Protect pragma directives
+28.4	-	Protect pragma keywords
+28.4.1	-	begin
+28.4.1.1	-	Syntax
+28.4.1.2	-	Description
+28.4.2	-	end
+28.4.2.1	-	Syntax
+28.4.2.2	-	Description
+28.4.3	-	begin_protected
+28.4.3.1	-	Syntax
+28.4.3.2	-	Description
+28.4.4	-	end_protected
+28.4.4.1	-	Syntax
+28.4.4.2	-	Description
+28.4.5	-	author
+28.4.5.1	-	Syntax
+28.4.5.2	-	Description
+28.4.6	-	author_info
+28.4.6.1	-	Syntax
+28.4.6.2	-	Description
+28.4.7	-	encrypt_agent
+28.4.7.1	-	Syntax
+28.4.7.2	-	Description
+28.4.8	-	encrypt_agent_info
+28.4.8.1	-	Syntax
+28.4.8.2	-	Description
+28.4.9	-	encoding
+28.4.9.1	-	Syntax
+28.4.9.2	-	Description
+28.4.10	-	data_keyowner
+28.4.10.1	-	Syntax
+28.4.10.2	-	Description
+28.4.11	-	data_method
+28.4.11.1	-	Syntax
+28.4.11.2	-	Description
+28.4.12	-	data_keyname
+28.4.12.1	-	Syntax
+28.4.12.2	-	Description
+28.4.13	-	data_public_key
+28.4.13.1	-	Syntax
+28.4.13.2	-	Description
+28.4.14	-	data_decrypt_key
+28.4.14.1	-	Syntax
+28.4.14.2	-	Description
+28.4.15	-	data_block
+28.4.15.1	-	Syntax
+28.4.15.2	-	Description
+28.4.16	-	digest_keyowner
+28.4.16.1	-	Syntax
+28.4.16.2	-	Description
+28.4.17	-	digest_key_method
+28.4.17.1	-	Syntax
+28.4.17.2	-	Description
+28.4.18	-	digest_keyname
+28.4.18.1	-	Syntax
+28.4.18.2	-	Description
+28.4.19	-	digest_public_key
+28.4.19.1	-	Syntax
+28.4.19.2	-	Description
+28.4.20	-	digest_decrypt_key
+28.4.20.1	-	Syntax
+28.4.20.2	-	Description
+28.4.21	-	digest_method
+28.4.21.1	-	Syntax
+28.4.21.2	-	Description
+28.4.22	-	digest_block
+28.4.22.1	-	Syntax
+28.4.22.2	-	Description
+28.4.23	-	key_keyowner
+28.4.23.1	-	Syntax
+28.4.23.2	-	Description
+28.4.24	-	key_method
+28.4.24.1	-	Syntax
+28.4.24.2	-	Description
+28.4.25	-	key_keyname
+28.4.25.1	-	Syntax
+28.4.25.2	-	Description
+28.4.26	-	key_public_key
+28.4.26.1	-	Syntax
+28.4.26.2	-	Description
+28.4.27	-	key_block
+28.4.27.1	-	Syntax
+28.4.27.2	-	Description
+28.4.28	-	decrypt_license
+28.4.28.1	-	Syntax
+28.4.28.2	-	Description
+28.4.29	-	runtime_license
+28.4.29.1	-	Syntax
+28.4.29.2	-	Description
+28.4.30	-	comment
+28.4.30.1	-	Syntax
+28.4.30.2	-	Description
+28.4.31	-	reset
+28.4.31.1	-	Syntax
+28.4.31.2	-	Description
+28.4.32	-	viewport
+28.4.32.1	-	Syntax
+28.4.32.2	-	Description
+A	-	Formal syntax definition
+A.1	-	Source text
+A.1.1	-	Library source text
+A.1.2	-	Verilog source text
+A.1.3	-	Module parameters and ports
+A.1.4	-	Module items
+A.1.5	-	Configuration source text
+A.2	-	Declarations
+A.2.1	-	Declaration types
+A.2.1.1	-	Module parameter declarations
+A.2.1.2	-	Port declarations
+A.2.1.3	-	Type declarations
+A.2.2	-	Declaration data types
+A.2.2.1	-	Net and variable types
+A.2.2.2	-	Strengths
+A.2.2.3	-	Delays
+A.2.3	-	Declaration lists
+A.2.4	-	Declaration assignments
+A.2.5	-	Declaration ranges
+A.2.6	-	Function declarations
+A.2.7	-	Task declarations
+A.2.8	-	Block item declarations
+A.3	-	Primitive instances
+A.3.1	-	Primitive instantiation and instances
+A.3.2	-	Primitive strengths
+A.3.3	-	Primitive terminals
+A.3.4	-	Primitive gate and switch types
+A.4	-	Module instantiation and generate construct
+A.4.1	-	Module instantiation
+A.4.2	-	Generate construct
+A.5	-	UDP declaration and instantiation
+A.5.1	-	UDP declaration
+A.5.2	-	UDP ports
+A.5.3	-	UDP body
+A.5.4	-	UDP instantiation
+A.6	-	Behavioral statements
+A.6.1	-	Continuous assignment statements
+A.6.2	-	Procedural blocks and assignments
+A.6.3	-	Parallel and sequential blocks
+A.6.4	-	Statements
+A.6.5	-	Timing control statements
+A.6.6	-	Conditional statements
+A.6.7	-	Case statements
+A.6.8	-	Looping statements
+A.6.9	-	Task enable statements
+A.7	-	Specify section
+A.7.1	-	Specify block declaration
+A.7.2	-	Specify path declarations
+A.7.3	-	Specify block terminals
+A.7.4	-	Specify path delays
+A.7.5	-	System timing checks
+A.7.5.1	-	System timing check commands
+A.7.5.2	-	System timing check command arguments
+A.7.5.3	-	System timing check event definitions
+A.8	-	Expressions
+A.8.1	-	Concatenations
+A.8.2	-	Function calls
+A.8.3	-	Expressions
+A.8.4	-	Primaries
+A.8.5	-	Expression left-side values
+A.8.6	-	Operators
+A.8.7	-	Numbers
+A.8.8	-	Strings
+A.9	-	General
+A.9.1	-	Attributes
+A.9.2	-	Comments
+A.9.3	-	Identifiers
+A.9.4	-	White space
+B	-	List of keywords
+C	non-normative	System tasks and functions	Informative annex per the TOC heading (Annex C (informative)).
+C.1	non-normative	$countdrivers	Informative annex per the TOC heading (Annex C (informative)).
+C.2	non-normative	$getpattern	Informative annex per the TOC heading (Annex C (informative)).
+C.3	non-normative	$input	Informative annex per the TOC heading (Annex C (informative)).
+C.4	non-normative	$key and $nokey	Informative annex per the TOC heading (Annex C (informative)).
+C.5	non-normative	$list	Informative annex per the TOC heading (Annex C (informative)).
+C.6	non-normative	$log and $nolog	Informative annex per the TOC heading (Annex C (informative)).
+C.7	non-normative	$reset, $reset_count, and $reset_value	Informative annex per the TOC heading (Annex C (informative)).
+C.8	non-normative	$save, $restart, and $incsave	Informative annex per the TOC heading (Annex C (informative)).
+C.9	non-normative	$scale	Informative annex per the TOC heading (Annex C (informative)).
+C.10	non-normative	$scope	Informative annex per the TOC heading (Annex C (informative)).
+C.11	non-normative	$showscopes	Informative annex per the TOC heading (Annex C (informative)).
+C.12	non-normative	$showvars	Informative annex per the TOC heading (Annex C (informative)).
+C.13	non-normative	$sreadmemb and $sreadmemh	Informative annex per the TOC heading (Annex C (informative)).
+D	non-normative	Compiler directives	Informative annex per the TOC heading (Annex D (informative)).
+D.1	non-normative	`default_decay_time	Informative annex per the TOC heading (Annex D (informative)).
+D.2	non-normative	`default_trireg_strength	Informative annex per the TOC heading (Annex D (informative)).
+D.3	non-normative	`delay_mode_distributed	Informative annex per the TOC heading (Annex D (informative)).
+D.4	non-normative	`delay_mode_path	Informative annex per the TOC heading (Annex D (informative)).
+D.5	non-normative	`delay_mode_unit	Informative annex per the TOC heading (Annex D (informative)).
+D.6	non-normative	`delay_mode_zero	Informative annex per the TOC heading (Annex D (informative)).
+E	non-normative	acc_user.h (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+F	non-normative	veriuser.h (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
+G	-	vpi_user.h
+H	non-normative	Encryption/decryption flow	Informative annex per the TOC heading (Annex H (informative)).
+H.1	non-normative	Tool vendor secret key encryption system	Informative annex per the TOC heading (Annex H (informative)).
+H.1.1	non-normative	Encryption input	Informative annex per the TOC heading (Annex H (informative)).
+H.1.2	non-normative	Encryption output	Informative annex per the TOC heading (Annex H (informative)).
+H.2	non-normative	IP author secret key encryption system	Informative annex per the TOC heading (Annex H (informative)).
+H.2.1	non-normative	Encryption input	Informative annex per the TOC heading (Annex H (informative)).
+H.2.2	non-normative	Encryption output	Informative annex per the TOC heading (Annex H (informative)).
+H.3	non-normative	Digital envelopes	Informative annex per the TOC heading (Annex H (informative)).
+H.3.1	non-normative	Encryption input	Informative annex per the TOC heading (Annex H (informative)).
+H.3.2	non-normative	Encryption output	Informative annex per the TOC heading (Annex H (informative)).
+I	non-normative	Bibliography	Informative annex per the TOC heading (Annex I (informative)).

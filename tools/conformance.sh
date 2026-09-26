@@ -7,7 +7,7 @@
 #
 # Every number comes from a command in this file. There is no second place a
 # percentage is written down, which is the point: ROADMAP.md §1 defines v1.0.0
-# as four measures, and two of them are machine-readable today.
+# as four measures, and three of them are machine-readable today.
 #
 # ponytail: grep over the suite's own report, not a --json flag on bench.zig.
 # Both lines parsed here are already machine-shaped — the `pass fail unasserted
@@ -70,6 +70,17 @@ for value in "${both:-}" "${acc:-}" "${ref:-}" "${unc:-}" "${classified:-}"; do
 done
 (( both + acc + ref + unc + classified == clauses )) || die "coverage tally does not sum to clause denominator"
 
+# --- Measure B: IEEE 1364-2005 clauses, the same static inventory -----------
+cov1364="$(zig build test-1364 -- --coverage 2>&1)" || die "1364 coverage command failed"
+read -r b_both b_acc b_ref b_unc < <(grep -oP '\d+(?= (cited both ways|positive citations only|rejection citations only|uncited))' \
+  <<<"$cov1364" | paste -sd' ')
+b_classified="$(grep -oP '\d+(?= classified$)' <<<"$cov1364" | head -1)"
+b_clauses="$(grep -oP '^\d+ of \K\d+(?= IEEE 1364-2005 clauses cited)' <<<"$cov1364" | head -1)"
+for value in "${b_clauses:-}" "${b_both:-}" "${b_acc:-}" "${b_ref:-}" "${b_unc:-}" "${b_classified:-}"; do
+  [[ "$value" =~ ^[0-9]+$ ]] || die "could not parse the 1364 coverage tally. tests/ieee1364.zig changed?"
+done
+(( b_both + b_acc + b_ref + b_unc + b_classified == b_clauses )) || die "1364 tally does not sum to its clause denominator"
+
 # --- The two gates that are pass/fail, not a percentage ----------------------
 zig build test         >/dev/null 2>&1 && unit=pass    || unit=FAIL
 zig build test-devices >/dev/null 2>&1 && devices=pass || devices=FAIL
@@ -84,17 +95,18 @@ block="$(cat <<EOF
 | **C** — clauses with both citation polarities (static) | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both - classified)) clauses | \`zig build benchmark -- --coverage\` |
 | &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | $acc · $ref · $unc | requires rule-level review | same run |
 | &nbsp;&nbsp;↳ classified under \`CLAUSE-AUDIT.md\` §5 (\`CLAUSES.tsv\`) | $classified | reviewed claims, not evidence | same run |
-| **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | not measured by this script | source and evidence review required |
+| **B** — IEEE 1364-2005 clauses with both citation polarities (static) | **$b_both / $b_clauses — $(pct "$b_both" "$b_clauses")** | $((b_clauses - b_both - b_classified)) clauses | \`zig build test-1364 -- --coverage\` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited · classified | $b_acc · $b_ref · $b_unc · $b_classified | §§17–18 obligation detail: \`docs/CLAUSE-AUDIT.md\` §7.1 | same run |
 | **D** — \`ARCHITECTURE.md\` §6 phases landed | hand-entered, see \`ARCHITECTURE.md\` §8 | not measured by this script | architecture review required |
 | \`zig build test\` | **$unit** | pass | \`zig build test\` |
 | \`zig build test-devices\` | **$devices** | pass | \`zig build test-devices\` |
 
 \`--strict\` exit code **$strict_rc** — 0 only when FAIL, unasserted and XFAIL are all 0.
-A and C are measured by this script and nothing else may write them. B and D are
-hand-entered against their source documents; if you change one, say which
-document you read.
+A, B and C are measured by this script and nothing else may write them. D is
+hand-entered against its source document; if you change it, say which document
+you read.
 
-C counts citations without executing fixtures. It is not a conformance score:
+B and C count citations without executing fixtures. It is not a conformance score:
 XFAILs and implementation-limit rejections can supply citations, and a clause
 can contain multiple untested rules. See \`docs/CONFORMANCE.md\`.
 EOF
@@ -102,8 +114,8 @@ EOF
 
 [ -z "$mode" ] && { printf '%s\n' "$block"; exit 0; }
 
-# Only the rows this script computes are verifiable. B and D are hand-entered
-# against documents no command reads, so `--check` must not hold them to the
+# Only the rows this script computes are verifiable. D is hand-entered
+# against a document no command reads, so `--check` must not hold it to the
 # placeholder text `--changelog` wrote — it would force every release to either
 # leave them blank or fail.
 measured() { grep '^|' | grep -v 'hand-entered'; }
