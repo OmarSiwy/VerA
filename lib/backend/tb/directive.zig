@@ -35,6 +35,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var warn: std.ArrayList([]const u8) = .empty;
     var plusargs: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
@@ -112,6 +113,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
+        } else if (std.mem.eql(u8, kw, "warn")) {
+            // One verbatim substring, as `reject`.
+            if (rest.len == 0) return error.BadSyntax;
+            try warn.append(arena, try arena.dupe(u8, rest));
+        } else if (std.mem.eql(u8, kw, "nowarn")) {
+            if (rest.len != 0) return error.BadSyntax;
+            d.nowarn = true;
         } else if (std.mem.eql(u8, kw, "noise")) {
             // `none` is the empty table, spelled rather than left as an absent
             // directive: "this model declares no generator" is a claim, and a
@@ -183,6 +191,10 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.reject = reject.items;
     d.plusargs = plusargs.items;
     if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
+    d.warn = warn.items;
+    // A refusal has no successful compile whose warnings could be judged.
+    if ((d.warn.len != 0 or d.nowarn) and d.reject.len != 0) return error.BadSyntax;
+    if (d.warn.len != 0 and d.nowarn) return error.BadSyntax;
     d.lrm = lrm.items;
     d.noise = noise.items;
     d.qsites = qsites.items;
