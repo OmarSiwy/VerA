@@ -21,7 +21,8 @@ const setBit = @import("net.zig").setBit;
 const Signal = @import("net.zig").Signal;
 const netPull = @import("net.zig").netPull;
 /// §9.4.3 Table 9-23's C conversion, the one the analog devices run.
-const zCReal = @import("kernels").str_kernels.zCReal;
+const str_k = @import("kernels").str_kernels;
+const zCReal = str_k.zCReal;
 const system = @import("system.zig");
 const fmt = @import("../fmt.zig");
 
@@ -496,20 +497,34 @@ fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
-/// §17.1.1.2 one real conversion (`%e %f %g`, §9.4.7 `%r`): C's text,
-/// padded on the left to `width`, for both engines. No width or precision
-/// is too large: the padding is written, not buffered, and the text goes
-/// through a buffer sized for this precision (from `gpa` past a small one on
-/// the stack). The longest %f of an f64 is a sign, 309 integer digits and the
-/// point, then `precision` fractional digits, inside 512 + precision.
-pub fn real(out: *std.Io.Writer, gpa: std.mem.Allocator, r: f64, conv: u8, precision: i64, width: ?u64) (std.mem.Allocator.Error || std.Io.Writer.Error)!void {
+/// §17.1.1.2 one real conversion (`%e %f %g`, §9.4.7 `%r`): C's text under
+/// C11 7.21.6.1p6's `flags` (`str_kernels.zc_*`; `fmt.flagVerdict` has
+/// refused '#' on `%r`), in a field `width` wide, for both engines. No width
+/// or precision is too large: the padding is written, not buffered, and the
+/// text goes through a buffer sized for this precision (from `gpa` past a
+/// small one on the stack). The longest %f of an f64 is a sign, 309 integer
+/// digits and the point, then `precision` fractional digits, inside 512 +
+/// precision.
+pub fn real(out: *std.Io.Writer, gpa: std.mem.Allocator, r: f64, conv: u8, flags: u8, precision: i64, width: ?u64) (std.mem.Allocator.Error || std.Io.Writer.Error)!void {
     var stack: [1024]u8 = undefined;
     const need = 512 + @as(usize, @intCast(@max(precision, 0)));
     const buf = if (need <= stack.len) &stack else try gpa.alloc(u8, need);
     defer if (buf.ptr != &stack) gpa.free(buf);
-    const text = zCReal(buf, r, conv, 0, 0, precision);
-    if (width) |w| if (text.len < w) try out.splatByteAll(' ', w - text.len);
-    try out.writeAll(text);
+    // The kernel spells the sign and the body; the field is padded here,
+    // as `zCReal` would pad it: '-' on the right, '0' after the sign of a
+    // finite value (C: the '0' flag is ignored for inf and nan), else
+    // spaces on the left.
+    const text = zCReal(buf, r, conv, flags & ~(str_k.zc_left | str_k.zc_zero), 0, precision);
+    const pad = (width orelse 0) -| text.len;
+    if (flags & str_k.zc_left != 0) {
+        try out.writeAll(text);
+        return out.splatByteAll(' ', pad);
+    }
+    const zero = flags & str_k.zc_zero != 0 and std.math.isFinite(r);
+    const sign: usize = if (zero and text.len != 0 and (text[0] == '-' or text[0] == '+' or text[0] == ' ')) 1 else 0;
+    try out.writeAll(text[0..sign]);
+    try out.splatByteAll(if (zero) '0' else ' ', pad);
+    try out.writeAll(text[sign..]);
 }
 
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
@@ -562,24 +577,23 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             // source writes and means "minimum width"; a non-zero width is
             // an explicit column count. Absent means §17.1.1.3's automatic
             // sizing, which is `null` here and computed from the operand.
-            var width: ?u64 = null;
-            while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1) {
-                const d = format[i] - '0';
-                width = (width orelse 0) *| 10 +| d;
-            }
-            // §17.1.1.2: a real conversion takes C's `.precision` too.
-            var precision: i64 = -1;
-            if (i < format.len and format[i] == '.') {
-                i += 1;
-                precision = 0;
-                while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
-                    precision = precision *| 10 +| (format[i] - '0');
-            }
+            // A real conversion takes C's flags and `.precision` too.
+            const at = i - 1;
+            const sp = fmt.spec(format, &i);
+            const width = sp.width;
+            const precision = sp.precision;
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
+            // #43: a flag is rendered where §17.1.1.2 grants C, refused
+            // where it does not; never read and then ignored.
+            if (format[i] != '%') switch (fmt.flagVerdict(sp.flags, format[i])) {
+                .ok => {},
+                .alt => return self.failWith(.E0825, ex.mainTok(e), "`{s}`: '#' is C's alternative form, which IEEE 1364-2005 §17.1.1.2 grants only to %e, %f and %g", .{format[at .. i + 1]}),
+                .c_flag => return self.failWith(.E0827, ex.mainTok(e), "`{s}`: IEEE 1364-2005 §17.1.1.2 grants C's '-', '+' and ' ' flags to the real conversions only", .{format[at .. i + 1]}),
+            };
             const radix: ?Radix = switch (format[i]) {
                 // #42: §9.4.2's `%%` is two characters (`%%` above); one
-                // with a width or precision between them is no escape.
-                '%' => return self.failWith(.E0826, ex.mainTok(e), "a width or precision before the second `%` of `%%`", .{}),
+                // with a flag, width or precision between them is no escape.
+                '%' => return self.failWith(.E0826, ex.mainTok(e), "a flag, width or precision before the second `%` of `%%`", .{}),
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
                 'h', 'H' => .hex,
@@ -651,7 +665,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                 if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, args[arg], 0), r, width);
             } else {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| try real(self.out, a, try evaluate.evalReal(self, a, args[arg]), format[i], precision, width);
+                if (allocator) |a| try real(self.out, a, try evaluate.evalReal(self, a, args[arg]), format[i], sp.flags, precision, width);
             }
         }
     }
@@ -1094,6 +1108,38 @@ test "§17.1.1 %c, %s, %%, %m in a named block, %l, a real's width and precision
         \\end endmodule
         \\
     , "A|hi|%|m.blk|work.m|  2.500|7\n");
+}
+
+test "§17.1.1.2 a real conversion renders C's flags; any other refuses them (#43)" {
+    // By hand: "2.50" left in 8; '+' on 1.5; ' ' where 3.0's sign would be;
+    // "-2.500" zero-filled to 8 after its sign; '#' keeps 2's point; `%r`
+    // of 1500 is "1.5K", left in 6. `%05d` stays §17.1.1.3's width 5.
+    try expectRun(
+        \\module m; initial $display("[%-8.2f|%+e|% .1f|%08.3f|%#.0f|%-6r|%05d]", 2.5, 1.5, 3.0, -2.5, 2.0, 1500.0, 42);
+        \\endmodule
+        \\
+    , "[2.50    |+1.500000e+00| 3.0|-002.500|2.|1.5K  |   42]\n");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%-5d\", 1); endmodule", "to the real conversions only");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%+h\", 1); endmodule", "to the real conversions only");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%#h\", 1); endmodule", "alternative form");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%#r\", 1.5); endmodule", "alternative form");
+}
+
+test "§17.1.1.2 real pads its field as zCReal does, under every flag set (#43)" {
+    // `real` streams its padding so no width is buffered; `zCReal` pads in
+    // its buffer and is held to the C library's snprintf by
+    // tests/printf_reference.zig. The two must print one text.
+    const inf = std.math.inf(f64);
+    const values = [_]f64{ 2.5, -2.5, 0.0, -0.0, inf, -inf, std.math.nan(f64), 1e-300, 1234.5678 };
+    var buf: [600]u8 = undefined;
+    for (values) |v| for ("eEfFgGrR") |conv| for (0..32) |flags| for ([_]usize{ 0, 1, 7, 20 }) |width| for ([_]i64{ -1, 0, 3 }) |prec| {
+        const f: u8 = @intCast(flags);
+        if (f & str_k.zc_alt != 0 and !str_k.zcAltOk(conv)) continue; // E0825
+        var got: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer got.deinit();
+        try real(&got.writer, std.testing.allocator, v, conv, f, prec, width);
+        try std.testing.expectEqualStrings(zCReal(&buf, v, conv, f, width, prec), got.written());
+    };
 }
 
 test "§17.1.1 a malformed format is refused before anything prints" {

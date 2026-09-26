@@ -517,6 +517,9 @@ pub const Code = enum(u16) {
     E0825,
     /// §9.4.2 Table 9-21's `%%` written with a flag, width or precision.
     E0826,
+    /// IEEE 1364-2005 §17.1.1.2 C's '-', '+' or ' ' flag on a digital-context
+    /// conversion that is not a real one.
+    E0827,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -6023,6 +6026,27 @@ fn infoOf(c: Code) Info {
             \\Rather than guess whether the width pads the `%` or whether the
             \\specification takes an argument, VerA refuses it. Write `%%` for a
             \\percent sign, or `%5s` over "%" for a padded one.
+            ,
+        },
+        .E0827 => .{
+            .title = "a C format flag on a digital-context conversion that is not a real one",
+            .lrm = "9.4.7",
+            .explain =
+            \\IEEE 1364-2005 17.1.1.2: "The format specifications in Table 17-3
+            \\are used with real numbers and have the full formatting
+            \\capabilities available in the C language." In the digital context
+            \\VerA therefore renders C11 7.21.6.1's flags on %e, %f and %g (and
+            \\on 9.4.7's %r, '#' apart): `%-8.2f` of 2.5 prints "2.50    ",
+            \\`%08.3f` of -2.5 prints "-002.500".
+            \\
+            \\The grant names the real conversions only. The others (%h %d %o %b
+            \\%c %s %t %v %m %l) are sized by 17.1.1.3, automatically or by a
+            \\written width, and its one override is the zero of `%0d`. No clause
+            \\says what '-', '+' or ' ' does to such a field (does `%-h` pad an
+            \\auto-sized hex field on the right?), so VerA refuses the flag rather
+            \\than read it and print the field as if it were not there. Drop the
+            \\flag, or format a real with %e, %f or %g. ('#' outside %e, %f and %g
+            \\is E0825.)
             ,
         },
         .E0817 => .{

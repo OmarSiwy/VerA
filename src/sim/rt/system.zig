@@ -101,8 +101,9 @@ pub fn fshow(self: *State, d: i64) Error!void {
 /// are used, and whether they end inside a conversion.
 pub const Format = struct { text: []const u8, i: usize = 0, bad: bool = false };
 
-/// One argument-taking conversion of a `Format`.
-pub const Spec = struct { conv: u8, width: ?u64, precision: i64 };
+/// One argument-taking conversion of a `Format`; `flags` are `fmt.spec`'s,
+/// which only a real conversion carries past `fmt.flagVerdict`.
+pub const Spec = struct { conv: u8, flags: u8, width: ?u64, precision: i64 };
 
 /// The characters of the `w`-bit format `a` (`system.text`) in `buf`,
 /// `w / 8` bytes rounded up, most significant first and its leading zero
@@ -153,27 +154,24 @@ fn scanSpec(self: *State, f: *Format, scope: []const u8, lib: []const u8) Error!
             try self.out.writeByte('%');
             continue;
         }
-        var width: ?u64 = null;
-        while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
-            width = (width orelse 0) *| 10 +| (t[f.i] - '0');
-        var precision: i64 = -1;
-        if (f.i < t.len and t[f.i] == '.') {
-            f.i += 1;
-            precision = 0;
-            while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
-                precision = precision *| 10 +| (t[f.i] - '0');
-        }
+        const sp = fmt.spec(t, &f.i);
         if (f.i == t.len) {
             f.bad = true;
             return null;
         }
         const conv = t[f.i];
         f.i += 1;
+        // #43: `display.walk`'s rule, met here only when the task runs.
+        if (conv != '%') switch (fmt.flagVerdict(sp.flags, conv)) {
+            .ok => {},
+            .alt => return self.fail("IEEE 1364-2005 §17.1.1.2 (E0825): '#' is C's alternative form, granted only to %e, %f and %g", .{}),
+            .c_flag => return self.fail("IEEE 1364-2005 §17.1.1.2 (E0827): C's '-', '+' and ' ' flags are granted to the real conversions only", .{}),
+        };
         switch (conv) {
-            '%' => return self.fail("§9.4.2 (E0826): a width or precision before the second `%` of `%%`", .{}),
+            '%' => return self.fail("§9.4.2 (E0826): a flag, width or precision before the second `%` of `%%`", .{}),
             'm', 'M' => try self.out.writeAll(scope),
             'l', 'L' => try self.out.writeAll(lib),
-            'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R', 't', 'T', 's', 'S', 'c', 'C', 'v', 'V' => return .{ .conv = conv, .width = width, .precision = precision },
+            'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R', 't', 'T', 's', 'S', 'c', 'C', 'v', 'V' => return .{ .conv = conv, .flags = sp.flags, .width = sp.width, .precision = sp.precision },
             else => return self.fail("only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %v are implemented", .{}),
         }
     }

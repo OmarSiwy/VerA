@@ -2,10 +2,13 @@
 //! time and the `$timeformat` state) -> its IEEE 1364-2005 §17.1 text.
 //! The interpreter (`digital/display.zig`) and a native executable (`rt/`)
 //! both print through these, so the two cannot disagree about a digit.
-//! Clauses: VAMS §9.4.3 Table 9-22; IEEE 1364-2005 §17.1.1.3, §17.1.1.4,
-//! §17.1.1.7, §17.3, §19.8.
+//! A conversion's flags, width and precision are read here too (`spec`),
+//! with which flags each conversion takes (`flagVerdict`).
+//! Clauses: VAMS §9.4.3 Table 9-22; IEEE 1364-2005 §17.1.1.2, §17.1.1.3,
+//! §17.1.1.4, §17.1.1.7, §17.3, §19.8.
 const std = @import("std");
 const Int = @import("frontend").Integer;
+const str_k = @import("kernels").str_kernels;
 
 /// §9.4.3 Table 9-22's four conversions. The value is the base, so a digit is
 /// `@ctz(base)` bits wide for the three power-of-two members and decimal is the
@@ -287,7 +290,91 @@ fn widthMask(width: u32, j: usize) u64 {
     return if (left >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(left)) - 1;
 }
 
+/// One conversion's `[flags][width][.precision]`, read after its `%`.
+pub const Spec = struct {
+    /// C11 7.21.6.1p6's flags as `str_kernels.zc_*` bits.
+    flags: u8 = 0,
+    /// The field width; null when none is written (§17.1.1.3's automatic
+    /// sizing). A '0' flag alone is width 0: `%0d`, the override.
+    width: ?u64 = null,
+    /// The precision; -1 when none is written.
+    precision: i64 = -1,
+};
+
+/// The `Spec` at `t[i.*..]`, with `i.*` moved past it to the conversion
+/// letter (or to the end). Flags are `str_kernels.zcFlag`'s set, the one
+/// lowering, the device and the host read; leading zeros are the '0' flag,
+/// so `%05d` is the '0' flag and width 5, the width digits `%05d` always
+/// had. Width and precision saturate: §17.1.1.2 bounds neither, and no
+/// width is buffered (`display.real`, `value`).
+pub fn spec(t: []const u8, i: *usize) Spec {
+    var s: Spec = .{};
+    while (i.* < t.len) : (i.* += 1) s.flags |= str_k.zcFlag(t[i.*]) orelse break;
+    if (s.flags & str_k.zc_zero != 0) s.width = 0;
+    while (i.* < t.len and t[i.*] >= '0' and t[i.*] <= '9') : (i.* += 1)
+        s.width = (s.width orelse 0) *| 10 +| (t[i.*] - '0');
+    if (i.* < t.len and t[i.*] == '.') {
+        i.* += 1;
+        s.precision = 0;
+        while (i.* < t.len and t[i.*] >= '0' and t[i.*] <= '9') : (i.* += 1)
+            s.precision = s.precision *| 10 +| (t[i.*] - '0');
+    }
+    return s;
+}
+
+/// Whether conversion `conv` takes the flags in `flags` in the digital
+/// context. IEEE 1364-2005 §17.1.1.2 grants "the full formatting
+/// capabilities available in the C language" to its real conversions only
+/// (`%e %f %g`, and VAMS §9.4.7's `%r`), so every flag renders there but
+/// '#' on `%r` (`str_kernels.zcAltOk`). The others are sized by §17.1.1.3,
+/// whose one override is the zero (`%0d`): '#' on them is `.alt` (E0825)
+/// and '-', '+' or ' ' is `.c_flag` (E0827), refused rather than ignored.
+pub fn flagVerdict(flags: u8, conv: u8) enum { ok, alt, c_flag } {
+    if (flags & str_k.zc_alt != 0 and !str_k.zcAltOk(conv)) return .alt;
+    const real = switch (conv | 0x20) {
+        'e', 'f', 'g', 'r' => true,
+        else => false,
+    };
+    if (!real and flags & (str_k.zc_left | str_k.zc_plus | str_k.zc_space) != 0) return .c_flag;
+    return .ok;
+}
+
 const testing = std.testing;
+
+test "§17.1.1.2 spec: C's flags, then the width and precision; leading zeros are the '0' flag" {
+    const cases = [_]struct { t: []const u8, want: Spec, rest: []const u8 }{
+        .{ .t = "d", .want = .{}, .rest = "d" },
+        .{ .t = "0d", .want = .{ .flags = str_k.zc_zero, .width = 0 }, .rest = "d" },
+        .{ .t = "05d", .want = .{ .flags = str_k.zc_zero, .width = 5 }, .rest = "d" },
+        .{ .t = "10d", .want = .{ .width = 10 }, .rest = "d" },
+        .{ .t = "-+ #010.3f", .want = .{ .flags = 31, .width = 10, .precision = 3 }, .rest = "f" },
+        .{ .t = ".f", .want = .{ .precision = 0 }, .rest = "f" },
+        .{ .t = "99999999999999999999999d", .want = .{ .width = std.math.maxInt(u64) }, .rest = "d" },
+        .{ .t = "-", .want = .{ .flags = str_k.zc_left }, .rest = "" },
+    };
+    for (cases) |c| {
+        var i: usize = 0;
+        const got = spec(c.t, &i);
+        try testing.expectEqual(c.want.flags, got.flags);
+        try testing.expectEqual(c.want.width, got.width);
+        try testing.expectEqual(c.want.precision, got.precision);
+        try testing.expectEqualStrings(c.rest, c.t[i..]);
+    }
+}
+
+test "§17.1.1.2 flagVerdict: C's flags on the real conversions only (#43)" {
+    const all = str_k.zc_left | str_k.zc_plus | str_k.zc_space | str_k.zc_zero | str_k.zc_alt;
+    for ("eEfFgG") |c| try testing.expect(flagVerdict(all, c) == .ok);
+    try testing.expect(flagVerdict(all & ~str_k.zc_alt, 'r') == .ok);
+    try testing.expect(flagVerdict(str_k.zc_alt, 'R') == .alt);
+    for ("dDhHoObBcCsStTvVmMlL") |c| {
+        try testing.expect(flagVerdict(str_k.zc_zero, c) == .ok); // `%0d`
+        try testing.expect(flagVerdict(str_k.zc_alt, c) == .alt);
+        try testing.expect(flagVerdict(str_k.zc_left, c) == .c_flag);
+        try testing.expect(flagVerdict(str_k.zc_plus, c) == .c_flag);
+        try testing.expect(flagVerdict(str_k.zc_space, c) == .c_flag);
+    }
+}
 
 fn lit(planes: []u64, width: u32, signed: bool) Int.Literal {
     return .{ .width = width, .signed = signed, .sized = true, .planes = planes };

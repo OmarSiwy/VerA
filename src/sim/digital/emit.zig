@@ -2248,16 +2248,11 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 try text.append(self.arena, '%');
                 continue;
             }
-            var width: ?u64 = null;
-            while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
-                width = (width orelse 0) *| 10 +| (format[i] - '0');
-            var precision: i64 = -1;
-            if (i < format.len and format[i] == '.') {
-                i += 1;
-                precision = 0;
-                while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
-                    precision = precision *| 10 +| (format[i] - '0');
-            }
+            // `display.walk` validated this format: every flag left is one
+            // `fmt.flagVerdict` admits, so only a real conversion carries one.
+            const sp = fmt.spec(format, &i);
+            const width = sp.width;
+            const precision = sp.precision;
             switch (format[i]) {
                 'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D' => {
                     arg += 1;
@@ -2294,7 +2289,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try flush(self, &text);
                     try self.print("            try s.real(", .{});
                     try expr.real(self, args[arg]);
-                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], precision, width });
+                    try self.print(", '{c}', {d}, {d}, {?d});\n", .{ format[i], sp.flags, precision, width });
                 },
                 'v', 'V' => {
                     arg += 1;
@@ -2369,7 +2364,7 @@ fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
         } else try self.print("                'v', 'V' => return s.fail(\"§17.1.1.5: %v takes a scalar net reference\", .{{}}),\n", .{});
         try self.print("                else => try s.real(", .{});
         try expr.real(self, a);
-        try self.print(", c{d}_{d}.conv, c{d}_{d}.precision, c{d}_{d}.width),\n            }}\n", .{ lb, k, lb, k, lb, k });
+        try self.print(", c{d}_{d}.conv, c{d}_{d}.flags, c{d}_{d}.precision, c{d}_{d}.width),\n            }}\n", .{ lb, k, lb, k, lb, k, lb, k });
     }
     try self.print("            try s.endFormat(&f{d}, \"{f}\", \"{f}\");\n            }}\n            }}\n", .{ lb, scope, lib });
 }

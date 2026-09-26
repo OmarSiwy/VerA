@@ -7,8 +7,9 @@
 //! double, 1234.5678) under every flag set, several widths and precisions;
 //! the ties that round across a power of ten; 10^5 seeded random doubles.
 //! Out: byte-equal text. `src/sim/fmt.zig` has no real conversion of its own
-//! (the digital path is zCReal with no flags, padded to the width), so this
-//! is its oracle too.
+//! (the digital path is zCReal with its flags, its field padded as it streams
+//! by `display.real`, whose test holds that padding to zCReal's), so this is
+//! its oracle too.
 //!
 //! The oracle is glibc's, and build.zig runs this nowhere else: a NaN's sign
 //! is the implementation's to print (C11 7.21.6.1; Windows' UCRT differs),

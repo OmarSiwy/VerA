@@ -1867,10 +1867,11 @@ pub const State = struct {
         try fmt.time(self.out, literal(&buf, w, signed), f, unit_exp);
     }
 
-    /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
-    /// padded on the left to `width`.
-    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u64) Error!void {
-        return display.real(self.out, self.gpa, r, conv, precision, width);
+    /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text
+    /// under `flags` (`str_kernels.zc_*`) in a field `width` wide
+    /// (`display.real`).
+    pub fn real(self: *State, r: f64, conv: u8, flags: u8, precision: i64, width: ?u64) Error!void {
+        return display.real(self.out, self.gpa, r, conv, flags, precision, width);
     }
 
     /// §17.1.1.5 `%v` of the native net `k` (`Nets.sig0`, kept by the fold
