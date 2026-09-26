@@ -153,7 +153,7 @@ fn native(self: *Emitter, file_name: []const u8) Error![]const u8 {
     }
 
     try self.print("fn dispatch(s: *S, pc: u32) rt.Error!void {{\n    return switch (pc) {{\n", .{});
-    for (ranges.items) |rg| try self.print("        {d}...{d} => p{d}(s, pc),\n", .{ rg.lo, rg.hi, rg.lo });
+    for (ranges.items) |rg| try self.print("        {d}...{d} => proc{d}(s, pc),\n", .{ rg.lo, rg.hi, rg.lo });
     try self.print("        else => unreachable,\n    }};\n}}\n\n", .{});
 
     try self.print("const design: rt.Design = .{{\n    .v = &.{{", .{});
@@ -221,13 +221,13 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
     return pcs.items;
 }
 
-/// `fn p<entry>`: the process whose reachable pcs are `pcs`.
+/// `fn proc<entry>`: the process whose reachable pcs are `pcs`.
 fn process(self: *Emitter, pcs: []const u32) Error!void {
     const r = self.r;
     const head = self.out.written().len;
     // Every kernel call folds its widths at compile time, which Zig counts
     // against one quota per function.
-    try self.print("fn p{d}(s: *S, pc: u32) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{pcs[0]});
+    try self.print("fn proc{d}(s: *S, pc: u32) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{pcs[0]});
     for (pcs) |pc| if (r.code.items[pc] == .restart) {
         try self.print("    var restarted = false;\n", .{});
         break;
@@ -418,9 +418,9 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Ast.ExprId, nonblocking: 
     const lb = self.label();
     try self.print("            if (L.pos(L.asInt(", .{});
     const t = try expr.selfDetermined(self, rg);
-    try self.print(", {d}, {}), {d}, {d}, {d})) |p{d}| try s.{s}({d}, L.up(", .{ t.width, t.signed, range.msb, range.lsb, sw, lb, op, at });
+    try self.print(", {d}, {}), {d}, {d}, {d})) |q{d}| try s.{s}({d}, L.up(", .{ t.width, t.signed, range.msb, range.lsb, sw, lb, op, at });
     try expr.assigned(self, val, .{ .width = 1, .signed = false });
-    try self.print(", p{d}), @as(u64, 1) << p{d});\n", .{ lb, lb });
+    try self.print(", q{d}), @as(u64, 1) << q{d});\n", .{ lb, lb });
 }
 
 /// `exec.delayOf` of an integral delay, in ticks: folded when constant.
