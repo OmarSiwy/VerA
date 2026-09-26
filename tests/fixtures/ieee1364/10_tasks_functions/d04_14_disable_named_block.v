@@ -37,6 +37,7 @@
 //! lrm A.6.4
 //! lrm A.6.5
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 10.3
 `timescale 1ns/1ps
 module d04_disable_named_block;
   reg [3:0] r, s;

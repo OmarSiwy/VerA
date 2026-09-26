@@ -172,7 +172,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// element; a runtime index becomes a `$idx` call carrying every element, which
 /// codegen renders as ONE `switch` — a jump table, so the read is O(1) in the
 /// array's extent (the array is scalarized, so there is no memory to index).
-pub fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
     const chain = (try lower_stmt.indexChain(self, e, &subs)) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0330, "only `name[<index>]` is supported", .{});
@@ -260,7 +260,7 @@ pub fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// string one. A multiplier the folder can make a number of is unrolled
 /// here; one it cannot is the row's nonconstant case, and `$str$repeat`
 /// makes the N copies while the device runs (`str_kernels.zStrRepeat`).
-pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const repl = ex.tag(e) == .multi_concat;
     const elems = ex.args(if (repl) ex.rhs(e) else e);
@@ -431,7 +431,7 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
 /// shadow genvars (§3.5). Nets are NOT values — they are only reachable
 /// through an access function (§4.4).
 /// §6.7 hierarchical reads pass the dotted path joined by `flatName`.
-pub fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
+fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     // §8.5.3.6 a digital read under an explicit D2A event is the region-1b value.
     if (self.in_d2a_body and self.out.discrete_snaps.contains(name)) {
         const idx = self.param_index.get(try std.fmt.allocPrint(self.arena, "{s}__1b", .{name})).?;
@@ -478,7 +478,7 @@ pub fn funcParamShadows(self: *const Lower, name: []const u8) bool {
 }
 
 /// A.8.6 unary operators. §4.2.3 (+/-), §4.2.7 (!), §4.2.9 (~).
-pub fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const a = try lowerExpr(self, ex.lhs(e));
     switch (ex.unOp(e)) {
@@ -566,7 +566,7 @@ fn fourState(self: *Lower, e: Ast.ExprId) Oom!?Planes {
 /// §7.3.2 / IEEE 1364 §5.1.8 `a === b` when either side is four-state: both
 /// planes compare, and the result is never x. A two-state side has no unknown
 /// bits. Null when neither side is four-state (the ordinary `==` path).
-pub fn caseEquality(self: *Lower, l: Ast.ExprId, r: Ast.ExprId) Oom!?Mir.Value {
+fn caseEquality(self: *Lower, l: Ast.ExprId, r: Ast.ExprId) Oom!?Mir.Value {
     const pl = try fourState(self, l);
     const pr = try fourState(self, r);
     if (pl == null and pr == null) return null;
@@ -769,7 +769,7 @@ pub fn cmp(self: *Lower, op: Ast.BinaryOp, a: TypedValue, b: TypedValue) Oom!Mir
 /// and the `.itof` each arm may need can still be emitted before its jump.
 /// Nothing between the two reads the then-arm's terminator: the SSA builder
 /// walks predecessors, and the else-arm has none of the then-arm's blocks.
-pub fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const cond = ex.lhs(e);
     const c = try self.toBool(try lowerExpr(self, cond));
@@ -830,7 +830,7 @@ pub fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// ponytail: syntactic, and it does not look inside a §4.7 analog function
 /// body. An operator there is already E0422 territory, and the upgrade path if
 /// one ever is legal is a per-function flag computed when the function lowers.
-pub fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
+fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
@@ -842,7 +842,7 @@ pub fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
 
 /// §4.2.7 `&&` / `||` with LRM short-circuit evaluation. The rhs gets its own
 /// block, so a guard like `(x != 0) && (1/x > k)` never divides by zero.
-pub fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
+fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
     const ex = &self.file.exprs;
     // §4.5.15's evaluate-every-iteration rule wins over §4.2.7's skip when the
     // rhs holds an analog operator: the skipped step feeds that operator site
@@ -895,7 +895,7 @@ pub fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!Type
 /// §4.4.1 access function: `V(a)`, `V(a,b)`, `I(br)`.
 /// A potential is the difference of two node unknowns; a flow that is *read*
 /// makes the branch current an unknown of its own (§5.4.2).
-pub fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
         return poison;
@@ -1022,7 +1022,7 @@ pub fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// access functions whose examples are all POTENTIAL probes, which draw no flow
 /// — see `potentialSourceHere` for the case where this unit's OWN source is the
 /// branch being read.
-pub fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
+fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
     for (self.out.contributions.items, self.accum.items) |c, acc| {
         if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
             return acc;
@@ -1046,7 +1046,7 @@ pub fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
 /// a second instance potential-sourcing a pair another already sources reads the
 /// accumulator instead — two ideal potential sources in parallel is a degenerate
 /// topology the clause does not describe either way.
-pub fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
+fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
     for (self.out.contributions.items) |c| {
         if (c.kind == .direct and c.access == .potential and c.hi == t.hi and c.lo == t.lo and
             c.br == t.br and c.unit == self.cur_unit) return true;
@@ -1065,7 +1065,7 @@ pub fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
 /// be an expression over the other units without a cycle. It becomes its own
 /// solver unknown, exactly like the §5.4.2 branch-flow unknown, and codegen
 /// pins it with the row `x[u] − Σ stamps at p`.
-pub fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
         return poison;
@@ -1078,7 +1078,7 @@ pub fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// be one unknown and one set of rules. `p` is the port's `nodes` row —
 /// resolved by the caller, because the two spellings name it differently (an
 /// argument expression here, a branch declaration there).
-pub fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
+fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const access = self.access_kind.get(name) orelse {
@@ -1128,7 +1128,7 @@ pub fn binaryMathOp(name: []const u8) ?Mir.Opcode {
 // File-scope so `unknownCall` can offer `.keys()` as did-you-mean candidates:
 // a misspelled built-in is the commonest way to reach E0512, and the LRM's own
 // spelling is the answer.
-pub const unary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
+const unary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
     .{ "sqrt", .sqrt },   .{ "exp", .exp },     .{ "expm1", .expm1 },
     .{ "ln", .ln },       .{ "ln1p", .ln1p },   .{ "log", .log10 },
     .{ "floor", .floor }, .{ "ceil", .ceil },   .{ "sin", .sin },
@@ -1138,7 +1138,7 @@ pub const unary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
     .{ "acosh", .acosh }, .{ "atanh", .atanh },
 });
 
-pub const binary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
+const binary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
     .{ "pow", .pow }, .{ "hypot", .hypot }, .{ "atan2", .atan2 },
 });
 

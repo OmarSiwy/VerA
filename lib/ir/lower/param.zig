@@ -12,7 +12,6 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
-const lower_event = @import("event.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -161,7 +160,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
 /// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
 /// before the solve and are left to the ordinary paths. Every other tag is
 /// searched through its `children`, first in source order.
-pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
+fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
     if (e == .none) return null;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
@@ -209,7 +208,7 @@ fn oomrInDefault(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
 /// for a whole run, and a default reading it is the documented W1050 contract
 /// — the field ships as 0 and the host writes it (codegen's "§3.4 a default
 /// with no compile-time value is W1050" test pins exactly that shape).
-pub fn simStateName(n: []const u8) bool {
+fn simStateName(n: []const u8) bool {
     const names = [_][]const u8{
         "$abstime", "$realtime", "$temperature", "$vt",
         "$random",  "$arandom",  "analysis",
@@ -227,7 +226,7 @@ pub fn simStateName(n: []const u8) bool {
 /// when a bound or the value will not fold: §3.4.2 admits a constant expression
 /// over earlier parameters, and a bound that reads an overridable parameter has
 /// no single value at compile time.
-pub fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
+fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
     const c = folded orelse return;
     if (c == .str) {
         var has_from = false;
@@ -281,7 +280,7 @@ pub fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u
 
 /// One end of a §3.4.2 value_range. A.2.5 lets it be `inf` / `-inf`, which is
 /// not a constant_expression and so cannot go through `constEval`.
-pub fn rangeBound(self: *Lower, e: Ast.ExprId) ?f64 {
+fn rangeBound(self: *Lower, e: Ast.ExprId) ?f64 {
     if (e == .none) return null;
     return switch (self.file.exprs.tag(e)) {
         .pos_inf => std.math.inf(f64),
@@ -300,7 +299,7 @@ pub fn rangeBound(self: *Lower, e: Ast.ExprId) ?f64 {
 ///
 /// Scalars only — the array path has its own arm, since §3.4.4's requirement is
 /// about the DECLARATION and holds whatever the pattern contains.
-pub fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
+fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
     const c = folded orelse return; // not constant here: nothing to compare
     const is_str = c == .str;
     // §3.4.1: "the type of a string parameter (see 3.4.6) ... is mandatory."
@@ -391,7 +390,7 @@ pub fn addParam(
 /// Apply an explicit parameter type before a later default infers its own type.
 /// Out-of-i64 real conversion retains the existing saturation policy; deciding
 /// that implementation-defined domain is separate from preserving integral bits.
-pub fn parameterConst(ty: Ast.Type, value: Const) Const {
+fn parameterConst(ty: Ast.Type, value: Const) Const {
     return switch (ty) {
         .real => if (value == .str) value else .{ .real = value.asReal() },
         .integer => switch (value) {
@@ -410,7 +409,7 @@ pub fn parameterConst(ty: Ast.Type, value: Const) Const {
 
 /// The MIR must contain the same declared-type conversion as `folded` metadata.
 /// Later defaults and operator controls follow this MIR, not the Model field.
-pub fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value {
+fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value {
     if (e == .none) return zeroOf(astTy(ty));
     if (lower_constfold.foldExpr(self, e, false)) |raw| {
         return switch (parameterConst(ty, raw)) {
@@ -431,7 +430,7 @@ pub fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value
 
 /// §3.4.4 `parameter real c[0:2] = '{1,2,3};` → three scalar parameters named
 /// `c[0]`, `c[1]`, `c[2]`. Codegen emits one Model field each.
-pub fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
+fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
     const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
     // §3.4.4, in the restriction list closed by "Failure to follow these
     // restrictions shall result in an error": "A type of a parameter array
@@ -536,7 +535,7 @@ pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
 }
 
 /// `"a", "b" or "c"` — the LRM's own listing style, for E0358's help line.
-pub fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u8 {
+fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (items, 0..) |it, i| {
         if (i != 0) try out.appendSlice(arena, if (i + 1 == items.len) " or " else ", ");
@@ -563,7 +562,7 @@ pub fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]c
     return out;
 }
 
-pub fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {
+fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {
     if (dims.len == 0) {
         out[0] = e;
         return;
@@ -749,7 +748,7 @@ pub fn closeScope(self: *Lower, mark: usize) void {
     }
 }
 
-pub fn shadowName(self: *Lower, name: []const u8) Oom!void {
+fn shadowName(self: *Lower, name: []const u8) Oom!void {
     try self.scope_log.append(self.arena, .{
         .name = name,
         .prev = self.vars.get(name),
@@ -917,7 +916,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
 /// The `Instance` field name of a held slot carries the block path too, because
 /// codegen derives one struct field per `held_vars` entry from it and two
 /// blocks may spell a local the same way (§5.3.2's whole point).
-pub fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
+fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
     if (prefix.len == 0) return name;
     return std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
 }
@@ -948,7 +947,7 @@ fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
 /// names, and `naming.isStatefulAnalogOp` rejects them, so they create no unit
 /// and renumber no existing `Instance` state. The single argument is the index
 /// into `held_vars`, which is how codegen recovers the field.
-pub fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why) Oom!Mir.Value {
+fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why) Oom!Mir.Value {
     // Emitted into the DECLARATION's block — `.entry`, unless the initializer
     // itself opened a diamond (§4.2.7 `&&`/`||` short-circuit), in which case it
     // is that diamond's join. Either way it dominates every statement of the
@@ -1234,7 +1233,7 @@ const Exposed = struct {
         if (s == .for_stmt) try x.stmt(s.for_stmt.init);
         // §9.4 a print the device drops reads nothing in the device.
         const dropped = s == .sys_task and self.displays_dropped and
-            lower_event.isDisplayTask(self.file.str(s.sys_task.name));
+            Mir.callee.family(.fromName(self.file.str(s.sys_task.name))) == .display;
         if (!dropped) try self.file.stmtEdges(id, Own{ .x = x });
         const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
         var ws: std.ArrayList(Ast.ExprId) = .empty;
@@ -1388,7 +1387,7 @@ const Exposed = struct {
 /// decided by the NEAREST declaration of it, so the walk looks outward from the
 /// innermost named block and falls back to the bare (module-scope) name — a
 /// module variable assigned from inside a block is still the module's.
-pub fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
+fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
     var i = self.param_state.held_frames.items.len;
     while (i > 0) {
         i -= 1;
@@ -1406,7 +1405,7 @@ pub fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 /// the next evaluation. "Writes" is `Ast.SourceFile.stmtWrites`, not only the
 /// assignment target: an output actual or a `$random` seed written only inside
 /// an event body used to revert to zero at the next evaluation.
-pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
+fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
     if (in_event) {
         const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};

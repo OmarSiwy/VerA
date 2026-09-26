@@ -35,11 +35,16 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 4.4.1 4.6.3 4.6.3.2
 //
 // HAND DERIVATION — one stimulus `d` driving three triregs that differ only in
 // their declared charge strength, and one plain wire.
 //   t=0     `d` is an undriven reg, so it is x and every driver drives x.
-//           A trireg with no charge yet shows that x          -> x x x, wire x
+//           A trireg with no charge yet shows that x          -> x x x
+//           The wire is not sampled here: IEEE 1364-2005 4.2.1 starts a net
+//           at z and 11.6.1 evaluates `assign ctl = d` "at time 0", so a
+//           time-0 read races that evaluation (11.5) and may see z or x.
+//           A trireg is x either way (4.2.1: it defaults to x).
 //   t=1     d=1, driven                                       -> 1 1 1, wire 1
 //   t=2     d=z since t=1: capacitive state, stored 1         -> 1 1 1, wire z
 //   t=1002  1000 ns later, no decay time was declared         -> 1 1 1, wire z
@@ -47,7 +52,7 @@
 //   t=1004  d=z again: the stored value is the NEW one        -> 0 0 0, wire z
 //
 // The three trireg columns are identical on every line; the fourth differs on
-// three of the six.
+// three of the five that carry it.
 //
 // HISTORICAL TRANSCRIPT PROVENANCE: the initial capture used a build where
 // `trireg (large)`/`trireg (small)` did not parse, with the two charge strengths
@@ -77,7 +82,7 @@ module d03_trireg_capacitive_hold;
   assign ctl = d;
 
   initial begin
-    $display("start %b %b %b %b", big, tiny, plain, ctl);
+    $display("start %b %b %b", big, tiny, plain);
     d = 1'b1;
     #1 $display("driven %b %b %b %b", big, tiny, plain, ctl);
     d = 1'bz;

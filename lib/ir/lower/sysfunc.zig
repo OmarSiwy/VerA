@@ -333,7 +333,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
     // $feof): ordinary values, but each one moves or creates state the NEXT call
     // observes, so it is sequenced into the I/O phase like the tasks.
-    if (lower_event.isFileFunc(name)) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
+    if (Mir.callee.family(.fromName(name)) == .file_func) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
 }
 
@@ -389,7 +389,7 @@ pub fn checkDescriptor(self: *Lower, name: []const u8, i: usize, arg: Ast.ExprId
 
 /// §9.5.1 Table 9-24: "type is a string expression containing a character
 /// string of one of the forms in Table 9-24". Only a literal can be judged.
-pub fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
+fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
     if (args.len != 2 or args[1] == .none) return false;
     const s = constStrArg(self, args[1]) orelse return false;
     const forms = [_][]const u8{
@@ -424,7 +424,7 @@ pub fn constStrArg(self: *Lower, e: Ast.ExprId) ?[]const u8 {
 /// §9.22/§9.23 driver access family takes net references too, but
 /// `isConnectModuleOnlySysFunc` refuses those calls before an argument is ever
 /// lowered, so listing them here would gate a path they cannot reach.
-pub fn takesNetRef(name: []const u8) bool {
+fn takesNetRef(name: []const u8) bool {
     const fns = [_][]const u8{ "$port_connected", "$analog_node_alias", "$analog_port_alias" };
     for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
     return false;
@@ -450,7 +450,7 @@ pub fn lowerFormatArg(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 }
 
 pub fn lowerTaskArg(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
-    if (lower_event.isDisplayTask(name) or lower_event.isFileOutTask(name)) return lowerFormatArg(self, e);
+    if (Mir.callee.takesFormat(.fromName(name))) return lowerFormatArg(self, e);
     return lowerSysArg(self, e, takesNetRef(name));
 }
 

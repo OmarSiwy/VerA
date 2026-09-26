@@ -42,6 +42,7 @@
 //! reject E0210
 //! lrm A.2.2.3
 //! lrm A.6.1
+//! inherited IEEE 1364-2005 6.1.3 A.2.2.3
 
 `timescale 1ns/1ns
 module reject_delay4;

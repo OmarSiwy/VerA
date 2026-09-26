@@ -508,6 +508,9 @@ pub const Code = enum(u16) {
     /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
     /// independent of the model card.
     E0523,
+    /// §2.9 VerA's `vera_interp` attribute with a value other than 1 or 2, or
+    /// one that depends on the model card.
+    E0524,
     /// §4.5.1 a Laplace or Z-transform coefficient argument that is a scalar,
     /// not an array identifier or an assignment pattern.
     E0572,
@@ -710,6 +713,9 @@ pub const Code = enum(u16) {
     /// §9.18 Table 9-29 a hierarchical system parameter override outside the
     /// table's "Allowed Values".
     E0890,
+    /// §9.17.3 a `$limit` site the device does not honour: the probe is
+    /// returned unchanged, which the clause permits.
+    W0853,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -4306,6 +4312,23 @@ fn infoOf(c: Code) Info {
             \\The attribute is ignored and the site keeps the default (included).
             ,
         },
+        .E0524 => .{
+            .title = "vera_interp is 1 or 2",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_interp = <value> *)` is VerA's attribute for choosing how an
+            \\`absdelay` (4.5.7) reads its history between accepted timepoints:
+            \\1 is the clause's linear interpolation, 2 is 3-point Lagrange
+            \\(quadratic), the reading SPICE's lossless transmission line uses.
+            \\The value picks the emitted kernel, so it must fold before the model
+            \\card exists and may not name a parameter:
+            \\
+            \\    y = absdelay (* vera_interp = 2 *) (V(a), td);   // quadratic
+            \\    (* vera_interp *) y = absdelay(V(a), td);        // 1: linear
+            \\
+            \\The attribute is ignored and the site keeps linear interpolation.
+            ,
+        },
         .E0572 => .{
             .title = "filter coefficient argument is not an array",
             .lrm = "4.5.1",
@@ -5998,6 +6021,42 @@ fn infoOf(c: Code) Info {
             \\simulator quantity in the analog block instead, where 9.10 and
             \\9.18 say it is evaluated. Or take the field as the host's to
             \\write, and `--allow=W1050`.
+            ,
+        },
+        .W0853 => .{
+            .title = "$limit is not applied at this call",
+            .lrm = "9.17.3",
+            .explain =
+            \\LRM 9.17.3 leaves limiting to the simulator: "In all cases, the
+            \\simulator is responsible for determining if limiting should be
+            \\applied ... In particular, the simulator may simply choose to have
+            \\$limit() return the value of its first argument". So the source
+            \\is legal and compiles; this call returns its probe unchanged, and
+            \\Newton runs on it without the clamp you asked for.
+            \\
+            \\VerA's clamps are applied by the host to the node voltages
+            \\between the linear solve and the next evaluation, which is what
+            \\decides the calls it can honour:
+            \\
+            \\  - the string names an algorithm VerA implements: pnjlim, fetlim,
+            \\    limvds, fetlimds, steplim. An unknown name, or none, leaves the
+            \\    choice to the simulator "just as if no string had been
+            \\    supplied", and VerA's choice is none;
+            \\  - the first argument is a potential probe V(a) or V(a,b): there
+            \\    must be a node to correct. A flow, or `type*V(a,b)`, has none;
+            \\  - the call is not under an `if`: the clamp list has no control
+            \\    flow. A polarity guard is the trailing sign argument instead,
+            \\    `$limit(V(b,e), "pnjlim", vte, vcrit, type)`;
+            \\  - at least one net is internal: the host never moves a port,
+            \\    because other devices share it. A junction straight across
+            \\    two ports (no series resistance) has nothing to correct;
+            \\  - the arguments the algorithm takes are present and real;
+            \\  - a `fetlimds` site is one of two on the same gate, with a
+            \\    `limvds` across the two internal channel nodes.
+            \\
+            \\The help line under the warning names the change for this call.
+            \\Silence it for a model that converges without the clamp with
+            \\`--allow=W0853`.
             ,
         },
     };

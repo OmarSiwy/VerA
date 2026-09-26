@@ -43,6 +43,7 @@
 //! lrm A.6.2
 //! lrm 8.5.3.1
 //! lrm 8.5.3.3
+//! inherited IEEE 1364-2005 A.6.1
 
 `timescale 1ns/1ns
 module reject_intra_assign_on_net;

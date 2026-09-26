@@ -4,6 +4,7 @@
 // have disjoint inputs, and missing combinations, including xx, default to x.
 // The definition is not instantiated, so the claim is definition acceptance.
 //! lrm A.5.3
+//! inherited IEEE 1364-2005 8.1.4 8.2
 primitive udp_good_level (o, a, b);
   output o;
   input a, b;

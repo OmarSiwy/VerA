@@ -66,6 +66,7 @@
 //! lrm A.5.2
 //! lrm A.5.3
 //! lrm 1.1
+//! inherited IEEE 1364-2005 8.1.4 8.3 8.5
 `timescale 1ns/1ns
 
 primitive udp_latch (q, clk, d);

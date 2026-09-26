@@ -17,6 +17,7 @@
 //! lrm annex A.2.2.3
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 7.14
 //
 // Hand derivation.  `wire #4 y;` -> 4 ns for every direction.
 //                   `wire #(2, 6) z;` -> rise 2, fall 6.

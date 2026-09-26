@@ -1107,10 +1107,13 @@ pub const ModuleDecl = struct {
 /// Nature attribute: `name = expr;`. LRM §3.6.1 (A.1.6 nature_attribute).
 /// The LRM-defined names are `abstol` (§3.6.1.2, REQUIRED for a base nature),
 /// `access` (§3.6.1.4), `units` (§3.6.1.3), `idt_nature` (§3.6.1.5),
-/// One `(* vera_lte [= constant_expression] *)` — see `SourceFile.lte_attrs`.
+/// One `(* vera_lte [= constant_expression] *)` or `(* vera_interp [= ...] *)`
+/// — see `SourceFile.lte_attrs`.
 /// Exactly one of `stmt`/`expr` is set. `value == .none` is §2.9's "If a value
 /// is not specifically assigned to the attribute, then its value shall be 1".
 pub const LteAttr = struct {
+    /// The attribute's name, which is its tag.
+    kind: enum { vera_lte, vera_interp } = .vera_lte,
     stmt: StmtId = .none,
     expr: ExprId = .none,
     value: ExprId,
@@ -1537,29 +1540,30 @@ pub const SourceFile = struct {
     /// is for "analog primitives", which a netlist-derived wrapper is not.
     netlist_modules: u32 = 0,
 
-    /// VerA's one vendor attribute, `vera_lte` (§2.9 `attribute_instance`),
-    /// where it decorates an analog statement (A.6.4) or suffixes a `ddt`
-    /// call's name (§2.9's "Verilog-AMS function name" — A.8.2 draws the slot
-    /// only for `analog_function_call`, and VerA extends it to the built-in
-    /// operators). Every other attribute is collected into `ModuleDecl.attrs`
-    /// and read by nothing; this one decides which §5.6.1.2 charge sites join
-    /// the host's truncation-error check (`contract.QSites`). Few enough that
-    /// a list beats a map.
+    /// VerA's two vendor attributes, `vera_lte` and `vera_interp` (§2.9
+    /// `attribute_instance`), where one decorates an analog statement (A.6.4)
+    /// or suffixes an operator call's name (§2.9's "Verilog-AMS function name"
+    /// — A.8.2 draws the slot only for `analog_function_call`, and VerA extends
+    /// it to the built-in operators). Every other attribute is collected into
+    /// `ModuleDecl.attrs` and read by nothing. `vera_lte` decides which
+    /// §5.6.1.2 charge sites join the host's truncation-error check
+    /// (`contract.QSites`); `vera_interp` which `absdelay` sites interpolate
+    /// quadratically. Few enough that a list beats a map.
     lte_attrs: std.ArrayList(LteAttr) = .empty,
 
-    /// The `vera_lte` attribute on statement `id`, if any. Last wins (§2.9).
-    pub fn stmtLte(self: *const SourceFile, id: StmtId) ?LteAttr {
+    /// The `kind` attribute on statement `id`, if any. Last wins (§2.9).
+    pub fn stmtLte(self: *const SourceFile, id: StmtId, kind: @FieldType(LteAttr, "kind")) ?LteAttr {
         var out: ?LteAttr = null;
-        for (self.lte_attrs.items) |a| if (a.stmt == id) {
+        for (self.lte_attrs.items) |a| if (a.stmt == id and a.kind == kind) {
             out = a;
         };
         return out;
     }
 
-    /// The `vera_lte` attribute suffixed to call `id`'s name, if any.
-    pub fn exprLte(self: *const SourceFile, id: ExprId) ?LteAttr {
+    /// The `kind` attribute suffixed to call `id`'s name, if any.
+    pub fn exprLte(self: *const SourceFile, id: ExprId, kind: @FieldType(LteAttr, "kind")) ?LteAttr {
         var out: ?LteAttr = null;
-        for (self.lte_attrs.items) |a| if (a.expr == id) {
+        for (self.lte_attrs.items) |a| if (a.expr == id and a.kind == kind) {
             out = a;
         };
         return out;

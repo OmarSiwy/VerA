@@ -23,6 +23,7 @@
 //! lrm annex A.2.2.3
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 11.6.1
 //
 // Hand derivation for `assign #5 y = a;`:
 //   t=0   a := 0.  The x->0 change queues an update of y for t=0+5=5.

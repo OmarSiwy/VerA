@@ -67,8 +67,7 @@ const diag = @import("diag");
 // §9.13's argument table and the kernels it names — `rewriteParamsetDist` folds
 // an in-paramset draw with the SAME code a device embeds, so the two cannot
 // disagree on the stream.
-const Lower = @import("lower.zig");
-const discipline = @import("lower/discipline.zig");
+const discipline = @import("discipline_rules.zig");
 const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
