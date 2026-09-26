@@ -185,9 +185,13 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     mir.cur_tok = mir.instTok(term);
 
     // Drop the branch row from X's chain, then splice the arms in.
-    unlink(mir, x, term);
-    if (then_arm) |a| splice(mir, x, a);
-    if (else_arm) |a| splice(mir, x, a);
+    // Late phi rows after the branch stay linked. Each arm's jump is its last
+    // row (`classifyArm`) and is orphaned with the branch.
+    mir.unlink(x, term);
+    for ([_]?Mir.Block{ then_arm, else_arm }) |arm| if (arm) |a| {
+        mir.unlink(a, mir.blockLast(a));
+        mir.splice(x, a);
+    };
 
     // One select per live join phi, then the fall-through jump. The cond is
     // peeled of `toBool` wrappers first: a select condition means "nonzero ⇒
@@ -252,41 +256,6 @@ fn phiValueFor(mir: *const Mir, phi: Mir.Inst, from: Mir.Block) ?Mir.Value {
         if (p.block == from) return p.value;
     }
     return null;
-}
-
-/// Remove `inst` (X's terminator) from X's chain; any rows after it (late
-/// phis, see `terminator`) stay linked. The row itself is orphaned, not reused.
-fn unlink(mir: *Mir, b: Mir.Block, inst: Mir.Inst) void {
-    const bi = @intFromEnum(b);
-    const next = mir.insts.items(.next);
-    const after = next[@intFromEnum(inst)];
-    var prev: Mir.Inst = .none;
-    var cur = mir.blocks.items(.first)[bi];
-    while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
-    if (prev == .none) mir.blocks.items(.first)[bi] = after else next[@intFromEnum(prev)] = after;
-    if (mir.blocks.items(.last)[bi] == inst) mir.blocks.items(.last)[bi] = prev;
-    next[@intFromEnum(inst)] = .none;
-}
-
-/// Move every row of `arm` except its jump terminator to the end of `dst`,
-/// preserving order. `arm` is left empty (first=last=none).
-fn splice(mir: *Mir, dst: Mir.Block, arm: Mir.Block) void {
-    var it = mir.blockInsts(arm);
-    while (it.next()) |inst| {
-        if (mir.instOp(inst) == .jump) continue; // classifyArm proved it's last
-        mir.insts.items(.next)[@intFromEnum(inst)] = .none;
-        mir.insts.items(.block)[@intFromEnum(inst)] = dst;
-        const bi = @intFromEnum(dst);
-        const last = mir.blocks.items(.last)[bi];
-        if (last == .none) {
-            mir.blocks.items(.first)[bi] = inst;
-        } else {
-            mir.insts.items(.next)[@intFromEnum(last)] = inst;
-        }
-        mir.blocks.items(.last)[bi] = inst;
-    }
-    mir.blocks.items(.first)[@intFromEnum(arm)] = .none;
-    mir.blocks.items(.last)[@intFromEnum(arm)] = .none;
 }
 
 /// Replace this phi's diamond pairs with one `(x, sel)` pair; if that leaves a
