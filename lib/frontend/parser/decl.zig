@@ -23,6 +23,27 @@ const found = Parser.found;
 // A.2.1.1 parameter declarations — LRM §3.4
 // -----------------------------------------------------------------------
 
+/// A.2.1.1 `aliasparam_declaration`, from the keyword through the `;`. Shared
+/// by module items and A.1.9 paramset items.
+pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
+    self.pos += 1; // 'aliasparam'
+    const alias = try self.expectIdent();
+    _ = try self.expect(.assign_eq);
+    // §3.4.7 prints `aliasparam m = $mfactor;` beside `aliasparam
+    // trise = dtemp;`. Syntax 3-2 puts a parameter_identifier on the
+    // right, so a §9.18 hierarchical system parameter is a form the
+    // clause states in prose only — one token tag here, not a second
+    // production. WHICH system parameters have storage to alias is
+    // `Lower.aliasSystemParam`'s question, not the grammar's.
+    const target = if (self.peek() == .system_identifier) blk: {
+        const s = try self.internTok(self.pos);
+        self.pos += 1;
+        break :blk s;
+    } else try self.expectIdent();
+    _ = try self.expect(.semicolon);
+    return .{ .alias = alias, .target = target };
+}
+
 /// Parameter declaration incl. ranges. LRM §3.4, §3.4.1, §3.4.2, §3.4.5.
 ///
 /// `parameter real a = 1, b = 2;` is one
