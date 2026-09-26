@@ -745,7 +745,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
 /// as a local rather than added to the prelude: it exists only where a `//!
 /// noise` line asked for a number, and a prelude declaration would be dead in
 /// every other testbench.
-pub const noise_close =
+const noise_close =
     \\        const nclose = struct {
     \\            fn f(g: f64, w: f64, rt: f64) bool {
     \\                return @abs(g - w) <= rt * @max(@abs(g), @abs(w));
@@ -758,7 +758,7 @@ pub const noise_close =
 /// label (§4.6.4.1/.2/.3) and the tabulated spectrum (§4.6.4.3/.4). Emitted
 /// beside the topology block, one guarded statement per asserting line, so a
 /// fixture that asserts none of them adds nothing.
-pub fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     var any_points = false;
     for (d.noise) |w| {
         if (w.points != null) any_points = true;
@@ -853,7 +853,7 @@ pub fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directive
 /// §4.6.4.1/.2 `white`, `flicker` and `ef`, read out of `noisePsd` at the
 /// operating point this is emitted into. `model` is the caller's card name,
 /// which `//! psweep` renames.
-pub fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     var any = false;
     for (d.noise) |w| {
         if (w.needsPoint()) any = true;
@@ -897,7 +897,7 @@ pub fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, md
 /// are, which branch each is on, and which analysis it answers to. One block,
 /// not one per line: unlike `noise_gens`'s per-row tables there is nothing here
 /// that needs a `k`-indexed statement of its own.
-pub fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     try out.appendSlice(arena,
         \\
         \\    // §4.6.3: what this device tells a host about its AC stimuli. The
@@ -963,7 +963,7 @@ pub fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) 
 /// `analog_expression`s and a swept-amplitude source has a phasor that depends
 /// on the bias. `model` is the caller's card name, which `//! psweep` renames —
 /// the same contract `emitNoisePsd` has.
-pub fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     var any = false;
     for (d.acstim) |w| {
         if (w.needsPoint()) any = true;
@@ -1033,7 +1033,7 @@ pub fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
     return .{ .data = x };
 }
 
-pub fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
+fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     if (std.math.isNan(x)) return w.writeAll("std.math.nan(f64)");
     if (std.math.isInf(x)) return w.writeAll(if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)");
     try w.print("{d}", .{x});

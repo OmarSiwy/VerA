@@ -190,7 +190,7 @@ fn emitQSites(self: *Gen) Error!void {
 /// OMITTED above 64 unknowns rather than widened: `Analysis.deps` is one
 /// u64 per Value for exactly that reason, and a host that does not find
 /// this declaration scatters densely, which is what it did before.
-pub fn emitPattern(self: *Gen, any_q: bool) Error!void {
+fn emitPattern(self: *Gen, any_q: bool) Error!void {
     if (self.names.n_u > 64) return;
     try self.w(
         \\/// §5.6 structural Jacobian: bit `cu` of `jac_pattern[ru]` is set
@@ -218,7 +218,7 @@ pub fn emitPattern(self: *Gen, any_q: bool) Error!void {
 /// in it leaves the mask clear while still writing the row — `isource` has
 /// `jac_pattern` all zero and stamps its DC current into both rows. Reading
 /// a clear pattern row as "identically zero" deletes it.
-pub fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64) Error!void {
+fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64) Error!void {
     try self.w(
         \\/// §5.6 which residual rows `{s}` ever WRITES: bit `ru` set means
         \\/// `res[ru]` is assigned somewhere in it. A CLEAR bit is the only
@@ -232,7 +232,7 @@ pub fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64
     , .{ half, name, mask });
 }
 
-pub fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
+fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
     try self.w("pub const {s} = [n_u]u64{{\n", .{name});
     for (rows, 0..) |m, i| try self.w("    0x{x:0>16}, // {s}\n", .{ m, self.names.u_names[i] });
     try self.w("}};\n\n", .{});
@@ -783,7 +783,7 @@ pub fn guardField(self: *const Gen, k: u32) Error![]const u8 {
 /// is retained (§5.6.1.3's open circuit). `switchElse` writes the same
 /// three cases as a residual — `I_b − c` and `−φ` — and this is that
 /// residual solved for I_b, so the signs are the plain `.flow` stamp's.
-pub fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
+fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
     const j = partner orelse return self.b("S.con(0.0)", .{});
     const f = self.lowered.contributions.items[j];
     const fv = self.an.rv(if (react) f.react_val else f.resist_val);
@@ -803,7 +803,7 @@ pub fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
 /// The not-a-potential-source-this-cycle half of a selected branch row:
 /// the flow form when the switch partner retained one, the open circuit
 /// otherwise. `react` picks the residual: I_b/current for eval, flux for q.
-pub fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
+fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
     const open: []const u8 = if (react) "S.con(0.0)" else "ib";
     const j = partner orelse return self.b("{s}", .{open});
     const f = self.lowered.contributions.items[j];
@@ -841,7 +841,7 @@ pub fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
 
 /// One value as the residual reads it: a core field, or the inline zero
 /// `plan_core.plan` never plans (`.f_zero` has no `m.f<k>`).
-pub fn coreRef(self: *Gen, v: Mir.Value) Error!void {
+fn coreRef(self: *Gen, v: Mir.Value) Error!void {
     if (v == .f_zero) return self.b("S.con(0.0)", .{});
     try self.b("m.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
 }
@@ -982,12 +982,12 @@ pub fn uBit(u: u32) u64 {
 }
 
 /// Same, for a node that may be ground (no unknown, no column).
-pub fn nodeBit(node: u16) u64 {
+fn nodeBit(node: u16) u64 {
     return if (node == Lower.ground) 0 else uBit(node);
 }
 
 /// The columns accumulated so far on row `u` of the half being emitted.
-pub fn patOf(self: *const Gen, u: u32) u64 {
+fn patOf(self: *const Gen, u: u32) u64 {
     const half = self.pat[@intFromBool(self.pat_react)];
     return if (half.len == 0) std.math.maxInt(u64) else half[u];
 }
@@ -996,7 +996,7 @@ pub fn patOf(self: *const Gen, u: u32) u64 {
 /// a runtime decision, so the row carries EVERY arm's columns: its own
 /// value, the switch partner's, and `ib` — the open circuit and both flow
 /// forms all name it.
-pub fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
+fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
     var acc = uBit(self.names.branch_u[i]) |
         self.an.unknownDeps(if (react) c.react_val else c.resist_val);
     if (plan_topo.switchFlowOf(self.input(), i)) |j| {
@@ -1006,7 +1006,7 @@ pub fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: b
     return acc;
 }
 
-pub fn nodeVoltage(self: *Gen, node: u16) Error!void {
+fn nodeVoltage(self: *Gen, node: u16) Error!void {
     if (node == Lower.ground) return self.b("S.con(0.0)", .{});
     try self.b("x[@intFromEnum(U.{s})]", .{self.names.u_names[node]});
 }
@@ -1338,7 +1338,7 @@ pub fn acUsesCore(self: *Gen) Error!bool {
 /// `ctrlStep` makes in `updateState`. Null means neither, which is a
 /// planning defect rather than a legal program, and `refuseAc` says so
 /// instead of exporting a wrong number.
-pub fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
+fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
     if (try gen_call.f64Const(self, v, 0, false)) |s| return s;
     const k = self.core.lo_idx[@intFromEnum(v)];
     if (k == none_u32) return null;
@@ -1353,7 +1353,7 @@ pub fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
 /// No diagnostic of its own: the only way to get here is a mag or phase
 /// `f64Const` will not answer for, and `emitCall` lowered the same argument
 /// into the residual first and already reported E0515 on the same token.
-pub fn refuseAc(self: *Gen) Error!void {
+fn refuseAc(self: *Gen) Error!void {
     try self.w("/// §4.6.3 refused by codegen; see the diagnostic.\n", .{});
     try self.w("pub const ac_gens = @compileError(\"LRM 4.6.3: an ac_stim magnitude or " ++
         "phase must be a constant or parameter expression\");\n\n", .{});
@@ -1363,7 +1363,7 @@ pub fn refuseAc(self: *Gen) Error!void {
 /// §4.6.4.3 and §4.6.4.4 are two spellings of ONE exported kind, because
 /// what a host does with either is read `noise_tables`, and which
 /// interpolation to use is the table's own `interp` field.
-pub fn contractNoiseKind(k: Lower.NoiseKind) []const u8 {
+fn contractNoiseKind(k: Lower.NoiseKind) []const u8 {
     return switch (k) {
         .thermal => "thermal",
         .flicker => "flicker",
@@ -1384,7 +1384,7 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
 /// One PSD argument as an `f64` expression in `noisePsd`'s body. `is_exp`
 /// allows the inline-constant shortcut — see `buildJobs` for why only the
 /// exponent may take it.
-pub fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
+fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
     if (v == .f_zero) return "0";
     if (is_exp) if (plan_noise.psdConst(self.mir, v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
     const k = self.core.lo_idx[@intFromEnum(v)];

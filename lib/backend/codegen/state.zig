@@ -446,7 +446,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
 
 /// Called after evaluating a Newton iterate, with that iterate's x.
 /// All return values are computed before any history slot is changed.
-pub fn emitAdvanceIteration(self: *Gen) Error!void {
+fn emitAdvanceIteration(self: *Gen) Error!void {
     if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.newton_iter) and !self.lowered.uses.contains(.reject_iteration)) return;
     if (self.lowered.uses.contains(.newton_iter)) try self.w(
         "pub fn beginSolve(inst: *Instance) void {{\n    inst.newton_iteration = 1;\n}}\n\n",
@@ -637,7 +637,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
 /// from `collapse`: a flag that is clear at runtime merges strictly less,
 /// so `collapse(m, i) == collapse_full` is the honest "maximal" predicate
 /// and every other outcome falls back to the full width.
-pub fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
+fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
     try self.w(
         \\/// The MAXIMAL collapse: `collapse` with every §5.6.1.3 retention
         \\/// flag set. Comptime, so a host can size a reduced derivative

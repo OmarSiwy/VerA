@@ -43,7 +43,7 @@ const enableArgIdx = codegen.enableArgIdx;
 
 /// Reuse the optimizer's select or reconstruct a pure two-way CFG merge.
 /// Loop-carried/multiway phis and arms with calls remain unsupported here.
-pub fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
+fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
     if (self.mir.instOp(inst) == .select) return self.mir.instData(inst);
     if (self.mir.instOp(inst) != .phi or self.mir.instData(inst).phi.count != 2) return null;
     const join = self.an.def_block[@intFromEnum(self.mir.instResult(inst))];
@@ -82,7 +82,7 @@ pub fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
     return .{ .ternary = .{ .cond = branch.cond, .then_val = arms[0], .else_val = arms[1] } };
 }
 
-pub fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[]const u8 {
+fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[]const u8 {
     const d = (hostConditional(self, inst) orelse return null).ternary;
     const condition = try i64Const(self, d.cond, depth + 1) orelse return null;
     const yes = (if (ty == .int) try i64Const(self, d.then_val, depth + 1) else try f64Const(self, d.then_val, depth + 1, false)) orelse return null;
@@ -96,7 +96,7 @@ pub fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Erro
 /// A host-side `[]const u8` for a STRING operand: the literal, or the model
 /// field a §3.4.6 string parameter occupies. Null for anything else, which
 /// is how `i64Const` tells a string comparison from arithmetic.
-pub fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
+fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
     switch (self.mir.valueDef(self.an.rv(v0))) {
         .str_const => |s| return try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
@@ -578,7 +578,7 @@ pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
 /// equal to 0.0, the timer shall trigger only once at the specified
 /// start_time." An absent period is the same case — `updateState` defaults
 /// it to 0.0 — and a period that does not fold cannot be decided here.
-pub fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
+fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
     if (args.len < 2) return true;
     const c = self.an.foldConst(args[1], false) orelse return false;
     return c.f <= 0.0;
@@ -622,7 +622,7 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
 /// than a codegen-time constant — `enableArgIdx` is what makes `UnitPlan`
 /// give it a slot, so a `cross(…, enable)` whose enable is a variable
 /// assigned in the block renders as that variable and not as its phi's zero.
-pub fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
+fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
     const i = enableArgIdx(k) orelse return "true";
     if (i >= args.len) return "true";
     const at = self.out.items.len;
@@ -1272,7 +1272,7 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
 /// The arguments are bound to `const`s first rather than rendered twice:
 /// each is needed once for its value and once for its derivative, and an
 /// argument expression can be an arbitrary subtree.
-pub fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
     const k = for (self.systf_names.items, 0..) |n, i| {
         if (std.mem.eql(u8, n, name)) break i;
     } else blk: {
@@ -1577,7 +1577,7 @@ pub fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 
     return .{ rise, fall };
 }
 
-pub fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     // `resolve_params = false`: a zero through the DECLARED default is not
     // a zero — `transition(x, 0, tr)` with `tr` defaulting to 0.0 but

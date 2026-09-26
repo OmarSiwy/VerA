@@ -196,7 +196,7 @@ pub fn validSection(s: []const u8) bool {
 /// Is this an `//! inherited` cite — `IEEE 1364-2005 17.2.9`, optionally
 /// followed by more clauses or a parenthesised note? Only the first clause is
 /// checked, with `validSection`'s own looseness.
-pub fn validInherited(s: []const u8) bool {
+fn validInherited(s: []const u8) bool {
     const std_name = "IEEE 1364-2005 ";
     if (!std.mem.startsWith(u8, s, std_name)) return false;
     const rest = s[std_name.len..];
@@ -217,7 +217,7 @@ pub fn digits(s: []const u8) bool {
 /// whose `want` genuinely differs from the table, which is the assertion doing
 /// its job. Nothing here could check a node anyway — directives are read out of
 /// raw source, before the compiler has been told what unknowns exist.
-pub fn validNoiseEntry(s: []const u8) bool {
+fn validNoiseEntry(s: []const u8) bool {
     const open = std.mem.indexOfScalar(u8, s, '(') orelse return false;
     // `#<source>` after the branch is §4.6.4.6's correlation id — see the
     // `noise` directive doc. `#null` is a row with no identity declared.
@@ -245,7 +245,7 @@ pub fn validNoiseEntry(s: []const u8) bool {
 /// space AFTER the `#`, not to the first space anywhere, because the branch may
 /// be written `thermal(p, n)#0` — `validNoiseEntry` already trims inside the
 /// parentheses, so splitting on any space would cut a legal entry in half.
-pub fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
+fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     const hash = std.mem.indexOfScalar(u8, s, '#') orelse return error.BadSyntax;
     var end = hash + 1;
     while (end < s.len and s[end] != ' ' and s[end] != '\t') end += 1;
@@ -294,7 +294,7 @@ pub fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
 /// parenthesised branch alone, and it is CANONICALISED rather than compared
 /// verbatim — `(p, n)` and `(p,n)` are the same want, and the device's own
 /// spelling has no space in it.
-pub fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
+fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     if (s.len == 0 or s[0] != '(') return error.BadSyntax;
     const close = std.mem.indexOfScalar(u8, s, ')') orelse return error.BadSyntax;
     const inner = s[1..close];
@@ -426,7 +426,7 @@ pub fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Bin
     try oneBinding(arena, rest[start..], out);
 }
 
-pub fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Binding)) Error!void {
+fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Binding)) Error!void {
     const t = std.mem.trim(u8, item, " \t");
     if (t.len == 0) return;
     const at = std.mem.indexOfScalar(u8, t, '=') orelse return error.BadSyntax;
@@ -438,7 +438,7 @@ pub fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Bindin
     });
 }
 
-pub fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
+fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
     var out: std.ArrayList(f64) = .empty;
     var it = std.mem.splitScalar(u8, rest, ',');
     while (it.next()) |item| {

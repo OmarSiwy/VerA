@@ -147,7 +147,7 @@ pub fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void 
 /// Is everything emitted since `at` exactly "leave the block labelled `k`"?
 /// A break to any OTHER label is not the same thing: dropping this label
 /// would then let control fall into `k`'s code instead of past it.
-pub fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
+fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     const body = self.out.items[at..];
     if (body.len == 0) return true;
     var buf: [64]u8 = undefined;
