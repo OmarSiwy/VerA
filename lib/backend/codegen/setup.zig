@@ -201,6 +201,7 @@ pub fn emitSetup(self: *Gen) Error!void {
     self.plan.su_on = false; // computing the roots, not reading them
     self.plan.setup_mode = true;
     self.plan.sinv = self.sinv.val;
+    self.plan.su_home = self.sinv.home;
     self.plan.display_unit = false;
     self.su.mode = true;
     self.emitting_common = true;

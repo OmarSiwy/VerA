@@ -3200,10 +3200,11 @@ test "codegen: the setup split — invariant values are computed by setup and re
     try std.testing.expect(std.mem.indexOf(u8, src, "const P = struct {") == null);
 }
 
-test "codegen: the setup split keeps a probe-guarded value in eval, and lists its $simparams" {
+test "codegen: the setup split computes a probe-guarded card value, and lists its $simparams" {
     // ln(r) runs only on the `V(p,n) > 0` arm, a branch on the solve: its
-    // block is not placeable, so `setup` must not compute it (it would be
-    // ln of a negative r when the arm is dead) and the core keeps it.
+    // block is not placeable, but ln cannot fault — a negative r is NaN,
+    // read only on the arm — so `setup` computes it (plan/setup.zig
+    // `speculable`) and the core reads the root.
     // `$simparam("gmin")` is a Table 9-27 name other than `iteration`, so it
     // is invariant and `setup_simparams` names it.
     var h: Harness = undefined;
@@ -3222,9 +3223,9 @@ test "codegen: the setup split keeps a probe-guarded value in eval, and lists it
     const src = try h.gen(std.testing.allocator);
     const su = src[std.mem.indexOf(u8, src, "pub fn setup(").?..];
     const su_end = std.mem.indexOf(u8, su, "\n}\n").?;
-    try std.testing.expect(std.mem.indexOf(u8, su[0..su_end], "log") == null);
+    try std.testing.expect(std.mem.indexOf(u8, su[0..su_end], "log") != null);
     const core_at = std.mem.indexOf(u8, src, "__common__core(comptime S").?;
-    try std.testing.expect(std.mem.indexOf(u8, src[core_at..], "log") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src[core_at..], "log") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{ \"gmin\" };") != null);
 }
 
