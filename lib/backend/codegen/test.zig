@@ -2193,7 +2193,7 @@ test "codegen: an unsupported dependent default diagnoses instead of freezing" {
     try Harness.run(std.testing.allocator,
         \\module unsupported_parameter;
         \\  parameter integer amount = 2;
-        \\  localparam integer size = $clog2(amount);
+        \\  localparam integer size = $realtobits(1.0 * amount);
         \\endmodule
     , &h);
     defer h.deinit();

@@ -6,14 +6,12 @@
 // error 30_natureless_discipline.va deliberately stops short of: everything in
 // that file is legal, and this is the first line that is not.
 //
-// No diagnostic code is pinned because VerA has none for this rule: it accepts
-// the contribution, so pinning a code would pin the wrong rule and would stop
-// matching on the day the right one lands. `DiagnosticsReported` says only
-// "some diagnostic", which is the weakest claim that still fails on silence.
+// VerA refuses it with E0501, "`V` is not an access function of `link`" —
+// the rule itself.
 //
 //! lrm 3.6.3
 //! lrm 3.6.2.3
-//! reject DiagnosticsReported
+//! reject E0501
 discipline ch3_natureless_beh;
     domain continuous;
 enddiscipline

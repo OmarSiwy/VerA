@@ -346,9 +346,11 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
             if (s != .none) try w.file.stmtEdges(s, w);
         }
     };
-    // §7.3.2 in the analog block of a mixed module, an x/z literal compared by
-    // `===`/`!==` or as a `case`/`casex`/`casez` label is the four-state comparison the clause
-    // provides (`lower_expr.caseEquality`); anywhere else it stays E0130.
+    // §7.3.2 in an analog block, an x/z literal compared by `===`/`!==` or as a
+    // `case`/`casex`/`casez` label is the four-state comparison the clause
+    // provides (`lower_expr.caseEquality`); anywhere else it stays E0130. Every
+    // module, not only a mixed one: the clause's own `a2d` has no discrete block
+    // and reads its input net with `dnet === 1'bx`.
     const Cmp = struct {
         file: *const Ast.SourceFile,
         marks: []bool,
@@ -379,8 +381,8 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         // A task (A.2.7) runs only on the kernel, in any module: the analog
         // backend never executes its body.
         for (m.tasks) |t| w.stmt(t.body) catch unreachable;
-        if (!isMixed(file, m)) continue;
         for (m.analog) |blk| (Cmp{ .file = file, .marks = marks }).stmt(blk.body) catch unreachable;
+        if (!isMixed(file, m)) continue;
         for (m.discrete) |blk| w.stmt(blk.body) catch unreachable;
         for (m.assigns) |a| for ([_]Ast.ExprId{ a.target, a.value, a.delay.rise, a.delay.fall, a.delay.off }) |e|
             w.expr(e, .read) catch unreachable;

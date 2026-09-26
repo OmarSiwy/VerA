@@ -5,22 +5,23 @@
 // function call, and `first` returns it unchanged — so the branch carries the
 // reactive current d/dt V(p,n), a 1 F capacitor.
 //
-// VerA models a reactive part only when ddt is a linear factor of the
-// contribution (E0503, "ddt() must be a linear factor of a contribution");
-// `first(ddt(V(p, n)))` has always been refused that way. The same ddt one
-// level deeper, inside the assignment pattern, was not seen by the scan that
-// asks "is there a ddt here", and was lowered as a RESISTIVE backward-Euler
-// difference: the emitted device had no charge function at all, so a host's
-// AC or small-signal analysis saw no capacitance. That is a silent loss of
-// the reactive part, and it now gets the same E0503 as the unwrapped call.
+// So the device publishes exactly one charge site, the charge V(p,n) entering
+// row p with + and row n with − (§1.3.1.2, rows in `U` order, ports first):
+// `//! qsite p+ n- lte`. A compiler that lowered the call as a resistive
+// backward-Euler difference publishes no charge site at all, and a host's AC
+// analysis sees no capacitance.
 //
-// A limitation of VerA, not an error in the source: this fixture pins the
-// refusal and moves to a positive one the day a ddt under a call is modelled.
+// The CHECK pins the other half — `first` returns element 0 of its pattern —
+// on the same shape without the ddt: V(p,n) = 1.0 at the declared bias.
 //
 //! lrm 5.6.1.2
 //! lrm 4.5.3
-//! reject E0503
+//! bias V(p) = 1.0, V(n) = 0.0
+//! print none
+//! qsite p+ n- lte
+//! xfail E0503: VerA models a reactive part only when ddt is a linear factor of the contribution, and a ddt under a call is not
 `include "disciplines.vams"
+`include "check.vh"
 module ch5_ddt_inside_array_pattern(p, n);
   inout p, n; electrical p, n;
   analog function real first;
@@ -30,5 +31,8 @@ module ch5_ddt_inside_array_pattern(p, n);
       first = a[0];
     end
   endfunction
-  analog I(p, n) <+ first('{ddt(V(p, n)), 0.0});
+  analog begin
+    `CHECKX("first returns element 0 of its pattern", first('{V(p, n), 0.0}), 1.0);
+    I(p, n) <+ first('{ddt(V(p, n)), 0.0});
+  end
 endmodule

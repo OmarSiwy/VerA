@@ -413,6 +413,8 @@ directives: Preprocessor.Directives = .{},
 unconnected_inputs: []const Elaborate.NameSite = &.{},
 /// `Elaborate.Design.port_concats`, held for `lowerModule` the same way.
 port_concats: []const Elaborate.PortConcat = &.{},
+/// `Elaborate.Design.port_widths`, held for `lowerModule` the same way.
+port_widths: []const Elaborate.PortWidth = &.{},
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -1143,6 +1145,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     for (design.implicit_nets) |n| try lower_node.rejectImplicitNet(self, n.name, n.main_tok);
     self.unconnected_inputs = design.unconnected_inputs;
     self.port_concats = design.port_concats;
+    self.port_widths = design.port_widths;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
     return self.lowered();
@@ -1319,6 +1322,15 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // — the parameter loop runs above the port loop — so a nodeset written
         // over a parameter folds here and not later.
         if (n.init != .none) try lower_node.recordNodeset(self, idx, n.init, n.main_tok, name);
+    }
+
+    // §6.5.7.1 "The sizes of the ports and net must match." A net this module
+    // never interned (a discrete input) has no width here to compare.
+    for (self.port_widths) |pw| {
+        const port: u64 = if (pw.range) |d| ((try lower_node.foldDim(self, d, pw.main_tok)) orelse continue).size() else 1;
+        const net: u64 = if (self.out.vectors.get(pw.net)) |v| v.size() else if (self.node_voltages.contains(pw.net)) 1 else continue;
+        if (port != net)
+            try self.err(pw.main_tok, .E0925, "`{s}` is {d} wide and the port it connects is {d}", .{ pw.net, net, port });
     }
 
     // §6.5.7.1 a vector port bound to a concatenated net expression: element k
@@ -1512,7 +1524,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the assignment that reveals it — see `holdSlot`.
     try lower_param.markHeldVars(self, module);
     try lower_param.markMemArrays(self, module);
-    try lower_param.checkOneItemPerScope(self, module.vars);
+    try lower_param.checkOneItemPerScope(self, module.params, module.vars, module.nets);
     // A.6.2 the digital `initial` block, for the same reason and at the same
     // point as the §5.10 scan above: what a variable holds at the top of every
     // evaluation is decided at its declaration. `initial x = 3;` and

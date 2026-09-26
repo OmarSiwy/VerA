@@ -95,6 +95,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     if (simStateInDefault(self, decl.default)) |what| {
         try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
+    if (oomrInDefault(self, decl.default)) |h|
+        try self.err(self.file.exprs.mainTok(h), .E0924, "`{s}` in the default of `{s}`", .{ try lower_expr.flatName(self, h), name });
 
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return lowerParamArray(self, decl, name);
@@ -152,8 +154,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
 }
 
-/// §3.4/A.2.4: the spelling of the first simulation-state reference in a
-/// parameter default, or null when none exists. Access functions, analog
+/// §3.4/A.2.4: the spelling of the first simulation-state or module-variable
+/// reference in a parameter default, or null when none exists. Access functions, analog
 /// operators, small-signal sources and event functions are state reads by
 /// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
 /// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
@@ -171,10 +173,31 @@ pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
             const n = self.file.str(ex.strOf(e));
             if (simStateName(n)) return n;
         },
+        // §3.4 "constant numbers and previously defined parameters": a module
+        // variable is neither, and holds nothing until the analog block runs.
+        .ident => if (self.out.module) |m| for (m.vars) |v| {
+            if (v.name == ex.strOf(e)) return self.file.str(v.name);
+        },
         else => {}, // else: a state read only through its children
     }
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (simStateInDefault(self, c)) |w| return w;
+    return null;
+}
+
+/// §6.7.1 "parameter declaration statements shall not make out-of-module
+/// references": the first hierarchical name in `e`, or null. A §5.5.3 nature
+/// attribute reference (`net.potential.attr`) is a constant, not a reference.
+fn oomrInDefault(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .hier_ident) {
+        const parts = ex.nameParts(e);
+        const half = if (parts.len == 3) self.file.str(parts[1]) else "";
+        if (!std.mem.eql(u8, half, "potential") and !std.mem.eql(u8, half, "flow")) return e;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (oomrInDefault(self, c)) |h| return h;
     return null;
 }
 
@@ -755,27 +778,44 @@ pub fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
 /// to give an instance the same name as the name of the net connected to its
 /// output."
 ///
-/// The first clause of that sentence, which is the one that has a second
-/// declaration to point at. Without it the second `put` in `declareVar` rebinds
-/// the name and the first declaration's initializer is silently unreachable —
-/// and the legal case looks identical from the map's side, which is why the test
-/// is over ONE DECLARATION LIST rather than over `self.vars`: a list is exactly
-/// the declarations of one scope (§6.8 lists what opens one; a second declaration
-/// is not on it), so shadowing an outer name cannot reach this.
+/// Checked across every kind a scope declares by name — parameters, variables,
+/// nets — not only variable against variable: a second parameter used to reach
+/// codegen as a duplicate struct field, and a net or parameter sharing a
+/// variable's name was silently rebound. The test is over ONE SCOPE'S
+/// DECLARATION LISTS rather than over `self.vars`: the lists are exactly the
+/// declarations of one scope (§6.8 lists what opens one), so shadowing an outer
+/// name cannot reach this. Net against net is left alone: a port direction and
+/// its discipline are two declarations of one item. So is a discipline against
+/// a variable — §7's connect modules write `reg out; ddiscrete out;` — so only a
+/// net declaration with no discipline (`wire x;`) is a second item beside a
+/// variable.
 ///
-/// ponytail: O(n²) over one scope's variables, which is a handful. A set would
-/// need an allocation per scope to save comparisons that cost nothing.
-pub fn checkOneItemPerScope(self: *Lower, vars: []const Ast.VarDecl) Oom!void {
-    for (vars, 0..) |v, i| {
-        for (vars[0..i]) |earlier| {
-            if (earlier.name != v.name) continue;
-            var b = self.errWith(v.main_tok, .E0362);
-            b.msg("`{s}`", .{self.file.str(v.name)});
-            b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
-            try b.emit();
-            break;
-        }
+/// ponytail: O(n²) over one scope's names — ~1e6 u32 compares for a thousand-
+/// parameter compact model. A set per scope when a model makes that show.
+pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: []const Ast.VarDecl, nets: []const Ast.NetDecl) Oom!void {
+    for (params, 0..) |p, i| {
+        if (declares(params[0..i], p.name)) try dupItem(self, p.main_tok, p.name);
     }
+    for (vars, 0..) |v, i| {
+        if (declares(vars[0..i], v.name) or declares(params, v.name))
+            try dupItem(self, v.main_tok, v.name);
+        for (nets) |n| if (n.name == v.name and n.discipline == .none) try dupItem(self, v.main_tok, v.name);
+    }
+    for (nets) |n| {
+        if (declares(params, n.name)) try dupItem(self, n.main_tok, n.name);
+    }
+}
+
+fn declares(decls: anytype, name: Ast.StrId) bool {
+    for (decls) |d| if (d.name == name) return true;
+    return false;
+}
+
+fn dupItem(self: *Lower, tok: u32, name: Ast.StrId) Oom!void {
+    var b = self.errWith(tok, .E0362);
+    b.msg("`{s}`", .{self.file.str(name)});
+    b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
+    try b.emit();
 }
 
 /// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a

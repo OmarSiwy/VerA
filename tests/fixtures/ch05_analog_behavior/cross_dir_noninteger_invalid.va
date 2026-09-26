@@ -23,11 +23,10 @@
 // that a tolerance be accompanied by a direction is
 // event_null_argument_invalid.va.
 //
-// No VerA code exists for this, so the expectation is the phase label: the file
-// must not compile at all.
+// VerA refuses it with E0517, the §5.10.3 event-argument code.
 //
 //! lrm 5.10.3.1
-//! reject DiagnosticsReported
+//! reject E0517
 module ch5_cross_dir_noninteger(p);
   inout p; electrical p; real x;
   analog begin

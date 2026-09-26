@@ -171,7 +171,7 @@ pub fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     if (try scopeElem(self, b)) |elem|
         self.scope_path = if (outer_scope.len == 0) elem else try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ outer_scope, Elaborate.sep, elem });
     for (b.params) |*p| try lower_param.lowerParamDecl(self, p); // §5.3.2 local parameters
-    try lower_param.checkOneItemPerScope(self, b.vars);
+    try lower_param.checkOneItemPerScope(self, b.params, b.vars, &.{});
     for (b.vars) |*v| try lower_param.declareVarDecl(self, v, .local);
     if (b.name != .none) try publishBlockLocals(self, self.file.str(b.name), b);
     // §6.7 a labelled block is a scope, and A.6.5 lets `disable` name it. The

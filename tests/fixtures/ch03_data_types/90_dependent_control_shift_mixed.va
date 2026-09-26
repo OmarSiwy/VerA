@@ -1,8 +1,25 @@
-// Legal mixed context needs full expression signedness, not a value-sign guess.
+// IEEE 1364 §5.5.1 (carried by Verilog-AMS §4.2.11's expression rules): "If any
+// operand is unsigned, the result is unsigned, regardless of the operator", and
+// §5.5.2 propagates that type "back down to the context-determined operands" —
+// the two operands of `>`, and through them the left operand of `>>` — before
+// the shift is evaluated.
+//
+//   32'h1 is unsigned (a based literal without `s`), so the comparison is
+//   unsigned and `operand` is read as 32'hFFFF_FFFF;
+//   32'hFFFF_FFFF >> 0 = 32'hFFFF_FFFF;   32'hFFFF_FFFF > 1  ->  mixed = 1.
+//
+// A compiler that compared the signed carrier would evaluate -1 > 1 = 0.
+//
 //! lrm 4.2.11
-//! reject E0364
-module dependent_control_shift_mixed;
+//! xfail E0364: the analog MIR carries no expression signedness, so an unsigned context over a signed shift is refused rather than evaluated
+`include "check.vh"
+module dependent_control_shift_mixed(p);
+  inout p; electrical p;
   parameter integer operand = -1;
   parameter integer count = 0;
   localparam integer mixed = (operand >> count) > 32'h1;
+  analog begin
+    `CHECKI("unsigned context: (-1 >> 0) > 32'h1", mixed, 1);
+    I(p) <+ V(p);
+  end
 endmodule

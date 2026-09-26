@@ -17,13 +17,10 @@
 // every port and therefore cannot reach this rule at all: it tests that a declared
 // type WORKS, not that an undeclared one is refused. This is the other half.
 //
-// No `//! reject <code>`: VerA has no diagnostic here — it treats the
-// discipline-less port as an implicit net and probes it — so there is no code to
-// name. `DiagnosticsReported` is the weakest form that still demands a rejection;
-// tighten it to the E-code the day one exists.
+// VerA refuses it with E0337, "`q` has no discipline, so `V` names nothing on it".
 //
 //! lrm 6.5.2.1
-//! reject DiagnosticsReported
+//! reject E0337
 module ch6_untyped_port_behavioral_use(p, q);
   inout p, q;
   electrical p;
