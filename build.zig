@@ -628,6 +628,25 @@ pub fn build(b: *std.Build) void {
             beh_step.dependOn(&sim.step);
         }
     }
+    // A charge or td that is not finite has no delay to print: refused by node
+    // (#47). Its legal neighbour is the same model at its declared charge.
+    {
+        const va = b.path("tests/beh_verilog/rc_charge.va");
+        const bad = b.addRunArtifact(exe);
+        bad.addArgs(&.{ "--emit-verilog", "--allow=W0650", "--digital-pins", "a,y", "--param", "c=inf" });
+        bad.addFileArg(va);
+        bad.expectExitCode(1);
+        bad.expectStdOutEqual("");
+        bad.addCheck(.{ .expect_stderr_match = "--emit-verilog: node `y`: its delay is not finite" });
+        test_step.dependOn(&bad.step);
+        const ok = b.addRunArtifact(exe);
+        ok.addArgs(&.{ "--emit-verilog", "--allow=W0650", "--digital-pins", "a,y" });
+        ok.addFileArg(va);
+        ok.expectExitCode(0);
+        ok.addCheck(.{ .expect_stdout_match = "parameter real vera_rise_y = 0.693147; // ns" });
+        ok.addCheck(.{ .expect_stdout_match = "parameter real vera_fall_y = 0.693147; // ns" });
+        test_step.dependOn(&ok.step);
+    }
     // VAMPyRE, the CMC's Verilog-A rule checker, and VerA on the same compact
     // models, disagreements triaged by name (tools/external_vampyre.py,
     // tests/fixtures/external/vampyre/). It fetches its pins over the

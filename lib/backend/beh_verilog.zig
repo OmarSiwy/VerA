@@ -36,7 +36,9 @@
 //! Refused with a message, never emitted half-right: §5.10 events and held
 //! variables, `I()` probes and `ddt`/`idt` outside a contribution (their
 //! unknowns are not nets), arrays, vector ports, `$abstime` and any call with
-//! no static value, and more than `max_vars` pins plus nodes.
+//! no static value, more than `max_vars` pins plus nodes, and a node whose
+//! derived delay is not finite (a NaN or infinite charge or `td`) and has no
+//! `vera_delay`.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -124,7 +126,8 @@ const Emitter = struct {
                     try pin_attr.put(self.arena, decl, v.?.str);
                 } else if (std.mem.eql(u8, an, "vera_delay")) {
                     const d = if (v) |c| c.asReal() else -1;
-                    if (v == null or v.? == .str or !(d >= 0) or !std.math.isFinite(d)) return self.refuse("`{s}`: vera_delay takes a constant delay in seconds, >= 0", .{decl});
+                    // Finite in ns too: the module prints it in ns (`node`).
+                    if (v == null or v.? == .str or !(d >= 0) or !std.math.isFinite(d * 1e9)) return self.refuse("`{s}`: vera_delay takes a constant delay in seconds, >= 0", .{decl});
                     try delay_attr.put(self.arena, decl, d);
                 }
             }
@@ -272,6 +275,11 @@ const Emitter = struct {
                 // Settling at VDD/2 (a comparator with equal inputs) is no logic level.
                 target[m] = if (@abs(f - self.o.vdd / 2) <= 1e-9 * self.o.vdd) .x else if (f > self.o.vdd / 2) .@"1" else .@"0";
                 const d = tau * ln2 + at(TD, m, states.len, si);
+                // A NaN or infinite charge or td (a `--param c=inf`) has no
+                // delay to print; a `vera_delay` replaces it, so is not asked.
+                // Finite in ns, as `node` prints it.
+                if (target[m] != .x and !delay_attr.contains(names[r]) and !std.math.isFinite(d * 1e9))
+                    return self.refuse("node `{s}`: its delay is not finite (tau·ln2 + td = {d} s); give it a (* vera_delay *)", .{ names[r], d });
                 switch (target[m]) {
                     .@"1" => rise = @max(rise, d),
                     .@"0" => fall = @max(fall, d),
@@ -404,6 +412,9 @@ const Emitter = struct {
             assert(k < vars.len);
             if (j > 0) assert(k > support[j - 1]);
         }
+        // `run` refused a delay with no finite ns value.
+        assert(std.math.isFinite(rise * 1e9));
+        assert(std.math.isFinite(fall * 1e9));
         const A = self.arena;
         const lw = self.lw;
         const name = lw.nodes.items(.name)[r];
@@ -618,7 +629,9 @@ const Interp = struct {
                 assert(args.len > 0);
                 const x = try self.get(args[0]);
                 const td = if (args.len > 1) (try self.get(args[1])).c.asReal() else 0;
-                break :blk .{ .c = x.c, .d = x.d + @max(td, 0) };
+                // A NaN td stays NaN (`@max` would drop it to 0) so `run`
+                // refuses it.
+                break :blk .{ .c = x.c, .d = x.d + if (std.math.isNan(td)) td else @max(td, 0) };
             },
             // §4.5.9: the settled value; a slew's time depends on the swing.
             .slew => blk: {
@@ -758,6 +771,36 @@ test "emit: an RC's delay is tau·ln2, a transition's is its td" {
     const td = try emitOk(&g, logic);
     try std.testing.expect(std.mem.find(u8, td, "parameter real vera_rise_y = 2.000000; // ns\n") != null);
     try std.testing.expect(std.mem.find(u8, td, "parameter real vera_fall_y = 2.000000; // ns\n") != null);
+}
+
+test "emit: a non-finite charge or td is refused by node, not printed (#47)" {
+    // The RC above with C = inf: Q(V(y) = 0) = inf·0 = NaN, so tau is NaN.
+    // Before #47 `@max` dropped the NaN delay and printed 0 ns.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const a = f.alloc();
+    const vy = try f.probe(1);
+    const diff = try f.mir.emit(a, .entry, .fsub, &.{ vy, try f.probe(0) });
+    const i_r = try f.mir.emit(a, .entry, .fdiv, &.{ diff, try f.mir.addFloatConst(a, 1000) });
+    const q = try f.mir.emit(a, .entry, .fmul, &.{ try f.mir.addFloatConst(a, std.math.inf(f64)), vy });
+    try addFlow(&f, 1, 3, i_r, q);
+    try expectRefused(&f, logic, "node `y`: its delay is not finite");
+
+    // `transition(V(a), td)` with td = inf (printed `inf` before #47) and
+    // td = NaN (dropped to 0 before #47).
+    for ([_]f64{ std.math.inf(f64), std.math.nan(f64) }) |td| {
+        var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer g.deinit();
+        try g.init(&four);
+        g.lowered.num_ports = 4;
+        const b = g.alloc();
+        const tr = try g.call("transition", &.{ try g.probe(0), try g.mir.addFloatConst(b, td) });
+        try addFlow(&g, 1, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(1), tr }), .f_zero);
+        try expectRefused(&g, logic, "node `y`: its delay is not finite");
+    }
+    // The legal neighbours are the finite RC and td of the test above.
 }
 
 test "emit: a node settling at exactly VDD/2 is x, and a constant needs no table" {
