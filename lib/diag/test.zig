@@ -66,6 +66,21 @@ test "lint levels" {
     try std.testing.expect(!try levels.parseFlag(gpa, "not-a-flag"));
 }
 
+test "bag: dedupe keys on the file of a preprocessor span" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var bag = diag_bag.Bag.init(arena_state.allocator());
+
+    // Offset 0 in two different headers is two places.
+    for ([_]u16{ 1, 2, 2 }) |f| {
+        var b = bag.build(.preprocess, .E0101, .at(0));
+        b.inFile(@enumFromInt(f));
+        try b.emit();
+    }
+    try std.testing.expectEqual(@as(usize, 2), bag.count());
+    try std.testing.expectEqual(@as(u32, 1), bag.deduped);
+}
+
 test "bag: dedupe, cap, level promotion" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
