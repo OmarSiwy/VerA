@@ -1763,7 +1763,7 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, 
 // ---------------------------------------------------------------------------
 
 const FuzzVar = struct { width: u32, signed: bool };
-const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64 };
+const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64, 65, 100, 128, 129 };
 const fuzz_vars = 12;
 const fuzz_per_file = 400;
 
@@ -1839,18 +1839,18 @@ fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
     for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8 } });
     for (0..n) |_| {
         var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o };
+        // `%d` of more than 64 bits is refused by both engines alike, so it
+        // is asked of an expression only when its width is at most 64.
         if (rand.boolean()) {
-            try o.writeAll("    $display(\"%b ");
-            try o.writeAll(if (rand.boolean()) "%d\", " else "%h\", ");
-            const cut = out.written().len;
-            _ = try g.expr(3);
-            const e = try a.dupe(u8, out.written()[cut..]);
-            try o.print(", {s});\n", .{e});
+            var e: Io.Writer.Allocating = .init(a);
+            g.out = &e.writer;
+            const ew = try g.expr(3);
+            try o.print("    $display(\"%b {s}\", {s}, {s});\n", .{ if (ew <= 64 and rand.boolean()) "%d" else "%h", e.written(), e.written() });
         } else {
             const t = rand.uintLessThan(usize, fuzz_widths.len);
             try o.print("    t{d} = ", .{t});
             _ = try g.expr(3);
-            try o.print(";\n    $display(\"%b %d\", t{d}, t{d});\n", .{ t, t });
+            try o.print(";\n    $display(\"%b {s}\", t{d}, t{d});\n", .{ if (fuzz_widths[t] <= 64) "%d" else "%h", t, t });
         }
     }
     try o.writeAll("  end\nendmodule\n");
@@ -1868,8 +1868,8 @@ const FuzzBits = struct {
     }
 };
 
-/// Random expressions whose every operand and result is at most 64 bits,
-/// so the native executable takes all of them.
+/// Random expressions over one- and multi-word operands, every one of which
+/// the native executable takes.
 const FuzzGen = struct {
     rand: std.Random,
     vars: []const FuzzVar,
@@ -1923,17 +1923,14 @@ const FuzzGen = struct {
                 return @max(wa, wb);
             },
             7 => {
-                // A concatenation of narrow operands only, so it stays within 64.
                 const i = r.uintLessThan(usize, g.vars.len);
                 const j = r.uintLessThan(usize, g.vars.len);
-                if (g.vars[i].width + g.vars[j].width > 64) return g.leaf();
                 try o.print("{{v{d}, v{d}}}", .{ i, j });
                 return g.vars[i].width + g.vars[j].width;
             },
             8 => {
                 const i = r.uintLessThan(usize, g.vars.len);
-                const k = 64 / g.vars[i].width;
-                const n = 1 + r.uintLessThan(u32, @min(k, 4));
+                const n = 1 + r.uintLessThan(u32, 4);
                 try o.print("{{{d}{{v{d}}}}}", .{ n, i });
                 return n * g.vars[i].width;
             },
@@ -1948,7 +1945,7 @@ const FuzzGen = struct {
                 const vw = g.vars[i].width;
                 if (r.boolean()) {
                     try o.print("v{d}[", .{i});
-                    _ = try g.expr(0);
+                    try g.index();
                     try o.writeByte(']');
                     return 1;
                 }
@@ -1959,10 +1956,19 @@ const FuzzGen = struct {
             },
             else => {
                 try o.writeAll("mem[");
-                _ = try g.expr(0);
+                try g.index();
                 try o.writeByte(']');
                 return 8;
             },
+        }
+    }
+
+    /// A leaf of at most 64 bits: the engine refuses a wider index.
+    fn index(g: *FuzzGen) Io.Writer.Error!void {
+        while (true) {
+            const cut = g.out.end;
+            if (try g.leaf() <= 64) return;
+            g.out.end = cut;
         }
     }
 
