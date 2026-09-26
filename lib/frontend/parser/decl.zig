@@ -255,10 +255,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
                 self.pos += 1;
                 ty = try tfPortType(self);
             }
-            var v = ty;
-            v.main_tok = self.pos;
-            v.name = try self.expectIdent();
-            try ports.append(self.arena, .{ .direction = dir, .v = v });
+            try ports.append(self.arena, try tfFormal(self, dir, ty));
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
@@ -272,10 +269,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
             self.pos += 1;
             const ty = try tfPortType(self);
             while (true) {
-                var v = ty;
-                v.main_tok = self.pos;
-                v.name = try self.expectIdent();
-                try ports.append(self.arena, .{ .direction = d, .v = v });
+                try ports.append(self.arena, try tfFormal(self, d, ty));
                 if (!self.eat(.comma)) break;
             }
             _ = try self.expect(.semicolon);
@@ -324,6 +318,13 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
 /// A.2.7's formal and block-item types: `[ reg ] [ signed ] [ range ]`,
 /// `integer`, `time`, `real` or `realtime`. A bare direction is a 1-bit
 /// unsigned `reg` (IEEE 1364-2005 §10.2.1).
+fn tfFormal(self: *Parser, dir: Ast.Direction, ty: Ast.VarDecl) Error!Ast.TfPort {
+    var v = ty;
+    v.main_tok = self.pos;
+    v.name = try self.expectIdent();
+    return .{ .direction = dir, .v = v };
+}
+
 fn tfPortType(self: *Parser) Error!Ast.VarDecl {
     var v = tfType(self);
     if (v.storage == .reg and self.peek() == .lbracket) v.packed_range = try parseDim(self);
@@ -451,17 +452,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                 },
                 else => Ast.Direction.input, // else: no direction keyword, so A.2.7's `input` default
             };
-            const ty = varType(self.peek()) orelse .unspecified;
-            if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
-            const dims = try parseDims(self);
-            const at = self.pos;
-            try args.append(self.arena, .{
-                .name = try self.expectIdent(),
-                .ty = ty,
-                .direction = dir,
-                .dims = dims,
-                .main_tok = at,
-            });
+            try analogFormals(self, &args, dir, false);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
@@ -488,25 +479,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
             .kw_input, .kw_output, .kw_inout => {
                 const dir = parse_module.portDirection(self.peek()).?;
                 self.pos += 1;
-                // `input real x;` (A.2.7 task_port_type) or bare `input x;`
-                const ty = varType(self.peek()) orelse .unspecified;
-                if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
-                // A.2.6 `input_declaration ::= input [ range ] list_of_ports`
-                // — one range, BEFORE the names, shared by all of them.
-                // §4.7.2.3's own example is `output [0:1] out;` and §4.7.1's
-                // Example 3 is `inout [0:1]a;`.
-                const dims = try parseDims(self);
-                while (true) {
-                    const at = self.pos;
-                    try args.append(self.arena, .{
-                        .name = try self.expectIdent(),
-                        .ty = ty,
-                        .direction = dir,
-                        .dims = dims,
-                        .main_tok = at,
-                    });
-                    if (!self.eat(.comma)) break;
-                }
+                try analogFormals(self, &args, dir, true);
                 _ = try self.expect(.semicolon);
             },
             .kw_parameter, .kw_localparam => {
@@ -590,6 +563,29 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
 // -----------------------------------------------------------------------
 // A.1.6 nature_declaration / A.1.7 discipline_declaration — LRM §3.6
 // -----------------------------------------------------------------------
+
+/// A function formal after its direction: `input real x` (A.2.7
+/// task_port_type) or bare `input x`, then A.2.6 `input [ range ]
+/// list_of_ports` — one range, before the names, shared by all of them
+/// (§4.7.2.3 `output [0:1] out;`, §4.7.1 Example 3 `inout [0:1]a;`).
+/// `list` reads `, name` onward, as a body declaration does; a port-list
+/// entry names one formal.
+fn analogFormals(self: *Parser, args: *std.ArrayList(Ast.FuncArg), dir: Ast.Direction, list: bool) Error!void {
+    const ty = varType(self.peek()) orelse .unspecified;
+    if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
+    const dims = try parseDims(self);
+    while (true) {
+        const at = self.pos;
+        try args.append(self.arena, .{
+            .name = try self.expectIdent(),
+            .ty = ty,
+            .direction = dir,
+            .dims = dims,
+            .main_tok = at,
+        });
+        if (!list or !self.eat(.comma)) break;
+    }
+}
 
 /// LRM §3.6.1 (A.1.6). Base natures must declare `abstol` and `access`;
 /// that check is lowering's, not the grammar's.
