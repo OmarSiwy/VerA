@@ -30,6 +30,7 @@ const netPull = @import("net.zig").netPull;
 const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+const wordMask = @import("net.zig").wordMask;
 const wired = @import("net.zig").wired;
 const undriven = @import("net.zig").undriven;
 const Show = display.Show;
@@ -1380,11 +1381,14 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
     std.debug.assert(value.width == label.width);
     if (kind == .normal) return value.equality(.case_equal, label) == .one;
     // IEEE1364-2005 §9.5.1: wildcards apply symmetrically to either value.
-    for (0..value.width) |i| {
-        const a = value.bit(@intCast(i));
-        const b = label.bit(@intCast(i));
-        if (a == .z or b == .z or (kind == .casex and (a == .x or b == .x))) continue;
-        if (a != b) return false;
+    // Per plane word: z is (value 0, unknown 1), x is (1, 1).
+    for (0..(value.width + 63) / 64) |w| {
+        const av = value.values()[w];
+        const au = value.unknowns()[w];
+        const bv = label.values()[w];
+        const bu = label.unknowns()[w];
+        const wild = if (kind == .casex) au | bu else (au & ~av) | (bu & ~bv);
+        if (((av ^ bv) | (au ^ bu)) & ~wild & wordMask(value.width, w) != 0) return false;
     }
     return true;
 }
@@ -1961,6 +1965,32 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test "§9.5.1 casez/casex per plane word agree with the per-bit wildcard rule" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prng = std.Random.DefaultPrng.init(0x9051);
+    const rand = prng.random();
+    for ([_]u32{ 1, 3, 64, 70 }) |width| for (0..500) |_| {
+        const v = try filled(a, width, false, .zero);
+        const l = try filled(a, width, false, .zero);
+        for (0..width) |i| {
+            // Mostly 0/1 so that some pairs match.
+            setBit(v, @intCast(i), if (rand.uintLessThan(u8, 4) == 0) rand.enumValue(Int.Bit) else .zero);
+            setBit(l, @intCast(i), if (rand.uintLessThan(u8, 4) == 0) rand.enumValue(Int.Bit) else .zero);
+        }
+        for ([_]Ast.CaseKind{ .casez, .casex }) |kind| {
+            const want = for (0..width) |i| {
+                const x = v.bit(@intCast(i));
+                const y = l.bit(@intCast(i));
+                if (x == .z or y == .z or (kind == .casex and (x == .x or y == .x))) continue;
+                if (x != y) break false;
+            } else true;
+            try std.testing.expectEqual(want, caseMatches(kind, v, l));
+        }
+    };
+}
 
 test "continuous vector delay audit_assignment_pending_same_value" {
     try expectRun(
