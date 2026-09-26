@@ -106,6 +106,7 @@ const vera = @import("vera");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
 const external = @import("external.zig");
+const ieee1364 = @import("ieee1364.zig");
 const options = @import("suite_options");
 
 const Io = std.Io;
@@ -122,6 +123,7 @@ test {
     _ = harness;
     _ = torture;
     _ = external;
+    _ = ieee1364;
 }
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
@@ -131,14 +133,15 @@ pub fn main(init: std.process.Init) !u8 {
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
-    // `devices`, `vpi` and `spice` are the THREE remaining words in argument
+    // `devices`, `ieee1364`, `vpi` and `spice` are the remaining words in argument
     // position 2, and none is a mode of the benchmark: they are the other runs of this
     // executable, whose cases need the BINARY (or a C compiler) rather than the
     // engine. Everything else is a benchmark argument, including a bare filter
     // word — which is why these two are matched exactly and not by prefix.
     const first = args.next();
     if (first) |a| {
-        if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args);
+        if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args, &digital_dirs);
+        if (std.mem.eql(u8, a, ieee1364_dir)) return devices(init, vera_exe, &args, &.{ieee1364_dir});
         if (std.mem.eql(u8, a, "vpi")) return vpiFixtures(init, &args);
         if (std.mem.eql(u8, a, "spice")) return spiceDecks(init, vera_exe, &args);
     }
@@ -149,7 +152,7 @@ fn usage(io: Io, why: []const u8) !u8 {
     var buf: [256]u8 = undefined;
     var e = Io.File.stderr().writer(io, &buf);
     try e.interface.print(
-        "suite: {s}\nusage: <vera-exe> [devices | vpi | spice | benchmark args]\n",
+        "suite: {s}\nusage: <vera-exe> [devices | ieee1364 | vpi | spice | benchmark args]\n",
         .{why},
     );
     try e.interface.flush();
@@ -1052,11 +1055,11 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
 /// semantics, so `.v` and not `.va`: the shared frontend plus `sim/`, with no
 /// analog path at all.
 ///
-/// WALKED, NOT LISTED. `tests/fixtures/digital/` is where the merged `tests/
-/// pending` digital rows landed — D03 strengths, D06 delays, D08 gates, D09
-/// timing — and they are ~70 files against the four that were here before. A
-/// table would be a second register of the same directory, and the one that
-/// rots is always the table.
+/// WALKED, NOT LISTED, recursively. `tests/fixtures/ieee1364/<NN_clause>/` is
+/// the IEEE 1364-2005 suite, one directory per clause; `tests/fixtures/digital/`
+/// keeps the digital-context cases that are Verilog-AMS rules (wreal, the
+/// `--std` boundary). A table would be a second register of the same
+/// directories, and the one that rots is always the table.
 ///
 /// A `.v` needs either `.expected.txt` or `// digital-runner: reject`.
 /// Unmarked legacy negatives retain their analog route and are NOT digital
@@ -1064,9 +1067,10 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
 /// That is how a design
 /// a fixture INSTANTIATES (D08's UDP libraries, M04's driver designs) sits in
 /// the same directory without being run on its own.
-const digital_dir = "digital";
+const digital_dirs = [_][]const u8{ "digital", ieee1364_dir };
+const ieee1364_dir = "ieee1364";
 
-fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
+fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []const []const u8) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
@@ -1074,14 +1078,17 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
-    while (args.next()) |a| filter = a;
+    while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
+        filter = a;
+    }
 
     var buf: [4096]u8 = undefined;
     var stderr = Io.File.stderr().writer(io, &buf);
     const w = &stderr.interface;
     defer w.flush() catch {};
 
-    const cases = try digitalCases(gpa, io);
+    const cases = try digitalCases(gpa, io, dirs);
     defer {
         for (cases) |c| gpa.free(c);
         gpa.free(cases);
@@ -1516,29 +1523,32 @@ fn diff(w: *Io.Writer, what: []const u8, want: []const u8, got: []const u8) !boo
 
 /// Digital transcript cases and explicitly opted-in diagnostic cases, sorted
 /// so two runs report in the same order. Support files are not cases.
-fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
-    const root = try std.fs.path.join(gpa, &.{ options.fixture_root, digital_dir });
-    defer gpa.free(root);
-    var dir = try Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
-    defer dir.close(io);
-
+/// Case names are fixture-root-relative stems, `ieee1364/05_expressions/control`.
+fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8) ![]const []const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (list.items) |c| gpa.free(c);
         list.deinit(gpa);
     }
-    var it = dir.iterate();
-    while (try it.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        const stem = std.fs.path.stem(entry.name);
-        if (!std.mem.eql(u8, std.fs.path.extension(entry.name), ".v")) continue;
-        const golden = try std.fmt.allocPrint(gpa, "{s}.expected.txt", .{stem});
-        defer gpa.free(golden);
-        const has_golden = if (dir.access(io, golden, .{})) |_| true else |_| false;
-        const source = try dir.readFileAlloc(io, entry.name, gpa, .limited(1 << 20));
-        defer gpa.free(source);
-        if (!harness.digitalCaseSelected(has_golden, source)) continue;
-        try list.append(gpa, try gpa.dupe(u8, stem));
+    for (dirs) |sub| {
+        const root = try std.fs.path.join(gpa, &.{ options.fixture_root, sub });
+        defer gpa.free(root);
+        var dir = try Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+        defer dir.close(io);
+        var walker = try dir.walk(gpa);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.eql(u8, std.fs.path.extension(entry.path), ".v")) continue;
+            const stem = entry.path[0 .. entry.path.len - ".v".len];
+            const golden = try std.fmt.allocPrint(gpa, "{s}.expected.txt", .{stem});
+            defer gpa.free(golden);
+            const has_golden = if (dir.access(io, golden, .{})) |_| true else |_| false;
+            const source = try dir.readFileAlloc(io, entry.path, gpa, .limited(1 << 20));
+            defer gpa.free(source);
+            if (!harness.digitalCaseSelected(has_golden, source)) continue;
+            try list.append(gpa, try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub, stem }));
+        }
     }
     std.mem.sort([]const u8, list.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
@@ -1549,7 +1559,7 @@ fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
 }
 
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.v", .{ options.fixture_root, digital_dir, case });
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     var argv_buf: [4][]const u8 = .{ vera_exe, "--run", src, undefined };
     const argv: []const []const u8 = if (harness.digitalStd(source)) |s| blk: {
@@ -1557,7 +1567,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
         break :blk &argv_buf;
     } else argv_buf[0..3];
     if (harness.digitalNegative(source)) {
-        const golden = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.expected.txt", .{ options.fixture_root, digital_dir, case });
+        const golden = try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case });
         if (Io.Dir.cwd().access(io, golden, .{})) |_| {
             try w.print("FAIL {s}: digital reject also has a positive transcript\n", .{case});
             return false;
@@ -1571,7 +1581,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
     }
     const want = try Io.Dir.cwd().readFileAlloc(
         io,
-        try std.fmt.allocPrint(arena, "{s}/{s}/{s}.expected.txt", .{ options.fixture_root, digital_dir, case }),
+        try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }),
         arena,
         .limited(1 << 20),
     );

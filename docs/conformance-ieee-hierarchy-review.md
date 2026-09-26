@@ -72,7 +72,7 @@ existing fixture bodies or expectations was changed.
 | `ch06_hierarchy/audit_hierarchy_defparam_source_order.va` | Last same-file defparam7 wins over earlier5 and inline2. | Runtime7 `ok=1`. |
 | `ch06_hierarchy/audit_hierarchy_override_breaks_dependency.va` | Override a4 and b11; b no longer follows a+1; c=a*b becomes44. | All three checks `ok=1`. |
 | `ch06_hierarchy/audit_hierarchy_duplicate_parameter_rejected.va` | Two nonempty assignments to gain must reject; no aliasparam exists. | Exit1 E0908; pinned to observed code, but message falsely alleges aliasparam conflict. |
-| `digital/audit_hierarchy_unselected_instance_not_top.v` | Leaf mentioned only inside generate-if0 is not a top; only top prints. | Exit1 E1100 unsupported module contents, before runtime. Expected transcript remains `top-only`. |
+| `ieee1364/12_hierarchy/audit_hierarchy_unselected_instance_not_top.v` | Leaf mentioned only inside generate-if0 is not a top; only top prints. | Exit1 E1100 unsupported module contents, before runtime. Expected transcript remains `top-only`. |
 
 Analog positives were compiled with `--emit-exe`, root contract and fixture
 include paths, then the returned executable was run. Individual `ok` values,
@@ -154,8 +154,8 @@ name-enumeration evidence. Existing bodies and expectations remain unchanged.
 
 | Fixture | Independent expected result | Observed result |
 |---|---|---|
-| `digital/audit_hierarchy_port_signedness.v` | Identical ff bits interpreted by signed child as -1 and unsigned child as255; comparisons to0 print `signed=1 unsigned=0`. | Exit0 prints `signed=0 unsigned=0`: runtime mismatch. |
-| `digital/audit_hierarchy_explicit_port_concat.v` | External joined input1001 splits a10/b01, output concatenation b,a is0110. | Exit1 E1100: instantiated module has no such port. Required positive, not a rejection test. |
+| `ieee1364/12_hierarchy/audit_hierarchy_port_signedness.v` | Identical ff bits interpreted by signed child as -1 and unsigned child as255; comparisons to0 print `signed=1 unsigned=0`. | Exit0 prints `signed=0 unsigned=0`: runtime mismatch. |
+| `ieee1364/12_hierarchy/audit_hierarchy_explicit_port_concat.v` | External joined input1001 splits a10/b01, output concatenation b,a is0110. | Exit1 E1100: instantiated module has no such port. Required positive, not a rejection test. |
 | `ch06_hierarchy/audit_hierarchy_zero_generate_control.va` | Empty loop contributes nothing; sole current contribution2 at V(p)=1 gives I(p)=2. | Exit0, current check got2/want2 `ok=1`. |
 | `ch06_hierarchy/audit_hierarchy_zero_generate_collision.va` | Empty array name still collides with ordinary real declaration. | Exit1 E0230 naming the colliding array. |
 

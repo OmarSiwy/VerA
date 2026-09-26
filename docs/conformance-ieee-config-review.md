@@ -50,7 +50,7 @@ All observations are direct calls to the current root `zig-out/bin/vera --run`
 from the agent worktree, on the review date. No full suite ran. Files with
 expected transcripts are legal behavioral programs, not expected rejections:
 
-- `digital/audit_config_design_select.v` defines selected and unselected modules,
+- `ieee1364/13_configuration/audit_config_design_select.v` defines selected and unselected modules,
   both otherwise uninstantiated, and a config whose design is
   `work.config_selected`. Unmapped source defaults to work. The config makes
   only selected module a top, hence transcript is exactly `selected`; the other
@@ -58,14 +58,14 @@ expected transcripts are legal behavioral programs, not expected rejections:
   one top-level module. There are no child instances, so hierarchy elaboration
   cannot explain away the selected-top requirement. Unsupported legal program,
   not an invalid-top test.
-- `digital/audit_config_binding_display.v` has one unmapped module and prints
+- `ieee1364/13_configuration/audit_config_binding_display.v` has one unmapped module and prints
   both binding formats. Expected both are `work.audit_config_binding_display`,
   without argument consumption. Actual exit1/E1100 unsupported conversions.
   This isolates the display capability without configuration selection,
   hierarchy or library-map loading prerequisites. The oracle presumes the
   stated no-map/no-library-override invocation; future runner mapping changes
   must preserve that controlled premise, not silently alter the expected library.
-- `digital/audit_config_default_use_rejected.v` explicitly opts into the digital
+- `ieee1364/13_configuration/audit_config_default_use_rejected.v` explicitly opts into the digital
   rejection runner. The source forbids default/use. Actual exit1 has E0207 and
   header phrase `a default pairs with ` followed by `liblist` in backticks;
   both machine-readable patterns require this rule-specific diagnostic, not

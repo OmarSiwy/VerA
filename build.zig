@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) void {
     ).dependOn(&bench.step);
 
     // The other run of the same executable: `vera --run` over every `.v` under
-    // `tests/fixtures/digital/` that has a committed transcript beside it.
+    // `tests/fixtures/ieee1364/` and `tests/fixtures/digital/` that has a committed transcript beside it.
     // `addArtifactArg` is what makes the built `vera` a dependency of this run,
     // so it cannot race the compiler it is testing.
     //
@@ -190,8 +190,25 @@ pub fn build(b: *std.Build) void {
     const dev = b.addRunArtifact(suite_exe);
     dev.addArtifactArg(exe);
     dev.addArg("devices");
-    b.step("test-devices", "Run `vera --run` over the digital fixtures and diff their transcripts")
+    b.step("test-devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts")
         .dependOn(&dev.step);
+
+    // The two suites by language. `test-1364` is the IEEE 1364-2005 half alone
+    // (`tests/fixtures/ieee1364/`), the half Verilator can be run against;
+    // `-- --coverage` prints its clause inventory instead of running it.
+    // `test-ams` is `benchmark -- --strict` under the name of what it measures.
+    const v1364 = b.addRunArtifact(suite_exe);
+    v1364.addArtifactArg(exe);
+    v1364.addArg("ieee1364");
+    if (b.args) |a| v1364.addArgs(a);
+    b.step("test-1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory)")
+        .dependOn(&v1364.step);
+    const ams = b.addRunArtifact(suite_exe);
+    ams.addArtifactArg(exe);
+    ams.addArg("--strict");
+    if (b.args) |a| ams.addArgs(a);
+    b.step("test-ams", "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)")
+        .dependOn(&ams.step);
 
     // The 26 `.c` fixtures. `harness.zig:collect` walks `.va` and `.v`; these
     // are neither, and are not VerA source at all — a VPI fixture is a C

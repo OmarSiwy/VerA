@@ -682,7 +682,7 @@ fn reportCoverage(
 /// its positive fixtures are the whole obligation and there is nothing to
 /// reject. That one kind is checked against the evidence: it is refused unless
 /// a positive fixture cites the clause.
-const ClassKind = enum {
+pub const ClassKind = enum {
     non_normative,
     no_prohibition,
     optional,
@@ -720,6 +720,8 @@ fn readClassifications(
     defer walker.deinit();
     while (try walker.next(io)) |e| {
         if (e.kind != .file or !std.mem.eql(u8, e.basename, "CLAUSES.tsv")) continue;
+        // Numbered in IEEE 1364-2005, not this LRM: `tests/ieee1364.zig` reads it.
+        if (std.mem.startsWith(u8, e.path, "ieee1364" ++ std.fs.path.sep_str)) continue;
         try files.append(arena, try std.fs.path.join(arena, &.{ root, e.path }));
     }
     std.mem.sort([]const u8, files.items, {}, struct {
@@ -1123,7 +1125,7 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 /// does its stem end at? `null` means "not this walk's business".
 ///
 /// `.va` is unconditional. `.v` is the awkward one, because three different
-/// things share that extension in `tests/fixtures/digital/`:
+/// things share that extension in `tests/fixtures/{ieee1364,digital}/`:
 ///
 ///   1. 66 files with a `<stem>.expected.txt` beside them. Those belong to
 ///      `zig build test-devices`, which runs `vera --run` and diffs the

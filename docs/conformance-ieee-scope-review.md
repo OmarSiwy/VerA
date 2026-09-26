@@ -75,7 +75,7 @@ diagnostic controls outside the measured fixture suite: there is no fabricated
 specific early-resolution diagnostic or broad rejection oracle to bless this
 masked result. Compiler acceptance would still not establish runtime behavior.
 
-`tests/fixtures/digital/audit_scope_lexical_shadow.v` adds a derived behavioral
+`tests/fixtures/ieee1364/12_hierarchy/audit_scope_lexical_shadow.v` adds a derived behavioral
 oracle: module variable 11; same-named inner variable starts at 23, increments
 to 24; exiting leaves module variable 11. Its expected transcript is
 `inner=24`, then `outer=11`. Direct root `vera --run` exits 1 with E1100,

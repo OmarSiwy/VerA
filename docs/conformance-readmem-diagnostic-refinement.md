@@ -127,7 +127,7 @@ the actual exit code recorded; successful output alone was not treated as pass.
 Command pattern from the agent worktree:
 
 ```sh
-/home/omare/Documents/Projects/Zig/VerA/.zig-cache/o/a10b1de8b23e4ac042c82f9415cfe87a/vera --run tests/fixtures/digital/audit_readmem_warn_hex_short_up.v
+/home/omare/Documents/Projects/Zig/VerA/.zig-cache/o/a10b1de8b23e4ac042c82f9415cfe87a/vera --run tests/fixtures/ieee1364/17_system_tasks/audit_readmem_warn_hex_short_up.v
 ```
 
 No full build, compiler edits, ledger status promotion, mutation result or

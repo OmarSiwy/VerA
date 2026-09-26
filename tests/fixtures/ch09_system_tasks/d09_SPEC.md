@@ -76,7 +76,7 @@ review" at the end.
   unpacked arrays with element indexing (`digital.zig:148-212, 307-312`),
   `timescale` handling and integral delays (`digital.zig:979`), `$finish(0)`
   as a silent terminator, and the §5.4 region ordering already pinned by
-  `tests/digital/scheduling.v`. Real procedural delays are **not** wired:
+  `tests/ieee1364/11_scheduling/scheduling.v`. Real procedural delays are **not** wired:
   `digital.zig:979` calls only `signedDelay`/`unsignedDelay`, never
   `realDelay`, although `src/sim/time.zig` implements `realDelay` already.
 

@@ -9,7 +9,7 @@ only `op="maybe"`, not the other standard attribute domains. Fixtures 69–72
 now isolate those other invalid values. Fixtures 67/68 extend octal-escape and
 string-whitespace evidence. The historical counts below predate these additions.
 Digital sized four-state observations and the failing unsized-context-fill
-case live in `../digital/lexical_*.v`; an empty local XFAIL list is not closure
+case live in `../ieee1364/03_lexical_conventions/lexical_*.v`; an empty local XFAIL list is not closure
 of full-AMS lexical obligations.
 
 Source: `docs/ch2-lexical.html`, read section by section including every

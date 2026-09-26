@@ -373,8 +373,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1326,8 +1326,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_address_restart.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_address_restart.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_address_restart.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_address_restart.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1391,8 +1391,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_lowest_descending.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_lowest_descending.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_lowest_descending.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_lowest_descending.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1510,8 +1510,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1575,8 +1575,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_start_formfeed.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1802,8 +1802,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_address_restart.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_address_restart.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_address_restart.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_address_restart.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1867,7 +1867,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_address_range_rejected.v",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_address_range_rejected.v",
               "assertion": "distinctive digital-reject directive",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
@@ -1932,8 +1932,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_count_warning.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_count_warning.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_count_warning.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_count_warning.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",
@@ -1997,8 +1997,8 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_readmem_count_warning.v",
-              "assertion": "tests/fixtures/digital/audit_readmem_count_warning.expected.txt and warning directives where present",
+              "fixture": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_count_warning.v",
+              "assertion": "tests/fixtures/ieee1364/17_system_tasks/audit_readmem_count_warning.expected.txt and warning directives where present",
               "runner": "root digital gate; exact command and checkpoint details in provenance report",
               "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
               "result": "pass",

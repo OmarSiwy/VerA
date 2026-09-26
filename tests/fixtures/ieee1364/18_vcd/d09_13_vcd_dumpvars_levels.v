@@ -12,7 +12,7 @@
 // `[msb:lsb]` for a vector. §18.2.2 Table 18-1: a vector value is written
 // with the leading digits that left-extension would supply removed.
 //
-// HAND DERIVATION of ../ch09_system_tasks/d09_13_vcd_dumpvars_levels.expected.vcd,
+// HAND DERIVATION of d09_13_vcd_dumpvars_levels.expected.vcd,
 // with the same convention as d09_11: codes from `!` in $var order, and a
 // module's variables listed ports, then nets, then variables.
 //
@@ -30,7 +30,7 @@
 //
 //! inherited IEEE 1364-2005 18.1.2 ($dumpvars levels and variables)
 //! inherited IEEE 1364-2005 18.2.2 (vector shortening)
-//! expect vcd d09_vcd_scope.vcd == ../ch09_system_tasks/d09_13_vcd_dumpvars_levels.expected.vcd
+//! expect vcd d09_vcd_scope.vcd == d09_13_vcd_dumpvars_levels.expected.vcd
 `timescale 1ns/1ns
 module leaf(input [1:0] i, output o);
   reg q;
