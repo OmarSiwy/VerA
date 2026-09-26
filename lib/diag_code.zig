@@ -677,6 +677,8 @@ pub const Code = enum(u16) {
     /// §7.8 a connect statement's two disciplines are not one discrete and
     /// one continuous.
     E0923,
+    /// §6.7.1 a parameter declaration makes an out-of-module reference.
+    E0924,
     /// §3.9 a digital primitive's terminal is a continuous net and no
     /// `default_discipline` names the primitive side's discipline.
     E0960,
@@ -5688,6 +5690,22 @@ fn infoOf(c: Code) Info {
             \\continuous and discrete ports. Two disciplines of one domain are the
             \\7.7.2 `resolveto` form's business, which resolves a net instead of
             \\bridging it.
+            ,
+        },
+        .E0924 => .{
+            .title = "parameter declaration makes an out-of-module reference",
+            .lrm = "6.7.1",
+            .explain =
+            \\LRM 6.7.1, third bullet: "Access of parameters can be done
+            \\hierarchically. However, parameter declaration statements shall not
+            \\make out-of-module references (e.g., for setting default values)."
+            \\
+            \\Parameter values are computed during elaboration (6.9.4), so a default
+            \\that reads another instance's parameter would need the hierarchy
+            \\resolved in order to resolve the hierarchy.
+            \\
+            \\Read the other parameter in the analog block instead, or pass the
+            \\value down as an instance parameter override (6.3).
             ,
         },
         .E0960 => .{
