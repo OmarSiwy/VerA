@@ -613,6 +613,7 @@ pub const Gen = struct {
     // Setup: the solve-invariant slice, computed once per card — codegen/setup.zig
     const gen_setup = @import("codegen/setup.zig");
     pub const probeInstance = gen_setup.probeInstance;
+    pub const rootRef = gen_setup.rootRef;
 
     // --------------------------------------------------------------- units ----
 

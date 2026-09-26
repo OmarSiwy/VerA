@@ -40,9 +40,12 @@ pub const Setup = struct {
     /// `none_u32`. Every body but `setup` reads a root as a leaf
     /// (`UnitPlan.isRoot`).
     idx: []u32 = &.{},
-    /// The roots, reals first; `real` of them are reals.
+    /// The roots, reals first, then integers, then §4.2.5/§4.2.8 0/1 flags;
+    /// `real` of them are reals and `int` integers. A root with the same op
+    /// and operands as an earlier one is not listed: its `idx` is that one's.
     vals: []Mir.Value = &.{},
     real: u32 = 0,
+    int: u32 = 0,
     /// `Options.setup`: `false` emits the un-split device, every value
     /// computed in eval — the bit-for-bit oracle the split is checked against.
     on: bool = true,
@@ -115,22 +118,102 @@ pub fn planSetup(self: *Gen) Error!void {
         }
     }
     @memset(self.su.idx, none_u32);
+    const same = try valueNumbers(self);
     var vals: std.ArrayList(Mir.Value) = .empty;
-    var n_real: u32 = 0;
-    for ([_]VTy{ .real, .int }) |want| {
-        var k: u32 = 0;
+    var n: [3]u32 = @splat(0);
+    for (0..3) |group| {
         for (0..nv) |i| {
-            if (!root[i] or self.an.vty[i] != want) continue;
-            self.su.idx[i] = k;
-            k += 1;
-            try vals.append(a, @enumFromInt(@as(u32, @intCast(i))));
+            if (!root[i] or rootGroup(self, @enumFromInt(@as(u32, @intCast(i)))) != group) continue;
+            const r = @intFromEnum(same[i]);
+            if (self.su.idx[r] == none_u32) {
+                self.su.idx[r] = n[group];
+                n[group] += 1;
+                try vals.append(a, same[i]);
+            }
+            self.su.idx[i] = self.su.idx[r];
         }
-        if (want == .real) n_real = k;
     }
     self.su.vals = vals.items;
-    self.su.real = n_real;
+    self.su.real = n[0];
+    self.su.int = n[1];
     self.plan.su_idx = self.su.idx;
     self.plan.su_on = vals.items.len != 0;
+}
+
+/// 0 real, 1 integer, 2 a 0/1 flag: which of `Setup`'s arrays holds `v`.
+fn rootGroup(self: *const Gen, v: Mir.Value) u2 {
+    const i = @intFromEnum(v);
+    if (self.an.vty[i] == .real) return 0;
+    const def = self.mir.valueDef(v);
+    return if (def == .inst_result and Mir.opcode.get(self.mir.instOp(def.inst_result)).bool01) 2 else 1;
+}
+
+/// Value → an earlier candidate with the same pure op over the same operands,
+/// computed in a block that dominates this one's, so `setup` has it whenever
+/// it has this one (itself if none). Lowering does not number values, so a
+/// card expression written twice is two roots without this. `x != 0` over a
+/// 0/1 flag `x` is `x`.
+fn valueNumbers(self: *Gen) Error![]Mir.Value {
+    const Opnd = struct { tag: enum(u8) { none, val, f, i, param }, x: u64 };
+    const Key = struct { op: Mir.Opcode, a: Opnd, b: Opnd, c: Opnd };
+    const nv = self.an.nv;
+    const same = try self.arena.alloc(Mir.Value, nv);
+    for (same, 0..) |*r, i| r.* = @enumFromInt(@as(u32, @intCast(i)));
+    var seen: std.AutoHashMapUnmanaged(Key, Mir.Value) = .empty;
+    const opnd = struct {
+        fn f(g: *Gen, sm: []const Mir.Value, raw: u32) ?Opnd {
+            const v = g.an.rv(@enumFromInt(raw));
+            return switch (g.mir.valueDef(v)) {
+                .inst_result => .{ .tag = .val, .x = @intFromEnum(sm[@intFromEnum(v)]) },
+                .float_const => |k| .{ .tag = .f, .x = @bitCast(k) },
+                .int_const => |k| .{ .tag = .i, .x = @bitCast(k) },
+                .param_ref => |k| .{ .tag = .param, .x = k },
+                .undef, .str_const, .block_param => null,
+            };
+        }
+    }.f;
+    for (Mir.Value.first_dynamic..nv) |i| {
+        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        if (!plan_setup.candidate(self.input(), self.sinv.val, v) or self.an.rv(v) != v) continue;
+        const row = self.mir.instRow(self.mir.valueDef(v).inst_result);
+        const none: Opnd = .{ .tag = .none, .x = 0 };
+        var key: Key = .{ .op = row.op, .a = none, .b = none, .c = none };
+        switch (Mir.opClass(row.op)) {
+            .unary => key.a = opnd(self, same, row.a) orelse continue,
+            .binary => {
+                key.a = opnd(self, same, row.a) orelse continue;
+                key.b = opnd(self, same, row.b) orelse continue;
+            },
+            .ternary => {
+                key.a = opnd(self, same, row.a) orelse continue;
+                key.b = opnd(self, same, row.b) orelse continue;
+                key.c = opnd(self, same, row.c) orelse continue;
+            },
+            .phi, .branch, .jump, .call, .anew, .load, .store => continue,
+        }
+        if (row.op == .ine and key.b.tag == .i and key.b.x == 0 and key.a.tag == .val) {
+            const x: Mir.Value = @enumFromInt(@as(u32, @intCast(key.a.x)));
+            if (rootGroup(self, x) == 2 and plan_setup.candidate(self.input(), self.sinv.val, x) and placedOver(self, x, v)) {
+                same[i] = x;
+                continue;
+            }
+        }
+        const gop = try seen.getOrPut(self.arena, key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = v;
+        } else if (placedOver(self, gop.value_ptr.*, v)) same[i] = gop.value_ptr.*;
+    }
+    return same;
+}
+
+/// Does `setup` compute `a` wherever it computes `b`?
+fn placedOver(self: *const Gen, a: Mir.Value, b: Mir.Value) bool {
+    return self.an.dominates(placeOf(self, a), placeOf(self, b));
+}
+
+fn placeOf(self: *const Gen, v: Mir.Value) u32 {
+    const h = self.sinv.home[@intFromEnum(v)];
+    return if (h != none_u32) h else self.an.def_block[@intFromEnum(v)];
 }
 
 /// A root's field, as an f64 (`as_f64`) or in its own type.
@@ -138,6 +221,10 @@ pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     const i = @intFromEnum(v);
     const k = self.su.idx[i];
     self.uses_inst = true;
+    if (rootGroup(self, v) == 2) {
+        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(@intFromBool(inst.su.b[{d}])))", .{k});
+        return std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(inst.su.b[{d}]))", .{k});
+    }
     if (self.an.vty[i] == .int) {
         if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(inst.su.i[{d}]))", .{k});
         return std.fmt.allocPrint(self.arena, "inst.su.i[{d}]", .{k});
@@ -148,7 +235,7 @@ pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
 /// `pub const Setup`, ahead of `Instance`.
 pub fn emitSetupDecl(self: *Gen) Error!void {
     if (self.su.vals.len == 0) return;
-    const n_int = self.su.vals.len - self.su.real;
+    const n_flag = self.su.vals.len - self.su.real - self.su.int;
     try self.w(
         \\/// Solve-invariant values: functions of `Model`, this instance and its
         \\/// temperature only, which `eval` would otherwise recompute at every
@@ -159,7 +246,8 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
         \\
     , .{});
     if (self.su.real != 0) try self.w("    r: [{d}]f64 = @splat(std.math.nan(f64)),\n", .{self.su.real});
-    if (n_int != 0) try self.w("    i: [{d}]i64 = @splat(0),\n", .{n_int});
+    if (self.su.int != 0) try self.w("    i: [{d}]i64 = @splat(0),\n", .{self.su.int});
+    if (n_flag != 0) try self.w("    b: [{d}]bool = @splat(false),\n", .{n_flag});
     try self.w("}};\n\n", .{});
 }
 
@@ -291,15 +379,19 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
     }
     const at = self.out.items.len;
     defer self.su.store_bytes += self.out.items.len - at;
-    for (self.su.vals, 0..) |v, j| {
-        const i = @intFromEnum(v);
+    for (self.su.vals) |v| {
+        const k = self.su.idx[@intFromEnum(v)];
         try self.ind(depth);
-        if (self.an.vty[i] == .int) {
-            try self.b("inst.su.i[{d}] = ", .{j - self.su.real});
+        if (rootGroup(self, v) == 2) {
+            try self.b("inst.su.b[{d}] = (", .{k});
+            try gen_render.renderVal(self, v, .int);
+            try self.b(") != 0;\n", .{});
+        } else if (self.an.vty[@intFromEnum(v)] == .int) {
+            try self.b("inst.su.i[{d}] = ", .{k});
             try gen_render.renderVal(self, v, .int);
             try self.b(";\n", .{});
         } else {
-            try self.b("inst.su.r[{d}] = (", .{j});
+            try self.b("inst.su.r[{d}] = (", .{k});
             try gen_render.renderVal(self, v, .real);
             try self.b(").val();\n", .{});
         }

@@ -451,10 +451,7 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     const i = @intFromEnum(g.an.rv(v));
     // Solve-invariant: `setup` latched it (codegen/setup.zig), so neither
     // `limit` nor `seed` evaluates the core for it.
-    if (isRoot(g, v)) {
-        const k = g.su.idx[i];
-        return if (g.an.vty[i] == .int) g.w("inst.su.i[{d}]", .{k}) else g.w("inst.su.r[{d}]", .{k});
-    }
+    if (isRoot(g, v)) return g.w("{s}", .{try Gen.rootRef(g, v, false)});
     if (isLeaf(g, v)) return g.w("{s}", .{try g.f64Expr(v)});
     const k = g.core.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
