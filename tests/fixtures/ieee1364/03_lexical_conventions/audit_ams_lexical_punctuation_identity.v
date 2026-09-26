@@ -4,6 +4,7 @@
 // remain name contents. Independent values catch consistently renamed aliases.
 //! lrm 2.8.1
 //! expect stdout audit_ams_lexical_punctuation_identity.expected.txt
+//! inherited IEEE 1364-2005 3.7.1
 module audit_ams_lexical_punctuation_identity;
 integer ab, \a.b , \a/b , \a+b , \.ab , \ab. , \!ab , \ab! , \~ab , \ab~ , \1ab , \$ab , \\ab , \a/*b , \a//b , \a*/b ;
 initial begin

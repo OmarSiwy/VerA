@@ -1,3 +1,4 @@
+//! inherited IEEE 1364-2005 11.3 11.4.1 11.6.4
 `timescale 1ns/1ps
 module scheduling;
   reg [3:0] a, b, captured;

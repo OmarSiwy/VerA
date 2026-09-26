@@ -21,6 +21,7 @@
 //! lrm annex A.2.2.3
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 4.6.3 7.14.2 7.14.2.1 7.14.2.2
 //
 // HAND DERIVATION — `trireg (medium) #(0, 0, 50) c;` with a single driver.
 // Rise and fall delays are 0 so no net delay (that is D06) shifts any sample.

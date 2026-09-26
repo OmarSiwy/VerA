@@ -67,6 +67,7 @@
 // So this file fails for three independent reasons and will keep failing until
 // D03's strength model exists. It is here to state the target, not to pass.
 
+//! inherited IEEE 1364-2005 4.6.4 4.6.6 7.10.1 19.9
 `unconnected_drive pull1
 module d10_pulled(w, t, s);
   input w;

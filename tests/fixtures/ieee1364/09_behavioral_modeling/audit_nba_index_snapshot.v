@@ -8,6 +8,7 @@
 // All observations are separated from NBA delivery times, so there is no
 // dependency on active-region process ordering or monitor formatting.
 //! lrm 8.5.3.4
+//! inherited IEEE 1364-2005 9.2.2 11.6.4
 `timescale 1ns/1ns
 module audit_nba_index_snapshot;
   reg [3:0] bits;

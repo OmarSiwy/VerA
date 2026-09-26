@@ -3,6 +3,7 @@
 // References use ordinary spelling: same object identity must be preserved.
 //! lrm 2.8.1
 //! expect stdout audit_ams_lexical_escaped_terminators.expected.txt
+//! inherited IEEE 1364-2005 3.7.1 (space, tab, newline; the formfeed terminator is AMS 2.8.1's)
 module audit_ams_lexical_escaped_terminators;
 integer \space_end , \tab_end	, \line_end
 , \form_end;

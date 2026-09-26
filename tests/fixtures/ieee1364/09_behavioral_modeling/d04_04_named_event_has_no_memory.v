@@ -32,6 +32,7 @@
 //! lrm 5.10.4
 //! lrm A.6.5
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.3
 `timescale 1ns/1ps
 module d04_named_event_has_no_memory;
   event e;
