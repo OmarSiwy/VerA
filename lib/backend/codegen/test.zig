@@ -137,7 +137,7 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try std.testing.expect(std.mem.indexOf(u8, host, "pub const jac_f32_host = true;") != null);
 }
 
-test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
+test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate and the exact core_sim_fields" {
     // A device-resident host republishes t/dt/kind on the HOST Instance only,
     // so a core reading them there evals stale — the decl is how it knows to
     // keep such a device off the device. The resistor must NOT carry it (its
@@ -148,6 +148,7 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
         try std.testing.expect(std.mem.indexOf(u8, src, "core_reads_simstate") == null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "core_sim_fields") == null);
     }
     {
         var h: Harness = undefined;
@@ -161,6 +162,22 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
         try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+        // Exactly the one field `analysis()` reads, so a host that republishes
+        // it per analysis may keep the core device-resident.
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"analysis_kind\" };") != null);
+    }
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator,
+            \\module td(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p, n) <+ 1e-3 * idt(V(p, n), 0.0) + 1e-3 * V(p, n) * $abstime;
+            \\endmodule
+        , &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"abstime\", \"dt\" };") != null);
     }
 }
 
