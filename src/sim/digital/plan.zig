@@ -6,7 +6,8 @@
 //! role per process with the tables that run it: combinational nodes in
 //! topological order with the bits that dirty them (§5.2.1: a constant
 //! select reads only the bits it names), and the watchers of the processes
-//! that wait at one fixed event control.
+//! that wait at one fixed event control. For `--state=auto`, the slots
+//! whose value at a time-step boundary nothing reads (`stepLocal`).
 //!
 //! Clauses: IEEE 1364-2005 §11.4.1 (active events in any order), §6.1
 //! continuous assignment, §9.7.5 `@*`, §9.7.2 edges.
@@ -557,4 +558,211 @@ fn readBits(self: *Emitter, e: Ast.ExprId, out: *Bits) Error!void {
             for (ex.children(e, &buf)) |c| if (c != .none) try readBits(self, c, out);
         },
     }
+}
+
+/// The slots `rt.Design.dead` names. At a time-step boundary every process
+/// is suspended; a slot is dead there when each read of it, in every
+/// activation, follows a whole-slot blocking write in that activation, so
+/// the value it holds at the boundary is never read (`rt.State.boundary`).
+/// Activations follow `emit.reach`'s control flow: a suspension, a fork, a
+/// `disable` resumes a process in a new one, which starts knowing nothing
+/// written; a subroutine body starts knowing its inputs (§10.2.2 copy-in).
+/// A slot something outside the processes reads (`Plan.watched`: an event
+/// control, a driver, a node, the monitor, a dump) is never dead.
+pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
+    const r = self.r;
+    const a = self.arena;
+    const n = r.code.items.len;
+    // The candidates: slots some instruction writes whole, as bit indices.
+    const bit = try a.alloc(?u32, r.values.len);
+    @memset(bit, null);
+    var cands: std.ArrayList(u32) = .empty;
+    const writes = try a.alloc(?u32, n);
+    for (writes, 0..) |*w, pc| {
+        w.* = null;
+        const at = wholeWrite(self, @intCast(pc)) orelse continue;
+        if (self.watched[at] or r.reals.contains(at)) continue;
+        if (bit[at] == null) {
+            bit[at] = @intCast(cands.items.len);
+            try cands.append(a, at);
+        }
+        w.* = bit[at];
+    }
+    if (cands.items.len == 0) return &.{};
+    const nw = (cands.items.len + 63) / 64;
+    // Per pc, the candidates written on every path into it this activation.
+    const in = try a.alloc(u64, n * nw);
+    @memset(in, std.math.maxInt(u64));
+    const seen = try a.alloc(bool, n);
+    @memset(seen, false);
+    var work: std.ArrayList(u32) = .empty;
+    const none = try a.alloc(u64, nw);
+    @memset(none, 0);
+    for (procs) |p| try meet(a, in, seen, &work, nw, p.entry, none);
+    for (self.subs_todo.items) |idx| {
+        const sub = r.subs.items[idx];
+        const known = try a.dupe(u64, none);
+        for (sub.decl.ports, sub.frame.ports) |port, at| if (port.direction != .output) if (bit[at]) |b| {
+            known[b / 64] |= @as(u64, 1) << @intCast(b % 64);
+        };
+        try meet(a, in, seen, &work, nw, sub.entry, known);
+    }
+    const out = try a.alloc(u64, nw);
+    while (work.pop()) |pc| {
+        @memcpy(out, in[pc * nw ..][0..nw]);
+        if (writes[pc]) |b| out[b / 64] |= @as(u64, 1) << @intCast(b % 64);
+        if (self.block_ends.get(pc)) |ends| for (ends.items) |e| try meet(a, in, seen, &work, nw, e, none);
+        const next = pc + 1;
+        switch (r.code.items[pc]) {
+            .stop, .continuous => {},
+            .jump => |t| try meet(a, in, seen, &work, nw, t, out),
+            .restart => |x| try meet(a, in, seen, &work, nw, x.target, out),
+            .branch => |b| for ([_]u32{ next, b.otherwise }) |t| try meet(a, in, seen, &work, nw, t, out),
+            .case_select => |c| {
+                try meet(a, in, seen, &work, nw, c.fallback, out);
+                const arms = r.file.stmt(c.statement).case_stmt.arms.len;
+                for (r.case_targets.items[c.targets..][0..arms]) |t| try meet(a, in, seen, &work, nw, t, out);
+            },
+            .repeat_start => |x| for ([_]u32{ next, x.end }) |t| try meet(a, in, seen, &work, nw, t, out),
+            .repeat_next => |x| for ([_]u32{ next, x.body }) |t| try meet(a, in, seen, &work, nw, t, out),
+            .task => |t| if (t.task != .finish) try meet(a, in, seen, &work, nw, next, out),
+            .assign, .init_var, .trigger, .deposit, .call, .copy_out, .override_eval, .override_off => try meet(a, in, seen, &work, nw, next, out),
+            .delay, .wait_event, .wait_slots, .wait_level, .sample => try meet(a, in, seen, &work, nw, next, none),
+            .disable_block => |b| {
+                try meet(a, in, seen, &work, nw, next, out);
+                if (pc >= b.start and pc < b.end) try meet(a, in, seen, &work, nw, b.end, out);
+            },
+            .disable_task => |idx| {
+                try meet(a, in, seen, &work, nw, next, out);
+                for (r.subs.items[idx].ranges.items) |rg| if (pc >= rg.start and pc < rg.end) try meet(a, in, seen, &work, nw, rg.end, out);
+            },
+            .pla_start => |loop| for ([_]u32{ next, loop }) |t| try meet(a, in, seen, &work, nw, t, none),
+            .fork => |f| for (if (f.arms.len == 0) &[_]u32{f.end} else f.arms) |t| try meet(a, in, seen, &work, nw, t, none),
+            .join_arm => |j| try meet(a, in, seen, &work, nw, j.end, none),
+            .override_on => |o| {
+                try meet(a, in, seen, &work, nw, next, out);
+                try meet(a, in, seen, &work, nw, o.start, none);
+            },
+            .call_timed, .task_return, .switch_ctrl => return &.{}, // `emit.reach` refuses these
+        }
+    }
+    // A read of a candidate not written before it in its activation keeps
+    // the candidate's boundary value alive.
+    const live = try a.alloc(bool, cands.items.len);
+    @memset(live, false);
+    var reads: std.ArrayList(u32) = .empty;
+    for (0..n) |pc| if (seen[pc]) {
+        reads.clearRetainingCapacity();
+        if (!try readsAt(self, @intCast(pc), &reads)) return &.{};
+        for (reads.items) |at| if (at < bit.len) if (bit[at]) |b| {
+            if (in[pc * nw + b / 64] >> @intCast(b % 64) & 1 == 0) live[b] = true;
+        };
+    };
+    var dead: std.ArrayList(u32) = .empty;
+    for (cands.items, live) |at, l| if (!l) try dead.append(a, at);
+    return dead.items;
+}
+
+/// `in[to] &= set`; `to` is queued when that is its first set or changes it.
+fn meet(a: std.mem.Allocator, in: []u64, seen: []bool, work: *std.ArrayList(u32), nw: usize, to: u32, set: []const u64) Error!void {
+    var changed = !seen[to];
+    for (in[to * nw ..][0..nw], set) |*w, s| {
+        changed = changed or w.* & s != w.*;
+        w.* &= s;
+    }
+    seen[to] = true;
+    if (changed) try work.append(a, to);
+}
+
+/// The slot the instruction at `pc` writes whole with a blocking write.
+fn wholeWrite(self: *Emitter, pc: u32) ?u32 {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    r.scope = r.code_scope.items[pc];
+    const target = switch (r.code.items[pc]) {
+        .init_var => |x| return x.slot,
+        .assign => |x| if (x.nonblocking) return null else x.target,
+        .copy_out => |x| x.target,
+        else => return null, // else: only these three write a slot at their own pc
+    };
+    if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return null;
+    return r.slot(target) catch null;
+}
+
+/// Append every slot the instruction at `pc` reads; false when a name
+/// does not resolve to one.
+fn readsAt(self: *Emitter, pc: u32, out: *std.ArrayList(u32)) Error!bool {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    r.scope = r.code_scope.items[pc];
+    switch (r.code.items[pc]) {
+        .assign => |x| {
+            if (ex.tag(x.target) != .ident and ex.tag(x.target) != .hier_ident) if (!try exprReads(self, x.target, out)) return false;
+            return exprReads(self, x.value, out);
+        },
+        .copy_out => |x| {
+            try out.append(self.arena, x.slot);
+            if (ex.tag(x.target) != .ident and ex.tag(x.target) != .hier_ident) return exprReads(self, x.target, out);
+            return true;
+        },
+        .init_var => |x| return exprReads(self, x.value, out),
+        .delay => |x| return exprReads(self, x.amount, out),
+        .task => |t| for (t.args) |e| if (!try exprReads(self, e, out)) return false,
+        .branch => |b| return exprReads(self, b.condition, out),
+        .case_select => |c| {
+            const cs = r.file.stmt(c.statement).case_stmt;
+            if (!try exprReads(self, cs.scrutinee, out)) return false;
+            for (cs.arms) |arm| for (arm.labels) |l| if (!try exprReads(self, l, out)) return false;
+        },
+        .repeat_start => |x| return exprReads(self, x.count, out),
+        .wait_event => |e| return exprReads(self, e, out),
+        .wait_level => |x| return exprReads(self, x.cond, out),
+        .sample => |x| return stmtReads(self, x.statement, out),
+        .deposit => |x| return stmtReads(self, x.statement, out),
+        .call => |x| for (x.args) |e| if (!try exprReads(self, e, out)) return false,
+        .override_eval => |x| return exprReads(self, x.value, out),
+        .continuous, .wait_slots, .trigger, .restart, .jump, .stop, .disable_block, .disable_task, .fork, .join_arm, .pla_start, .override_on, .override_off, .repeat_next, .switch_ctrl, .call_timed, .task_return => {},
+    }
+    return true;
+}
+
+fn stmtReads(self: *Emitter, s: Ast.StmtId, out: *std.ArrayList(u32)) Error!bool {
+    var v: StmtReads = .{ .self = self, .out = out };
+    try self.r.file.stmtEdges(s, &v);
+    return v.ok;
+}
+
+/// `readsAt` of a statement's own expressions, both edges: a target's
+/// selects are read, and reading its base too only keeps more alive.
+const StmtReads = struct {
+    self: *Emitter,
+    out: *std.ArrayList(u32),
+    ok: bool = true,
+
+    pub fn expr(v: *StmtReads, e: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
+        if (v.ok) v.ok = try exprReads(v.self, e, v.out);
+    }
+
+    pub fn stmt(_: *StmtReads, _: Ast.StmtId) Error!void {}
+};
+
+/// Append every slot `e` reads, a function call's result among them.
+fn exprReads(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!bool {
+    if (e == .none) return true;
+    const r = self.r;
+    const ex = &r.file.exprs;
+    switch (ex.tag(e)) {
+        .ident, .hier_ident => {
+            try out.append(self.arena, r.slot(e) catch return false);
+            return true;
+        },
+        .call => {
+            const idx = r.sub_base.get(r.instanceOf(r.scope)).? + r.call_subs.get(e).?;
+            try out.append(self.arena, r.subs.items[idx].frame.result);
+        },
+        else => {}, // else: every other form reads only through its children
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (!try exprReads(self, c, out)) return false;
+    return true;
 }

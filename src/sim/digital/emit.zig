@@ -12,6 +12,10 @@
 //! is `vera --run`'s. The switch over `Instruction` is exhaustive: whatever
 //! is not native yet is an arm that refuses by name.
 //!
+//! The functions sit in `Code(comptime two)` and touch the planes through
+//! `rt.Phase(two)`. Under `Logic.auto` a design no x or z carries meaning
+//! in names both phases (`rt.auto`); any other names `Code(false)` alone.
+//!
 //! Refused: the design embeds its source and runs the interpreter
 //! (`rt.interpret`); `Program.fallback` says why. The verdict is the
 //! emitter's own refusal, so the two cannot disagree about a design.
@@ -48,16 +52,27 @@ pub const Program = struct {
     text: []const u8,
     /// Null when the design runs natively; else why it does not.
     fallback: ?[]const u8,
+    /// `.auto`, native: why the executable is 4-state throughout; null
+    /// when it carries both phases (`rt.auto`).
+    four: ?Reason = null,
 };
+
+/// Which logic the executable computes: IEEE 1364's 4-state; `--two-state`'s,
+/// where every x or z is 0 (`rt.logic.two`); or 4-state that turns 2-state
+/// once no live x or z is left (`rt.auto`), which prints what 4-state prints.
+pub const Logic = enum { auto, two, four };
+
+/// Why a design keeps x or z meaning, and the token where it does.
+pub const Reason = struct { why: []const u8, tok: ?u32 };
 
 pub const Error = error{ Unsupported, OutOfMemory };
 
 /// The root module of `r`'s executable. `r` is read — and its time-0 queue
-/// drained — never run. `two_state`: every x or z the design would create
-/// is 0 (`rt.logic.two`); a design where one carries meaning is refused.
-pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, two_state: bool) std.mem.Allocator.Error!Program {
-    var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = two_state };
-    if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null } else |err| switch (err) {
+/// drained — never run. Under `.two` a design where an x or z carries
+/// meaning is refused; under `.auto` it is 4-state throughout (`Program.four`).
+pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
+    var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
+    if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null, .four = e.four } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Unsupported => return .{ .text = try interpreted(arena, embed, e.why), .fallback = e.why },
     }
@@ -92,8 +107,11 @@ pub const Emitter = struct {
     reach: []const plan.Reach = &.{},
     /// The process being emitted.
     role: plan.Role = .general,
-    /// `--two-state` (`program`).
+    /// `Logic.two` and `Logic.auto` (`program`); under `auto`, the first
+    /// reason the design keeps x or z meaning.
     two_state: bool = false,
+    auto: bool = false,
+    four: ?Reason = null,
     /// The subroutines a call reached (§10), each emitted once as
     /// `fn proc<entry>` after the processes.
     subs_todo: std.ArrayList(u32) = .empty,
@@ -129,6 +147,25 @@ pub const Emitter = struct {
         return error.Unsupported;
     }
 
+    /// Whether `xMeaning` and `keepFour` can do anything: skip their
+    /// checks otherwise.
+    pub fn caresX(self: *const Emitter) bool {
+        return self.two_state or self.auto;
+    }
+
+    /// An x or z carries meaning at token `tok`: `--two-state` refuses the
+    /// design, `auto` keeps it 4-state.
+    pub fn xMeaning(self: *Emitter, why: []const u8, tok: ?u32) Error!void {
+        if (self.two_state) return self.refuse(why);
+        self.keepFour(why, tok);
+    }
+
+    /// Under `auto`, the design stays 4-state throughout; the first reason
+    /// is the one kept.
+    pub fn keepFour(self: *Emitter, why: []const u8, tok: ?u32) void {
+        if (self.auto and self.four == null) self.four = .{ .why = why, .tok = tok };
+    }
+
     /// A fresh number for a block label or a capture.
     pub fn label(self: *Emitter) u32 {
         self.labels += 1;
@@ -140,19 +177,19 @@ pub const Emitter = struct {
         if (t.real) return self.refuse("a real value");
     }
 
-    /// `s.get` (or `s.getw`) of slot `at`'s value.
+    /// `M.get` (or `M.getw`) of slot `at`'s value.
     pub fn get(self: *Emitter, at: u32) Error!void {
         const w = self.r.values[at].width;
-        if (w <= 64) return self.print("s.get({d})", .{self.off[at]});
-        try self.print("s.getw({d}, {d})", .{ self.off[at], words(w) });
+        if (w <= 64) return self.print("M.get(s, {d})", .{self.off[at]});
+        try self.print("M.getw(s, {d}, {d})", .{ self.off[at], words(w) });
     }
 
-    /// The call that stores into slot `at`, up to its value: `s.nba` (or
-    /// `s.nbaAfter`), or `s.put`, or `s.set` when nothing can wait on the slot.
+    /// The call that stores into slot `at`, up to its value: `M.nba` (or
+    /// `M.nbaAfter`), or `M.put`, or `M.set` when nothing can wait on the slot.
     pub fn store(self: *Emitter, at: u32, how: How) Error!void {
         // §4.8 a real changes when its value does, not its bits.
         if (how == .blocking and self.r.reals.contains(at)) return self.print("try s.putReal({d}, {d}, ", .{ at, self.off[at] });
-        if (how == .blocking and !self.watched[at]) return self.print("s.set({d}, ", .{self.off[at]});
+        if (how == .blocking and !self.watched[at]) return self.print("try M.set(s, {d}, ", .{self.off[at]});
         try storeCall(self, how, self.reach[at]);
         try self.print("{d}, {d}, ", .{ at, self.off[at] });
     }
@@ -164,7 +201,7 @@ pub const Emitter = struct {
         if (self.r.reals.contains(base)) return self.refuse("an array of reals");
         const count = self.r.arrays.get(base).?.count;
         const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
-        if (how == .blocking and !watched) return self.print("s.set({d} + (a{d} - {d}) * {d}, ", off);
+        if (how == .blocking and !watched) return self.print("try M.set(s, {d} + (a{d} - {d}) * {d}, ", off);
         var wakes: plan.Reach = .{};
         for (self.reach[base..][0..count]) |x| wakes = @bitCast(@as(u8, @bitCast(wakes)) | @as(u8, @bitCast(x)));
         try storeCall(self, how, wakes);
@@ -197,10 +234,10 @@ pub const How = union(enum) { blocking, nba, nba_after: Ast.ExprId };
 
 fn storeCall(self: *Emitter, how: How, wakes: plan.Reach) Error!void {
     switch (how) {
-        .blocking => try self.print("try s.put({f}, ", .{fmtReach(wakes)}),
-        .nba => try self.print("try s.nba({f}, ", .{fmtReach(wakes)}),
+        .blocking => try self.print("try M.put(s, {f}, ", .{fmtReach(wakes)}),
+        .nba => try self.print("try M.nba(s, {f}, ", .{fmtReach(wakes)}),
         .nba_after => |d| {
-            try self.print("try s.nbaAfter({f}, ", .{fmtReach(wakes)});
+            try self.print("try M.nbaAfter(s, {f}, ", .{fmtReach(wakes)});
             try delay(self, d);
             try self.print(", ", .{});
         },
@@ -229,15 +266,15 @@ fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
         .expr => |e| try expr.assigned(self, e, target),
         // `exec.convertValue`, §4.8.2 between a real and an integer.
         .stored => |v| {
-            if (v.ty.real and target.real) return self.print("s.get({d})", .{v.off});
+            if (v.ty.real and target.real) return self.print("M.get(s, {d})", .{v.off});
             if (target.real) {
                 try self.print("L.realBits(L.toReal(", .{});
-                if (v.ty.width <= 64) try self.print("s.get({d})", .{v.off}) else try self.print("s.getw({d}, {d})", .{ v.off, words(v.ty.width) });
+                if (v.ty.width <= 64) try self.print("M.get(s, {d})", .{v.off}) else try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) });
                 return self.print(", {d}, {}))", .{ v.ty.width, v.ty.signed });
             }
-            if (v.ty.real) return self.print("L.rs(L.ofReal(L.real(s.get({d}))), 64, {d}, true)", .{ v.off, target.width });
+            if (v.ty.real) return self.print("L.rs(L.ofReal(L.real(M.get(s, {d}))), 64, {d}, true)", .{ v.off, target.width });
             try self.print("L.rs(", .{});
-            if (v.ty.width <= 64) try self.print("s.get({d})", .{v.off}) else try self.print("s.getw({d}, {d})", .{ v.off, words(v.ty.width) });
+            if (v.ty.width <= 64) try self.print("M.get(s, {d})", .{v.off}) else try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) });
             try self.print(", {d}, {d}, {})", .{ v.ty.width, target.width, v.ty.signed });
         },
     }
@@ -265,7 +302,7 @@ pub fn call(self: *Emitter, idx: u32, args: []const Ast.ExprId, lb: u32) Error!v
     try self.print("            try s.enter({d}, {d}, ", .{ idx, lo });
     if (sub.decl.automatic) try self.print("&fill{d});\n", .{idx}) else try self.print("&.{{}});\n", .{});
     for (sub.decl.ports, f.ports, 0..) |p, at, i| if (p.direction != .output)
-        try self.print("            s.set({d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(try self.slotWidth(at)) });
+        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(try self.slotWidth(at)) });
     try self.print("            try proc{d}(s, {d});\n", .{ sub.entry, sub.entry });
     if (sub.decl.is_function) {
         try self.print("            const r{d} = ", .{lb});
@@ -337,6 +374,10 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
     for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
+    // Every function of the design, once per phase (`rt.Phase`): `main`
+    // names `Code(true)` only when it runs both, and Zig compiles only what
+    // is named.
+    try self.print("\nfn Code(comptime two: bool) type {{\nreturn struct {{\nconst M = rt.Phase(two);\n\n", .{});
     const seen = try self.arena.alloc(bool, r.code.items.len);
     @memset(seen, false);
     var procs: std.ArrayList(plan.Proc) = .empty;
@@ -367,6 +408,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         try process(self, pcs);
         for (pcs) |pc| entry_of[pc] = pcs[0];
         if (!sub.decl.automatic) continue;
+        self.keepFour("an automatic task or function, whose storage is x at every call (§10.2.3)", null);
         // §10.2.3: an automatic activation's storage starts x.
         try self.print("const fill{d} = [_]u64{{", .{idx});
         for (r.values[sub.frame.first..][0..sub.frame.count]) |v| for (0..words(v.width)) |j| {
@@ -383,7 +425,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     for (entry_of) |t| if (t) |lo| try self.print(" proc{d},", .{lo}) else try self.print(" none,", .{});
     try self.print(" }};\n\n", .{});
     try self.print(
-        \\fn dispatch(s: *S, pc: u32) rt.Error!void {{
+        \\pub fn dispatch(s: *S, pc: u32) rt.Error!void {{
         \\    if (pc < rt.show_base) return procs[pc](s, pc);
         \\
     , .{});
@@ -408,6 +450,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (p.node_pc, 0..) |pc, n| if (pureNode(self, pc)) try nodeValue(self, pc, @intCast(n));
     }
 
+    try self.print("}};\n}}\n\n", .{});
+    if (!advances(r)) self.keepFour("nothing delays, so the run never leaves time 0", null);
+    const two_phase = self.auto and self.four == null;
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
     // intra-assignment cells follow the slots; each is written before it
     // is read.
@@ -436,18 +481,37 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (p.watchers) |w| try self.print(" .{{ .proc = {d}, .pc = {d}, .edge = .{t} }},", .{ w.proc, w.pc, w.edge });
         try self.print(" }},\n    .triggered = {d},\n", .{p.triggered});
     }
+    if (two_phase) {
+        try self.print("    .dead = &.{{", .{});
+        for (try plan.stepLocal(self, procs.items)) |at| try self.print(" .{{ {d}, {d} }},", .{ self.off[at], words(r.values[at].width) });
+        try self.print(" }},\n", .{});
+    }
     try self.print("}};\n\n", .{});
     if (dumps(r)) try catalog(self);
-    try self.print(
+    if (two_phase) try self.print(
+        \\pub fn main(init: std.process.Init) u8 {{
+        \\    return rt.auto(init, &design, {d}, Code(false).dispatch, Code(true).dispatch);
+        \\}}
+        \\
+    , .{r.finest}) else try self.print(
         \\pub fn main(init: std.process.Init) u8 {{
         \\    var s: S = undefined;
         \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
-        \\    while (s.next() catch |e| return s.exit(e)) |pc| dispatch(&s, pc) catch |e| return s.exit(e);
+        \\    while (s.next() catch |e| return s.exit(e)) |pc| Code(false).dispatch(&s, pc) catch |e| return s.exit(e);
         \\    return s.exit(null);
         \\}}
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// Can simulation time pass 0: does a procedural, intra-assignment, net
+/// or gate delay exist?
+fn advances(r: *const Run) bool {
+    for (r.code.items) |ins| if (ins == .delay or ins == .sample) return true;
+    for (r.drivers) |d| if (d.delay.present) return true;
+    for (r.nets) |n| if (n.delay.present) return true;
+    return false;
 }
 
 /// Node `n`, whose evaluation starts at `pc` in `fn proc<entry>`, in the
@@ -459,10 +523,10 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
     const r = self.r;
     if (!pureNode(self, pc)) return self.print("    if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc });
     const slot = r.nets[r.drivers[r.code.items[pc].continuous].net].slot;
-    if (!self.watched[slot]) return self.print("    s.set({d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(try self.slotWidth(slot)) });
+    if (!self.watched[slot]) return self.print("    try M.set(s, {d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(try self.slotWidth(slot)) });
     var wakes = self.reach[slot];
     wakes.comb = false;
-    try self.print("    try s.putNode({f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
+    try self.print("    try M.putNode(s, {f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
     // A pure reader in this node's own dirty word runs after it anyway.
     for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| if (e.node / 64 != n / 64 or !pureNode(self, p.node_pc[e.node]))
         try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
@@ -504,7 +568,7 @@ fn nodeValue(self: *Emitter, pc: u32, n: u32) Error!void {
         .bridge, .udp, .mos, .pull => unreachable, // `pureNode` admits these two
     }
     try self.print(";\n}}\n\n", .{});
-    if (std.mem.indexOf(u8, self.out.written()[head..], "s.") == null) try insert(self, body, "    _ = s;\n");
+    if (!usesS(self.out.written()[head..])) try insert(self, body, "    _ = s;\n");
 }
 
 /// Does `e` read only nets and variables: no system or user function,
@@ -664,8 +728,12 @@ fn process(self: *Emitter, pcs: []const u32) Error!void {
     // declared only when the body uses it.
     const text = self.out.written()[head..];
     if (std.mem.indexOf(u8, text, "continue :sw") != null) try insert(self, sw + 4, "sw: ");
-    if (std.mem.indexOf(u8, self.out.written()[head..], "s.") == null and std.mem.indexOf(u8, self.out.written()[head..], "(s,") == null)
-        try insert(self, sw, "    _ = s;\n");
+    if (!usesS(self.out.written()[head..])) try insert(self, sw, "    _ = s;\n");
+}
+
+/// Does a function's text use its parameter `s`?
+fn usesS(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, "s.") != null or std.mem.indexOf(u8, text, "(s,") != null;
 }
 
 fn insert(self: *Emitter, at: usize, text: []const u8) Error!void {
@@ -778,7 +846,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     const base = try self.slot(t.args[0]);
                     const ty = try targetType(self, t.args[2]);
                     if (ty.real) return self.refuse("a §17.5 PLA writing a real");
-                    if (self.two_state and p.plane) return self.refuse("a §17.5.4 plane PLA, whose z personality bits mean \"ignore this input\"");
+                    if (p.plane) try self.xMeaning("a §17.5.4 plane PLA, whose z personality bits mean \"ignore this input\"", t.tok);
+                    self.keepFour("a §17.5 PLA, whose outputs are x where no row decides", t.tok);
                     const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
                     try self.print("            try s.pla(.{{ .logic = .@\"{t}\", .plane = {}, .async_ = false }}, {d}, {d}, {d}, ", .{
                         p.logic, p.plane, self.off[base], r.arrays.get(base).?.count, try self.slotWidth(base),
@@ -913,7 +982,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 return self.print("            continue :sw {d};\n", .{next});
             }
             const ty = try targetType(self, st.target);
-            try self.print("            s.set({d}, ", .{try cellOf(self, x.cell, ty.width)});
+            try self.print("            try M.set(s, {d}, ", .{try cellOf(self, x.cell, ty.width)});
             try expr.assigned(self, st.value, ty);
             try self.print(", {f});\n", .{full(ty.width)});
             if (st.timing_is_delay) {
@@ -1065,9 +1134,9 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
     if (sw > 64 and how == .blocking) {
         // One bit of a wide vector: the store touches only its word.
         if (self.watched[at])
-            try self.print("try s.putWord({f}, {d}, {d}, q{d} / 64, ", .{ fmtReach(self.reach[at]), at, self.off[at], lb })
+            try self.print("try M.putWord(s, {f}, {d}, {d}, q{d} / 64, ", .{ fmtReach(self.reach[at]), at, self.off[at], lb })
         else
-            try self.print("s.set({d} + q{d} / 64, ", .{ self.off[at], lb });
+            try self.print("try M.set(s, {d} + q{d} / 64, ", .{ self.off[at], lb });
         try self.print("L.up(", .{});
         try rhsFor(self, val, .{ .width = 1, .signed = false });
         return self.print(", q{d} % 64, 64), L.bit(q{d} % 64, 64));\n", .{ lb, lb });
@@ -1258,7 +1327,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
         const k = self.drv_ix[i].?;
         // `--two-state` keeps a delay or a logic gate: neither gives an x
         // or z meaning. Strength, several drivers, three states do.
-        if (self.two_state) {
+        if (self.caresX()) {
             const two_ok = switch (n.kind) {
                 .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and d.s0 == .strong and d.s1 == .strong,
                 .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
@@ -1270,11 +1339,11 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
                 },
                 .udp, .mos, .bridge, .pull => false,
             };
-            if (!two_ok) return self.refuse("a §7.9 net resolved from strengths or several drivers, or a three-state, switch, UDP, port-window or pull driver");
+            if (!two_ok) try self.xMeaning("a §7.9 net resolved from strengths or several drivers, or a three-state, switch, UDP, port-window or pull driver", null);
             // §7.14 picks the delay by the value transitioned to: with
             // three different ones, an x or z decides when a value lands.
             for ([_]@import("net.zig").Delay{ d.delay, n.delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
-                return self.refuse("a `delay3` whose rise, fall and turn-off differ, chosen by an x or z");
+                try self.xMeaning("a `delay3` whose rise, fall and turn-off differ, chosen by an x or z", null);
         }
         switch (d.source) {
             .expr => |x| {
@@ -1370,7 +1439,7 @@ fn bits(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
 /// scratch word past the slots'.
 pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
-    try self.print("            s.set({d}, L.k(@bitCast(@as(i64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
+    try self.print("            try M.set(s, {d}, L.k(@bitCast(@as(i64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
 }
 

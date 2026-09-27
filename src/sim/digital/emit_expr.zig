@@ -167,7 +167,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     const w = ty.width;
     const sg = ty.signed;
     if (compile.constantExpression(r, e)) fold: {
-        if (self.two_state) try everyCaseEq(self, e);
+        if (self.caresX()) try everyCaseEq(self, e);
         const v = exec.evalContext(r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
         // `--two-state`: a literal's x or z bit is 0; an operator of known
         // operands then computes what 4-state computes wherever that has no
@@ -176,6 +176,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         // computed from its 0-valued leaves instead.
         var buf: [3]Ast.ExprId = undefined;
         if (self.two_state and v.hasUnknown() and ex.children(e, &buf).len != 0) break :fold;
+        if (v.hasUnknown()) self.keepFour("a constant with an x or z bit", ex.mainTok(e));
         return constant(self, v, w, self.two_state);
     }
     // §4.8: a real context holds the value's bits; a real operand in an
@@ -227,7 +228,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             const op = ex.binOp(e);
             switch (op) {
                 .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
-                    if (self.two_state) try twoStateMeaning(self, e);
+                    if (self.caresX()) try twoStateMeaning(self, e);
                     const ot = compile.common(compile.typeOf(r, ex.lhs(e)), compile.typeOf(r, ex.rhs(e)));
                     if (ot.real) {
                         try self.print("L.ctx(if (", .{});
@@ -378,6 +379,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 },
                 // §17.2 on the executable's descriptor table.
                 .fopen => {
+                    self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
                     try self.print("L.rs(L.k(@as(u32, @truncate(@as(u64, @bitCast(try s.fopen(\"{f}\", ", .{std.zig.fmtString(r.file_name)});
                     const n = try selfDetermined(self, args[0]);
                     try self.print(", {d}, ", .{n.width});
@@ -397,7 +399,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 },
                 // §17.2.4.3: each output argument as the scan reaches it.
                 .sscanf => {
-                    if (self.two_state) return self.refuse("`$sscanf`, which answers EOF for an x or z in its input or format");
+                    try self.xMeaning("`$sscanf`, which answers EOF for an x or z in its input or format", ex.mainTok(e));
                     const lb = self.label();
                     try self.print("L.rs(sc{d}: {{\n            var c{d} = try s.scan(", .{ lb, lb });
                     const in = try selfDetermined(self, args[0]);
@@ -515,7 +517,15 @@ fn constant(self: *Emitter, v: @import("frontend").Integer.Literal, w: u32, know
 /// (§9.5.1), and a `case` label with one is refused: it matches only an x
 /// or z, which a two-state run never holds.
 pub fn caseLabel(self: *Emitter, e: Ast.ExprId, ty: Type, kind: Ast.CaseKind) Error!void {
-    if (!self.two_state or !compile.constantExpression(self.r, e)) return value(self, e, ty);
+    if (!self.caresX() or !compile.constantExpression(self.r, e)) return value(self, e, ty);
+    if (self.auto) {
+        // A casez/casex label's z (and x) bits are wildcards (§9.5.1),
+        // which keep nothing 4-state.
+        const kept = self.four;
+        try value(self, e, ty);
+        if (kind != .normal) self.four = kept;
+        return;
+    }
     try self.fits(ty);
     const v = exec.evalContext(self.r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
     if (kind == .normal and v.hasUnknown()) return self.refuse("a `case` label with an x or z bit, which only an x or z matches");
@@ -528,9 +538,9 @@ fn everyCaseEq(self: *Emitter, e: Ast.ExprId) Error!void {
     try twoStateMeaning(self, e);
 }
 
-/// Refuse, under `--two-state`, a `===` or `!==` with an operand that
-/// holds x or z: it asks whether a value is unknown (§5.1.8), which a
-/// two-state run cannot answer.
+/// `xMeaning` of a `===` or `!==` with an operand that holds x or z: it
+/// asks whether a value is unknown (§5.1.8), which a two-state run cannot
+/// answer.
 fn twoStateMeaning(self: *Emitter, e: Ast.ExprId) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
@@ -539,8 +549,8 @@ fn twoStateMeaning(self: *Emitter, e: Ast.ExprId) Error!void {
     if (op != .case_eq and op != .case_neq) return;
     for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |side| {
         if (!compile.constantExpression(r, side)) continue;
-        const v = exec.eval(r, self.arena, side, 0) catch return self.refuse("a constant the engine does not fold");
-        if (v.hasUnknown()) return self.refuse("`===` or `!==` against an x or z, which asks whether a value is unknown");
+        const v = exec.eval(r, self.arena, side, 0) catch return self.xMeaning("a constant the engine does not fold", ex.mainTok(e));
+        if (v.hasUnknown()) return self.xMeaning("`===` or `!==` against an x or z, which asks whether a value is unknown", ex.mainTok(e));
     }
 }
 
@@ -560,9 +570,9 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         const nw = emit.words(n.width);
         const at = .{ self.off[base], lb, base, nw };
         if (nw == 1)
-            try self.print(") |a{d}| s.get({d} + (a{d} - {d}) * {d})", .{lb} ++ at)
+            try self.print(") |a{d}| M.get(s, {d} + (a{d} - {d}) * {d})", .{lb} ++ at)
         else
-            try self.print(") |a{d}| s.getw({d} + (a{d} - {d}) * {d}, {d})", .{lb} ++ at ++ .{nw});
+            try self.print(") |a{d}| M.getw(s, {d} + (a{d} - {d}) * {d}, {d})", .{lb} ++ at ++ .{nw});
         return self.print(" else L.xs({d}), {d}, {d}, {})", .{ n.width, n.width, w, sg });
     }
     const at = try self.slot(ex.lhs(e));
