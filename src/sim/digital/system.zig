@@ -146,6 +146,79 @@ pub fn queueIsFull(queues: *const Queues, id: ?i64) struct { status: i64, full: 
     return .{ .status = ok, .full = @intFromBool(found.jobs.items.len >= found.max) };
 }
 
+// ---- §17.9 probabilistic distribution functions -----------------------------
+
+const rng = @import("kernels").rng_kernels;
+
+/// §17.9.3 Table 17-17: `$random` and the seven `$dist_*` functions.
+pub const Dist = enum { random, uniform, normal, exponential, poisson, chi_square, t, erlang };
+
+/// A draw's value and the seed its inout argument is written back with.
+pub const Draw = struct { value: i32, seed: i32 };
+
+/// §17.9.3's `rtl_dist_*` over the listing's 32-bit `long` seed; `a` and `b`
+/// are the arguments after the seed. Null where the listing prints its
+/// "must have positive" warning instead of drawing: the value is 0 and the
+/// seed is left as it was (§17.9.2: mean, degree_of_freedom and k_stage
+/// "shall be greater than 0").
+pub fn dist(f: Dist, seed: i32, a: i32, b: i32) ?Draw {
+    const bad = switch (f) {
+        .random, .uniform, .normal => false,
+        .exponential, .poisson, .chi_square, .t => a <= 0,
+        .erlang => a <= 0 or b <= 0,
+    };
+    if (bad) return null;
+    const s: i64 = seed;
+    const x: f64 = @floatFromInt(a);
+    const y: f64 = @floatFromInt(b);
+    // Each kernel is a pure function of the seed; its `Next` twin replays
+    // the same draw for the written-back seed.
+    const r: f64, const next: f64 = switch (f) {
+        .random => .{ rng.zRngRand(s), rng.zRngRandNext(s) },
+        .uniform => .{ rng.zRngIUniform(s, x, y), rng.zRngIUniformNext(s, x, y) },
+        .normal => .{ rng.zRngNormal(s, x, y), rng.zRngNormalNext(s, x, y) },
+        .exponential => .{ rng.zRngExponential(s, x), rng.zRngExponentialNext(s, x) },
+        .poisson => .{ rng.zRngPoisson(s, x), rng.zRngPoissonNext(s, x) },
+        .chi_square => .{ rng.zRngChiSquare(s, x), rng.zRngChiSquareNext(s, x) },
+        .t => .{ rng.zRngT(s, x), rng.zRngTNext(s, x) },
+        .erlang => .{ rng.zRngErlang(s, x, y), rng.zRngErlangNext(s, x, y) },
+    };
+    // The listing's `(long)(r + 0.5)`, mirrored for a negative r; the
+    // integer-valued draws are unchanged by it.
+    const m = @trunc(@abs(r) + 0.5);
+    return .{ .value = std.math.lossyCast(i32, if (r >= 0) m else -m), .seed = @intFromFloat(next) };
+}
+
+/// The seed or integer argument `e` as the listing's 32-bit `long`: its
+/// low 32 bits, 0 when it holds an x or z bit.
+fn long(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!i32 {
+    return @truncate(try int(self, a, e) orelse 0);
+}
+
+/// §17.9 one call of `$random` or a `$dist_*` function. A seed argument is
+/// read and written back (§17.9.1, §17.9.2: "an inout argument"); a
+/// seedless `$random` advances `Run.random_seed`.
+pub fn random(self: *Run, a: std.mem.Allocator, f: Dist, args: []const Ast.ExprId, tok: u32) Error!i32 {
+    if (args.len == 0) {
+        const d = dist(.random, self.random_seed, 0, 0).?;
+        self.random_seed = d.seed;
+        return d.value;
+    }
+    const seed = try long(self, a, args[0]);
+    const x = if (args.len > 1) try long(self, a, args[1]) else 0;
+    const y = if (args.len > 2) try long(self, a, args[2]) else 0;
+    const d = dist(f, seed, x, y) orelse {
+        const start = self.starts[@min(tok, self.starts.len - 1)];
+        try self.bag.add(.lower, .W1151, .{ .start = start, .end = start }, dist_warning, .{});
+        return 0;
+    };
+    try exec.assignInt(self, a, args[0], d.seed);
+    return d.value;
+}
+
+/// The text of the listing's `print_error` for a non-positive argument.
+pub const dist_warning = "a $dist_ mean, degree of freedom or k_stage is not positive: the result is 0 and the seed is unchanged";
+
 // ---- §17.2 file input and output --------------------------------------------
 
 const contract = @import("contract");
@@ -155,7 +228,7 @@ const fk = @import("kernels").file_kernels;
 /// devices run, so both engines answer §17.2 one way (IEEE 1364-2005 §17.2.1's
 /// encodings: an mcd's bit 0 is standard output, an fd has bit 31 set and
 /// 0..2 are the standard streams).
-const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof };
+pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof };
 
 /// VAMS §9.5.1.2: ONE descriptor table per simulation — the host's
 /// (`Run.file_io`: a mixed simulation's device table), else this engine's
@@ -191,52 +264,68 @@ pub fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
 /// A descriptor is "a 32-bit value" (§17.2.1): its low 32 bits, however the
 /// variable holding it is signed — `integer fd` is the clause's own example.
 fn descriptor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?i64 {
-    return ((try int(self, a, e)) orelse return null) & 0xffff_ffff;
+    return low32(try int(self, a, e));
+}
+
+fn low32(d: ?i64) ?i64 {
+    return (d orelse return null) & 0xffff_ffff;
 }
 
 /// One §17.2 function call; every one of them returns an integer.
 pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, _: u32) Error!i64 {
+    if (f == .sscanf) return scanCall(self, a, args);
+    const t = table(self) orelse return if (f == .fopen) 0 else -1;
+    if (f == .fopen) {
+        const name = try text(a, try exec.eval(self, a, args[0], 0));
+        const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
+        return fopen(t, a, self.file_name, name, mode, args.len == 1);
+    }
+    var v: [3]?i64 = .{ null, null, null };
+    for (args, 0..) |arg, i| v[i] = try int(self, a, arg);
+    return fileOp(t, f, v[0], v[1], v[2]);
+}
+
+/// §17.2.1 `$fopen(name)` (`mcd`) or `$fopen(name, type)` on the table `t`
+/// of a source `file_name`: no type opens for writing and returns a
+/// multichannel descriptor, one bit above bit 0; a Table 17-7 type returns
+/// a file descriptor. 0 when the file cannot be opened, or `name` or `mode`
+/// is null (an x or z bit).
+pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, name: ?[]const u8, mode: ?[]const u8, mcd: bool) std.mem.Allocator.Error!i64 {
+    const path = name orelse return 0;
+    const ty = if (mcd) "w" else mode orelse return 0;
+    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
+    for (types) |allowed| {
+        if (std.mem.eql(u8, allowed, ty)) break;
+    } else return 0;
+    // A file read is looked for beside the source first, as `$readmemh`
+    // looks (`display.readSideFile`).
+    if (ty[0] == 'r') if (std.fs.path.dirname(file_name)) |dir| {
+        const d = t.open(try std.fs.path.join(a, &.{ dir, path }), ty, mcd);
+        if (d != 0) return d;
+    };
+    return t.open(path, ty, mcd);
+}
+
+/// §17.2.4.1 / §17.2.4.2 / §17.2.5 / §17.2.8 on the table `t`, C's
+/// semantics: `x`, `y`, `z` are the call's arguments in order, null where an
+/// argument has an x or z bit (or is absent). EOF (-1) for an unknown one.
+pub fn fileOp(t: contract.FileIo, f: FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
     const eof: i64 = -1;
-    if (f == .sscanf) return scan(self, a, args);
-    const t = table(self) orelse return if (f == .fopen) 0 else eof;
     switch (f) {
-        // §17.2.1: no type opens for writing and returns a multichannel
-        // descriptor, one bit above bit 0; a Table 17-7 type returns a file
-        // descriptor. 0 when the file cannot be opened.
-        .fopen => {
-            const name = (try text(a, try exec.eval(self, a, args[0], 0))) orelse return 0;
-            const mcd = args.len == 1;
-            const mode = if (mcd) "w" else (try text(a, try exec.eval(self, a, args[1], 0))) orelse return 0;
-            const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
-            for (types) |ty| {
-                if (std.mem.eql(u8, ty, mode)) break;
-            } else return 0;
-            // A file read is looked for beside the source first, as
-            // `$readmemh` looks (`display.readSideFile`).
-            if (mode[0] == 'r') if (std.fs.path.dirname(self.file_name)) |dir| {
-                const d = t.open(try std.fs.path.join(a, &.{ dir, name }), mode, mcd);
-                if (d != 0) return d;
-            };
-            return t.open(name, mode, mcd);
-        },
-        // §17.2.4.1 / §17.2.4.2 / §17.2.5 / §17.2.8, C's semantics.
-        .fgetc => return t.getc((try descriptor(self, a, args[0])) orelse return eof),
-        .ungetc => {
-            const c = (try int(self, a, args[0])) orelse return eof;
-            return t.ungetc(c, (try descriptor(self, a, args[1])) orelse return eof);
-        },
-        .ftell => return t.tell((try descriptor(self, a, args[0])) orelse return eof),
+        .fgetc => return t.getc(low32(x) orelse return eof),
+        .ungetc => return t.ungetc(x orelse return eof, low32(y) orelse return eof),
+        .ftell => return t.tell(low32(x) orelse return eof),
         // §17.2.5: whence 0 from the start, 1 from here, 2 from the end.
         .fseek, .rewind => {
-            const d = (try descriptor(self, a, args[0])) orelse return eof;
+            const d = low32(x) orelse return eof;
             if (f == .rewind) return t.seek(d, 0, 0);
-            const offset = (try int(self, a, args[1])) orelse return eof;
-            const whence = (try int(self, a, args[2])) orelse return eof;
+            const offset = y orelse return eof;
+            const whence = z orelse return eof;
             if (whence < 0 or whence > 2) return eof;
             return t.seek(d, offset, whence);
         },
-        .feof => return t.eof((try descriptor(self, a, args[0])) orelse return eof),
-        .sscanf => unreachable, // answered above
+        .feof => return t.eof(low32(x) orelse return eof),
+        .fopen, .sscanf => unreachable, // `fopen` and `Scan`
     }
 }
 
@@ -248,9 +337,7 @@ pub fn fclose(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!
 }
 
 /// §17.2.2 `$fdisplay`/`$fwrite` and their radix forms: the `$display` text
-/// of the arguments after the descriptor, to every channel it names. Bit 0
-/// of an mcd and fd 1 (STDOUT) are the transcript; fd 2 is STDERR; every
-/// other channel is the table's.
+/// of the arguments after the descriptor, to every channel it names.
 /// ponytail: `$fstrobe` and `$fmonitor` are not implemented.
 pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
     const d = (try descriptor(self, a, args[0])) orelse return;
@@ -260,81 +347,124 @@ pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show
     defer self.out = saved;
     try @import("display.zig").display(self, args[1..], a, show);
     self.out = saved;
-    const bytes = buf.written();
+    try channels(table(self), self.io, self.out, d, buf.written());
+}
+
+/// `bytes` to every channel descriptor `d` names: bit 0 of an mcd and fd 1
+/// (STDOUT) are the transcript `out`; fd 2 is STDERR; every other channel
+/// is the table's.
+pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, bytes: []const u8) std.Io.Writer.Error!void {
     const fd = d & (@as(i64, 1) << 31) != 0;
     const ch = d & 0x7fff_ffff;
-    if ((fd and ch == 1) or (!fd and d & 1 != 0)) try self.out.writeAll(bytes);
-    if (fd and ch == 2) if (self.io) |io| std.Io.File.stderr().writeStreamingAll(io, bytes) catch {};
+    if ((fd and ch == 1) or (!fd and d & 1 != 0)) try out.writeAll(bytes);
+    if (fd and ch == 2) if (io) |i| std.Io.File.stderr().writeStreamingAll(i, bytes) catch {};
     const files = if (fd) (if (ch > 2) d else 0) else d & ~@as(i64, 1);
-    if (files != 0) if (table(self)) |t| {
-        _ = t.put(files, bytes);
+    if (files != 0) if (t) |tt| {
+        _ = tt.put(files, bytes);
     };
 }
 
-/// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters
-/// of `str`, returning how many arguments were assigned, or EOF (-1) when the
-/// input ends before the first conversion — and, the clause's own rule, when
-/// either `str` or `format` has an x or z bit.
-/// ponytail: the integral conversions %d %h %x %o %b, %c and %s.
-fn scan(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
-    const input = (try text(a, try exec.eval(self, a, args[0], 0))) orelse return -1;
-    const format = (try text(a, try exec.eval(self, a, args[1], 0))) orelse return -1;
-    var at: usize = 0;
-    var assigned: i64 = 0;
-    var next: usize = 2;
-    var i: usize = 0;
-    while (i < format.len) : (i += 1) {
-        const c = format[i];
-        if (std.ascii.isWhitespace(c)) {
-            while (at < input.len and std.ascii.isWhitespace(input[at])) at += 1;
-            continue;
-        }
-        if (c != '%' or i + 1 == format.len) {
-            if (at >= input.len) return if (assigned == 0) -1 else assigned;
-            if (input[at] != c) return assigned;
-            at += 1;
-            continue;
-        }
-        i += 1;
-        const conv = std.ascii.toLower(format[i]);
-        if (conv == '%') {
-            if (at >= input.len or input[at] != '%') return assigned;
-            at += 1;
-            continue;
-        }
-        if (conv != 'c') while (at < input.len and std.ascii.isWhitespace(input[at])) : (at += 1) {};
-        if (at >= input.len) return if (assigned == 0) -1 else assigned;
-        if (next >= args.len) return assigned;
-        switch (conv) {
-            'c' => {
-                try exec.assignInt(self, a, args[next], input[at]);
-                at += 1;
-            },
-            's' => {
-                const start = at;
-                while (at < input.len and !std.ascii.isWhitespace(input[at])) at += 1;
-                try exec.assign(self, a, args[next], try stringValue(a, input[start..at]));
-            },
-            'd', 'h', 'x', 'o', 'b' => {
-                const radix: u8 = switch (conv) {
-                    'd' => 10,
-                    'o' => 8,
-                    'b' => 2,
-                    else => 16,
-                };
-                const start = at;
-                if (conv == 'd' and (input[at] == '-' or input[at] == '+')) at += 1;
-                while (at < input.len and (std.fmt.charToDigit(input[at], radix) catch null) != null) at += 1;
-                const value = std.fmt.parseInt(i64, input[start..at], radix) catch return assigned;
-                try exec.assignInt(self, a, args[next], value);
-            },
-            else => return assigned,
-        }
-        next += 1;
-        assigned += 1;
-    }
-    return assigned;
+/// §17.2.4.3 `$sscanf(str, format, args...)` in the interpreter (`Scan`).
+fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
+    const input = try text(a, try exec.eval(self, a, args[0], 0));
+    const format = try text(a, try exec.eval(self, a, args[1], 0));
+    var sc: Scan = .init(input, format, args.len - 2);
+    while (sc.next()) |x| switch (x.value) {
+        .int => |v| try exec.assignInt(self, a, args[2 + x.arg], v),
+        .chars => |c| try exec.assign(self, a, args[2 + x.arg], try stringValue(a, c)),
+    };
+    return sc.result;
 }
+
+/// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters
+/// of `str`. Each `next` is one assignment to an output argument, in order;
+/// once it returns null, `result` is how many were assigned, or EOF (-1)
+/// when the input ends before the first conversion — and, the clause's own
+/// rule, when either `str` or `format` has an x or z bit (null here).
+/// ponytail: the integral conversions %d %h %x %o %b, %c and %s.
+pub const Scan = struct {
+    input: []const u8,
+    format: []const u8,
+    /// Output arguments the call has.
+    outs: usize,
+    at: usize = 0,
+    i: usize = 0,
+    result: i64 = 0,
+    done: bool = false,
+
+    /// Output argument `arg` (0 = the first after the format) takes an
+    /// integer or, from `%s`, characters.
+    pub const Assign = struct { arg: usize, value: union(enum) { int: i64, chars: []const u8 } };
+
+    pub fn init(input: ?[]const u8, format: ?[]const u8, outs: usize) Scan {
+        if (input == null or format == null) return .{ .input = "", .format = "", .outs = outs, .result = -1, .done = true };
+        return .{ .input = input.?, .format = format.?, .outs = outs };
+    }
+
+    fn stop(self: *Scan, eof: bool) ?Assign {
+        if (eof and self.result == 0) self.result = -1;
+        self.done = true;
+        return null;
+    }
+
+    pub fn next(self: *Scan) ?Assign {
+        if (self.done) return null;
+        const input = self.input;
+        const format = self.format;
+        while (self.i < format.len) : (self.i += 1) {
+            const c = format[self.i];
+            if (std.ascii.isWhitespace(c)) {
+                while (self.at < input.len and std.ascii.isWhitespace(input[self.at])) self.at += 1;
+                continue;
+            }
+            if (c != '%' or self.i + 1 == format.len) {
+                if (self.at >= input.len) return self.stop(true);
+                if (input[self.at] != c) return self.stop(false);
+                self.at += 1;
+                continue;
+            }
+            self.i += 1;
+            const conv = std.ascii.toLower(format[self.i]);
+            if (conv == '%') {
+                if (self.at >= input.len or input[self.at] != '%') return self.stop(false);
+                self.at += 1;
+                continue;
+            }
+            if (conv != 'c') while (self.at < input.len and std.ascii.isWhitespace(input[self.at])) : (self.at += 1) {};
+            if (self.at >= input.len) return self.stop(true);
+            const arg: usize = @intCast(self.result);
+            if (arg >= self.outs) return self.stop(false);
+            const value: @FieldType(Assign, "value") = switch (conv) {
+                'c' => blk: {
+                    self.at += 1;
+                    break :blk .{ .int = input[self.at - 1] };
+                },
+                's' => blk: {
+                    const start = self.at;
+                    while (self.at < input.len and !std.ascii.isWhitespace(input[self.at])) self.at += 1;
+                    break :blk .{ .chars = input[start..self.at] };
+                },
+                'd', 'h', 'x', 'o', 'b' => blk: {
+                    const radix: u8 = switch (conv) {
+                        'd' => 10,
+                        'o' => 8,
+                        'b' => 2,
+                        else => 16,
+                    };
+                    const start = self.at;
+                    if (conv == 'd' and (input[self.at] == '-' or input[self.at] == '+')) self.at += 1;
+                    while (self.at < input.len and (std.fmt.charToDigit(input[self.at], radix) catch null) != null) self.at += 1;
+                    break :blk .{ .int = std.fmt.parseInt(i64, input[start..self.at], radix) catch return self.stop(false) };
+                },
+                else => return self.stop(false),
+            };
+            self.i += 1;
+            self.result += 1;
+            return .{ .arg = arg, .value = value };
+        }
+        return self.stop(false);
+    }
+};
 
 /// IEEE 1364-2005 §4.2.3 a string as a value: 8 bits a character, the last
 /// character in the low byte. Assigning it pads or truncates on the left.
@@ -392,21 +522,27 @@ pub const pla_tasks = blk: {
     break :blk list;
 };
 
-/// §17.5 one evaluation: row k of the personality memory (lowest address
-/// first) computes output bit k; within a row, bit j of the personality
-/// governs input j, both counted from the left. An unknown input selected by
-/// a row makes it unknown unless the row's controlling value decides it.
-/// ponytail: rows are taken lowest address first, which is the declaration
-/// order of the ascending memories §17.5's examples use.
+/// §17.5 one evaluation in the interpreter (`plaEval`).
 pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) Error!void {
     const base = try self.slot(args[0]);
     const arr = self.arrays.get(base).?; // compile proved it is an array
     const in = try exec.eval(self, a, args[1], 0);
-    const tt = try exec.targetType(self, args[2]);
-    const out = try filled(a, tt.width, false, .x);
+    const out = try filled(a, (try exec.targetType(self, args[2])).width, false, .x);
+    plaEval(p, self.values[base..][0..arr.count], in, out);
+    try exec.assign(self, a, args[2], out);
+}
+
+/// §17.5 one evaluation into `out`, which starts all x: row k of the
+/// personality `rows` (lowest address first) computes output bit k; within
+/// a row, bit j of the personality governs input j, both counted from the
+/// left. An unknown input selected by a row makes it unknown unless the
+/// row's controlling value decides it.
+/// ponytail: rows are taken lowest address first, which is the declaration
+/// order of the ascending memories §17.5's examples use.
+pub fn plaEval(p: Pla, rows: []const Int.Literal, in: Int.Literal, out: Int.Literal) void {
     const and_like = p.logic == .@"and" or p.logic == .nand;
-    for (0..@min(arr.count, tt.width)) |k| {
-        const row = self.values[base + @as(u32, @intCast(k))];
+    for (0..@min(rows.len, out.width)) |k| {
+        const row = rows[k];
         var unknown = false;
         var decided = false;
         for (0..@min(row.width, in.width)) |j| {
@@ -425,13 +561,12 @@ pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) E
         }
         const value: Int.Bit = if (decided) (if (and_like) .zero else .one) else if (unknown) .x else (if (and_like) .one else .zero);
         const inverted = p.logic == .nand or p.logic == .nor;
-        setBit(out, @intCast(tt.width - 1 - k), if (!inverted) value else switch (value) {
+        setBit(out, @intCast(out.width - 1 - k), if (!inverted) value else switch (value) {
             .zero => .one,
             .one => .zero,
             else => .x,
         });
     }
-    try exec.assign(self, a, args[2], out);
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -481,4 +616,13 @@ test "§17.5 a synchronous PLA evaluates only when called, an asynchronous one t
         \\end
         \\endmodule
     , "11 11\n");
+}
+
+test "§17.9.1 a seedless $random is the listing's stream from seed 0" {
+    try expectRun(
+        \\module m;
+        \\integer a, b;
+        \\initial begin a = $random; b = $random; $display("%0d %0d", a, b); end
+        \\endmodule
+    , "303379748 -1064739199\n");
 }

@@ -415,6 +415,9 @@ pub const Run = struct {
     reals: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// §17.6 the stochastic queues, by `q_id`.
     queues: std.AutoHashMapUnmanaged(i64, @import("system.zig").Queue) = .empty,
+    /// §17.9.1 the seed of a `$random` called without one. §17.9.3's
+    /// listing starts from 0, which its `uniform` reads as 259341593.
+    random_seed: i32 = 0,
     /// VAMS §9.5.1.2 the host's descriptor table, when the simulation shares
     /// one between this engine and an analog device (the mixed runner
     /// installs the device's `file_io`); null, this engine's own
@@ -424,6 +427,8 @@ pub const Run = struct {
     part_selects: std.AutoHashMapUnmanaged(SpecExpr, VecRange) = .empty,
     /// §18 the value change dump.
     vcd: @import("vcd.zig").Vcd = .{},
+    /// `vcd.catalog` of this run, built at the first dump.
+    vcd_catalog: ?@import("vcd.zig").Catalog = null,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
