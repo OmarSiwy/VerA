@@ -334,7 +334,8 @@ pub fn checkDescriptor(self: *Lower, name: []const u8, i: usize, arg: Ast.ExprId
     const at = Mir.callee.fdArg(Mir.Callee.fromName(name)) orelse return false;
     if (i != at or tv.ty == .integer) return false;
     try self.err(self.file.exprs.mainTok(arg), .E0888, "`{s}`'s descriptor argument is {s}", .{
-        name, switch (tv.ty) {
+        name,
+        switch (tv.ty) {
             .real => "a real",
             .string => "a string",
             .integer => unreachable,
@@ -349,7 +350,7 @@ fn checkFopenType(self: *Lower, args: []const Ast.ExprId) Oom!bool {
     if (args.len != 2 or args[1] == .none) return false;
     const s = constStrArg(self, args[1]) orelse return false;
     const forms = [_][]const u8{
-        "r",  "rb",  "w",   "wb",  "a",  "ab",  "r+",  "r+b",
+        "r",   "rb", "w",   "wb",  "a",  "ab",  "r+",  "r+b",
         "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+",
     };
     for (forms) |f| if (std.mem.eql(u8, s, f)) return false;

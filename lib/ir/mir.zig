@@ -38,7 +38,6 @@ pub const Value = enum(u32) {
     /// First dynamic Value index. Values below this are the sentinels above and
     /// have no row in the `defs` side table.
     pub const first_dynamic: u32 = 10;
-
 };
 /// Handle to a basic block; block 0 is the entry.
 pub const Block = enum(u32) { entry = 0, _ };
@@ -776,12 +775,14 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
             .else_block = @enumFromInt(row.c),
         } },
         .jump => .{ .jump = .{ .target = @enumFromInt(row.a) } },
-        .call => .{ .call = .{
-            .callee = @enumFromInt(row.a),
-            .name = self.strings.get(@enumFromInt(self.extra.items[row.b])),
-            // Borrowed slice into the payload pool; invalidated by further appends.
-            .args = @ptrCast(self.extra.items[row.b + 1 ..][0..row.c]),
-        } },
+        .call => .{
+            .call = .{
+                .callee = @enumFromInt(row.a),
+                .name = self.strings.get(@enumFromInt(self.extra.items[row.b])),
+                // Borrowed slice into the payload pool; invalidated by further appends.
+                .args = @ptrCast(self.extra.items[row.b + 1 ..][0..row.c]),
+            },
+        },
         .anew => .{ .anew = .{ .array = row.a } },
         .load => .{ .load = .{ .op = row.op, .arr = @enumFromInt(row.a), .index = @enumFromInt(row.b) } },
         .store => .{ .store = .{

@@ -550,10 +550,10 @@ fn reportCoverage(
         "\n{d} of {d} LRM clauses cited, by {d} of {d} fixtures\n" ++
             "  {d} cited both ways · {d} positive citations only · {d} rejection citations only · {d} uncited · {d} classified\n",
         .{
-            n - uncited.items.len - uncited_classified,                                                   n,
-            citing,                                                                                        fixtures.len + c_files.len,
-            n - uncited.items.len - pos_only.items.len - neg_only.items.len - classified.items.len,       pos_only.items.len,
-            neg_only.items.len,                                                                            uncited.items.len,
+            n - uncited.items.len - uncited_classified,                                             n,
+            citing,                                                                                 fixtures.len + c_files.len,
+            n - uncited.items.len - pos_only.items.len - neg_only.items.len - classified.items.len, pos_only.items.len,
+            neg_only.items.len,                                                                     uncited.items.len,
             classified.items.len,
         },
     );
