@@ -499,7 +499,7 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
                 for (r.subs.items[idx].ranges.items) |rg| if (pc >= rg.start and pc < rg.end) try work.append(self.arena, rg.end);
             },
             .call_timed, .task_return => return self.refuse("a §10.2.3 timed task that reaches itself"),
-            .pla_start => return self.refuse("a §17.5 PLA task"),
+            .pla_start => |loop| try work.appendSlice(self.arena, &.{ next, loop }),
             .fork => |f| try work.appendSlice(self.arena, if (f.arms.len == 0) &.{f.end} else f.arms),
             .join_arm => |j| try work.append(self.arena, j.end),
             .override_on, .override_eval, .override_off => return self.refuse("a §9.3 procedural continuous assignment"),
@@ -645,7 +645,20 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     };
                     try assignInt(self, t.args[3], try std.fmt.allocPrint(self.arena, "q{d}.status", .{lb}));
                 },
-                .pla => return self.refuse("a §17.5 PLA task"),
+                // §17.5: the outputs through a cell as wide as they are.
+                .pla => |p| {
+                    const base = try self.slot(t.args[0]);
+                    const ty = try targetType(self, t.args[2]);
+                    if (ty.real) return self.refuse("a §17.5 PLA writing a real");
+                    if (self.two_state and p.plane) return self.refuse("a §17.5.4 plane PLA, whose z personality bits mean \"ignore this input\"");
+                    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
+                    try self.print("            try s.pla(.{{ .logic = .@\"{t}\", .plane = {}, .async_ = false }}, {d}, {d}, {d}, ", .{
+                        p.logic, p.plane, self.off[base], r.arrays.get(base).?.count, try self.slotWidth(base),
+                    });
+                    const in = try expr.selfDetermined(self, t.args[1]);
+                    try self.print(", {d}, {d}, {d});\n", .{ in.width, at, ty.width });
+                    try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+                },
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);
@@ -794,7 +807,9 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            return;\n", .{});
         },
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
-        .call_timed, .task_return, .pla_start, .override_on, .override_eval, .override_off, .switch_ctrl => unreachable, // `reach` refused each of these by name
+        // §17.5 an asynchronous array's own process starts now.
+        .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
+        .call_timed, .task_return, .override_on, .override_eval, .override_off, .switch_ctrl => unreachable, // `reach` refused each of these by name
     }
 }
 

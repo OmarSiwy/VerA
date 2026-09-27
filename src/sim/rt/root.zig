@@ -743,6 +743,32 @@ pub const State = struct {
         v[n - 1] &= logic.mask(w - 64 * (n - 1));
     }
 
+    /// §17.5 `system.plaEval` of the `nrows` `rw`-bit rows from word `off`
+    /// over the `iw`-bit `in`, into the `ow`-bit cell at word `cell`.
+    pub fn pla(self: *State, p: system.Pla, off: u32, nrows: u32, comptime rw: u32, in: anytype, comptime iw: u32, cell: u32, comptime ow: u32) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const n = comptime logic.words(rw);
+        const rows = try a.alloc(Int.Literal, nrows);
+        for (rows, 0..) |*row, k| {
+            const planes = try a.alloc(u64, 2 * n);
+            @memcpy(planes[0..n], self.v[off + k * n ..][0..n]);
+            @memcpy(planes[n..], self.x[off + k * n ..][0..n]);
+            if (two) @memset(planes[n..], 0);
+            row.* = literal(planes, rw, false);
+        }
+        var ib = logic.planesOf(in);
+        const out = @import("../digital/net.zig").filled(a, ow, false, .x) catch return error.OutOfMemory;
+        system.plaEval(p, rows, literal(&ib, iw, false), out);
+        const on = comptime logic.words(ow);
+        for (self.v[cell..][0..on], self.x[cell..][0..on], out.values(), out.unknowns()) |*v, *x, ov, ox| {
+            // `--two-state`: an output no row decides is 0.
+            v.* = if (two) ov & ~ox else ov;
+            x.* = if (two) 0 else ox;
+        }
+    }
+
     /// §17.9 `system.dist`, with the interpreter's W1151 warning where the
     /// listing prints one.
     pub fn dist(self: *State, f: system.Dist, seed: i32, a: i32, b: i32) ?system.Draw {
