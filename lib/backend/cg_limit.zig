@@ -1,41 +1,9 @@
-//! §4.5.15 `$limit` — the convergence half of the backend.
-//!
-//! Transformation: each `$limit(V(a,b), "alg", args…)` call in the MIR → one
-//! clamp in the contract's `limit` hook, plus a cold-start bias in `seed`. The
-//! host applies both to the solution vector: `limit` after every linear solve
-//! (`ARPice/src/devices/engine.zig` `limitRange`, driven from
-//! `converger.zig`'s `finalizeStep`), `seed` once before Newton iteration 1
-//! (`Circuit.zig`'s `seedJunctions`).
-//!
-//! `eval` still renders the STRING form of `$limit` as the IDENTITY of its
-//! probe, and that is not a gap — it is the other half of this design. The host
-//! clamps `x` BEFORE it calls `eval`, so the probe the body reads is already
-//! the limited value. Applying the clamp a second time inside `eval` would
-//! limit against the wrong `x_old` and break the Jacobian's agreement with the
-//! residual.
-//!
-//! §9.17.3's USER-FUNCTION form is not this file's: nothing here can honour it,
-//! because the limiter is Verilog-A the model wrote and the clamp list has no
-//! way to call it. It is lowered instead — `Lower.lowerLimitUser` inlines the
-//! function inside `eval` with a per-access-function previous-iterate slot, and
-//! restores the probe's derivative on the way out (codegen's `zLimitUf`). The
-//! two forms coexist in one module and share nothing but the spelling.
-//!
-//! WHY A WRITE-BACK INTO `x` AND NOT A CLAMPED LOCAL. SPICE limits the branch
-//! voltage inside the load routine and never touches the node voltages; the
-//! contract instead has the device return a corrected `x`. The two agree when
-//! the correction lands on the unknown that is not shared with the rest of the
-//! circuit — see `sides` — and only the contract's shape lets the engine keep
-//! ONE limited solution vector that `eval`, `q` and the convergence test all
-//! read. That is why `converged` is a device verdict and not a host guess.
-//!
-//! The limiters themselves are `backend/limit_kernels.zig`, `@embedFile`d by
-//! codegen (`limit_txt`) and `@import`ed by its tests — one source, so the
-//! shapes the tests pin are the shapes the device runs. They were a string
-//! literal here until wave 10, which is why nothing could call them.
-//!
-//! Free functions over `*Gen`, like `cg_display.zig` and `cg_filters.zig`:
-//! Zig cannot extend a struct across files.
+//! Honoured `$limit(V(a,b), "alg", args…)` sites -> the device's `limit` hook
+//! (one clamp per site, writing a corrected `x`), `limit_reads`/`limit_writes`,
+//! and the cold-start `seed` (SPICE MODEINITJCT). LRM §4.5.15, §9.17.3.
+//! The host clamps `x` before `eval`, so `eval` renders the string form as the
+//! identity of its probe; a second clamp would use the wrong `x_old`. The
+//! user-function form is lowered instead. Limiters live in `limit_kernels.zig`.
 
 const std = @import("std");
 const plan_topo = @import("codegen/plan/topology.zig");
@@ -45,9 +13,11 @@ const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
-/// The pure half: which sites are honoured, and the questions both halves ask.
+// The pure half: which sites are honoured, and the questions both halves ask.
 const plan_limit = @import("codegen/plan/limit.zig");
+/// A `$limit` algorithm name (§9.17.3).
 pub const Alg = plan_limit.Alg;
+/// One honoured `$limit` site.
 pub const LimitCall = plan_limit.LimitCall;
 const Ladder = plan_limit.Ladder;
 const Rung = plan_limit.Rung;
@@ -56,22 +26,14 @@ const none_u32 = std.math.maxInt(u32);
 
 // -------------------------------------------------------- the live sets
 
-/// Which unknowns `limit` actually touches. `reads` is every `cur[u]`/`old[u]`
-/// the emitted body loads, `writes` every `x[u]` it (or `seed`) can store.
+/// Which unknowns `limit` touches: `reads` is every `cur[u]`/`old[u]` the body
+/// loads, `writes` every `x[u]` it or `seed` can store. The host uses them to
+/// skip gathering and storing unknowns the clamps never see (a MOS ladder reads
+/// four of eight and writes two).
 ///
-/// WHY THE HOST WANTS THIS. `limit`'s signature is `[n_u]f64` twice in and
-/// `[n_u]f64` out because the host cannot name a device's unknowns, but a MOS
-/// ladder reads four of eight and writes two: `d`, `s` and the two branch-flow
-/// unknowns pass straight through, and without a mask the host gathers them
-/// from `x`, copies them across `limit`'s frame and stores them back into
-/// `lim_x` once per instance per Newton iterate to arrive at the value they
-/// already had. ngspice has no such traffic — its limiter memory is the three
-/// BRANCH voltages in `CKTstate0`, not every node the device touches.
-///
-/// Both masks are SUPERSETS by construction and must stay that way: a missing
-/// `reads` bit hands the clamp an undefined probe, a missing `writes` bit
-/// silently drops a limit. `unionSite` mirrors `emitClamp`/`emitLadder`
-/// site for site, so the two go stale together or not at all.
+/// Both masks must stay supersets: a missing `reads` bit hands a clamp an
+/// undefined probe, a missing `writes` bit silently drops a limit. `unionSite`
+/// mirrors `emitClamp`/`emitLadder` site for site.
 const Live = struct { reads: u64 = 0, writes: u64 = 0 };
 
 fn ubit(u: u32) u64 {
@@ -83,10 +45,12 @@ fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
     lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
 }
 
+/// Returns the `limit_reads`/`limit_writes` masks; every bit is set when a
+/// clamp reads the core or `n_u > 64`.
 pub fn liveSets(g: *const Gen) Live {
     var lv: Live = .{};
     // A core re-entry is seeded from EVERY entry of `old` (`emit`'s `xr` loop),
-    // and n_u > 64 has no room in the mask — both answer "all of them".
+    // and n_u > 64 has no room in the mask; both answer "all of them".
     if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
@@ -111,9 +75,9 @@ pub fn liveSets(g: *const Gen) Live {
         .limvds => if (!g.limits.limvdsClaimed(i)) unionSite(&lv, g, lc),
         .pnjlim, .fetlim, .steplim => unionSite(&lv, g, lc),
     };
-    // `seed` corrects the same node `emitClamp` does, but OR it in rather than
-    // rely on that: the host initialises `lim_x` through `seed` and reads it
-    // back through `limit`, so a bit in one and not the other is a stale slot.
+    // `seed` corrects the same node `emitClamp` does, but it is ORed in
+    // anyway: the host initialises `lim_x` through `seed` and reads it back
+    // through `limit`, so a bit in one and not the other is a stale slot.
     // The seed tree writes every node it places, its roots included.
     for (g.limits.seed_steps) |st| lv.writes |= ubit(st.node);
     if (!g.limits.seed_tree) for (g.limits.calls) |lc| {
@@ -126,10 +90,9 @@ pub fn liveSets(g: *const Gen) Live {
 
 // -------------------------------------------------------------------- emit
 
-/// Does any clamp read a value out of the shared core AT CLAMP TIME? Three ways
-/// not to: `limvds` takes no arguments, an unsigned site has no sign, and — the
-/// case that matters — the argument is solve-invariant, so `setup` already
-/// latched it into `Instance.su` (codegen/setup.zig).
+/// Returns true when a clamp reads a value out of the shared core at clamp
+/// time, so `limit` must run `core`. An argument that is a literal, a parameter
+/// or a `setup` root (latched in `Instance.su`) needs no core.
 pub fn usesCore(g: *const Gen) bool {
     for (g.limits.calls) |lc| {
         if (needsCore(g, lc.sign)) return true;
@@ -140,8 +103,7 @@ pub fn usesCore(g: *const Gen) bool {
     return false;
 }
 
-/// `seed`'s narrower question: it reads only each pnjlim site's `vcrit` and
-/// that site's sign.
+/// `usesCore` for `seed`, which reads only each pnjlim site's `vcrit` and sign.
 fn seedUsesCore(g: *const Gen) bool {
     for (g.limits.seed_steps) |st| {
         if (st.site == none_u32) continue;
@@ -156,7 +118,7 @@ fn seedUsesCore(g: *const Gen) bool {
     return false;
 }
 
-/// One argument: is it still a core live-out read, rather than a setup root?
+/// True when `v0` must be read from the core's live-outs (not a root or leaf).
 fn needsCore(g: *const Gen, v0: Mir.Value) bool {
     if (v0 == .f_zero) return false;
     return !isRoot(g, v0) and !isLeaf(g, v0);
@@ -175,7 +137,7 @@ fn isRoot(g: *const Gen, v0: Mir.Value) bool {
     return g.su.idx.len != 0 and g.su.idx[@intFromEnum(g.an.rv(v0))] != none_u32;
 }
 
-/// Does any clamp argument read `Model` directly (a parameter leaf)?
+/// True when a clamp argument reads `Model` directly (a parameter leaf).
 fn readsParam(g: *const Gen) bool {
     for (g.limits.calls) |lc| {
         if (lc.sign != .f_zero and paramLeaf(g, lc.sign)) return true;
@@ -190,7 +152,7 @@ fn paramLeaf(g: *const Gen, v: Mir.Value) bool {
     return g.mir.valueDef(g.an.rv(v)) == .param_ref and isLeaf(g, v);
 }
 
-/// Does any clamp argument read `inst.su`?
+/// True when a clamp argument reads `inst.su`.
 fn readsRoot(g: *const Gen) bool {
     for (g.limits.calls) |lc| {
         if (lc.sign != .f_zero and isRoot(g, lc.sign)) return true;
@@ -201,6 +163,10 @@ fn readsRoot(g: *const Gen) bool {
     return false;
 }
 
+/// Emits `limit`, `limit_reads`/`limit_writes` and `seed` for a device with
+/// honoured `$limit` sites, and reports declined sites (W0853), dropped seeds
+/// (W0854) and seeds that read the solution (E0527, sets `any_fatal`).
+/// Emits nothing but diagnostics when no site is honoured.
 pub fn emit(g: *Gen) Error!void {
     if (g.diags) |bag| for (g.limits.declined) |d| {
         var b = bag.build(.codegen, .W0853, g.lowered.tokenSpan(d.tok));
@@ -295,19 +261,15 @@ pub fn emit(g: *Gen) Error!void {
     try emitSeed(g);
 }
 
-/// `const zsg__k: f64 = ±1.0` for each DISTINCT frame sign, once at the top of
-/// `limit`. Every clamp on a MOSFET reads the same `type` parameter, so without
-/// this the compare-and-select is re-emitted three or four times per body over
-/// a latched `inst.su` field that cannot have changed between them (measured: 8 Ir
-/// per MOSFET per Newton iterate on mos1, 5 of them recoverable). Named from
-/// the MIR value so `signOf` needs no shared state.
+/// Emits `const zsg__k: f64 = ±1.0` once per distinct frame sign at the top of
+/// `limit`, so the clamps of one MOSFET, which all read the same `type`, share
+/// one compare-and-select. Named from the MIR value, so no state is shared.
 fn emitSigns(g: *Gen) Error!void {
     var seen: std.ArrayList(u32) = .empty;
     defer seen.deinit(g.gpa);
-    // MIRRORS `emit`'s dispatch site for site. A claimed `limvds` emits no
-    // clamp of its own but IS the ladder's channel rung, so its sign is still
-    // referenced; a const with no reference is a Zig compile error, and one
-    // referenced but not emitted is worse.
+    // Mirrors `emit`'s dispatch site for site. A claimed `limvds` emits no
+    // clamp of its own but is the ladder's channel rung, so its sign is still
+    // referenced. An unreferenced const is a Zig compile error.
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
             const lad = g.limits.ladderOf(i).?;
@@ -357,13 +319,12 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
         // ±1 recovered from the model value: the limiters assume forward =
         // positive, so the clamp runs on sg·v and hands back sg·result.
         //
-        // `limvds` alone frames on the OLD vds sign, not the sign argument:
+        // `limvds` alone frames on the old vds sign, not the sign argument:
         // ngspice's loads branch on `vdsold >= 0` (mos1load: `vds =
-        // -DEVlimvds(-vds, -vdsold)` in inverse mode), which in raw node
-        // coordinates is sign(vo). Framing on device type instead pinned an
-        // inverted-mode FET at DEVlimvds's absolute -0.5 bound — a clamp
-        // that is NOT fixed-point-preserving, so it moved the converged
-        // solution, not just the trajectory (2.1x drain current at vds=-5).
+        // -DEVlimvds(-vds, -vdsold)` in inverse mode), which in node
+        // coordinates is sign(vo). Framing on device type pins an inverted
+        // FET at DEVlimvds's -0.5 bound, a clamp that moves the converged
+        // solution and not just the trajectory.
         if (lc.alg == .limvds) {
             try g.w("        const sg: f64 = if (vo < 0) -1.0 else if (vo > 0) 1.0 else zsg__{d};\n", .{signKey(g, lc.sign)});
         } else {
@@ -389,46 +350,36 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     }
     try g.w(");\n", .{});
 
-    // SINGLE WRITER, never a split. Junctions share nodes — a BJT's vbe and
-    // vbc clamps both span `bi`, and a diode-connected device gathers b and c
-    // from ONE global node — so a dv/2 split makes sequential clamps fight
-    // through the shared side and the final frame satisfies neither probe
-    // (observed: a 12 V rail's local image dragged to −43 V, junction read
-    // +72 V, e^80 residual). Anchoring the FIRST-named node and writing the
-    // whole correction to the second keeps every probe exactly its limited
-    // value: model authors put the shared side first (V(bi,ei), V(b,si)),
-    // which is also ngspice's frame (vbe state hangs off the emitter side).
+    // Single writer, never a split. Junctions share nodes (a BJT's vbe and
+    // vbc clamps both span `bi`), so a dv/2 split makes sequential clamps
+    // fight through the shared side and the final frame satisfies neither
+    // probe. Anchoring the first-named node and writing the whole correction
+    // to the second keeps every probe exactly its limited value: model
+    // authors put the shared side first (V(bi,ei)), as ngspice's frame does.
     const w_lo = g.limits.writable(lc.lo);
     if (w_lo) {
         try g.w("        x[@intFromEnum(U.{s})] -= vl - vn;\n", .{g.names.u_names[lc.lo]});
     } else {
         try g.w("        x[@intFromEnum(U.{s})] += vl - vn;\n", .{g.names.u_names[lc.hi]});
     }
-    // ngspice reports `icheck` from `DEVpnjlim` alone, and sets it exactly on
-    // the paths where it moved `vnew` — so "the value changed" IS the flag,
-    // with no out-parameter. `fetlim`/`limvds` have no such flag: their clamps
-    // are trajectory shaping, not a statement about the residual. `steplim`
-    // reports like pnjlim — ngspice's B4SOIlimit sets Check=1 on every clamp.
+    // ngspice sets `icheck` from `DEVpnjlim` exactly where it moved `vnew`,
+    // so "the value changed" is the flag. `fetlim`/`limvds` report nothing:
+    // they shape the trajectory. `steplim` reports like pnjlim (ngspice's
+    // B4SOIlimit sets Check=1 on every clamp).
     if (lc.alg == .pnjlim or lc.alg == .steplim) try g.w("        if (vl != vn) ok = false;\n", .{});
     try g.w("    }}\n", .{});
 }
 
-/// One `fetlimds` pair + its `limvds`, emitted as ngspice's MOS gate ladder
-/// (mos1load.c:351-373): branch on the sign of the OLD vds — the limiter's
-/// own memory, and exactly the condition the load's mode select reads — clamp
-/// the CONTROLLING gate leg, re-clamp the channel, derive the other leg. In
-/// node coordinates "derive the other" is a write-target choice: correcting
-/// the source-side node moves vgs and vds together and leaves vgd (normal
-/// mode's fetlim, inverse mode's limvds); correcting the drain-side node
-/// moves vgd and vds and leaves vgs (the other two rungs). And vgdo needs no
-/// storage of its own: old[g]−old[di] IS vgso−vdso, the derivation ngspice
-/// spells by hand off its vgs/vds states.
+/// Emits one `fetlimds` pair and its `limvds` as ngspice's MOS gate ladder
+/// (mos1load.c:351-373): branch on the sign of the old vds, clamp the
+/// controlling gate leg, re-clamp the channel, derive the other leg. In node
+/// coordinates "derive the other" is a write-target choice: correcting the
+/// source-side node moves vgs and vds and leaves vgd; correcting the
+/// drain-side node moves vgd and vds and leaves vgs. vgdo needs no storage:
+/// old[g]−old[di] is vgso−vdso.
 ///
-/// The channel rung fixes the same frame the standalone `limvds` clamp
-/// recovers from sign(vo) (the f4cd9cc rule): the mode branch already knows
-/// it — `sgt` in the normal arm, `-sgt` in the inverse arm, ngspice's
-/// `vds = -DEVlimvds(-vds,-vdso)` — and adds the write target the flat list
-/// cannot express.
+/// The channel rung frames on `sgt` (normal arm) or `-sgt` (inverse arm),
+/// the frame the standalone `limvds` clamp recovers from sign(vo).
 fn emitLadder(g: *Gen, lad: Ladder) Error!void {
     const gs = g.limits.calls[lad.gs];
     const gd = g.limits.calls[lad.gd];
@@ -447,9 +398,9 @@ fn emitLadder(g: *Gen, lad: Ladder) Error!void {
     try g.w("        }}\n    }}\n", .{});
 }
 
-/// One arm: fetlim the controlling leg (writing its own second-named node, so
-/// the other leg's probe is untouched), then limvds the channel V(nd,ns)
-/// against the old vds, writing the node the fetlim left alone.
+/// Emits one ladder arm: fetlim the controlling leg (writing its own
+/// second-named node, so the other leg's probe is untouched), then limvds the
+/// channel V(nd,ns) against the old vds, writing the node the fetlim left alone.
 fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) Error!void {
     const ngate = g.names.u_names[leg.hi];
     const nw = g.names.u_names[leg.lo];
@@ -474,12 +425,10 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
     }
 }
 
-/// One `pnjlimds` pair + its `limvds`, emitted as ngspice's MOS bulk rung
-/// (mos1load.c:376-384): branch on the sign of the LIMITED vds — the ladder
-/// has already run — pnjlim the junction on the source side (vbs) or the
-/// drain side (vbd) from its RAW value against its old one, and put the bulk
-/// where that leaves the limited junction. The other junction follows through
-/// the limited vds, as ngspice derives it; only the bulk moves.
+/// Emits one `pnjlimds` pair and its `limvds` as ngspice's MOS bulk rung
+/// (mos1load.c:376-384): branch on the sign of the limited vds (the ladder has
+/// run), pnjlim vbs or vbd from its raw value against its old one, and put the
+/// bulk where that leaves the limited junction. Only the bulk moves.
 fn emitRung(g: *Gen, r: Rung) Error!void {
     const bs = g.limits.calls[r.bs];
     const bd = g.limits.calls[r.bd];
@@ -497,8 +446,8 @@ fn emitRung(g: *Gen, r: Rung) Error!void {
     try g.w("        }}\n    }}\n", .{});
 }
 
-/// One rung arm: pnjlim the RAW `V(hi, lo)` (from `cur`, before the ladder
-/// moved `lo`) and write the bulk `hi` to the limited value above `x[lo]`.
+/// Emits one rung arm: pnjlim the raw `V(hi, lo)` (from `cur`, before the
+/// ladder moved `lo`) and write the bulk `hi` to the limited value above `x[lo]`.
 fn emitJunction(g: *Gen, leg: LimitCall) Error!void {
     const nb = g.names.u_names[leg.hi];
     const nj = g.names.u_names[leg.lo];
@@ -518,8 +467,7 @@ fn emitJunction(g: *Gen, leg: LimitCall) Error!void {
     try g.w("            if (vl != vn) ok = false;\n", .{});
 }
 
-/// `const NAME: f64 = ±1.0` recovered from a sign argument, or the literal
-/// 1.0 when the site is unsigned.
+/// Emits `const NAME: f64 = ±1.0` from a sign argument, or 1.0 when unsigned.
 fn writeSign(g: *Gen, name: []const u8, v: Mir.Value) Error!void {
     if (v == .f_zero) return g.w("        const {s}: f64 = 1.0;\n", .{name});
     try g.w("        const {s}: f64 = zsg__{d};\n", .{ name, signKey(g, v) });
@@ -540,21 +488,17 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     const k = g.core.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
-    // a family value — no `.val()` to read.
+    // a family value, so it has no `.val()`.
     if (g.an.vty[i] == .int)
         try g.w("m.f{d}", .{k})
     else
         try g.w("m.f{d}.val()", .{k});
 }
 
-/// SPICE `MODEINITJCT`. Newton started at 0 V on a junction sees no current
-/// and no conductance, so its first step is a blind jump into the exponential;
-/// that is what pins a cold start in the wrong basin, and it is why
-/// `contract.zig` says a device with `limit` should also have `seed`.
-///
-/// Every pnjlim-limited branch starts at its own `vcrit` — the bias where the
-/// exponential is still Newton-tractable, which is exactly what `vcrit` IS.
-/// `fetlim`/`limvds` get nothing: a channel is well-conditioned at 0 V.
+/// Emits `seed`, SPICE `MODEINITJCT`: every pnjlim-limited branch starts at its
+/// own `vcrit`, where the exponential is still Newton-tractable, instead of at
+/// 0 V, where the junction has no current and no conductance. `fetlim`/`limvds`
+/// get nothing: a channel is well-conditioned at 0 V.
 fn emitSeed(g: *Gen) Error!void {
     if (g.limits.seed_tree) return emitSeedTree(g);
     var any = false;
@@ -591,8 +535,8 @@ fn emitSeed(g: *Gen) Error!void {
     for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         // The junction sits across `V(hi, lo)`, and only the internal side is
-        // ours to place. Two clamps on the same net leave the later one's
-        // bias — they are the same junction seen twice, so either is right.
+        // ours to place. Two clamps on the same net are the same junction seen
+        // twice, so the later one's bias is as right as the earlier.
         // A signed clamp seeds V = sign·vcrit: the junction is forward at
         // NEGATIVE probe voltage when the sign argument is negative.
         const on_lo = g.limits.writable(lc.lo);
@@ -618,10 +562,10 @@ fn emitSeed(g: *Gen) Error!void {
     try g.w("    return s;\n}}\n\n", .{});
 }
 
-/// The seed tree's `seed` (plan/limit.zig `planSeed`): the limited image a host
-/// starts from is NODE values, so each seeded branch is solved into them down
-/// the tree, root at 0 V. ngspice MODEINITJCT (mos1load.c:397-408) starts the
-/// branches, not the nodes, at vgs = vto, vds = 0, vbs = -1.
+/// Emits the seed tree's `seed` (`plan/limit.zig` `planSeed`): the host's
+/// limited image is node values, so each seeded branch is solved into them
+/// down the tree from a root at 0 V. ngspice MODEINITJCT (mos1load.c:397-408)
+/// seeds the branches instead: vgs = vto, vds = 0, vbs = -1.
 fn emitSeedTree(g: *Gen) Error!void {
     if (g.limits.seed_steps.len == 0) return;
     const needs_core = seedUsesCore(g);
