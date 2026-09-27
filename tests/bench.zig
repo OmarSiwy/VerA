@@ -792,15 +792,16 @@ const Scope = enum { va, ams };
 /// scope, so a scope rule never excuses a real refusal.
 const ams_only = [_][]const u8{
     // C.16
-    "connect",    "connectmodule",       "connectrules", "driver_update",
-    "endconnectrules", "merged",         "resolveto",    "split",
+    "connect",         "connectmodule", "connectrules",       "driver_update",
+    "endconnectrules", "merged",        "resolveto",          "split",
     "wreal",
     // C.4
-    "discrete",   "default_discipline",
+              "discrete",      "default_discipline",
     // C.7
-    "always",     "initial",             "casex",        "casez",
-    "posedge",    "negedge",             "fork",         "join",
-    "task",       "endtask",
+    "always",
+    "initial",         "casex",         "casez",              "posedge",
+    "negedge",         "fork",          "join",               "task",
+    "endtask",
 };
 
 /// Is this fixture inside the Verilog-A subset?
@@ -1054,9 +1055,9 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
             // that warning. The flags are `vpi_app.c`'s, so no fixture passes
             // here that the acceptance test's flags would refuse.
             const r = capture(pa, io, &.{
-                options.zig_exe, "cc",      "-std=c99", "-Wall", "-Werror",
-                "-c",            "-o",      obj,        "-I",    vpi_include,
-                "-I",            dir_path,  src,
+                options.zig_exe, "cc",     "-std=c99", "-Wall", "-Werror",
+                "-c",            "-o",     obj,        "-I",    vpi_include,
+                "-I",            dir_path, src,
             }) catch |e| {
                 try w.print("FAIL {s}: could not run the C compiler: {s}\n", .{ name, @errorName(e) });
                 failed += 1;
@@ -1216,8 +1217,8 @@ fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
             //    include dirs, per AGENTS.md §6 — `check.vh` is at the suite
             //    root and the model's siblings are beside it.
             const r = capture(pa, io, &.{
-                vera_exe, "--check",             "--contract", options.contract,
-                "-I",     options.fixture_root,  "-I",         dir_path,
+                vera_exe, "--check",            "--contract", options.contract,
+                "-I",     options.fixture_root, "-I",         dir_path,
                 model,
             }) catch |e| {
                 try w.print("FAIL {s}: could not run vera: {s}\n", .{ name, @errorName(e) });
@@ -1493,7 +1494,7 @@ const RunState = enum { four, two, rerun };
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
 fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    const src =try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return nativeCase(arena, io, vera_exe, flags, case, w);
     if (xfail.len == 0) {

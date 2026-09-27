@@ -331,4 +331,3 @@ pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!
     try g.w("    }};\n}}\n\n", .{});
     return at_fn;
 }
-

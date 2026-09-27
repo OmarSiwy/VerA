@@ -188,9 +188,9 @@ pub fn isStaticValue(self: *Lower, v: Mir.Value) Oom!bool {
 /// `analysis()`, §9.15's `$temperature` and `$vt`, §9.18's six system
 /// parameters, and the runtime array read (a pure selection over its operands).
 const static_calls = std.StaticStringMap(void).initComptime(.{
-    .{"analysis"},  .{"$temperature"}, .{"$vt"},     .{"$mfactor"},  .{"$xposition"},
-    .{"$yposition"}, .{"$angle"},      .{"$hflip"},  .{"$vflip"},    .{"$idx"},
-    .{"$idx$int"},  .{"$idx$str"},
+    .{"analysis"},   .{"$temperature"}, .{"$vt"},    .{"$mfactor"}, .{"$xposition"},
+    .{"$yposition"}, .{"$angle"},       .{"$hflip"}, .{"$vflip"},   .{"$idx"},
+    .{"$idx$int"},   .{"$idx$str"},
 });
 
 fn staticWalk(

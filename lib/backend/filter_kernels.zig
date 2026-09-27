@@ -268,8 +268,8 @@ test "zPush: newest first, and an empty history is a no-op" {
 
 test "zSecR: unit section is the identity, and gain is b0/a0" {
     const stdx = @import("std");
-    const uh: [1]f64 = .{ 0 };
-    const yh: [1]f64 = .{ 0 };
+    const uh: [1]f64 = .{0};
+    const yh: [1]f64 = .{0};
     try stdx.testing.expectApproxEqAbs(
         @as(f64, 4.25),
         zSecR(1, 4.25, .{ 1, 0 }, .{ 1, 0 }, &uh, &yh),

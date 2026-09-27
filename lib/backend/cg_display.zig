@@ -288,7 +288,13 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
     switch (c) {
         // §9.5.2's five output tasks, and the two descriptor tasks that take no
         // text (`Lower.isFileOutTask`).
-        .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor", .@"$fdebug", .@"$fclose", .@"$fflush",
+        .@"$fdisplay",
+        .@"$fwrite",
+        .@"$fstrobe",
+        .@"$fmonitor",
+        .@"$fdebug",
+        .@"$fclose",
+        .@"$fflush",
         => return emitFileWrite(g, c, args, site),
         // §9.5.1 Syntax 9-2: one argument is a multichannel descriptor, two are a
         // file descriptor. The presence of the type argument IS the discriminator,
