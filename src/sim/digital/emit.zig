@@ -1010,7 +1010,8 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
 }
 
 /// Is driver `i` its net's value as is (`exec.plainCopy`, with no delay)?
-/// It stores the net itself; every other driver resolves in `rt.net`.
+/// It stores the net itself; every other driver resolves in `rt.net`. A
+/// logic gate is one on a scalar net: it never asserts §7.10.2's H/L.
 pub fn plainDriver(r: *const Run, i: u32) bool {
     const d = r.drivers[i];
     const n = r.nets[d.net];
@@ -1018,7 +1019,15 @@ pub fn plainDriver(r: *const Run, i: u32) bool {
         .wire, .tri, .uwire => true,
         .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
     };
-    return plain and d.source == .expr and n.drivers.len == 1 and !n.strength_read and
+    const source = switch (d.source) {
+        .expr => true,
+        .gate => |g| r.values[n.slot].width == 1 and switch (g.kind) {
+            .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => true,
+            .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => false,
+        },
+        .bridge, .udp, .mos, .pull => false,
+    };
+    return plain and source and n.drivers.len == 1 and !n.strength_read and
         d.s0 == .strong and d.s1 == .strong and !d.delay.present and !n.delay.present;
 }
 
@@ -1132,10 +1141,14 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     r.scope = d.scope;
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
-        const x = d.source.expr;
+        if (d.source == .gate) try bits(self, d.source.gate.ins, d.source.gate.lane);
         try self.print("            ", .{});
         try self.store(n.slot, .blocking);
-        try driverValue(self, x.e, x.slice, n.slot);
+        switch (d.source) {
+            .expr => |x| try driverValue(self, x.e, x.slice, n.slot),
+            .gate => |g| try self.print("rt.net.gateValue(.{t}, &b)", .{g.kind}),
+            .bridge, .udp, .mos, .pull => unreachable, // `plainDriver` admits these two
+        }
         try self.print(", {f});\n", .{full(nw)});
     } else {
         const k = self.drv_ix[i].?;
