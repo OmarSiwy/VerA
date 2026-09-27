@@ -1,10 +1,6 @@
-//! The bag: every diagnostic of one compilation, collected, deduplicated and sorted.
-//!
-//! In: `err`/`warn`/`note` calls from every stage. Out: an ordered entry table; one run
-//! reports many errors.
-//!
-//! Cut verbatim from `diag.zig`. Functions take `self: *diag` and are called
-//! directly, `diag_bag.f(self, ...)`; `diag.zig` aliases only what other modules call.
+//! The bag: every diagnostic of one compilation, collected, deduplicated and
+//! sorted. In: `Builder` commits from every stage. Out: an ordered table of
+//! `Record` rows whose text lives in one string pool.
 
 const std = @import("std");
 const diag = @import("../diag.zig");
@@ -123,8 +119,9 @@ pub const Bag = struct {
         };
     }
 
-    /// Decodes into `buf` rather than allocating: `max_children` is a hard cap
-    /// the `Builder` enforces, so the caller's array is always big enough.
+    /// Returns `e`'s secondary labels, decoded into `buf`; the slice is valid
+    /// while `buf` and the bag are. `buf` always fits: `Builder` caps labels at
+    /// `max_children`.
     pub fn labels(self: *const Bag, e: diag_entry.Entry, buf: *[diag_entry.max_children]diag_entry.Label) []const diag_entry.Label {
         const m = &self.records.items[e.index];
         for (m.labels[0..m.n_labels], buf[0..m.n_labels]) |r, *out|
@@ -132,6 +129,7 @@ pub const Bag = struct {
         return buf[0..m.n_labels];
     }
 
+    /// Returns `e`'s notes and help lines, decoded into `buf` as `labels` does.
     pub fn notes(self: *const Bag, e: diag_entry.Entry, buf: *[diag_entry.max_children]diag_entry.Note) []const diag_entry.Note {
         const m = &self.records.items[e.index];
         for (m.notes[0..m.n_notes], buf[0..m.n_notes]) |r, *out| out.* = .{
@@ -142,19 +140,18 @@ pub const Bag = struct {
         return buf[0..m.n_notes];
     }
 
-    /// Register a file and get the id that names it. The FIRST file
-    /// registered is `.root`, so the preprocessor must open the top-level
-    /// compilation unit before any `include.
+    /// Registers a file and returns its id. `text` is borrowed, not copied.
+    /// The first file registered is `.root`, so the preprocessor must open the
+    /// top-level compilation unit before any `include.
     pub fn addFile(self: *Bag, name: []const u8, text: []const u8) Allocator.Error!diag_location.FileId {
         const id: diag_location.FileId = @enumFromInt(@as(u16, @intCast(self.files.items.len)));
         try self.files.append(self.arena, .{ .name = name, .text = text });
         return id;
     }
 
-    /// Point an already-registered file at its comment-STRIPPED bytes — what
-    /// every span from here on indexes. The registered ORIGINAL is kept and
-    /// `marks` maps stripped offsets back into it, so the renderer can print
-    /// the line the user WROTE with the caret still under the right column.
+    /// Points a registered file at its comment-stripped bytes, which every span
+    /// from here on indexes. The original stays for rendering and `marks` maps
+    /// stripped offsets back into it. An unknown `id` is ignored.
     pub fn setStrippedText(self: *Bag, id: diag_location.FileId, stripped: []const u8, marks: []const diag_location.StripMark) void {
         const i = @intFromEnum(id);
         if (i >= self.files.items.len) return;
@@ -255,32 +252,14 @@ pub const Bag = struct {
         return b.emit();
     }
 
-    /// Deep-copy every borrowed byte into `gpa`, so the bag outlives the
-    /// compilation arena. The shape does not change — only the owner.
+    /// Deep-copies every arena-owned or borrowed byte (rows, string pool, file
+    /// names and texts, macro names) into `gpa`, so the bag outlives the
+    /// compilation arena. The caller then owns it and releases it with
+    /// `deinit(gpa)`. On `OutOfMemory` nothing is allocated and the bag is
+    /// unchanged, still on its arena.
     ///
-    /// THE OWNERSHIP BOUNDARY. During compilation the bag allocates from the
-    /// per-compilation arena — no frees, no bookkeeping, and the file texts are
-    /// borrowed rather than copied. But a failed compilation frees its arena on
-    /// the way out and the caller still wants to render, so exactly one place
-    /// pays for a copy: here.
-    ///
-    /// The diagnostics themselves are two `appendSlice`s, because the rows
-    /// hold no pointers: there is nothing to fix up after the copy. What
-    /// is left is the provenance sidecar — file names, file texts and the
-    /// macro names in `map.segs` — which is borrowed and does need duping.
-    ///
-    /// An EMPTY bag is detached too, provenance and all. It used to drop the
-    /// borrowed tables and return, on the grounds that a bag with no messages
-    /// can never need to render one — which stopped being true when codegen
-    /// became a diagnostic-producing stage (E0515): that runs after `detach`,
-    /// and a model whose only diagnostic is a codegen one would have rendered
-    /// with no file text and therefore no source snippet. The cost is one copy
-    /// of the source per clean compile, which is what every compile that emits
-    /// a single warning already paid.
-    ///
-    /// After this the bag must be released with `deinit(gpa)`. On
-    /// `OutOfMemory` nothing is allocated and the bag is unchanged, still on
-    /// its arena.
+    /// An empty bag is detached too: codegen runs after this and may still
+    /// report (E0515), and its snippet needs the file text.
     pub fn detach(self: *Bag, gpa: Allocator) Allocator.Error!void {
         var string_bytes: std.ArrayList(u8) = .empty;
         errdefer string_bytes.deinit(gpa);
@@ -329,8 +308,8 @@ pub const Bag = struct {
         self.arena = gpa;
     }
 
-    /// Release a bag that has been through `detach`. A bag that never was is
-    /// freed with its arena instead — do not call this on one.
+    /// Releases a bag that has been through `detach`. Precondition: detached;
+    /// a bag still on its arena is freed with the arena instead.
     pub fn deinit(self: *Bag, gpa: Allocator) void {
         for (self.files.items) |f| {
             gpa.free(f.name);
@@ -364,25 +343,15 @@ pub const Bag = struct {
     }
 };
 
-/// Accumulates one diagnostic's parts, then commits.
+/// Accumulates one diagnostic's parts, then commits with `emit`.
 ///
-/// Methods return void rather than `*Builder`, and an allocation failure is
-/// latched in `oom` instead of propagating: chaining `try` through a fluent
-/// interface in Zig reads worse than it builds. `emit` is the only fallible
-/// call.
-///
-/// Text is interned into the bag's pool AS IT IS BUILT, so nothing here is a
-/// pointer: the builder holds `String` indices and the records it will commit.
-/// A diagnostic that is then dropped (allowed, deduped, over the cap) leaves
-/// its strings behind in the pool — exactly as the old code left its
-/// `allocPrint`s on the arena.
-/// ponytail: no rollback index. The cap bounds the waste at a few kilobytes of
-/// arena on a run that is already failing; add a mark-and-truncate in `emit`
-/// if a bag ever outlives its compilation for long enough to matter.
-///
-/// Labels and notes live in fixed inline arrays — more than `max_children` of
-/// either is not clearer for it.
+/// Methods return void: an allocation failure is latched in `oom` and reported
+/// by `emit`, the only fallible call. Text is interned into the bag's pool as
+/// it is built. Labels and notes beyond `max_children` are dropped.
 pub const Builder = struct {
+    // ponytail: no rollback index. A dropped diagnostic (allowed, deduped,
+    // over the cap) leaves its strings in the pool; the cap bounds the waste.
+    // Add a mark-and-truncate in `emit` if a bag outlives its compilation.
     bag: *Bag,
     stage: diag_entry.Stage,
     code: Code,
@@ -396,6 +365,7 @@ pub const Builder = struct {
     n_notes: u8 = 0,
     oom: bool = false,
 
+    /// Sets the headline printed after `Info.title`.
     pub fn msg(self: *Builder, comptime fmt: []const u8, args: anytype) void {
         self.message = self.bag.printString(fmt, args) catch {
             self.oom = true;
@@ -418,6 +388,7 @@ pub const Builder = struct {
         };
     }
 
+    /// Adds a secondary span with its own text.
     pub fn label(self: *Builder, span: diag_location.Span, comptime fmt: []const u8, args: anytype) void {
         if (self.n_labels == self.labels.len) return;
         const text = self.bag.printString(fmt, args) catch {
@@ -436,7 +407,7 @@ pub const Builder = struct {
         self.pushNote(.help, null, fmt, args);
     }
 
-    /// A help line WITH a machine-applicable rewrite. The renderer shows the
+    /// Adds a help line with a machine-applicable rewrite. The renderer shows the
     /// patched line under the help text.
     pub fn suggest(
         self: *Builder,
@@ -447,10 +418,8 @@ pub const Builder = struct {
         self.pushNote(.help, fix, fmt, args);
     }
 
-    /// The did-you-mean shape: rewrite the PRIMARY span. Every "unknown name"
-    /// diagnostic has it — the misspelled identifier is exactly what the caret
-    /// is already under — so the alternative is thirteen call sites each
-    /// restating `.span = b.span`, and one of them eventually getting it wrong.
+    /// Adds a help line that rewrites the primary span, the did-you-mean shape
+    /// of every "unknown name" diagnostic.
     pub fn suggestHere(self: *Builder, replacement: []const u8) void {
         self.suggest(
             .{ .span = self.span, .replacement = replacement },
@@ -486,8 +455,9 @@ pub const Builder = struct {
         self.n_notes += 1;
     }
 
-    /// Commit. Honours the lint level, the cap and the dedupe set; a dropped
-    /// diagnostic is counted, never silent.
+    /// Commits the diagnostic. Honours the lint level, the cap and the dedupe
+    /// set; a dropped diagnostic is counted, never silent. Returns
+    /// `OutOfMemory` if any earlier builder call failed to allocate.
     pub fn emit(self: *Builder) Allocator.Error!void {
         if (self.oom) return error.OutOfMemory;
         const bag = self.bag;
@@ -544,15 +514,8 @@ pub const Builder = struct {
 /// Optimal string alignment distance (Damerau-Levenshtein restricted to
 /// adjacent transpositions), capped at `limit` so a hopeless pair exits early.
 ///
-/// Bounded stack, no allocation: names longer than this are not the ones a
-/// typo suggestion helps with.
-///
-/// The rows are `u8` because the `cap` guard three lines down is the proof: an
-/// edit distance never exceeds the longer input, so no cell can exceed 64, and
-/// the widest intermediate any `@min` sees is `cell + 1 == 65`. Three `usize`
-/// rows were 1.5 KB of frame for a value that fits in a byte — and the rotation
-/// was two 520-byte struct copies per input character. Rotating three pointers
-/// over one `[3][cap + 1]u8` is 195 bytes and no copy at all.
+/// No allocation: names longer than `cap` are not the ones a typo suggestion
+/// helps with.
 pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     const cap = 64;
     if (a.len > cap or b.len > cap) return limit + 1;
@@ -560,6 +523,8 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     if (b.len == 0) return a.len;
     if (a.len > b.len + limit or b.len > a.len + limit) return limit + 1;
 
+    // `u8` cells: an edit distance never exceeds the longer input (<= cap), so
+    // the widest intermediate any `@min` sees is cap + 1.
     var rows: [3][cap + 1]u8 = undefined;
     var prev2: *[cap + 1]u8 = &rows[0];
     var prev: *[cap + 1]u8 = &rows[1];
@@ -591,28 +556,17 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     return prev[b.len];
 }
 
-/// Nearest candidate to `name`, or null when nothing is close enough.
-///
-/// DETERMINISM: callers feed this from `StringHashMap` iterators, whose order
-/// is unspecified. Ties therefore break on the NAME, lexicographically — never
-/// on "whichever the iterator yielded first", which would make the same source
-/// produce different suggestions across runs and the fixture suite flaky.
+/// Returns the candidate nearest to `name`, or null when nothing is close
+/// enough. Ties break on the name, lexicographically, so the answer does not
+/// depend on candidate order (callers often feed hash-map iterators).
 pub fn didYouMean(name: []const u8, candidates: []const []const u8) ?[]const u8 {
     var n: Nearest = .init(name);
     for (candidates) |c| n.offer(c);
     return n.best;
 }
 
-/// `didYouMean` over the keys of any `StringHashMapUnmanaged`, which is the
-/// shape every symbol table in lower.zig has.
-///
-/// It streams the iterator. The version before this one collected the keys into
-/// the arena first, and its comment said that was needed "so the deterministic
-/// tie-break sees every candidate" — but `Nearest` is a running minimum of the
-/// pair `(distance, name)`, which is a total order, so it sees every candidate
-/// either way and the answer cannot depend on arrival order. The test below
-/// ("ties break lexicographically, not by input order") is that claim, asserted.
-/// The collect was one arena allocation per emitted suggestion for nothing.
+/// `didYouMean` over the keys of any `StringHashMapUnmanaged`, streamed
+/// without allocating.
 pub fn didYouMeanMap(name: []const u8, map: anytype) ?[]const u8 {
     var n: Nearest = .init(name);
     var it = map.keyIterator();
