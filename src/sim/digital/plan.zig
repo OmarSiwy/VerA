@@ -18,6 +18,7 @@ const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
+pub const Reach = @import("../rt/root.zig").Reach;
 
 pub const Schedule = enum { fifo, static };
 
@@ -46,6 +47,8 @@ pub const Sense = struct { node: u32, word: u32, mask: u64 };
 pub const Plan = struct {
     /// Per slot: an event control, driver or node may wait on it.
     watched: []const bool,
+    /// Per slot: what a change of it can wake.
+    reach: []const Reach,
     /// Per node, the pc its evaluation starts at.
     node_pc: []const u32 = &.{},
     /// Per slot, the bits its node readers read, ascending by word
@@ -126,7 +129,12 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     // a dumped change must reach `rt`'s hook, which `set` bypasses.
     // ponytail: every slot of a dumping design; the catalog's alone if it matters.
     if (emit.dumps(r)) @memset(watched, true);
-    if (schedule == .fifo) return .{ .watched = watched, .fan_start = r.fan_start, .fan = r.fan };
+    if (schedule == .fifo) return .{
+        .watched = watched,
+        .reach = try reachOf(self, procs, mon.items, r.fan_start, &.{}, &.{}),
+        .fan_start = r.fan_start,
+        .fan = r.fan,
+    };
 
     // Candidates for a node, with the slots they read and write.
     // `bits` is null when a node re-runs on any change of an input.
@@ -255,6 +263,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
 
     return .{
         .watched = watched,
+        .reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start),
         .node_pc = node_pc,
         .comb_start = comb.start,
         .comb = comb.items,
@@ -264,6 +273,56 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
         .fan_start = fan.start,
         .fan = fan.items,
     };
+}
+
+/// Per slot, what its change can wake: the tables' rows, an event control
+/// a process files (every wait but a triggered process's or a node's entry;
+/// a subroutine a process calls never waits), the monitor, a dump.
+fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]const Reach {
+    const r = self.r;
+    const reach = try self.arena.alloc(Reach, r.values.len);
+    @memset(reach, .{});
+    const has = struct {
+        fn f(start: []const u32, s: usize) bool {
+            return s + 1 < start.len and start[s] != start[s + 1];
+        }
+    }.f;
+    for (reach, 0..) |*x, s| {
+        x.fan = has(fan_start, s);
+        x.comb = has(comb_start, s);
+        x.watch = has(watch_start, s);
+    }
+    var ts: std.ArrayList(Term) = .empty;
+    for (procs) |p| for (p.pcs) |pc| {
+        if (pc == p.entry and p.role != .general) continue;
+        r.scope = r.code_scope.items[pc];
+        switch (r.code.items[pc]) {
+            .wait_event => |e| {
+                ts.clearRetainingCapacity();
+                try terms(self, e, &ts);
+                for (ts.items) |t| reach[t.slot].terms = true;
+            },
+            .wait_slots => |slots| for (slots) |s| {
+                reach[s].terms = true;
+            },
+            .wait_level => |x| for (x.slots) |s| {
+                reach[s].terms = true;
+            },
+            .sample => |x| {
+                const st = r.file.stmt(x.statement).assign;
+                if (st.nonblocking or st.timing_is_delay) continue;
+                ts.clearRetainingCapacity();
+                try terms(self, st.timing, &ts);
+                for (ts.items) |t| reach[t.slot].terms = true;
+            },
+            else => {}, // else: only these four file an event control
+        }
+    };
+    for (mon) |s| reach[s].mon = true;
+    if (emit.dumps(r)) for (reach) |*x| {
+        x.dump = true;
+    };
+    return reach;
 }
 
 /// Does `p` suspend only at its entry, returning there after every pass?

@@ -87,8 +87,9 @@ pub const Emitter = struct {
     labels: u32 = 0,
     /// Each slot's first word in `rt.State`'s planes.
     off: []const u32 = &.{},
-    /// `plan.Plan.watched`.
+    /// `plan.Plan.watched` and `plan.Plan.reach`.
     watched: []const bool = &.{},
+    reach: []const plan.Reach = &.{},
     /// The process being emitted.
     role: plan.Role = .general,
     /// `--two-state` (`program`).
@@ -152,7 +153,7 @@ pub const Emitter = struct {
         // §4.8 a real changes when its value does, not its bits.
         if (how == .blocking and self.r.reals.contains(at)) return self.print("try s.putReal({d}, {d}, ", .{ at, self.off[at] });
         if (how == .blocking and !self.watched[at]) return self.print("s.set({d}, ", .{self.off[at]});
-        try storeCall(self, how);
+        try storeCall(self, how, self.reach[at]);
         try self.print("{d}, {d}, ", .{ at, self.off[at] });
     }
 
@@ -164,7 +165,9 @@ pub const Emitter = struct {
         const count = self.r.arrays.get(base).?.count;
         const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("s.set({d} + (a{d} - {d}) * {d}, ", off);
-        try storeCall(self, how);
+        var wakes: plan.Reach = .{};
+        for (self.reach[base..][0..count]) |x| wakes = @bitCast(@as(u8, @bitCast(wakes)) | @as(u8, @bitCast(x)));
+        try storeCall(self, how, wakes);
         try self.print("a{d}, {d} + (a{d} - {d}) * {d}, ", .{lb} ++ off);
     }
 
@@ -192,16 +195,27 @@ pub const Emitter = struct {
 /// this step or `delay` later.
 pub const How = union(enum) { blocking, nba, nba_after: Ast.ExprId };
 
-fn storeCall(self: *Emitter, how: How) Error!void {
+fn storeCall(self: *Emitter, how: How, wakes: plan.Reach) Error!void {
     switch (how) {
-        .blocking => try self.print("try s.put(", .{}),
-        .nba => try self.print("try s.nba(", .{}),
+        .blocking => try self.print("try s.put({f}, ", .{fmtReach(wakes)}),
+        .nba => try self.print("try s.nba({f}, ", .{fmtReach(wakes)}),
         .nba_after => |d| {
-            try self.print("try s.nbaAfter(", .{});
+            try self.print("try s.nbaAfter({f}, ", .{fmtReach(wakes)});
             try delay(self, d);
             try self.print(", ", .{});
         },
     }
+}
+
+/// `wakes` as the `rt.Reach` literal of the fields it sets.
+fn fmtReach(wakes: plan.Reach) std.fmt.Alt(plan.Reach, reachText) {
+    return .{ .data = wakes };
+}
+
+fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
+    try out.writeAll(".{");
+    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
+    try out.writeAll(" }");
 }
 
 /// A right-hand side: an expression, or a value already stored — a formal
@@ -331,6 +345,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     }
     const p = try plan.build(self, procs.items, schedule);
     self.watched = p.watched;
+    self.reach = p.reach;
     // `fn proc<pc>` of every pc, so a dispatch is one indexed call.
     const entry_of = try self.arena.alloc(?u32, r.code.items.len);
     @memset(entry_of, null);
@@ -966,7 +981,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
     if (sw > 64 and how == .blocking) {
         // One bit of a wide vector: the store touches only its word.
         if (self.watched[at])
-            try self.print("try s.putWord({d}, {d}, q{d} / 64, ", .{ at, self.off[at], lb })
+            try self.print("try s.putWord({f}, {d}, {d}, q{d} / 64, ", .{ fmtReach(self.reach[at]), at, self.off[at], lb })
         else
             try self.print("s.set({d} + q{d} / 64, ", .{ self.off[at], lb });
         try self.print("L.up(", .{});
