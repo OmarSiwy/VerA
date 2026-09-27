@@ -11,8 +11,19 @@
 //! Clauses: §5.1.5 arithmetic, §5.1.7 relational, §5.1.8 equality, §5.1.9
 //! logical, §5.1.10 bitwise, §5.1.11 reduction, §5.1.12 shift, §5.1.13
 //! conditional, Tables 5-12..5-21; §5.5.2 extension; §9.5.1 casez/casex.
+//!
+//! Under `--two-state` (the executable's root declares `vera_two_state`)
+//! every x or z an operator would create is 0 instead: an out-of-range
+//! select, `/` or `%` by zero, `0 ** -n`. Operands then never hold x or z,
+//! so no other operator can make one.
 const std = @import("std");
 const Int = @import("frontend").Integer;
+
+/// `vera --emit-exe --two-state`: not IEEE 1364 §3.2/§4.1 4-state logic.
+pub const two = blk: {
+    const root = @import("root");
+    break :blk if (@hasDecl(root, "vera_two_state")) root.vera_two_state else false;
+};
 
 /// A value of at most 64 bits as two planes, VPI-encoded per bit: (v, x) =
 /// 00/10/11/01 for 0/1/x/z. Bits at and above the width are 0 in both.
@@ -72,6 +83,7 @@ pub fn full(comptime w: u32) M(w) {
 
 /// A `w`-bit value of all x.
 pub fn xs(comptime w: u32) T(w) {
+    if (two) return narrow(w, .{ .v = @splat(0), .x = @splat(0) });
     return narrow(w, .{ .v = wideFull(w), .x = wideFull(w) });
 }
 
@@ -140,6 +152,7 @@ pub inline fn k(v: u64, x: u64) W {
 }
 
 fn allX(comptime w: u32) W {
+    if (two) return .{ .v = 0, .x = 0 };
     return .{ .v = mask(w), .x = mask(w) };
 }
 
@@ -273,6 +286,7 @@ pub inline fn arith(comptime op: Arith, a: anytype, b: @TypeOf(a), comptime w: u
         else
             @bitCast(if (op == .div) @divTrunc(@as(i64, @bitCast(av)), @as(i64, @bitCast(d))) else @rem(@as(i64, @bitCast(av)), @as(i64, @bitCast(d)))),
     };
+    if (two) return .{ .v = r & ~unk & mask(w), .x = 0 };
     return .{ .v = (r | unk) & mask(w), .x = unk & mask(w) };
 }
 
@@ -309,6 +323,10 @@ fn big(comptime w: u32, comptime signed: bool, a: anytype, b: anytype, comptime 
     var o: Wide(words(w)) = undefined;
     @memcpy(&o.v, r.values()[0..words(w)]);
     @memcpy(&o.x, r.unknowns()[0..words(w)]);
+    if (two) for (&o.v, &o.x) |*v, *x| {
+        v.* &= ~x.*;
+        x.* = 0;
+    };
     return narrow(w, o);
 }
 
@@ -537,6 +555,59 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
     };
 }
 
+/// §4.8.2 integer to real (`exec.realOfInt`): the value read by its own
+/// signedness; an x or z bit makes it 0.
+/// ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
+pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
+    if (anyX(a)) return 0;
+    const lo = wide(a).v[0];
+    if (signed and w <= 64) return @floatFromInt(@as(i64, @bitCast(sext(lo, w))));
+    return @floatFromInt(lo);
+}
+
+/// §4.8.2 real to integer (`exec.intOfReal`): rounded to nearest, halves
+/// away from zero, as a 64-bit signed value; x when no such integer exists.
+pub inline fn ofReal(r: f64) W {
+    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return allX(64);
+    return .{ .v = @bitCast(@as(i64, @intFromFloat(@round(r)))), .x = 0 };
+}
+
+/// §17.8 `$rtoi`: truncated toward zero, a 32-bit signed value; x when none.
+pub inline fn rtoi(r: f64) W {
+    if (!std.math.isFinite(r) or @abs(r) >= 0x1p31) return allX(32);
+    return .{ .v = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r))))), .x = 0 };
+}
+
+/// A real as the 64-bit value a real slot holds: its IEEE 754 bits.
+pub inline fn realBits(r: f64) W {
+    return .{ .v = @bitCast(r), .x = 0 };
+}
+
+/// The real a real slot's value holds.
+pub inline fn real(a: W) f64 {
+    return @bitCast(a.v);
+}
+
+/// The least significant word of `a`'s value plane (`$bitstoreal`).
+pub inline fn word0(a: anytype) u64 {
+    return wide(a).v[0];
+}
+
+/// §5.1.13 a real `?:` under an x or z condition: equal arms are that
+/// value, anything else 0 (`exec.evalReal`).
+pub inline fn realCond(c: Bit, y: f64, n: f64) f64 {
+    return switch (c) {
+        .one => y,
+        .zero => n,
+        .x, .z => if (y == n) y else 0,
+    };
+}
+
+/// A real's truth (§9.4): not zero.
+pub inline fn realTruth(r: f64) Bit {
+    return if (r != 0) .one else .zero;
+}
+
 /// `{hi, lo}`, `hi` being `hw` bits wide and `lo` `lw`.
 pub inline fn join(hi: anytype, comptime hw: u32, lo: anytype, comptime lw: u32) T(hw + lw) {
     if (hw + lw <= 64) return .{ .v = hi.v << lw | lo.v, .x = hi.x << lw | lo.x };
@@ -561,7 +632,7 @@ pub inline fn asInt(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
 /// `exec.position` then `readSelect` of one bit: bit `index` of a vector
 /// declared `[msb:lsb]`, x when the index is x/z or outside it (§5.2.1).
 pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
-    const p = pos(index, msb, lsb, w) orelse return .{ .v = 1, .x = 1 };
+    const p = pos(index, msb, lsb, w) orelse return allX(1);
     const s = wide(a);
     const n: u6 = @intCast(p % 64);
     return .{ .v = (s.v[p / 64] >> n) & 1, .x = (s.x[p / 64] >> n) & 1 };
@@ -579,7 +650,7 @@ pub inline fn part(a: anytype, comptime shift_: i64, comptime count: u32, compti
         for (&o.v, &o.x, 0..) |*v, *x, j| {
             const at = shift_ + @as(i64, @intCast(64 * j));
             const valid = span(j, lo, hi);
-            const holes = ~valid & (if (j == words(count) - 1) top(count) else ones);
+            const holes = if (two) 0 else ~valid & (if (j == words(count) - 1) top(count) else ones);
             v.* = (funnel(&s.v, at) & valid) | holes;
             x.* = (funnel(&s.x, at) & valid) | holes;
         }
@@ -588,7 +659,7 @@ pub inline fn part(a: anytype, comptime shift_: i64, comptime count: u32, compti
     const valid = comptime span(0, lo, hi);
     const v = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.v >> @intCast(shift_) else a.v << @intCast(-shift_);
     const x = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.x >> @intCast(shift_) else a.x << @intCast(-shift_);
-    const holes = ~valid & mask(count);
+    const holes = if (two) 0 else ~valid & mask(count);
     return .{ .v = (v & valid) | holes, .x = (x & valid) | holes };
 }
 
