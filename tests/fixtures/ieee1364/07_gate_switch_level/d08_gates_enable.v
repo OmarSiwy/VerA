@@ -27,7 +27,7 @@
 //                               column is x, so every ambiguous-enable cell
 //                               below reads x. (A fixture that distinguished L
 //                               from H would need the %v strength format; see
-//                               SPEC.md, "not covered".)
+//                               tests/fixtures/ieee1364/07_gate_switch_level/d08_SPEC.md at 8b1514d4, "not covered".)
 //
 // The two fully-known enable columns are what discriminate the four gate types
 // from each other: at d=1,c=0 the four outputs are 1, z, 0, z — no two alike.

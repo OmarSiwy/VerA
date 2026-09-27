@@ -1,20 +1,9 @@
-//! Shared frontend -> finite initial-process execution. IEEE1364-2005 §§9,11.
-//! This deliberately rejects unsupported source forms before executing a task.
-//!
-//! In: Verilog source text. Out: its §17 transcript on `out`, or E1100
-//! diagnostics before any process has printed anything.
-//!
-//! This file is the `Run` driver: the engine state and its §6.2.2 per-instance
-//! names (§12.4 downward references), §6.2.2 elaboration of the instance tree
-//! into slots, nets and driver rows (§6.5 ports, §6.5.7.1 port connections,
-//! IEEE 1364 §19.10 `unconnected_drive`), and `run`, which compiles every
-//! driver and process and then drains the scheduler.
-//!
-//!   compile.zig  AST -> bytecode: §5.5 typing, A.6.5 statements
-//!   exec.zig     the interpreter: evaluation, the write path, §7.9 resolution
-//!   net.zig      §7.9 resolution data: drivers, strengths, gate tables, delays
-//!   display.zig  IEEE 1364 §17 display, strobe, monitor, `%t`, `$readmem`
-//!   driver.zig   VAMS §9.22/§9.23 driver access, §9.22.6 segregation
+//! Verilog source -> its IEEE 1364-2005 §17 transcript on `out`, or E1100
+//! diagnostics before any process prints anything. The `Run` driver: engine
+//! state, §6.2.2 per-instance names (§12.4 downward references), elaboration
+//! into slots, nets and driver rows (§6.5, §6.5.7.1, §19.10), and `run`, which
+//! compiles every driver and process, then drains the §11 scheduler.
+//! Siblings: compile.zig (AST -> bytecode), exec.zig (interpreter), net.zig.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -26,7 +15,7 @@ pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
 const compile = @import("compile.zig");
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
-/// process does — `exec.store` now, `exec.enqueue` of a `.write` later — so a
+/// process does (`exec.store` now, `exec.enqueue` of a `.write` later), so a
 /// §12.30 put wakes waiters and value-change watchers like any other write.
 pub const exec = @import("exec.zig");
 const display = @import("display.zig");
@@ -60,10 +49,9 @@ pub const Error = error{DigitalFailed} || std.mem.Allocator.Error || std.Io.Writ
 pub const Options = struct {
     file_name: []const u8 = "<digital>",
     include_dirs: []const []const u8 = &.{},
-    /// Only IEEE 1364-2005 §17.2.9's `$readmemb`/`$readmemh` reach the
-    /// filesystem while a process is running, so this is optional: a caller
-    /// with no `Io` gets a diagnostic from those two tasks and an unchanged
-    /// engine everywhere else. The unit tests are that caller.
+    /// Only IEEE 1364-2005 §17.2.9's `$readmemb`/`$readmemh` read files while
+    /// a process runs; without an `Io` those two fail with a diagnostic and
+    /// nothing else changes.
     io: ?std.Io = null,
     /// VAMS §7: elaborate the DIGITAL half of a mixed-signal module. See `Mixed`.
     mixed: ?Mixed = null,
@@ -90,8 +78,8 @@ pub const Mixed = struct {
     /// expression reads. Each is declared here anyway, and the coordinator
     /// writes it (`a2dWrite`) after every accepted analog solution.
     reads: []const []const u8 = &.{},
-    /// VAMS §6.3 the root's parameters as the host's card set them — the
-    /// values the device's `Model` holds — so both halves read one value.
+    /// VAMS §6.3 the root's parameters as the host's card set them (the
+    /// values the device's `Model` holds), so both halves read one value.
     params: []const Param = &.{},
 };
 
@@ -126,10 +114,10 @@ pub const SpecExpr = struct { spec: u32, e: Ast.ExprId };
 /// How many distinct types the specializations that typed a row gave it.
 pub const TyState = enum(u8) { untyped, one, many };
 
-// §3.9 an unpacked array is `count` consecutive element slots; the declared
-// name maps to the first. `low`/`high` are the declared address bounds, in
-// either order of declaration — no operation here observes element ORDER, only
-// which address names which element.
+/// §3.9 an unpacked array is `count` consecutive element slots; the declared
+/// name maps to the first. `low`/`high` are the declared address bounds, in
+/// either order: nothing here observes element order, only which address
+/// names which element.
 ///
 /// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
 /// and the others in `rest`, addressed row-major.
@@ -191,11 +179,11 @@ pub const Run = struct {
     scope: u32 = 0,
     /// The highest scope id handed out; the root is 0.
     scopes: u32 = 0,
-    /// Per scope id: the instance that minted it, its name and its module —
-    /// §17.1.1.6's `%m` path and §13.6's `%l` binding. Row 0 is the root,
+    /// Per scope id: the instance that minted it, its name and its module
+    /// (§17.1.1.6's `%m` path and §13.6's `%l` binding). Row 0 is the root,
     /// named after its module.
-    /// `lexical` marks a scope nested INSIDE its parent's module — a task or
-    /// function (§12.7) — whose unresolved names are searched for in the
+    /// `lexical` marks a scope nested inside its parent's module, a task or
+    /// function (§12.7), whose unresolved names are searched for in the
     /// parent; an instance is a hierarchy boundary and is searched no further.
     /// `index` marks one iteration of a §12.4.1 loop generate, the `[i]` of
     /// its block name.
@@ -261,19 +249,19 @@ pub const Run = struct {
     ty_state: []TyState = &.{},
     spec_types: std.AutoHashMapUnmanaged(SpecExpr, Type) = .empty,
     /// Which system function each `.sys_call` is, indexed by AST ExprId and
-    /// written by `infer` — so evaluation switches on it instead of hashing
+    /// written by `infer`, so evaluation switches on it instead of hashing
     /// the name again. Null for every other node.
     sys_calls: []?compile.SysFn = &.{},
     replications: std.AutoHashMapUnmanaged(SpecExpr, u32) = .empty,
     code: std.ArrayList(Instruction) = .empty,
     /// The instance scope each instruction was compiled in, one row per `code`
     /// row. A process never leaves the scope it was written in, so `execute`
-    /// reads this once per dispatch — including on an event resumption, which
+    /// reads this once per dispatch, an event resumption included, which
     /// re-enters at a pc in the middle of a body.
     code_scope: std.ArrayList(u32) = .empty,
     case_targets: std.ArrayList(u32) = .empty,
-    /// §5.3.2 the pc range of each named sequential block, keyed the way every
-    /// other declared name is — per §6.2.2 INSTANCE, so two instances of one
+    /// §5.3.2 the pc range of each named sequential block, keyed per §6.2.2
+    /// instance like every other declared name, so two instances of one
     /// definition disable their own copy and not each other's.
     /// `depth` is the block's statement nesting, which orders two named
     /// blocks with the same range (`begin : a begin : b ... end end`) for `%m`.
@@ -284,10 +272,10 @@ pub const Run = struct {
     /// not be compiled yet, so the lookup is deferred to one pass at the end
     /// rather than failing in the middle of a dispatch.
     disables: std.ArrayList(struct { at: u32, name: Name, tok: u32 }) = .empty,
-    // One counter per lexical repeat is sufficient without recursive processes.
+    /// One counter per lexical `repeat`: no process re-enters its own.
     repeats: std.ArrayList(u64) = .empty,
     /// §9.8.2 one counter per lexical `fork`: the arms still running. One per
-    /// SITE is enough for `repeats`' reason — the parent waits at the site.
+    /// site is enough, since the parent waits at the site.
     joins: std.ArrayList(u32) = .empty,
     /// §9.3 the procedural continuous assignments in effect, by slot: the
     /// process range of an `assign` and of a `force`. While one is, ordinary
@@ -295,10 +283,9 @@ pub const Run = struct {
     overrides: std.AutoHashMapUnmanaged(u32, Overrides) = .empty,
     /// `store` from an override's own process, which the guard lets through.
     overriding: bool = false,
-    // §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
-    // control. One cell per SITE is enough for the same reason `repeats` is:
-    // the process that reached it is suspended there, so it cannot reach it
-    // again before the `deposit` consumes the value.
+    /// §8.5.3.3 one parked right-hand side per lexical intra-assignment timing
+    /// control. One cell per site is enough: the process that reached it is
+    /// suspended there until the `deposit` consumes the value.
     holds: std.ArrayList(Int.Literal) = .empty,
     /// Payload rows, indexed by the scheduler's `payload`. Recycled through
     /// `free_rows`, so this is bounded by the most events queued at once.
@@ -327,9 +314,9 @@ pub const Run = struct {
     io: ?std.Io = null,
     /// The ROOT module's time scale; every module's own is in `module_times`.
     scale: ?Time.Scale = null,
-    /// The root module's TIME UNIT as a power of ten of a second, which `Scale`
-    /// deliberately does not keep — it stores ratios, and `%t` needs the
-    /// absolute magnitude to reach §17.3's `units_number`.
+    /// The root module's time unit as a power of ten of a second. `Scale`
+    /// stores only ratios, and `%t` needs the absolute magnitude to reach
+    /// §17.3's `units_number`.
     unit_exp: i32 = 0,
     /// IEEE 1364 §19.8 each module definition's own time scale, by name.
     /// Read through `timeOf`.
@@ -344,7 +331,7 @@ pub const Run = struct {
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
-    /// The slots the standing monitor's arguments read — §17.1.3's "variable
+    /// The slots the standing monitor's arguments read: §17.1.3's "variable
     /// or an expression in the argument list". Clock queries read no slot,
     /// which is the clause's `$time`/`$stime`/`$realtime` exception.
     monitor_slots: std.ArrayList(u32) = .empty,
@@ -406,7 +393,7 @@ pub const Run = struct {
     defparams: std.AutoHashMapUnmanaged(Name, Ast.Defparam) = .empty,
     /// `Mixed.params`: the root's parameter values on the host's card.
     card: []const Param = &.{},
-    /// §12.2 parameter slots — constants an expression may fold, never a
+    /// §12.2 parameter slots: constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// IEEE 1364-2005 §4.8 `real` variables and VAMS §3.7 `wreal` nets: slots
@@ -439,7 +426,7 @@ pub const Run = struct {
     }
 
     /// VAMS §7.3.6.4: an analog variable a digital expression reads takes the
-    /// value the analog block left it, as a write at the current tick — so a
+    /// value the analog block left it, as a write at the current tick, so a
     /// continuous assign over it re-evaluates like over any other operand.
     /// Table 7-1 in reverse: a real "with no conversion", an integer as itself.
     pub fn a2dWrite(r: *Run, at: u32, v: f64) Error!void {
@@ -609,8 +596,8 @@ pub const Run = struct {
                     try exec.resolve(r, t.a);
                     try exec.resolve(r, t.b);
                 },
-                // §6.1.3: a cancelled transition never gets here — the scheduler
-                // dropped it — so what arrives is the one still in flight.
+                // §6.1.3: the scheduler drops a cancelled transition, so what
+                // arrives is the one still in flight.
                 .drive => |at| {
                     const d = &r.drivers[at];
                     d.transition.in_flight = null;
@@ -672,8 +659,8 @@ pub const Run = struct {
     /// §12.4 a DOWNWARD hierarchical reference: every part but the last names an
     /// instance declared in the scope before it, and the last is a declared name
     /// in the scope the final instance minted. Upward references (§12.5) resolve
-    /// by searching enclosing scopes and are not implemented — a name that does
-    /// not descend from the referring scope is simply undeclared here.
+    /// by searching enclosing scopes and are not implemented: a name that does
+    /// not descend from the referring scope is undeclared here.
     pub fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
@@ -694,7 +681,7 @@ pub const Run = struct {
         return .{ .width = self.values[at].width, .signed = self.values[at].signed };
     }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
-    /// scope of the same module — never across an instance boundary.
+    /// scope of the same module, never across an instance boundary.
     pub fn lookup(self: *const Run, scope: u32, str: Ast.StrId) ?u32 {
         var s = scope;
         while (true) {
@@ -704,7 +691,6 @@ pub const Run = struct {
             s = info.parent;
         }
     }
-    /// The instance a (possibly nested) scope belongs to.
     /// The scope whose parameters decide every type, part-select bound and
     /// replication count in `scope`: the nearest instance (§12.2) or §12.4.1
     /// loop-generate iteration (its genvar is a local parameter) at or above
@@ -719,6 +705,7 @@ pub const Run = struct {
         }
         return s;
     }
+    /// The instance a (possibly nested) scope belongs to.
     pub fn instanceOf(self: *const Run, scope: u32) u32 {
         var s = scope;
         while (self.scope_info.items[s].lexical) s = self.scope_info.items[s].parent;
@@ -734,7 +721,7 @@ pub const Run = struct {
     }
     /// A constant expression's value at elaboration (IEEE 1364-2005 §5.2 /
     /// §12.2): literals, parameters, operators and the constant system
-    /// functions, folded by the engine's own evaluator — so a bound and a
+    /// functions, folded by the engine's own evaluator, so a bound and a
     /// run-time expression cannot disagree about an operator. The result's
     /// planes are fresh arena memory, never a literal's own.
     pub fn constant(self: *Run, e: Ast.ExprId, tok: u32) Error!Int.Literal {
@@ -746,15 +733,15 @@ pub const Run = struct {
         @memcpy(out.planes, v.planes);
         return out;
     }
-    /// One declared bound (§3.3, §4.3.1): any constant expression, and — the
-    /// §4.3.1 example `[-2:1]` — any sign.
+    /// One declared bound (§3.3, §4.3.1): any constant expression, of any
+    /// sign (the §4.3.1 example `[-2:1]`).
     fn declaredBound(self: *Run, e: Ast.ExprId, tok: u32) Error!i64 {
         if (self.file.exprs.tag(e) == .int_literal) return self.file.exprs.intValue(e);
         return (try self.constant(e, tok)).asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
     }
     /// A.2.2.3 `delay_value ::= unsigned_number | real_number | identifier`, in
-    /// scheduler ticks. Elaboration-time, because a net's or a driver's delay is
-    /// fixed for the run — only a procedural `#` re-evaluates.
+    /// scheduler ticks. Folded at elaboration: a net's or a driver's delay is
+    /// fixed for the run, and only a procedural `#` re-evaluates.
     ///
     /// The `identifier` alternative names a parameter, so anything but a
     /// literal goes through `constant`.
@@ -767,9 +754,8 @@ pub const Run = struct {
         } catch self.fail(tok, "digital delay cannot be represented", .{});
     }
 
-    /// One A.2.2.3 `delay3` as the three tick counts §7.14 chooses between. The
-    /// two-value form leaves `off` unwritten because the clause derives it —
-    /// "the smallest of the delays" — rather than spelling it.
+    /// One A.2.2.3 `delay3` as the three tick counts §7.14 chooses between. A
+    /// two-value form's `off` is "the smallest of the delays".
     fn declaredDelay3(self: *Run, d: Ast.Delay3, tok: u32) Error!Delay {
         if (!d.any()) return .{};
         var out: Delay = .{ .present = true };
@@ -791,9 +777,7 @@ pub const Run = struct {
         if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
         entry.value_ptr.* = at;
     }
-    /// A reference to ONE whole value. §3.9's unpacked array has no value of
-    /// its own — only its elements do — so a bare array name is refused here.
-    /// The slot an lvalue's WIDTH comes from: an array element reference is as
+    /// The slot an lvalue's width comes from: an array element reference is as
     /// wide as element zero, so a parked value can be sized before §8.5.3.3
     /// resolves which element it lands in.
     pub fn baseSlot(self: *Run, e: Ast.ExprId) Error!u32 {
@@ -809,13 +793,15 @@ pub const Run = struct {
         while (ex.tag(x) == .index) : (depth += 1) x = ex.lhs(x);
         return .{ .base = x, .depth = depth };
     }
+    /// The slot of a reference to one whole value. §3.9's unpacked array has
+    /// no value of its own, only its elements do, so a bare array name fails.
     pub fn scalarSlot(self: *Run, e: Ast.ExprId) Error!u32 {
         const at = try self.slot(e);
         if (self.arrays.contains(at)) return self.exprFail(e, "an unpacked array reference requires an element index");
         return at;
     }
-    /// The array an `.index` names an ELEMENT of — one index per dimension
-    /// (§4.9) — or null when it is a bit or part select.
+    /// The array an `.index` names an element of (one index per dimension,
+    /// §4.9), or null when it is a bit or part select.
     pub fn indexedArray(self: *Run, e: Ast.ExprId) Error!?Array {
         const ex = &self.file.exprs;
         if (ex.tag(e) != .index) return null;
@@ -847,9 +833,9 @@ const Wire = struct {
 /// What the parent decided one port connection is. §6.5.7.1's "matching size
 /// rule" plus IEEE 1364 clause 12's "a port is a connection, not an
 /// assignment": wherever one net can stand for both sides, `collapse` makes
-/// them literally the same net, which is the only model under which a child's
-/// DRIVE STRENGTH survives the boundary (d03_11). The other two arms are the
-/// fallback for a connection no single net can express.
+/// them the same net, the only model under which a child's drive strength
+/// survives the boundary. The other two arms are for a connection no single
+/// net can express.
 const PortBind = union(enum) {
     /// §6.2.2 an unconnected port: the child's net exists and nothing feeds it.
     open,
@@ -862,10 +848,9 @@ const PortBind = union(enum) {
     send: struct { operands: []const u32, tok: u32 },
 };
 
-/// Everything §6.2.2 elaboration accumulates before any expression is compiled.
-/// The split is load-bearing: a name lookup in pass two must not run against a
-/// slot space a later instance is still growing, and `Int.Literal` slices would
-/// move under it.
+/// Everything §6.2.2 elaboration accumulates before any expression is compiled:
+/// a name lookup in pass two must not run against a slot space a later
+/// instance is still growing, whose `Int.Literal` slices would move under it.
 pub const Elab = struct {
     values: std.ArrayList(Int.Literal) = .empty,
     nets: std.ArrayList(Net) = .empty,
@@ -883,7 +868,7 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
     // the top-level cells, whatever else the source leaves uninstantiated.
     if (r.file.config_cells.len > 1) return r.fail(0, "digital execution requires exactly one top-level module", .{});
     if (r.file.config_cells.len == 1) return findModule(r, r.file.config_cells[0], 0);
-    // §12.1.1: "an instantiated module is not a top" — wherever it is
+    // §12.1.1: "an instantiated module is not a top", wherever it is
     // instantiated, a generate arm the scheme does not select included.
     var generated: std.ArrayList(Ast.StrId) = .empty;
     for (modules) |other| for (other.analog) |ab| try generatedModules(r.file, ab.body, &generated, r.arena);
@@ -902,7 +887,7 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
 fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
     for (r.file.modules) |*m| if (m.name == name) {
         // VAMS §7.1: a connect module "can be manually inserted (by the user)
-        // or automatically inserted (by the simulator)" — in a mixed design,
+        // or automatically inserted (by the simulator)", in a mixed design,
         // which is the only one that can hold its continuous half.
         if (m.is_connect and !r.mixed) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
         return m;
@@ -985,7 +970,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         _ = try mintVar(r, v);
     }
     // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
-    // instance holding its formals, its locals and a function's result — the
+    // instance holding its formals, its locals and a function's result: the
     // storage a static subroutine shares between activations (§10.2.3).
     try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
     for (m.tasks) |*t| {
@@ -999,7 +984,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = f });
     }
     for (m.nets) |n| {
-        // §7.2.1: a disciplined net is continuous — the analog solver's.
+        // §7.2.1: a disciplined net is continuous, the analog solver's.
         if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
         if (!r.mixed and (n.discipline != .none or n.is_ground))
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
@@ -1013,7 +998,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         net.delay = try r.declaredDelay3(n.delay, n.main_tok);
         // A.2.1.3 gives `trireg` its own alternatives, and in them the third
         // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-        // a trireg in the capacitive state does not turn off, it holds — so the
+        // a trireg in the capacitive state does not turn off, it holds, so the
         // net's own turn-off falls back to §7.14's "smallest of the delays".
         if (n.kind == .trireg and n.delay.off != .none) {
             net.decay = net.delay.off;
@@ -1021,10 +1006,9 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         }
         net.charge = n.charge;
         // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-        // declaration, so it is one more driver of that net and not a separate
-        // construct. Its delay is the NET's (`wire #3 y = ~a;` — A.2.1.3 puts
-        // the `delay3` before the name list, not on the `=`), which is why the
-        // row it contributes carries none of its own.
+        // declaration: one more driver of that net. Its delay is the net's
+        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
+        // not on the `=`), so the row it contributes carries none.
         if (n.init != .none)
             try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
     }
@@ -1036,7 +1020,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         // IEEE 1364-2005 §12.3.3: an output port "declared as a variable"
         // (`output q; reg q;`) is that variable, and it drives the net it
-        // is connected to — one driver of it, as a continuous assignment is.
+        // is connected to: one driver of it, as a continuous assignment is.
         if (r.names.get(.{ .scope = scope, .str = p.name })) |var_slot| {
             if (p.direction != .output) return r.fail(p.main_tok, "§12.3.3: only an output port may be declared as a variable", .{});
             switch (bind) {
@@ -1054,7 +1038,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (bind == .collapse) {
             // VAMS §3.7: "When the two nets connected by a port are of net
             // type wreal and wire/tri, the resulting single net will be
-            // assigned as wreal" — on whichever side the wreal is.
+            // assigned as wreal", on whichever side the wreal is.
             const outer = &e.nets.items[bind.collapse];
             const merging = (p.kind == .wreal) != (outer.kind == .wreal);
             if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
@@ -1065,22 +1049,17 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 try r.port_signed.put(arena, .{ .scope = scope, .str = p.name }, p.is_signed);
             continue;
         }
-        // `p.kind`, NOT `.wire`. A body declaration naming a header port is
-        // folded into the `Port` by the parser, so `inout t; tri0 t;` arrives
-        // here as one `Port` — and until `Ast.Port` carried a net type that
-        // fold DROPPED it, minting every port net `.wire`. The visible effect
-        // was that an internal `tri0` read 0 while the identical declaration
-        // on a port read z: §7.9's resolution and `netPull`'s undriven value
-        // are both functions of the net type, and the port's was a lie.
+        // `p.kind`, not `.wire`: the parser folds a body declaration naming a
+        // header port into the `Port` (`inout t; tri0 t;` is one `Port`), and
+        // §7.9 resolution and `netPull`'s undriven value both read the net type.
         const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
         switch (bind) {
-            // IEEE 1364 §19.10: an unconnected INPUT port declared in an
-            // `unconnected_drive` region is pulled to a logic level THROUGH A
-            // PULL-STRENGTH DRIVER. So it is one driver among drivers and meets
-            // the net's own type in §7.9 resolution — which is the whole
-            // difference from `lib/ir/lower.zig`'s analog approximation, where a
-            // potential source can neither tie with a `tri0` nor lose to a
-            // `supply0`.
+            // IEEE 1364 §19.10: an unconnected input port declared in an
+            // `unconnected_drive` region is pulled to a logic level through a
+            // pull-strength driver: one driver among drivers, meeting the net's
+            // own type in §7.9 resolution. The analog half
+            // (`lib/ir/lower/node.zig`'s `applyUnconnectedDrive`) cannot tie
+            // with a `tri0` or lose to a `supply0`.
             .open => if (p.direction == .input) {
                 const drive = Front.Preprocessor.DriveRegion.inForce(r.drives, r.starts[@min(p.main_tok, r.starts.len - 1)], .default);
                 if (drive != .float) try e.wires.append(arena, .{
@@ -1129,7 +1108,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
         // index, and a terminal as wide as the array gives each gate one bit
-        // — the leftmost index the most significant — while a scalar one is
+        // (the leftmost index the most significant), while a scalar one is
         // shared by all of them.
         const lanes: u32 = if (g.range) |rg| try r.declaredWidth(rg, g.main_tok) else 1;
         // §7.8.5's tables are one bit wide, so a plain gate's output is too.
@@ -1210,8 +1189,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
 
 /// VAMS §7.8.4 `m`'s instances at `scope` as the analog compile's connect
 /// module insertion left them (`Mixed.inserts`): every re-pointed port bound
-/// to its segment — a net of this scope, when the bridge's side of it is
-/// discrete — and one instance of each bridge appended, taking the port's
+/// to its segment (a net of this scope, when the bridge's side of it is
+/// discrete), and one instance of each bridge appended, taking the port's
 /// upper connection. The source's own list where nothing was inserted.
 // ponytail: the bridge takes no parameter override (a mixed module's
 // parameters are the analog block's), and a generate scope's path is not
@@ -1435,7 +1414,7 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 /// at a mixed design's root the host's card (the `Model` value the analog
 /// block reads), and its declared default. Each is a constant expression in
 /// the scope that wrote it. null: in a mixed design, a value this engine does
-/// not fold — a real, or one naming the analog block's — so the parameter is
+/// not fold (a real, or one naming the analog block's), so the parameter is
 /// the analog block's alone.
 fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?Int.Literal {
     const Src = struct { e: Ast.ExprId, scope: u32 };
@@ -1473,7 +1452,7 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
     return value;
 }
 
-/// §6.2.2 one module or UDP instance, declared in `scope` — or IEEE 1364
+/// §6.2.2 one module or UDP instance, declared in `scope`, or IEEE 1364
 /// §12.1.2's array of them, one instance per element from the lower index
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
@@ -1507,9 +1486,9 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         @memset(binds_out, .open);
         for (inst.ports, 0..) |conn, i| {
             // IEEE 1364-2005 §12.3.2/§12.3.6: a header port `.name(expr)` is
-            // connected by its EXTERNAL name, and when its expression is a
+            // connected by its external name, and when its expression is a
             // concatenation of internal ports every one of them is a slice
-            // of the one connection — leftmost the most significant.
+            // of the one connection, leftmost the most significant.
             if (conn.name != .none and portByName(child, conn.name) == null) {
                 const first = for (child.ports, 0..) |p, k| {
                     if (p.external_name == conn.name) break k;
@@ -1533,15 +1512,15 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
             r.scope = scope;
             // A continuous port is the analog solver's on both sides (§7.2.1),
-            // so a mixed design's digital half connects nothing through it —
-            // the same skip the child's own port loop makes.
+            // so a mixed design's digital half connects nothing through it,
+            // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
             if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
         try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name, .index = index });
-        // §12.4's path is walked by NAME, so the instance's own identifier has
+        // §12.4's path is walked by name, so the instance's own identifier has
         // to outlive the recursion that consumes it. An array element's path
         // carries its index, which that walk does not read: not registered.
         if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
@@ -1550,7 +1529,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
     }
 }
 
-/// VAMS §7.2.2: the variables a discrete process of `m` writes — the ones
+/// VAMS §7.2.2: the variables a discrete process of `m` writes, the ones
 /// whose domain is digital.
 fn digitalWrites(r: *Run, m: *const Ast.ModuleDecl) Error!std.AutoHashMapUnmanaged(Ast.StrId, void) {
     var out: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
@@ -1575,13 +1554,12 @@ fn digitalWrites(r: *Run, m: *const Ast.ModuleDecl) Error!std.AutoHashMapUnmanag
     return out;
 }
 
-/// VAMS §3.6.2.2: is `name` a CONTINUOUS discipline — the analog solver's —
+/// VAMS §3.6.2.2: is `name` a continuous discipline (the analog solver's)
 /// rather than a discrete one such as Annex D's `ddiscrete`, whose nets are
-/// §7.2's digital nets and this engine's? A net is a net by its declaration;
-/// the discipline only says which kernel resolves it. The same rule as
-/// `lib/ir/lower/discipline.zig`'s `isContinuous` (the last declaration wins;
-/// an undeclared domain is continuous when a nature is bound), restated here
-/// because `sim` cannot import `ir`.
+/// §7.2's digital nets and this engine's? The discipline only says which
+/// kernel resolves a net. `lib/ir/discipline_rules.zig`'s `isContinuous`
+/// restated, since `sim` cannot import `ir`: the last declaration wins, and
+/// an undeclared domain is continuous when a nature is bound.
 fn continuous(file: *const Ast.SourceFile, name: Ast.StrId) bool {
     if (name == .none) return false;
     var i = file.disciplines.len;
@@ -1604,8 +1582,8 @@ pub fn newScope(r: *Run, tok: u32) Error!u32 {
     return r.scopes;
 }
 
-/// One variable's storage in the current scope — a whole value, or §3.9's
-/// array of them — bound to its name. Works in both passes: an automatic
+/// One variable's storage in the current scope (a whole value, or §3.9's
+/// array of them), bound to its name. Works in both passes: an automatic
 /// task inlined at a call site gets fresh storage while pass two compiles it.
 pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
@@ -1683,18 +1661,19 @@ fn usesReal(t: *const Ast.Subroutine) bool {
     return false;
 }
 
-/// One activation's storage: a scope, a slot per formal, the result slot of
-/// a function, and the contiguous slot range an automatic activation saves.
-/// §9.3 one slot's procedural continuous assignments: the pc range of the
-/// process maintaining each.
+/// A module's §19.8 time scale, and its unit as a power of ten of a second.
 pub const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
 
+/// §9.3 one slot's procedural continuous assignments: the pc range of the
+/// process maintaining each.
 pub const Overrides = struct {
     assign: ?PcRange = null,
     force: ?PcRange = null,
 };
 pub const PcRange = struct { start: u32, end: u32 };
 
+/// One activation's storage: a scope, a slot per formal, the result slot of
+/// a function, and the contiguous slot range an automatic activation saves.
 pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u32, count: u32 };
 
 /// A fresh frame for `t` inside instance `inst`: its static one in pass one,
@@ -1736,8 +1715,8 @@ pub fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, n
     const slot: u32 = @intCast(e.values.items.len);
     const at: u32 = @intCast(e.nets.items.len);
     if (name != .none) try r.bind(name, slot, tok);
-    // §3.7: a net with no driver is Z, not X — except where the net type itself
-    // supplies a value. That is the whole net/variable difference. VAMS §3.7:
+    // §3.7: a net with no driver is z, not x, except where the net type itself
+    // supplies a value. VAMS §3.7:
     // a wreal carries a real and "shall have an initial value of zero".
     const wreal = kind == .wreal;
     try e.values.append(r.arena, try filled(r.arena, if (wreal) 64 else width, signed or wreal, if (wreal) .zero else undriven(kind)));
@@ -1757,7 +1736,7 @@ fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
 /// IEEE 1364-2005 §8 one UDP instance: one more driver of its output net, as
 /// a gate is (§8.1: "UDPs are instantiated exactly the same way as gate
 /// primitives"), whose value is its table's. §8.5: a sequential UDP's state
-/// starts at its `initial` value — or x — and that value is on the output at
+/// starts at its `initial` value, or x, and that value is on the output at
 /// time 0 whatever the instance delay.
 fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
     const net_mod = @import("net.zig");
@@ -1802,16 +1781,15 @@ fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
 fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
     if (conn.expr == .none) return .open;
     const ex = &r.file.exprs;
-    // One whole net of the right size on the outside is a net COLLAPSE, and
-    // that is the only arm under which the child's drive strengths reach the
-    // parent's resolution unchanged (IEEE 1364 clause 12: a port is a
-    // connection). `bindPort` does not size-check here — `declare` does, once
-    // the port's own width is known.
+    // One whole net on the outside is a collapse, the only arm under which
+    // the child's drive strengths reach the parent's resolution unchanged
+    // (IEEE 1364 clause 12: a port is a connection). `declare` size-checks
+    // it once the port's own width is known.
     if (ex.tag(conn.expr) == .ident) {
         if (r.net_of.get(try r.scalarSlot(conn.expr))) |net| return .{ .collapse = net };
     }
     return switch (port.direction) {
-        // §6.5.2.2 an input port is a RECEIVER: the child puts no driver on the
+        // §6.5.2.2 an input port is a receiver: the child puts no driver on the
         // outside, so whatever the parent wrote feeds the port net.
         .input => .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok } },
         .output => blk: {
@@ -1835,13 +1813,13 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
 
 /// IEEE 1364-2005 §19.8: "If there is no `timescale specified or it has been
 /// reset by a `resetall directive, the time unit and precision are
-/// simulator-specific." Not an error — so this simulator's are one second,
+/// simulator-specific." Not an error: this simulator's are one second,
 /// unit and precision alike, which makes every delay a whole count of units
 /// and `$time`, `$realtime` and `%t` print the numbers the source wrote.
 const default_quantum: Time.Quantum = .s;
 
-/// Callers own the run arena and diagnostic source lifetime. No analog lowering,
-/// generated-device interpretation, external compiler, or secondary lexer is used.
+/// Runs `source` to completion: `elaborate`, then every event. `arena` and
+/// `bag` must outlive the call; the transcript goes to `out`.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
     var r = try elaborate(arena, source, opts, bag, out);
     // Nothing is `watchAnalog`ed in a digital-only run, so it never stops early.
@@ -1852,7 +1830,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
 /// parse, §6.2.2 elaboration, and every driver and process compiled and
 /// enqueued at time 0. The returned `Run` owns nothing outside `arena`, so a
 /// caller that holds it may step it with `runUntil` for as long as the arena
-/// lives — which is what a mixed-signal coordinator needs from it.
+/// lives, as a mixed-signal coordinator does.
 pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
     const pp: Front.Preprocessor.Output = if (opts.mixed) |mx| .{
         .text = source,
@@ -1888,9 +1866,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // IEEE 1364 §19.8: a `timescale applies to "all modules that follow this
     // directive until another `timescale compiler directive is read", so each
     // definition takes the last directive before it. A null value is §19.6's
-    // `resetall, which returns to "none specified" — the simulator-specific
-    // default. A MALFORMED directive never reaches here: the preprocessor
-    // refuses it where it is written (E0142). A mixed design's one timescale
+    // `resetall, which returns to "none specified", the simulator-specific
+    // default. The preprocessor refuses a malformed directive where it is
+    // written (E0142). A mixed design's one timescale
     // arrives at offset 0, before every module of its text.
     const Local = struct { unit: Time.Quantum = default_quantum, precision: Time.Quantum = default_quantum, set: bool = false };
     var finest: Time.Quantum = default_quantum;
@@ -1929,7 +1907,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // all the `timescale compiler directives in the source description".
     r.time_format.units = @intFromEnum(finest);
     r.finest = r.time_format.units;
-    // PASS ONE — storage. Variables, array elements and nets share one slot
+    // Pass one: storage. Variables, array elements and nets share one slot
     // space, so one `store` publishes all three and wakes the same event
     // waiters. §6.2.2 elaboration walks the instance tree parent-first, which
     // is what lets a port connection resolve against nets that already exist.
@@ -1963,11 +1941,11 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
-    // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
+    // Pass two: drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
     //
-    // Drivers compile FIRST so that no driver's pc can also be a process's
+    // Drivers compile first so that no driver's pc can also be a process's
     // resumption point: a `wait_event` resumes at its own pc plus one, and
     // every instruction from here on belongs to a process.
     if (e.wires.items.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
@@ -2094,9 +2072,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
         }
     }
-    // A.6.5's `disable` names a block that needs no declaration before its use
-    // — d04_14's is in the process next door — so the ranges are bound here,
-    // once every process has a pc range at all.
+    // A.6.5's `disable` names a block that needs no declaration before its
+    // use (it may be in another process), so the ranges are bound here, once
+    // every process has a pc range.
     // A block is looked for through the enclosing scopes (§12.7); a name
     // that is no block may be a task (§10.3), which has no single range.
     disabling: for (r.disables.items) |d| {
@@ -2314,9 +2292,8 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
     , "across an instance array");
 }
 
-// IEEE 1364 §19.10. The directive drives at PULL strength, so the level it
-// asks for is not automatically the level the net shows — `strong0` outranks
-// it and wins, which is the half no "pull is just a value" model reproduces.
+// IEEE 1364 §19.10. The directive drives at pull strength, so the level it
+// asks for is not always the level the net shows: `strong0` outranks it.
 test "§19.10 unconnected_drive pulls an open input port and loses to a stronger driver" {
     try expectRun(
         \\`timescale 1ns/1ps
@@ -2396,7 +2373,7 @@ test "§10.2.3 recursive timed automatic tasks and a formal passed to itself" {
     , "4 ra=3\n9 rb=6 f=7\n");
 }
 
-// §6.2.1: the initializer is an initial-block assignment at time 0 — so a
+// §6.2.1: the initializer is an initial-block assignment at time 0, so a
 // net assigned from the variable tracks it, and a later write replaces it.
 test "§6.2.1 a variable declaration assignment is a time-0 write" {
     try expectRun(
@@ -2501,8 +2478,8 @@ test "§12.3.6 an external port name, alone or over a concatenation" {
     , "0 101\n");
 }
 
-// §12.3.11: each side of a port reads the connected bits with ITS OWN
-// declaration's signedness — the child's `signed` port sees -1 in a parent's
+// §12.3.11: each side of a port reads the connected bits with its own
+// declaration's signedness: the child's `signed` port sees -1 in a parent's
 // unsigned 8'hff, and an unsigned port sees 255 in a signed parent net.
 test "§12.3.11 the sign attribute does not cross a port, and a signed net is signed" {
     try expectRun(
@@ -2520,8 +2497,8 @@ test "§12.3.11 the sign attribute does not cross a port, and a signed net is si
     , "10 -1 255\n");
 }
 
-// §7.8: a pull source drives at pull strength unless its OWN side's strength
-// is written, and the other side's is ignored — so `(weak0, strong1)` is a
+// §7.8: a pull source drives at pull strength unless its own side's strength
+// is written, and the other side's is ignored, so `(weak0, strong1)` is a
 // strong pullup that beats a pulldown, and `(strong0, weak1)` a weak one.
 test "§7.8 pullup and pulldown are drivers at the strength of their own side" {
     try expectRun(
@@ -2602,8 +2579,7 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"%b\", mem[0]); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
-    // A net's `=` no longer joins them: A.2.4's `net_decl_assignment` is a
-    // continuous assignment on an UNdisciplined net, and it runs.
+    // A.2.4's `net_decl_assignment` on an undisciplined net runs.
     try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined and ground");
     try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "undeclared digital variable");
     try expectRejected("module m; reg [3:0] a; wire [a:0] w; initial $display(\"x\"); endmodule", "constant expression is required");
@@ -2613,21 +2589,19 @@ test "the net and array declaration boundaries are explicit" {
 test "§19.8 no timescale is the simulator's own unit, not an error" {
     // "If there is no `timescale specified or it has been reset by a
     // `resetall directive, the time unit and precision are simulator-specific."
-    try expectRun("module m; wire w; reg a; assign #3 w = a; initial begin a = 1; #2 $display(\"%b %0d\", w, $time); #1 $display(\"%b %t\", w, $time); end endmodule",
-        "z 2\n1                    3\n");
+    try expectRun("module m; wire w; reg a; assign #3 w = a; initial begin a = 1; #2 $display(\"%b %0d\", w, $time); #1 $display(\"%b %t\", w, $time); end endmodule", "z 2\n1                    3\n");
     try expectRun("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 $display(\"%0d %g\", $time, $realtime); endmodule", "1 1\n");
 }
 
 test "timescale provenance rejects malformed or later directives" {
-    // All three are refused by the preprocessor now (E0142), so what the digital
-    // executor sees is a failed preprocess and the message names the directive
-    // rather than the consumer that could not use it.
+    // The preprocessor refuses all three (E0142), so the message names the
+    // directive rather than the consumer that could not use it.
     try expectRejected("`timescale 2ns/1ps\nmodule m; initial #1 ; endmodule", "is not a `timescale");
     try expectRejected("`timescale 1ns/1ps junk\nmodule m; initial #1 ; endmodule", "is not a `timescale");
     try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "coarser than the time unit");
     try expectRejected("`timescale 1ns/1ns\nmodule m; initial #(128'd1) ; endmodule", "wider than 64");
     // §19.8: "It shall be an error if some modules have a `timescale
-    // specified and others do not" — here `resetall takes it from `top`.
+    // specified and others do not": here `resetall takes it from `top`.
     try expectRejected("`timescale 1ns/1ns\nmodule a; endmodule\n`resetall\nmodule top; a u(); endmodule", "others do not");
 }
 

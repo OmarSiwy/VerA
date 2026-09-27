@@ -1,38 +1,9 @@
-//! The runtime a `vera --emit-exe design.v` executable links.
-//!
-//! In: the emitted design (`digital/emit.zig`): its initial values, its
-//! static fan-out, its time-0 process order, and one function per process.
-//! Out: its IEEE 1364 §17 transcript on stdout, exit 0; or a diagnostic on
-//! stderr, exit 1.
-//!
-//! `State` is the interpreter's queue discipline with the interpreter taken
-//! out: the same §11 scheduler, the same event-control waiter lists (§9.7,
-//! §5.10.1), the same continuous-assignment fan-out (§6.1) and the same
-//! nonblocking update rows (§9.2.2), so a native process wakes and is woken
-//! in exactly `vera --run`'s order. Only the process bodies are compiled.
-//!
-//! That is the `fifo` schedule. The `static` one keeps the queue only for
-//! what needs it: a combinational node (a continuous assignment, an
-//! `always @*`) is marked dirty when a bit it reads changes, and one
-//! `settle` event runs, in topological order, each word of 64 nodes that
-//! holds a dirty one (a continuous assignment of nets and variables whether
-//! or not it is dirty: unchanged inputs store an unchanged value); an
-//! `always @(event)` whose body never suspends waits on a static per-slot
-//! watcher list, not on a suspension record. Both are orders §11.4.1 leaves
-//! to the simulator. A store wakes only what its slot's `Reach` names.
-//!
-//! A net resolved from several drivers, strengths, gates, UDPs, switches
-//! or delays (§7.9, §6.1.3) resolves in `net.zig`, on `digital/net.zig`'s
-//! tables.
-//!
-//! `--state=auto` (`auto`): the design's functions twice, `Phase(false)` and
-//! `Phase(true)`. It runs 4-state until a time step begins with no x or z
-//! any process can still read, then 2-state, where a read's x half is the
-//! constant 0. Storing an x or z there reruns it all 4-state, so its
-//! transcript is always the 4-state one.
-//!
-//! `interpret` is the executable of a design `digital/emit.zig` did not make
-//! native: the embedded source through the interpreter, exactly `vera --run`.
+//! The runtime a `vera --emit-exe design.v` executable links: the emitted
+//! design (`digital/emit.zig`) in, its IEEE 1364 §17 transcript on stdout
+//! out (exit 0), or a diagnostic on stderr (exit 1).
+//! Clauses: §11 scheduling (§11.4.2 for the `static` order), §9.7 event
+//! controls, §9.2.2 nonblocking updates, §6.1 and §7.9 nets, §17 system
+//! tasks, §18 VCD.
 const std = @import("std");
 const diag = @import("diag");
 const digital = @import("../digital/root.zig");
@@ -56,9 +27,10 @@ test {
     std.testing.refAllDecls(State);
 }
 
-/// `vera --run` of `source` inside the executable: its transcript on stdout,
-/// its diagnostics on stderr, and `vera --run`'s exit status. The names in
-/// `opts` resolve against the working directory the executable runs in.
+/// Runs `source` through the interpreter, exactly `vera --run`: the
+/// executable of a design `digital/emit.zig` did not make native. Prints
+/// the transcript on stdout and diagnostics on stderr; returns `vera --run`'s
+/// exit status. The names in `opts` resolve against the working directory.
 pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
     const io = init.io;
     var out_buf: [1 << 16]u8 = undefined;
@@ -81,7 +53,7 @@ pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const 
     return code;
 }
 
-/// A native design's static half, emitted as constants.
+/// A native design's tables, emitted as constants.
 pub const Design = struct {
     /// Every slot's initial value (`Run.values`), `logic.words(width)`
     /// words per plane, slot after slot.
@@ -166,7 +138,7 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
     return code;
 }
 
-/// Dispatch every event of `s` in its phase; how the run ended.
+/// Dispatches every event of `s` in its phase; returns how the run ended.
 fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
     while (true) {
         const pc = (@call(.always_inline, State.next, .{s}) catch |e| return e) orelse return null;
@@ -238,11 +210,12 @@ pub const Reach = packed struct(u8) {
 };
 
 /// `exec.Susp` without the task activation, which no native process has.
-const Susp = struct { pc: u32, gen: u32, alive: bool };
+/// `seq` is its `State.stamp`.
+const Susp = struct { pc: u32, gen: u32, alive: bool, seq: u64 = 0 };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
-/// holds THEN. `v`, `x` and `m` are `n` words each: the row's own `one`
+/// holds then. `v`, `x` and `m` are `n` words each: the row's own `one`
 /// for a single word, else at `words[at..]`. A `quiet` slot has nothing to
 /// wake.
 const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool, one: [3]u64 = undefined };
@@ -347,7 +320,6 @@ pub fn Phase(comptime k: bool) type {
 
         pub inline fn nba(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
             if (k) try known(a, m);
-            // In line, as a design in one phase gets it.
             return @call(.always_inline, State.nba, .{ s, reach, slot, off, a, m });
         }
 
@@ -437,6 +409,13 @@ pub const View = struct {
     }
 };
 
+/// One run of a native design. Under the `fifo` schedule it is `vera
+/// --run`'s queue discipline with only the process bodies compiled: the
+/// same waiter lists, fan-out and nonblocking rows, so a process wakes in
+/// the interpreter's order. Under `static`, combinational nodes run in one
+/// `settle` event in topological order, and a process that suspends only
+/// at its entry waits on a per-slot watcher list; a store wakes those
+/// processes and the event controls in suspension order (`stamp`).
 pub const State = struct {
     gpa: std.mem.Allocator,
     v: []u64,
@@ -466,8 +445,11 @@ pub const State = struct {
     settle: enum { idle, queued, running } = .idle,
     watch_start: []const u32,
     watchers: []const Watcher,
-    /// Per triggered process: it is waiting at its event control.
-    waiting: []bool,
+    /// Per triggered process: the `stamp` of its suspension at its event
+    /// control, 0 while it runs.
+    waiting: []u64,
+    /// The last `stamp`.
+    seq: u64 = 0,
     repeats: []u64,
     /// §9.8.2: per `fork`, the arms still running.
     joins: []u32,
@@ -543,7 +525,7 @@ pub const State = struct {
             .dirty = try gpa.alloc(u64, (d.nodes + 63) / 64),
             .watch_start = d.watch_start,
             .watchers = d.watchers,
-            .waiting = try gpa.alloc(bool, d.triggered),
+            .waiting = try gpa.alloc(u64, d.triggered),
             .repeats = try gpa.alloc(u64, d.repeats),
             .joins = try gpa.alloc(u32, d.joins),
             .active = try gpa.alloc(u32, d.subs),
@@ -567,7 +549,7 @@ pub const State = struct {
         @memset(self.pending, false);
         @memset(self.diff, 0);
         @memset(self.dirty, 0);
-        @memset(self.waiting, false);
+        @memset(self.waiting, 0);
         @memset(self.repeats, 0);
         @memset(self.joins, 0);
         @memset(self.active, 0);
@@ -663,8 +645,8 @@ pub const State = struct {
         self.two_at = at;
     }
 
-    /// Mark dirty the nodes that read a bit of `slot` changed since the
-    /// last call, then forget those changes.
+    /// Marks dirty the nodes that read a bit of `slot` changed since the
+    /// last call, then forgets those changes.
     fn markReaders(self: *State, slot: u32) void {
         const senses = self.comb[self.comb_start[slot]..self.comb_start[slot + 1]];
         // Held here, not re-read from `self` after each store to `dirty`.
@@ -835,14 +817,13 @@ pub const State = struct {
 
     /// §9.2.2: schedule the bits `m` of `slot` (words from `off`) to become
     /// `a` in the NBA region.
-    /// ponytail: a real's update is compared by its bits, not its value as
-    /// `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
     pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        // ponytail: a real's update is compared by its bits, not its value as
+        // `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
         const quiet = reach == Reach{};
         if (@TypeOf(a) == W) {
-            // Grown out of line, appended in line: a design in two phases
-            // calls this from twice the sites, and LLVM then leaves a whole
-            // `append` out of line on the hottest path of an NBA design.
+            // Grown out of line, appended in line: with two phases' call
+            // sites LLVM otherwise outlines the whole `append`.
             if (self.rows.items.len == self.rows.capacity) try self.rows.ensureUnusedCapacity(self.gpa, 1);
             self.rows.appendAssumeCapacity(.{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
         } else {
@@ -985,7 +966,7 @@ pub const State = struct {
         _ = self.sched.schedule(.monitor, monitor_payload) catch |e| return self.schedFail(e);
     }
 
-    /// Queue the process at `pc`: now (active), or `ticks` later (inactive).
+    /// Queues the process at `pc`: now (active), or `after` ticks later (inactive).
     pub fn run(self: *State, pc: u32, after: ?u64) Error!void {
         _ = (if (after) |t|
             self.sched.scheduleAfter(t, .inactive, pc) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e})
@@ -993,18 +974,21 @@ pub const State = struct {
             self.sched.schedule(.active, pc) catch |e| return self.schedFail(e));
     }
 
+    /// A scheduling failure as `error.OutOfMemory`, or an E1100 refusal.
     pub fn schedFail(self: *State, e: Scheduler.Error) Error {
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital scheduling failure: {t}", .{e});
     }
 
+    /// `schedFail` of a failure to schedule a delay.
     pub fn timeFail(self: *State, e: Scheduler.Error) Error {
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e});
     }
 
     /// `exec.wake`: the continuous drivers reading `slot` first, then the
     /// event controls in the order they suspended. Under the static
-    /// schedule the nodes and triggered processes reading it come between.
-    /// A change of a slot the monitor watches asks for its line (§17.1.3).
+    /// schedule the nodes reading it come before them, and the triggered
+    /// processes take their place in that order by `stamp`. A change of a
+    /// slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         return self.wakeOf(.all, slot, before, after);
     }
@@ -1018,17 +1002,15 @@ pub const State = struct {
             try self.run(pc, null);
         };
         if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
-        if (reach.watch and slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
-            if (!self.waiting[w.proc] or !w.edge.matches(before, after)) continue;
-            self.waiting[w.proc] = false;
-            try self.run(w.pc, null);
-        };
-        if (reach.terms) try self.wakeTerms(slot, before, after);
+        if (reach.terms) return self.wakeTerms(reach, slot, before, after);
+        if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
     }
 
     /// `wake` of the event controls filed under `slot`, in the order they
-    /// suspended.
-    fn wakeTerms(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
+    /// suspended, each after the triggered processes that suspended before
+    /// it: `vera --run`'s order, so a process woken here suspends again
+    /// before they store what it waits for next.
+    fn wakeTerms(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
         const list = &self.terms[slot];
         var keep: usize = 0;
         for (list.items) |t| {
@@ -1039,11 +1021,32 @@ pub const State = struct {
                 keep += 1;
                 continue;
             }
+            if (reach.watch) try self.wakeWatchers(slot, before, after, s.seq);
             const pc = s.pc;
             self.retire(t.susp);
             try self.run(pc, null);
         }
         list.shrinkRetainingCapacity(keep);
+        if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
+    }
+
+    /// `wake` of the triggered processes watching `slot` that suspended
+    /// before stamp `bound`.
+    fn wakeWatchers(self: *State, slot: u32, before: Bit, after: Bit, bound: u64) Error!void {
+        if (slot + 1 >= self.watch_start.len) return;
+        for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+            const since = self.waiting[w.proc];
+            if (since == 0 or since >= bound or !w.edge.matches(before, after)) continue;
+            self.waiting[w.proc] = 0;
+            try self.run(w.pc, null);
+        }
+    }
+
+    /// The next suspension's order among all of them: `vera --run` wakes
+    /// the processes waiting on a change in this order (`wakeTerms`).
+    pub inline fn stamp(self: *State) u64 {
+        self.seq += 1;
+        return self.seq;
     }
 
     /// `exec.park`: suspend the running process, to resume at `pc`.
@@ -1056,6 +1059,7 @@ pub const State = struct {
         const s = &self.susps.items[id];
         s.pc = pc;
         s.alive = true;
+        s.seq = self.stamp();
         return id;
     }
 

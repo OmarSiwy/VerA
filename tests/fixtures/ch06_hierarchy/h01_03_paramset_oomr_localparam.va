@@ -25,7 +25,7 @@
 // THE PROHIBITION IS NOT TESTED HERE. `h01_lib.tox` is a `localparam`; the
 // clause's next sentence refuses the same syntax over a plain `parameter`, and a
 // fixture for that would be a rejection, which this row keeps to a minimum. It is
-// listed in SPEC.md as not covered.
+// listed in tests/fixtures/ch06_hierarchy/h01_SPEC.md at 8b1514d4 as not covered.
 //
 // GROUND TRUTH TODAY: green, both checks. It was refused with E0901,
 // "`h01_lib.tox` names nothing in the elaborated design": `Flatten` resolved a

@@ -63,7 +63,7 @@
  * p02_design.bit1 is a scalar `reg` holding 1'b1: vpiScalarVal -> vpi1,
  * vpiBinStrVal -> "1", vpiIntVal -> 1, and vpiObjTypeVal -> vpiScalarVal
  * (12.16 spells this "vpiScalar"; Annex G's format constant is vpiScalarVal
- * and they are the same thing — see SPEC.md).
+ * and they are the same thing — see tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4).
  *
  * WHEN. All of the above are assigned by an `initial` block, so they are only
  * true AFTER the time-0 queue has run. 12.31.2: "cbReadOnlySynch ... Callback

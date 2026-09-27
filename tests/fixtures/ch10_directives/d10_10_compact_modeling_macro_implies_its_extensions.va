@@ -21,7 +21,7 @@
 // introduced them ("Verilog-AMS HDL version 2.2 introduced a number of
 // extensions to support compact modeling"), and Table G.3 item 26 is the row
 // that adds this very macro. Four of its rows are sampled — not exhausted, and
-// SPEC.md says which are left. Each is asserted against a number derived by
+// tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 says which are left. Each is asserted against a number derived by
 // hand, so a stub that parses the construct and returns zero fails:
 //
 //   item 8/10  ddx()            §4.5.6 is the symbolic derivative with respect
@@ -83,7 +83,7 @@
 //   header quotes two lines above it. 14 does not ASSERT that sentence (its
 //   `else` arm checks 2.0*V(p,n) == 1.0, true whichever arm compiled), so there
 //   is no fixture conflict, only a prose one, and the file that carries it is
-//   outside this row's scope to edit. SPEC.md records it.
+//   outside this row's scope to edit. tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 records it.
 //
 // The alternative unconditional check considered and rejected: §10.5's other
 // sentence, "__VAMS_ENABLE__ ... shall always be defined". It has teeth, but
@@ -93,7 +93,7 @@
 // out of reach, and that is a property of the clause and not of this file: the
 // source text has no way to ask "is extension X missing?" other than by using
 // it, which is exactly what fails to compile when it is missing. Recorded in
-// SPEC.md rather than silently dropped.
+// tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 rather than silently dropped.
 //
 //! lrm 10.5
 //! bias V(p) = 0.75, V(n) = 0.25

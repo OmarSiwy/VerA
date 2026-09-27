@@ -1,12 +1,9 @@
-//! §7.9 net resolution data, with no engine state.
-//!
-//! In: driver bits, their A.2.2.2 strengths and the net's type. Out: one
-//! resolved four-state bit, a delay in scheduler ticks, or a gate output bit.
-//!
-//! Clauses: IEEE 1364-2005 clause 7's strength pair and §7.9 Tables
-//! 7-4/7-6/7-7 wired logic, §7.10; §7.8.5 gate tables for A.3.1/A.3.4 gate
-//! instances; §3.7 undriven values and §3.8 `trireg` charge; A.2.2.3 `delay3`
-//! chosen per IEEE 1364-2005 §7.14, and §6.1.3's vector and inertial rules.
+//! Driver bits, their A.2.2.2 strengths and the net's type -> one resolved
+//! four-state bit, a delay in scheduler ticks, or a gate output bit. Data and
+//! pure functions only; no engine state. IEEE 1364-2005 §7.9 Tables 7-4/7-6/7-7
+//! and §7.10 strength resolution, §7.8.5 gate tables (A.3.1, A.3.4), §7.6/§7.12
+//! switches, §8 UDPs, §3.7 undriven values, §3.8 `trireg` charge, A.2.2.3
+//! `delay3` chosen per §7.14, §6.1.3 vector and inertial delays.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -17,39 +14,34 @@ const Handle = @import("../scheduler.zig").Handle;
 
 // ---- delays (A.2.2.3, §7.14, §6.1.3) ----------------------------------------
 
-/// IEEE 1364-2005 §6.1.3: a delayed continuous assignment is INERTIAL — "if
-/// the value changes before the delay has elapsed, the scheduled event is
-/// cancelled". So a driver or a net has at most ONE transition in flight, and
-/// cancelling it is the scheduler's own `cancel` on the handle kept here.
+/// A driver's or net's one transition in flight. §6.1.3: a delayed continuous
+/// assignment is inertial ("if the value changes before the delay has
+/// elapsed, the scheduled event is cancelled"), and cancelling it is the
+/// scheduler's own `cancel` on the handle kept here.
 pub const Inertial = struct {
     /// The event in flight, or null when none is. Cleared when it dispatches.
     in_flight: ?Handle = null,
     /// What the event in flight will publish, meaningful only while
-    /// `in_flight` is set. Compared against rather than the published value, so
-    /// that a re-evaluation landing on the value already on its way leaves the
-    /// timer alone instead of restarting it. Its planes are sized once and
-    /// then reused, so a toggling input costs no memory per transition.
+    /// `in_flight` is set. A re-evaluation landing on this value leaves the
+    /// timer alone instead of restarting it. Sized once and reused, so a
+    /// toggling input allocates nothing per transition.
     target: Int.Literal = .{ .width = 0, .sized = true, .signed = false, .planes = &.{} },
     /// `target`'s §7.10.2 H/L flag, for a gate driver (see `Driver.or_z`).
     or_z: bool = false,
 };
 
-/// A.2.2.3's three values, already in scheduler ticks. `present` is false for
-/// every construct that names no delay, and that is the path the engine took
-/// before delays existed — an immediate store.
+/// A.2.2.3's three values, in scheduler ticks. `present` is false for every
+/// construct that names no delay: an immediate store.
 pub const Delay = struct {
     rise: u64 = 0,
     fall: u64 = 0,
     off: u64 = 0,
     present: bool = false,
 
-    /// IEEE 1364-2005 §7.14: the delay is chosen by the value being
-    /// transitioned TO, and a transition to x takes the SMALLEST of the three —
-    /// x is "the value is somewhere in here", and it is true from the first
-    /// moment any of the three transitions could have begun.
-    ///
-    /// This selector is scalar. Net-delay vector handling remains separate
-    /// from §6.1.3's whole-vector continuous-assignment rule below.
+    /// The delay of a scalar transition to `to` (§7.14): the one for that
+    /// value, and for x the smallest of the three, since x holds from the
+    /// first moment any of the transitions could have begun. A vector
+    /// continuous assignment uses `continuous` instead.
     pub fn to(self: Delay, b: Int.Bit) u64 {
         return switch (b) {
             .one => self.rise,
@@ -59,10 +51,10 @@ pub const Delay = struct {
         };
     }
 
-    /// IEEE 1364-2005 §6.1.3: vector assignments use falling delay for
-    /// nonzero-to-zero, turn-off for all-z, and rising for every other case.
-    /// Unlike scalar gates, mixed x/z values do not select a minimum delay.
-    /// The caller supplies the published driver value, not a pending target.
+    /// The delay of a continuous assignment from `from` (the published
+    /// driver value, not a pending target) to `value` (§6.1.3): fall for
+    /// nonzero to zero, turn-off for all z, rise otherwise. Unlike a scalar
+    /// gate, a mix of x and z does not select the minimum.
     pub fn continuous(self: Delay, from: Int.Literal, value: Int.Literal) u64 {
         if (value.width == 1) return self.to(value.bit(0));
         // z is (value 0, unknown 1): one plane word tests 64 bits.
@@ -86,37 +78,36 @@ pub const Delay = struct {
 /// happens to assert only part of the net.
 pub const Bridge = struct { src: u32, src_lo: u32, dst_lo: u32, width: u32 };
 
-// §7.9 one net: its resolution function, its storage, and the drivers whose
-// wired-logic combination IS its value. `resolved` is the scratch the fold
-// writes before publishing through `store`; it is sized once, at setup.
+/// §7.9 one net: its resolution function, its storage, and the drivers whose
+/// wired-logic combination is its value. `resolved` is the scratch the fold
+/// writes before publishing through `store`, sized once at setup.
 pub const Net = struct {
     kind: Ast.NetKind,
     slot: u32,
     resolved: Int.Literal,
     /// The declaring token, for a verdict reached after elaboration (§7.9's
-    /// `uwire` driver count is the only one so far).
+    /// `uwire` driver count).
     tok: u32 = 0,
     drivers: []const u32 = &.{},
     /// A.2.1.3 `charge_strength`, the level the stored charge of a `trireg` in
     /// the capacitive state asserts. `medium` is §3.8's default and is ignored
     /// outright by every other net type.
     charge: Ast.Strength = .medium,
-    /// A.2.1.3 `[ delay3 ]` on the declaration, applied to the RESOLVED value.
+    /// A.2.1.3 `[ delay3 ]` on the declaration, applied to the resolved value.
     delay: Delay = .{},
     transition: Inertial = .{},
     /// A.2.1.3's third `delay3` value on a `trireg`: how long the capacitive
-    /// state may last before the charge is worth nothing. `null` — which is
-    /// what a `trireg` with no `delay3` gets — is IEEE 1364-2005 §3.8's
-    /// indefinite hold.
+    /// state may last before the charge is worth nothing. `null` (a `trireg`
+    /// with no `delay3`) is §3.8's indefinite hold.
     decay: ?u64 = null,
     /// Whether the last resolution found no driver asserting anything, which is
-    /// §3.8's capacitive state. The decay countdown restarts on each ENTRY into
+    /// §3.8's capacitive state. The decay countdown restarts on each entry into
     /// it, so the transition is what is watched, not the state.
     capacitive: bool = false,
     /// The §3.8 decay countdown in flight, cancelled on leaving the state.
     decay_event: ?Handle = null,
-    /// Per bit, the §7.10 signal the last resolution found — its strength is
-    /// what a MOS switch reading this net passes on (§7.12). Kept current only
+    /// Per bit, the §7.10 signal the last resolution found, whose strength a
+    /// MOS switch reading this net passes on (§7.12). Kept current only
     /// where `strength_read` or the net resolves through a fold.
     signal: []Signal = &.{},
     /// A MOS switch's data terminal is this net, so `signal` is read.
@@ -125,8 +116,8 @@ pub const Net = struct {
     trans: []const u32 = &.{},
 };
 
-/// §7.6 one MOS switch (half of a CMOS one, §7.7): it passes `data` — value
-/// and strength — to its output while `gate` holds the conducting value (1
+/// §7.6 one MOS switch (half of a CMOS one, §7.7): it passes `data`, value
+/// and strength, to its output while `gate` holds the conducting value (1
 /// for an n-type, 0 for a p-type), and is off otherwise.
 pub const Mos = struct { data: Ast.ExprId, gate: Ast.ExprId, n_type: bool, resistive: bool };
 
@@ -182,7 +173,7 @@ pub fn reduce(s: Ast.Strength, resistive: bool) Ast.Strength {
 }
 
 /// One gate evaluation: §7.8.5's output bit, and whether it is §7.10.2's H/L
-/// — `bit` or high impedance — rather than `bit` itself.
+/// (`bit` or high impedance) rather than `bit` itself.
 pub const GateOut = struct { bit: Int.Bit, or_z: bool = false };
 
 /// A window of a wider value: bits [lo, lo + the receiver's width) of it read
@@ -197,28 +188,25 @@ pub const Slice = struct { lo: u32, total: u32 };
 /// broadcast, and it drives bit `out_bit` of a vector output net.
 pub const Gate = struct { kind: Ast.GateKind, ins: []const Ast.ExprId, lane: ?u32 = null, lanes: u32 = 1, out_bit: ?u32 = null };
 
-/// §7.8.5: "a gate transmits a logic value, not a connection" — every primitive
-/// but the MOS switches reads a z input as x. This is the one place the gate
-/// tables part company with the expression operators.
+/// §7.8.5: "a gate transmits a logic value, not a connection": every primitive
+/// but the MOS switches reads a z input as x, unlike the expression operators.
 fn gateIn(b: Int.Bit) Int.Bit {
     return if (b == .z) .x else b;
 }
 
 /// §7.8.5's tables for A.3.4's twelve computing gate types, one output bit.
 ///
-/// The n-input arms are written as controlling-value rules rather than as 4x4
-/// tables because that is what the tables ARE: `and(0, x)` is 0 because the 0
-/// controls, while `xor(0, x)` is x because xor has no controlling value. An
-/// implementation that folds "unknown in, unknown out" uniformly gets the and
-/// and or rows wrong and nothing else.
+/// The n-input arms are controlling-value rules, which is what the tables
+/// encode: `and(0, x)` is 0 because the 0 controls, while `xor(0, x)` is x
+/// because xor has no controlling value.
 pub fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) GateOut {
     switch (kind) {
         // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
-        // regimes: the OFF enable gives z whatever the data is; the ON enable
+        // regimes: the off enable gives z whatever the data is; the on enable
         // gives the gate function of the data; an x/z enable means the gate may
         // or may not be conducting, which IEEE 1364 writes as L (0-or-z) or H
-        // (1-or-z). Neither is a member of {0,1,x,z} — L is not 0, because it
-        // might be z — so the value alone projects to x, and the flag is what
+        // (1-or-z). Neither is a member of {0,1,x,z} (L is not 0, because it
+        // might be z), so the value alone projects to x, and the flag is what
         // lets §7.10.3 resolve it against another driver (Figure 7-6).
         .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
             const on: Int.Bit = if (kind == .g_bufif1 or kind == .g_notif1) .one else .zero;
@@ -245,7 +233,7 @@ fn logicBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
     switch (kind) {
         .g_and, .g_nand, .g_or, .g_nor => {
             // The value that decides the output on its own, and the output it
-            // decides — `and` is controlled by 0 and produces 0.
+            // decides: `and` is controlled by 0 and produces 0.
             const control: Int.Bit = if (kind == .g_and or kind == .g_nand) .zero else .one;
             var unknown = false;
             for (ins) |raw| {
@@ -273,17 +261,13 @@ fn logicBit(kind: Ast.GateKind, ins: []const Int.Bit) Int.Bit {
     }
 }
 
-// §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
-// of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
-// are A.2.2.2's `drive_strength`, which is a property of the DRIVER and not of
-// the value it currently holds.
 /// What one driver asserts, decided at elaboration: exactly one source.
 pub const Source = union(enum) {
     /// A.6.1 an expression. With `slice`, it is read `total` bits wide and the
-    /// driver asserts the bits from `lo` up — one internal port of a §12.3.6
+    /// driver asserts the bits from `lo` up: one internal port of a §12.3.6
     /// concatenated port.
     expr: struct { e: Ast.ExprId, slice: ?Slice = null },
-    /// A port connection that cannot collapse — see `Bridge`.
+    /// A port connection that cannot collapse (`Bridge`).
     bridge: Bridge,
     /// An A.3.1 gate instance. A gate is a driver (§7.1) but not an
     /// expression: §7.8.5's tables read z on an input as x, which no operator
@@ -294,21 +278,22 @@ pub const Source = union(enum) {
     /// A §7.6 MOS switch, whose `s0`/`s1` are the strengths it passes, set at
     /// each evaluation.
     mos: Mos,
-    /// IEEE 1364 §19.10's `unconnected_drive`: the directive pulls an
-    /// unconnected input port to a logic level THROUGH A PULL-STRENGTH
-    /// DRIVER, so it is a driver among drivers and argues with the net's own
-    /// type through `Signal` like any other. A constant, hence an empty
-    /// sensitivity list — it is evaluated once, at the initial `.continuous`
-    /// dispatch, and never re-runs.
+    /// §19.10 `unconnected_drive`: a pull-strength driver of an unconnected
+    /// input port, resolved against the net's own type through `Signal` like
+    /// any other. A constant with an empty sensitivity list: it is evaluated
+    /// once, at the initial `.continuous` dispatch.
     pull: Int.Bit,
 };
 
+/// §6.1 one driver. It keeps its own value (the net's is the resolution of
+/// all of them) and re-evaluates whenever one of its operands changes.
+/// `s0`/`s1` are A.2.2.2's `drive_strength`, a property of the driver, not
+/// of the value it holds.
 pub const Driver = struct {
     net: u32,
     source: Source,
     /// The §6.2.2 instance the source is written in. A port connection
-    /// expression belongs to the PARENT, which is not the scope of the net it
-    /// feeds.
+    /// expression belongs to the parent, not to the scope of the net it feeds.
     scope: u32 = 0,
     sensitivity: []const u32,
     current: Int.Literal,
@@ -319,29 +304,27 @@ pub const Driver = struct {
     /// A.6.1 `[ delay3 ]`.
     delay: Delay = .{},
     transition: Inertial = .{},
-    /// The statement's main token — with `scope`, the identity a VPI
+    /// The statement's main token: with `scope`, the identity a VPI
     /// application's §12.29 vpi_put_delays reaches this driver by.
     tok: u32 = 0,
 };
 
 // ---- strength and resolution (clause 7, §7.9 Tables 7-4/7-6/7-7, §3.7) ------
 
-/// IEEE 1364-2005 §7.10's signal: a RANGE of strength levels on Figure 7-2's
+/// IEEE 1364-2005 §7.10's signal: a range of strength levels on Figure 7-2's
 /// scale, which runs Su0 … Sm0 HiZ0 HiZ1 Sm1 … Su1. A position here is that
 /// scale folded at HiZ: `-s` is strength0 level `s`, `+s` strength1 level
-/// `s`, and 0 is HiZ. A four-state value is not enough to resolve a net,
-/// because "0 and 1 disagree" has a different answer depending on which
-/// driver is stronger, and a per-side maximum is not enough either: §7.10.2's
-/// StH (a bufif1 with an x enable passing a 1) is `[HiZ, St1]`, which a
-/// maximum cannot tell from St1 and which §7.10.3 lets a Pu1 settle to 1.
-/// Collapsing back to four states is the LAST step, not the first.
+/// `s`, and 0 is HiZ. A per-side maximum would not do: §7.10.2's StH (a
+/// bufif1 with an x enable passing a 1) is `[HiZ, St1]`, which a maximum
+/// cannot tell from St1 and which §7.10.3 lets a Pu1 settle to 1. `collapse`
+/// turns it into four states only after resolution.
 pub const Signal = struct {
     lo: i8 = 0,
     hi: i8 = 0,
 
-    /// What a driver holding `b` at `(s0, s1)` asserts. An `x` spans BOTH
-    /// sides — that is what makes it an ambiguous range rather than a value —
-    /// and a `z` asserts nothing, which is why an undriven net reads z. A
+    /// What a driver holding `b` at `(s0, s1)` asserts. An `x` spans both
+    /// sides, an ambiguous range rather than a value, and a `z` asserts
+    /// nothing, which is why an undriven net reads z. A
     /// `highz` strength on one side of an `x` is Figure 7-17's H/L: "HiZ0 is
     /// part of the result because the strength specification ... specified
     /// that strength for an output with a value 0".
@@ -356,8 +339,8 @@ pub const Signal = struct {
         };
     }
 
-    /// §7.10.2 H or L: `b` or high impedance, at `b`'s side's strength —
-    /// what a three-state driver with an unknown control asserts (Figure 7-6).
+    /// §7.10.2 H or L: `b` or high impedance, at `b`'s side's strength, what
+    /// a three-state driver with an unknown control asserts (Figure 7-6).
     pub fn orZ(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Signal {
         return of(.x, if (b == .one) .highz else s0, if (b == .zero) .highz else s1);
     }
@@ -369,13 +352,13 @@ pub const Signal = struct {
     /// §7.10.1-§7.10.3, one more contributor folded in.
     ///   - two unambiguous signals: the stronger wins; equal strength and
     ///     opposite values give x "along with the strength levels of both
-    ///     signals and all the smaller strength levels" — the hull;
+    ///     signals and all the smaller strength levels", the hull;
     ///   - two ambiguous ones: "a range that includes the extremes of the
-    ///     signals and all the strengths between them" — the hull again;
-    ///   - one of each: §7.10.3's rules a-c. The ambiguous levels STRONGER
+    ///     signals and all the strengths between them", the hull again;
+    ///   - one of each: §7.10.3's rules a-c. The ambiguous levels stronger
     ///     than the unambiguous one remain, the rest disappear, and the gap
     ///     between what remains and the unambiguous level is filled. An
-    ///     opposite-value level EQUAL to it remains too: Figure 7-21's text
+    ///     opposite-value level equal to it remains too: Figure 7-21's text
     ///     drops only the opposite levels of "lesser strength", and §4.6.1
     ///     Table 4-2 makes St0 with StX an x, which dropping it would not.
     pub fn combine(a: Signal, b: Signal) Signal {
@@ -399,7 +382,7 @@ pub const Signal = struct {
     }
 
     /// §7.10.4, one more contributor folded into a wired-logic net: the
-    /// table decides only between levels of the SAME strength ("resolve
+    /// table decides only between levels of the same strength ("resolve
     /// conflicts when multiple drivers have the same strength"), and
     /// otherwise "the stronger signal shall dominate" (§7.10.1). An ambiguous
     /// signal takes "all combinations of each of the strength levels in the
@@ -426,9 +409,9 @@ pub const Signal = struct {
         return out;
     }
 
-    /// The one place the range becomes a printable value again: wholly on
-    /// one side is that side's value, HiZ alone is z, and anything that
-    /// straddles HiZ — including §7.10.2's H and L — is x.
+    /// The four-state value of the range: wholly on one side is that side's
+    /// value, HiZ alone is z, and anything that straddles HiZ (§7.10.2's H
+    /// and L among them) is x.
     pub fn collapse(self: Signal) Int.Bit {
         if (self.lo > 0) return .one;
         if (self.hi < 0) return .zero;
@@ -437,9 +420,9 @@ pub const Signal = struct {
     }
 };
 
-/// §3.7/§7.9: what the net TYPE itself contributes, at the level clause 7 gives
-/// it. This is the same information `undriven` returns as a value, at the
-/// strength that lets a driver argue with it: a `weak1` driver cannot move a
+/// §3.7/§7.9: what the net type itself contributes, at the level clause 7
+/// gives it: `undriven`'s value, at the strength that lets a driver argue
+/// with it: a `weak1` driver cannot move a
 /// `tri0` because pull(5) beats weak(3), and nothing an `assign` can write
 /// beats a supply net's supply(7).
 pub fn netPull(kind: Ast.NetKind) Signal {
@@ -491,8 +474,8 @@ pub const UdpSym = union(enum) { level: u8, pair: [2]u8, letter: u8 };
 pub const UdpRow = struct { ins: []const UdpSym, state: u8, out: u8, edge_at: ?u32 };
 
 /// §8 one UDP instance as a driver: its table, its input terminals, and what
-/// a sequential one carries between events — the input values the table last
-/// saw (an event is a change FROM these) and its state, the output reg.
+/// a sequential one carries between events: the input values the table last
+/// saw (an event is a change from these) and its state, the output reg.
 pub const Udp = struct {
     rows: []const UdpRow,
     sequential: bool,
@@ -576,7 +559,7 @@ fn udpOut(sym: u8, state: Int.Bit) Int.Bit {
 /// §8.6/§8.7 one evaluation. With `changed == null` only level entries can
 /// match (a combinational table, or a sequential one re-read without an
 /// event); otherwise `changed` went from `from` to `ins[changed]`, and an
-/// edge entry on that input matches too — after every level entry, since
+/// edge entry on that input matches too, after every level entry, since
 /// §8.8 makes level-sensitive entries dominate edge-sensitive ones. Nothing
 /// matching is x (§8.1.6: "a combination of input values not specified ...
 /// results in x").
@@ -602,9 +585,9 @@ pub fn udpEval(rows: []const UdpRow, sequential: bool, ins: []const Int.Bit, sta
 
 // ---- four-state storage (§3.7) ----------------------------------------------
 
-/// A four-state value of `width` bits, every bit `fill`. This is the one place
-/// declared state gets its starting value: X for a variable, Z for an undriven
-/// net (§3.7 — that difference IS the net/variable difference).
+/// A four-state value of `width` bits, every bit `fill`: where declared state
+/// gets its starting value, X for a variable and Z for an undriven net (§3.7).
+/// The caller owns the result, allocated from `a`.
 pub fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Error!Int.Literal {
     const words = (@as(usize, width) - 1) / 64 + 1;
     const planes = try a.alloc(u64, words * 2);
@@ -785,11 +768,9 @@ test "IEEE1364-2005 Figure 7-25 wired logic over an ambiguous strength" {
     try std.testing.expectEqual(Signal{ .lo = -6, .hi = 5 }, s1.combineWired(s2, .@"or"));
 }
 
-// IEEE 1364-2005 clause 7 via §1.1, annex A.2.2.2 and A.6.1. The boundary the
-// suite's d03 fixtures own is the resolution ITSELF; what a unit test is for is
-// the three places the pair model changes an answer the value-only resolver had
-// a different one for, so that a regression is named here rather than in a
-// transcript diff.
+// IEEE 1364-2005 clause 7, A.2.2.2, A.6.1: the three places strength decides
+// what a four-state resolution alone would get wrong. The d03 fixtures cover
+// the resolution as a whole.
 test "a drive strength decides which of two disagreeing drivers the net shows" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -808,9 +789,9 @@ test "a drive strength decides which of two disagreeing drivers the net shows" {
         \\end
         \\endmodule
     ,
-    // `t` is a tri0: its own pull(5) loses to strong(6) on both polarities and
-    // to the strong x on neither side, so the ambiguous line is x there too —
-    // and the weak driver of `w` never moves it.
+        // `t` is a tri0: its own pull(5) loses to strong(6) on both polarities and
+        // to the strong x on neither side, so the ambiguous line is x there too,
+        // and the weak driver of `w` never moves it.
         \\6v3 1 1
         \\3v6 0 0
         \\ambiguous x x
@@ -836,8 +817,8 @@ test "a highz half suppresses that polarity outright, wired logic included" {
         \\end
         \\endmodule
     ,
-    // The `highz0` driver holding 0 asserts nothing at all, so it is invisible
-    // to the plain wire AND is the wand table's identity rather than a 0 vote.
+        // The `highz0` driver holding 0 asserts nothing at all, so it is invisible
+        // to the plain wire and is the wand table's identity rather than a 0 vote.
         \\open_drain 1 1
         \\weak_zero 0 0
         \\nothing_left z z
@@ -861,9 +842,9 @@ test "a supply net outranks every strength an assign can write but its own" {
         \\end
         \\endmodule
     ,
-    // A supply-strength driver does not LOSE to the net, it TIES with it, and a
-    // tie on two nonzero sides is x. That is the line a resolver which simply
-    // ignores a supply net's drivers gets wrong.
+        // A supply-strength driver does not lose to the net, it ties with it, and a
+        // tie on two nonzero sides is x. That is the line a resolver which simply
+        // ignores a supply net's drivers gets wrong.
         \\zero 1 x
         \\one 1 1
         \\
@@ -907,14 +888,14 @@ test "§7.10 strength ranges combine the way Figures 7-9 through 7-19 draw them"
     // Figure 7-19: StH + We0 is 36X (rule c fills the gap).
     const sth = S.of(.x, .highz, .strong);
     try std.testing.expectEqual(S{ .lo = -3, .hi = 6 }, sth.combine(S.of(.zero, .weak, .strong)));
-    // Rules a/b: StH + Pu1 keeps only St1 above Pu1 — a 1, not an x.
+    // Rules a/b: StH + Pu1 keeps only St1 above Pu1: a 1, not an x.
     try std.testing.expectEqual(Int.Bit.one, sth.combine(S.of(.one, .strong, .pull)).collapse());
     try std.testing.expectEqual(Int.Bit.x, sth.collapse());
-    // An opposite level EQUAL to the unambiguous one ties: Table 4-2's 0-with-x.
+    // An opposite level equal to the unambiguous one ties: Table 4-2's 0-with-x.
     try std.testing.expectEqual(Int.Bit.x, S.of(.x, .strong, .strong).combine(S.of(.zero, .strong, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.x, S.of(.x, .pull, .pull).combine(S.of(.zero, .pull, .highz)).collapse());
     try std.testing.expectEqual(Int.Bit.x, sth.combine(S.of(.zero, .strong, .strong)).collapse());
-    // §7.10.1: unambiguous — the stronger wins, equal and opposite is x.
+    // §7.10.1: unambiguous, the stronger wins; equal and opposite is x.
     try std.testing.expectEqual(Int.Bit.zero, S.of(.one, .strong, .weak).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.x, S.of(.one, .strong, .pull).combine(S.of(.zero, .pull, .strong)).collapse());
     try std.testing.expectEqual(Int.Bit.z, S.of(.one, .strong, .highz).collapse());
@@ -955,7 +936,7 @@ test "§7.1.5 a gate instance array splits vector terminals and shares scalars" 
 }
 
 // §8: a rising-edge toggle built from Table 8-1's letters, behind an
-// instance delay — the initial state is out at time 0, a falling edge holds,
+// instance delay: the initial state is out at time 0, a falling edge holds,
 // each rising edge flips the state and lands 2 units later.
 test "§8 a sequential UDP with edge letters, an initial state and an instance delay" {
     try expectRun(

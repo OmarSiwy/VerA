@@ -16,7 +16,7 @@
 //
 // This complements fixture 10, but is only a legal automatic-recursion oracle,
 // not a complete discriminator for per-call storage (TF-016 in
-// docs/conformance-ieee-task-functions-review.md).
+// docs/conformance-ieee-task-functions-review.md at 8b1514d4).
 //
 // HAND DERIVATION — 5! by the textbook recursion, all arithmetic 16 bits wide.
 //   fact(5) = 5 * fact(4)

@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.6.3 io decl objects: a taskfunc reaches its arguments one-to-many, and the
 // NOTE there says a function contains an object with the function's own name.
 // The Verilog-A rules behind that are §4.7.1 — inputs are copied by value in

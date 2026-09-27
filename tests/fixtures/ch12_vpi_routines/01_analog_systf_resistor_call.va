@@ -1,5 +1,5 @@
 // Source-review evidence boundary: retained HDL test does not execute the VPI
-// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
+// contract. Chapter12 behavioral obligations are tracked in docs/ROADMAP.md (Open items).
 // VAMS-12.22.2  (ch12-vpi-routines.html) — the LRM's own $resistor() example.
 //
 // `$resistor(curr, V(p,n), r)` is a USER-DEFINED analog system task: it exists

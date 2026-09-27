@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.4 Tables 11-1/11-4 name `vpi_get` as a C VPI routine of the simulator
 // host interface. Nothing makes it a Verilog-A function: it has no declaration
 // in this source and no §9 system-function spelling (no leading `$`), so §4.7

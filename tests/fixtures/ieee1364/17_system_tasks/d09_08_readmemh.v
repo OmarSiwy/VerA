@@ -51,7 +51,7 @@
 // silently agree.
 //
 // The data file is resolved relative to the process working directory, so the
-// runner must be invoked from this directory (see SPEC.md).
+// runner must be invoked from this directory (see tests/fixtures/ch09_system_tasks/d09_SPEC.md at 8b1514d4).
 //
 //! lrm 9.5 (Table 9-2)
 //! inherited IEEE 1364-2005 17.2.9 ($readmemh addressing and comments)

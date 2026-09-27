@@ -18,7 +18,7 @@
 // module_definition.va) bet on WHICH text the directive has to enclose: the
 // module DEFINITION that declares the input port, or the INSTANTIATION that
 // leaves the terminal blank. That claim is WITHDRAWN, for three reasons and
-// all three are recorded in SPEC.md:
+// all three are recorded in tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4:
 //
 //   - nothing in docs/ settles it. §6.2.2 is the only on-disk sentence in the
 //     neighbourhood and it points the OTHER way ("a blank port connection shall

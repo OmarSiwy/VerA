@@ -44,7 +44,7 @@ nav a:hover { text-decoration: underline; }
 <!-- 6.2 Modules -->
 <h2 id="s6.2">6.2 Modules</h2>
 
-<p class="note"><strong>Inherited-rule audit note (editorial):</strong> IEEE 1364-2005 §4.10.1, inherited through AMS §1.1, makes body parameter declarations local when the module parameter header contains parameter assignments. The AMS text below does not restate that restriction. Header-default acceptance alone does not test it; see <a href="conformance-parameters.md">PAR-020 and PARAM-HEADER-001</a> for the open implementation defect and evidence boundaries.</p>
+<p class="note"><strong>Inherited-rule audit note (editorial):</strong> IEEE 1364-2005 §4.10.1, inherited through AMS §1.1, makes body parameter declarations local when the module parameter header contains parameter assignments. The AMS text below does not restate that restriction. Header-default acceptance alone does not test it; see <code>tests/fixtures/ch06_hierarchy/audit_header_body_parameter_override_rejected.va</code> and its legal sibling <code>audit_header_body_parameter_dependency.va</code>.</p>
 
 <p>A module definition shall be enclosed between the keywords <code>module</code> and <code>endmodule</code>. The identifier following <code>module</code> shall be the name of the module being defined.</p>
 

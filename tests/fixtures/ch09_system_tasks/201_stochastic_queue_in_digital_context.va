@@ -6,7 +6,7 @@
 // rejected.va is the clause's only other cite and pins the other half — not
 // extended means not callable from the analog block.
 //
-// IEEE 1364-2005 §17.6 (inventoried in docs/conformance-ieee-queue-review.md,
+// IEEE 1364-2005 §17.6 (inventoried in docs/conformance-ieee-queue-review.md at 8b1514d4,
 // QUEUE-001..008): $q_initialize(q_id, q_type, max_length, status) with type 1
 // = FIFO; $q_add(q_id, job_id, inform_id, status); $q_full(q_id, status)
 // returns 1 when full; $q_exam(q_id, q_stat_code, q_stat_value, status) with

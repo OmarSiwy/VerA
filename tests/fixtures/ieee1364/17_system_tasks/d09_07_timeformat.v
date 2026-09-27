@@ -42,7 +42,7 @@
 // Every min_field_width here is either 0 or paired with an EMPTY suffix, on
 // purpose: whether the minimum width counts the suffix characters is a
 // question this fixture declines to decide, so it never puts a nonzero width
-// and a nonempty suffix in the same call. See SPEC.md.
+// and a nonempty suffix in the same call. See tests/fixtures/ch09_system_tasks/d09_SPEC.md at 8b1514d4.
 //
 // The final line hands %t a literal 1 rather than $time. %t formats a TIME
 // VALUE given in the scope's unit, so the 1 means one unit = 10ns and prints

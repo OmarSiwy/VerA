@@ -32,8 +32,9 @@ pub const Quantum = enum(i5) {
     ten_s = 1,
     hundred_s = 2,
 
-    /// Bridge for the existing preprocessor's canonical binary64 constants.
-    /// No tolerance, ratio, logarithm, or computed floating-point exponent.
+    /// The quantum whose value in seconds is exactly `seconds`, one of the
+    /// preprocessor's canonical binary64 constants; error.InvalidQuantum for
+    /// any other value, however close.
     pub fn fromSeconds(seconds: f64) Error!Quantum {
         const decades = [_]f64{
             1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10,
@@ -83,23 +84,17 @@ pub const Scale = struct {
         return self.globalTicks(try roundedLocal(value, self.local_per_unit));
     }
 
-    /// The inverse direction, which `$time` and `$realtime` are the only
-    /// callers of: global ticks back into the invoking module's TIME UNIT.
-    ///
-    /// IEEE 1364-2005 §17.7.1 makes `$time` an integer "scaled to the time unit
-    /// of the module that invoked it and rounded", with halves away from zero —
-    /// the same rule `realDelay` already applies in the other direction, which
-    /// is why a `#0.5` under `10ns/100ps` reports 1 and not 0. A truncating
-    /// reader is off by one for half of all timepoints.
+    /// Returns `ticks` in the invoking module's time unit, rounded half away
+    /// from zero: IEEE 1364-2005 §17.7.1 `$time`, "scaled to the time unit of
+    /// the module that invoked it and rounded". The rule is `realDelay`'s, so
+    /// a `#0.5` under `10ns/100ps` reports 1, not 0.
     pub fn unitsAt(self: Scale, ticks: u64) u64 {
         const local = ticks / self.global_per_local;
         const per: u64 = self.local_per_unit;
         return (local + per / 2) / per;
     }
 
-    /// §17.7.2 `$realtime`: the same quantity NOT rounded. It is the reason
-    /// both exist — `$time` says which unit the simulation is in and
-    /// `$realtime` says where inside it.
+    /// `unitsAt` without the rounding (IEEE 1364-2005 §17.7.2 `$realtime`).
     pub fn realAt(self: Scale, ticks: u64) f64 {
         const local: f64 = @floatFromInt(ticks / self.global_per_local);
         return local / @as(f64, @floatFromInt(self.local_per_unit));
