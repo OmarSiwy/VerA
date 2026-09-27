@@ -276,6 +276,14 @@ zig build golden -- after
 zig build golden -- diff       # prints IDENTICAL, or exits 1 naming each file that differs
 ```
 
+A snapshot holds, per fixture, `vera --emit-zig`'s stdout and stderr
+(`.txt`, `.stderr`), the testbench runner `--emit-exe` renders for a `//!`
+`.va` (`.runner.txt`), the tree `--emit-so` writes for a `.va` before `zig`
+runs (`.so/`: `shim.zig`, the split device), and a `.v` design's
+`--emit-exe` root (`.program.txt`). It does not hold a split build's part and
+chunk shims, the engine root (`driver/shim.zig`'s tests pin those) or anything
+`zig` produces. `tests/harness/golden.zig`'s header has the rules.
+
 One phase = one branch = one PR. Never two phases in flight in `lib/`. No
 behaviour changes, no bug fixes, no "while I'm here" inside a phase. Those are
 separate commits before or after. **A phase that cannot keep goldens
