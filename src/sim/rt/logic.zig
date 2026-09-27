@@ -555,6 +555,59 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
     };
 }
 
+/// §4.8.2 integer to real (`exec.realOfInt`): the value read by its own
+/// signedness; an x or z bit makes it 0.
+/// ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
+pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
+    if (anyX(a)) return 0;
+    const lo = wide(a).v[0];
+    if (signed and w <= 64) return @floatFromInt(@as(i64, @bitCast(sext(lo, w))));
+    return @floatFromInt(lo);
+}
+
+/// §4.8.2 real to integer (`exec.intOfReal`): rounded to nearest, halves
+/// away from zero, as a 64-bit signed value; x when no such integer exists.
+pub inline fn ofReal(r: f64) W {
+    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return allX(64);
+    return .{ .v = @bitCast(@as(i64, @intFromFloat(@round(r)))), .x = 0 };
+}
+
+/// §17.8 `$rtoi`: truncated toward zero, a 32-bit signed value; x when none.
+pub inline fn rtoi(r: f64) W {
+    if (!std.math.isFinite(r) or @abs(r) >= 0x1p31) return allX(32);
+    return .{ .v = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r))))), .x = 0 };
+}
+
+/// A real as the 64-bit value a real slot holds: its IEEE 754 bits.
+pub inline fn realBits(r: f64) W {
+    return .{ .v = @bitCast(r), .x = 0 };
+}
+
+/// The real a real slot's value holds.
+pub inline fn real(a: W) f64 {
+    return @bitCast(a.v);
+}
+
+/// The least significant word of `a`'s value plane (`$bitstoreal`).
+pub inline fn word0(a: anytype) u64 {
+    return wide(a).v[0];
+}
+
+/// §5.1.13 a real `?:` under an x or z condition: equal arms are that
+/// value, anything else 0 (`exec.evalReal`).
+pub inline fn realCond(c: Bit, y: f64, n: f64) f64 {
+    return switch (c) {
+        .one => y,
+        .zero => n,
+        .x, .z => if (y == n) y else 0,
+    };
+}
+
+/// A real's truth (§9.4): not zero.
+pub inline fn realTruth(r: f64) Bit {
+    return if (r != 0) .one else .zero;
+}
+
 /// `{hi, lo}`, `hi` being `hw` bits wide and `lo` `lw`.
 pub inline fn join(hi: anytype, comptime hw: u32, lo: anytype, comptime lw: u32) T(hw + lw) {
     if (hw + lw <= 64) return .{ .v = hi.v << lw | lo.v, .x = hi.x << lw | lo.x };

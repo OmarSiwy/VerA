@@ -141,6 +141,8 @@ pub const Emitter = struct {
     /// The call that stores into slot `at`, up to its value: `s.nba` (or
     /// `s.nbaAfter`), or `s.put`, or `s.set` when nothing can wait on the slot.
     pub fn store(self: *Emitter, at: u32, how: How) Error!void {
+        // §4.8 a real changes when its value does, not its bits.
+        if (how == .blocking and self.r.reals.contains(at)) return self.print("try s.putReal({d}, {d}, ", .{ at, self.off[at] });
         if (how == .blocking and !self.watched[at]) return self.print("s.set({d}, ", .{self.off[at]});
         try storeCall(self, how);
         try self.print("{d}, {d}, ", .{ at, self.off[at] });
@@ -150,6 +152,7 @@ pub const Emitter = struct {
     /// slot `base`.
     pub fn storeElement(self: *Emitter, base: u32, lb: u32, how: How) Error!void {
         const off = .{ self.off[base], lb, base, words(self.r.values[base].width) };
+        if (self.r.reals.contains(base)) return self.refuse("an array of reals");
         const count = self.r.arrays.get(base).?.count;
         const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("s.set({d} + (a{d} - {d}) * {d}, ", off);
@@ -159,9 +162,7 @@ pub const Emitter = struct {
 
     /// The slot `e` names in the current scope (`Run.slot`).
     pub fn slot(self: *Emitter, e: Ast.ExprId) Error!u32 {
-        const at = self.r.slot(e) catch return self.refuse("a name the engine resolves only at run time");
-        if (self.r.reals.contains(at)) return self.refuse("a real value");
-        return at;
+        return self.r.slot(e) catch return self.refuse("a name the engine resolves only at run time");
     }
 
     /// Slot `at`'s first word; past the last slot, the end of theirs.
@@ -204,8 +205,15 @@ pub const Rhs = union(enum) { expr: Ast.ExprId, stored: struct { off: u32, ty: T
 fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
     switch (rhs) {
         .expr => |e| try expr.assigned(self, e, target),
+        // `exec.convertValue`, §4.8.2 between a real and an integer.
         .stored => |v| {
-            try self.fits(target);
+            if (v.ty.real and target.real) return self.print("s.get({d})", .{v.off});
+            if (target.real) {
+                try self.print("L.realBits(L.toReal(", .{});
+                if (v.ty.width <= 64) try self.print("s.get({d})", .{v.off}) else try self.print("s.getw({d}, {d})", .{ v.off, words(v.ty.width) });
+                return self.print(", {d}, {}))", .{ v.ty.width, v.ty.signed });
+            }
+            if (v.ty.real) return self.print("L.rs(L.ofReal(L.real(s.get({d}))), 64, {d}, true)", .{ v.off, target.width });
             try self.print("L.rs(", .{});
             if (v.ty.width <= 64) try self.print("s.get({d})", .{v.off}) else try self.print("s.getw({d}, {d})", .{ v.off, words(v.ty.width) });
             try self.print(", {d}, {d}, {})", .{ v.ty.width, target.width, v.ty.signed });
@@ -606,7 +614,25 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 else
                     try self.print("            _ = s.monitorEnable(false);\n", .{}),
                 .readmem => return self.refuse("$readmemb/$readmemh"),
-                .queue => return self.refuse("a §17.6 queue task"),
+                // §17.6: inputs read, the shared queue engine, then each
+                // output written as `exec.assignInt` writes it, status last.
+                .queue => |op| {
+                    const lb = self.label();
+                    const scale = r.timeOf(r.scope).scale;
+                    try self.print("            const q{d} = try s.queue(.{t}, ", .{ lb, op });
+                    try int64(self, t.args[0]);
+                    try self.print(", ", .{});
+                    if (op == .initialize or op == .add or op == .exam) try int64(self, t.args[1]) else try self.print("null", .{});
+                    try self.print(", ", .{});
+                    if (op == .initialize or op == .add) try int64(self, t.args[2]) else try self.print("null", .{});
+                    try self.print(", .{{ .local_per_unit = {d}, .global_per_local = {d} }});\n", .{ scale.local_per_unit, scale.global_per_local });
+                    for (1..3) |k| if (op == .remove or (op == .exam and k == 2)) {
+                        try self.print("            if (q{d}.out[{d}]) |v{d}| {{\n", .{ lb, k - 1, lb });
+                        try assignInt(self, t.args[k], try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
+                        try self.print("            }}\n", .{});
+                    };
+                    try assignInt(self, t.args[3], try std.fmt.allocPrint(self.arena, "q{d}.status", .{lb}));
+                },
                 .pla => return self.refuse("a §17.5 PLA task"),
                 .fclose, .fshow => return self.refuse("a §17.2 file task"),
                 .sshow => return self.refuse("$swrite or $sformat"),
@@ -755,9 +781,7 @@ fn waitFixed(self: *Emitter) Error!bool {
 
 /// `exec.targetType` of a whole slot.
 fn slotType(self: *Emitter, at: u32) Error!Type {
-    const t = self.r.slotType(at);
-    try self.fits(t);
-    return t;
+    return self.r.slotType(at);
 }
 
 /// `exec.targetType`: the type a value assigned to `target` takes.
@@ -832,6 +856,16 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const r = self.r;
     const scale = r.timeOf(r.scope).scale;
     const t = try expr.natural(self, amount);
+    if (t.real) {
+        if (compile.constantExpression(r, amount)) {
+            const v = exec.evalReal(r, self.arena, amount) catch return self.refuse("a delay the engine does not fold");
+            const ticks = scale.realDelay(v) catch |e| return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
+            return self.print("{d}", .{ticks});
+        }
+        try self.print("try s.realTicks(", .{});
+        try expr.real(self, amount);
+        return self.print(", .{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ scale.local_per_unit, scale.global_per_local });
+    }
     if (t.width > 64) return self.refuse("a delay wider than 64 bits");
     if (compile.constantExpression(r, amount)) fold: {
         const v = exec.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
@@ -880,6 +914,21 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     // A node is run by its settle event, not re-queued by its operands.
     if (self.role != .comb) try self.print("            s.armed[{d}] = true;\n", .{pc});
     try self.print("            return;\n", .{});
+}
+
+/// `exec.assignInt`: the Zig `i64` `v` assigned to `target`, through a
+/// scratch word past the slots'.
+pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const at = try cellOf(self, std.math.maxInt(u32), 64);
+    try self.print("            s.set({d}, L.k(@bitCast(@as(i64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
+}
+
+/// `exec.eval(e, 0).asInt()` as a Zig `?i64`.
+pub fn int64(self: *Emitter, e: Ast.ExprId) Error!void {
+    try self.print("L.asInt(", .{});
+    const t = try expr.selfDetermined(self, e);
+    try self.print(", {d}, {})", .{ t.width, t.signed });
 }
 
 /// `exec.eval(e, 0).asInt() orelse 0` as a Zig `i64`.
@@ -937,9 +986,12 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
             var width: ?u32 = null;
             while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
                 width = (width orelse 0) *| 10 +| (format[i] - '0');
+            var precision: i64 = -1;
             if (i < format.len and format[i] == '.') {
                 i += 1;
-                while (i < format.len and format[i] >= '0' and format[i] <= '9') i += 1;
+                precision = 0;
+                while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
+                    precision = precision *| 10 +| (format[i] - '0');
             }
             switch (format[i]) {
                 'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D' => {
@@ -971,7 +1023,15 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
                     try text.appendSlice(self.arena, "work.");
                     try text.appendSlice(self.arena, r.file.str(r.scope_info.items[r.scope].module));
                 },
-                else => return self.refuse("a real conversion (%e %f %g %r)"),
+                // §17.1.1.2 Table 17-3's real conversions, and §9.4.7's %r.
+                'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R' => {
+                    arg += 1;
+                    try flush(self, &text);
+                    try self.print("            try s.real(", .{});
+                    try expr.real(self, args[arg]);
+                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], @min(precision, 60), width });
+                },
+                else => return self.refuse("a display conversion the engine refuses"),
             }
         }
     }
