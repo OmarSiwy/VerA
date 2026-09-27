@@ -422,11 +422,10 @@ pub const ops_txt =
     \\    if (dt <= 0.0) return S.con(ic); // §4.5.4 DC value is the initial condition
     \\    return v.scale(dt).addC(acc);
     \\}
-    \\fn zIdtReset(comptime S: type, v: S, acc: f64, dt: f64, ic: f64, assert_: f64) S { // §4.5.4
-    \\    // "idt() returns the initial conditions during DC and IC analyses,
-    \\    // and whenever assert is nonzero."
+    \\fn zIdtHold(comptime S: type, v: S, off: f64, ic: f64, assert_: f64) S { // §4.5.4
+    \\    // "idt() returns the initial conditions ... whenever assert is nonzero."
     \\    if (assert_ != 0.0) return S.con(ic);
-    \\    return zIdt(S, v, acc, dt, ic);
+    \\    return v.addC(-off);
     \\}
     \\fn zIdtAcc(v: f64, acc: f64, dt: f64, ic: f64) f64 {
     \\    if (dt <= 0.0) return ic;

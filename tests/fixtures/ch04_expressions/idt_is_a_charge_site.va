@@ -33,7 +33,6 @@
 //! print none
 //! qsite idtZ240+ lte
 //! qsite idtZ241+ nolte
-//! xfail C1: idt integrates inside the device, so the host sees no charge site for it
 `include "check.vh"
 module idt_is_a_charge_site(i, o, o2);
     inout i, o, o2;

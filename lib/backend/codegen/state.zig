@@ -269,16 +269,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         switch (k) {
             // §4.5.4 "Once assert becomes zero, idt() returns the integral
             // of the argument starting from the last instant where assert
-            // was nonzero": while assert is nonzero the accumulator is ic.
-            .idt => if (args.len >= 3) try self.w(
-                "        inst.{s}__acc = if (({s}) != 0.0) ({s}) else zIdtAcc(in, inst.{s}__acc, dt, {s});\n",
-                .{
-                    n,                                           try gen_call.ctrlStep(self, args, 2, "0.0"),
-                    try gen_call.ctrlStep(self, args, 1, "0.0"), n,
-                    try gen_call.ctrlStep(self, args, 1, "0.0"),
-                },
-            ) else try self.w("        inst.{s}__acc = zIdtAcc(in, inst.{s}__acc, dt, {s});\n", .{
-                n, n, try gen_call.ctrlStep(self, args, 1, "0.0"),
+            // was nonzero": the row holds s still while assert is nonzero,
+            // and the offset latched then makes the value ic(ta) + ∫ from ta.
+            .idt_hold => try self.w("        if (({s}) != 0.0) inst.{s}__off = in - ({s});\n", .{
+                try gen_call.ctrlStep(self, args, 2, "0.0"), n, try gen_call.ctrlStep(self, args, 1, "0.0"),
             }),
             .idtmod => try self.w("        inst.{s}__acc = zWrap(zIdtAcc(in, inst.{s}__acc, dt, {s}), {s}, {s});\n", .{
                 n,                                           n,

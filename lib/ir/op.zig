@@ -11,7 +11,7 @@
 /// their argument, so they own no state and get no unit.
 pub const OpKind = enum {
     none,
-    idt, // §4.5.4
+    idt_hold, // §4.5.4 assert
     idtmod, // §4.5.5
     absdelay, // §4.5.7
     transition, // §4.5.8

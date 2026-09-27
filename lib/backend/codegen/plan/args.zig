@@ -29,7 +29,7 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         // The §5.10.3 `enable` is the exception: it is a live expression the
         // event test reads every evaluation, so it needs a slot like any other
         // operand.
-        .idt,
+        .@"idt$hold",
         .idtmod,
         .absdelay,
         .@"absdelay$quad",
@@ -159,6 +159,7 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .initial_step,
         .final_step,
         .analog_initial,
+        .@"op$static",
         .analysis,
         .ac_stim,
         .white_noise,

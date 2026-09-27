@@ -822,7 +822,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             // Every `.static` and `.none` row: already handled above, or
             // (§9.17) writing the two unconditional fields and no per-unit
             // one at all.
-            .none, .idt, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => {},
+            .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => {},
         }
     }
     // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
@@ -891,7 +891,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                     "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
                     .{self.names.unit_names[i]},
                 ),
-                .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+                .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
             }
         }
     }
@@ -940,7 +940,7 @@ fn fsmStateCtl(self: *const Gen) bool {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => return true,
-            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     return false;
@@ -1006,7 +1006,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w("    }} else {{\n", .{});
@@ -1020,7 +1020,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w(

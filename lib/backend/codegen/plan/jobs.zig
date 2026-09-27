@@ -141,7 +141,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .mode = unitMode(from.unit_modes, i),
             .comment = switch (k) {
                 .bound_step, .discontinuity => "§9.17 analog kernel control request",
-                .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
+                .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
             },
             .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
         });
@@ -335,7 +335,7 @@ fn dynCtrlArgs(k: OpKind) []const usize {
         // samples a dynamic value there "at the start of the analysis", which
         // `updateState` latches off this field (`absdelayMaxdSampled`).
         .absdelay => &.{ 1, 2 },
-        .idt => &.{ 1, 2 }, // ic, assert
+        .idt_hold => &.{ 1, 2 }, // ic, assert
         .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
         .none, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
     };
