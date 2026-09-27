@@ -45,9 +45,9 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, and the open items | what is left, and which row your work closes |
+| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, the release ladder, and the open items | which release your work belongs to, and which row it closes |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
-| `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4–5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
+| `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
 | `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
@@ -68,7 +68,7 @@ reduces to another. Every change you make should say which one it moves.
 | | Measure | Command |
 |---|---|---|
 | **A** | Fixtures behaving as stated | `zig build benchmark -- --strict` |
-| **B** | IEEE 1364-2005 clauses with **two-way** evidence | `zig build test-1364 -- --coverage` (§§17–18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
+| **B** | IEEE 1364-2005 clauses with **two-way** evidence | `zig build test-1364 -- --coverage` (§§17-18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
 | **C** | LRM clauses with **two-way** evidence | `zig build benchmark -- --coverage` |
 | **D** | `ARCHITECTURE.md` §6 phases landed | hand-read against its §6/§8 (`git show 297e97d^:ARCHITECTURE.md`) |
 
@@ -217,7 +217,7 @@ testbench's batch family (`tb/runner_text.zig`, `@Vector(NL, f64)`) asserts.
 Measured and not built (2026-09):
 - Instance lanes (several operating points per SIMD register, `batch_ok`):
   measured on AVX2, not worth it alone (hand-converted diode and mos1 at
-  W = 4/8: 1.07–1.22× and 0.78–0.86×); re-evaluation with sparse lanes +
+  W = 4/8: 1.07-1.22× and 0.78-0.86×); re-evaluation with sparse lanes +
   AVX-512 pending, so the ABI keeps `S.V` and `batch_ok` for it.
 - Liveness-coloured hoist slots: bsim4 33% slower (they defeat SROA).
 - A no-inline core on the GPU: eval 2× slower.
