@@ -118,9 +118,9 @@ they are not counted as covered in the clause table above.
   against and no exit-status contract for "the card is invalid" — the fixture
   would be asserting a mechanism that does not exist yet rather than a rule.
   Noted in 11's header.
-- **`W0651` on `from [0:hi]`.** A range whose bound is a parameter is reported as
-  "parameter range admits infinity". Cosmetic, not a conformance break, so no
-  fixture.
+- **`W0651` on `from [0:hi]`** — fixed: W0651 now fires only on a bound written
+  as a closed `inf`. Pinned by `ch03_data_types/97_range_without_closed_inf_is_silent.va`
+  (`//! nowarn`) and `96_range_closed_on_inf_warns.va` (`//! warn W0651`).
 - **§6.4.1's prohibition** on an out-of-module reference to a *non-local*
   parameter. It is a rejection and 03 already covers the permission; the row's
   rejection budget went to 12.
