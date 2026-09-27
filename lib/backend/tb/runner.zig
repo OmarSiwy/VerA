@@ -1,10 +1,7 @@
-//! Runner generation: the testbench `main` for one fixture.
-//!
-//! In: the testbench plan and the device's exported tables. Out: the runner's Zig source.
-//!
-//! LRM clauses this file's code cites: §1, §2.8.3, §3.4, §3.4.1, §3.4.5, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.3, §4.6.4.6, §6.3.4, §9.19.
-//!
-//! Cut verbatim from `tb.zig`.
+//! Runner generation: `tb.Directives` in, the testbench's Zig source out
+//! (fixed-grid, mixed-signal, or the Clause 12 VPI library form).
+//! LRM: §1, §2.8.3, §3.4, §3.4.1, §3.4.5, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.1,
+//! §4.6.4.3, §4.6.4.6, §5.10.2, §6.3.4, §8.2, §9.19.
 
 const std = @import("std");
 const tb = @import("../tb.zig");
@@ -19,17 +16,10 @@ const Sweep = tb.Sweep;
 const Directives = tb.Directives;
 const max_points = tb.max_points;
 
-// ---------------------------------------------------------------------------
-// Runner generation
-// ---------------------------------------------------------------------------
-
-/// Emit the runner's Zig source. `title` is what each transcript block is keyed
-/// by — the fixture's file stem, so a failing diff names the fixture.
-///
-/// Everything is written with `std.debug.print`, which is also where the
-/// generated `$strobe` writes: ONE stream, so the interleaving of the model's
-/// own output with the harness's is deterministic and diffable. stdout is left
-/// alone for a caller that wants to pipe something else.
+/// Returns the runner's Zig source, allocated in `arena`; dispatches to
+/// `renderMixed` when `d.mixed` is set. `title` keys each transcript block
+/// (the fixture's file stem). All output goes to stderr via `std.debug.print`,
+/// the stream generated `$strobe` uses, so the interleaving is deterministic.
 pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
@@ -46,16 +36,11 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     );
     for (d.params) |p| {
         // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
-        // integer parameter rounds, away from zero on a tie. Writing the real
-        // straight into an `i64` field was not even a wrong number — it was a
-        // `zig build-exe` failure, "fractional component prevents float value
-        // '-1.5' from coercion to type 'i64'".
+        // integer parameter rounds, away from zero on a tie.
         try print(&out, arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
             std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
         });
-        // §9.19 `$param_given` is answered from a companion field when codegen
-        // emitted one. Setting the value without it would make an explicit
-        // override read as "not given".
+        // §9.19 `$param_given` reads the companion field when codegen emitted one.
         try print(
             &out,
             arena,
@@ -63,10 +48,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
         );
     }
-    // §6.3.4: the model card is complete only now, so this is where a parameter
-    // defined over another one gets its value. It runs unconditionally — a
-    // §3.4.5 localparam is re-derived even with no `//! param` line, since the
-    // point of `derive` is also that a localparam is not overridable.
+    // §6.3.4: the card is complete only now. Unconditional, so a §3.4.5
+    // localparam is derived even with no `//! param` line.
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
         \\    shapeCheck(&model);
@@ -76,11 +59,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     );
     try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try print(&out, arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
-    // §2.8.3/§12.32: this testbench IS a host, so it answers for the device's
-    // unresolved `$name`s like any other. It binds `no_vpi_app` rather than
-    // being exempt from `validateHost` — an exemption for the tool's own host is
-    // how a seam stops being tested, and it is the one host that certainly
-    // exercises every device VerA emits.
+    // §2.8.3/§12.32: this testbench is a host, so it binds `no_vpi_app` for
+    // the device's unresolved `$name`s and passes `validateHost` like any other.
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
@@ -98,11 +78,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     );
 
     // --- §4.6.4 the exported noise topology ---------------------------------
-    //
-    // Before the operating points, and once: `noise_gens` is a COMPTIME table,
-    // a property of the model and not of a bias. Printing it per point would
-    // repeat one fact N times and make a sweep's transcript say N times as much
-    // as it knows.
+    // Once, before the points: `noise_gens` is a comptime table.
     if (d.asserts_noise) {
         try out.appendSlice(arena,
             \\
@@ -165,32 +141,22 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     if (d.asserts_seed) try emitSeedCheck(arena, &out, d);
 
     // --- one straight-line block per operating point ------------------------
-    //
-    // The SWEEP is the outer loop and TIME the inner one, and the §4.5 operator
-    // state belongs to the inner walk: each sweep point is its own transient run
-    // and starts from a fresh `State`, or the second bias would inherit the
-    // first one's history and no transcript line would mean anything on its own.
+    // Sweep outer, time inner. Each sweep point is its own transient run with a
+    // fresh `State`, so no bias inherits another's §4.5 operator history.
     const points = try expand(arena, d);
-    // §5.10.2 / Table 5-1: `initial_step` is active on the FIRST point of an
-    // analysis and `final_step` on the LAST. What counts as "an analysis" here
-    // is read off the runner's own shape. With `//! time` each sweep block is a
-    // separate transient run — it restarts the time walk at dt = 0 with a fresh
-    // `State` — so every block carries its own first and last point. Without it
-    // the blocks are the steps of ONE dc sweep, and only the first and last step
-    // of the whole sweep carry the events. A one-point fixture is both at once,
-    // which is exactly the DCOP column of Table 5-1: both events, one point.
+    // §5.10.2 / Table 5-1: `initial_step` fires on an analysis's first point
+    // and `final_step` on its last. With `//! time` each sweep block is its own
+    // transient analysis; without it the blocks are the steps of one dc sweep.
+    // A one-point fixture gets both events, as Table 5-1's DCOP column does.
     const per_block = d.times.len > 1;
     var n: usize = 0;
-    // `//! psweep` gives each point its OWN model card: §8.2 makes a parametric
-    // sweep a series of sub-tasks, and §6.3.4 says anything derived from the
-    // swept parameter has to be recomputed with it, which is `derive`'s job.
-    // Without a psweep line not one byte of this changes — the shared `model`
-    // built above is passed straight through, as it always was.
+    // `//! psweep` gives each point its own model card: §8.2 sub-tasks, each
+    // re-derived per §6.3.4. Without it the shared `model` is used.
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points) |pt| {
         try out.appendSlice(arena, "    {\n");
-        // §9.5.1.1 a block after the first is a FOLLOWING analysis of the same
-        // process, and a file it reopens "w" keeps what the earlier ones wrote.
+        // §9.5.1.1 a block after the first is a following analysis of the same
+        // process, so a file it reopens "w" keeps earlier output.
         if (per_block and n != 0)
             try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
         if (d.psweeps.len != 0) {
@@ -208,33 +174,19 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             }
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
-            // §6.3.4 again: the hoisted prep derives from the swept card too.
+            // §6.3.4: setup also derives from the swept card.
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm, &inst);\n");
         }
-        // `forced` is the other half of the operating point: which unknowns the
-        // HOST drives, as opposed to which ones the device's own equations
-        // determine. Newton needs the distinction; a bare evaluation did not.
-        // Its DEFAULT is the harness's netlist — every unknown tied to the
-        // reference — and `//! solve` is what unties the ones no line names.
+        // `forced` marks the unknowns the host drives rather than Newton. By
+        // default every unknown is tied to the reference; `//! solve` unties
+        // the ones no line names.
         try print(
             &out,
             arena,
             "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n" ++
-                // §3.6.3.2: "the value ... will be used as a nodeset value by
-                // the analog solver". A nodeset is an INITIAL GUESS and nothing
-                // more — it seeds `x` and does not touch `forced`, so Newton is
-                // free to walk away from it. On a system with more than one
-                // solution that is the entire point: `a08_nodeset_01`'s cubic
-                // has roots at 1, 2 and 3, and which one the solve lands on is
-                // decided right here.
-                //
-                // VerA has emitted `u_nodeset` for as long as it has parsed net
-                // initializers, and nothing had ever read it — so the clause
-                // was implemented up to the device boundary and no further.
-                //
-                // Before the `//! bias` lines below, so a fixture that names an
-                // unknown outright still wins: a bias is a constraint, a
-                // nodeset is a suggestion.
+                // §3.6.3.2 a nodeset is an initial guess: it seeds `x` and does
+                // not touch `forced`, so it picks which root Newton finds. It
+                // precedes the `//! bias` lines, which override it.
                 "        if (comptime @hasDecl(D, \"u_nodeset\")) for (D.u_nodeset, 0..) |nodeset_i, i| {{\n" ++
                 "            if (nodeset_i) |v| x[i] = v;\n" ++
                 "        }};\n" ++
@@ -247,55 +199,35 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
-                // A short `wave` HOLDS its last value — that is how a step is
-                // written without repeating the level once per remaining time.
+                // A short `wave` holds its last value.
                 const v = wv.values[@min(k, wv.values.len - 1)];
                 try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
             }
-            // §4.5.3 `ddt` divides by `dt`; the FIRST time is the DC point, so
-            // it gets dt = 0 — which every operator kernel reads as "no history"
-            // and answers with its DC form (§4.5.4 the initial condition,
-            // §4.5.11 the filter's DC gain).
+            // The first time is the DC point, dt = 0, which operator kernels
+            // answer with their DC form (§4.5.4 initial condition, §4.5.11 DC gain).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
             try print(&out, arena, "        sim_state.t = {f};\n        sim_state.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
-            // Both are written at every point, never left over from the last
-            // one: the guard codegen emits reads the field as it stands when
-            // `eval`/`display` runs, so a stale `true` would fire the body a
-            // second time.
+            // Written at every point: a stale `true` would fire an event twice.
             try print(&out, arena, "        sim_state.initial_step = {};\n        sim_state.final_step = {};\n", .{
                 k == 0 and (per_block or n == 0),
                 k + 1 == d.times.len and (per_block or n + 1 == points.len),
             });
-            // §5.2.1 `analog initial` is re-executed per SUB-TASK, which in this
-            // runner is one point of the sweep: the first time step of every
-            // block, whether or not that block is the first of the analysis.
-            // That is the one place it differs from `initial_step` above, and
-            // the difference is only visible under `//! psweep` — where the
-            // clause's "if a parameter ... is changed during a sub-task ... the
-            // analog initial block shall be re-executed" is exactly the case.
+            // §5.2.1 `analog initial` re-runs per sub-task: the first time of
+            // every block, unlike `initial_step` (visible under `//! psweep`).
             try print(&out, arena, "        sim_state.analog_initial = {};\n", .{k == 0});
-            // §5.6 the model is evaluated AT A SOLUTION: solve first, then let
-            // the model print. Every `//!` value is still exactly itself — it
-            // came in as a constraint row — and everything else is now the
-            // number the device's own equations put there.
+            // §5.6 the model prints at a solution: solve first, then `point`.
             try print(&out, arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
             try print(&out, arena, "        point({d}, &x, &{s}, &inst);\n", .{ n, mdl });
-            // §4.6.4.1/.2 the PSD is a function of the BIAS, so unlike the
-            // topology it cannot be printed once beside the comptime table.
-            // The first point is the one a fixture states: it is the only
-            // point every fixture has, and pinning a density at a named bias
-            // is the whole content of a bias-dependent `white=`.
+            // §4.6.4.1/.2 the PSD depends on bias; fixtures state it at the
+            // first point, the one every fixture has.
             if (n == 0) try emitNoisePsd(arena, &out, d, mdl);
-            // §4.6.3 the magnitude and phase are the model CARD's — a parameter
-            // is a legal `mag` — so they need a card, which is this block's
-            // `mdl`; `//! psweep` gives each point its own and the first point
-            // is the one a fixture states, exactly as for the PSD above.
+            // §4.6.3 magnitude and phase may read the card (`mdl`); also
+            // stated at the first point.
             if (n == 0) try emitAcStim(arena, &out, d, mdl);
             // §9.17.3 the published clamp, with this point's `x` as `cur`.
             if (n == 0) try emitLimitCheck(arena, &out, d, mdl);
-            // §4.5.2 accepted-step bookkeeping. This is the whole reason the
-            // stateful operators are observable at all: `eval` reads history out
-            // of `Instance`, and only `updateState` ever writes it.
+            // §4.5.2 accepted-step bookkeeping: only `updateState` writes the
+            // history `eval` reads.
             try print(&out, arena, "        stepPost(&{s}, &inst, &x, &state, solved{d});\n", .{ mdl, n });
             n += 1;
         }
@@ -316,12 +248,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     return out.items;
 }
 
-/// §3.4 the card values of `d` that are compile-time values: the `//! param`
-/// lines naming a SHAPE parameter of `lowered` (`ParamInfo.shape`). The
-/// testbench is a host whose card is those lines, and a shape parameter cannot
-/// follow a card at run time, so a non-empty answer is the caller's cue to
-/// compile again with it as `Options.param_overrides` — as `--param` would.
-/// Every other card value stays a run-time write, as for any host.
+/// Returns the `//! param` lines that name a shape parameter of `lowered`
+/// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
+/// at compile time, so a non-empty result means the caller must compile again
+/// with it as `Options.param_overrides`, as `--param` would.
 pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lower.ParamOverride {
     var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
     for (d.params) |card| for (lowered.params.items) |p| {
@@ -330,9 +260,9 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
     return out.items;
 }
 
-/// The mixed-signal plan of a compile, or null for a module with no discrete
-/// half that needs the event queue (`Lowered.mixed_signal`). Borrowed from the
-/// compile's arena.
+/// Returns the mixed-signal plan of a compile, or null for a module with no
+/// discrete half that needs the event queue (`Lowered.mixed_signal`). The
+/// slices borrow from `lowered` and `mir`.
 pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
     if (!lowered.mixed_signal) return null;
     const ts = lowered.directives.timescale();
@@ -351,17 +281,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
     };
 }
 
-/// VAMS §8 the mixed-signal testbench: the same device and solver, but the
-/// operating points come from `sim.mixed.run` — the declared `//! time`s plus
-/// every implicit D2A time — and the discrete inputs from the digital half of
-/// the same source, re-elaborated at startup (`sim.digital.elaborate`).
-///
-/// The adapter the coordinator drives is emitted per fixture, because the
-/// input names and the `//! wave` lines are. A `//! wave` is PIECEWISE LINEAR
-/// here: an inserted point falls between declared ones, and at every declared
-/// point the value is the one the fixed-grid runner's step-hold gives.
-/// `//! qsite` — see `tb.Directives.qsites`. Once, before the points: the
-/// layout is a comptime property of the device.
+/// Emits the `//! qsite` check (`tb.Directives.qsites`), once before the
+/// points: the site layout is a comptime property of the device.
 fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     try out.appendSlice(arena,
         \\
@@ -397,8 +318,8 @@ fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!vo
     );
 }
 
-/// `//! seed` — see `tb.Directives.seeds`. Once, after `setup`: `seed` is
-/// the host's pre-solve call.
+/// Emits the `//! seed` check (`tb.Directives.seeds`), once after `setup`,
+/// where a host calls `seed` before solving.
 fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     try out.appendSlice(arena,
         \\
@@ -424,8 +345,8 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
     );
 }
 
-/// `//! limit` — see `tb.Directives.limits`. At the first point, after the
-/// solve, so `x` is the bias the fixture states.
+/// Emits the `//! limit` checks (`tb.Directives.limits`) at the first point,
+/// after the solve, so `x` is the bias the fixture states.
 fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     for (d.limits, 0..) |c, k| {
         try out.appendSlice(arena, "        {\n            var old = x;\n            _ = &old;\n");
@@ -450,6 +371,13 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
     }
 }
 
+/// Returns the VAMS §8 mixed-signal runner, allocated in `arena`: the same
+/// device and solver, with operating points from `sim.mixed.run` (declared
+/// `//! time`s plus every implicit D2A time) and discrete inputs from the
+/// digital half, re-elaborated at startup. A `//! wave` is piecewise linear
+/// here, equal to the fixed-grid runner's value at every declared point.
+/// Device-table directives (noise, acstim, qsite, seed, limit) are a compile
+/// error in the emitted runner.
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
@@ -579,7 +507,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
         \\
     );
-    // Each digital name beside the `Model` field codegen spelled for it.
+    // Each digital name beside its `Model` field.
     var buf: [256]u8 = undefined;
     try out.appendSlice(arena, "const input_ports = [_]Port{");
     for (mx.inputs) |name| {
@@ -609,9 +537,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     }
     try out.appendSlice(arena, " };\n");
     // VAMS §7.3.6.4 each analog variable a digital expression reads, beside
-    // the §5.10 held `Instance` field (`plan/names.zig`'s spelling) its value
-    // is copied from. One that is not held — assigned outside an analog event
-    // statement — is left out, and the digital half refuses the read.
+    // the §5.10 held `Instance` field its value is copied from. A variable
+    // that is not held is left out, and the digital half refuses the read.
     try out.appendSlice(arena, "const a2d_ports = [_]Port{");
     var mod_buf: [256]u8 = undefined;
     const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
@@ -620,8 +547,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
         break;
     };
-    // VAMS §6.3 the card's root parameters, for the digital half to read the
-    // same values the `Model` below is given (`sim.digital.Mixed.params`).
+    // VAMS §6.3 the card's root parameters, so the digital half reads the
+    // values `Model` gets (`sim.digital.Mixed.params`).
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
     for (d.params) |p| try print(&out, arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
     try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
@@ -656,8 +583,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    var n: usize = 0;
         \\
     );
-    // Each sweep point is its own analysis: a fresh digital elaboration, a
-    // fresh `State`, exactly as the fixed-grid runner restarts its time walk.
+    // Each sweep point is its own analysis: fresh digital elaboration and `State`.
     const points = try expand(arena, d);
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points, 0..) |pt, pi| {
@@ -703,25 +629,15 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     return out.items;
 }
 
-/// Clause 12's analog host (§12.7–§12.10, §12.18, §12.31.3): the device
-/// and the fixed solver as a SHARED LIBRARY with a C interface, driven one
-/// solution at a time by a host that owns the clock.
-///
-/// The fixed-grid `renderRunner` decides every time point when it is
-/// generated; §12.31.3's acbAbsTime and acbElapsedTime "shall force a
-/// solution at that time", and acbConvergenceTest may reject one and "back
-/// up to an earlier time" — decisions made by a VPI application while the
-/// analysis runs. So the time walk is the host's (`src/vpi/analog.zig`) and
-/// this library answers four questions: solve at t (tentatively), accept the
-/// last solution, what is x, and what is each §5.6 row's value
-/// (`Options.vpi_contribs`, which the device must be compiled with).
-///
-/// A tentative solve changes nothing an accepted one reads: history is
-/// written by `stepPost` alone, so a rejected point is simply not accepted,
-/// and the next solve at an earlier time starts from the same history.
-/// Every unknown is solved for (§3.6.1: a node's value is the solution of
-/// the instances' equations); a `//! bias`/`//! wave` line still pins one, as
-/// a host driving that terminal.
+/// Returns a Clause 12 analog host library (§12.7 to §12.10, §12.18,
+/// §12.31.3), allocated in `arena`: the device and solver behind a C
+/// interface, stepped by a host that owns the time walk (`src/vpi/analog.zig`),
+/// since §12.31.3 lets a VPI application force or reject a solution time. It
+/// exports: solve at t tentatively, accept the last solution, read x, and read
+/// each §5.6 row's value; the device must be compiled with
+/// `Options.vpi_contribs`. Only an accepted solve writes history, so a rejected
+/// point needs no undo. Every unknown is solved for (§3.6.1) unless a
+/// `//! bias`/`//! wave` line pins it.
 pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
@@ -799,10 +715,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     return out.items;
 }
 
-/// The relative compare the `white`/`flicker`/`ef`/`points` fields use, emitted
-/// as a local rather than added to the prelude: it exists only where a `//!
-/// noise` line asked for a number, and a prelude declaration would be dead in
-/// every other testbench.
+/// The relative compare for `white`/`flicker`/`ef`/`points`, emitted locally
+/// only where a `//! noise` line asks for a number.
 const noise_close =
     \\        const nclose = struct {
     \\            fn f(g: f64, w: f64, rt: f64) bool {
@@ -812,10 +726,9 @@ const noise_close =
     \\
 ;
 
-/// The §4.6.4 fields that are COMPTIME properties of the device: the source
-/// label (§4.6.4.1/.2/.3) and the tabulated spectrum (§4.6.4.3/.4). Emitted
-/// beside the topology block, one guarded statement per asserting line, so a
-/// fixture that asserts none of them adds nothing.
+/// Emits the checks of the comptime §4.6.4 fields: the source label
+/// (§4.6.4.1/.2/.3) and the tabulated spectrum (§4.6.4.3/.4), one guarded
+/// statement per asserting line.
 fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     var any_points = false;
     for (d.noise) |w| {
@@ -841,10 +754,8 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
             .{ k, k, std.zig.fmtString(nm), k, std.zig.fmtString(nm) },
         );
         if (w.interp != null or w.points != null) {
-            // A `.table` row and only a `.table` row has a spectrum here. A
-            // fixture that asserts `points` on a parametric row is asserting
-            // something the export cannot carry, and that is a FAIL with a
-            // reason rather than a crash on `g.table.?`.
+            // Only a `.table` row has a spectrum; `points` on another row
+            // FAILs with a reason instead of crashing on `g.table.?`.
             try print(out, arena,
                 \\            if (D.noise_gens[{d}].table) |ti| {{
                 \\                const tbl = D.noise_tables[ti];
@@ -860,12 +771,10 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                 .{ k, ip, ip },
             );
             if (w.points) |pts| {
-                // §4.6.4.3's array-parameter input: `noise_tables` then holds
-                // the parameter's DECLARED DEFAULTS, and the card's own knots
-                // are `noiseTablePoints` — one flat array whose segment for
-                // table `ti` starts after every earlier table's points. A
-                // device of literal tables does not declare the hook and this
-                // reads `tbl.points`, which is the same thing.
+                // §4.6.4.3 array-parameter input: `noise_tables` holds the
+                // declared defaults and the card's knots are `noiseTablePoints`,
+                // one flat array with table `ti`'s segment after every earlier
+                // table's. Devices of literal tables lack the hook.
                 try out.appendSlice(arena,
                     \\                const card = if (comptime @hasDecl(D, "noiseTablePoints"))
                     \\                    D.noiseTablePoints(&model)
@@ -908,9 +817,8 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
     try out.appendSlice(arena, "    }\n");
 }
 
-/// §4.6.4.1/.2 `white`, `flicker` and `ef`, read out of `noisePsd` at the
-/// operating point this is emitted into. `model` is the caller's card name,
-/// which `//! psweep` renames.
+/// Emits the §4.6.4.1/.2 `white`, `flicker` and `ef` checks, read from
+/// `noisePsd` at the enclosing operating point. `mdl` names the card.
 fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     var any = false;
     for (d.noise) |w| {
@@ -951,10 +859,8 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
     try out.appendSlice(arena, "        }\n");
 }
 
-/// §4.6.3 the COMPTIME half of the AC stimulus export: how many sources there
-/// are, which branch each is on, and which analysis it answers to. One block,
-/// not one per line: unlike `noise_gens`'s per-row tables there is nothing here
-/// that needs a `k`-indexed statement of its own.
+/// Emits the comptime §4.6.3 `ac_gens` checks: source count, branch and
+/// analysis name, in one block.
 fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
     try out.appendSlice(arena,
         \\
@@ -969,9 +875,8 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
     );
     for (d.acstim) |e| try print(out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
     try out.appendSlice(arena, "        };\n");
-    // A parallel `?[]const u8` column rather than a second guarded block per
-    // line: `inline for` makes the index comptime, so one lookup covers every
-    // line and a line that asserts no name simply has none.
+    // A parallel `?[]const u8` column: `inline for` makes the index comptime,
+    // so one lookup covers every line.
     try out.appendSlice(arena, "        const want_name = [_]?[]const u8{");
     for (d.acstim, 0..) |e, i| {
         if (e.name) |nm|
@@ -1016,11 +921,9 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
     );
 }
 
-/// §4.6.3 `mag` and `phase`, read out of `acStim` at the operating point this
-/// is emitted into — `x` is that point, because A.8.2's magnitude and phase are
-/// `analog_expression`s and a swept-amplitude source has a phasor that depends
-/// on the bias. `model` is the caller's card name, which `//! psweep` renames —
-/// the same contract `emitNoisePsd` has.
+/// Emits the §4.6.3 `mag` and `phase` checks, read from `acStim` at the
+/// enclosing operating point (A.8.2 makes both `analog_expression`s, so they
+/// may depend on bias). `mdl` names the card.
 fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     var any = false;
     for (d.acstim) |w| {
@@ -1051,11 +954,9 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
     try out.appendSlice(arena, "        }\n");
 }
 
-/// The cartesian product of the sweep lines, last varying fastest. One
-/// allocation per point.
-/// A point is `sweeps.len + psweeps.len` wide: the unknown columns first, then
-/// the parameter columns, so `psweep` varies fastest and a parameter sweep reads
-/// as the inner loop it is.
+/// Returns the cartesian product of `sweeps` then `psweeps`, last varying
+/// fastest, allocated in `arena`. Each point holds the unknown columns, then
+/// the parameter columns. Fails with `error.TooManyPoints` past `max_points`.
 pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
     const dims = d.sweeps.len + d.psweeps.len;
     if (dims == 0) return &.{&.{}};
@@ -1085,8 +986,8 @@ pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
     return rows;
 }
 
-/// `{d}` on an f64 is shortest-round-trip, which is exact but can print `1e-14`
-/// — legal Zig. What it must never print is `inf`/`nan`, which are not.
+/// Formats `x` as a Zig expression: shortest round-trip decimal, or a
+/// `std.math` call for inf and nan, which have no literal.
 pub fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
     return .{ .data = x };
 }
@@ -1097,6 +998,7 @@ fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     try w.print("{d}", .{x});
 }
 
+/// Appends formatted text to `out`, which must be backed by `arena`.
 pub fn print(out: *std.ArrayList(u8), arena: Allocator, comptime fmt: []const u8, args: anytype) Error!void {
     var aw: Io.Writer.Allocating = .fromArrayList(arena, out);
     defer out.* = aw.toArrayList();

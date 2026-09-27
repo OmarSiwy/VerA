@@ -1,112 +1,25 @@
-//! Device contract: the comptime interface every device (VA-generated or
-//! hand-written) must satisfy. `validate(D)` structurally checks the surface
-//! the engine calls — decls present, enum dense, param types, function arity —
-//! so a mismatch fails at the device definition with a readable error.
-//!
-//! This contract is NORMATIVE, not descriptive: it specifies the device↔host
-//! interface required to represent Verilog-AMS LRM 2.4 analog semantics, and a
-//! member may be declared here before the engine consumes it. A member with no
-//! LRM justification and no consumer is not a roadmap item — it is deleted.
-//!
-//! A member declared here and not yet consumed says so in its own comment,
-//! naming the clause that requires it. Rules the compiler does not yet carry
-//! are the `//! xfail` lines in tests/fixtures/**.va.
-//!
-//! This file CHECKS the contract, and carries two implementations a host may
-//! use: `gm`, the device-routed f64 transcendentals, and `RefFamily`, the
-//! reference scalar family.
-//!
-//! Physics is written generic over a scalar FAMILY `S` (`family_fns`): the
-//! device asks for `S.Of(mask)`, the value type carrying the derivative lanes
-//! of exactly the unknowns `mask` names, and types each value by the unknowns
-//! it may depend on. The unknowns reach the device as values; `S.probe(u, v)`
-//! seeds lane `u` on the unknowns in `derivReads`, `S.con(v)` the rest.
-//!
-//!   pub fn eval(comptime S: type, x: *const [n_u]S.V, m: *const Model, i: InstancePtr, sim: SimState) Rows(Self, S);
-//!   pub fn q   (comptime S: type, x, m, i, sim) Sites(Self, S);   // optional: one charge per q site
-//!
-//! Row `r` of `eval` is `S.Of(rowMask(D, r))`, site `k` of `q` is
-//! `S.Of(siteMask(D, k))`. The value-only entry points (`setup`, `collapse`,
-//! `derive`, `noisePsd`, `acStim`, `updateState`, `limit`, `seed`,
-//! `advanceIteration`, `checkConvergence`) take the same `comptime S`, so
-//! the host decides the arithmetic of every path; a value-only family is one
-//! whose `Of(m)` carries no lanes.
-//!
-//! What every `Of(m)` carries is `family_primitives`: addC scale · add sub
-//! neg mul div · exp log expm1 log1p sqrt pow(a,c) · sin cos tanh sinh cosh
-//! atan · lt le eq · val ddxAt to. min, max and abs are device text over
-//! lt/sel, spelled as §4.3.1 spells them. expm1/log1p are primitives and not
-//! exp(x)-1 / log(1+x): §4.3.1 Table 4-14 names the C library forms precisely
-//! because those two compositions cancel.
-//!
-//! lt/le/eq (§4.2.5/§4.2.7) return `Of(0)` holding 1.0 where the relation
-//! holds and 0.0 elsewhere: a comparison is piecewise constant. `sel(c, a, b)`
-//! (§4.2.12) is `a` where `c` is nonzero and `b` elsewhere, carrying the
-//! winner's lanes — the same selection semantics §4.3.1 gives min/max. gt/ge
-//! are operand swaps and ne swaps sel's arms. Codegen emits them ONLY for a
-//! conditional that may run BOTH arms: a `.strict` unit whose arms contain no
-//! call and no domain-restricted op, where a dead arm's NaN/inf is
-//! IEEE-defined and the pick discards it. A conditional the finiteness proof
-//! accepted only UNDER its guard (`x > 0 ? ln(x) : 0`) stays a lazy Zig `if`
-//! on a `.val()`.
-//!
-//! THE WIDTHS INSIDE S ARE THE HOST'S, NOT THE DEVICE'S. Every primitive takes
-//! and returns `f64` at the boundary — `con(f64)`, `scale(f64)`, `addC(f64)`,
-//! `val() f64`, `ddxAt(comptime usize) f64` — and physics code may not open a
-//! value up, so a host may carry the lanes in `f32` while the value stays
-//! `f64`: the inexact-Newton construction, where the converged answer is fixed
-//! by the accuracy of the RESIDUAL and an approximate Jacobian costs
-//! iterations rather than correctness.
-//!
-//! A device opts in with `pub const jac_f32 = true` (VerA's `--jac-f32`).
-//! Absent, the host must assume f64 lanes: a model whose unknowns span more
-//! than f32's ~7 digits can lose a Newton direction outright, and only the
-//! physics knows that. It is a permission and NOT an order, so it is per
-//! INSTANTIATION: a host may take it in its GPU kernel and decline it on its
-//! CPU path. `pub const jac_f32_host = true` (`--jac-f32-host`) is the
-//! separate, stronger request that the host take it on its CPU instantiation
-//! too; it implies the permission and `validate` refuses it without one.
-//!
-//! Optional family trait: `pub const collapse_applied: bool = true` promises
-//! the host has applied this device's `collapse()` aliases to its gather and
-//! scatter maps. Generated physics then omits the short's cancelling stamps,
-//! preserving arbitrarily small conductances already in the same matrix slot.
-//! Absent or false retains the full branch equations for standalone evaluation.
+//! The device/host ABI: the comptime interface every generated or hand-written
+//! device satisfies. `validate(D)` checks it where the device is defined and
+//! `validateHost(H, D)` where a host links it. Physics is generic over a
+//! host-supplied scalar family (`family_fns`); `RefFamily` is the reference
+//! one and `gm` the f64 transcendentals it and GPU kernels share. A member with
+//! no consumer yet names the LRM clause that requires it.
 
 const std = @import("std");
 
-/// The device↔host ABI this file specifies. A generated device mirrors it as
+/// The ABI version this file specifies. A generated device mirrors it as
 /// `pub const contract_abi`, and `validateHost` refuses a device whose value
-/// differs, so a host pinned to one VerA cannot link another's device and run.
-/// Bumped by every change a linked host could observe: 5 is the scalar
-/// family, value-typed `x`, `SimState` as an argument and `Rows`/`Sites`.
+/// differs. Bumped by every change a linked host could observe.
 pub const abi_version: u32 = 5;
 
-/// Device-routed f64 transcendentals for the SCALAR paths of generated code
-/// (the §4.5.15 limiters, zLimexp's clamp constant) and for `RefFamily`. Those helpers also
-/// compile inside GPU kernels (the engine's StateKernel runs `D.limit` /
-/// `D.updateState` on the device), and NVPTX/AMDGCN have no libm — `@exp` /
-/// `@log` on an f64 die at PTX assembly with "no libcall available for
-/// fexp". The host branch of every function IS the builtin (bit-identical to
-/// the historical emission); the device branch is a self-contained port so
-/// this file keeps zero imports (Zig's one-module-per-file rule forbids
-/// reusing gompute's copy here — same musl ancestry, same <=1 ulp f64).
+/// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
+/// libm. Used by the scalar paths of generated code (the §4.5.15 limiters) and
+/// by `RefFamily`. On the host each function is the Zig builtin or `std.math`
+/// call; on a GPU target it is a self-contained musl port (<= 1 ulp), so this
+/// file needs no imports beyond std.
 ///
-/// ponytail: exp/log/sin/cos are ported (the calls the admitted device class
-/// reaches — measured off the PTX libcall errors; sin/cos joined when the
-/// bjt hit tan through the StateKernel's scalar core); pow/tanh/sinh/cosh
-/// are composed on them; log1p stays on std.math (pure Zig). A model that
-/// reaches another builtin on the device fails ITS kernel compile loudly —
-/// extend `gm` then, not before.
-///
-/// expm1/atan were on that "pure Zig, leave them" list and should not have
-/// been. They need no libcall, so NVPTX takes them — but both raise the
-/// subnormal underflow flag through `std.mem.doNotOptimizeAway`, which for a
-/// float is `asm volatile ("" :: "rm" (v))`, and AMDGPU cannot match the `m`
-/// alternative. So the loud failure the paragraph above relies on is
-/// AMD-only, and reads `Could not match memory address. Inline asm failure!`
-/// rather than naming a function. A CUDA-only test matrix says nothing about
-/// it. Both are here now.
+/// ponytail: only the functions device code reaches are ported. A model that
+/// reaches another builtin on a GPU fails its kernel compile; extend `gm` then.
 pub const gm = struct {
     const dev = switch (@import("builtin").target.cpu.arch) {
         .nvptx64, .amdgcn => true,
@@ -182,33 +95,24 @@ pub const gm = struct {
     pub inline fn cos(x: f64) f64 {
         return if (comptime dev) softCos(x) else @cos(x);
     }
-    /// Needs no libcall, and STILL does not compile for AMDGCN: std's port
-    /// raises the subnormal underflow flag through `std.mem.doNotOptimizeAway`,
-    /// which for a float is `asm volatile ("" :: "rm" (v))`, and the AMDGPU
-    /// backend cannot match the `m` alternative. It assembles to PTX without
-    /// complaint, so the hole is AMD-only and an NVIDIA box never sees it.
-    ///
-    /// The device branch is std's own algorithm with that one line dropped. It
-    /// set a flag no GPU exposes to read, so every returned value is identical.
+    // std's port raises the subnormal underflow flag through
+    // `std.mem.doNotOptimizeAway` (`asm volatile ("" :: "rm" (v))`), which the
+    // AMDGPU backend cannot match. The device branch is std's algorithm with
+    // that line dropped; it only set a flag, so every value is identical.
     pub inline fn expm1(x: f64) f64 {
         return if (comptime dev) softExpm1(x) else std.math.expm1(x);
     }
-    /// Same AMDGCN hole as `expm1`, cheaper dodge: `std.math.atan` carries a
-    /// vector path that never reaches the idiom.
-    ///
-    /// TWO lanes, and the width is the point — `@Vector(1, f64)` does not fail
-    /// to select, it SEGVs the compiler. The second result is discarded, so
-    /// device `atan` costs twice what it should; port std's `atanBinary64`
-    /// minus its one bad line if that ever reaches a profile. The host branch
-    /// stays the scalar body, so host emission is bit-identical to before.
+    // Same AMDGCN hole as `expm1`, dodged through `std.math.atan`'s vector
+    // path, which never reaches the idiom. Two lanes because `@Vector(1, f64)`
+    // crashes the compiler; the second is discarded. ponytail: port
+    // `atanBinary64` minus its bad line if device atan reaches a profile.
     pub inline fn atan(x: f64) f64 {
         if (comptime !dev) return std.math.atan(x);
         const v: @Vector(2, f64) = @splat(x);
         return std.math.atan(v)[0];
     }
 
-    // musl exp.c / log.c ports, via gompute src/device/math.zig (measured
-    // there: f64 <= 1 ulp on sm_89).
+    // musl exp.c / log.c ports (f64 <= 1 ulp).
     const P1 = 1.66666666666666019037e-01;
     const P2 = -2.77777777770155933842e-03;
     const P3 = 6.61375632143793436117e-05;
@@ -246,7 +150,7 @@ pub const gm = struct {
     }
 
     /// musl expm1.c, by way of `std.math.expm1`, minus its one
-    /// `doNotOptimizeAway` — see `expm1` above.
+    /// `doNotOptimizeAway`, see `expm1` above.
     ///
     /// Not `softExp(x) - 1`: the whole point is that the `-1` happens INSIDE
     /// the reduced-argument polynomial, where the subtraction would otherwise
@@ -368,9 +272,7 @@ pub const gm = struct {
         return s * (hfsq + t2 + t1) + dk * ln2lo - hfsq + f + dk * ln2hi;
     }
 
-    // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2, via
-    // gompute src/device/math.zig (measured there: f64 matched glibc
-    // bit-for-bit over (0,8] on sm_89).
+    // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2.
     const pio4 = 0x1.921fb54442d18p-1;
     const pio2 = 0x1.921fb54442d18p+0;
     const invpio2 = 6.36619772367581382433e-01;
@@ -498,9 +400,9 @@ pub const gm = struct {
     }
 
     test "gm host branches are the builtins, device ports agree to ~1 ulp" {
-        // The host branch must be indistinguishable from the historical raw
-        // emission; the soft ports are pinned against libm on a physical
-        // range so a transcription slip fails HERE, not inside a kernel.
+        // The host branch is the builtin; the soft ports are pinned against
+        // libm on a physical range so a transcription slip fails here, not
+        // inside a kernel.
         var x: f64 = -700.0;
         while (x <= 700.0) : (x += 13.77) {
             try std.testing.expectEqual(@exp(x), exp(x));
@@ -574,57 +476,51 @@ pub const gm = struct {
     }
 };
 
+/// What `updateState` returns: `.ok`, or a request that the host reject the
+/// step and retry with its end at `request_reject_at` (an absolute time).
 pub const UpdateResult = union(enum) {
     ok,
     request_reject_at: f64,
 };
 
-/// What a device carries across accepted points, declared as `state_class` so
-/// a host's GPU gate reads one decl instead of inferring it from field shapes.
-///   none       — no `State`/`updateState` at all.
-///   path_latch — only the §5.6.1.2 path latches: `updateState` stages
-///                `wb`/`wq`, `stateCtl(.commit)` latches them; no operator
-///                history, no held FSM, no §9.13.1 seed.
-///   history    — anything else `updateState` advances.
-/// A device without the decl is `history` when it has `updateState` and `none`
-/// otherwise — the safe reading for a host that predates it.
+/// What a device carries across accepted points, declared as `state_class`:
+///   none: no `State` and no `updateState`.
+///   path_latch: only the §5.6.1.2 path latches. `updateState` stages them and
+///     `stateCtl(.commit)` latches them; no operator history, held FSM or
+///     §9.13.1 seed.
+///   history: anything else `updateState` advances.
 pub const StateClass = enum { none, path_latch, history };
 
+/// Returns `D.state_class`, or for a device without the decl `history` when it
+/// has `updateState` and `none` otherwise.
 pub fn stateClass(comptime D: type) StateClass {
     if (@hasDecl(D, "state_class")) return D.state_class;
     return if (@hasDecl(D, "updateState")) .history else .none;
 }
 
-/// Accepted-state bookkeeping for FSM devices (switches). The transient
-/// loop uses this to reject/retry a timestep whose converged solution flipped
-/// a device state, so the discontinuity lands sharp at the crossing:
-///   query  — does the working state differ from the last accepted state?
-///   commit — step accepted: accepted := working
-///   revert — step rejected: working := accepted
+/// The operations of `stateCtl`, which a transient loop uses to reject and
+/// retry a step whose converged solution flipped a device state:
+///   query: does the working state differ from the last accepted one?
+///   commit: the step is accepted; accepted := working.
+///   revert: the step is rejected; working := accepted.
 pub const StateCtlOp = enum(u8) { query, commit, revert };
 
 /// §4.6.1 `analysis()`, Table 4-21: the analysis a `SimState` describes.
 /// The tag names are the analysis names `analysis()` compares against.
 pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
 
-/// The analysis in force, passed BY VALUE to every entry point that can read
-/// it. A property of the ANALYSIS, not of the device, so the host is the only
-/// writer and one value serves every instance of a batch:
-///   t     — §9.10 `$abstime`, the time the solve is targeting
-///   dt    — §9.10 timestep feeding `ddt`/`idt`; 0 in a static analysis, which
-///           is what the generated zDdt/zIdt helpers test for
-///   kind  — §4.6.1 `analysis()`
-///   initial_step / final_step — §5.10.2 global events
-///   analog_initial — §5.2.1: this evaluation is the first of a SUB-TASK
-///           (each point of a parameter sweep), so `analog initial` runs
-///   iteration — §9.15 `$simparam("iteration")`: the Newton iteration of
-///           the current solve, 1 at its first
-/// `extern` so its layout is the same on every target a kernel is built for:
-/// t @0, dt @8, kind @16 (u8), initial_step @17, final_step @18,
-/// analog_initial @19 (bools, one byte each), iteration @20 (u32); 24 bytes,
-/// align 8. A host that ships it to a GPU hashes it with its other boundary
-/// types. The defaults are a DC operating point at t = 0, which is what
-/// `collapse` and `derive` evaluate at.
+/// The analysis in force, passed by value to every entry point that reads it.
+/// The host is its only writer, and one value serves every instance of a batch.
+///   t: §9.10 `$abstime`, the time the solve is targeting.
+///   dt: the timestep `ddt`/`idt` integrate over; 0 in a static analysis.
+///   kind: §4.6.1 `analysis()`.
+///   initial_step, final_step: the §5.10.2 global events.
+///   analog_initial: this evaluation is the first of a §5.2.1 sub-task (each
+///     point of a parameter sweep), so `analog initial` runs.
+///   iteration: §9.15 `$simparam("iteration")`, 1 at a solve's first iterate.
+/// `extern`, 24 bytes, align 8, the same on every target (`iteration` at 20).
+/// The defaults are a DC operating point at t = 0, which is what `collapse`
+/// and `derive` evaluate at.
 pub const SimState = extern struct {
     t: f64 = 0,
     dt: f64 = 0,
@@ -639,116 +535,71 @@ comptime {
     std.debug.assert(@sizeOf(SimState) == 24 and @offsetOf(SimState, "iteration") == 20);
 }
 
+/// What an unknown is, per position of the optional `u_kinds` table.
 pub const UnknownKind = enum {
     voltage,
     current,
     flow,
 };
 
-/// Host-written `Instance` fields. These are NOT decls — the host reaches them
-/// by name (`@hasField`), so a typo would be a silently-null hook rather than
-/// an error. Presence is optional (a hand-written resistor needs none of
-/// them), but the NAME and TYPE are contract.
+/// Host-written `Instance` fields. Presence is optional; the name and type are
+/// contract, because the host reaches them by `@hasField` and a typo would be
+/// a silently ignored field rather than an error.
 const SimStateField = struct { name: []const u8, T: type };
 const sim_state_fields = [_]SimStateField{
     .{ .name = "temperature", .T = f64 }, // §9.15 $temperature, kelvin
     .{ .name = "mfactor", .T = f64 }, // §9.15/E.4.1 $mfactor
     .{ .name = "bound_step", .T = f64 }, // §9.17.2 $bound_step
-    // §9.12 / IEEE 1364 §17.10 the command line's arguments, verbatim and in
-    // order (`argv[1..]`); only `+` entries are plusargs. Emitted only by a
-    // device that calls $test$plusargs/$value$plusargs; a host that never
-    // writes it leaves `&.{}`, i.e. "no plusargs", and every search answers 0.
+    // §9.12 / IEEE 1364 §17.10 the command line's arguments (`argv[1..]`),
+    // host-owned; only `+` entries are plusargs. Left at `&.{}`, every
+    // $test$plusargs/$value$plusargs search answers 0.
     .{ .name = "plusargs", .T = []const [:0]const u8 },
 };
 
-/// §4.6.4 noise generator topology. Position k of `noise_gens` names one
-/// generator of `kind` on the (row, col) branch.
-///
-/// **§4.6.4.6 correlation is the `source` field.** The clause's mechanism is
-/// "using the output of one noise function for more than one noise source":
-/// two rows carrying the SAME non-null `source` are one physical generator
-/// contributed to two branches — perfectly correlated — while distinct values
-/// (and null) are independent generators. VerA numbers sources densely in
-/// first-appearance order; a hand-written device may leave the default, which
-/// declares every row independent, exactly what an absent field used to mean.
-/// The fixtures that grade the sharing are
-/// `tests/fixtures/ch04_expressions/38_correlated_noise.va` (Example 1, one
-/// shared source) and `161_partially_correlated_noise.va` (Example 2, shared +
-/// unshared).
-///
-/// The per-use scaling coefficient (`c1*n` vs `c2*n`) landed where this note
-/// said it would: `PsdTerm.coeff`, because it can depend on the bias and only
-/// the `noisePsd` hook is evaluated at one.
-///
-/// §4.6.4.3/.4 `noise_table`/`noise_table_log` are the `table` kind, and their
-/// PSD is `noise_tables[table.?]` rather than anything `noisePsd` can return —
-/// see `NoiseTable`. The tag is APPENDED, so every existing ordinal and every
-/// existing row is unchanged, and a host that switches on `kind` gets a
-/// compile error at the new tag rather than a silent mis-read: a table
-/// generator answered as `.thermal` would be handed to a 4kT·g fallback whose
-/// answer has nothing to do with the table.
+/// §4.6.4 one noise generator: position k of `noise_gens` is a generator of
+/// `kind` on the (row, col) branch, and position k of `noisePsd`'s result is
+/// its PSD. A `.table` generator's PSD is `noise_tables[table.?]` (see
+/// `NoiseTable`); its `noisePsd` entry reads zero. The per-use scale factor is
+/// `PsdTerm.coeff`, because it may depend on the bias.
 pub fn NoiseGen(comptime D: type) type {
     const n = nU(D);
     return struct {
         row: std.math.IntFittingRange(0, n - 1),
         col: std.math.IntFittingRange(0, n - 1),
         kind: enum { thermal, shot, flicker, table },
-        /// §4.6.4.6 shared-generator identity; null = independent.
+        /// §4.6.4.6 correlation: rows with the same non-null `source` are one
+        /// generator contributed to several branches, fully correlated.
+        /// Distinct values, and null, are independent generators.
         source: ?u16 = null,
         /// §4.6.4.3/.4 index into the device's `noise_tables`. Non-null exactly
         /// when `kind == .table`; `validate` checks both halves.
         table: ?u16 = null,
-        /// §4.6.4.1/.2/.3 the optional `name` argument, empty when the model
-        /// supplied none. "The optional name argument acts as a label for the
-        /// noise source used when the simulator outputs the individual
-        /// contribution of each noise source to the total output noise. The
-        /// contributions of noise sources with the same name from the same
-        /// instance of a module are combined in the noise contribution
-        /// summary."
-        ///
-        /// Combined IN THE SUMMARY — a host groups its REPORT by this string.
-        /// It is not correlation and not identity: §4.6.4.6 makes every
-        /// separate call an uncorrelated generator, so two rows may share a
-        /// name and still carry different `source` values, and a host that
-        /// added them as one random process would be wrong. `source` is the
-        /// only field that says anything about correlation.
+        /// §4.6.4.1-.3 the optional `name` argument, empty when absent. A host
+        /// groups its noise contribution REPORT by it. It says nothing about
+        /// correlation: two rows may share a name and have different `source`
+        /// values, and are then independent.
         name: []const u8 = "",
     };
 }
 
 /// §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log`: one generator's PSD as
-/// a piecewise (frequency, power) table instead of a parametric term. Position
-/// k of the device's optional `noise_tables` is what `NoiseGen.table == k`
-/// names.
+/// a piecewise (frequency, power) table. Position k of the device's optional
+/// `noise_tables` is what `NoiseGen.table == k` names. Comptime data, so a
+/// host that integrates a spectrum gets the knots.
 ///
-/// A COMPTIME table beside `noise_gens`, not a field of `PsdTerm`: the clause's
-/// input is "an array parameter or an array assignment pattern", i.e. data the
-/// model states once and not per bias, and a host that integrates a spectrum
-/// wants the KNOTS — a segment of a log-log line has a closed-form integral and
-/// a sampled evaluator does not. `noisePsd` still answers position k, and for a
-/// table row it answers all-zero, so a host that has not learned about tables
-/// yet reads no noise from one rather than the wrong noise.
-///
-/// The invariants `validate` enforces, so a consumer may assume them:
-/// `points.len >= 1`, frequencies strictly ascending (§4.6.4.3: "the simulator
-/// shall internally sort the pairs into ascending frequency … Each frequency
-/// value must be unique" — VerA sorts at compile time, so the host never has
-/// to), every frequency > 0, every power >= 0, and > 0 throughout a `.log`
-/// table because its own interpolation takes their logarithm.
+/// `validate` guarantees: at least one point, frequencies strictly ascending
+/// and > 0, powers >= 0, and > 0 in a `.log` table. When the device declares
+/// `noiseTablePoints`, these are only the parameter defaults; see that hook.
 pub const NoiseTable = struct {
-    /// §4.6.4.3 linear in (f, p); §4.6.4.4 linear in (log f, log p) — a
-    /// straight line on a log-log plot, which is the whole difference between
-    /// the two functions (LRM Figure 4-14).
+    /// §4.6.4.3 linear in (f, p); §4.6.4.4 linear in (log f, log p).
     interp: enum(u8) { linear, log },
     /// (frequency [Hz], power [units²/Hz]) pairs, ascending in frequency.
     points: []const [2]f64,
 };
 
-/// §4.6.4.3 "the simulator shall internally sort the pairs into ascending
-/// frequency if required". VerA sorts the DEFAULTS at compile time, so a
-/// device's `noise_tables` already arrives ascending; this is for the knots a
-/// model card moved, which `noiseTablePoints` returns and which no compiler
-/// saw. In place, because that is where the generated accessor has them.
+/// Sorts `pts` by frequency in place (§4.6.4.3 "the simulator shall internally
+/// sort the pairs into ascending frequency"). For the knots `noiseTablePoints`
+/// returns; `noise_tables` already arrives sorted.
 pub fn sortNoiseTable(pts: [][2]f64) void {
     std.mem.sort([2]f64, pts, {}, struct {
         fn lt(_: void, a: [2]f64, b: [2]f64) bool {
@@ -757,18 +608,9 @@ pub fn sortNoiseTable(pts: [][2]f64) void {
     }.lt);
 }
 
-/// §4.6.4.3/.4 the tabulated PSD at `f`. Lives here rather than in each host
-/// because the two clauses state one formula each and both are easy to get
-/// subtly wrong — §4.6.4.4 is `pow(10, log(p1) + (log(p2)-log(p1)) *
-/// (log(f)-log(f1)) / (log(f2)-log(f1)))`, written below with the natural
-/// logarithm, which is the same line: the base cancels in the ratio.
-///
-/// Outside the table both clauses clamp, in the same words: "for frequencies
-/// lower than the lowest frequency in the value set, noise_table() returns the
-/// power specified for the lowest frequency, and for frequencies higher than
-/// the highest frequency, noise_table() returns the power specified for the
-/// highest frequency." No extrapolation, in either mode — which is also what
-/// makes a one-point table legal and constant.
+/// Returns the §4.6.4.3/.4 tabulated PSD at `f`. Outside the table it clamps
+/// to the end power, as both clauses require; a one-point table is constant.
+/// Precondition: `t` meets `NoiseTable`'s invariants.
 pub fn noiseTableAt(t: NoiseTable, f: f64) f64 {
     const p = t.points;
     if (f <= p[0][0]) return p[0][1];
@@ -782,129 +624,67 @@ pub fn noiseTableAt(t: NoiseTable, f: f64) f64 {
     const b = p[i];
     return switch (t.interp) {
         .linear => a[1] + (b[1] - a[1]) * (f - a[0]) / (b[0] - a[0]),
+        // §4.6.4.4's base-10 formula; the base cancels in the ratio.
         .log => @exp(@log(a[1]) + (@log(b[1]) - @log(a[1])) *
             (@log(f) - @log(a[0])) / (@log(b[0]) - @log(a[0]))),
     };
 }
 
-/// One generator's PSD at a given state vector, returned by the optional
-/// device `noisePsd` hook (position k = noise_gens[k]):
-///   S(f) = white + flicker / f^ef   [A²/Hz]
-/// white: thermal 4kT·g, shot 2q|I| — the DEVICE computes it from its own
-/// currents/conductances. corr_with pairs correlated generators (BSIM4
-/// tnoiMod, PSP igid); real coefficient until a reference demands complex.
+/// One generator's PSD at a state vector, position k of `noisePsd`'s result
+/// (generator `noise_gens[k]`). The density generator k contributes is
 ///
-/// NOTE: this parametric form cannot express §4.6.4.3 `noise_table` /
-/// §4.6.4.4 `noise_table_log`, which are piecewise PSD-vs-frequency; those are
-/// `NoiseGen.kind == .table` and `noise_tables`, and their `PsdTerm` reads
-/// all-zero. So the full spectrum of generator k is
+///     S_k(f) = coeff² · (white + flicker/f^ef)                              parametric row
+///     S_k(f) = coeff² · noiseTableAt(noise_tables[noise_gens[k].table.?], f)  table row
 ///
-///     S_k(f) = white + flicker/f^ef        (parametric rows)
-///     S_k(f) = noiseTableAt(noise_tables[noise_gens[k].table.?], f)
-///
-/// and a host that simply ADDS the two is right for both, because each shape
-/// is zero where the other one speaks.
-///
-/// `coeff` MULTIPLIES whichever of those two shapes this row has, and it is not
-/// optional arithmetic — see its own doc.
+/// A table row's `white` and `flicker` are zero, so a host that adds both
+/// shapes is right for every row. The device computes `white` itself.
 pub const PsdTerm = struct {
     white: f64,
     flicker: f64 = 0,
     ef: f64 = 1,
+    /// A generator this one is correlated with (BSIM4 tnoiMod, PSP igid), and
+    /// the real correlation coefficient.
     corr_with: ?u8 = null,
     corr: f64 = 0,
-    /// §4.6.4.6 the factor the CONTRIBUTION applies to this generator: the `c1`
-    /// of `V(a,b) <+ c1*n`. The density the branch actually carries is
-    ///
-    ///     S_k(f) = coeff² · (white + flicker/f^ef)          parametric rows
-    ///     S_k(f) = coeff² · noiseTableAt(noise_tables[…], f) table rows
-    ///
-    /// **A host that ignores this field is low by c² on any scaled source**,
-    /// silently — which is what VerA did before the field existed, because
-    /// there was nowhere to put the factor.
-    ///
-    /// Here and not folded into `white`, for two reasons that each rule it out
-    /// on their own. A §4.6.4.3 table row's spectrum is COMPTIME data and
-    /// cannot absorb a factor that may depend on the bias — and it may:
-    /// `I(a,b) <+ V(a,b)*white_noise(p)` is a legal modulated source, which is
-    /// why this lives on the per-bias `PsdTerm` and not on `NoiseGen`. And the
-    /// §4.6.4.6 cross term between two rows sharing a `source` is
-    ///
-    ///     S_ij(f) = coeff_i · coeff_j · (the shared generator's own spectrum)
-    ///
-    /// whose SIGN is the whole difference between correlation and
-    /// anti-correlation. A squared density cannot carry it, so the field is
-    /// signed and only the host squares it.
-    ///
-    /// 1.0 for the overwhelmingly common `I(a,b) <+ white_noise(pwr)`, and 1.0
-    /// for a use VerA could not reduce to a single factor — a generator
-    /// squared, or inside a call — where no coefficient exists to report.
+    /// §4.6.4.6 the signed factor the contribution applies to this generator
+    /// (the `c1` of `V(a,b) <+ c1*n`); it may depend on the bias. A host must
+    /// apply it: the density is `coeff²` times the shape above, and the cross
+    /// term of two rows sharing a `source` is `coeff_i · coeff_j` times the
+    /// shared spectrum, whose sign distinguishes correlation from
+    /// anti-correlation. 1.0 when the use reduces to no single factor.
     coeff: f64 = 1,
 };
 
-/// §2.8.3 + §12.32: one `$name` the compiler could not resolve, which §2.8.3
-/// says may be "defined using the VPI as described in Clause 11 and Clause 12".
-/// Position k of `systf_calls` is what position k of `SystfHost.call` answers.
-///
-/// Keyed by NAME and not by call site, because that is what
-/// `vpi_register_analog_systf()` registers: "the task or function name shall be
-/// unique in the domain in which it is registered". Two calls to one `$name`
-/// are one entry and one binding.
-///
-/// The name is the whole entry, and §12.32's own structure is why. Its other
-/// fields — `type` (vpiAnalogSysTask/SysFunc), `sysfunctype`
-/// (vpiIntFunc/vpiRealFunc), `sizetf` — are the APPLICATION's declaration of
-/// what it registered, not facts a compiler that has never seen the
-/// registration can report. A struct rather than a bare `[]const u8` so they
-/// have somewhere to land if a host ever needs them; per this file's own rule,
-/// none is added before a consumer asks.
+/// §2.8.3/§12.32 one `$name` the compiler could not resolve, left to a VPI
+/// application. Position k of `systf_calls` is what `SystfHost.call(ctx, k, ...)`
+/// answers. Keyed by name, as `vpi_register_analog_systf()` registers it, so
+/// two calls to one `$name` are one entry.
 pub const Systf = struct {
     /// `$sampnhold`, with the `$`. §12.32: "first character shall be `$`".
     name: []const u8,
 };
 
-/// The VPI application, as the device sees it. Written into `Instance.systf` by
-/// the host; `validateHost` is what makes it non-optional for a device that
-/// declares any `systf_calls`.
-///
-/// WHY VALUE-PLUS-PARTIALS AND NOT `fn (k, args: []S) S`. `eval` is generic
-/// over the family and gets instantiated at several lane masks, and a
-/// function POINTER cannot be generic over them. So the boundary has to be
-/// concrete, which means the host returns the value and its partials
-/// separately and the device rebuilds the family value from them.
-///
-/// That is not a workaround: it is §12.22.1 "Derivatives for analog system
-/// task/functions" and §12.32's `derivtf` / `p_vpi_stf_partials`, arrived at
-/// from the opposite direction. A systf inside a contribution is inside the
-/// residual, and the residual must stay a pure function of `x` or the host's
-/// own Newton iteration cannot converge — which is the same invariant that
-/// keeps §9.5 file I/O and `$random` out of `eval`. A value with no derivative
-/// would break it; a value WITH its derivative does not.
+/// The VPI application as the device sees it. The host owns it and writes a
+/// pointer into `Instance.systf`; `validateHost` requires a binding for every
+/// device that declares `systf_calls`. The call returns a value and its
+/// partials (§12.22.1, §12.32 `derivtf`) rather than a family value, because a
+/// function pointer cannot be generic over the family.
 pub const SystfHost = struct {
-    /// The application's own state — `s_vpi_analog_systf_data.user_data`.
+    /// The application's own state (`s_vpi_analog_systf_data.user_data`).
     ctx: *anyopaque,
-    /// §12.32 `calltf` and §12.22.1 `derivtf` in one call. Returns the value at
-    /// `args` and writes d(value)/d(args[j]) into `partials[j]`.
-    ///
-    /// `partials` is exactly `args.len` long and is NOT zeroed on entry: an
-    /// application that leaves an entry alone is claiming a derivative it did
-    /// not compute. Write every slot, zero included.
+    /// §12.32 `calltf` and §12.22.1 `derivtf` in one call: returns the value
+    /// of `systf_calls[k]` at `args` and writes d(value)/d(args[j]) into
+    /// `partials[j]`. `partials.len == args.len` and it is not zeroed on
+    /// entry, so the callee must write every slot.
     call: *const fn (ctx: *anyopaque, k: usize, args: []const f64, partials: []f64) f64,
 };
 
-/// VAMS §9.5.1.2 "The file I/O system functions and tasks in both the analog
-/// and digital contexts can use file descriptors opened in either context":
-/// the device's §9.5 descriptor table, for a host that runs a second context —
-/// a mixed simulation's digital half — which has to name the same files. ONE
-/// table per simulation: the host routes that context's file tasks through
-/// these, so a descriptor either context returns names the same channel in
-/// both, with §9.5.1's encodings (mcd bit 0 standard output, bit 31 clear; an
-/// fd bit 31 set, 0..2 the standard streams).
-///
-/// OPTIONAL, `fileIo`'s null by default: only a device that carries the table
-/// (a printing artifact that calls the §9.5 family) declares `file_io`, and a
-/// host with no second context never reads it. `put` writes text already
-/// formatted; standard output stays the host's own stream.
+/// The device's §9.5 descriptor table, for a host whose second context (a
+/// mixed simulation's digital half) must share it (§9.5.1.2). The host routes
+/// that context's file tasks through these, so a descriptor names the same
+/// channel in both, with §9.5.1's encodings (an mcd has bit 31 clear, an fd bit
+/// 31 set). `put` writes already-formatted text. Declared only by a printing
+/// artifact that calls the §9.5 family.
 pub const FileIo = struct {
     open: *const fn (path: []const u8, ty: []const u8, mcd: bool) i64,
     close: *const fn (d: i64) i64,
@@ -921,73 +701,43 @@ pub const FileIo = struct {
     new_analysis: ?*const fn () void = null,
 };
 
-/// The device's `file_io`, or null: it has no descriptor table to share.
+/// Returns the device's `file_io`, or null when it has no descriptor table.
 pub fn fileIo(comptime D: type) ?FileIo {
     return if (@hasDecl(D, "file_io")) D.file_io else null;
 }
 
-/// §4.6.3 AC stimulus topology. Position k of `ac_gens` names one `ac_stim`
-/// call on the (row, col) branch, and position k of the `acStim(...)` result
-/// carries that call's phasor — exactly the `noise_gens`/`noisePsd` split, for
-/// the same reason: the branch and the analysis name are properties of the
-/// MODEL TEXT, the magnitude and phase are properties of the model card.
-///
-/// "When the name of the small-signal analysis matches analysis_name, the
-/// source becomes active and models a source with magnitude mag and phase
-/// phase … The AC stimulus function returns zero (0) during large-signal
-/// analyses (such as DC and transient) as well as on all small-signal analyses
-/// using names which do not match analysis_name."
-///
-/// **What a host that ignores this export gets wrong.** VerA also lowers
-/// `ac_stim` into the residual, as `mag·cos(phase)` — the phasor's REAL PART,
-/// because a residual is real. So a host that reads only the residual sees a
-/// source whose quadrature component has been deleted: a stimulus at phase π/2
-/// disappears from the analysis entirely instead of being in quadrature with
-/// one at phase 0. This table is the whole phasor. A host that solves a complex
-/// small-signal system reads it INSTEAD OF the residual term, not in addition
-/// — both spell the same source, and adding them counts its real part twice.
+/// §4.6.3 one AC stimulus: position k of `ac_gens` is an `ac_stim` call on the
+/// (row, col) branch, and position k of `acStim`'s result is its phasor.
+/// The residual carries only the phasor's real part, `mag·cos(phase)`. A host
+/// that solves a complex small-signal system reads this table instead of that
+/// residual term; adding both counts the real part twice.
 pub fn AcGen(comptime D: type) type {
     const n = nU(D);
     return struct {
         row: std.math.IntFittingRange(0, n - 1),
         col: std.math.IntFittingRange(0, n - 1),
-        /// §4.6.3 `analysis_name`: the source is active only while the
-        /// small-signal analysis in force carries this name (§4.6.1's Table
-        /// 4-21 vocabulary — "ac", "noise", "xf", …). "ac" is the clause's own
-        /// default for `ac_stim()`.
+        /// §4.6.3 `analysis_name`: the source is active only in the
+        /// small-signal analysis of this name (Table 4-21), and zero in every
+        /// other analysis.
         name: []const u8 = "ac",
     };
 }
 
-/// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, returned by the optional
-/// `acStim(x, model, inst)` hook (position k = `ac_gens[k]`).
-///
-/// EVALUATED AT A STATE VECTOR, like `noisePsd` and for the same reason: A.8.2
-/// gives `ac_stim`'s magnitude and phase as `analog_expression`, so a
-/// swept-amplitude source — `ac_stim("ac", k*V(ctrl))` — has a phasor that is
-/// a function of the operating point and not of the card alone.
-///
-/// Polar and not rectangular, because polar is what the clause states and what
-/// the model wrote: converting here would round `cos(π/2)` to 6.1e-17 and hand
-/// a host a source that is 6.1e-17 out of quadrature for no reason.
-///
-/// `mag` may be NEGATIVE: §4.6.4.6's per-use coefficient applies to a stimulus
-/// too (`I(a,b) <+ -2*ac_stim("ac")`), and a real factor folds into the
-/// magnitude exactly, sign and all — `−m·e^(jφ)` is `m·e^(j(φ+π))`. A host that
-/// takes `@abs(mag)` inverts such a source.
+/// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, position k of `acStim`'s
+/// result. Evaluated at a state vector, since A.8.2 lets magnitude and phase
+/// depend on the operating point. Polar, as the model wrote it. `mag` may be
+/// negative (a per-use coefficient folded in); a host must not take its
+/// absolute value.
 pub const AcPhasor = struct {
-    /// Magnitude, in the contributed nature's units. §4.6.3's default is 1.
+    /// Magnitude, in the contributed nature's units.
     mag: f64 = 1,
-    /// Phase, in RADIANS — "phase is given in radians". Default 0.
+    /// Phase, in radians.
     phase: f64 = 0,
 };
 
-/// Result of a limiting pass. `converged` is the device's own verdict on
-/// whether its clamp was significant enough to require another Newton
-/// iteration — pnjlim says yes, a cosmetic fetlim/limvds clamp says no. It
-/// replaces the old `limit_flag_unknowns` per-unknown table, which could only
-/// answer that question positionally and could not distinguish a large clamp
-/// from a small one on the same unknown.
+/// What `limit` returns: the limited unknowns, and `converged`, false when a
+/// clamp was large enough that the host must run another Newton iteration
+/// (pnjlim's clamp is; a small fetlim/limvds one is not).
 pub fn LimitResult(comptime n: usize) type {
     return struct {
         x: [n]f64,
@@ -995,115 +745,67 @@ pub fn LimitResult(comptime n: usize) type {
     };
 }
 
-/// Which unknowns `limit`/`seed` actually touch, as bit masks over `U`.
-/// `limitReads` is every `cur`/`old` entry the body loads, `limitWrites` every
-/// `x` entry it can store. Both are supersets, and both default to ALL when a
-/// device does not declare them — the answer that costs performance rather
-/// than correctness.
-///
-/// `limit`'s signature has to be `[n_u]f64` in and out, because a host cannot
-/// name a device's unknowns. But a MOS ladder reads four of eight and writes
-/// two: without these masks a host gathers, copies through the frame and
-/// stores back the other four once per instance per Newton iterate, to arrive
-/// at the value they already had. ngspice has no such traffic — its limiter
-/// memory is the three branch voltages in `CKTstate0`.
-///
-/// THE RULE FOR A HOST: an unknown outside `limitWrites` was never written by
-/// the device, so its "previously limited" value must come from the host's own
-/// previous iterate, not from the plane `limit` writes into.
+/// Returns the unknowns `limit` loads from `cur`/`old`, as a bit mask over `U`:
+/// `D.limit_reads`, or all ones when undeclared. A superset.
 pub fn limitReads(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_reads")) D.limit_reads else ~@as(u64, 0);
 }
+
+/// Returns the unknowns `limit`/`seed` can store, as a bit mask over `U`:
+/// `D.limit_writes`, or all ones when undeclared. A superset. An unknown
+/// outside it is never limited, so its previous limited value is the host's
+/// own previous iterate, not the plane `limit` writes into.
 pub fn limitWrites(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_writes")) D.limit_writes else ~@as(u64, 0);
 }
 
-/// Which unknowns need a derivative lane, as a bit mask over `U` (bit i is
-/// `@intFromEnum` value i). A SOUND SUPERSET, and like `limitReads` it
-/// defaults to ALL when a device does not declare `deriv_reads` — the answer
-/// that costs performance rather than correctness.
+/// Returns the unknowns that need a derivative lane, as a bit mask over `U`
+/// (bit i is `@intFromEnum` value i): `D.deriv_reads`, or all ones when
+/// undeclared. A superset.
 ///
-/// THE PROMISE: for every unknown u outside the mask, every ∂eval[row]/∂x[u]
-/// and ∂q[row]/∂x[u] is a compile-time constant — the same at every x, every
-/// Model and every Instance — and `jacConst` holds its exact value. Such a
-/// column only ever enters the residual as a linear term with a constant
-/// coefficient: a §5.6 branch relation's ±V, KCL's ±x[flow], a §5.4.3
-/// port-probe row. The branch-flow unknowns are most of them; bsim4va's
-/// shared core differentiates 11 of its 18.
+/// For every unknown outside the mask, each ∂eval[row]/∂x[u] and ∂q[row]/∂x[u]
+/// is a compile-time constant, and `jacConst` holds its exact value; the device
+/// reads such an unknown with `S.con`, so no lane carries its partial. A host
+/// stamps `jacConst` for those columns. Their matrix slots stay in
+/// `jac_pattern`/`q_pattern` and `jac_rows`/`q_rows`.
 ///
-/// THE RULE FOR A HOST: the device probes only the unknowns in the mask
-/// (`S.probe`) and reads the rest as constants (`S.con`), so the lanes of a
-/// row carry no partial outside it; stamp `jacConst` there. The width is the
-/// host's to choose through `S.Of`, and the device declares only masks.
-/// `ddxAt` reads a lane by unknown index; see `ddxReads`.
-///
-/// The constant entries stay in `jac_pattern`/`q_pattern` and
-/// `jac_rows`/`q_rows`: their matrix slots exist, only their values are known
-/// before the solve.
-///
-/// `validate` enforces four rules, each where a wrong mask would otherwise
-/// corrupt the Jacobian silently:
-///   (a) a declared `deriv_reads` needs |U| <= 64, the width of the mask;
-///   (b) `limitWrites ⊆ derivReads` on a device with a `limit`: the host's
-///       limiting correction `I(vlim) + g(vlim)·(v − vlim)` is lane-indexed,
-///       so every unknown the limiter moves needs a live lane;
-///   (c) `jac_const` is sorted by (row, col) with no duplicates, has no
-///       entry whose `g` and `c` are both zero, and names no column inside
-///       the mask; a guarded entry's `when.flag` names a field of `Model`;
-///   (d) `ddxReads ⊆ derivReads`, for the same reason as (b).
-///
-/// A GUARDED entry (`when != null`, see `JacWhen`) is a partial that is
-/// constant per (model card, host) rather than per device: a §5.6.5
-/// collapsible switch branch's ±1 KCL stamps exist only while the model
-/// retains the 0 V arm and the host has not collapsed it. Its column is
-/// still outside the mask; `jacConstApplies` says when to stamp it.
+/// `validate` enforces: (a) a declared mask needs |U| <= 64; (b) on a device
+/// with `limit`, `limitWrites ⊆ derivReads`, because the host's limiting
+/// correction is lane-indexed; (c) `jac_const` is sorted by (row, col), has no
+/// duplicate, no all-zero entry and no column inside the mask, and a guard's
+/// `when.flag` names a `Model` field; (d) `ddxReads ⊆ derivReads`.
 pub fn derivReads(comptime D: type) u64 {
     return if (@hasDecl(D, "deriv_reads")) D.deriv_reads else ~@as(u64, 0);
 }
 
-/// The unknowns whose partial §4.5.14 `ddx` reads, as a bit mask over `U`:
-/// device code calls `S.ddxAt(col)` with `col` an UNKNOWN index, so the VALUE
-/// it returns is a lane. Defaults to ALL when a device does not declare
-/// `ddx_reads`, and `validate` holds it inside `derivReads` (rule (d)).
-///
-/// THE RULE FOR A HOST: `ddxAt(comptime col)` must go through the family's
-/// own unknown-to-lane map. Lane `col` read as another unknown's partial is a
-/// wrong VALUE in the residual, not only a wrong Jacobian, and nothing
-/// downstream notices.
+/// Returns the unknowns whose partial §4.5.14 `ddx` reads, as a bit mask over
+/// `U`: `D.ddx_reads`, or all ones when undeclared. The device calls
+/// `S.ddxAt(u)` with `u` an unknown index and uses the result as a value, so a
+/// family must map `u` to its own lane; a wrong map is a wrong residual.
 pub fn ddxReads(comptime D: type) u64 {
     return if (@hasDecl(D, "ddx_reads")) D.ddx_reads else ~@as(u64, 0);
 }
 
 /// One constant entry of the local Jacobian, for a column outside
 /// `derivReads`: `g` is ∂eval[row]/∂x[col] and `c` is ∂q[row]/∂x[col], both
-/// exact. Generic over the device's own `U`, because the unknown enum is per
-/// device: a device spells its table `[_]contract.JacConst(U){ ... }`.
-///
-/// An absent entry is exactly 0 in both halves, which is why an entry with
-/// `g == c == 0` is refused rather than tolerated — see `derivReads` (c).
+/// exact. An absent entry is exactly 0 in both. A guarded entry (`when`
+/// non-null) applies only as `jacConstApplies` says.
 pub fn JacConst(comptime U: type) type {
     return struct { row: U, col: U, g: f64, c: f64, when: ?JacWhen = null };
 }
 
-/// The guard on a `jac_const` entry. EXACT SEMANTICS: the entry applies iff
-///   `@field(model, flag)` is nonzero (true, for a `bool` field)
-///   AND `collapse_open` == !collapsed,
-/// where `collapsed` is the host's `collapse_applied` for the scalar it
-/// evaluates with — true when it applied this device's `collapse()` aliases
-/// to its gather/scatter maps. So `collapse_open = true` reads "applies while
-/// the branch is NOT collapsed" (the only form VerA emits: the branch's
-/// stamps it describes are compiled out under `collapse_applied`), and
-/// `collapse_open = false` reads "applies only once it IS collapsed".
-///
-/// `flag` is a Model FIELD NAME, not an index, so it survives field
-/// reordering and a host resolves it at comptime with `@field`. For a
-/// §5.6.1.3 retention flag VerA publishes a `<flow unknown>__retained`
-/// field that `derive` fills; a host that skips `derive` stamps garbage.
+/// The guard on a `jac_const` entry, for a partial that is constant per model
+/// card and host rather than per device (a §5.6.5 collapsible branch's KCL
+/// stamps). The entry applies iff `@field(model, flag)` is nonzero and
+/// `collapse_open == !collapsed`, where `collapsed` is the family's
+/// `collapse_applied`. `flag` is a `Model` field name; VerA's are
+/// `<flow unknown>__retained` fields that `derive` fills, so the host must
+/// call `derive` first.
 pub const JacWhen = struct { flag: []const u8, collapse_open: bool };
 
-/// Does `jac_const` entry `e` apply to `model` under a host whose collapse
-/// state is `collapsed`? See `JacWhen` for the rule; an unguarded entry
-/// always applies.
+/// Returns whether `jac_const` entry `e` applies to `model` under a host whose
+/// collapse state is `collapsed` (see `JacWhen`). An unguarded entry always
+/// applies.
 pub fn jacConstApplies(comptime D: type, comptime e: JacConst(D.U), model: *const D.Model, collapsed: bool) bool {
     const w = e.when orelse return true;
     if (w.collapse_open == collapsed) return false;
@@ -1111,68 +813,52 @@ pub fn jacConstApplies(comptime D: type, comptime e: JacConst(D.U), model: *cons
     return if (@TypeOf(v) == bool) v else v != 0;
 }
 
-/// The device's `jac_const` as a slice, sorted by (row, col); empty when the
-/// device declares none — which is also the only answer `derivReads`'
-/// all-ones default leaves room for.
+/// Returns the device's `jac_const`, sorted by (row, col), or empty when it
+/// declares none.
 pub fn jacConst(comptime D: type) []const JacConst(D.U) {
     return if (@hasDecl(D, "jac_const")) D.jac_const[0..] else &.{};
 }
 
-/// Constant-Jacobian declaration. `g`/`c` assert that the device's dF/dx and
-/// dQ/dx do not depend on x, so the engine can build the stamp once and memcpy
-/// it every Newton iteration. A wrong value silently freezes the Jacobian.
+/// The device's optional `constant` declaration: `g`/`c` promise that dF/dx and
+/// dQ/dx do not depend on x, so a host may build the stamp once and reuse it
+/// every iteration. A wrong promise silently freezes the Jacobian.
 pub const Constant = struct {
     g: bool = false,
     c: bool = false,
 };
 
+/// Returns |U|, the device's number of unknowns.
 pub fn nU(comptime D: type) comptime_int {
     return @typeInfo(D.U).@"enum".fields.len;
 }
 
 // ============================================================================
-// §5.6.1.2 charge sites: `q` returns one charge per `ddt` site
+// §5.6.1.2 charge sites
 // ============================================================================
 //
-// THE LAYOUT. `q(S, x, model, inst, sim)` returns `Sites(D, S)`: one CHARGE
-// per charge site (a `ddt` term of a contribution, after genvar unrolling and
-// flattening — static, because §4.5.15 bars analog operators from user
-// functions, runtime loops and runtime conditionals), not one per residual
-// row. `evalQ(...).q` and `acceptQ(...)` return the same `Sites`. The rows are
-// recovered by `q_stamps`: row `r` of the reactive residual is
-//
-//     Σ over entries e with e.row == r:  e.sign · q[e.site]
-//
-// (`qRows`). A host differentiates — tapes, integrates, truncation-checks —
-// each SITE on its own and stamps the resulting current into the rows exactly
-// as it stamped the row charges before. The split is what lets it check
-// junction charges apart from the gate charges at the same pin (ngspice's
-// mos1trun.c) or reject a step on one charge a sum would dilute (bjttrunc.c).
-//
-// `q_lte[k]` says whether site k joins the local-truncation-error check. A
-// model leaves a site out with VerA's `vera_lte` attribute: `(* vera_lte = 0 *)`
-// before an analog statement covers every site inside it, and
-// `ddt (* vera_lte = 0 *) (q)` covers one; the innermost wins, and the default
-// is 1 (every site checked).
-//
-// A device that declares none of `n_q`/`q_stamps` has the per-row layout: `q`
-// returns one site per row, i.e. `n_q = |U|` and site k stamps row k with +1
-// (`nQ`, `qStamps`), every one checked (`qLte`).
-//
-// `jac_const`'s `c` and `q_pattern`/`q_rows` stay per ROW: they describe the
-// stamped reactive residual. `q_site_pattern[k]` is site k's own column set.
+// `q` returns one charge per charge site (a `ddt` term of a contribution, after
+// unrolling and flattening), not one per residual row; `evalQ(...).q` and
+// `acceptQ` return the same `Sites`. Row r of the reactive residual is
+// Σ e.sign · q[e.site] over the `q_stamps` entries with e.row == r (`qRows`).
+// A host integrates and truncation-checks each site on its own, then stamps
+// the currents into rows. `q_lte[k]` says whether site k joins the truncation
+// check (VerA's `vera_lte` attribute clears it). A device without `n_q` and
+// `q_stamps` has one site per row, site k on row k with sign +1, all checked.
+// `jac_const.c`, `q_pattern` and `q_rows` stay per row; `q_site_pattern[k]`
+// is site k's column set.
 
-/// One `q_stamps` entry: row `row` gains `sign · q[site]`.
+/// One `q_stamps` entry: reactive row `row` gains `sign · q[site]`.
 pub fn QStamp(comptime U: type) type {
     return struct { site: u16, row: U, sign: f64 };
 }
 
-/// How many charges `q` returns: `n_q`, or |U| for the per-row layout.
+/// Returns how many charges `q` returns: `n_q`, or |U| for the per-row layout.
 pub fn nQ(comptime D: type) comptime_int {
     return if (@hasDecl(D, "n_q")) D.n_q else nU(D);
 }
 
-/// The row map, sorted by (row, site). The per-row layout's is the identity.
+/// Returns the site-to-row map, sorted by (row, site); the identity for the
+/// per-row layout.
 pub fn qStamps(comptime D: type) []const QStamp(D.U) {
     if (@hasDecl(D, "q_stamps")) return D.q_stamps[0..];
     const n = nU(D);
@@ -1184,13 +870,14 @@ pub fn qStamps(comptime D: type) []const QStamp(D.U) {
     return &id;
 }
 
-/// Does site k join the truncation-error check? All of them unless declared.
+/// Returns, per site, whether it joins the truncation-error check: `q_lte`, or
+/// all true when undeclared.
 pub fn qLte(comptime D: type) [nQ(D)]bool {
     return if (@hasDecl(D, "q_lte")) D.q_lte else @splat(true);
 }
 
-/// The lanes reactive row `r` carries: the union of the `siteMask`s of the
-/// sites `q_stamps` puts on it.
+/// Returns the lanes reactive row `r` carries: the union of the `siteMask`s
+/// of the sites `q_stamps` puts on it.
 pub fn qRowMask(comptime D: type, comptime r: usize) u64 {
     var m: u64 = 0;
     for (qStamps(D)) |e| {
@@ -1207,8 +894,8 @@ pub fn QRows(comptime D: type, comptime S: type) type {
     return @Tuple(&ts);
 }
 
-/// The reactive residual's rows from the sites' charges: `Σ sign · q[site]`
-/// per row, from +0 and in `q_stamps` order.
+/// Returns the reactive residual's rows from the sites' charges:
+/// `Σ sign · q[site]` per row, summed from +0 in `q_stamps` order.
 pub fn qRows(comptime D: type, comptime S: type, q: Sites(D, S)) QRows(D, S) {
     @setEvalBranchQuota(1_000_000);
     var out: QRows(D, S) = undefined;
@@ -1246,10 +933,6 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 }
 
 // ============================================================================
-// Validation
-// ============================================================================
-
-// ============================================================================
 // Scalar families
 // ============================================================================
 //
@@ -1257,7 +940,7 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 // derivative lanes of exactly the unknowns `mask` names, and types each value
 // by the unknowns it can depend on.
 //
-// THE NUMERICS, pinned per primitive so every family computes one thing.
+// The numerics, pinned per primitive so every family computes the same thing.
 // Values are bit-exact except the transcendentals (exp log expm1 sin cos tanh
 // sinh cosh atan pow), whose last ulp is the host's. Lanes follow the formula
 // with one rounding per listed operation; FMA is optional.
@@ -1281,33 +964,38 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 // slew clamps (c < a) ? c : a and (a < c) ? c : a, each over lt and sel and
 // carrying the selected operand's lanes.
 
-/// The family decls a host passes as `comptime S`: `Of(comptime m: u64)
-/// type`; `V`, the type of one unknown's VALUE (`f64`, or a vector for a
-/// family that evaluates several operating points at once); `con(f64)
-/// Of(0)`, and, when `V` is not `f64`, `lift(V) Of(0)`; `probe(comptime u:
-/// usize, V) Of(1 << u)`; `sel(c, a, b)` joining `a` and `b`. The device
-/// calls `probe` only for `u` in `derivReads`, and names only masks inside
-/// it. A host may carry MORE lanes than a mask names, or map several unknowns
-/// to one lane. Above 64 unknowns every mask is all ones and only a family
-/// whose `Of` ignores its mask can serve the device.
+/// The decls of the family a host passes as `comptime S`: `Of(comptime m: u64)
+/// type`; `V`, the type of one unknown's value (`f64`, or a vector for a
+/// family that evaluates several operating points at once); `con(f64) Of(0)`
+/// and, when `V` is not `f64`, `lift(V) Of(0)`; `probe(comptime u: usize, V)
+/// Of(1 << u)`; `sel(c, a, b)` joining `a` and `b`.
 ///
-/// A `V` other than `f64` is sound only for a device that declares
-/// `batch_ok`: every other one steers on `val()`, which answers for one
-/// operating point.
+/// The device probes only unknowns in `derivReads` and names only masks inside
+/// it. A family may carry more lanes than a mask names, or map several
+/// unknowns to one lane. Above 64 unknowns every mask is all ones, so only a
+/// family whose `Of` ignores its mask can serve the device. A `V` other than
+/// `f64` is sound only for a device that declares `batch_ok`.
+///
+/// Optional trait: `collapse_applied: bool = true` promises the host applied
+/// the device's `collapse()` aliases to its gather and scatter maps; the
+/// device then omits the collapsed branches' cancelling stamps.
 pub const family_fns = [_][]const u8{ "Of", "V", "con", "probe", "sel" };
 
-/// What every `Of(m)` value carries. A binary operation takes any
-/// `Of(m')` operand and returns `Of(m | m')`; a unary one keeps `Of(m)`;
-/// `lt`/`le`/`eq` return `Of(0)`; `to(comptime m2)` widens and is a compile
-/// error unless `m ⊆ m2`; `ddxAt(comptime u)` is lane `u`, or 0 off the mask.
+/// The methods every `Of(m)` value carries, with the numerics pinned in the
+/// table above. A binary operation takes any `Of(m')` operand and returns
+/// `Of(m | m')`; a unary one keeps `Of(m)`; `lt`/`le`/`eq` return `Of(0)`;
+/// `to(comptime m2)` widens and is a compile error unless `m ⊆ m2`;
+/// `ddxAt(comptime u)` is lane `u`, or 0 off the mask. Constants and results
+/// cross as `f64` (`con`, `scale`, `addC`, `val`, `ddxAt`) and device code
+/// never opens a value, so lanes may be narrower than `f64` (`jac_f32`).
 pub const family_primitives = [_][]const u8{
     "addC",  "scale", "add",  "sub", "neg", "mul",   "div",  "exp",  "log",
     "expm1", "log1p", "sqrt", "pow", "sin", "cos",   "tanh", "sinh", "cosh",
     "atan",  "lt",    "le",   "eq",  "val", "ddxAt", "to",
 };
 
-/// Structural check of a family: its decls, and the primitives of `Of(0)`
-/// and `Of(1)`.
+/// Checks family `S` at comptime: its `family_fns` decls, and the
+/// `family_primitives` of `Of(0)` and `Of(1)`.
 pub fn checkFamily(comptime S: type) void {
     if (@hasDecl(S, "collapse_applied") and @TypeOf(S.collapse_applied) != bool)
         @compileError(@typeName(S) ++ ": family collapse_applied must be bool");
@@ -1319,18 +1007,20 @@ pub fn checkFamily(comptime S: type) void {
     };
 }
 
-/// `lane[u]` for an unknown the family does not carry.
+/// The `RefFamily` `lane[u]` entry for an unknown the family does not carry.
 pub const no_lane: u8 = std.math.maxInt(u8);
 
+/// Layout options for `RefFamily`.
 pub const RefOptions = struct {
     /// Every `Of(m)` is one type carrying every lane `lane` maps, its lanes
     /// an array a host may index at run time. Otherwise `Of(m)` carries
     /// exactly `m`'s lanes, in unknown order.
     dense: bool,
+    /// The family's `collapse_applied` trait (see `family_fns`).
     collapse_applied: bool = false,
 };
 
-/// The reference family: the numerics table above, lanes of float type `L`
+/// Returns the reference family: the numerics table above, lanes of float type `L`
 /// (`f64`, or `f32` under `jac_f32`) beside an `f64` value. `lane[u]` is the
 /// lane unknown `u` occupies in the dense layout, or `no_lane`; a sparse
 /// `Of(m)` refuses at compile time a mask naming an unknown `lane` does not
@@ -1651,7 +1341,8 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
 /// declares: data for a host's width policy (`laneMasks`), never a width.
 pub const LaneUse = struct { mask: u64, uses: u32 };
 
-/// `D.lane_masks`, or one dense entry (`derivReads`) for a device without it.
+/// Returns `D.lane_masks`, or one dense entry (`derivReads`) for a device
+/// without it.
 pub fn laneMasks(comptime D: type) []const LaneUse {
     if (@hasDecl(D, "lane_masks")) return &D.lane_masks;
     return &.{.{ .mask = derivReads(D) & unknownsMask(D), .uses = 0 }};
@@ -1861,12 +1552,58 @@ fn famExpect(comptime op: []const u8, narrow: bool, x: f64, y: f64, got: anytype
     }
 }
 
-/// Devices with first-call table state require exclusively owned mutable evaluation.
-/// Initialization is permanent for the instance and is not timestep rollback state.
+/// Returns the instance pointer type `eval`/`q` take: `*D.Instance` for a
+/// device that declares `mutable_eval` (it initializes table state on its
+/// first call, permanently and outside timestep rollback), so the host must
+/// give each evaluation exclusive access; `*const D.Instance` otherwise.
 pub fn InstancePtr(comptime D: type) type {
     return if (@hasDecl(D, "mutable_eval") and D.mutable_eval) *D.Instance else *const D.Instance;
 }
 
+// ============================================================================
+// Validation
+// ============================================================================
+
+/// Checks device `D` against the contract at comptime; a violation is a compile
+/// error naming the decl. Required: `U` (a dense `enum(u8)`, ports first),
+/// `num_ports` (<= |U|; 0 is legal, §6.2), `Model` and `Instance` (structs
+/// whose fields all have defaults and are value types), and
+/// `eval(S, x, model, inst, sim) Rows(D, S)`. Every other decl is optional
+/// and must be one `validate` knows. The entry points, in the order a host
+/// calls them:
+///
+///   derive(S, *model)            after writing a card, before building instances
+///                                (§6.3.4 parameters derived from others)
+///   checkShape(&model)           after derive; non-null names a §3.4 shape
+///                                parameter the card moved, so refuse the card
+///   setup(S, &model, &inst)      after every card, instance, temperature or
+///                                `setup_simparams` write; fills `inst.su`
+///   collapse(S, &model, &inst)   once per instance at build: per internal unknown,
+///                                the index it merges into, or null
+///   initState(&model, &inst)     once per instance, before the first solve
+///   seed(S, ...)                 once before Newton iteration 1
+///   eval / q / evalQ             every iterate; `q` returns one charge per site
+///                                (`Sites`), `evalQ` both from one evaluation
+///   limit(S, ..., cur, old, sim) every iterate, on the instance's private limited
+///                                image; returns `cur` where it does not clamp
+///   advanceIteration / checkConvergence
+///                                after each iterate / before accepting one
+///   updateState(S, ..., x, &state, sim)
+///                                at each accepted point; `acceptQ` fuses it with `q`
+///   stateCtl(op)                 query, commit or revert the accepted state
+///   display(S, &x, ...)          per accepted point, `--display=emit` artifacts only;
+///                                a §9.7 `$finish`/`$stop`/`$fatal` exits the process
+///   noisePsd / acStim            at any state vector, positional on
+///                                `noise_gens` / `ac_gens`
+///   nextBreakpoint / pendingBreakpoint / delays
+///                                transient breakpoint scheduling
+///
+/// The value-only hooks take the same `comptime S` as `eval`, with a family
+/// whose `Of(m)` carries no lanes, so the host picks the arithmetic of every
+/// path. Optional permissions: `jac_f32` (the host may carry lanes in f32;
+/// absent, it must assume f64), `jac_f32_host` (take it on the CPU path too;
+/// requires `jac_f32`), `batch_ok` (a family whose `V` holds several operating
+/// points evaluates each exactly), `mutable_eval` (see `InstancePtr`).
 pub fn validate(comptime D: type) void {
     @setEvalBranchQuota(1_000_000);
     const name = @typeName(D);
@@ -1882,15 +1619,8 @@ pub fn validate(comptime D: type) void {
         @compileError(name ++ ".U must be a dense enum(u8) with values 0..n-1");
     const n = nU(D);
 
-    // Ports come first in `U` (codegen orders them that way), so num_ports is a
-    // prefix length and the only real bound is `np <= n`. ZERO is legal: §6.2
-    // makes the port list OPTIONAL and Annex A.1.2 admits `module identifier ;`,
-    // so a device with no terminals and only internal unknowns is a well-formed
-    // compilation unit. Its residual is solvable — every equation it contributes
-    // is over its own private nodes — and elaboration can instantiate it as a
-    // child that contributes those equations to the parent. Nothing downstream
-    // needs np >= 1: the limiter mask (`u >= num_ports`) and the port/internal
-    // split in codegen both degenerate correctly at 0.
+    // Ports are a prefix of `U`. Zero is legal: §6.2 makes the port list
+    // optional, and a portless module still contributes its private equations.
     const np: usize = D.num_ports;
     if (np > n)
         @compileError(name ++ ".num_ports must be <= |U|");
@@ -1901,15 +1631,11 @@ pub fn validate(comptime D: type) void {
         @compileError(name ++ ".mutable_eval must be bool");
     validateSimState(D);
 
-    // Physics: generic over S, so only shape-checkable. eval/q take
-    // (comptime S, *const [n_u]f64, *const Model, InstancePtr, SimState).
+    // Generic over S, so only the shape is checkable here.
     validatePhysicsFn(D, "eval");
     if (@hasDecl(D, "q")) validatePhysicsFn(D, "q");
 
-    // `evalQ` is `eval` and `q` sharing ONE model evaluation — the same five
-    // parameters, returning both residuals. Fusing is the whole point, so it
-    // is meaningless without a reactive half; a device that declares it
-    // without `q` has a hook whose second field nothing can fill.
+    // `evalQ` fuses `eval` and `q`, so it is meaningless without `q`.
     if (@hasDecl(D, "evalQ")) {
         if (!@hasDecl(D, "q"))
             @compileError(name ++ ".evalQ without q: the fused entry point needs a reactive half");
@@ -1917,37 +1643,21 @@ pub fn validate(comptime D: type) void {
     }
     if (qSitesError(D)) |m| @compileError(m);
 
-    // §9.4/§9.5 display phase (the clause map lives on `allowed_pub_decls`).
-    // Present only in a printing artifact; when present it must be callable
-    // the way tb.zig's generated runner calls it — `D.display(Dual, &x,
-    // model, inst, sim)` — which is `eval`'s generic shape returning void.
-    //
-    // §9.7 SIMULATION CONTROL RUNS INSIDE THIS PHASE AND MAY NOT RETURN. A
-    // `$finish`/`$stop`/`$fatal` the model reaches terminates the PROCESS at
-    // its position among the prints (`std.process.exit`; exit status 0 for
-    // §9.7.1/§9.7.2, `$fatal`'s finish_number floored at 1 for §9.7.3's
-    // errorcode). The signature stays `void` on purpose: both clauses tie the
-    // task to the accepted point — which is exactly when a host calls this —
-    // so ending the run right here IS the contract, and a return-value channel
-    // would only re-encode "the process is over" for a caller that no longer
-    // exists. A host that must survive its devices' §9.7 calls (an interactive
-    // kernel with a real `$stop`) upgrades this to a control-code return; no
-    // such host exists today, and a device built `--display=drop` contains no
-    // display phase and no exit (the calls are dropped under W0850).
+    // §9.4/§9.5 display phase: `eval`'s generic shape returning void. §9.7
+    // `$finish`/`$stop`/`$fatal` inside it exit the process (status 0, or
+    // `$fatal`'s finish_number floored at 1), because both clauses tie the task
+    // to the accepted point, which is when a host calls this.
     if (@hasDecl(D, "display")) {
         if (genericFnError(D, "display", "void")) |m| @compileError(m);
     }
     if (@hasDecl(D, "file_io") and @TypeOf(D.file_io) != FileIo)
         @compileError(@typeName(D) ++ ".file_io must be a contract.FileIo");
 
-    // Optional permission, not a shape: the WIDTH of S is the host's, and this
-    // only says which widths this device's physics tolerates.
+    // A permission, not a shape: the lane width is the host's to choose.
     if (@hasDecl(D, "jac_f32") and @TypeOf(D.jac_f32) != bool)
         @compileError(@typeName(D) ++ ".jac_f32 must be a bool");
-    // `jac_f32_host` is a request laid ON that permission — the host taking it
-    // on its CPU path too, not only wherever f32 is free. Asking without the
-    // permission means nothing, so it is refused here rather than silently
-    // ignored by whichever host happens to read only one of the two decls.
+    // A request laid on that permission, so refused without it rather than
+    // ignored by a host that reads only one of the two decls.
     if (@hasDecl(D, "jac_f32_host")) {
         if (@TypeOf(D.jac_f32_host) != bool)
             @compileError(@typeName(D) ++ ".jac_f32_host must be a bool");
@@ -1955,20 +1665,14 @@ pub fn validate(comptime D: type) void {
             @compileError(@typeName(D) ++ ".jac_f32_host = true without jac_f32 = true");
     }
 
-    // Voltage limiting (pnjlim/fetlim) and cold-start seeding (SPICE
-    // MODEINITJCT). limit's x and seed's values are the instance's PRIVATE
-    // limited image, never the shared x. seed runs once before Newton
-    // iteration 1 and returns non-null only on limit_writes lanes; limit
-    // returns `cur` on a lane it does not clamp. `old` is the previous Newton
-    // iterate's limited point: the image on limit_writes once seed or limit
-    // has run, x_old elsewhere. limit_writes may name a port; a host that
-    // masks ports only loses that clamp, which §9.17.3 permits. Any device
-    // with junction limiting should also declare seed — limiting from
-    // x_old = 0 is what pins cold-start Newton in the wrong basin.
+    // §9.17.3 limiting and SPICE MODEINITJCT seeding, both on the instance's
+    // private limited image, never the shared x. `seed` is non-null only on
+    // `limit_writes` lanes. `old` is the previous iterate's limited point: the
+    // image on `limit_writes` once seed or limit has run, x_old elsewhere. A
+    // host that masks ports loses only that clamp, which §9.17.3 permits.
     if (@hasDecl(D, "limit"))
         expectGeneric(D, "limit", 6, "fn (comptime S: type, *const Model, *const Instance, cur: [n_u]f64, old: [n_u]f64, SimState) LimitResult(n_u)");
-    // The masks are only meaningful next to a `limit`, and `writes ⊆ reads`
-    // because every corrected unknown is one the clamp read a probe from.
+    // `writes ⊆ reads`: every corrected unknown is one the clamp read.
     for ([_][]const u8{ "limit_reads", "limit_writes" }) |m| {
         if (!@hasDecl(D, m)) continue;
         if (!@hasDecl(D, "limit")) @compileError(@typeName(D) ++ "." ++ m ++ " without a `limit`");
@@ -1976,21 +1680,18 @@ pub fn validate(comptime D: type) void {
     }
     if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
         @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
-    // The narrow-lane pair and its three rules — see `derivReads`.
+    // Rules (a)-(d) of `derivReads`.
     if (derivReadsError(D, n)) |m| @compileError(m);
     if (@hasDecl(D, "seed"))
         expectGeneric(D, "seed", 4, "fn (comptime S: type, *const Model, *const Instance, SimState) [n_u]?f64");
-    // Node collapse (ngspice setup): for each internal unknown, return the
-    // port index it collapses onto when its separating parasitic R is 0, or
-    // null to keep a private node. Consulted once at build time.
+    // Node collapse: per internal unknown, the index it merges into when its
+    // separating parasitic resistance is 0, or null.
     if (@hasDecl(D, "collapse"))
         expectGeneric(D, "collapse", 3, "fn (comptime S: type, *const Model, *const Instance) [n_u]?u8");
-    // The same map with every retention flag set, comptime. A host uses it to
-    // size a reduced derivative basis for the instances whose per-instance
-    // `collapse` equals it, so the two invariants it relies on are checked
-    // here rather than assumed: entries are fully resolved (an alias points at
-    // a root, never at another alias) and point DOWNWARD (min-index root), so
-    // `root[u] = collapse_full[u] orelse u` is one lookup and not a walk.
+    // The same map with every retention flag set, at comptime, for a host
+    // sizing a reduced derivative basis. Entries point downward at a root,
+    // never at another alias, so `root[u] = collapse_full[u] orelse u` is one
+    // lookup.
     if (@hasDecl(D, "collapse_full")) {
         if (!@hasDecl(D, "collapse"))
             @compileError(name ++ ": collapse_full without a `collapse`");
@@ -2002,30 +1703,14 @@ pub fn validate(comptime D: type) void {
         };
     }
 
-    // State machine: eval reads Instance, so updateState gets a MUTABLE
-    // Instance — switch position etc. must live in Instance fields.
+    // `eval` reads Instance, so state `eval` sees (a switch position) lives in
+    // Instance fields, and `updateState` gets it mutable.
     if (@hasDecl(D, "initState") or @hasDecl(D, "updateState")) {
         if (!@hasDecl(D, "State"))
             @compileError(name ++ ": initState/updateState require pub const State");
-        // initState takes a MUTABLE Instance for the §5.10 held variables: a
-        // guarded variable with a parameter-dependent initializer cannot express
-        // that value as a struct field default, because a default must be
-        // comptime and a parameter is not. Those collapse to the parameter's
-        // spec default today; this hook is the upgrade path.
-        //
-        // It is NOT for digital drivers, and there is no driver state anywhere in
-        // this contract: no generated device has ever written a logic output
-        // here. The §9.22 `$driver_*` family does not reach a device at all —
-        // §9.22 confines those calls to connect modules, so lowering refuses
-        // every one of them (E0818). This comment used to cite codegen's
-        // hardwire-to-0 for the family as the reason, i.e. it recorded a wrong
-        // answer as a design decision; the answer is gone.
-        //
-        // If driver access is ever supported it arrives as an OPTIONAL DECL on
-        // this contract, the shape `display`, `u_abstol` and the §9.5 I/O
-        // interface already use, with the HOST supplying the per-net driver list
-        // — a compiler does not need a digital scheduler to ask its simulator a
-        // question. Not a State field, and not this hook.
+        // initState takes a mutable Instance so a §5.10 held variable can get
+        // a parameter-dependent initial value, which a comptime field default
+        // cannot express. §9.22 driver access never reaches a device (E0818).
         expectFn(D, "initState", fn (*const D.Model, *D.Instance) D.State);
         expectGeneric(D, "updateState", 6, "fn (comptime S: type, *const Model, *Instance, [n_u]f64, *State, SimState) UpdateResult");
         if (@hasDecl(D, "stateCtl"))
@@ -2040,11 +1725,8 @@ pub fn validate(comptime D: type) void {
         if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
             @compileError(name ++ ".state_class = .path_latch requires stateCtl");
     }
-    // The solve-invariant slice. `setup(S, model, inst)` fills `inst.su` (a
-    // `Setup`) once per card, instance, temperature or `setup_simparams`
-    // write, with a family whose values are the ones `eval` computes with;
-    // eval reads the fields as constants. The three come together or not at
-    // all.
+    // The solve-invariant slice: `setup` fills `inst.su`, and `eval` reads it
+    // as constants. `setup`'s family must compute values the way `eval`'s does.
     if (@hasDecl(D, "Setup") != @hasDecl(D, "setup") or @hasDecl(D, "setup") != @hasDecl(D, "setup_simparams"))
         @compileError(name ++ ": Setup, setup and setup_simparams come together");
     if (@hasDecl(D, "setup")) {
@@ -2057,8 +1739,7 @@ pub fn validate(comptime D: type) void {
         if (sp != .array or sp.array.child != []const u8)
             @compileError(name ++ ".setup_simparams must be [k][]const u8");
     }
-    // §5.6.1.2 + §4.5.2 the fused accepted-point pass: `q` and `updateState`
-    // from one core evaluation, so it needs both of them to be equivalent to.
+    // §5.6.1.2/§4.5.2 `q` and `updateState` fused into one evaluation.
     if (@hasDecl(D, "acceptQ")) {
         if (!@hasDecl(D, "q") or !@hasDecl(D, "updateState"))
             @compileError(name ++ ".acceptQ requires q and updateState");
@@ -2071,59 +1752,29 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "checkConvergence"))
         expectGeneric(D, "checkConvergence", 5, "fn (comptime S: type, *const Model, *const Instance, [n_u]f64, SimState) bool");
 
-    // Convergence aids. Only the 2-arg attempt form exists — batch.zig:616
-    // calls it unconditionally; a 3-arg variant would never be invoked.
+    // Convergence aid: the card modified for continuation step `lambda`.
     if (@hasDecl(D, "attempt"))
         expectFn(D, "attempt", fn (D.Model, f64) D.Model);
 
-    // Optional metadata. Each is a comptime [k]T table paired with the hook
-    // that fills position k — see `expectArray` / `requireWith`.
+    // Optional per-unknown metadata tables.
     if (@hasDecl(D, "u_kinds") and @TypeOf(D.u_kinds) != [n]UnknownKind)
         @compileError(name ++ ".u_kinds must be [|U|]UnknownKind");
 
-    // §3.6.1.2 `abstol`, per unknown: "the largest signal value that can be
-    // safely ignored", declared on the NATURE bound to that net (and
-    // overridable per discipline, §3.6.2.3). OPTIONAL, because it is a
-    // convergence aid and not part of the residual: a host without it has to
-    // invent one tolerance for every unknown, which is what a host that only
-    // knows `u_kinds` does. A host that runs Newton on `eval` reads it — the
-    // absolute half of the iteration's stopping test is exactly this number,
-    // and it is per-unknown because a thermal net and a voltage net do not
-    // agree on what "negligible" means.
+    // §3.6.1.2 `abstol` of each unknown's nature (§3.6.2.3 discipline
+    // overrides included): the absolute half of a Newton stopping test.
     if (@hasDecl(D, "u_abstol") and @TypeOf(D.u_abstol) != [n]f64)
         @compileError(name ++ ".u_abstol must be [|U|]f64");
 
-    // §3.6.3.2 `electrical n = 5.0;`, per unknown: "the initializer ... will be
-    // used as a nodeset value for the potential of the net by the analog
-    // solver". OPTIONAL in the strongest sense — it is an initial GUESS, so a
-    // host that never reads it computes the same answer and only starts
-    // somewhere else. Absent whenever the module declares no initializer at
-    // all, which is almost every module.
-    //
-    // `?f64`, because "a null value in the constant array indicates that no
-    // nodeset value is being specified for this element" and 0.0 is a perfectly
-    // ordinary nodeset. A host takes `u_nodeset[i]` as the starting x for that
-    // unknown and leaves the nulls at whatever it would have used.
-    //
-    // NOT an initial condition: §5.10.2's `initial_step` and the `.ic` pass are
-    // a different mechanism with a different meaning — a value the solve must
-    // HOLD. Nothing here may be handed to a host as one.
+    // §3.6.3.2 a net initializer (`electrical n = 5.0;`) is a nodeset: a
+    // starting guess for that unknown, null where none is given. It is not an
+    // initial condition the solve must hold.
     if (@hasDecl(D, "u_nodeset") and @TypeOf(D.u_nodeset) != [n]?f64)
         @compileError(name ++ ".u_nodeset must be [|U|]?f64");
 
-    // §5.6 STRUCTURAL Jacobian, one bitset per residual row: bit `cu` of
-    // `jac_pattern[ru]` is set when `∂eval(x)[ru]/∂x[cu]` can be nonzero, and
-    // `q_pattern` says the same for `q`. OPTIONAL and OVER-APPROXIMATE — a host
-    // that does not find them assumes every entry live, which is the dense
-    // n×n local Jacobian it had to assume before.
-    //
-    // It is worth declaring because the dense assumption is not free on either
-    // side of the boundary: the host reserves a sparse-matrix entry for every
-    // (row, col) a device might fill, and adds a float into every one of them
-    // per instance per Newton iteration. A MOSFET fills a third of its n×n.
-    //
-    // Above 64 unknowns a generator should emit NEITHER — the dense fallback is
-    // the correct answer and a wider bitset is not worth an ABI.
+    // §5.6 structural Jacobian, over-approximate: bit `cu` of
+    // `jac_pattern[ru]` is set when ∂eval[ru]/∂x[cu] can be nonzero, and
+    // `q_pattern` says the same for `q`. Absent means dense; omitted above 64
+    // unknowns.
     if (@hasDecl(D, "jac_pattern") and @TypeOf(D.jac_pattern) != [n]u64)
         @compileError(name ++ ".jac_pattern must be [|U|]u64");
     if (@hasDecl(D, "q_pattern")) {
@@ -2133,33 +1784,17 @@ pub fn validate(comptime D: type) void {
             @compileError(name ++ ".q_pattern without a `q` residual to describe");
     }
 
-    // §5.6 which residual rows the half ever WRITES — ONE bitset, bit `ru` per
-    // row, not per column. `jac_rows` describes `eval`, `q_rows` describes `q`.
-    // Also optional, also over-approximate, also omitted above 64 unknowns.
-    //
-    // A SEPARATE declaration from the pattern, and it must stay one. The
-    // pattern answers for the DERIVATIVE: `res[ru] = <term with no unknown in
-    // it>` writes the row and ORs nothing into the column mask, so a clear
-    // pattern row does NOT mean a clear row. `isource` ships that exact shape —
-    // `jac_pattern = {0, 0}` and both rows written with the DC current — and a
-    // host that inferred "row dead" from "columns dead" would delete every
-    // independent current source in the netlist. On the reactive half the same
-    // mistake is quieter and worse: a `ddt()` of something varying in `t` and
-    // not in `x` would leave the host's per-state charge tape frozen at zero
-    // for a live state and its LTE bound silently gone.
-    //
-    // So the containment is checked here, in the only direction that is sound:
-    // every row with a live column must be a written row.
+    // Which rows `eval` (`jac_rows`) and `q` (`q_rows`) ever write, one bit
+    // per row. Separate from the pattern because a row can be written with no
+    // unknown in it (an independent current source has `jac_pattern = {0, 0}`
+    // and two written rows). Only the sound direction is checked: a row with a
+    // live column is a written row.
     checkRowMask(D, name, "jac_rows", "eval", n);
     checkRowMask(D, name, "q_rows", "q", n);
 
-    // In-device noise PSDs: pure fn of ANY state vector (AC noise calls it
-    // once at x_op, pnoise per PSS sample, tran-noise per step). Position k of
-    // the result describes generator k. `requireWith` is the weak direction
-    // (a PSD needs a generator to belong to); the strong one — a generator
-    // needs a PSD, because nothing outside the device can state one — is the
-    // HOST's to enforce, since only a host knows whether it has a fallback.
-    // ARPice has none and `@compileError`s (devices/engine.zig collectNoise).
+    // Noise PSDs: a pure function of any state vector. Only the weak
+    // direction is checked (a PSD needs a generator); whether a generator
+    // without a PSD is acceptable is the host's call.
     expectArray(D, "noise_gens", NoiseGen(D));
     requireWith(D, "noisePsd", "noise_gens");
     // Clause 12: the row values are meaningless without the rows' shape.
@@ -2170,11 +1805,8 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "noisePsd"))
         expectGeneric(D, "noisePsd", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [noise_gens.len]PsdTerm");
 
-    // §4.6.4.3/.4 the tabulated PSDs, and the `kind`/`table` pairing that says
-    // which generator reads one. Checked HERE and not left to the host: the
-    // invariants `noiseTableAt` assumes (non-empty, ascending, unique, and
-    // logarithmable in a `.log` table) are exactly the ones whose violation
-    // reads as a NaN spectrum three analyses later.
+    // §4.6.4.3/.4 tables: `noiseTableAt`'s preconditions, checked here
+    // because a violation otherwise surfaces as a NaN spectrum.
     expectArray(D, "noise_tables", NoiseTable);
     requireWith(D, "noise_tables", "noise_gens");
     if (@hasDecl(D, "noise_gens")) {
@@ -2196,11 +1828,9 @@ pub fn validate(comptime D: type) void {
                     @compileError(name ++ ".noise_tables: frequencies must be sorted and unique");
             }
         }
-        // §4.6.4.3's array-parameter input: `noise_tables` then holds the
-        // parameter's DECLARED DEFAULTS and this is the card's own knots, one
-        // flat array over every table in `noise_tables` order. Optional — a
-        // device of literal tables does not declare it, and a host that reads
-        // `noise_tables` alone is right about such a device.
+        // §4.6.4.3 array-parameter tables: `noise_tables` holds the declared
+        // defaults, and this returns the card's knots, one flat array over
+        // every table in `noise_tables` order.
         if (@hasDecl(D, "noiseTablePoints")) {
             var total: usize = 0;
             for (tables) |t| total += t.points.len;
@@ -2208,20 +1838,14 @@ pub fn validate(comptime D: type) void {
         }
     }
 
-    // §4.6.3 the AC stimulus sources. Same twin shape as noise_gens/noisePsd:
-    // the hook needs a table to be positional against, and `row`/`col` are
-    // range-checked by `AcGen`'s own integer widths.
+    // §4.6.3 AC stimuli; `AcGen`'s integer widths range-check row and col.
     expectArray(D, "ac_gens", AcGen(D));
     requireWith(D, "acStim", "ac_gens");
     if (@hasDecl(D, "acStim"))
         expectGeneric(D, "acStim", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [ac_gens.len]AcPhasor");
 
-    // §2.8.3/§12.32 unresolved `$name`s. There is no device-side hook to pair
-    // this table with — the implementation is the HOST's, which is the whole
-    // point — so what is checked here is only that the device can be reached:
-    // `eval` reads the binding off `Instance`, so a device that names a systf
-    // and has nowhere to read it from could not be built at all. `validateHost`
-    // is the other half, and the host is what calls it.
+    // §2.8.3/§12.32 unresolved `$name`s: the device must have the
+    // `Instance.systf` slot the host binds; `validateHost` checks the host.
     expectArray(D, "systf_calls", Systf);
     if (@hasDecl(D, "systf_calls") and D.systf_calls.len != 0) {
         if (!@hasField(D.Instance, "systf"))
@@ -2233,42 +1857,31 @@ pub fn validate(comptime D: type) void {
 
     validateMcParam(D);
 
-    // LRM 6.3.4 / 3.4.5: parameters whose value is an expression over OTHER
-    // parameters, plus every localparam. The Model is a flat struct, so a host
-    // write to a base parameter cannot reach what was declared over it; the
-    // host closes that gap by calling `derive` once, after it finishes writing
-    // the card and before it builds an Instance. Absent when the module has no
-    // such parameter, which is the common case — a literal default is still
-    // just a field initializer.
+    // §6.3.4/§3.4.5 parameters defined over other parameters, and every
+    // localparam: `Model` is flat, so a write to a base parameter reaches them
+    // only through `derive`.
     if (@hasDecl(D, "derive"))
         expectGeneric(D, "derive", 2, "fn (comptime S: type, *Model) void");
 
-    // §3.4 SHAPE parameters: parameters "modified at compilation time", folded
-    // into an array bound, a replication count or the generate structure (a
-    // genvar loop bound, a generate scheme), so the device holds one value
-    // of each. `checkShape` names the first one a card (after `derive`) sets to
-    // anything else, or null. Absent — the default — means no parameter shapes
-    // this device and every card fits. `validateHost` makes calling it the
-    // host's obligation when it is present.
+    // §3.4 shape parameters, folded into an array bound, a replication count
+    // or the generate structure, so the device holds one value of each.
     if (@hasDecl(D, "checkShape"))
         expectFn(D, "checkShape", fn (*const D.Model) ?[]const u8);
 
-    // precompute: instance-mutating parameter prep before solve.
+    // Hand-written devices' per-instance preparation before a solve.
     if (@hasDecl(D, "precompute"))
         expectFn(D, "precompute", fn (*D.Instance, *const D.Model) void);
 
-    // Constant-Jacobian declaration.
     if (@hasDecl(D, "constant") and @TypeOf(D.constant) != Constant)
         @compileError(name ++ ".constant must be contract.Constant");
 
-    // Breakpoint scheduling for piecewise sources.
+    // Breakpoint scheduling (piecewise sources).
     if (@hasDecl(D, "nextBreakpoint"))
         expectFn(D, "nextBreakpoint", fn (*const D.Model, f64) ?f64);
     // §5.10.3.3 the live timer schedule, re-armed start times included.
     if (@hasDecl(D, "pendingBreakpoint"))
         expectFn(D, "pendingBreakpoint", fn (*const D.Instance, f64) ?f64);
-    // §4.5.7 transport delays (absdelay sites), model-frame like
-    // nextBreakpoint: the host echoes wavefront breakpoints from these.
+    // §4.5.7 `absdelay` delays, from which the host echoes breakpoints.
     if (@hasDecl(D, "delays")) {
         const R = @typeInfo(@TypeOf(D.delays)).@"fn".return_type.?;
         if (@typeInfo(R) != .array or @typeInfo(R).array.child != f64)
@@ -2276,37 +1889,31 @@ pub fn validate(comptime D: type) void {
         expectFn(D, "delays", fn (*const D.Model) R);
     }
 
-    // Pub-decl allowlist: only contract-recognized names may be pub.
     rejectStrayPubDecls(D);
 }
 
-/// The other half of `validate`, and the only check aimed at the HOST rather
-/// than the device. A simulator embedding VerA calls it once per device it
-/// links, beside `validate(D)`.
-///
-/// `validate(D)` cannot ask this. It runs where the DEVICE is defined, and at
-/// that point the host does not exist yet — a `.va` compiled to a `.so` does
-/// not know which simulator will load it. So the requirement "somebody must
-/// implement this" can only be enforced where the two meet, which is here.
-///
-/// WHAT IT REFUSES, and why that is the right severity. A device declaring
-/// `systf_calls` contains a `$name` whose value is the application's to supply.
-/// With no binding there is no value — not a wrong one, an absent one — and the
-/// residual would read a number nothing computed. §12.32.3's own sampnhold
-/// listing never initializes `sampler->value` before its first update callback,
-/// so the language fixes no default to fall back to. Failing the host's build
-/// is the only outcome that cannot be mistaken for a working device.
-///
-/// `vera`'s own testbench binds a stub rather than being exempt from this — see
-/// `lib/backend/tb.zig`. An exemption for the tool's own host is how a seam
-/// stops being tested.
+/// Checks host `H` against what device `D` needs from it; a host calls it once
+/// per device it links, beside `validate(D)`. A missing obligation is a compile
+/// error. `H` declares each obligation it meets as a `true` bool:
+///   `D.contract_abi` must equal `abi_version` (no declaration; regenerate D);
+///   `calls_setup` when D has `setup`: the host calls it after every card,
+///     instance, temperature or `setup_simparams` write, before `eval`;
+///   `mutable_eval` when D declares it: evaluations get exclusive `*Instance`;
+///   `iteration_hooks` when D has `advanceIteration`/`checkConvergence`: the
+///     host calls the first after every iterate and the second before
+///     accepting one, on the same Instance `eval` reads;
+///   `noise_table_points` when D has `noiseTablePoints`: the host reads the
+///     card's knots from it, not the defaults in `noise_tables`;
+///   `shape_check` when D has `checkShape`: the host calls it after `derive`
+///     and refuses a card it names;
+///   `systf: fn (*const Model) ?*const SystfHost` when D declares
+///     `systf_calls`: §12.32 fixes no default value for an unbound `$name`.
 pub fn validateHost(comptime H: type, comptime D: type) void {
     if (!@hasDecl(D, "contract_abi") or D.contract_abi != abi_version)
         @compileError(@typeName(D) ++ " was generated for a different device ABI than this contract's " ++
             std.fmt.comptimePrint("abi_version = {d}", .{abi_version}) ++
             "; regenerate it with the VerA this contract came from.");
-    // `eval` reads `inst.su`, which only `setup` fills: a host that skips it
-    // evaluates every solve-invariant value at its NaN initializer.
+    // A host that skips `setup` evaluates at `inst.su`'s NaN initializers.
     if (@hasDecl(D, "setup")) {
         if (!@hasDecl(H, "calls_setup") or !H.calls_setup)
             @compileError(@typeName(H) ++ " must call `setup`: " ++ @typeName(D) ++
@@ -2319,11 +1926,8 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
         if (!@hasDecl(H, "mutable_eval") or !H.mutable_eval)
             @compileError("this device requires exclusive mutable evaluation; declare mutable_eval = true");
     }
-    // `iteration_hooks = true` promises `advanceIteration` after every Newton
-    // iterate and `checkConvergence` before one is accepted, both on the
-    // Instance `eval` reads: `limiter_previous` lives there, written by the
-    // first and read by the next `eval`, so a host that keeps Instance
-    // device-resident runs the hook there before the next launch.
+    // `advanceIteration` writes `limiter_previous`, which the next `eval`
+    // reads, so a host keeping Instance on a GPU runs the hook there.
     if (@hasDecl(D, "advanceIteration") or @hasDecl(D, "checkConvergence")) {
         if (!@hasDecl(H, "iteration_hooks")) @compileError(@typeName(H) ++
             " must implement the Newton iteration hooks and declare iteration_hooks = true; " ++
@@ -2331,12 +1935,7 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
             "by advanceIteration on the Instance eval reads.");
         if (!H.iteration_hooks) @compileError("this device requires Newton iteration hooks");
     }
-    // §4.6.4.3 an array-parameter noise table. `noise_tables` holds only the
-    // parameter's DECLARED DEFAULTS, so a host that reads it and stops has
-    // silently ignored the model card — the exact trap that made VerA refuse
-    // the spelling outright for so long. Opting in is how a host says it reads
-    // `noiseTablePoints`; there is no way to check that it does, and a silent
-    // wrong spectrum is worse than a build that will not start.
+    // A host reading only `noise_tables` would silently ignore the card.
     if (@hasDecl(D, "noiseTablePoints")) {
         if (!@hasDecl(H, "noise_table_points") or !H.noise_table_points)
             @compileError(@typeName(H) ++ " must read `noiseTablePoints`: " ++ @typeName(D) ++
@@ -2344,10 +1943,8 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
                 "`noise_tables` carries only their declared defaults. Declare " ++
                 "noise_table_points = true once the host reads the hook.");
     }
-    // §3.4 a device compiled for one value of a shape parameter answers a card
-    // that moves it with a wrong-sized array, silently. Only the host sees the
-    // card, so only the host can refuse it; opting in is how it says it calls
-    // `checkShape` after `derive` and rejects a non-null answer.
+    // A card that moves a §3.4 shape parameter would otherwise evaluate with a
+    // wrong-sized array, silently.
     if (@hasDecl(D, "checkShape")) {
         if (!@hasDecl(H, "shape_check") or !H.shape_check)
             @compileError(@typeName(H) ++ " must call `checkShape`: " ++ @typeName(D) ++
@@ -2369,29 +1966,20 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
 const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "U", {} },
     .{ "num_ports", {} },
-    // The `abi_version` the device was generated for; see `validateHost`.
     .{ "contract_abi", {} },
     .{ "Model", {} },
     .{ "Instance", {} },
     .{ "eval", {} },
     .{ "q", {} },
-    // Both residuals from one core evaluation; see `validate`'s pair rule.
     .{ "evalQ", {} },
     .{ "limit", {} },
-    // The two live-set masks over `U` that go with it — see `limitReads`.
-    // Optional; a device without them reads as "every unknown", which is the
-    // behaviour every host had before they existed.
     .{ "limit_reads", {} },
     .{ "limit_writes", {} },
-    // The narrow-derivative pair: which unknowns need a lane, and the exact
-    // constant partials of the rest — see `derivReads`.
     .{ "deriv_reads", {} },
     .{ "ddx_reads", {} },
     .{ "jac_const", {} },
     .{ "seed", {} },
     .{ "collapse", {} },
-    // The same alias map with every retention flag set, at comptime — see the
-    // `collapse_full` block in `validate`.
     .{ "collapse_full", {} },
     .{ "initState", {} },
     .{ "updateState", {} },
@@ -2399,78 +1987,32 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "checkConvergence", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
-    // What `State` carries (`StateClass`), and the fused accepted-point pass;
-    // both checked in `validate`.
     .{ "state_class", {} },
     .{ "acceptQ", {} },
-    // The solve-invariant slice: the per-instance `Setup` block, the call that
-    // fills it, and the `$simparam` names it reads. Checked in `validate`.
     .{ "Setup", {} },
     .{ "setup", {} },
     .{ "setup_simparams", {} },
-    // Single-precision-Jacobian permission — checked inline in `validate` (the
-    // "`jac_f32` must be a bool" guard); the S note in the header is the story.
-    // Optional; absent means f64, which is the default a host must assume.
     .{ "jac_f32", {} },
-    // ...and the host-side request laid on it (`--jac-f32-host`). Checked in
-    // `validate` beside the permission, which it implies.
     .{ "jac_f32_host", {} },
-    // Batch permission: eval/q on a family whose `V` holds several operating
-    // points (one per element) is exact per element — nothing steers on a
-    // `.val()` of an x-dependent value, draws a per-call scalar, or collapses
-    // an x-dependent chain to its value. Emitted by codegen only when nothing
-    // in the device pinned lanes; the testbench's batch check asserts it on
-    // every fixture that carries it. Absent means batching is NOT sound.
+    // Nothing steers on a `.val()` of an x-dependent value, draws a per-call
+    // scalar, or collapses an x-dependent chain to its value.
     .{ "batch_ok", {} },
     .{ "mutable_eval", {} },
-    // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
-    // and `validateHost` — a device that declares it has knots `noise_tables`
-    // states only the declared defaults of.
     .{ "noiseTablePoints", {} },
-    // LRM 9.4 display tasks AND LRM 9.5 file I/O: the device's per-accepted-point
-    // SIDE-EFFECT phase, and the whole of the optional I/O interface a host may
-    // provide. Present ONLY in a device built with `--display=emit` (FastVAF's
-    // testbench artifact); the engine never calls it, and a device compiled for
-    // the solver does not have it at all.
-    //
-    // One decl for both clauses, because they are one phase. §9.5.2 defines its
-    // output tasks as §9.4.1's "with one additional argument, which is either a
-    // multichannel descriptor or a file descriptor", and §9.5.9 puts every file
-    // write at the ACCEPTED point — "if a file is being written to during an
-    // iterative solve, then the file write operations shall not be performed
-    // unless the iteration is accepted. The exception to this is the $fdebug". So
-    // the descriptor operations are sequenced here, in source order, with the
-    // prints, and NOT in `eval`: a residual has to stay a pure function of x or
-    // the host's Newton iteration cannot converge, and an open, a read position
-    // and an appended line are none of them.
-    //
-    // A host that declines to call this gets the DEGRADED path, and that path is
-    // conformant rather than a fudge. §9.5.1 reserves 0 as $fopen's failure
-    // return; a device whose host offers no file table genuinely cannot open a
-    // file, so 0 is the correct answer and every later operation on it is a
-    // no-op with a defined result (§9.5.4.1's "code is set to zero", §9.5.7's
-    // zero errno with an empty description, §9.5.8's zero).
-    //
-    // This is NOT part of the Kernel ABI and must not become part of it: nothing
-    // in `Instance` holds a descriptor, and `eval`/`q` cannot reach a file at all.
+    // §9.4 display tasks and §9.5 file I/O, one accepted-point phase (§9.5.9
+    // performs file writes only at an accepted point), kept out of `eval` so
+    // the residual stays a pure function of x. A device built for a solver has
+    // no display phase, and its `$fopen` returns §9.5.1's failure value 0.
     .{ "display", {} },
-    // §9.5.1.2 the descriptor table that `display` sequences, for a host's
-    // second context to share (`FileIo`). Optional; see `validate`.
     .{ "file_io", {} },
     .{ "attempt", {} },
     .{ "u_kinds", {} },
     .{ "u_abstol", {} },
-    // §3.6.3.2 the declared nodeset per unknown, `?f64`. Optional; see the
-    // `u_nodeset` block in `validate`.
     .{ "u_nodeset", {} },
     .{ "jac_pattern", {} },
     .{ "q_pattern", {} },
-    // Which residual rows each half ever writes — one u64 of row bits, the
-    // companion the pattern deliberately cannot substitute for. See
-    // `checkRowMask` and its call site in `validate`.
     .{ "jac_rows", {} },
     .{ "q_rows", {} },
-    // §5.6.1.2 the charge-site layout of `q`: see `QStamp` and `qSitesError`.
     .{ "n_q", {} },
     .{ "q_stamps", {} },
     .{ "q_lte", {} },
@@ -2478,31 +2020,24 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "noise_tables", {} },
-    // §4.6.3 the AC stimulus sources and their phasors.
     .{ "ac_gens", {} },
     .{ "acStim", {} },
-    // §2.8.3/§12.32 the `$name`s left to a VPI application. Pub because the
-    // HOST reads it — to know what it has to bind, and `validateHost` to refuse
-    // when it has not.
     .{ "systf_calls", {} },
     .{ "mc_param", {} },
     .{ "derive", {} },
-    // §3.4 the card check for shape parameters; see `validate`.
     .{ "checkShape", {} },
     .{ "precompute", {} },
     .{ "constant", {} },
     .{ "nextBreakpoint", {} },
     .{ "pendingBreakpoint", {} },
     .{ "delays", {} },
-    // Clause 12 (`codegen.Options.vpi_contribs`): the §5.6 contribution rows
-    // an analog VPI host reads §12.10's flows from. Opt-in; no other device
-    // declares them.
+    // Clause 12: the §5.6 contribution rows an analog VPI host reads §12.10's
+    // flows from, emitted only under `codegen.Options.vpi_contribs`.
     .{ "vpiContribs", {} },
     .{ "vpi_contrib_access", {} },
     .{ "vpi_contrib_hi", {} },
     .{ "vpi_contrib_lo", {} },
     .{ "vpi_contrib_flow_u", {} },
-    // The masks a device's reals are declared at (`laneMasks`).
     .{ "lane_masks", {} },
 });
 
@@ -2510,19 +2045,11 @@ fn rejectStrayPubDecls(comptime D: type) void {
     const decls = @typeInfo(D).@"struct".decls;
     for (decls) |d| {
         if (allowed_pub_decls.has(d.name)) continue;
-        // <module>__analog_op__{laplace,zi}_*__sec — the cascade coefficients of
-        // an LRM 4.5.11/4.5.12 filter. Public on purpose: they ARE the transfer
-        // function, and a host running .ac/.noise would have to build H(jw)
-        // from them because the real-valued residual cannot carry it. The name
-        // embeds the module, so it cannot be in the list above.
-        //
-        // NOTE (§4.5.11/12): this exemption is
-        // scheduled for removal. `laplace_*` is rational and belongs in the
-        // matrix as internal unknowns; `zi_*` is transcendental and needs a
-        // complex AC stamp the contract does not carry yet. Neither needs a public coefficient table. The exemption
-        // stays only until codegen stops emitting it — VerA's own fixtures
-        // (066_laplace_dc_gain, 067_zi_sample_hold, 23_laplace_filters,
-        // 24_z_transform_filters) depend on it today.
+        // `<module>__analog_op__{laplace,zi}_*__sec`: a §4.5.11/§4.5.12
+        // filter's cascade coefficients, public because a small-signal host
+        // builds H(jw) from them. The name embeds the module, so it cannot be
+        // listed. TODO: drop once `laplace_*` lowers to internal unknowns and
+        // `zi_*` has a complex AC stamp.
         // ponytail: the exemption is suffix-only; endsWith owns the length guard.
         if (std.mem.endsWith(u8, d.name, "__sec")) continue;
         @compileError(@typeName(D) ++ ": stray pub decl `" ++ d.name ++
@@ -2530,18 +2057,15 @@ fn rejectStrayPubDecls(comptime D: type) void {
     }
 }
 
-/// eval/q: fn (comptime S, *const [n_u]S.V, *const Model, InstancePtr,
-/// SimState) Rows/Sites. Generic over S, so the concrete signature is checked
-/// by instantiation: here only arity + comptime-type first param.
+/// eval/q are generic over S, so only arity and the comptime first parameter
+/// are checked here; instantiation checks the rest.
 fn validatePhysicsFn(comptime D: type, comptime fn_name: []const u8) void {
     if (genericFnError(D, fn_name, if (std.mem.eql(u8, fn_name, "q")) "Sites(D, S)" else "Rows(D, S)")) |m| @compileError(m);
 }
 
-/// The shape shared by every generic-over-S entry point (`eval`, `q`,
-/// `display`): five parameters, the first `comptime S: type`.
-/// `ret` only names the expected result in the complaint — a generic return
-/// cannot be checked without instantiating. Returns the message instead of
-/// raising it so the NEGATIVE half is testable; `validate` is the raiser.
+/// The shape shared by `eval`, `q`, `evalQ` and `display`: five parameters,
+/// the first `comptime S: type`. `ret` only names the result in the message.
+/// Returns the message rather than raising it so the refusal is testable.
 fn genericFnError(comptime D: type, comptime fn_name: []const u8, comptime ret: []const u8) ?[]const u8 {
     const info = @typeInfo(@TypeOf(@field(D, fn_name)));
     if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
@@ -2565,8 +2089,7 @@ fn expectFn(comptime D: type, comptime fn_name: []const u8, comptime Expected: t
         @compileError(@typeName(D) ++ "." ++ fn_name ++ ": expected " ++ @typeName(Expected));
 }
 
-/// Optional comptime `[k]Child` metadata table. No-op when absent — every
-/// caller is "if you declare it, it must be this shape".
+/// If `D` declares `decl`, it must be a `[k]Child` array.
 fn expectArray(comptime D: type, comptime decl: []const u8, comptime Child: type) void {
     if (!@hasDecl(D, decl)) return;
     const info = @typeInfo(@TypeOf(@field(D, decl)));
@@ -2574,12 +2097,7 @@ fn expectArray(comptime D: type, comptime decl: []const u8, comptime Child: type
         @compileError(@typeName(D) ++ "." ++ decl ++ " must be [k]" ++ @typeName(Child));
 }
 
-/// `jac_rows` / `q_rows`: one u64, bit `ru` set when residual half `half` ever
-/// writes `res[ru]`. Optional. Checked here rather than inline because both
-/// halves want the identical four rules, the last of which is the one that
-/// matters — a row with a live Jacobian column is unarguably a written row, so
-/// the mask must contain the pattern's nonzero rows. (The converse is exactly
-/// what must NOT be assumed; see the note at the call site.)
+/// Checks `jac_rows`/`q_rows` (bit `ru` set when `half` ever writes row `ru`).
 fn checkRowMask(
     comptime D: type,
     comptime name: []const u8,
@@ -2590,10 +2108,8 @@ fn checkRowMask(
     if (rowMaskError(D, name, decl, half, n)) |m| @compileError(m);
 }
 
-/// The testable half — see `genericFnError` for why the message is returned
-/// rather than raised. The containment test is the interesting one and it runs
-/// in ONE direction only: a row with a live pattern column must be marked
-/// written, never the reverse.
+/// The testable half of `checkRowMask`. Containment runs one way only: a row
+/// with a live pattern column must be marked written, never the reverse.
 fn rowMaskError(
     comptime D: type,
     comptime name: []const u8,
@@ -2620,9 +2136,9 @@ fn rowMaskError(
     return null;
 }
 
-/// `derivReads`' rules (a)–(d), returned rather than raised so each is
-/// testable — see `genericFnError`. `n` is |U|, passed in so rule (a) can be
-/// exercised without a 65-member enum.
+/// `derivReads`' rules (a)-(d), returned rather than raised so each is
+/// testable. `n` is |U|, passed in so rule (a) is testable without a
+/// 65-member enum.
 fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
     const name = @typeName(D);
     if (@hasDecl(D, "deriv_reads")) {
@@ -2655,25 +2171,21 @@ fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
     return null;
 }
 
-/// `decl` is meaningless without `needs` — a table with no hook to fill it, or
-/// a hook with no table to describe it. Declare it both ways for a pair that
-/// is mutually required (ac_gens/acStim, noise_gens/noisePsd).
+/// Refuses `decl` without `needs`. Called both ways for a mutually required
+/// pair.
 fn requireWith(comptime D: type, comptime decl: []const u8, comptime needs: []const u8) void {
     if (requireWithError(D, decl, needs)) |m| @compileError(m);
 }
 
-/// The testable half of `requireWith` — see `genericFnError` for why the
-/// message is returned rather than raised.
+/// The testable half of `requireWith`.
 fn requireWithError(comptime D: type, comptime decl: []const u8, comptime needs: []const u8) ?[]const u8 {
     if (@hasDecl(D, decl) and !@hasDecl(D, needs))
         return @typeName(D) ++ ": `" ++ decl ++ "` requires `" ++ needs ++ "`";
     return null;
 }
 
-/// A numeric parameter field of either width. BOTH are live: this generator
-/// emits `f64` parameters, while a device written by hand straight against this
-/// contract may still declare `f32`. The host reaches them through a tagged
-/// `ParamRef`, so neither width is privileged here either.
+/// A float field of either width: VerA emits `f64` parameters, and a
+/// hand-written device may declare `f32`.
 fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
     for (@typeInfo(T).@"struct".fields) |f| {
         if (std.mem.eql(u8, f.name, name) and (f.type == f32 or f.type == f64)) return true;
@@ -2681,9 +2193,7 @@ fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
     return false;
 }
 
-/// The host-written `Instance` fields (see `sim_state_fields`). Presence is
-/// optional; the name and type are not, since a renamed or retyped field is a
-/// silently-null hook.
+/// Checks the host-written `Instance` fields (`sim_state_fields`).
 fn validateSimState(comptime D: type) void {
     const name = @typeName(D);
     for (sim_state_fields) |f| {
@@ -2715,28 +2225,19 @@ fn validateDefaultedStruct(comptime D: type, comptime decl: []const u8) void {
 }
 
 fn isValueType(comptime T: type) bool {
-    // Generated string parameters point at immutable literals in the device
-    // image. The loader keeps that .so open for the lifetime of every opaque
-    // Model blob, so copying the slice through init_model/ProtoStore is safe;
-    // numeric setParam/collectParams intentionally ignore it.
+    // String parameters point at literals in the device image, which a
+    // loader keeps mapped for as long as any Model blob lives.
     if (T == []const u8) return true;
-    // The VPI binding (§2.8.3/§12.32), and the only pointer INTO THE HOST this
-    // rule admits. It is not POD and is deliberately not treated as such: the
-    // host writes it, the host owns what it points at, and the device only ever
-    // calls through it. Nothing copies an `Instance` across a process boundary —
-    // the `.so` seam copies `Model` blobs, which is what the rule above is
-    // about — so a host-lifetime pointer here outlives every use of it.
-    //
-    // Named rather than admitted by shape: `isValueType` returning true for
-    // pointers in general would let a device hold one in `Model`, which the
-    // loader DOES copy, and that is the bug this whole check exists to stop.
+    // The §12.32 VPI binding: a host-owned pointer the device only calls
+    // through. Admitted by name, not by shape, because a pointer in `Model`
+    // would be copied across the `.so` seam; an `Instance` never is.
     if (T == ?*const SystfHost) return true;
     // §9.12 `Instance.plusargs`, admitted by name for the same reason: the
     // host's own argv, host-owned and host-lifetime.
     if (T == []const [:0]const u8) return true;
     return switch (@typeInfo(T)) {
         .float, .int, .bool => true,
-        // Integer-backed enums are fixed-size POD (e.g. Instance.analysis_kind).
+        // Integer-backed enums are fixed-size POD.
         .@"enum" => |e| isValueType(e.tag_type),
         .array => |a| isValueType(a.child),
         // `Instance.su` (a `Setup`): a plain struct of value fields is as
@@ -2758,9 +2259,8 @@ fn isDenseEnum(comptime E: type) bool {
     return true;
 }
 
-/// Optional per-device declaration: `pub const mc_param = "resist";`
-/// Names the principal value parameter (Instance or Model float field) that
-/// Monte Carlo varies. Validated here so a typo fails at compile time.
+/// `mc_param` names the float field of Model or Instance that Monte Carlo
+/// varies (`pub const mc_param = "resist";`).
 fn validateMcParam(comptime D: type) void {
     if (!@hasDecl(D, "mc_param")) return;
     if (!hasFloatField(D.Instance, D.mc_param) and !hasFloatField(D.Model, D.mc_param))
@@ -2869,11 +2369,9 @@ const MockTline = struct {
     }
 };
 
-/// Declares EVERY contract member. Exists so `allowed_pub_decls` cannot drift
-/// out of sync with `validate` — a member validate knows about but the
-/// allowlist does not is a `stray pub decl` compile error right here, and a
-/// member in neither is one this device fails to declare. It is the only place
-/// the full surface is exercised at once.
+/// Declares every contract member, so `allowed_pub_decls` cannot drift from
+/// `validate`: a member missing from the allowlist is a stray-pub-decl error
+/// here.
 const MockAll = struct {
     const Self = @This();
     const n_u = nU(@This());
@@ -2905,7 +2403,7 @@ const MockAll = struct {
     // §3.6.1.2 electrical potential's abstol, both unknowns being voltages.
     pub const u_abstol = [n_u]f64{ 1e-6, 1e-6 };
     // §3.6.3.2 one net declared `electrical p = 5.0;`, the other with no
-    // initializer — the mock carries both halves so `?f64` is exercised.
+    // initializer; the mock carries both halves so `?f64` is exercised.
     pub const u_nodeset = [n_u]?f64{ 5.0, null };
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
@@ -2959,24 +2457,15 @@ const MockAll = struct {
     fn noFile(_: i64) i64 {
         return -1;
     }
-    // The over-approximate masks, plus their row-level companions. All-ones is
-    // what a host must assume when a device omits them, so it is also the value
-    // that cannot be wrong here — this guard is about the ALLOWLIST not
-    // drifting, and these had drifted out of it: `jac_pattern`/`q_pattern` were
-    // allowlisted with nothing declaring them, so the guard had been failing to
-    // COMPILE rather than failing loudly.
-    //
-    // `q` is diagonal here, which is the point of keeping it narrower than
-    // all-ones: the interesting case is a row written with an EMPTY column
-    // mask (`isource`), and `checkRowMask` only rejects the reverse — live
-    // columns on a row not marked written.
+    // All-ones is what a host assumes for an omitted mask, so it cannot be
+    // wrong here. `q` is diagonal so `checkRowMask` sees a narrower pattern.
     pub const jac_pattern = [n_u]u64{ 0b11, 0b11 };
     pub const q_pattern = [n_u]u64{ 0b01, 0b10 };
     pub const jac_rows: u64 = 0b11;
     pub const q_rows: u64 = 0b11;
     pub const limit_reads: u64 = 0b11;
     pub const limit_writes: u64 = 0b11;
-    // `eval` scales by the model's `g`, so neither column is constant — and
+    // `eval` scales by the model's `g`, so neither column is constant, and
     // rule (b) would demand both lanes anyway, since `limit` writes both.
     pub const deriv_reads: u64 = 0b11;
     pub const ddx_reads: u64 = 0b01;
@@ -3078,7 +2567,7 @@ test "validate: minimal resistor" {
 test "validate: every contract member at once (allowlist cannot drift)" {
     comptime validate(MockAll);
     // Every allowlisted name is either declared above or is a required decl
-    // MockAll already has — so an entry added to one and not the other fails.
+    // MockAll already has, so an entry added to one and not the other fails.
     comptime for (allowed_pub_decls.keys()) |k| {
         if (!@hasDecl(MockAll, k))
             @compileError("allowed_pub_decls has `" ++ k ++ "` but MockAll does not declare it");
@@ -3106,7 +2595,7 @@ test "jac_rows: an empty pattern row may still be written; a live one may not be
     // `isource`'s shape, and the whole reason the declaration exists: the DC
     // current depends on no unknown, so both column masks are empty while both
     // rows are written. A host that inferred "row dead" from "columns dead"
-    // would delete it — so this direction has to stay legal.
+    // would delete it, so this direction has to stay legal.
     const Isrc = struct {
         pub const jac_pattern = [2]u64{ 0, 0 };
         pub const jac_rows: u64 = 0b11;
@@ -3156,7 +2645,7 @@ const MockVsrc = struct {
 test "deriv_reads/jac_const: a linear device needs no lane, and the table is its Jacobian" {
     comptime validate(MockVsrc);
     // The table is exact, so a unit step on a column moves each row by
-    // exactly the entry's `g` — a finite difference with no truncation error,
+    // exactly the entry's `g`, a finite difference with no truncation error,
     // because every term the column enters is linear.
     const m: MockVsrc.Model = .{};
     const base = [3]f64{ 0.25, -0.5, 2e-3 };
@@ -3248,7 +2737,7 @@ test "deriv_reads: the four rules each refuse their own mistake" {
     };
     try testing.expect(comptime (derivReadsError(NoLim, 2) == null));
     // (d) a ddx() column needs a live lane, and an undeclared `ddx_reads` is
-    // ALL of them — so a device with a narrow mask must declare it.
+    // ALL of them, so a device with a narrow mask must declare it.
     const Ddx = struct {
         pub const U = enum(u8) { a, b };
         pub const deriv_reads: u64 = 0b01;
@@ -3308,7 +2797,7 @@ test "deriv_reads: the four rules each refuse their own mistake" {
 }
 
 test "validateHost: a systf is the host's to bind, and only when there is one" {
-    // MockR names no `$name`, so any host will do — including one that has
+    // MockR names no `$name`, so any host will do, including one that has
     // never heard of VPI. That is the common case and it must stay free.
     comptime validateHost(struct {}, MockR);
 
@@ -3334,11 +2823,9 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
     };
     comptime validateHost(Sim, MockAll);
 
-    // The value-plus-partials boundary reassembles into a dual: a term is
-    // `p_j * (arg_j - arg_j.val())`, whose VALUE is zero and whose DERIVATIVE
-    // is p_j·d(arg_j), so adding it to `S.con(v)` grafts the host's partial on
-    // without disturbing the value. Checked here on the plain-f64 side, where
-    // every such term must vanish exactly.
+    // The device rebuilds a family value as `S.con(v)` plus
+    // `p_j * (arg_j - arg_j.val())` per argument: zero in value, p_j·d(arg_j)
+    // in the lanes. On the plain-f64 side every such term must vanish exactly.
     var partials: [1]f64 = .{7.5};
     const v = Sim.app.call(Sim.app.ctx, 0, &.{0.25}, &partials);
     try std.testing.expectEqual(@as(f64, 0), v);
@@ -3346,10 +2833,8 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
 }
 
 /// §6.2's optional port list, in device form: no terminals, one internal
-/// unknown. This is what tests/fixtures/ch06_hierarchy/module_definition.va
-/// lowers to (`module m; electrical p; analog I(p) <+ V(p); endmodule`), and it
-/// used to be a `num_ports must be in 1..|U|` compile error — a stale guard that
-/// predated the host being able to Newton-solve a device's private nodes.
+/// unknown, as tests/fixtures/ch06_hierarchy/module_definition.va lowers
+/// (`module m; electrical p; analog I(p) <+ V(p); endmodule`).
 const MockNoPorts = struct {
     pub const U = enum(u8) { p };
     pub const num_ports: usize = 0;
@@ -3420,7 +2905,7 @@ test "§4.6.4.3 noise_table interpolates linearly BETWEEN the pairs" {
     try testing.expectEqual(@as(f64, 4.0), noiseTableAt(u, 2));
     try testing.expectApproxEqAbs(@as(f64, 6.0), noiseTableAt(u, 3), 1e-15);
 
-    // One pair is a legal table and a constant PSD — both clamps answer it.
+    // One pair is a legal table and a constant PSD: both clamps answer it.
     const one: NoiseTable = .{ .interp = .linear, .points = &.{.{ 5, 3.0 }} };
     try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 1));
     try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 5));
@@ -3436,7 +2921,7 @@ test "§4.6.4.4 noise_table_log is a straight line on a log-log plot" {
         try testing.expectApproxEqRel(1.0 / f, noiseTableAt(t, f), 1e-12);
 
     // Figure 4-14 is this difference: on the SAME two points the linear form
-    // bows, and at 1 kHz it reads 1 + (1e-6 - 1)*(999/999999) — nowhere near
+    // bows, and at 1 kHz it reads 1 + (1e-6 - 1)*(999/999999), nowhere near
     // the 1e-3 the log form gives.
     const lin: NoiseTable = .{ .interp = .linear, .points = t.points };
     const want = 1.0 + (1e-6 - 1.0) * (1e3 - 1.0) / (1e6 - 1.0);

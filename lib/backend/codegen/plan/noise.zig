@@ -1,17 +1,8 @@
-//! §4.6.3/§4.6.4 the small-signal sources: every contribution's noise
-//! generators and AC stimuli, flattened into the rows `noise_gens`, `noisePsd`,
-//! `ac_gens` and `acStim` are emitted from, with §4.6.4.3/.4 tables folded and
-//! sorted.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and returns a
-//! `Noise`. A source VerA refuses (E0519/E0520) is RECORDED in `refusals`,
-//! not reported — `Gen.prepare` reports each one, in order, straight after.
-//!
-//! LRM clauses this file's code cites: §1.3.1.1, §4.6.3, §4.6.4, §4.6.4.1,
-//! §4.6.4.3, §4.6.4.4, §4.6.4.6.
-//!
-//! Cut verbatim from `codegen/unit.zig` (`planNoise`, `planNoiseTable`,
-//! `refuseNoise`); only the receiver changed.
+//! §4.6.3/§4.6.4 small-signal sources: lowered contributions -> `Noise`, the
+//! flattened rows `noise_gens`, `noisePsd`, `ac_gens` and `acStim` are
+//! emitted from, with §4.6.4.3/.4 tables folded and sorted. Refusals
+//! (E0519/E0520) are recorded for `Gen.prepare` to report. Clauses:
+//! §1.3.1.1, §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.3, §4.6.4.4, §4.6.4.6.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -19,49 +10,52 @@ const Lower = @import("ir").Lower;
 const diag = @import("diag");
 const Input = @import("input.zig").Input;
 
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 
+/// The small-signal plan: noise rows, folded tables, AC stimulus rows and
+/// the refusals found on the way.
 pub const Noise = struct {
     /// §4.6.4 `noise_gens` and `noisePsd`, one row each.
     rows: []NoiseRow = &.{},
     /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
     /// and sorted. Position k is `rows[j].table == k`.
     tabs: []const []const [2]f64 = &.{},
-    /// The same knots as `tabs`, in the same order, still as MIR values —
-    /// and only for a table A.8.2's `parameter_identifier` spelling made
-    /// MODEL-DEPENDENT, so `tabs` holds its declared defaults and only
-    /// this can state the card's. An empty slice is a table of literals, which
-    /// needs nothing beyond the comptime export. See `emitNoiseTablePoints`.
+    /// The same knots as `tabs`, in the same order, as MIR values, only for a
+    /// table an A.8.2 `parameter_identifier` made model-dependent: `tabs`
+    /// holds its declared defaults, and only this can state the card's. An
+    /// empty slice is a table of literals. See `emitNoiseTablePoints`.
     tab_vals: []const []const [2]Mir.Value = &.{},
-    /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `rows`
-    /// and separated from it by `kind`: a stimulus is not a generator and must
-    /// never reach `noise_gens`, but it reaches codegen through the same
-    /// `Contribution.noise_srcs` set.
+    /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `rows`,
+    /// separated by `kind`: a stimulus is not a generator and must never
+    /// reach `noise_gens`.
     ac_rows: []NoiseRow = &.{},
     /// The §4.6.4 export VerA will not write, as the message the generated
-    /// `@compileError` carries. First one wins — a device is refused once,
-    /// and the diagnostics carry the rest.
+    /// `@compileError` carries. The first one wins; the diagnostics carry the
+    /// rest.
     fatal: ?[]const u8 = null,
     /// Every refusal, in the order found, for the caller to report.
     refusals: std.ArrayList(Refusal) = .empty,
 
+    /// One recorded E0519/E0520, for the caller to report at `tok`.
     pub const Refusal = struct { code: diag.Code, tok: u32, msg: []const u8 };
 };
 
-/// One row of `noise_gens` AND of the `noisePsd` result — the two tables
-/// are positional in each other (`PsdTerm` k belongs to `noise_gens[k]`),
-/// so they are built once here rather than by two loops that could drift.
+/// One row of `noise_gens` and of the `noisePsd` result. The two tables are
+/// positional in each other (`PsdTerm` k belongs to `noise_gens[k]`), so
+/// they are built once here.
 pub const NoiseRow = struct {
     row: u16,
     col: u16,
     kind: Lower.NoiseKind,
+    /// §4.6.4.6 dense generator id: rows sharing it are one generator.
     source: usize,
     /// §4.6.4.1/.2 the PSD itself: `S(f) = pwr` for white, `pwr/f^exp` for
     /// flicker. rv-resolved, so `.f_zero` means "no generator at this bias".
     /// Both `.f_zero` on a §4.6.4.3/.4 row, whose PSD is `table` instead.
     pwr: Mir.Value,
     exp: Mir.Value,
-    /// §4.6.4.3/.4 index into `noise_tabs`, null on a parametric row.
+    /// §4.6.4.3/.4 index into `Noise.tabs`, null on a parametric row.
     table: ?u16 = null,
     /// §4.6.4.1/.2/.3 the source's label, empty when unnamed. See
     /// `Lower.NoiseSrc.name` for why it never merges rows.
@@ -72,15 +66,12 @@ pub const NoiseRow = struct {
     coeff: Mir.Value,
 };
 
-/// Flatten every contribution's generator set into `noise_rows`, in the
-/// order `noise_gens` declares them. §4.6.4.6's shared-generator identity
-/// (`NoiseSrc.id`) is renamed densely in first-seen order on the way.
-///
-/// §4.6.3's `ac_stim` arrives on the same set and leaves in `ac_rows`
-/// instead: it is a STIMULUS, and a row of it in `noise_gens` would be a
-/// noise generator the model never declared. Everything before the split —
-/// the branch, the §1.3.1.1 ground collapse, the E0520 refusal — is the
-/// same question for both, which is why they share one walk.
+/// Flattens every contribution's generator set into `Noise.rows`, in the
+/// order `noise_gens` declares them; slices are owned by `self.arena`.
+/// §4.6.4.6's shared-generator identity (`NoiseSrc.id`) is renamed densely in
+/// first-seen order. §4.6.3's `ac_stim` arrives on the same set and leaves in
+/// `ac_rows`: it is a stimulus, not a generator. Refusals are recorded, not
+/// reported.
 pub fn plan(self: Input) Error!Noise {
     var out: Noise = .{};
     var rows: std.ArrayList(NoiseRow) = .empty;
@@ -92,9 +83,9 @@ pub fn plan(self: Input) Error!Noise {
         if (c.noise_srcs.len == 0) continue;
         // §1.3.1.1 ground is not an unknown: a to-ground generator is
         // spelled row == col, and one on ground-ground has neither. The
-        // residual may drop such a contribution in silence — KCL at the
-        // reference node is not an equation — but a GENERATOR that vanishes
-        // is a PSD the host will never ask for, so it is reported (E0520).
+        // residual may drop such a contribution silently (KCL at the
+        // reference node is not an equation), but a vanishing generator is a
+        // PSD the host will never ask for, so it is reported (E0520).
         if (c.hi == Lower.ground and c.lo == Lower.ground) {
             try refuseNoise(self, &out, .E0520, c.noise_srcs[0].tok, "this small-signal source is on a " ++
                 "ground-ground branch, which has no row or column to export it in", .{});
@@ -104,9 +95,9 @@ pub fn plan(self: Input) Error!Noise {
         const col = if (c.lo != Lower.ground) c.lo else row;
         for (c.noise_srcs) |s| {
             // §4.6.3 a stimulus has no PSD, no table and no §4.6.4.6
-            // identity — one call is one source, and `addNoiseSrc` has
-            // already made two uses of one call one row. `source` is
-            // carried only so the struct is shared; nothing reads it.
+            // identity: one call is one source, and `addNoiseSrc` already
+            // made two uses of one call one row. `source` is carried only so
+            // the struct is shared; nothing reads it.
             if (s.kind == .ac_stim) {
                 try ac.append(self.arena, .{
                     .row = row,
@@ -125,7 +116,7 @@ pub fn plan(self: Input) Error!Noise {
             } else null;
             // §4.6.4.3/.4 the table, before the row: a generator VerA
             // cannot state gets no row, and the device is refused either
-            // way. §4.6.4.6's shared generator shares its TABLE too — one
+            // way. §4.6.4.6's shared generator shares its table too: one
             // call is one generator, so folding it twice would export the
             // same points under two indices.
             const table: ?u16 = switch (s.kind) {
@@ -161,37 +152,26 @@ pub fn plan(self: Input) Error!Noise {
     return out;
 }
 
-/// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
-/// `(frequency, power)` table and appended to `tabs`.
+/// §4.6.4.3/.4 folds one `noise_table`/`noise_table_log` argument into a
+/// sorted `(frequency, power)` table appended to `tabs`, and returns its
+/// index, or null after recording an E0519 refusal.
 ///
-/// ALL FOUR of A.8.2's `noise_table_input_arg` spellings land here. Three
-/// of them are literals by the time they arrive: the assignment pattern is
-/// one, a file name "shall be constant" so `Lower.readNoiseTableFile` has
-/// already turned it into the same flat pairs, and a `[msb:lsb]` slice of
-/// a parameter is the parameter.
+/// All four of A.8.2's `noise_table_input_arg` spellings land here. Three are
+/// literals by now: the assignment pattern, a file name ("shall be constant",
+/// so `Lower.readNoiseTableFile` already flattened it) and a `[msb:lsb]`
+/// slice of a parameter. The fourth, an array parameter, is a table the model
+/// card owns: `tabs` gets the declared defaults (all a comptime `noise_tables`
+/// can hold) and `tab_vals` gets the knots as MIR values, which
+/// `emitNoiseTablePoints` renders over `Model` so a card override moves them.
+/// Folding the default alone would silently ignore the override (E0515's
+/// trap).
 ///
-/// The fourth, an ARRAY PARAMETER, is a table the MODEL CARD owns, and
-/// this is where the two halves of that are separated. `tabs` gets the
-/// DECLARED DEFAULTS (`resolve_params = true`), which is what a comptime
-/// `noise_tables` can hold and all a compiler knows; `tab_vals` gets the
-/// knots as MIR values, and `emitNoiseTablePoints` renders them over
-/// `Model` so a card that overrides the parameter moves them. Folding the
-/// default and stopping there is the trap E0515 names — the override would
-/// be silently ignored — and refusing the spelling outright, which VerA
-/// used to do, refuses a form the clause names FIRST.
-///
-/// Sorting is done HERE, not by the host: §4.6.4.3 says "the simulator
-/// shall internally sort the pairs into ascending frequency if required",
-/// and a compiler is the cheapest simulator to do it in — the host then
-/// gets an invariant instead of a chore. Uniqueness is the clause's own
-/// requirement ("Each frequency value must be unique") and cannot be
-/// repaired by sorting, so it is the one ordering fact that is an error.
-///
-/// A card can defeat BOTH at run time, because both are statements about
-/// values this compiler never sees. The sort survives — the generated
-/// accessor re-sorts — and uniqueness does not: it is checked on the
-/// defaults here and is the host's precondition afterwards, which is what
-/// `contract.NoiseTable` says.
+/// §4.6.4.3 lets the simulator sort ("shall internally sort the pairs into
+/// ascending frequency if required"); sorting here gives the host an
+/// invariant. Uniqueness ("Each frequency value must be unique") cannot be
+/// repaired by sorting, so a repeat is an error. A card can defeat both at run
+/// time: the generated accessor re-sorts, and uniqueness becomes the host's
+/// precondition (`contract.NoiseTable`).
 fn planNoiseTable(
     self: Input,
     out: *Noise,
@@ -210,11 +190,9 @@ fn planNoiseTable(
             "a whole number of (frequency, power) pairs", .{vals.len});
         return null;
     }
-    // One array of both halves, so the sort below permutes the values and
-    // the defaults together and position k of each keeps meaning the same
-    // knot. `noise_tables[k]` and `noiseTablePoints`'s k-th pair have to
-    // BE the same pair; two sorts of two arrays is one comparator away
-    // from not being.
+    // One array of both halves, so the sort permutes the values and the
+    // defaults together: `noise_tables[k]` and `noiseTablePoints`'s k-th pair
+    // must be the same knot.
     const Knot = struct { f: f64, p: f64, fv: Mir.Value, pv: Mir.Value };
     const knots = try self.arena.alloc(Knot, vals.len / 2);
     var parametric = false;
@@ -222,9 +200,9 @@ fn planNoiseTable(
         const fv = vals[2 * i];
         const pv = vals[2 * i + 1];
         // `resolve_params = false` first, so "is this knot a literal?" is
-        // answered before "what is it by default?" — a table with no
+        // answered before "what is it by default?". A table with no
         // parameter in it must not gain an accessor, because that would
-        // oblige every host of every existing device to read one.
+        // oblige every host of the device to read one.
         const lit = self.an.foldConst(fv, false) != null and
             self.an.foldConst(pv, false) != null;
         const f = self.an.foldConst(fv, true);
@@ -281,11 +259,11 @@ fn planNoiseTable(
     return @intCast(tabs.items.len - 1);
 }
 
-/// One §4.6.4 export VerA refuses, recorded for `Gen.prepare` to report the
-/// way E0515 reports a control argument it cannot resolve: a SOURCE-LEVEL
-/// diagnostic plus a generated `@compileError`, so a caller with no diagnostic
-/// bag still cannot build a device whose noise table quietly lost a generator.
-/// The plan only records it; reporting is the emitter's.
+/// Records one §4.6.4 export VerA refuses, for `Gen.prepare` to report the
+/// way E0515 reports a control argument it cannot resolve: a source-level
+/// diagnostic plus a generated `@compileError`, so a caller with no
+/// diagnostic bag still cannot build a device whose noise table quietly lost
+/// a generator. The first refusal also sets `fatal`.
 fn refuseNoise(
     self: Input,
     out: *Noise,
@@ -300,7 +278,7 @@ fn refuseNoise(
         out.fatal = try std.fmt.allocPrint(self.arena, "LRM 4.6.4: {s}", .{msg});
 }
 
-/// `v` as a compile-time f64, or null when only the core can answer.
+/// Returns `v` as a compile-time f64, or null when only the core can answer.
 pub fn psdConst(mir: *const Mir, v: Mir.Value) ?f64 {
     return switch (mir.valueDef(v)) {
         .float_const => |x| x,

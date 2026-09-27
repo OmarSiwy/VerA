@@ -1,15 +1,6 @@
-//! Names: every identifier the device declares, and the unknowns behind them —
-//! decided before a byte is written.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and returns a
-//! `Names`. No `*Gen`, no writer, no diagnostics, so it is testable from a
-//! hand-built `Mir`/`Lowered` (see the tests at the bottom).
-//!
-//! LRM clauses this file's code cites: §3.4.7, §5.4.1, §5.4.2, §5.6, §5.6.7.1,
-//! §5.10, §9.19.
-//!
-//! Cut verbatim from `codegen.zig` (`buildUnits`/`buildNames`); only the
-//! receiver changed.
+//! Names: the lowered module -> `Names`, every identifier the device declares
+//! and the unknowns behind them, decided before a byte is written. Clauses:
+//! §3.4.7, §5.4.1, §5.4.2, §5.6, §5.6.7.1, §5.10, §9.19.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -18,16 +9,20 @@ const Lowered = @import("ir").Lowered;
 const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
 
+/// Allocation, or a name longer than `naming.max_name_len`.
 pub const Error = std.mem.Allocator.Error || error{NameTooLong};
 const none_u32 = std.math.maxInt(u32);
 
+/// Every identifier the device declares, and the unknowns behind them.
 pub const Names = struct {
     units: []naming.Unit = &.{},
+    /// Declaration name per `units` entry.
     unit_names: [][]const u8 = &.{},
     /// Extra solver unknowns codegen appends after `Lowered.nodes`: one
     /// branch current per §5.6 potential contribution that lowering did not
     /// already give a `flow(a,b)` slot. Values are `nodes`-space indices.
     branch_u: []u32 = &.{},
+    /// Unknown count: `Lowered.nodes` plus the appended branch currents.
     n_u: u32 = 0,
     /// Sanitized U-enum member name per unknown.
     u_names: [][]const u8 = &.{},
@@ -40,7 +35,7 @@ pub const Names = struct {
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
 
-    /// The operator `call` unit `unit` was enumerated from — `naming` records it.
+    /// The operator `call` unit `unit` was enumerated from (`naming` records it).
     pub fn opInstOf(self: *const Names, unit: u32) ?Mir.Inst {
         const inst = self.units[unit].inst;
         return if (inst == .none) null else inst;
@@ -53,9 +48,11 @@ pub const Names = struct {
     }
 };
 
-/// `n_unit_modes` is `Verdict.unit_modes.len`: the canonical-order contract
-/// `unitMode` depends on is checked here, where all three tables are in hand
-/// for the only time.
+/// Returns every declared name and the unknowns behind them; slices are owned
+/// by `in.arena`. `n_unit_modes` is `Verdict.unit_modes.len`: the
+/// canonical-order contract `unitMode` depends on is asserted here, where all
+/// three tables are in hand. Fails on allocation or a name over
+/// `naming.max_name_len`.
 pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     const a = in.arena;
     const mir = in.mir;
@@ -77,8 +74,8 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     }
 
     // §5.6 potential contributions need a branch-current unknown. Lowering
-    // allocates a `flow(a,b)` slot only where the model PROBES I(a,b), so
-    // codegen appends the missing ones after `nodes` — every existing
+    // allocates a `flow(a,b)` slot only where the model probes I(a,b), so
+    // codegen appends the missing ones after `nodes`; every existing
     // block_param index keeps its meaning.
     const base: u32 = @intCast(lowered.nodes.len);
     self.branch_u = try a.alloc(u32, lowered.contributions.items.len);
@@ -91,18 +88,12 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         // own unknown.
         if (c.access != .potential and c.kind != .indirect) continue;
         // Reuse the §5.4.2 slot lowering already allocated because the model
-        // PROBES I(a,b) — unless an earlier contribution is already driving
-        // it. §5.6.7.1 permits several indirect contributions to one branch,
-        // and each is a separate source with a separate current.
-        //
-        // Asked for by the NODE PAIR, which is the identity §5.4.1 gives the
-        // branch. This used to format `flow(hi,lo)` and scan `nodes`
-        // for a string match, which made it the fourth place that re-derived
-        // structure from a spelling — and the one that survived the key
-        // split in lowering: §1.3.1.1's reference node prints `gnd`, so on a
-        // module with a plain net called `gnd` the branches (a, reference)
-        // and (a, gnd) matched each other's slot and V(a) and V(a,gnd) drove
-        // one current.
+        // probes I(a,b), unless an earlier contribution already drives it:
+        // §5.6.7.1 permits several indirect contributions to one branch, and
+        // each is a separate source with a separate current. Looked up by the
+        // node pair, the identity §5.4.1 gives the branch, never by the
+        // `flow(hi,lo)` spelling (a plain net named `gnd` would collide with
+        // §1.3.1.1's reference node).
         var found: u32 = if (lowered.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
         if (found != none_u32 and uIsDriven(self.branch_u, found, i)) found = none_u32;
         if (found == none_u32) {
@@ -135,11 +126,11 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
 
     // §5.10 held variables. Same `<module>__<role>__<target>` grammar
     // `naming.unitName` builds, with `held` where a role word would go:
-    // `naming.Role` is a closed set that this is deliberately not a member
-    // of (a held variable is not an emitted source unit), and no enumerated
-    // unit can spell that segment, so the two name spaces cannot meet. The
-    // target is one `sanitize`d leaf, which is injective — and a module
-    // variable's name is unique in its scope, so the whole key is.
+    // `naming.Role` deliberately excludes it (a held variable is not an
+    // emitted source unit), and no enumerated unit can spell that segment, so
+    // the two name spaces cannot meet. The target is one `sanitize`d leaf,
+    // which is injective, and a module variable's name is unique in its
+    // scope, so the whole key is.
     self.held_names = try a.alloc([]const u8, lowered.held_vars.items.len);
     if (self.held_names.len != 0) {
         var mod_buf: [naming.max_name_len]u8 = undefined;
@@ -153,8 +144,8 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     @memset(self.p_given, false);
     // A non-local parameter whose default reads another parameter is a
     // `derive()` target, and its guard (`if (!model.X__given)`) needs the
-    // flag whether or not the model ever queries §9.19 — same fold
-    // condition `emitDerive` selects assignments on.
+    // flag whether or not the model ever queries §9.19 (the same fold
+    // condition `emitDerive` selects assignments on).
     for (lowered.params.items, 0..) |p, i| {
         if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
         if (an.foldConst(p.default, false) == null) self.p_given[i] = true;

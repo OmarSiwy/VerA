@@ -1,28 +1,15 @@
-//! The backend's facts about each §4.5 / §5.10.3 / §9.17 operator: its
-//! `Instance` fields as Zig source, whether its kernel reads the current input
-//! or `dt`, and which argument is the §5.10.3 `enable`. One row per
-//! `ir.op.OpKind`.
-//!
-//! `table` is a `std.EnumArray` with no defaults, so an `OpKind` added in ir
-//! does not compile until its row states every column here.
-//!
-//! The `Instance` shapes of `absdelay`, `laplace` and `zi` are not here: their
-//! field COUNT is a function of the call (the delay ring's length, the
-//! flattened cascade's ns*deg), so codegen computes them from `filterPlan` /
-//! `absdelayFreezes`. `shape = .from_args` says so.
-//!
-//! DOD: comptime rows in `.rodata`, read with one indexed load. No allocation.
+//! Backend facts per `ir.op.OpKind` (§4.5, §5.10.3, §9.17 operators): the
+//! operator's `Instance` fields as Zig source, whether its kernel reads the
+//! current input or `dt`, and which argument is the §5.10.3 `enable`.
+//! `absdelay`, `laplace` and `zi` size their fields from the call, so they are
+//! `.from_args` and codegen computes them.
 
 const std = @import("std");
 const OpKind = @import("ir").op.OpKind;
 
-/// One `Instance` field an operator owns. `codegen.emitInstance` writes these
-/// out; it does not need to know what any of them mean.
-///
-/// There is no `ty`: every one of these is an `f64`. The one operator with a
-/// non-f64 field (`absdelay`'s `__head: u32`) is `.from_args` anyway, so a type
-/// column would have exactly one value and never vary. Add it when a second
-/// arrives.
+/// One `f64` `Instance` field an operator owns. The only non-f64 operator
+/// field (`absdelay`'s `__head: u32`) is `.from_args`, so there is no type
+/// column.
 pub const Slot = struct {
     /// Field name is `<unit>__<suffix>`.
     suffix: []const u8,
@@ -33,46 +20,41 @@ pub const Slot = struct {
     note: []const u8 = "",
 };
 
+/// One operator's backend facts.
 pub const Row = struct {
-    /// The clause this operator realizes, as data. codegen used to carry this
-    /// string inline in fourteen separate format literals.
+    /// The clause this operator realizes.
     lrm: []const u8,
 
-    /// Does the kernel read the CURRENT input, or answer from `Instance`
-    /// alone? `emitOperator` renders `in` exactly for these and `UnitPlan`
-    /// (`callArgIsValue`) has to agree, which is why the set lives in one place
-    /// rather than in either of them.
+    /// The kernel reads the current input rather than answering from
+    /// `Instance` alone. `emitOperator` and `UnitPlan.callArgIsValue` both
+    /// read this, so they agree.
     ///
-    /// `cross` and `timer` are in the set because the §5.10.3 event moved into
-    /// `eval`: the hit test compares the current input against `__prev`
-    /// (`timer`'s "input" being its `start_time`). `zi` is in it for the
-    /// §4.5.12 static branch, which is a gain on the input and not a held
-    /// value. `absdelay` is in it for `zAbsdelay`'s two input-valued edges —
-    /// the §4.5.7 DC pass-through, and a delay shorter than the accepted step,
-    /// whose only covering data is the in-flight value.
+    /// `cross` and `timer` compare the current input (`timer`: its
+    /// `start_time`) against `__prev` in `eval` (§5.10.3). `zi` needs it for
+    /// the §4.5.12 static branch. `absdelay` needs it for the §4.5.7 DC
+    /// pass-through and for a delay shorter than the accepted step.
     needs_input: bool,
 
-    /// Does `updateState` need `dt` (the time since the last accepted step) to
-    /// advance this operator?
+    /// `updateState` needs `dt` (time since the last accepted step) to
+    /// advance this operator.
     needs_dt: bool,
 
-    /// §5.10.3: index of the `enable` argument — the ONE control argument of an
-    /// analog operator that stays a runtime expression, so `UnitPlan` must keep
-    /// it live while every other control argument folds at codegen time.
+    /// Index of the §5.10.3 `enable` argument: the one control argument that
+    /// stays a runtime expression, so `UnitPlan` keeps it live while every
+    /// other control argument folds at codegen time.
     enable_arg: ?u8,
 
     /// The `Instance` fields this operator always owns.
     slots: []const Slot = &.{},
 
-    /// `.static` — `slots` is the complete answer.
-    /// `.from_args` — the field count depends on the call; codegen computes it.
-    /// `.none` — owns no per-unit field at all (§9.17 writes the two
-    ///   unconditional `Instance` members instead).
+    /// `.static`: `slots` is complete. `.from_args`: the field count depends
+    /// on the call and codegen computes it. `.none`: no per-unit field (§9.17
+    /// writes the two unconditional `Instance` members instead).
     shape: enum { static, from_args, none } = .static,
 };
 
-/// THE TABLE. Total over `OpKind` by construction — a new variant is a compile
-/// error here before it is a wrong answer anywhere else.
+/// Every operator's row; total over `OpKind`, so a new variant fails to
+/// compile here.
 pub const table = std.EnumArray(OpKind, Row).init(.{
     .none = .{
         .lrm = "",
@@ -116,12 +98,10 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = true,
         .needs_dt = true,
         .enable_arg = null,
-        // The ORIGIN of the ramp in progress: the level the output left and the
-        // time it left it. NOT "the previous output" — that is the whole
-        // difference between a piecewise LINEAR traversal of the excursion and
-        // an exponential one. Re-armed by `zTransStep` only once the output has
-        // caught up with its input, so a ramp spanning several timesteps keeps
-        // counting from where it actually started.
+        // The origin of the ramp in progress (level and time the output left),
+        // not the previous output: that keeps the traversal piecewise linear
+        // rather than exponential. `zTransStep` re-arms it only once the output
+        // has caught up, so a multi-step ramp counts from where it started.
         .slots = &.{
             .{ .suffix = "from", .default = "0.0", .note = "§4.5.8 ramp origin (value), destination, start time" },
             .{ .suffix = "to", .default = "0.0" },
@@ -166,9 +146,8 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = true,
         .needs_dt = false,
         .enable_arg = 4, // cross(expr, dir, time_tol, expr_tol, enable)
-        // The history the event test compares against, and nothing else: there
-        // is no `__hit` flag, because a flag written on the accepted step is a
-        // flag read one timepoint after the event (see `emitOperator`).
+        // No `__hit` flag: one written on the accepted step would be read one
+        // timepoint after the event.
         .slots = &.{.{ .suffix = "prev", .default = "0.0", .note = "§5.10.3" }},
     },
     .above = .{
@@ -176,12 +155,10 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = true,
         .needs_dt = false,
         .enable_arg = 3, // above(expr, time_tol, expr_tol, enable)
-        // The 0.0 initialiser is not a placeholder — it IS the clause's
-        // initialisation rule. "If the expression is positive at the conclusion
-        // of the initial condition analysis that precedes a transient analysis,
-        // the above() function shall generate an event": with `__prev` at zero
-        // the ordinary "was ≤ 0, is now > 0" test fires on exactly that first
-        // positive evaluation, so the special case needs no code of its own.
+        // The 0.0 default implements the clause's initial rule: "If the
+        // expression is positive at the conclusion of the initial condition
+        // analysis ..., the above() function shall generate an event". With
+        // `__prev` at zero the ordinary "was <= 0, is now > 0" test fires there.
         .slots = &.{.{ .suffix = "prev", .default = "0.0", .note = "§5.10.3.2" }},
     },
     .timer = .{
@@ -189,12 +166,10 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = true,
         .needs_dt = false,
         .enable_arg = 3, // timer(start, period, time_tol, enable)
-        // `start` is the start_time the pending `next` was scheduled from.
-        // §5.10.3.3 "If the start_time or period expressions change value
-        // during the evaluation of the analog block, the next event will be
-        // scheduled based on the latest value": a start_time that differs
-        // from it re-schedules, earlier as well as later. NaN = nothing
-        // scheduled yet, and it differs from every start_time.
+        // `start` is the start_time the pending `next` was scheduled from. A
+        // different start_time re-schedules, earlier or later (§5.10.3.3: "the
+        // next event will be scheduled based on the latest value"). NaN means
+        // nothing is scheduled yet and differs from every start_time.
         .slots = &.{
             .{ .suffix = "next", .default = "0.0", .note = "§5.10.3" },
             .{ .suffix = "start", .default = "std.math.nan(f64)" },
@@ -205,10 +180,9 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = false,
         .needs_dt = false,
         .enable_arg = null,
-        // §9.17 writes the two UNCONDITIONAL `Instance` members
-        // (`bound_step`, `discontinuity_order`), not a per-unit field. The unit
-        // exists so `updateState` has one named function to evaluate the
-        // requested value with.
+        // §9.17 writes the unconditional `bound_step`/`discontinuity_order`
+        // members. The unit exists so `updateState` has a function to
+        // evaluate the requested value with.
         .shape = .none,
     },
     .discontinuity = .{
@@ -220,11 +194,10 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
     },
 });
 
+/// Returns `k`'s row.
 pub fn get(k: OpKind) Row {
     return table.get(k);
 }
-
-// ---------------------------------------------------------------------------
 
 test "op_zig: the table is total and internally consistent" {
     // Totality is already a compile-time property of EnumArray; what a test can
