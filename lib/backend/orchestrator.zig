@@ -1,33 +1,9 @@
-//! Build orchestration & artifact contract. LRM §8.3 device-side ABI only; the
-//! rest is engine machinery (no LRM section).
-//!
-//! Transformation: device.zig → lib<name>.so + layout hash +
-//! rebuilt signal.
-//!
-//! CRATE BOUNDARY (do not cross it): VerA PRODUCES the artifact. The host
-//! OWNS dlopen/dlclose/state-reset. Emit a VERSIONED .so path per generation so
-//! the host dlopens a fresh inode (sidesteps dlclose-didn't-unload).
-//!
-//! Two build shapes, each under any `Options.optimize`/`Options.backend`:
-//!   - resident → incremental via a compiler child holding -fincremental
-//!               (self-hosted only). Build ONLY on demand (not --watch).
-//!               Cross-process -fincremental is unimplemented on ELF 0.16, so the
-//!               child MUST stay resident to keep incremental state warm.
-//!   - cold     → `compileRelease`, one build, child reaped.
-//!
-//! NOT THE BUILD-RUNNER PROTOCOL, verified on this toolchain (zig 0.16.0).
-//! The obvious resident child is `zig build --listen=-` speaking to the build
-//! runner, and it is what the design this file replaced prescribed. Gone —
-//!
-//!     $ zig build --listen=-
-//!     unrecognized argument: '--listen=-'
-//!
-//! 0.16's build runner replaced it with `--webui` (HTTP/WebSocket). The
-//! COMPILER still speaks `--listen=-` (std.zig.Server/Client), and that is the
-//! process that actually owns incremental state, so the resident child here is
-//! `zig build-lib --listen=-` driven directly. Consequence: no generated
-//! build.zig at all — the module graph goes on the command line as
-//! `--dep`/`-M` pairs, which is exactly what std.Build.Step.Compile emits.
+//! Build orchestration: device.zig in, a generation-versioned lib<name>.so plus
+//! its layout hash out (§8.3 device-side ABI). VerA produces the artifact; the
+//! host owns dlopen, dlclose and state reset, and a fresh path per generation
+//! gives it a fresh inode. Builds run `zig build-lib --listen=-` (the compiler
+//! server protocol; the 0.16 build runner has no `--listen`), either resident
+//! and `-fincremental` or cold (`compileRelease`). No build.zig is generated.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -39,24 +15,22 @@ const Cache = std.Build.Cache;
 const ClientMsg = std.zig.Client.Message;
 const ServerMsg = std.zig.Server.Message;
 
-/// Which Zig code generator builds the artifact. Orthogonal to the optimize
-/// mode: `.self_hosted` accepts `-O` but does not optimise, and it has no
-/// nvptx/amdgcn target.
+/// Which Zig code generator builds the artifact, independent of the optimize
+/// mode. `.self_hosted` does not optimise and has no nvptx/amdgcn target.
 pub const Backend = enum {
     self_hosted,
     llvm,
 
-    /// `.self_hosted` exactly where it is the faster build and the eval cost
-    /// does not matter: Debug on x86_64. Everything else is `.llvm`.
+    /// Returns `.self_hosted` for Debug on x86_64, where build time dominates,
+    /// and `.llvm` otherwise.
     pub fn auto(optimize: std.builtin.OptimizeMode, arch: std.Target.Cpu.Arch) Backend {
         return if (optimize == .Debug and arch == .x86_64) .self_hosted else .llvm;
     }
 };
 
 /// One support module on the compiler command line. `name` is the `@import`
-/// string; `root` is a path to its root source file (relative to the process
-/// cwd, or absolute). All strings are BORROWED — they must outlive the
-/// `ResidentChild`.
+/// string; `root` is its root source file, relative to the process cwd or
+/// absolute. Strings are borrowed and must outlive the `ResidentChild`.
 pub const Module = struct {
     name: []const u8,
     root: []const u8,
@@ -64,7 +38,8 @@ pub const Module = struct {
     deps: []const []const u8 = &.{},
 };
 
-/// Everything the layout hash pins, plus where to put things. Borrowed strings.
+/// Everything the layout hash pins, plus where to put things. Strings are
+/// borrowed and must outlive any `ResidentChild` built from them.
 pub const Options = struct {
     /// VerA-owned directory: generated device.zig + shim.zig, the compiler
     /// cache, and the versioned artifacts. Created if absent.
@@ -74,32 +49,33 @@ pub const Options = struct {
     /// Independent of `backend`; `Backend.auto` is the usual pairing.
     optimize: std.builtin.OptimizeMode,
     backend: Backend,
-    /// Support modules. MUST contain `contract` (device.zig imports it) and
-    /// `dyn`, whose root must expose
-    /// `pub fn exportDevice(comptime D: type, comptime name: []const u8) void`
-    /// — in the ARPice host that is `src/devices/engine.zig`. Order is
-    /// load-bearing: it is hashed into `layout_hash` and fixes argv order.
+    /// Support modules. Must contain `contract` (device.zig imports it) and
+    /// `dyn`, whose root exposes
+    /// `pub fn exportDevice(comptime D: type, comptime name: []const u8) void`.
+    /// Order is hashed into `layout_hash` and fixes argv order.
     modules: []const Module,
     zig_exe: []const u8 = "zig",
 };
 
+/// A built shared library.
 pub const Artifact = struct {
-    /// Versioned: lib<name>.<generation>.so  — host dlopens this fresh inode.
+    /// `<work_dir>/lib<name>.<generation>.so`, a fresh inode for the host to
+    /// dlopen. Owned by the build's `gpa`; freed by `Result.deinit`.
     so_path: []const u8,
-    /// dyn-ABI layout hash. Host rejects a mismatched .so (pins optimize mode,
-    /// backend, module roots). LRM §8.3 device ABI.
+    /// `layoutHash` of the build options. The host rejects a `.so` whose
+    /// hash differs (§8.3 device ABI).
     layout_hash: u64,
     generation: u32,
-    /// The "rebuilt" half of the rebuilt signal: false ⇒ the compiler actually
-    /// produced new code this round.
+    /// True when the compiler reused cached output instead of producing new code.
     cache_hit: bool = false,
 };
 
-/// A build outcome. `failed` owns its bundle — `bundle.deinit(gpa)`.
+/// A build outcome. Both payloads are owned by the caller's `gpa`.
 pub const Result = union(enum) {
     ok: Artifact,
     failed: std.zig.ErrorBundle,
 
+    /// Frees the payload and invalidates `self`.
     pub fn deinit(self: *Result, gpa: Allocator) void {
         switch (self.*) {
             .ok => |a| gpa.free(a.so_path),
@@ -109,12 +85,10 @@ pub const Result = union(enum) {
     }
 };
 
-/// Pins optimize mode, backend, the module graph, AND the compiler version:
-/// Debug and Release std types differ in layout, and so do two zig versions.
-/// A mismatched .so loaded silently is memory corruption — the host compares
-/// this against `arp_layout_hash` in the .so before using it.
-///
-/// Determinism: only ordered slices are hashed; nothing iterates a hash map.
+/// Returns a hash of the compiler version, optimize mode, backend and module
+/// graph (in order), all of which change type layouts across the dyn ABI.
+/// `work_dir` and `name` do not affect it. The host compares it with the
+/// `.so`'s `arp_layout_hash` before use.
 pub fn layoutHash(o: Options) u64 {
     var h: std.hash.Wyhash = .init(0xfa57_0af0_1a40_07);
     h.update(builtin.zig_version_string);
@@ -137,13 +111,8 @@ pub fn layoutHash(o: Options) u64 {
     return h.final();
 }
 
-// ===========================================================================
-// Build tree
-// ===========================================================================
-
-/// The dyn-ABI export shim: one line that re-exports the generated
-/// device under the host's C ABI. Depends only on the device name, so it is
-/// byte-identical across rebuilds and never dirties.
+/// Returns the dyn-ABI export shim, which re-exports the device under the
+/// host's C ABI. It depends only on `name`, so rebuilds never dirty it.
 fn shimSource(gpa: Allocator, name: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa,
         \\// GENERATED BY VerA — DO NOT EDIT.
@@ -154,15 +123,9 @@ fn shimSource(gpa: Allocator, name: []const u8) ![]u8 {
     , .{name});
 }
 
-/// Write `data` only if it differs from what is on disk; returns whether it
-/// wrote. Load-bearing for incremental: `zig` keys its per-file ZIR cache on
-/// `stat_inode`/`stat_size`/`stat_mtime` (`Zir.Header` in std/zig/Zir.zig), so
-/// rewriting an identical file churns its mtime and forces the compiler to
-/// re-run AstGen over it. A no-op edit must be a no-op on disk.
-///
-/// The return value is the write COUNT the incremental story is actually about
-/// — `writeTree` sums it, and the "a no-op recompile writes nothing" test is
-/// that sum being zero.
+/// Writes `data` only if it differs from the file on disk and returns whether
+/// it wrote. `zig` keys its ZIR cache on inode, size and mtime, so rewriting
+/// an identical file would force AstGen to run again.
 fn writeIfChanged(
     io: Io,
     gpa: Allocator,
@@ -178,45 +141,12 @@ fn writeIfChanged(
     return true;
 }
 
-/// `<work_dir>/{device.zig, shim.zig, u/<key>.zig …}`. No build.zig — see the
-/// header. Returns how many files were actually written.
-///
-/// ONE FILE PER EMITTED DECLARATION, because `zig`'s cache unit is the file.
-/// `device.zig` keeps the prologue (topology / `Model` / `Instance`) and the
-/// dispatchers and re-imports the rest by their stable structural names, so the
-/// only thing crossing a file boundary is a name `naming.zig` already guarantees
-/// is insert-tolerant.
-///
-/// Since the merge that is usually TWO
-/// files, not ~105: `u/<model>__common__core.zig` holding the whole model, plus
-/// one `u/<key>__sec.zig` per §4.5.11/§4.5.12 filter and one for the §9.4
-/// display unit when they exist. The split is worth much less than it was — an
-/// edit to the physics rewrites the one 3.1 MB file rather than one of 105
-/// small ones — but it is not worthless and it is not a special case:
-///
-///   - `device.zig` (40 KB on `hisimhv_va`) and `h.zig` stay byte- AND
-///     mtime-identical across an edit that only changes an expression, so
-///     AstGen skips them; and the reverse holds for an edit that only renames a
-///     parameter. `writeIfChanged` is what makes a no-op recompile write zero
-///     bytes, and that property is what `tests/bench.zig` measures.
-///   - the core was ALREADY one 60 000-line declaration before the merge, so
-///     the granularity the per-unit split promised was mostly gone already: any
-///     shared value re-Sema'd all of it — naming.zig's header is where the
-///     per-declaration granularity this rests on is argued.
-///
-/// `pruneUnits` is what makes the shrink safe: a tree written by an older
-/// VerA has ~105 `u/*.zig`, and leaving 104 stale ones behind would keep
-/// feeding `zig` declarations nothing imports.
-///
-/// VerA builds no change-detection of its own here: `writeIfChanged` is a
-/// content compare, and everything past the write is `zig`'s job — naming.zig:
-/// "VerA's only job is stable names + stable order; `zig` does the actual
-/// incremental work". We do no hashing of our own.
-///
-/// PUBLIC for the one caller that is not `compileRelease`/`ResidentChild`:
-/// `tests/bench.zig` times a no-op rewrite as its fourth phase, and asserts the
-/// return is 0. That is the claim two paragraphs up, made falsifiable from
-/// outside this file; the alternative was a bench that spawns `zig` to reach it.
+/// Writes `<work_dir>/{shim.zig, device.zig, h.zig, u/<key>.zig ...}` and
+/// returns how many files changed on disk; an unchanged device writes 0.
+/// A split `device` gets one file per emitted unit (`zig`'s cache unit is the
+/// file) and `device.zig` imports them by their stable names; a single
+/// `device` is written as `device.zig` alone. Deletes `u/*.zig` files no
+/// longer emitted. Creates `work_dir` if absent.
 pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !usize {
     const cwd: Io.Dir = .cwd();
     try cwd.createDirPath(io, o.work_dir);
@@ -230,7 +160,7 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     if (try writeIfChanged(io, gpa, dir, "shim.zig", shim)) writes += 1;
 
     if (device.names.len == 0) {
-        // `Output.single` — no split (the CLI's `--emit-zig`, and the tests).
+        // `Output.single`: no split.
         if (try writeIfChanged(io, gpa, dir, "device.zig", device.text)) writes += 1;
         return writes;
     }
@@ -241,8 +171,6 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     var udir = try dir.openDir(io, unit_dir, .{ .iterate = true });
     defer udir.close(io);
 
-    // One buffer reused for every unit path and every unit body: the paths are
-    // short and the bodies are written straight from `device.text`.
     var path_buf: [naming.max_name_len + 8]u8 = undefined;
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);
@@ -278,11 +206,8 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
 
 const unit_dir = "u";
 
-/// Delete `u/*.zig` whose key is no longer emitted — a contribution the user
-/// removed. Leaving it behind is not just clutter: it is a stale declaration
-/// `zig` would keep analysing, and it would silently mask the next name
-/// collision.
-///
+/// Deletes each `u/*.zig` whose key is not in `names` and returns the count.
+/// A stale file would keep feeding `zig` a declaration nothing imports.
 // ponytail: O(files × units) membership scan. A module has ~100 units and the
 // directory has ~100 entries; switch to a StringHashMap of the names if a model
 // ever shows up with thousands.
@@ -310,11 +235,9 @@ fn pruneUnits(io: Io, gpa: Allocator, udir: Io.Dir, names: []const []const u8) !
     return stale.items.len;
 }
 
-/// `zig build-lib --listen=- ... -Mroot=shim.zig -Mdevice=... -M<support>...`
-///
-/// Argument shape copied from `std.Build.Step.Compile.getZigArgs`: every
-/// `--dep` applies to the NEXT `-M`. Deterministic: `o.modules` order is the
-/// argv order.
+/// Returns `zig build-lib --listen=- ... -Mroot=shim.zig -Mdevice=... -M<support>...`
+/// allocated in `arena`, in `o.modules` order. As in
+/// `std.Build.Step.Compile.getZigArgs`, each `--dep` applies to the next `-M`.
 fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
     var a: std.ArrayList([]const u8) = .empty;
 
@@ -331,8 +254,8 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
     });
 
     switch (o.backend) {
-        // ~10× faster than LLVM and the only backend that patches in place, so
-        // it is the only one `-fincremental` is worth anything on.
+        // The only backend that patches in place, so the only one where
+        // `-fincremental` pays.
         .self_hosted => try a.appendSlice(arena, &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
         .llvm => try a.append(arena, "-fllvm"),
     }
@@ -347,7 +270,7 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
         }),
     });
 
-    // device.zig: `const contract = @import("contract");` (codegen.zig header).
+    // device.zig imports `contract`.
     for (o.modules) |m| try a.appendSlice(arena, &.{ "--dep", m.name });
     try a.append(arena, try std.fmt.allocPrint(arena, "-Mdevice={s}", .{
         try std.fs.path.join(arena, &.{ o.work_dir, "device.zig" }),
@@ -361,14 +284,9 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
     return a.items;
 }
 
-// ===========================================================================
-// Resident compiler child
-// ===========================================================================
-
-/// Long-lived compiler. Spawn once per session (per optimize/backend tuple);
-/// reuse across edits so incremental state stays warm. Incremental state lives
-/// in the child's MEMORY — 0.16 cannot serialise it to disk ("TODO implement
-/// saving linker state for elf2"), so killing the child throws it away.
+/// A long-lived `zig build-lib --listen=-` child. Spawn once per
+/// optimize/backend pair and reuse it across edits: its incremental state
+/// lives only in the child's memory, so killing it loses that state.
 pub const ResidentChild = struct {
     io: Io,
     opts: Options,
@@ -381,13 +299,12 @@ pub const ResidentChild = struct {
     stdout: Io.File.Reader,
     layout_hash: u64,
 
-    /// Bodies seen so far: `file_system_inputs` runs ~20 KiB on a std-linked
-    /// device, error bundles more. Growable via `readAlloc`, this is only the
-    /// steady-state buffer.
+    /// Steady-state stdout buffer; larger message bodies go through `readAlloc`.
     const buf_len = 64 * 1024;
 
-    /// Spawn the child. The first build is cold; every later `rebuild` reuses
-    /// the warm state. `o` and all strings it points at must outlive this.
+    /// Spawns the child. The first build is cold; later `rebuild`s reuse the
+    /// warm state. `o` and every string it points at must outlive the result.
+    /// Fails with `error.CompilerGone` if `o.zig_exe` cannot be spawned.
     pub fn spawn(gpa: Allocator, io: Io, o: Options) !ResidentChild {
         var self: ResidentChild = .{
             .io = io,
@@ -409,14 +326,14 @@ pub const ResidentChild = struct {
         return self;
     }
 
-    /// (Re)launch the compiler. Safe to call after the child has died.
+    /// Launches the compiler; also valid after the child has died.
     fn start(self: *ResidentChild) !void {
         self.child = std.process.spawn(self.io, .{
             .argv = self.argv,
             .stdin = .pipe,
             .stdout = .pipe,
-            // Compiler panics land straight on the user's terminal, and a full
-            // stderr pipe can never deadlock the update loop.
+            // Compiler panics reach the terminal, and an unread stderr pipe
+            // cannot fill and deadlock the update loop.
             .stderr = .inherit,
         }) catch return error.CompilerGone;
         self.stdout = self.child.stdout.?.readerStreaming(self.io, self.stdout_buf);
@@ -433,18 +350,17 @@ pub const ResidentChild = struct {
         };
     }
 
+    /// Asks the child to exit, reaps it and frees the argv.
     pub fn deinit(self: *ResidentChild) void {
         self.stop();
         self.arena.deinit();
         self.* = undefined;
     }
 
-    /// On-demand rebuild: write the regenerated device.zig into the resident
-    /// tree, ask for one update, read the answer. NO filesystem watching —
-    /// a build fires only from here.
-    ///
-    /// On a build failure the child is KEPT ALIVE: its warm state is still
-    /// valid for the next attempt.
+    /// Writes `device` into the tree (`writeTree`), asks the child for one
+    /// update and returns the result, which the caller owns. Builds happen
+    /// only here; nothing watches the filesystem. A compile error keeps the
+    /// child alive, since its warm state stays valid.
     pub fn rebuild(
         self: *ResidentChild,
         gpa: Allocator,
@@ -453,13 +369,10 @@ pub const ResidentChild = struct {
     ) !Result {
         _ = try writeTree(self.io, gpa, self.opts, device);
         return self.update(gpa, generation) catch |err| switch (err) {
-            // ponytail: zig 0.16.0 SIGSEGVs the resident compiler on the second
-            // `update` when inputs changed. Reproduced on the official path too
-            // (`zig build --watch -fincremental` logs "restart required:
-            // BrokenPipe" and respawns), so this is a compiler bug, not our
-            // framing. std.Build.Step.evalZigProcess recovers exactly this way.
-            // Cost: that one build is cold. Delete this arm once the compiler
-            // survives repeated updates.
+            // ponytail: zig 0.16.0's resident compiler can crash on a later
+            // `update` after inputs change; respawn and rebuild cold, as
+            // std.Build.Step.evalZigProcess does. Delete this arm once the
+            // compiler survives repeated updates.
             error.CompilerGone => blk: {
                 self.stop();
                 try self.start();
@@ -476,9 +389,8 @@ pub const ResidentChild = struct {
             return error.CompilerGone;
     }
 
-    /// One request/response round of the compiler server protocol. The update
-    /// is terminated by `error_bundle` (possibly empty) — same rule
-    /// `std.Build.Step.zigProcessUpdate` uses in its resident mode.
+    /// Runs one request/response round of the compiler server protocol. An
+    /// `error_bundle` message, possibly empty, ends the update.
     fn update(self: *ResidentChild, gpa: Allocator, generation: u32) !Result {
         try self.send(.update);
 
@@ -510,8 +422,7 @@ pub const ResidentChild = struct {
                     bundle.deinit(gpa);
                     break;
                 },
-                // file_system_inputs / time_report / test_* — nothing here
-                // watches the filesystem, so they are consumed and dropped.
+                // file_system_inputs, time_report, test_*: nothing here uses them.
                 else => {},
             }
         }
@@ -525,10 +436,9 @@ pub const ResidentChild = struct {
         } };
     }
 
-    /// Copy the compiler's cache output to a generation-stamped path so the
-    /// host dlopens a FRESH INODE. Copy, not link: a hardlink shares the cache
-    /// entry's inode, which is the very thing that makes a same-path dlopen
-    /// hand back stale code. Caller owns the returned path.
+    /// Copies the cache output to a generation-stamped path so the host
+    /// dlopens a fresh inode; a hardlink would share the cache entry's inode.
+    /// Caller owns the returned path.
     fn publish(
         self: *ResidentChild,
         gpa: Allocator,
@@ -558,10 +468,8 @@ pub const ResidentChild = struct {
     }
 };
 
-/// Cold, one-shot build under whatever `o.optimize`/`o.backend` say.
-///
-/// Same machinery as the resident path; the child is reaped immediately.
-/// Caller owns `Result`.
+/// Builds once, cold, with a child that is reaped before returning. Caller
+/// owns the `Result`.
 pub fn compileRelease(
     gpa: Allocator,
     io: Io,
@@ -573,10 +481,6 @@ pub fn compileRelease(
     defer child.deinit();
     return child.rebuild(gpa, device, generation);
 }
-
-// ===========================================================================
-// Tests
-// ===========================================================================
 
 test "Backend.auto is self-hosted only for Debug on x86_64" {
     try std.testing.expectEqual(Backend.self_hosted, Backend.auto(.Debug, .x86_64));
@@ -622,7 +526,7 @@ test "layoutHash pins optimize, backend and the module graph" {
     o.modules = &swapped;
     try std.testing.expect(layoutHash(o) != layoutHash(base));
 
-    // `work_dir`/`name` are placement, not ABI — they must NOT move the hash.
+    // `work_dir` and `name` are placement, not ABI.
     o = base;
     o.work_dir = "elsewhere";
     o.name = "other";
@@ -699,9 +603,7 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
     // shim + h.zig + 2 units + device.zig
     try std.testing.expectEqual(@as(usize, 5), try writeTree(io, gpa, o, splitOutput(&both)));
 
-    // THE point of the split: regenerating an unchanged device touches nothing
-    // on disk, so `zig` sees identical mtime/size/inode on every file and skips
-    // AstGen for all of them (`Zir.Header` in std/zig/Zir.zig).
+    // Regenerating an unchanged device touches nothing on disk.
     try std.testing.expectEqual(@as(usize, 0), try writeTree(io, gpa, o, splitOutput(&both)));
 
     // The unit file is prelude ++ exactly its slice of the emission.
@@ -709,7 +611,7 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
     defer gpa.free(a);
     try std.testing.expectEqualStrings(split_prelude ++ "pub " ++ split_unit_a, a);
 
-    // device.zig is prologue ++ imports ++ tail — the units themselves are gone.
+    // device.zig is prologue ++ imports ++ tail; the unit bodies are elsewhere.
     const dev = try tmp.dir.readFileAlloc(io, "device.zig", gpa, .limited(4096));
     defer gpa.free(dev);
     try std.testing.expect(std.mem.startsWith(u8, dev, split_prologue));
@@ -717,9 +619,8 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
     try std.testing.expect(std.mem.indexOf(u8, dev, "const unit_a = @import(\"u/unit_a.zig\").unit_a;\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, dev, "return y * k2;") == null);
 
-    // A unit that vanished takes its file with it: the rewritten device.zig
-    // plus the delete. `u/unit_a.zig` is byte-identical, so it is NOT rewritten
-    // — which is the whole reason zig will skip re-analysing it.
+    // A vanished unit takes its file with it: device.zig plus the delete.
+    // `u/unit_a.zig` is unchanged, so it is not rewritten.
     const shrunk: codegen.Output = .{
         .text = split_prologue ++ split_unit_a ++ split_tail,
         .names = &.{"unit_a"},
@@ -822,10 +723,8 @@ test "resident child builds, versions and rebuilds a device" {
     defer r4.deinit(gpa);
     try std.testing.expect(r4 == .ok);
 
-    // The SPLIT form compiles too: `zig` resolves `device.zig`'s
-    // `@import("u/<key>.zig")` and the unit file's `@import("../device.zig")`
-    // back the other way. A cycle between two files is legal Zig; if it were
-    // not, the whole per-unit scheme would be unbuildable.
+    // The split form compiles: `device.zig` and the unit files import each
+    // other, which is legal Zig.
     var r5 = try child.rebuild(gpa, splitOutput(&.{ "unit_a", "unit_b" }), 5);
     defer r5.deinit(gpa);
     switch (r5) {

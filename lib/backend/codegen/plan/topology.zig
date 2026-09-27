@@ -1,28 +1,22 @@
-//! Topology: the §5.4.2/§5.6 branch facts the residual is assembled from —
-//! which branch-flow unknowns no row defines, which §5.6.5 switch branches the
-//! host may collapse, and what is statically known about a branch's retention.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the branch
-//! currents `plan/names.zig` allocated, and returns a `Topology`. The helpers
-//! below it answer from the same inputs, and the emitter asks them through
-//! `Gen.input()`.
-//!
-//! LRM clauses this file's code cites: §1.3.1.1, §1.3.4, §1.3.4.2, §3.6.2.2,
-//! §4.4, §5.4.2, §5.4.2.1, §5.6.1.3, §5.6.5, §5.6.6.
-//!
-//! Cut verbatim from `codegen/state.zig`, `codegen/unit.zig` and
-//! `codegen/file.zig`; only the receiver changed (`*Gen` → `Input`).
+//! Topology: lowered contributions and the branch currents `plan/names.zig`
+//! allocated -> `Topology`, the §5.4.2/§5.6 branch facts the residual is
+//! assembled from (free flow unknowns, collapsible §5.6.5 switch branches,
+//! static retention). The emitter asks the helpers through `Gen.input()`.
+//! Clauses: §1.3.1.1, §1.3.4, §1.3.4.2, §3.6.2.2, §4.4, §5.4.2, §5.4.2.1,
+//! §5.6.1.3, §5.6.5, §5.6.6.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
 const Input = @import("input.zig").Input;
 
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
+/// The §5.4.2/§5.6 branch facts the residual is assembled from.
 pub const Topology = struct {
-    /// §5.4.2.1/§5.6.6 — the branch-flow unknowns NO branch row defines, in
+    /// §5.4.2.1/§5.6.6 the branch-flow unknowns no branch row defines, in
     /// slot order. See `FreeFlow` and `emitStamps`.
     free_flows: []const FreeFlow = &.{},
     /// The §5.6.5 switch branches `collapse` aliases away (`collapsePairs`).
@@ -37,6 +31,8 @@ pub const Topology = struct {
     }
 };
 
+/// Returns the branch facts for the branch currents `branch_u` (per
+/// contribution, `none_u32` where none); slices are owned by `in.arena`.
 pub fn plan(in: Input, branch_u: []const u32) Error!Topology {
     return .{
         .free_flows = try freeFlows(in, branch_u),
@@ -44,22 +40,23 @@ pub fn plan(in: Input, branch_u: []const u32) Error!Topology {
     };
 }
 
-/// §5.6.1.3 what is known STATICALLY about a `.direct` contribution's
+/// §5.6.1.3 what is known statically about a `.direct` contribution's
 /// retention this cycle, read off `Lower.Contribution.wrote_val`.
 pub const Retention = union(enum) {
-    /// The flag folded to 1.0: a value is retained on every path. Today's
-    /// static row, byte-identical — the common unconditional case.
+    /// The flag folded to 1.0: a value is retained on every path (the common
+    /// unconditional case, a static row).
     on,
     /// Folded to 0.0: discarded on every path (§5.6.1.3's unconditional
-    /// replacement). The accumulators folded to `.f_zero` with it, so no
-    /// row is emitted — exactly as before the flag existed.
+    /// replacement). The accumulators folded to `.f_zero` with it, so no row
+    /// is emitted.
     off,
-    /// A phi: which quantity the branch retains is a property of the
-    /// CYCLE'S EXECUTION PATH, so the branch row's CONTENT is selected at
-    /// run time on this flag (carried as a core field).
+    /// A phi: which quantity the branch retains depends on the cycle's
+    /// execution path, so the branch row's content is selected at run time on
+    /// this flag (carried as a core field).
     runtime: Mir.Value,
 };
 
+/// Returns what is statically known about `c`'s §5.6.1.3 retention.
 pub fn retention(self: Input, c: Lower.Contribution) Retention {
     const v = self.an.rv(c.wrote_val);
     return switch (self.mir.valueDef(v)) {
@@ -98,27 +95,19 @@ pub fn flowIsMerged(self: Input, j: usize) bool {
     return false;
 }
 
-/// §1.3.4/§3.6.2.2. Returns the name of the contribution's net when that
-/// net is a SIGNAL-FLOW PORT: a directional (`input`/`output`, §6.5.2.2)
-/// port whose discipline binds only one nature. That combination is the
-/// LRM's unambiguous signal-flow port, and it has no conserved pair for a
-/// nodal device to stamp.
-///
-/// A single-nature discipline on an `inout` port is NOT caught here, and no
-/// longer can be: §1.3.4.1/§1.3.4.2 forbid that binding outright and
-/// lower.zig rejects it at the declaration (E0132). An internal net is not
-/// caught either — it is a conservative-shaped declaration whose net simply
-/// has one tolerance, which the device stamps as usual (§3.9).
+/// §1.3.4/§3.6.2.2. Returns the contribution's net when that net is a
+/// signal-flow port: a directional (`input`/`output`, §6.5.2.2) port whose
+/// discipline binds only one nature, which has no conserved pair for a nodal
+/// device to stamp. A single-nature `inout` port is rejected by lowering
+/// (E0132, §1.3.4.1/§1.3.4.2); an internal net stamps as usual (§3.9).
 ///
 /// §1.3.4.2's flow-only net is the one case the ordinary nodal stamp gets
-/// WRONG. On such a net there is no potential (§1.3.4: "Potential for such
-/// a node is not defined"), so the node's single unknown carries the FLOW,
-/// and `I(out) <+ e` is the equation `x[out] − e = 0`, not a KCL injection
-/// into a conservation law the net does not obey. §1.3.4.1's potential-only
-/// net needs nothing special: the ordinary branch relation already reduces
-/// to it — the KCL row at the net is `ib = 0` (a signal-flow net has no
-/// flow to conserve, and zero is what the clause says it is), which leaves
-/// the branch row `V(out) − e = 0` to fix the potential.
+/// wrong. Such a net has no potential (§1.3.4: "Potential for such a node is
+/// not defined"), so the node's single unknown carries the flow, and
+/// `I(out) <+ e` is the equation `x[out] - e = 0`, not a KCL injection.
+/// §1.3.4.1's potential-only net needs nothing special: the KCL row at the net
+/// is `ib = 0`, which leaves the branch row `V(out) - e = 0` to fix the
+/// potential.
 pub fn flowOnlySignalFlowNet(self: Input, c: Lower.Contribution) ?u16 {
     if (c.access != .flow or c.kind != .direct) return null;
     for ([_]u16{ c.hi, c.lo }) |n| {
@@ -135,18 +124,17 @@ pub fn flowOnlySignalFlowNet(self: Input, c: Lower.Contribution) ?u16 {
     return null;
 }
 
+/// Is unknown `i` a flow (a current) rather than a potential?
 pub fn isFlowUnknown(self: Input, i: u32) bool {
     if (i >= self.lowered.nodes.len) return true; // codegen-added branch current
-    // §5.4.2/§5.4.3. An array read: lowering records the kind where it
-    // creates the slot. It used to be `startsWith("flow(")`, which §2.8.1
-    // makes a lie — a net declared `\flow(p,n)` IS the identifier
-    // `flow(p,n)` and was classified as a current.
+    // §5.4.2/§5.4.3 lowering records the kind where it creates the slot; the
+    // name cannot decide it, since §2.8.1 lets a net be declared `\flow(p,n)`.
     if (self.lowered.nodes.items(.kind)[i] != .net) return true;
     // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
-    // a node is not defined"), so its ONE unknown is a flow even though it
-    // is a plain node with a plain name. Everything that asks this question
-    // — the host's `u_kinds`, the §3.6.1.2 tolerance, §4.5.15's refusal to
-    // `$limit` a current — wants the quantity, not the spelling.
+    // a node is not defined"), so its one unknown is a flow even though it
+    // is a plain node. Every caller (the host's `u_kinds`, the §3.6.1.2
+    // tolerance, §4.5.15's refusal to `$limit` a current) wants the quantity,
+    // not the spelling.
     const dname = self.lowered.nodes.items(.disc)[i];
     if (dname.len == 0) return false;
     const d = self.lowered.disciplines.get(dname) orelse return false;
@@ -157,35 +145,33 @@ pub fn isFlowUnknown(self: Input, i: u32) bool {
 /// retention flag, carried as a core field) is nonzero at build time,
 /// the host aliases unknown `victim` and the branch-flow unknown
 /// `flow_u` onto unknown `target`. Indices are `nodes`/U-enum space.
-/// `card`: the flag is a function of the model card ALONE (`cardOnly`), so
-/// `derive` can publish it as a `Model` field — the `jac_const` guard.
+/// `card`: the flag is a function of the model card alone (`cardOnly`), so
+/// `derive` can publish it as a `Model` field (the `jac_const` guard).
 pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value, card: bool = false };
 
 /// A §5.4.2 branch-flow unknown that no branch row defines.
 ///
-/// Lowering mints one whenever the model READS `I(a,b)`, and only a §5.6
-/// POTENTIAL (or §5.6.7 indirect) contribution on the same pair gives it a
-/// defining row — `branch_u` is that claim. What is left is the two shapes
-/// the LRM states outright, and both used to sit at their seed of 0 with no
-/// row and no Jacobian column at all:
+/// Lowering mints one whenever the model reads `I(a,b)`, and only a §5.6
+/// potential (or §5.6.7 indirect) contribution on the same pair gives it a
+/// defining row (`branch_u`). What is left is two shapes the LRM states
+/// outright, each needing its own row:
 ///
-///   `sourced` — §5.6.6 IMPLICIT contribution. `I(b) <+ f(..., I(b))` reads
+///   `sourced`: §5.6.6 implicit contribution. `I(b) <+ f(..., I(b))` reads
 ///   the unknown on its own right-hand side, and "the underlying
 ///   implementation of the simulator will find the value of I(diode) that
-///   equals the sum of the contributions made to it". That is the row
-///   `x[u] − Σ contributions = 0`; without it the self-reference evaluates
-///   to 0 and the model is silently LINEARISED.
+///   equals the sum of the contributions made to it". The row is
+///   `x[u] - sum(contributions) = 0`; without it the self-reference
+///   evaluates to 0 and the model is silently linearised.
 ///
-///   not `sourced` — §5.4.2.1 flow PROBE. "If the flow of the branch appears
-///   in an expression anywhere in the module, the branch is a flow probe …
+///   not `sourced`: §5.4.2.1 flow probe. "If the flow of the branch appears
+///   in an expression anywhere in the module, the branch is a flow probe ...
 ///   The branch potential of a flow probe is zero (0)." Figure 5-1 draws the
-///   ammeter: the probe is a SHORT, so its row is `V(hi) − V(lo) = 0` and
-///   its current enters KCL at both ends. Without them the probe was an
-///   open circuit reading 0.
+///   ammeter: the probe is a short, so its row is `V(hi) - V(lo) = 0` and its
+///   current enters KCL at both ends.
 pub const FreeFlow = struct { u: u32, hi: u16, lo: u16, sourced: bool };
 
-/// `free_flows`, in unknown-slot order — `flow_unknowns` is a hash map and
-/// its iteration order is not the emitted order.
+/// `free_flows`, in unknown-slot order (`flow_unknowns` is a hash map, and
+/// its iteration order is not the emitted order).
 pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
     var out: std.ArrayList(FreeFlow) = .empty;
     var it = self.lowered.flow_unknowns.iterator();
@@ -219,11 +205,11 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
     return out.items;
 }
 
-/// Is `v` a constant of the whole simulation — a function of Model and
+/// Is `v` a constant of the whole simulation, a function of Model and
 /// Instance-at-build and nothing else? Stricter than `Analysis.dFree`,
 /// which admits x-steered selects between constants (its ternary/phi
 /// rule ignores the condition); a collapse decision taken once at build
-/// must not. Calls are ALLOWLISTED for the same reason: `$abstime`, rng
+/// must not. Calls are allowlisted for the same reason: `$abstime`, rng
 /// draws, `$held_*` seeds and `analysis()` all change between
 /// evaluations, so a new operator is unsound here until shown otherwise.
 ///
@@ -238,7 +224,7 @@ pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
 
 /// `buildFree` without the Instance: no §9.10 `$temperature`/`$vt`, no
 /// §6.3.6 `$mfactor`. What is left is a function of the model card, which
-/// `derive` — it has no Instance — can compute.
+/// `derive` (it has no Instance) can compute.
 fn cardOnly(self: Input, v0: Mir.Value) bool {
     return constFree(self, v0, 0, false);
 }
@@ -295,8 +281,8 @@ fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
     }
 }
 
-/// Is `v` zero on EVERY path — `.f_zero`, a fold to 0.0, or a phi all of
-/// whose arms are? The accumulator of a §5.6.5 potential arm contributing
+/// Is `v` zero on every path: `.f_zero`, a fold to 0.0, or a phi or select
+/// all of whose arms are? The accumulator of a §5.6.5 potential arm contributing
 /// `<+ 0.0` is exactly this shape: entry-seeded 0, `discardOpposite`'s 0
 /// on the flow arm, `0 + 0.0` on its own.
 pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
@@ -316,9 +302,8 @@ pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
     }
     // The same join after if-conversion (ir/ifconv.zig): a diamond's phi
     // becomes `select(c, then, else)`, zero on every path exactly when both
-    // arms are. Without this a converted `if (rs > 0) I(b) <+ V(b)/rs; else
-    // V(b) <+ 0.0;` lost its collapse, and whether it collapsed depended on
-    // whether ifconv happened to convert the diamond.
+    // arms are, so a collapse does not depend on whether ifconv converted
+    // the diamond.
     if (op == .select) {
         const d = self.mir.instData(def.inst_result).ternary;
         return zeroOnEveryPath(self, d.then_val, depth + 1) and zeroOnEveryPath(self, d.else_val, depth + 1);
@@ -328,7 +313,7 @@ pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
 
 /// Does any MIR value read unknown `u` (a §4.4/§5.4.2 probe of it)? Every
 /// read of an unknown is its `block_param` value, so this is a scan of the
-/// value table — once per collapse candidate, of which a model has few.
+/// value table, run once per collapse candidate (a model has few).
 fn unknownProbed(self: Input, u: u32) bool {
     for (Mir.Value.first_dynamic..self.an.nv) |i| {
         const def = self.mir.valueDef(@enumFromInt(i));
@@ -337,14 +322,13 @@ fn unknownProbed(self: Input, u: u32) bool {
     return false;
 }
 
-/// The §5.6.5 switch branches this model can COLLAPSE: runtime-selected
-/// potential rows whose retained value is the constant 0 V (and 0 flux —
-/// a selected nonzero source is a real source, not a short) and whose
-/// retention flag is fixed at build time (`buildFree`). ngspice does the
-/// same in every setup routine (DIOsetup: `posPrimeNode = posNode` when
-/// RS == 0); keeping the pair apart behind a selected 0 V short costs the
-/// host an unknown, a branch row, and catastrophic cancellation when its
-/// LU eliminates the short.
+/// The §5.6.5 switch branches this model can collapse: runtime-selected
+/// potential rows whose retained value is the constant 0 V and 0 flux (a
+/// selected nonzero source is a real source, not a short) and whose retention
+/// flag is fixed at build time (`buildFree`). ngspice does the same in its
+/// setup routines (DIOsetup: `posPrimeNode = posNode` when RS == 0); keeping
+/// the pair apart behind a selected 0 V short costs the host an unknown, a
+/// branch row, and catastrophic cancellation when its LU eliminates the short.
 pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
     var out: std.ArrayList(CollapsePair) = .empty;
     const np: u32 = @intCast(self.lowered.num_ports);

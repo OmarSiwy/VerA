@@ -87,8 +87,9 @@ pub const Emitter = struct {
     labels: u32 = 0,
     /// Each slot's first word in `rt.State`'s planes.
     off: []const u32 = &.{},
-    /// `plan.Plan.watched`.
+    /// `plan.Plan.watched` and `plan.Plan.reach`.
     watched: []const bool = &.{},
+    reach: []const plan.Reach = &.{},
     /// The process being emitted.
     role: plan.Role = .general,
     /// `--two-state` (`program`).
@@ -152,7 +153,7 @@ pub const Emitter = struct {
         // §4.8 a real changes when its value does, not its bits.
         if (how == .blocking and self.r.reals.contains(at)) return self.print("try s.putReal({d}, {d}, ", .{ at, self.off[at] });
         if (how == .blocking and !self.watched[at]) return self.print("s.set({d}, ", .{self.off[at]});
-        try storeCall(self, how);
+        try storeCall(self, how, self.reach[at]);
         try self.print("{d}, {d}, ", .{ at, self.off[at] });
     }
 
@@ -164,7 +165,9 @@ pub const Emitter = struct {
         const count = self.r.arrays.get(base).?.count;
         const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("s.set({d} + (a{d} - {d}) * {d}, ", off);
-        try storeCall(self, how);
+        var wakes: plan.Reach = .{};
+        for (self.reach[base..][0..count]) |x| wakes = @bitCast(@as(u8, @bitCast(wakes)) | @as(u8, @bitCast(x)));
+        try storeCall(self, how, wakes);
         try self.print("a{d}, {d} + (a{d} - {d}) * {d}, ", .{lb} ++ off);
     }
 
@@ -192,16 +195,27 @@ pub const Emitter = struct {
 /// this step or `delay` later.
 pub const How = union(enum) { blocking, nba, nba_after: Ast.ExprId };
 
-fn storeCall(self: *Emitter, how: How) Error!void {
+fn storeCall(self: *Emitter, how: How, wakes: plan.Reach) Error!void {
     switch (how) {
-        .blocking => try self.print("try s.put(", .{}),
-        .nba => try self.print("try s.nba(", .{}),
+        .blocking => try self.print("try s.put({f}, ", .{fmtReach(wakes)}),
+        .nba => try self.print("try s.nba({f}, ", .{fmtReach(wakes)}),
         .nba_after => |d| {
-            try self.print("try s.nbaAfter(", .{});
+            try self.print("try s.nbaAfter({f}, ", .{fmtReach(wakes)});
             try delay(self, d);
             try self.print(", ", .{});
         },
     }
+}
+
+/// `wakes` as the `rt.Reach` literal of the fields it sets.
+fn fmtReach(wakes: plan.Reach) std.fmt.Alt(plan.Reach, reachText) {
+    return .{ .data = wakes };
+}
+
+fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
+    try out.writeAll(".{");
+    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
+    try out.writeAll(" }");
 }
 
 /// A right-hand side: an expression, or a value already stored — a formal
@@ -322,6 +336,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
+    for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
     const seen = try self.arena.alloc(bool, r.code.items.len);
     @memset(seen, false);
     var procs: std.ArrayList(plan.Proc) = .empty;
@@ -331,6 +346,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     }
     const p = try plan.build(self, procs.items, schedule);
     self.watched = p.watched;
+    self.reach = p.reach;
     // `fn proc<pc>` of every pc, so a dispatch is one indexed call.
     const entry_of = try self.arena.alloc(?u32, r.code.items.len);
     @memset(entry_of, null);
@@ -371,14 +387,25 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\    if (pc < rt.show_base) return procs[pc](s, pc);
         \\
     , .{});
-    if (p.node_pc.len != 0) {
-        try self.print("    if (pc == rt.settle_pc) {{\n        while (s.nextDirty()) |n| try procs[node_pc[n]](s, node_pc[n]);\n        return;\n    }}\n", .{});
-    }
+    if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
+    // The settle event: the nodes in topological order, 64 to a dirty word,
+    // each word a function of its own so no one function grows with the
+    // design (the compiler's time does, faster than its size). A word gets
+    // the view's fields and rebuilds it: passed whole, the view is read
+    // through a pointer again after every store.
     if (p.node_pc.len != 0) {
-        try self.print("const node_pc = [_]u32{{", .{});
-        for (p.node_pc) |pc| try self.print(" {d},", .{pc});
-        try self.print(" }};\n\n", .{});
+        try self.print("fn settle(s: rt.View) rt.Error!void {{\n", .{});
+        for (0..(p.node_pc.len + 63) / 64) |w| try self.print("    if (s.dirty[{d}] != 0) try @call(.never_inline, settle{d}, .{{ s.s, s.v, s.x, s.dirty }});\n", .{ w, w });
+        try self.print("    s.s.settle = .idle;\n}}\n\n", .{});
+        var lo: usize = 0;
+        while (lo < p.node_pc.len) : (lo += 64) {
+            try self.print("fn settle{d}(st: *S, v: [*]u64, x: [*]u64, dirty: [*]u64) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{lo / 64});
+            try self.print("    const s: rt.View = .{{ .s = st, .v = v, .x = x, .dirty = dirty }};\n", .{});
+            for (p.node_pc[lo..@min(lo + 64, p.node_pc.len)], lo..) |pc, n| try settleNode(self, p, pc, @intCast(n), entry_of[pc].?);
+            try self.print("    s.dirty[{d}] = 0;\n}}\n\n", .{lo / 64});
+        }
+        for (p.node_pc, 0..) |pc, n| if (pureNode(self, pc)) try nodeValue(self, pc, @intCast(n));
     }
 
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
@@ -395,7 +422,6 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
-    for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
     if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try netTables(self);
     try table(self, "order", order.items);
@@ -422,6 +448,76 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// Node `n`, whose evaluation starts at `pc` in `fn proc<entry>`, in the
+/// settle event. A `pureNode` runs whenever a node of its word is dirty:
+/// with no operand changed it computes the value its net already holds, and
+/// storing that changes nothing (§6.1), so its own dirty bit need not be
+/// tested. Any other node runs when its bit says an input changed.
+fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!void {
+    const r = self.r;
+    if (!pureNode(self, pc)) return self.print("    if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc });
+    const slot = r.nets[r.drivers[r.code.items[pc].continuous].net].slot;
+    if (!self.watched[slot]) return self.print("    s.set({d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(try self.slotWidth(slot)) });
+    var wakes = self.reach[slot];
+    wakes.comb = false;
+    try self.print("    try s.putNode({f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
+    // A pure reader in this node's own dirty word runs after it anyway.
+    for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| if (e.node / 64 != n / 64 or !pureNode(self, p.node_pc[e.node]))
+        try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
+    try self.print(" }});\n", .{});
+}
+
+/// Does the node at `pc` continuously assign a value that reads only nets
+/// and variables, of a net that is not a real?
+fn pureNode(self: *Emitter, pc: u32) bool {
+    const r = self.r;
+    const i = switch (r.code.items[pc]) {
+        .continuous => |i| i,
+        else => return false, // else: an `always @*` node, whose body may do anything
+    };
+    const d = r.drivers[i];
+    return switch (d.source) {
+        .expr => |x| pure(self, x.e) and !r.reals.contains(r.nets[d.net].slot),
+        .gate => true,
+        .bridge, .udp, .mos, .pull => false,
+    };
+}
+
+/// `fn val<n>`: the value of `pureNode` `n` (at `pc`), read through an
+/// `rt.View`, which its process and the settle event both store.
+fn nodeValue(self: *Emitter, pc: u32, n: u32) Error!void {
+    const r = self.r;
+    const d = r.drivers[r.code.items[pc].continuous];
+    const slot = r.nets[d.net].slot;
+    r.scope = d.scope;
+    r.pc = pc;
+    const head = self.out.written().len;
+    try self.print("fn val{d}(s: rt.View) L.T({d}) {{\n    @setEvalBranchQuota(1 << 30);\n", .{ n, try self.slotWidth(slot) });
+    const body = self.out.written().len;
+    if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
+    try self.print("    return ", .{});
+    switch (d.source) {
+        .expr => |x| try driverValue(self, x.e, x.slice, slot),
+        .gate => |g| try gateLogic(self, g.kind, g.ins.len),
+        .bridge, .udp, .mos, .pull => unreachable, // `pureNode` admits these two
+    }
+    try self.print(";\n}}\n\n", .{});
+    if (std.mem.indexOf(u8, self.out.written()[head..], "s.") == null) try insert(self, body, "    _ = s;\n");
+}
+
+/// Does `e` read only nets and variables: no system or user function,
+/// whose value or effect a re-evaluation could change?
+fn pure(self: *Emitter, e: Ast.ExprId) bool {
+    const ex = &self.r.file.exprs;
+    switch (ex.tag(e)) {
+        .sys_call, .call => return false,
+        else => {}, // else: every other form is pure when its operands are
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and !pure(self, c)) return false;
+    return true;
 }
 
 /// Does the design call a §18 dump task?
@@ -743,9 +839,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .jump => |t| try self.print("            continue :sw {d};\n", .{t}),
         .branch => |b| {
-            try self.print("            continue :sw if (", .{});
+            // Two constant `continue`s: each is a direct jump, where one
+            // `continue` of a selected pc is a jump through the table.
+            try self.print("            if (", .{});
             try expr.truth(self, b.condition);
-            try self.print(" == .one) {d} else {d};\n", .{ next, b.otherwise });
+            try self.print(" == .one) continue :sw {d};\n            continue :sw {d};\n", .{ next, b.otherwise });
         },
         .case_select => |c| {
             const case = r.file.stmt(c.statement).case_stmt;
@@ -768,9 +866,9 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             if ((try expr.natural(self, x.count)).width > 64) return self.refuse("a repeat count wider than 64 bits");
             try self.print("            const n = try s.repeatCount(", .{});
             const ty = try expr.selfDetermined(self, x.count);
-            try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            continue :sw if (n == 0) {d} else {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
+            try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
         },
-        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            continue :sw if (s.repeats[{d}] != 0) {d} else {d};\n", .{ x.counter, x.counter, x.body, next }),
+        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            if (s.repeats[{d}] != 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.counter, x.body, next }),
         .wait_event => |e| {
             if (try waitFixed(self)) return;
             try self.print("            const id = try s.park({d});\n", .{next});
@@ -967,7 +1065,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
     if (sw > 64 and how == .blocking) {
         // One bit of a wide vector: the store touches only its word.
         if (self.watched[at])
-            try self.print("try s.putWord({d}, {d}, q{d} / 64, ", .{ at, self.off[at], lb })
+            try self.print("try s.putWord({f}, {d}, {d}, q{d} / 64, ", .{ fmtReach(self.reach[at]), at, self.off[at], lb })
         else
             try self.print("s.set({d} + q{d} / 64, ", .{ self.off[at], lb });
         try self.print("L.up(", .{});
@@ -1141,12 +1239,18 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     r.scope = d.scope;
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
-        if (d.source == .gate) try bits(self, d.source.gate.ins, d.source.gate.lane);
+        if (self.role == .comb and pureNode(self, pc)) {
+            try self.print("            ", .{});
+            try self.store(n.slot, .blocking);
+            try self.print("val{d}(s.view()), {f});\n            return;\n", .{ self.role.comb, full(nw) });
+            return;
+        }
+        if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
         try self.print("            ", .{});
         try self.store(n.slot, .blocking);
         switch (d.source) {
             .expr => |x| try driverValue(self, x.e, x.slice, n.slot),
-            .gate => |g| try self.print("rt.net.gateValue(.{t}, &b)", .{g.kind}),
+            .gate => |g| try gateLogic(self, g.kind, g.ins.len),
             .bridge, .udp, .mos, .pull => unreachable, // `plainDriver` admits these two
         }
         try self.print(", {f});\n", .{full(nw)});
@@ -1212,6 +1316,40 @@ fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?@import("net.zig").Slice, 
         return self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(net_slot), ctx.width });
     }
     try expr.assigned(self, e, try slotType(self, net_slot));
+}
+
+/// `const w<j>`: bit `lane` (0 without one) of each terminal in `ins`, as
+/// a one-bit value.
+fn planes(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
+    for (ins, 0..) |in, j| {
+        const nt = try expr.natural(self, in);
+        try self.print("            const w{d} = ", .{j});
+        // `selfDetermined` reads a real as a 64-bit integer.
+        if (nt.real or nt.width > 1) try self.print("L.part(", .{});
+        const t = try expr.selfDetermined(self, in);
+        if (t.width > 1) try self.print(", {d}, 1, {d})", .{ lane.?, t.width });
+        try self.print(";\n", .{});
+    }
+}
+
+/// A plain logic gate's output from `planes`' `n` inputs: §7.8.5's tables
+/// for these eight are the §5.1.10 bitwise operators folded from their
+/// identity, which read z as x as the tables do.
+fn gateLogic(self: *Emitter, kind: Ast.GateKind, n: usize) Error!void {
+    const op, const invert = switch (kind) {
+        .g_and, .g_buf => .{ "and", false },
+        .g_nand => .{ "and", true },
+        .g_or => .{ "or", false },
+        .g_nor => .{ "or", true },
+        .g_xor => .{ "xor", false },
+        .g_xnor, .g_not => .{ "xor", true },
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => unreachable, // `plainDriver` admits none
+    };
+    if (invert) try self.print("L.not(", .{});
+    for (0..n) |_| try self.print("L.bitwise(.@\"{s}\", ", .{op});
+    try self.print("L.k({d}, 0)", .{@intFromBool(std.mem.eql(u8, op, "and"))});
+    for (0..n) |j| try self.print(", w{d}, 1)", .{j});
+    if (invert) try self.print(", 1)", .{});
 }
 
 /// `const b`: bit `lane` (0 without one) of each terminal in `ins`, as

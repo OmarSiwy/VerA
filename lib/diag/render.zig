@@ -1,9 +1,5 @@
-//! Rendering: the bag as terminal text or JSON.
-//!
-//! In: the bag and the source map. Out: human-readable text with source excerpts, or one
-//! JSON object per diagnostic.
-//!
-//! Cut verbatim from `diag.zig`.
+//! Rendering: a bag -> terminal text with source snippets (rustc style), JSON
+//! Lines, or a code's `--explain` entry.
 
 const std = @import("std");
 const diag = @import("../diag.zig");
@@ -19,10 +15,8 @@ const Severity = diag.Severity;
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// SGR escapes, or all-empty when colour is off. Keeping the "off" palette as
-/// a full struct of empty strings means the renderer has exactly ONE code path:
-/// there is no `if (color)` anywhere below, so the coloured and plain outputs
-/// cannot drift apart.
+/// SGR escapes, or all-empty when colour is off, so the renderer has one code
+/// path and coloured and plain output cannot drift apart.
 pub const Palette = struct {
     reset: []const u8 = "",
     bold: []const u8 = "",
@@ -54,6 +48,7 @@ pub const Palette = struct {
     }
 };
 
+/// What `render` draws besides each diagnostic's headline and location.
 pub const RenderOptions = struct {
     palette: Palette = .off,
     /// Draw the source snippet with carets. Off gives one `file:line:col:`
@@ -74,12 +69,9 @@ fn displayCol(line: []const u8, byte_col: u32) u32 {
     var col: u32 = 0;
     const upto = @min(byte_col, line.len);
     for (line[0..upto]) |c| {
-        // A UTF-8 continuation byte (0b10xxxxxx) is part of the codepoint the
-        // lead byte already counted, not a column of its own — counting BYTES
-        // pushed the caret one column right per extra byte of every `µ`, `Ω`,
-        // `°`. Counting lead bytes IS `std.unicode`'s codepoint count, minus
-        // the error path invalid input must not take here. (Codepoints, not
-        // grapheme clusters or wcwidth: same approximation rustc makes.)
+        // A UTF-8 continuation byte (0b10xxxxxx) belongs to the codepoint its
+        // lead byte counted. Codepoints, not grapheme clusters or wcwidth: the
+        // approximation rustc makes, without std.unicode's invalid-input error.
         if (c & 0xC0 == 0x80) continue;
         col += if (c == '\t') tab_width else 1;
     }
@@ -420,8 +412,8 @@ fn spaces(n: u32) []const u8 {
     return spaces_pad[0..@min(n, spaces_pad.len)];
 }
 
-/// `--explain EXXXX`. Wraps `Info.explain`'s pre-wrapped paragraphs verbatim —
-/// they are authored at 76 columns in diag_code.zig.
+/// Writes the `--explain EXXXX` entry: code, title, LRM citation, and
+/// `Info.explain` verbatim.
 pub fn explain(c: Code, w: *std.Io.Writer, palette: Palette) !void {
     const meta = info(c);
     try w.print("{s}{s}{s}: {s}{s}{s}\n", .{
@@ -434,9 +426,9 @@ pub fn explain(c: Code, w: *std.Io.Writer, palette: Palette) !void {
     try w.print("\n{s}\n", .{meta.explain});
 }
 
-/// One JSON object per line (JSON Lines), because that is what a build system
-/// wants to stream. Shape is deliberately close to rustc's `--message-format
-/// json` so existing editor plumbing can consume it.
+/// Writes one JSON object per diagnostic per line (JSON Lines), shaped like
+/// rustc's `--message-format json` so editor plumbing can consume it. Sorts
+/// the bag first, which invalidates earlier `Entry.index` values.
 pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     bag.sort();
     var scratch_state = std.heap.ArenaAllocator.init(bag.arena);

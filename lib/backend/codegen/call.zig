@@ -1,12 +1,8 @@
-//! Calls: §4.5 analog operators, §4.6 noise, Clause 9 system functions.
-//!
-//! In: a MIR `call`. Out: the kernel call text, the operator's state slots, and the noise and
-//! system-function tables codegen exports.
-//!
-//! LRM clauses this file's code cites: §1, §4.5, §4.5.7, §4.5.8, §4.6.1, §5.10.3.1, §5.10.3.2, §5.10.3.3, §6.3.4, §9.5, §9.5.1, §9.15.
-//!
-//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_call.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! Call rendering: a MIR `call` in, its Zig text out, for §4.5 analog
+//! operators, §4.6 analysis/noise functions and Clause 9 system functions;
+//! also the plain-f64 host spelling of parameter expressions (`f64Const`) and
+//! the `systf_calls` table. LRM clauses cited: §2.8.3, §4.5, §4.6, §5.10.3,
+//! §6.3.4, §9, §10.3, §12.32.
 
 const std = @import("std");
 const float_lanes = @import("float/lanes.zig");
@@ -38,12 +34,9 @@ const OpKind = codegen.OpKind;
 const opNeedsInput = codegen.opNeedsInput;
 const enableArgIdx = codegen.enableArgIdx;
 
-// =======================================================================
-// Calls: §4.5 analog operators, §4.6 noise, ch9 system functions
-// =======================================================================
-
-/// Reuse the optimizer's select or reconstruct a pure two-way CFG merge.
-/// Loop-carried/multiway phis and arms with calls remain unsupported here.
+/// Returns `inst` as a ternary: the optimizer's select, or a pure two-way CFG
+/// merge rebuilt from its phi. Null for loop-carried or multiway phis and
+/// for arms containing a call.
 fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
     if (self.mir.instOp(inst) == .select) return self.mir.instData(inst);
     if (self.mir.instOp(inst) != .phi or self.mir.instData(inst).phi.count != 2) return null;
@@ -91,12 +84,9 @@ fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[
     return try std.fmt.allocPrint(self.arena, "@as({s}, if (({s}) != 0) ({s}) else ({s}))", .{ if (ty == .int) "i64" else "f64", condition, yes, no });
 }
 
-/// Parameter derivation must preserve integral bits, including values beyond
-/// f64's exact range. Integer operators retain the analog MIR's existing
-/// 32-bit arithmetic rules; full expression sizing remains separate work.
-/// A host-side `[]const u8` for a STRING operand: the literal, or the model
-/// field a §3.4.6 string parameter occupies. Null for anything else, which
-/// is how `i64Const` tells a string comparison from arithmetic.
+/// Returns a host-side `[]const u8` for a string operand: the literal, or the
+/// model field of a §3.4.6 string parameter. Null for anything else, which is
+/// how `i64Const` tells a string comparison from arithmetic.
 fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
     switch (self.mir.valueDef(self.an.rv(v0))) {
         .str_const => |s| return try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
@@ -109,6 +99,9 @@ fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
     }
 }
 
+/// Returns a plain-i64 host expression for an integer parameter expression,
+/// or null when `v` has none. Keeps integral bits beyond f64's exact range
+/// and applies the MIR's 32-bit integer arithmetic rules.
 pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
     if (depth > 32) return null;
     const v = self.an.rv(v0);
@@ -156,14 +149,10 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
             }
             if (Mir.opClass(row.op) != .unary and Mir.opClass(row.op) != .binary) return null;
-            // Table 3-3's relational row over two strings — "Result is 1 if
-            // they are equal and 0 if they are not", the rest by
-            // "lexicographical ordering". §3.4.6's own `ebersmoll` example
-            // writes exactly this in a parameter default
-            // (`sign = (transistortype == "NPN") ? 1.0 : -1.0`), so §6.3.4
-            // has to be able to redo it after a card write. `lowerBinary`
-            // ran `strNum` over any MIXED pair, so a string reaching here is
-            // one of two. Mirrors `foldStrBinary`, operator for operator.
+            // Table 3-3's relational row over two strings (equality, then
+            // "lexicographical ordering"), as §3.4.6's `ebersmoll` example
+            // writes in a parameter default. Lowering converted any mixed
+            // pair, so a string here is one of two. Mirrors `foldStrBinary`.
             if (try strConst(self, av)) |sa| if (try strConst(self, bv)) |sb| {
                 const so: []const u8 = switch (row.op) {
                     .ieq => "== .eq",
@@ -206,18 +195,15 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .bitand, .bitor, .bitxor => try std.fmt.allocPrint(self.arena, "(({s}) {s} ({s}))", .{ a, op, rhs }),
                 .bitxnor => try std.fmt.allocPrint(self.arena, "~(({s}) ^ ({s}))", .{ a, rhs }),
                 .ieq, .ine, .ilt, .ile, .igt, .ige => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs }),
-                // The quotient can reach +2^63 for minInt(i64)/-1;
-                // i65 holds that intermediate before the MIR's wrap32.
-                // A zero divisor yields 0, as the device's `renderOp` `.idiv`
-                // does; the prover's W0653 announced it at compile time.
+                // i65 holds minInt(i64)/-1 before the wrap. A zero divisor
+                // yields 0, as `renderOp`'s `.idiv` does (W0653).
                 .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @as(i64, 0) else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
                 .imod => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @intCast(@rem(@as(i65, {s}), @as(i65, {s})))))", .{ rhs, a, rhs }),
                 .logand, .logor => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
                 .shl => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
                 .shr => try std.fmt.allocPrint(self.arena, "zShr({s}, {s})", .{ a, rhs }),
                 .imin, .imax => try std.fmt.allocPrint(self.arena, "@as(i64, {s}({s}, {s}))", .{ if (row.op == .imin) "@min" else "@max", a, rhs }),
-                // `Lower.ipow32` as device text; its 'bx corner reads 0 here
-                // exactly as it does in `renderOp`.
+                // `Lower.ipow32` as device text, as in `renderOp`.
                 .ipow => try std.fmt.allocPrint(self.arena, "{s}({s}, {s})", .{ gen_render.ipow_fn, a, rhs }),
                 // Real-valued binaries: `tyOf(v) == .real` and the float
                 // comparisons both returned above.
@@ -272,67 +258,26 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
     }
 }
 
-/// A plain-f64 expression for an operator CONTROL argument (delay,
-/// transition time, initial condition, …), or null when the argument is not
-/// one the host can evaluate outside the S domain.
+/// Returns a plain-f64 expression for `v` over `model.<p>` leaves (a
+/// parameter expression or operator control argument), or null when the host
+/// cannot evaluate it outside S. Literal subtrees fold to one number. Never
+/// looks through a parameter's default: the host overrides parameters.
 ///
-/// The `Model` struct IS the parameter set, so a control argument that is an
-/// arithmetic expression over parameters is just that expression with
-/// `model.<p>` leaves — `td = len * sqrt(l * c)` renders as
-/// `model.len * @sqrt(model.l * model.c)`. Real models write the delay of a
-/// transmission line that way (lossy_tline.va:135, coupled_tlines.va:110),
-/// and §4.5.7 permits it: `absdelay(input, td [, maxdelay])` gives td as an
-/// `analog_expression`, and with no `maxdelay` "the value of td when the
-/// absdelay() is first evaluated shall be used and any future changes to td
-/// shall be ignored" — which for a parameter expression is every evaluation.
-///
-/// `foldConst` first at EVERY node, so a subtree of literals still comes out
-/// as one folded number rather than as rendered arithmetic.
-//
-// ponytail: the op set is arithmetic, min/max, and the whole of Table 4-14
-// and Table 4-15 — every scalar math operator, because §6.3.4 puts no
-// restriction on which ones a dependent parameter's default may use and a
-// missing case must be diagnosed there, rather than freezing the field at
-// its declared value after a host write. Pure two-way conditionals render
-// as lazy Zig if expressions; arbitrary control flow remains unsupported.
-// Ceiling: unlike `foldConst` this never looks through a parameter's
-// DEFAULT, because the host overrides parameters at run time.
-//
-// ponytail: loop-carried and multiway phis are not expression fragments.
-// Supporting them needs execution of the constant-function CFG; the
-// two-way renderer deliberately does not guess their values.
-///
-/// `in_unit` says the expression lands in a UNIT BODY rather than in a
-/// host-side `derive` line or `updateState`, and that changes two things.
-///
-/// It may name a unit-local temporary — it must, in fact: without that a
-/// shared chain of parameter arithmetic re-renders its whole prefix at
-/// every link, which is quadratic in the chain length and BSIM4's
-/// temperature prep is hundreds of links long.
-///
-/// And it is restricted to `devSafe` opcodes, because a unit body also
-/// compiles for nvptx, where there is no libm: `@exp`/`@log` on an f64
-/// become "no libcall available for fexp" at PTX assembly time. Those stay
-/// S operations, whose implementation is the host's problem and not this
-/// generator's — which is the same division of labour the whole S protocol
-/// rests on.
+/// With `in_unit`, the text lands in a unit body: it names unit-local slots
+/// (avoiding quadratic re-rendering of parameter chains) and admits only
+/// `devSafe` opcodes, since a unit body also compiles for nvptx without libm.
 pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]const u8 {
+    // ponytail: loop-carried and multiway phis are not rendered; that needs
+    // execution of the constant-function CFG.
     if (depth > 32) return null;
     const v = self.an.rv(v0);
     if (in_unit) {
-        // Already materialised: NAME it, and never fold past it.
-        //
-        // `unit_plan` decided this slot was live by walking the MIR, and no
-        // rendering choice here can revise that — fold past it and the
-        // declaration it already emitted has no reader, which Zig rejects
-        // outright ("unused local constant"). Naming it is also the cheaper
-        // answer: the temporary holds a dual whose derivative half is a
-        // structural zero, so reading the value out beats recomputing the
-        // subtree. `depth > 0` because at depth 0 the caller IS this slot's
-        // own declaration.
+        // Already materialized: name it and never fold past it, or its
+        // declaration would be unread. `depth > 0` because at depth 0 the
+        // caller is this slot's own declaration.
         if (depth > 0 and self.an.dFree(v)) {
             const i = @intFromEnum(v);
-            // A setup field IS the plain f64 — no `.val()` needed.
+            // A setup field is already a plain f64.
             if (i < self.an.nv and self.plan.isRoot(v)) return try gen_setup.rootRef(self, v, true);
             if (i < self.an.nv and self.plan.cached(v))
                 return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
@@ -341,11 +286,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 return try std.fmt.allocPrint(self.arena, "{s}.val()", .{try gen_unit.slotRefStr(self, i)});
             }
         }
-        // Folding a whole literal chain to one number is still the right
-        // answer where it is available — `foldConst` works in f64, so the
-        // number it lands on is the one the hardware would have — but it
-        // takes the subtree in ONE step and cannot see the check above.
-        // So ask first whether it would swallow a slot.
+        // Fold a literal chain to one number unless it would swallow a slot.
         if (!gen_render.foldHidesSlot(self, v, 0)) {
             if (self.an.foldConst(v, false)) |k| return try gen_file.fmtF64(self, k.f);
         }
@@ -371,10 +312,8 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             const row = self.mir.instRow(inst);
             if (in_unit and !devSafe(row.op)) return null;
             if (!in_unit and (row.op == .select or row.op == .phi)) return hostConditionalExpr(self, inst, depth, .real);
-            // §9.15 a host-published `$simparam` IS a Model field, so a
-            // §3.4 parameter default written over it renders here and
-            // `emitDerive` picks it up. Without this the default folded to
-            // nothing, `paramDefault` wrote 0 and W1050 fired.
+            // §9.15 a host-published `$simparam` is a Model field, so a
+            // parameter default over it renders here for `emitDerive`.
             if (row.op == .call) {
                 const d = self.mir.instData(inst).call;
                 if (d.callee != .@"$simparam") return null;
@@ -383,11 +322,8 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 return try std.fmt.allocPrint(self.arena, "model.{s}", .{f});
             }
             switch (Mir.opClass(row.op)) {
-                // Rendered as open/close (and separator) fragments rather
-                // than as a format string per opcode: `allocPrint` wants a
-                // comptime format, and a `{s}`-per-case switch would be the
-                // same table written twice as long. The fragments are
-                // `opcode_zig`'s `host_f64` column.
+                // Fragments from `opcode_zig`'s `host_f64` column, because
+                // `allocPrint` needs a comptime format.
                 .unary => {
                     const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
                     const fix = opcode_zig.get(row.op).host_f64 orelse return null;
@@ -407,7 +343,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                     });
                 },
                 // `select`/`phi` returned above; the rest are not values, and
-                // a §3.2.2 array element is not one a model card can derive.
+                // a §3.2.2 array element is not derivable from a model card.
                 .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => return null,
             }
         },
@@ -415,16 +351,12 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
     }
 }
 
-/// `f64Const` for a position where the LRM requires one. A control argument
-/// that does not resolve is a SOURCE-LEVEL diagnostic (E0515) plus a refused
-/// unit — never an `@compileError` string pasted into the generated Zig,
-/// which surfaces as "unreachable code" at a line of generated code with
-/// nothing pointing back at the `.va`.
+/// Returns `f64Const(v)` where the LRM requires a constant or parameter
+/// expression. Otherwise reports E0515 at the source, marks the build fatal
+/// and returns "0.0".
 pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
     if (try f64Const(self, v0, 0, false)) |s| return s;
-    // The argument's own defining expression is the thing to point at; the
-    // operator call is the fallback for a leaf with no instruction of its
-    // own (a node probe, a phi), which is the common case here.
+    // Point at the argument's defining expression, else the operator call.
     const v = self.an.rv(v0);
     const def = self.mir.valueDef(v);
     const tok = if (def == .inst_result) self.mir.instTok(def.inst_result) else Mir.no_tok;
@@ -442,50 +374,39 @@ pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
     return "0.0";
 }
 
+/// Returns `f64Expr(args[i])`, or `dflt` when the argument is absent.
 pub fn argF64(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     return f64Expr(self, args[i]);
 }
 
-/// Does this §4.5 control argument need the core, i.e. is it a solve result
-/// rather than a constant/parameter expression? Speculative — `f64Const`'s
-/// `uses_model` side effect is rolled back, because whether the rendered
-/// text is ever emitted is decided later.
+/// Returns whether a §4.5 control argument is a solve result rather than a
+/// constant or parameter expression. Rolls back `f64Const`'s `uses_model`
+/// side effect.
 pub fn ctrlIsDynamic(self: *Gen, v: Mir.Value) Error!bool {
     const saved = self.uses_model;
     defer self.uses_model = saved;
     return (try f64Const(self, v, 0, false)) == null;
 }
 
-/// §4.5 Table 4-20 lists some operator control arguments as DYNAMIC, which
-/// `argF64` cannot render: it goes through `f64Const`, whose frame is the
-/// host's Model and which refuses a solve result with E0515. These two read
-/// the same argument in the two frames that actually evaluate one, and both
-/// fall back to `f64Const`'s text when it folds — so a literal or a model
-/// parameter renders exactly as it always did.
-///
-/// `ctrlEval` is the RESIDUAL's frame: the argument is an ordinary rendered
-/// expression there, S-valued, and only its value is wanted.
+/// Returns a dynamic (§4.5 Table 4-20) control argument's value in the
+/// residual's frame: `f64Const`'s text when it folds, else the rendered S
+/// expression's `.val()`, which pins lanes. `ctrlStep` is the `updateState`
+/// frame's counterpart.
 pub fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     if (try f64Const(self, args[i], 0, false)) |s| return s;
-    // `.val()` is a COLLAPSE: on the batch scalar it reads lane 0, so an
-    // x-dependent control argument gives every lane the operating point of
-    // the first one. That is exactly what `Float.pinned` records — and the
-    // collapse itself is right, not a bug to route around: a control
-    // argument is a number the operator is configured WITH, and §4.6.3's
-    // stimulus magnitude is an independent source's amplitude at the
-    // operating point, so neither belongs in the Jacobian.
+    // The collapse is intended: a control argument (or §4.6.3's stimulus
+    // magnitude) configures the operator and is not part of the Jacobian.
     float_lanes.pinLanes(self, self.an.rv(args[i]));
     return std.fmt.allocPrint(self.arena, "({s}).val()", .{
         try gen_render.renderToArena(self, args[i], .real),
     });
 }
 
-/// §4.5.7 the effective delay of one `absdelay` site, in the caller's
-/// frame (`step` selects `updateState`'s over the residual's). Without
-/// `maxdelay` a signal-valued td is read out of the field `updateState`
-/// froze it in; with a constant td there is nothing to freeze.
+/// Returns the §4.5.7 effective delay of one `absdelay` site in the caller's
+/// frame (`step`: `updateState`'s, else the residual's). A frozen td reads
+/// its `Instance` field; with `maxdelay`, td is clamped to it.
 pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool) Error![]const u8 {
     if (try absdelayFreezes(self, args))
         return std.fmt.allocPrint(self.arena, "inst.{s}__td", .{n});
@@ -494,48 +415,40 @@ pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool
     else
         try ctrlEval(self, args, 1, "0.0");
     if (args.len < 3) return td;
-    // §4.5.7 "If the optional maxdelay is specified, THEN td CAN VARY. If
-    // td becomes greater than maxdelay, MAXDELAY WILL BE USED AS A
-    // SUBSTITUTE FOR td." Argument 2 was read by nothing at all — the
-    // three-argument form behaved as the two-argument one, with no clamp
-    // and no varying td. Table 4-20 makes maxdelay the constant argument,
+    // §4.5.7 "If td becomes greater than maxdelay, maxdelay will be used as
+    // a substitute for td." Table 4-20 makes maxdelay the constant argument,
     // so it renders over Model where td renders over the core.
     return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{
-        td, if (try absdelayMaxdSampled(self, args))
+        td,
+        if (try absdelayMaxdSampled(self, args))
             try std.fmt.allocPrint(self.arena, "inst.{s}__maxd", .{n})
         else
             try argF64(self, args, 2, "0.0"),
     });
 }
 
-/// §4.5.14 "If a dynamic expression is passed as an argument which expects a
-/// constant expression, the value of the dynamic expression at the start of
-/// the analysis defaults to the constant value of the argument. Any further
-/// change in value of that expression is ignored" — and Table 4-20 makes
-/// `maxdelay` such an argument. So a signal-valued one is latched into
-/// `Instance` where the two-argument td is, instead of refused (E0515).
-///
-/// ponytail: `absdelay`'s maxdelay only. Every other constant slot still
-/// answers a solve result with E0515; the same latch is the upgrade path.
+/// Returns whether a signal-valued `maxdelay` is latched into `Instance` at
+/// the start of the analysis instead of refused (§4.5.14: "the value of the
+/// dynamic expression at the start of the analysis defaults to the constant
+/// value of the argument").
 pub fn absdelayMaxdSampled(self: *Gen, args: []const Mir.Value) Error!bool {
+    // ponytail: `absdelay`'s maxdelay only. Every other constant slot still
+    // answers a solve result with E0515; the same latch is the upgrade path.
     if (args.len != 3) return false;
     return ctrlIsDynamic(self, args[2]);
 }
 
-/// §4.5.7 "If maxdelay is not specified, the value of td when the
-/// absdelay() is first evaluated shall be used and ANY FUTURE CHANGES TO td
-/// SHALL BE IGNORED." A td that folds already IS its first value and needs
-/// nothing; only a signal-valued one has to be frozen into `Instance`.
+/// Returns whether a two-argument `absdelay`'s td is signal-valued and so
+/// frozen into `Instance` (§4.5.7: "any future changes to td shall be
+/// ignored").
 pub fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
     if (args.len != 2) return false;
     return ctrlIsDynamic(self, args[1]);
 }
 
-/// `ctrlStep` is `updateState`'s frame, where the only thing evaluated is
-/// the single value-only core sweep — so the argument has to be a field of it,
-/// which `buildJobs` is what arranges. A dynamic argument with no core
-/// field left is still E0515: that is a planning defect, not a legal
-/// program, and answering it with a wrong number would hide it.
+/// Returns a control argument's value in `updateState`'s frame: `f64Const`'s
+/// text, else the core field `buildJobs` queued (`m.f<k>.v`). With no field
+/// it reports E0515 through `f64Expr` rather than guess.
 pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     if (try f64Const(self, args[i], 0, false)) |s| return s;
@@ -544,29 +457,9 @@ pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
     return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
 }
 
-/// "the signal crossed zero since the last accepted step, in the direction
-/// argument 1 asks for": `+1` rising, `-1` falling, `0` (or absent) either.
-/// §4.5.10 `last_crossing` and §5.10.3 `cross` take the SAME argument with
-/// the same meaning, so they share the test — `last_crossing` used to fire
-/// on any sign change and report a falling edge to a `(V(p), +1)` call.
-///
-/// The argument is a `constant_expression` in both grammars — and a
-/// PARAMETER is one, so `resolve_params = false`: folding through the
-/// declared default froze `cross(x, dir)` at the default's direction and
-/// the model card's override was silently ignored. A direction that folds
-/// without parameters still picks its comparison here; a parameter one
-/// becomes a `zCrossDir` call on the model's value, and a genuinely
-/// solve-time one is E0515 out of `f64Expr` (§4.5.14's constant-or-
-/// parameter rule).
-/// `in` is the CURRENT input as a plain `f64` expression: the local
-/// `updateState` binds, or the rendered operand `.val()` in `eval`. Both
-/// spellings compare against the same `__prev`, which holds the last
-/// ACCEPTED input either way.
-/// §5.10.3.3's period, as `updateState` reads it. A folded one renders
-/// inline; a period computed during the solve is a core live-out queued by
-/// `buildJobs`, and reading it out of `m` is what "the next event will be
-/// scheduled based on the LATEST value" means for a value the host cannot
-/// spell.
+/// Returns §5.10.3.3's period as `updateState` reads it: inline when it
+/// folds, else the core field `buildJobs` queued, so "the next event will be
+/// scheduled based on the latest value".
 pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     if (args.len < 2) return "0.0";
     if (self.an.foldConst(args[1], false) == null) {
@@ -577,29 +470,28 @@ pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
 }
 
 /// §5.10.3.3: "If the period expression evaluates to a value less than or
-/// equal to 0.0, the timer shall trigger only once at the specified
-/// start_time." An absent period is the same case — `updateState` defaults
-/// it to 0.0 — and a period that does not fold cannot be decided here.
+/// equal to 0.0, the timer shall trigger only once". An absent period
+/// defaults to 0.0; one that does not fold is treated as periodic.
 fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
     if (args.len < 2) return true;
     const c = self.an.foldConst(args[1], false) orelse return false;
     return c.f <= 0.0;
 }
 
+/// Returns the test "the signal crossed zero since the last accepted step, in
+/// the direction argument 1 asks for" (+1 rising, -1 falling, 0 or absent
+/// either), shared by §4.5.10 `last_crossing` and §5.10.3 `cross`. `in` is
+/// the current input as a plain f64 expression, compared against `__prev`.
+///
+/// A direction that folds without parameters picks its comparison here; a
+/// parameter one becomes `zCrossDir` on the card's value; a solve-time one
+/// is E0515 (§4.5.14).
 pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const u8) Error![]const u8 {
     const arg: Mir.Value = if (args.len > 1) args[1] else .zero;
     if (self.an.foldConst(arg, false)) |c| {
-        // §5.10.3.1's fourth case, the one with a number in it: "For any
-        // other values of dir, the cross() function does not generate an
-        // event and does not act to control the timestep", restated in the
-        // same clause as "there are two ways to disable the cross function,
-        // either by specifying enable as 0, or giving a value other than
-        // -1, 0, or 1 to dir". The `else` arm used to be the BOTH-EDGES
-        // test, which made dir = 2 a synonym for dir = 0 and left a model
-        // handed an out-of-range direction firing on every edge instead of
-        // going quiet. §4.5.10's direction is the same closed set ("shall
-        // evaluate to an integer expression +1, -1, or 0"), so
-        // `last_crossing` reads it the same way.
+        // §5.10.3.1 "For any other values of dir, the cross() function does
+        // not generate an event". §4.5.10's direction is the same closed
+        // set, so `last_crossing` reads it the same way.
         if (c.f == 1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in });
         if (c.f == -1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in });
         if (c.f != 0.0) return "false";
@@ -614,16 +506,10 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
     });
 }
 
-/// §5.10.3.1/§5.10.3.2/§5.10.3.3, one sentence repeated verbatim for
-/// `cross`, `above` and `timer`: "If enable argument is specified and it is
-/// zero, then <op>() is inactive, meaning that it does not generate an
-/// event". Absent means active, so an operator without the argument gets a
-/// literal `true` and the emitted `and` folds away.
-///
-/// The enable is the ONE operator argument that is a live expression rather
-/// than a codegen-time constant — `enableArgIdx` is what makes `UnitPlan`
-/// give it a slot, so a `cross(…, enable)` whose enable is a variable
-/// assigned in the block renders as that variable and not as its phi's zero.
+/// Returns the §5.10.3 enable test for `cross`, `above` or `timer` ("If
+/// enable argument is specified and it is zero, then <op>() is inactive"), or
+/// `true` when absent. The enable is a live expression; `UnitPlan` gives it
+/// a slot via `enableArgIdx`.
 fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
     const i = enableArgIdx(k) orelse return "true";
     if (i >= args.len) return "true";
@@ -634,124 +520,262 @@ fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
     return s;
 }
 
-/// §5.10 the `held_vars` index a `$held_*` call carries as its only
-/// argument. Always a literal `Lower` emitted, so the fold cannot fail.
+/// Returns the §5.10 `held_vars` index a `$held_*` call carries as its only
+/// argument, a literal lowering emitted.
 pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     const c = self.an.foldConst(if (args.len != 0) args[0] else .zero, false) orelse return 0;
     const i: usize = @intFromFloat(c.f);
     return @min(i, self.names.held_names.len -| 1);
 }
 
-/// Does this call, as `emitCall` renders it, read something the HOST changes
-/// between evaluations with `x` held — the `SimState`, an operator's accepted
-/// history, the §5.2.1 sub-task flag, the Newton iteration, the limiter
-/// history or a §9.13.1 seed latch? A value built on one is not a constant of
-/// the card, which is what `family.constant` needs to know.
-///
-/// Kept beside `emitCall` because it is a column of the same dispatch: a new
-/// arm there that reads such a field belongs here too.
+/// Returns whether this call, as `emitCall` renders it, reads state the host
+/// changes between evaluations with `x` held: `SimState`, operator history,
+/// the §5.2.1 sub-task flag, the Newton iteration, limiter history, a
+/// §9.13.1 seed latch or a held value. For `family.constant`. A new
+/// `emitCall` arm that reads such state must be listed here too.
 pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
     const d = self.mir.instData(inst).call;
     return switch (d.callee) {
-        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
-        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
-        .@"$bound_step", .@"$discontinuity",
+        .ddt,
+        .idt,
+        .idtmod,
+        .absdelay,
+        .@"absdelay$quad",
+        .transition,
+        .slew,
+        .last_crossing,
+        .laplace_zd,
+        .laplace_zp,
+        .laplace_nd,
+        .laplace_np,
+        .zi_zd,
+        .zi_zp,
+        .zi_nd,
+        .zi_np,
+        .cross,
+        .above,
+        .timer,
+        .@"$bound_step",
+        .@"$discontinuity",
         // §5.2.1, §5.10.2, §4.6.1, §4.6.3, §9.10: the SimState or the
         // sub-task flag; `$limit$old` reads the limiter history.
-        .analog_initial, .initial_step, .final_step, .analysis, .ac_stim,
-        .@"$abstime", .@"$realtime", .@"$simparam$str", .@"$limit$old",
+        .analog_initial,
+        .initial_step,
+        .final_step,
+        .analysis,
+        .ac_stim,
+        .@"$abstime",
+        .@"$realtime",
+        .@"$simparam$str",
+        .@"$limit$old",
         // §9.13.1 the seedless draw reads the latch `updateState` advances;
         // a VPI application may answer from any state it keeps.
         // §5.10 a held value is what the last accepted step left.
-        .@"$rng$auto", .systf, .@"$held_real", .@"$held_int",
+        .@"$rng$auto",
+        .systf,
+        .@"$held_real",
+        .@"$held_int",
         => true,
         // §9.15 `$simparam("iteration")`: sim.iteration.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
         // Constants, Model reads, and Instance fields fixed with the card and
         // the instance (`temperature`, `mfactor`), and every task,
         // conversion and kernel of its operands alone.
-        .limexp, .ddx, .white_noise, .flicker_noise, .noise_table, .noise_table_log,
-        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected",
-        .@"$analog_node_alias", .@"$analog_port_alias", .@"$test$plusargs", .@"$value$plusargs",
-        .@"$xposition", .@"$yposition", .@"$angle", .@"$hflip", .@"$vflip", .@"$rtoi", .@"$itor",
-        .@"$realtobits", .@"$bitstoreal", .@"$clog2", .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln",
-        .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan",
-        .@"$asin", .@"$acos", .@"$atan", .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh",
-        .@"$atanh", .@"$pow", .@"$hypot", .@"$atan2", .@"$display", .@"$displayb", .@"$displayo",
-        .@"$displayh", .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb",
-        .@"$strobeo", .@"$strobeh", .@"$monitor", .@"$monitoron", .@"$monitoroff", .@"$debug",
-        .@"$fatal", .@"$error", .@"$warning", .@"$info", .@"$finish", .@"$stop", .@"$fopen",
-        .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor",
-        .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek", .@"$rewind", .@"$ferror",
-        .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
-        .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
-        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$str$cat", .@"$str$repeat", .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
-        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
-        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
-        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
-        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next",
+        .limexp,
+        .ddx,
+        .white_noise,
+        .flicker_noise,
+        .noise_table,
+        .noise_table_log,
+        .@"$temperature",
+        .@"$vt",
+        .@"$mfactor",
+        .@"$param_given",
+        .@"$port_connected",
+        .@"$analog_node_alias",
+        .@"$analog_port_alias",
+        .@"$test$plusargs",
+        .@"$value$plusargs",
+        .@"$xposition",
+        .@"$yposition",
+        .@"$angle",
+        .@"$hflip",
+        .@"$vflip",
+        .@"$rtoi",
+        .@"$itor",
+        .@"$realtobits",
+        .@"$bitstoreal",
+        .@"$clog2",
+        .@"$sqrt",
+        .@"$exp",
+        .@"$expm1",
+        .@"$ln",
+        .@"$ln1p",
+        .@"$log",
+        .@"$log10",
+        .@"$floor",
+        .@"$ceil",
+        .@"$sin",
+        .@"$cos",
+        .@"$tan",
+        .@"$asin",
+        .@"$acos",
+        .@"$atan",
+        .@"$sinh",
+        .@"$cosh",
+        .@"$tanh",
+        .@"$asinh",
+        .@"$acosh",
+        .@"$atanh",
+        .@"$pow",
+        .@"$hypot",
+        .@"$atan2",
+        .@"$display",
+        .@"$displayb",
+        .@"$displayo",
+        .@"$displayh",
+        .@"$write",
+        .@"$writeb",
+        .@"$writeo",
+        .@"$writeh",
+        .@"$strobe",
+        .@"$strobeb",
+        .@"$strobeo",
+        .@"$strobeh",
+        .@"$monitor",
+        .@"$monitoron",
+        .@"$monitoroff",
+        .@"$debug",
+        .@"$fatal",
+        .@"$error",
+        .@"$warning",
+        .@"$info",
+        .@"$finish",
+        .@"$stop",
+        .@"$fopen",
+        .@"$fclose",
+        .@"$fflush",
+        .@"$fdisplay",
+        .@"$fwrite",
+        .@"$fstrobe",
+        .@"$fmonitor",
+        .@"$fdebug",
+        .@"$fgets",
+        .@"$fscanf",
+        .@"$ftell",
+        .@"$fseek",
+        .@"$rewind",
+        .@"$ferror",
+        .@"$feof",
+        .@"$sformat",
+        .@"$sscanf",
+        .@"$limit",
+        .@"$table_model",
+        .@"$limit$uf",
+        .@"$idx",
+        .@"$idx$int",
+        .@"$idx$str",
+        .@"$display$width",
+        .@"$monitor$arm",
+        .@"$fgets$str",
+        .@"$ferror$str",
+        .@"$fscanf$int",
+        .@"$fscanf$real",
+        .@"$fscanf$str",
+        .@"$sscanf$int",
+        .@"$sscanf$real",
+        .@"$sscanf$str",
+        .@"$plusarg$str",
+        .@"$str$cat",
+        .@"$str$repeat",
+        .@"$rng$check",
+        .@"$rng$rand",
+        .@"$rng$rand_next",
+        .@"$rng$i_uniform",
+        .@"$rng$i_uniform_next",
+        .@"$rng$uniform",
+        .@"$rng$uniform_next",
+        .@"$rng$normal",
+        .@"$rng$normal_next",
+        .@"$rng$exponential",
+        .@"$rng$exponential_next",
+        .@"$rng$poisson",
+        .@"$rng$poisson_next",
+        .@"$rng$chi_square",
+        .@"$rng$chi_square_next",
+        .@"$rng$t",
+        .@"$rng$t_next",
+        .@"$rng$erlang",
+        .@"$rng$erlang_next",
         => false,
     };
 }
 
-/// System/environment and operator calls. LRM ch9, §4.5, §4.6.
-///
-/// ONE switch over `Mir.Callee`, without `else`: a callee lowering learns to
-/// emit does not compile here until this says how it renders. The raw name is
-/// read only where the text needs it — §9.7.1's diagnostic line and `.systf`,
-/// whose spelling is not its tag.
+/// Writes a call: system and environment functions (Clause 9), §4.5
+/// operators, §4.6 functions. One exhaustive switch over `Mir.Callee`, so a
+/// new callee does not compile until it has a rendering.
 pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const d = self.mir.instData(inst).call;
     const c = d.callee;
     const name = d.name;
     const args = d.args;
     const k = Mir.callee.opKind(c);
-    // Lane accounting for the batch differential gate. ddt/idt and the
-    // §4.5.11/§4.5.12 filters stay lane-exact: their helpers branch only
-    // on `dt` (lane-uniform) and are otherwise S-linear over shared f64
-    // state, so evaluating N points against one Instance is exactly N
-    // scalar evaluations. Every other operator either steers on a
-    // `.val()` of its x-dependent input (events, transition, slew) or
-    // collapses it (delays), so it pins.
+    // ddt/idt and the §4.5.11/§4.5.12 filters stay lane-exact: they branch
+    // only on `dt` and are S-linear over shared state. Every other operator
+    // steers on or collapses a `.val()` of its input, so it pins.
     switch (k) {
         .none, .ddt, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
         .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| float_lanes.pinLanes(self, arg),
     }
     switch (c) {
-        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
-        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
-        .@"$bound_step", .@"$discontinuity",
+        .ddt,
+        .idt,
+        .idtmod,
+        .absdelay,
+        .@"absdelay$quad",
+        .transition,
+        .slew,
+        .last_crossing,
+        .laplace_zd,
+        .laplace_zp,
+        .laplace_nd,
+        .laplace_np,
+        .zi_zd,
+        .zi_zp,
+        .zi_nd,
+        .zi_np,
+        .cross,
+        .above,
+        .timer,
+        .@"$bound_step",
+        .@"$discontinuity",
         => return emitOperator(self, inst, args, k),
 
-        // §4.5.13 limexp — user-invoked only; the engine never inserts it.
+        // §4.5.13 limexp, user-invoked only.
         // Pins: zLimexp branches on its argument's `.val()`.
         .limexp => {
             if (args.len > 0) float_lanes.pinLanes(self, args[0]);
             return gen_render.helper1(self, "zLimexp", if (args.len > 0) args[0] else .f_zero);
         },
 
-        // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
-        // Pins: `.ddxAt` reads one scalar partial, which a value-form batch S
-        // does not carry.
+        // §4.5.14 ddx(f, V(node)); the unknown index is an int literal. Pins:
+        // `.ddxAt` reads one scalar partial.
         .ddx => {
             if (args.len > 0) float_lanes.pinLanes(self, args[0]);
             const u = if (args.len > 1) self.an.foldConst(args[1], true) else null;
             const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
-            // The VALUE reads a lane, so that lane must exist in a narrow S —
-            // `ddx_reads`, which `contract.validate` holds inside `deriv_reads`.
+            // The value reads a lane, so record it in `ddx_reads`.
             self.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
             try self.b("S.con((", .{});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
-            // The index is a literal lowering minted, but the cast is still
-            // saturating: a compiler panic is never the answer to bad MIR.
+            // Saturating cast: bad MIR must not panic the compiler.
             try self.b(").ddxAt({d}))", .{lane});
             return;
         },
 
-        // §5.2.1 the `analog initial` guard. Its own flag and not
-        // `is_initial_step`: §5.2.1 re-executes the block for each SUB-TASK of a
-        // parameter sweep, and Table 5-1's initial_step is the first point of the
-        // whole analysis. See `Lower.lowerModule`.
+        // §5.2.1 the `analog initial` guard. Not `initial_step`: §5.2.1 re-runs
+        // the block per sweep sub-task, while initial_step is the first point
+        // of the whole analysis.
         .analog_initial => {
             self.uses_sim = true;
             try self.b("S.con(if (sim.analog_initial) 1.0 else 0.0)", .{});
@@ -780,40 +804,22 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return;
         },
 
-        // §4.6.4 noise sources contribute in a small-signal noise analysis only;
-        // their residual contribution is identically zero. The generator
-        // topology is exported through `noise_gens` and the PSD — which IS the
-        // call's argument, not anything derivable from the residual — through
-        // `noisePsd`, whose core fields the argument slice already holds.
+        // §4.6.4 noise sources contribute zero to the residual. The host
+        // reads them through `noise_gens` and `noisePsd`.
         .white_noise, .flicker_noise, .noise_table, .noise_table_log => return self.b("S.con(0.0)", .{}),
 
-        // §4.6.3 ac_stim(analysis_name, mag, phase) is NOT a noise source: it
-        // is a small-signal stimulus. "The AC stimulus function returns zero
-        // (0) during large-signal analyses (such as DC and transient) as well
-        // as on all small-signal analyses using names which do not match
-        // analysis_name" — so the whole function is one conditional on the
-        // analysis in force, with the §4.6.1 name comparison `analysis()`
-        // already spells. The name defaults to "ac", mag to 1.0, phase to 0.0.
+        // §4.6.3 ac_stim(analysis_name, mag, phase) "returns zero (0) during
+        // large-signal analyses ... as well as on all small-signal analyses
+        // using names which do not match analysis_name". Defaults: "ac", 1.0,
+        // 0.0.
         //
-        // ponytail: the residual is REAL, so a matching analysis contributes
-        // the phasor's real part, mag·cos(phase). The quadrature component is
-        // dropped, which costs nothing for the phase = 0 form every model in
-        // the suite writes and is wrong by cos for the rest. Upgrade path is
-        // an `ac_gens` export beside `noise_gens`, carrying (mag, phase) for a
-        // host that solves a complex system — the same shape §4.6.4 uses, and
-        // the reason this is a conditional rather than an export today is that
-        // the contract has no complex side to hand it to.
+        // ponytail: the residual is real, so a matching analysis contributes
+        // mag·cos(phase) and drops the quadrature part. Upgrade path: an
+        // `ac_gens` export carrying (mag, phase) for a complex-solving host.
         .ac_stim => {
-            // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
-            // same production a contribution's right-hand side uses, and puts
-            // `constant_expression` only where it means one (the filters'
-            // trailing argument, two productions above). §4.5's Table 4-20 is
-            // the constant-argument register and `ac_stim` is not in it,
-            // because it is not an analog operator and keeps no state. So
-            // `ctrlEval`, not `argF64`: a magnitude the solve computes —
-            // `ac_stim("ac", k*V(ctrl))`, a swept-amplitude source — is a
-            // rendered expression here, and only a literal or a parameter
-            // still folds to the number it always did.
+            // A.8.2 gives both numeric arguments as `analog_expression`, and
+            // Table 4-20 does not list ac_stim, so a solve-computed magnitude
+            // is legal: `ctrlEval`, not `argF64`.
             const mag = try ctrlEval(self, args, 1, "1.0");
             const phase = try ctrlEval(self, args, 2, "0.0");
             try self.b("S.con(if (", .{});
@@ -825,46 +831,64 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return;
         },
 
-        // ---- Clause 9 system functions ------------------------------------
+        // Clause 9 system functions.
         .@"$display$width" => return gen_render.renderVal(self, args[0], .int),
-        // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In
-        // a device they are void (below).
-        .@"$display", .@"$displayb", .@"$displayo", .@"$displayh", .@"$write", .@"$writeb",
-        .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb", .@"$strobeo", .@"$strobeh",
-        .@"$monitor", .@"$debug", .@"$fatal", .@"$error", .@"$warning", .@"$info",
+        // §9.4/§9.7.3 print only in a printing artifact; void in a device.
+        .@"$display",
+        .@"$displayb",
+        .@"$displayo",
+        .@"$displayh",
+        .@"$write",
+        .@"$writeb",
+        .@"$writeo",
+        .@"$writeh",
+        .@"$strobe",
+        .@"$strobeb",
+        .@"$strobeo",
+        .@"$strobeh",
+        .@"$monitor",
+        .@"$debug",
+        .@"$fatal",
+        .@"$error",
+        .@"$warning",
+        .@"$info",
         => return if (self.display == .emit)
             cg_display.emitDisplayTask(self, c, args, @intFromEnum(inst))
         else
             voidTask(self),
-        // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
-        // the call's position among the prints; in a device the call is dead
-        // (`Lower.isSimCtlTask` calls join the display chain and nothing else,
-        // so under `.drop` nothing ever renders one — the void answer is for a
-        // model that reads the void result).
+        // §9.7.1/§9.7.2 same gate: in a printing artifact the run ends at the
+        // call's position among the prints; in a device the call is dead.
         .@"$finish", .@"$stop" => return if (self.display == .emit)
             cg_display.emitSimCtl(self, name, args)
         else
             voidTask(self),
-        // §9.4.1 a monitor's registration (`Lower.armMonitor`): a side effect, so
-        // only the display unit performs it; anywhere else it is void.
+        // §9.4.1 a monitor's registration is a side effect, performed only by
+        // the display unit.
         .@"$monitor$arm" => return if (self.emitting_display) cg_display.emitMonitorArm(self, args) else voidTask(self),
         .@"$monitoron", .@"$monitoroff" => return voidTask(self),
-        // §9.5 the descriptor family. Real kernels only in the display unit (see
-        // `emitting_display`); rendered but discarded in any other unit of the
-        // same artifact, so the slice `callArgIsValue` asked for is consumed.
-        //
-        // NOT gated on the display mode, and that is the point: `buildJobs`
-        // queues a display unit only under `.emit`, so `emitting_display` is
-        // already false throughout a `.drop` build and every §9.5 name lands in
-        // `emitFileCallDropped` — the one place that answers with the type
-        // `Mir.callee.ty` gave the call. Answering with `voidTask` instead put
-        // an `S` in the `i64` slot §9.5.1 says a descriptor is:
-        // `const t0: i64 = S.con(0.0);`, `--emit-zig` exit 0, and the failure
-        // deferred to whoever compiled the device.
-        .@"$fopen", .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe",
-        .@"$fmonitor", .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek",
-        .@"$rewind", .@"$ferror", .@"$feof", .@"$fgets$str", .@"$ferror$str",
-        .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str",
+        // §9.5 the descriptor family runs only in the display unit. Everywhere
+        // else, including every `.drop` build, `emitFileCallDropped` answers
+        // with the call's own type (a descriptor is an i64, §9.5.1).
+        .@"$fopen",
+        .@"$fclose",
+        .@"$fflush",
+        .@"$fdisplay",
+        .@"$fwrite",
+        .@"$fstrobe",
+        .@"$fmonitor",
+        .@"$fdebug",
+        .@"$fgets",
+        .@"$fscanf",
+        .@"$ftell",
+        .@"$fseek",
+        .@"$rewind",
+        .@"$ferror",
+        .@"$feof",
+        .@"$fgets$str",
+        .@"$ferror$str",
+        .@"$fscanf$int",
+        .@"$fscanf$real",
+        .@"$fscanf$str",
         => return if (self.emitting_display)
             cg_display.emitFileCall(self, c, args, @intFromEnum(inst))
         else
@@ -875,7 +899,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b("S.con(inst.temperature)", .{});
         },
         .@"$vt" => {
-            // k/q = 8.617333262e-5 V/K (§9.10 $vt = kT/q).
+            // §9.10 $vt = kT/q, k/q = 8.617333262e-5 V/K.
             if (args.len == 0) {
                 self.uses_inst = true;
                 return self.b("S.con(inst.temperature * 8.617333262145179e-5)", .{});
@@ -888,10 +912,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             self.uses_sim = true;
             return self.b("S.con(sim.t)", .{});
         },
-        // §5.10 the retained value of an event-assigned variable. `Lower` put
-        // this in the entry block in place of the declared initializer, so
-        // reading the variable before the event has ever fired reads the
-        // `Instance` default and after it the last accepted value.
+        // §5.10 the retained value of an event-assigned variable: the
+        // `Instance` default before the event first fires, then the last
+        // accepted value.
         .@"$held_real", .@"$held_int" => {
             self.uses_inst = true;
             const f = self.names.held_names[heldIdx(self, args)];
@@ -904,62 +927,41 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             self.uses_inst = true;
             return self.b("S.con(inst.mfactor)", .{});
         },
-        // §9.18 Table 9-29 hierarchical system parameters. Their value is the
-        // top-level value combined down the instantiation hierarchy; VerA
-        // elaborates exactly ONE flat module, so the device IS the top level
-        // and the table's "Top-Level Value" column is exact — not a substitute.
-        // ($mfactor is the exception above: the host scales the whole stamp by
-        // it, so it stays a settable Instance field.)
+        // §9.18 Table 9-29 hierarchical system parameters. The device is the
+        // top level, so the "Top-Level Value" column is exact. ($mfactor is
+        // the exception: the host scales the stamp, so it is an Instance field.)
         .@"$xposition", .@"$yposition" => return self.b("S.con(0.0)", .{}), // 0.0 m
         .@"$angle" => return self.b("S.con(0.0)", .{}), // 0 degrees
         .@"$hflip", .@"$vflip" => return self.b("S.con(1.0)", .{}), // +1
-        // §9.15 $simparam(name [, fallback]), in the clause's own order: the
-        // KNOWN value first, the fallback only for a name this engine does not
-        // have ("its value is returned IF param_name is not known"). The list
-        // and the values are `Lower.simparamValue`, so the name that reaches
-        // here answered is the same set that escaped E0811 at lowering.
+        // §9.15 $simparam(name [, fallback]): the known value first, the
+        // fallback only "if param_name is not known". The known set is
+        // `Lower.simparamValue`, the same one E0811 checks.
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
                 self.uses_sim = true;
                 return self.b("S.con(@floatFromInt(sim.iteration))", .{});
             }
-            // Host-published first: `simparamValue` also answers `tnom`, but
-            // only as the DECLARED default (`Lower.simparamHostField`).
+            // Host-published first: `simparamValue` answers `tnom` only as
+            // the declared default.
             if (Lower.simparamHostField(nm)) |f| {
                 self.uses_model = true;
                 return self.b("S.con(model.{s})", .{f});
             }
             if (self.lowered.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
             if (args.len > 1) return self.b("S.con({s})", .{try f64Expr(self, args[1])});
-            // Unknown, no fallback: E0811 already refused this compile unless
-            // the name was not a literal, in which case zero is the only answer
-            // available and the model asked for a name nothing could resolve.
+            // Unknown with no fallback: E0811 refused it unless the name was
+            // not a literal.
             return self.b("S.con(0.0)", .{});
         },
-        // §9.15 "Table 9-28 gives a list of simulation string parameter names
-        // that shall be supported by $simparam$str" — no "if they support the
-        // parameter" escape, unlike Table 9-27's numeric side, so the two names
-        // this engine actually knows are answered. The rest ("cwd", "instance",
-        // "path") describe the host's filesystem and instantiation hierarchy,
-        // which a flat elaborated device has no view of: "" is the honest answer
-        // there, an invented path is not.
+        // §9.15 Table 9-28 `$simparam$str`: "analysis_type" and "module" are
+        // answered; "cwd", "instance" and "path" describe the host, which a
+        // flat device cannot see, so they read "".
         .@"$simparam$str" => {
-            // §9.15: "The argument param_name is a string value, either a string
-            // literal, a string parameter, or a STRING VARIABLE." A variable's
-            // value is only known while the block runs, so the table is
-            // consulted at RUN TIME and not folded here. The name folds to a
-            // literal in the common case and `zig` collapses the chain back to
-            // one branch; `strArg orelse ""` used to answer every unfoldable
-            // name with the empty string, which is a constant folder wearing
-            // §9.15's signature.
-            //
-            // §4.6.1's analysis names ARE the `AnalysisKind` tag spellings, so
-            // the enum is the table — no second list to drift out of step.
-            // Table 9-28's hierarchy rows are answered by `Lower` (they are
-            // elaboration facts, and this function has one flattened module):
-            // "module" survives here only for the callers that build a `Gen`
-            // with no elaborated unit table.
+            // §9.15 param_name may be a string variable, so the lookup runs
+            // at run time. §4.6.1's analysis names are the `AnalysisKind` tag
+            // spellings. `Lower` answers the hierarchy rows; "module" remains
+            // for callers that build a `Gen` without an elaborated unit table.
             self.uses_sim = true;
             try self.b("(if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
@@ -979,23 +981,12 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // Every port of an elaborated device instance is connected; an
         // unconnected one is the host's business (§6.5.6).
         .@"$port_connected" => return self.b("@as(i64, 1)", .{}),
-        // §9.20 node aliases do NOT render here, and used to: this arm answered
-        // the constant 0 on the argument that "this engine elaborates ONE FLAT
-        // MODULE, so there is no instance hierarchy for such a string to resolve
-        // into". The premise was false. Elaboration FLATTENS a hierarchy, and a
-        // flattened child's net keeps its path as its name (`Elaborate.sep` is a
-        // period), so the string §9.20 hands the compiler and the name the
-        // design carries are the same bytes. `Lower.bindAlias` resolves it
-        // against `node_voltages`, performs the clause's topology edit there —
-        // an alias is that map's business, since it is what every probe goes
-        // through — and folds the call to its 1 or its 0. This backend never
-        // sees one of these callees; were one to arrive, it is what it was
-        // before it had a tag — an unregistered `$name` (below).
+        // §9.20 node aliases are resolved and folded by `Lower.bindAlias`, so
+        // codegen never sees one; one that arrives is an unregistered `$name`.
         .@"$analog_node_alias", .@"$analog_port_alias" => return emitUnregistered(self, inst, name, args),
-        // §9.12 / IEEE 1364 §17.10: a search of the plusargs the HOST wrote
-        // into `inst.plusargs` (contract `sim_state_fields`), in supplied
-        // order. `$value$plusargs` matches on the plusarg_string before its
-        // format; `$plusarg$str` is the matched plusarg `$sscanf$<ty>` converts.
+        // §9.12 / IEEE 1364 §17.10: a search of the host-written
+        // `inst.plusargs`, in supplied order. `$plusarg$str` is the matched
+        // plusarg that `$sscanf$<ty>` converts.
         .@"$test$plusargs", .@"$value$plusargs", .@"$plusarg$str" => {
             self.uses_inst = true;
             const str = c == .@"$plusarg$str";
@@ -1003,28 +994,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .undef, .str);
             return self.b(", {}){s}", .{ c != .@"$test$plusargs", if (str) " orelse \"\")" else " != null))" });
         },
-        // §9.22/§9.23 driver & receiver access do NOT appear here. They used to,
-        // answering the constant 0 (and -1.0 for $driver_delay's no-pending-value
-        // sentinel) on the argument that a flat analog device has no digital
-        // drivers so zero is the true count. The argument is wrong at the first
-        // step: §9.22 paragraph 3 says "Driver access functions can only be
-        // called from connect modules", so the call itself is illegal in every
-        // module VerA can compile and there is no result to render. Refused at
-        // lowering now (E0818, `isConnectModuleOnlySysFunc`), which is where the
-        // call site is known — so this backend never sees one of these names.
-        // §4.5.15 $limit: the limiting ALGORITHM is a convergence aid the host
-        // owns (contract `limit`); the LRM lets a simulator that does not apply
-        // it return the access function unchanged, which is what happens here.
-        // §9.17.3 the USER-FUNCTION form. `lower.lowerLimitUser` has already
-        // inlined the function body and latched its return into the site's
-        // `LimitSlot`; what is left is the one thing only the backend can
-        // spell — the returned value carries the ACCESS FUNCTION's derivative,
-        // not the limiter's, so the clamp lands as a constant shift on the
-        // probe. args = (vnew, vlim). See `zLimitUf`.
+        // §9.22/§9.23 driver access is refused at lowering (E0818), so it
+        // never reaches codegen.
+        // §9.17.3 user-function `$limit`: lowering inlined the function and
+        // latched its return. The result carries the access function's
+        // derivative, not the limiter's. args = (vnew, vlim).
         .@"$limit$uf" => {
             if (args.len != 2) return emitUnregistered(self, inst, name, args);
-            // `.val()` on two x-dependent carriers: a vector S would collapse
-            // per lane, so this pins them for the same reason `zPow` does.
+            // `zLimitUf` reads `.val()` of both.
             float_lanes.pinLanes(self, args[0]);
             float_lanes.pinLanes(self, args[1]);
             return gen_render.helper2(self, "zLimitUf", args[0], args[1]);
@@ -1033,11 +1010,12 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             self.uses_inst = true;
             return self.b("S.con(inst.limiter_previous[{d}])", .{gen_render.intArg(self, args, 0) orelse unreachable});
         },
+        // §4.5.15 the host owns the limiting algorithm (contract `limit`), so
+        // the device returns the access function unchanged.
         .@"$limit" => return gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real),
         .@"$clog2" => return gen_render.intCall1(self, "zClog2", if (args.len > 0) args[0] else .zero),
-        // §9.11 conversions. `$rtoi` truncates (Table 9-7); the saturation is
-        // ours — the clause is silent on overflow and `@intFromFloat` is UB in
-        // the ReleaseFast artifact a host actually links.
+        // §9.11 `$rtoi` truncates (Table 9-7). Saturating, since the clause is
+        // silent on overflow and `@intFromFloat` is UB under ReleaseFast.
         .@"$rtoi" => {
             if (args.len > 0) float_lanes.pinLanes(self, args[0]); // scalar collapse
             try self.b("std.math.lossyCast(i64, @trunc((", .{});
@@ -1049,9 +1027,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
             return self.b(")))", .{});
         },
-        // §9.11 Table 9-8 $realtobits/$bitstoreal: the IEEE-754 bit pattern of
-        // the real, verbatim. Exactly representable in the i64 that lowering
-        // gives integers, so this is the spec function, not an approximation.
+        // §9.11 Table 9-8 $realtobits/$bitstoreal: the IEEE 754 bit pattern,
+        // exactly representable in the i64 lowering gives integers.
         .@"$realtobits" => {
             if (args.len > 0) float_lanes.pinLanes(self, args[0]); // scalar collapse
             try self.b("@as(i64, @bitCast((", .{});
@@ -1063,10 +1040,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .zero, .int);
             return self.b(")))", .{});
         },
-        // §9.5.3 `$swrite`/`$sformat`, arriving as the synthetic `$sformat` whose
-        // operands are the format and its arguments — the destination is gone,
-        // because lowering made this call the right-hand side of an assignment to
-        // it. The text goes into this call site's own scratch row.
+        // §9.5.3 `$swrite`/`$sformat` as the synthetic `$sformat(format,
+        // args...)`: lowering made it the right-hand side of an assignment to
+        // the destination. The text goes into this call site's scratch row.
         .@"$sformat" => return cg_display.emitStringFormat(self, args, @intFromEnum(inst)),
         // §3.3 Table 3-3 a string built while the device runs, into this call
         // site's own scratch row, keyed like `$sformat`'s.
@@ -1086,48 +1062,73 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b(")", .{});
         },
         .@"$table_model" => return gen_render.emitTable(self, inst, args), // §9.21
-        // §§3.2/5.7 runtime array index — one switch, see `emitIdx`. The
-        // element type is the callee's own (`Mir.callee.ty`).
+        // §3.2/§5.7 runtime array index (`emitIdx`), typed by the callee.
         .@"$idx", .@"$idx$int", .@"$idx$str" => return gen_render.emitIdx(self, args, Mir.callee.ty(c)),
-        // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
-        // seed's incoming value, then the distribution's parameters. Every one is
-        // a pure function of that seed and carries no derivative — a variate is a
-        // constant of the operating point, which is what makes it admissible in a
-        // residual at all (see `rng_kernels.zig`).
-        .@"$rng$auto", .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
-        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
-        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
-        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
-        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next",
+        // §9.13 Table 9-10 as `Lower.lowerRandom` shapes it: the seed, then
+        // the distribution's parameters. A variate is a pure function of the
+        // seed and carries no derivative.
+        .@"$rng$auto",
+        .@"$rng$check",
+        .@"$rng$rand",
+        .@"$rng$rand_next",
+        .@"$rng$i_uniform",
+        .@"$rng$i_uniform_next",
+        .@"$rng$uniform",
+        .@"$rng$uniform_next",
+        .@"$rng$normal",
+        .@"$rng$normal_next",
+        .@"$rng$exponential",
+        .@"$rng$exponential_next",
+        .@"$rng$poisson",
+        .@"$rng$poisson_next",
+        .@"$rng$chi_square",
+        .@"$rng$chi_square_next",
+        .@"$rng$t",
+        .@"$rng$t_next",
+        .@"$rng$erlang",
+        .@"$rng$erlang_next",
         => return gen_render.emitRng(self, c, args),
-        // §9.5.4.2 `$sscanf`: the count, and the three item flavours lowering
-        // picks from the destination's declared type. All four are pure functions
-        // of the same two strings, so nothing here has to sequence them.
-        //
-        // Unreached item helpers return default payloads, not assignments.
-        // Lower.lowerScan guards each destination write with count > index,
-        // retaining its incoming SSA value when conversion did not assign it.
+        // §9.5.4.2 `$sscanf`: the count and three item flavours, each a pure
+        // function of the two strings. `Lower.lowerScan` guards each
+        // destination write with count > index.
         .@"$sscanf" => return gen_render.emitScan(self, "zScanN", args, .int),
         .@"$sscanf$int" => return gen_render.emitScan(self, "zScanI", args, .int),
         .@"$sscanf$real" => return gen_render.emitScan(self, "zScanR", args, .real),
         .@"$sscanf$str" => return gen_render.emitScan(self, "zScanS", args, .str),
-        // IEEE 1364 §17.11 math functions, carried into Verilog-AMS: `$ln`,
-        // `$exp`, `$pow`, … are the same functions as their bare spellings —
-        // resolved at comptime, so a `$` tag with no Table 4-14/4-15 opcode
-        // does not compile. A wrong arity is an unregistered `$name` (below).
-        inline .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10",
-        .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan", .@"$asin", .@"$acos", .@"$atan",
-        .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh", .@"$atanh", .@"$pow",
-        .@"$hypot", .@"$atan2",
+        // IEEE 1364 §17.11 math functions are their bare spellings, resolved at
+        // comptime. A wrong arity is an unregistered `$name`.
+        inline .@"$sqrt",
+        .@"$exp",
+        .@"$expm1",
+        .@"$ln",
+        .@"$ln1p",
+        .@"$log",
+        .@"$log10",
+        .@"$floor",
+        .@"$ceil",
+        .@"$sin",
+        .@"$cos",
+        .@"$tan",
+        .@"$asin",
+        .@"$acos",
+        .@"$atan",
+        .@"$sinh",
+        .@"$cosh",
+        .@"$tanh",
+        .@"$asinh",
+        .@"$acosh",
+        .@"$atanh",
+        .@"$pow",
+        .@"$hypot",
+        .@"$atan2",
         => |t| {
             const op = comptime mathOpByName(@tagName(t)[1..]).?;
             if (Mir.opClass(op) == .unary and args.len >= 1) return gen_render.renderOp(self, op, args[0], .f_zero, .real);
             if (Mir.opClass(op) == .binary and args.len >= 2) return gen_render.renderOp(self, op, args[0], args[1], .real);
             return emitUnregistered(self, inst, name, args);
         },
-        // Not a Chapter 9 function, not an Annex D macro and not a §4.5
-        // operator. A `$name` is an UNREGISTERED system function
-        // (`emitUnregistered`); anything else is a MIR call no clause defines.
+        // A `$name` is an unregistered system function; anything else is a
+        // MIR call no clause defines.
         .systf => {
             if (name.len != 0 and name[0] == '$') return emitUnregistered(self, inst, name, args);
             return abort(self, "VerA: unhandled call `{s}`", .{name});
@@ -1135,49 +1136,19 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     }
 }
 
-/// §9.4/§9.7 display and control tasks outside the printing unit: void.
-/// Lowering keeps them as calls; their result is never read, so this only
-/// fires if a model assigns one — and every one of them is real-valued
-/// (`Mir.callee.ty` types none of them `.int`), which is what makes ONE answer
-/// correct for the whole family.
-///
-/// The §9.5 descriptor family is NOT here. It used to be, for the case where a
-/// device carries no host file table — but that answer is
-/// `emitFileCallDropped`'s, which reads the callee's type and returns
-/// `@as(i64, 0)` for the eight integer-valued names §9.5.1 defines a
-/// descriptor as. The blanket `S.con(0.0)` typed them real and the two
-/// disagreed.
+/// Writes the void result of a §9.4/§9.7 task outside the printing unit.
+/// Every such callee is real-valued, so one answer serves all. (§9.5
+/// descriptors go through `emitFileCallDropped`, which respects their type.)
 fn voidTask(self: *Gen) Error!void {
     return self.b("S.con(0.0)", .{});
 }
 
-/// Nothing in `emitCall` claimed the call, so it is not a Chapter 9 function,
-/// not an Annex D macro and not a §4.5 operator: it is an UNREGISTERED system
-/// function. §2.8.3 makes `$name` grammatical and lists "defined using the VPI
-/// as described in Clause 11 and Clause 12" as one of its definition sites;
-/// §12.32's vpi_register_analog_systf() hands the APPLICATION a compiletf
-/// routine, so what an unknown systf means is the host's decision and not this
-/// compiler's. §12.32.3's own sampnhold listing puts one in a contribution. No
-/// clause makes the source an error, so it may not be rejected — see W0852.
-///
-/// THE SET THAT ARRIVES HERE IS ACTUALLY EMPTY OF LRM NAMES, which is what
-/// makes the answer below safe rather than a blanket amnesty: every Chapter 9
-/// name is either implemented in `emitCall` or diagnosed by a RULE before
-/// codegen (E0806 for a digital-only row of the §9.2 tables, E0808 for the
-/// retired v1.0 `$limexp`, E0812, E0813, E0815, E0816). Probing the whole of
-/// ch9 by hand, the only names that reach this line are ones Verilog-AMS
-/// defines nowhere — `$countdrivers`, `$rose`, `$fell`, and a typo. Add an
+/// Writes an unregistered system function call (W0852) as a VPI hand-off.
+/// §2.8.3 makes `$name` grammatical and lets the VPI define it (§12.32), so
+/// the source may not be rejected; `--deny=W0852` makes a host-less build
+/// fail. Every Clause 9 name is implemented in `emitCall` or refused before
+/// codegen, so only names the LRM defines nowhere arrive here. Add an
 /// unimplemented LRM function to `Mir.Callee` and `emitCall`, not here.
-///
-/// WHY THIS IS NOT THE SILENT-ZERO THE REST OF THIS FILE REFUSES. Every
-/// `abort` here stands where the LRM fixes a number and a substitute would
-/// contradict it (E0515's control arguments, a filter VerA cannot build). This
-/// name has no such number: the language defines no value for an unregistered
-/// systf at all — §12.32.3 never initializes sampler->value before the first
-/// update callback and returns that field through vpi_put_value() — so there
-/// is nothing to be wrong about, only an absent host. The compromise is that
-/// it is LOUD: one warning per call site, `--deny=W0852` restores the refusal
-/// for anyone who wants a host-less build to fail instead.
 fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const Mir.Value) Error!void {
     if (self.diags) |bag| try bag.add(
         .codegen,
@@ -1188,21 +1159,21 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
             "will not build",
         .{name},
     );
-    // A systf crosses to the host through concrete f64s (`.val()` per
-    // argument, partials written back) — a per-lane crossing does not
-    // exist, so it pins regardless of what the host computes.
+    // A systf crosses to the host through concrete f64s, so it pins.
     float_lanes.pinCrossing(self);
     return emitSystfCall(self, name, args);
 }
 
+/// Marks the build fatal with the first such message and writes a
+/// placeholder `S.con(0.0)` so emission can continue.
 pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
     self.any_fatal = true;
     if (self.fatal == null) self.fatal = try std.fmt.allocPrint(self.arena, fmt, args);
     try self.b("S.con(0.0)", .{});
 }
 
-/// §4.6.1 the analysis-name arguments are string constants; the comparison
-/// against the runtime pass is what the host answers.
+/// Writes the §4.6.1 test of `args`' analysis names against `sim.kind`,
+/// or `false` when none is a string literal.
 pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
     self.uses_sim = true;
     var first = true;
@@ -1213,17 +1184,12 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
         first = false;
         const s = def.str_const;
         if (std.mem.eql(u8, s, "static")) {
-            // §4.6.1 "static" is true in any analysis that computes a DC
-            // operating point.
+            // §4.6.1 "static": any analysis that computes a DC operating point.
             try self.b("(sim.kind == .static or sim.kind == .ic or " ++
                 "sim.kind == .nodeset or sim.kind == .dc)", .{});
         } else if (std.mem.eql(u8, s, "tran")) {
-            // §4.6.1 "tran" is true during "the initial DC and time-sweep
-            // phases of a transient" — the ic phase counts. This is what
-            // lets a source spell ngspice's TRANOP/DCOP split: the
-            // transient's own operating point evaluates waveform(0) while
-            // .op/.dc/.ac bias at the DC value
-            // (`analysis("static") && !analysis("tran")`).
+            // §4.6.1 "tran" covers "the initial DC and time-sweep phases of a
+            // transient", so the ic phase counts.
             try self.b("(sim.kind == .tran or sim.kind == .ic)", .{});
         } else if (isAnalysisName(s)) {
             try self.b("sim.kind == .{s}", .{s});
@@ -1234,27 +1200,11 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
     if (first) try self.b("false", .{});
 }
 
-/// §2.8.3/§12.32: hand one unresolved `$name` to the host's VPI application.
-///
-/// WHY THIS IS NOT A CALL THROUGH A `fn (args: []S) S` POINTER, which is what
-/// every other hook in the contract would look like. `eval` is generic over
-/// S and is instantiated at least twice — a plain f64 for the residual, a
-/// derivative-carrying dual for the Jacobian — and a function POINTER cannot
-/// be generic over S. So the boundary is concrete: the host returns the
-/// value and writes the partials, and this rebuilds the dual.
-///
-/// The reassembly is the whole trick. `arg.addC(-arg.val())` has VALUE zero
-/// and DERIVATIVE d(arg), so `.scale(p)` makes a term that contributes p·d(arg)
-/// to the derivative and nothing at all to the value. Summed onto `S.con(v)`
-/// the result carries the host's value with the host's partials grafted on —
-/// and on the plain-f64 instantiation every one of those terms is exactly
-/// zero, so the residual reads `v` and nothing else. That is §12.22.1's
-/// `derivtf` arrived at from the other side, and it is what keeps `eval` a
-/// pure function of x, which the host's own Newton iteration depends on.
-///
-/// The arguments are bound to `const`s first rather than rendered twice:
-/// each is needed once for its value and once for its derivative, and an
-/// argument expression can be an arbitrary subtree.
+/// Writes one §2.8.3/§12.32 hand-off of `$name` to the host's VPI
+/// application. A function pointer cannot be generic over S, so the host
+/// takes f64 values and returns the value plus partials, and this rebuilds
+/// S: `arg.addC(-arg.val()).scale(p)` adds p·d(arg) to the derivative and
+/// zero to the value (§12.22.1's `derivtf`).
 fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
     const k = for (self.systf_names.items, 0..) |n, i| {
         if (std.mem.eql(u8, n, name)) break i;
@@ -1262,8 +1212,7 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
         try self.systf_names.append(self.arena, name);
         break :blk self.systf_names.items.len - 1;
     };
-    // `inst` is the generated device's own parameter, and `emitUnit` patches
-    // it to `_` when nothing read it. This reads it.
+    // Reads `inst`, so `emitUnit` keeps the parameter named.
     self.uses_inst = true;
 
     const label = self.systf_sites;
@@ -1274,12 +1223,8 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
         try gen_render.renderVal(self, a, .real);
         try self.b(";\n", .{});
     }
-    // `validateHost` is what makes this unwrap safe, and it is the reason
-    // the check exists: with no application bound there is no value here,
-    // not a wrong one — §12.32.3 never initializes its sampler's value
-    // before the first callback, so the language fixes no default to fall
-    // back to. Refusing the HOST's build is the only outcome that cannot be
-    // mistaken for a working device.
+    // `validateHost` refuses a host that binds no application, so this
+    // unwrap is safe; the LRM fixes no default value to fall back to.
     try self.b("        const zsh = inst.systf.?;\n", .{});
     try self.b("        const zsv = [_]f64{{", .{});
     for (args, 0..) |_, j| try self.b("{s} zs{d}a{d}.val()", .{ if (j == 0) "" else ",", label, j });
@@ -1296,9 +1241,8 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     try self.b("        break :zs{d} zsr;\n    }}", .{label});
 }
 
-/// The `$name`s this device leaves to a VPI application. Emitted after the
-/// units because that is when the set is known — nothing before `renderCall`
-/// can say which names it will fail to resolve without repeating all of it.
+/// Writes `systf_calls`, the `$name`s this device leaves to a VPI
+/// application. Call after every unit is emitted: `emitCall` fills the set.
 pub fn emitSystfTable(self: *Gen) Error!void {
     if (self.systf_names.items.len == 0) return;
     try self.w(
@@ -1313,35 +1257,17 @@ pub fn emitSystfTable(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// A §9.5 call in a unit that is NOT the display unit: the descriptor answers
-/// what §9.5.1 says a device with no file table has to answer, and the
-/// operands are consumed rather than dropped.
-///
-/// Consumed, because `callArgIsValue` said they were live and the slice
-/// therefore declared them — an unused local is a hard error in Zig, so the
-/// two have to agree. The alternative, teaching `callArgIsValue` which unit it
-/// is being asked about, would thread the display flag through `UnitPlan`'s
-/// whole marking pass to save four characters of generated text.
-///
-/// The whole of a `display == .drop` build is "not the display unit", so this
-/// is also every §9.5 call in a device. `callArgIsValue` marks nothing live
-/// there, which agrees the other way round: no slot is declared, and there is
-/// nothing to consume. What matters in both modes is the TYPE below — the
-/// caller's slot is `Mir.callee.ty`'s, and §9.5's descriptors are integers.
+/// Writes a §9.5 call outside the display unit (every §9.5 call in a
+/// `.drop` build). The result has `Mir.callee.ty`'s type; a descriptor is
+/// an integer (§9.5.1).
 pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
-    // A printing artifact HAS a file table: the display unit performed this
-    // call and latched its integer result (`file_kernels.zFRes`), so a
-    // descriptor assigned in the analog block reads back as the descriptor.
-    // A device (`.drop`) never performs one and keeps the zero below.
+    // In a printing artifact the display unit performed the call and latched
+    // its integer result, so read it back.
     if (self.display == .emit and Mir.callee.ty(c) == .int)
         return self.b("zFRes({d}).*", .{site});
-    // §9.5.1 reserves 0 for `$fopen`'s failure, §9.5.4.1 for "an error occurs
-    // reading", §9.5.8 for "no EOF has been detected" and §9.5.7 for "the most
-    // recent operation did not result in an error" — so zero is the right
-    // answer here and not a stub. §9.5.5's positioning family is the one
-    // exception: its error return is EOF, but `$ftell` on a descriptor that
-    // was never opened has no offset to report either way.
+    // Zero is the LRM's answer: §9.5.1 `$fopen` failure, §9.5.4.1 read
+    // error, §9.5.8 no EOF, §9.5.7 no error.
     try self.b("{s}", .{switch (Mir.callee.ty(c)) {
         .real => "S.con(0.0)",
         .int => "@as(i64, 0)",
@@ -1349,31 +1275,23 @@ pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, s
     }});
 }
 
+/// Returns the string literal at `args[i]`, or null.
 pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
     return plan_args.strArg(self.input(), args, i);
 }
 
-/// §4.5 stateful analog operators. The operator's INPUT is a named unit of
-/// its own, so the state field and `updateState`'s read of the input share
-/// one stable key and adding an unrelated operator renumbers nothing.
+/// Writes a §4.5 stateful analog operator call. Each operator is a named
+/// unit, so its `Instance` fields and `updateState`'s read share a stable key.
 pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKind) Error!void {
     self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
     const unit = gen_unit.unitOfInst(self, inst);
     if (unit == none_u32) return self.b("S.con(0.0)", .{});
     const n = self.names.unit_names[unit];
-    // Only the operators whose kernel needs the CURRENT input read it; the
-    // pure-history ones answer from `Instance` alone. Rendering the input
-    // for one of those would set `uses_x`/`uses_model` for text that is
-    // never emitted, and `patchParam` would then leave a named parameter
-    // nothing references — which Zig rejects.
+    // Render the input only when the kernel reads it, or `uses_x` would keep
+    // an unreferenced parameter named.
     const needs_in = opNeedsInput(k);
-    // The input is a `Mir.Value` of the body being rendered, not a call to a
-    // declaration of its own: `plan_core.plan` makes every operator input a
-    // field of the core, so inside the core it is the local that already
-    // holds it and inside the §9.4 `display` unit it is a cache read.
-    // `callArgIsValue` still returns false for an operator argument — the
-    // value is live because it is a core target, not because this call
-    // marked it, which is what keeps the §4.5.2 one-evaluation-per-step rule.
+    // Every operator input is a core field, so this renders a local in the
+    // core and a cache read in the display unit.
     const in0 = if (needs_in)
         try gen_render.renderToArena(self, if (args.len == 0) .f_zero else args[0], .real)
     else
@@ -1390,16 +1308,12 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     const kS = try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{fm});
     const in = if (needs_in) try std.fmt.allocPrint(self.arena, "zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
     switch (k) {
-        // §4.5.11 the cascade reads its sections from Model on every
-        // evaluation and is LINEAR in the current input, so the Jacobian
-        // `b0/a0` it hands the solver is exact.
+        // §4.5.11 the cascade is linear in the current input, so its
+        // Jacobian `b0/a0` is exact.
         .laplace => {
             const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, "{s}", .{m});
-            // `__sec` takes a `*const Model` whatever its coefficients read,
-            // so the call site is a use of `model` even when `filterPlan`
-            // saw no Model read — without this the enclosing unit's
-            // parameter gets patched to `_` and the device does not compile.
+            // `__sec` always takes `model`, so keep the parameter named.
             self.uses_model = true;
             try opOpen(self, fm);
             try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
@@ -1407,20 +1321,14 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             });
             try opClose(self);
         },
-        // §4.5.12 "acts like a simple sample-and-hold which samples every T
-        // seconds and EXHIBITS NO DELAY": between samples the output does
-        // not depend on the current unknowns and enters the residual as a
-        // constant — the same companion model `absdelay` uses — but AT a
-        // sample instant it is the output of THAT sample. `zZiEval` decides
-        // which, off the same `__next` clock `updateState` advances; it
-        // used to be handed `inst.__out` alone, which `updateState` writes
-        // after the timepoint is evaluated, so every zi_* ran one whole
-        // sample period late.
+        // §4.5.12 "samples every T seconds and exhibits no delay": between
+        // samples the output is a held constant; at a sample instant it is
+        // that sample's output. `zZiEval` decides which on the same clock
+        // `updateState` advances.
         .zi => {
             const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, "{s}", .{m});
-            // Same reason `.laplace` above forces it: `__sec` takes a
-            // `*const Model` whatever its coefficients read.
+            // As for `.laplace`.
             self.uses_model = true;
             try opOpen(self, fm);
             try self.b(
@@ -1435,12 +1343,9 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try self.b("zDdt({s}, {s}, inst.{s}__prev, sim.dt)", .{ kS, in, n });
             try opClose(self);
         },
-        // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
-        // conditions during DC and IC analyses, and whenever assert is
-        // nonzero. Once assert becomes zero, idt() returns the integral of
-        // the argument starting from the last instant where assert was
-        // nonzero." The reset is a plain select on the accumulator, which
-        // `updateState` holds at `ic` for as long as assert is nonzero.
+        // §4.5.4 `idt(expr, ic, assert)` "returns the initial conditions
+        // during DC and IC analyses, and whenever assert is nonzero". The
+        // reset is a select; `updateState` holds the accumulator at `ic`.
         .idt => {
             try opOpen(self, fm);
             if (args.len >= 3) try self.b(
@@ -1476,12 +1381,9 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             );
             try opClose(self);
         },
-        // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
-        // output was when the current excursion began, and when that was —
-        // and takes its TARGET from the current input, so the companion
-        // model is linear in the unknowns with slope `(t-t0)/tt`. That is
-        // the derivative of the piecewise-linear function itself, not an
-        // approximation of it.
+        // §4.5.8 the ramp's origin comes from `Instance` and its target from
+        // the current input, so the companion model is linear in the
+        // unknowns with the exact slope `(t-t0)/tt`.
         .transition => {
             const t = try transitionTimes(self, args);
             try opOpen(self, fm);
@@ -1501,46 +1403,23 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try opClose(self);
         },
         .last_crossing => try self.b("S.con(inst.{s}__t_last)", .{n}),
-        // §5.10.3 THE EVENT IS DECIDED HERE, not in `updateState`. The flag
-        // used to be read out of `Instance`, and `updateState` runs on the
-        // ACCEPTED solution — after this point has been evaluated — so every
-        // cross()/timer() event was observed one timepoint late, the exact
-        // mirror of "at that time point, the event evaluates to True".
-        // `updateState` now only advances `__prev`/`__next`.
-        // §5.10.3.1 "The cross() function will not generate events for
-        // non-transient analyses, such as ac, dc, or noise analyses … it can
-        // only generate an event after the simulation time has advanced from
-        // zero." Both halves are the guard: the analysis has to be a
-        // transient AND a step has to have been taken, which is what a
-        // positive `dt` means everywhere else in this file. (§5.10.3.2
-        // `above` is the operator that is explicitly exempt from both.)
+        // §5.10.3 the event is decided here, at the point being evaluated;
+        // `updateState` only advances `__prev`/`__next`. §5.10.3.1 "will not
+        // generate events for non-transient analyses ... it can only generate
+        // an event after the simulation time has advanced from zero": a
+        // transient and a positive `dt`.
         .cross => try self.b("S.con(if (sim.kind == .tran and sim.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
             try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in0})),
             try enableTest(self, .cross, args),
         }),
-        // §5.10.3.3 fires at `start_time` and every `period` after it.
-        // `__next` carries the schedule, but it initialises to 0.0 and is
-        // only clamped up to `start_time` by `updateState`, so the clamp is
-        // repeated here — without it a `timer(1n, …)` fires at t = 0.
-        // §5.10.3.3's parenthetical is a CONDITION on the single fire, not
-        // an aside: "the timer shall trigger only once at the specified
-        // start_time (IF THE START_TIME IS IN THE FUTURE WITH RESPECT TO
-        // THE CURRENT SIMULATION TIME)". Simulation time never runs
-        // negative, so a negative start_time is in the past at every
-        // timepoint of every analysis and the clause licenses no fire —
-        // where the bare `abstime >= @max(__next, start)` fired once at the
-        // origin, because `__next` clamps up from 0.0 and never down.
+        // §5.10.3.3 fires at `start_time` and every `period` after it. Until
+        // `updateState` schedules (`__start` is NaN), `__next` is 0.0 and the
+        // start is clamped in here. After that `__next` is the event: a start
+        // that moves now schedules the next one. A one-shot fires only if
+        // "the start_time is in the future", so a negative start never fires.
         //
-        // ponytail: applied only when the period FOLDS non-positive. A
-        // period computed during the solve is treated as periodic here, and
-        // §5.10.5's `zNextTimer` reads a past start the same way ("a start
-        // before the origin fires at the origin") for the periodic case.
-        //
-        // Once `updateState` has scheduled an event (`__start` is not NaN),
-        // `__next` IS the event: a start_time that moves during THIS
-        // evaluation schedules the NEXT event (§5.10.3.3, "the next event
-        // will be scheduled based on the latest value") and must not
-        // cancel the one this timepoint was placed for.
+        // ponytail: the one-shot rule applies only when the period folds
+        // non-positive; a solve-time period is treated as periodic.
         .timer => try self.b("S.con(if (sim.t >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
             n,
             in0,
@@ -1550,34 +1429,21 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
                 "",
             try enableTest(self, .timer, args),
         }),
-        // §5.10.3.2 "above() generates a monitored analog event to detect
-        // threshold crossings in analog signals when the expression crosses
-        // zero (0) from below". CROSSES, not "is above": the test is
-        // edge-triggered against the last accepted value, exactly like
-        // `cross`, and it was a bare `expr > 0.0` — which re-fires on every
-        // solution while the expression stays positive, so a `@(above(x))`
-        // latch tracked its probe instead of holding the value it sampled.
-        //
-        // No `.tran and dt > 0.0` guard, unlike `cross`: above() is the
-        // operator §5.10.3.2 explicitly exempts from both restrictions
-        // ("can generate an event during initialization", "during a dc
-        // sweep, the above() function shall also generate an event when the
-        // expression crosses zero from below"). The initialisation case is
-        // the `__prev = 0.0` initialiser — see `emitInstance`.
+        // §5.10.3.2 fires "when the expression crosses zero (0) from below":
+        // edge-triggered against the last accepted value. No transient or
+        // `dt` guard: above() "can generate an event during initialization"
+        // and during a dc sweep. `__prev = 0.0` gives the initial event.
         .above => try self.b("S.con(if (inst.{0s}__prev <= 0.0 and ({1s}).val() > 0.0 and ({2s})) 1.0 else 0.0)", .{
             n, in0, try enableTest(self, .above, args),
         }),
-        // §9.17 tasks return no value ("It does not return a value").
-        // Unreachable in practice — lowering never leaves one in an eval
-        // expression — but a void task read as a value is a zero, not a
-        // crash.
+        // §9.17 tasks return no value; read as one, they are zero.
         .bound_step, .discontinuity => try self.b("S.con(0.0)", .{}),
         .none => unreachable,
     }
 }
 
-/// `zLu(S, m, ` around an operator kernel whose scalar is `zL(S, m)`, and
-/// its `)`.
+/// Writes `zLu(S, m, ` around an operator kernel whose scalar is `zL(S, m)`;
+/// `opClose` writes its `)`.
 fn opOpen(self: *Gen, m: u64) Error!void {
     try self.b("zLu(S, 0x{x}, ", .{m});
 }
@@ -1585,30 +1451,11 @@ fn opClose(self: *Gen) Error!void {
     try self.b(")", .{});
 }
 
-/// §4.5.8 `transition(expr, td, rise_time, fall_time)`: the two times, as
-/// emitted f64 expressions, in that order.
-///
-/// TWO, not one. This used to return a single first-order lag constant
-/// `(rise + fall)*0.5/2.2`, which made `transition(V, 0, 4n, 8n)` and
-/// `transition(V, 0, 8n, 4n)` the same filter — while §4.5.8 says the
-/// output "forces all positive transitions of expr to occur over rise_time
-/// and all negative transitions to occur in fall_time". Averaging them is
-/// not an approximation of that sentence, it is a different filter.
-///
-/// §4.5.8's defaulting is a two-step fall-through and both steps are here:
-///
-///   "If only a positive rise_time value is specified, the simulator uses
-///    it for both rise and fall times."  → `fall` defaults to `rise`.
-///   "If neither rise_time nor fall_time are specified OR ARE EQUAL TO ZERO
-///    (0.0), the rise and fall time default to the value defined by
-///    `default_transition."  → and §10.3 scopes that to the directive
-///    "which immediately precedes the transition filter".
-///
-/// Zero is spelled as absent by the clause itself, which is why the fold is
-/// consulted and not just the argument count: `transition(x, 0, 0.0)` takes
-/// the directive exactly as `transition(x)` does. A time that is not
-/// foldable is left alone — it is a parameter expression, and the clause
-/// conditions on the VALUE, which is a run-time fact there.
+/// Returns §4.5.8 `transition(expr, td, rise_time, fall_time)`'s rise and
+/// fall times as f64 expressions. "If only a positive rise_time value is
+/// specified, the simulator uses it for both"; a time that is absent or
+/// "equal to zero (0.0)" takes the `default_transition` in force (§10.3).
+/// A parameter time is tested for zero at run time.
 pub fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
     const dflt = try defaultTransition(self);
     const rise = try transitionTime(self, args, 2, dflt orelse "0.0");
@@ -1618,39 +1465,23 @@ pub fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 
 
 fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
-    // `resolve_params = false`: a zero through the DECLARED default is not
-    // a zero — `transition(x, 0, tr)` with `tr` defaulting to 0.0 but
-    // overridden on the model card used to take `default_transition
-    // forever. Only a time that is zero WITHOUT parameters is spelled-
-    // absent at compile time.
+    // `resolve_params = false`: only a time that is zero without parameters
+    // is absent at compile time; a card may override a zero default.
     if (self.an.foldConst(args[i], false)) |c| {
         if (c.f == 0.0) return dflt;
-        return f64Expr(self, args[i]); // a known-nonzero literal, as before
+        return f64Expr(self, args[i]);
     }
     const e = try f64Expr(self, args[i]);
-    // §4.5.8 conditions on the VALUE ("… or are equal to zero (0.0)"),
-    // which for a parameter time is a run-time fact — so the fall-through
-    // to `dflt` is emitted as a select. Skipped when `dflt` is the bare
-    // 0.0 fallback: `zTransFrac` already reads a non-positive time as the
-    // simulator's own default (an instantaneous edge), so the select would
-    // choose between two spellings of the same thing.
+    // A run-time zero test for a parameter time. Skipped for the bare 0.0
+    // fallback, which `zTransFrac` already reads as an instantaneous edge.
     if (std.mem.eql(u8, dflt, "0.0")) return e;
     return std.fmt.allocPrint(self.arena, "(if (({s}) != 0.0) ({s}) else ({s}))", .{ e, e, dflt });
 }
 
-/// §10.3 the `` `default_transition `` in force AT THE CALL BEING EMITTED,
-/// as an emitted f64 literal, or null when no directive precedes it.
-///
-/// Positional, because the clause is: "the default rise and fall times for
-/// a transition filter are derived from the transition_time value of the
-/// directive which IMMEDIATELY PRECEDES the transition filter." So the walk
-/// is backwards from the call's own token offset and stops at the first
-/// directive at or before it — which is what makes a second directive
-/// supersede a first rather than being ignored by a latched value.
-///
-/// `ctrl_tok` is the operator call's token, set by `emitOperator` and by
-/// the `updateState` loop before either asks for the times, so both sides
-/// of the operator resolve the same directive.
+/// Returns the §10.3 `` `default_transition `` in force at the call being
+/// emitted ("the directive which immediately precedes the transition
+/// filter") as an f64 literal, or null. Requires `ctrl_tok` set to the
+/// operator call's token.
 pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
     const list = self.lowered.directives.transitions;
     if (list.len == 0) return null;
@@ -1659,14 +1490,10 @@ pub fn defaultTransition(self: *Gen) Error!?[]const u8 {
     return try gen_file.fmtF64(self, t);
 }
 
-/// §4.5.9's two rate limits, for the two places that emit a `zSlew` call.
-///
-/// "If the max_neg_slew_rate is not specified, it defaults to the opposite
-/// of the max_pos_slew_rate." The kernel takes `@abs` of the negative limit,
-/// so "the opposite" is spelled by reusing the positive expression verbatim.
-/// The old default of `1e300` left every falling edge UNLIMITED while the
-/// rising edge was held — an asymmetry the source never asked for, and one
-/// that only showed up in a transient.
+/// Returns §4.5.9's positive and negative slew limits. "If the
+/// max_neg_slew_rate is not specified, it defaults to the opposite of the
+/// max_pos_slew_rate": the kernel takes `@abs` of the negative limit, so the
+/// positive expression is reused.
 pub fn slewRates(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
     const pos = try argF64(self, args, 1, "1e300");
     return .{ pos, try argF64(self, args, 2, pos) };

@@ -1,46 +1,17 @@
-//! If-conversion: pure CFG diamonds/triangles → §4.2.12 `select`.
-//!
-//! Transformation: Mir (post-lowering, pre-proof) → the same Mir with every
-//! convertible two-way branch replaced by straight-line code and one `select`
-//! per join phi. Runs between lower and prove in root.zig.
-//!
-//! WHY. A data-dependent branch in an eval unit costs twice: the host's Newton
-//! loop hands the predictor data-dependent work (ref/SIMD-Strategies T7), and a
-//! lane-parallel S (one operating point per lane) has no single branch
-//! direction at all. As a `select` the conditional can be emitted branchless
-//! (`S.sel`) whenever the proof shows both arms total — and where it does not,
-//! codegen's lazy `if`-expression emission preserves §4.2.3's short-circuit
-//! semantics exactly as the branch did, because proof.markSelectArms re-derives
-//! the guard facts the CFG edge used to carry.
-//!
-//! WHAT CONVERTS. Block X ending `branch(c, T, E)` where each arm side is
-//! either the join J itself (triangle) or a block with exactly one predecessor
-//! whose every instruction is a pure value op (unary/binary/ternary — no call,
-//! no opt_barrier, no live phi, no domain-restricted op) ending `jump J`. Arms
-//! splice into X in then-else order, each join phi becomes
-//! `select(c, v_then, v_else)` in X, and X jumps to J. Effectful arms — calls,
-//! analog operators, display — never match, so §4.2.3's "side effects shall
-//! not occur" is preserved by construction. Neither does an arm holding ln,
-//! sqrt, pow, integer `/` …: a runtime error keeps its CFG edge (classifyArm).
-//!
-//! Fixpoint: converting an inner diamond can collapse an outer arm to a single
-//! block (nested `?:`, `&&` chains), so sweep until a round converts nothing.
-//!
-//! DOD: one u32 pred-count per block per round, on the caller's arena. Inst
-//! rows MOVE by relinking `next` (chains are singly linked); the orphaned
-//! branch/jump rows stay in `insts` but in no chain, which every consumer
-//! tolerates because they only walk chains. Emptied arm blocks keep their
-//! BlockRow with first=last=none — unreachable, and both proof.walk and the
-//! codegen relooper already handle unreachable blocks.
-//!
-//! DETERMINISM: blocks are visited in index order and every mutation is an
-//! append or a relink of existing rows, so identical MIR converts identically.
+//! If-conversion: MIR → the same MIR with each pure CFG diamond or triangle
+//! replaced by straight-line code and one §4.2.12 `select` per join phi, to a
+//! fixpoint. An arm converts only when every instruction is a pure value op
+//! (no call, `opt_barrier`, store or domain-restricted op), so §4.2.3's "side
+//! effects shall not occur" holds by construction. Moved rows are relinked;
+//! orphaned terminators and emptied arm blocks stay behind, unreachable.
 
 const std = @import("std");
 const Mir = @import("mir.zig");
 const proof = @import("proof.zig");
 
-/// Convert every pure diamond, to a fixpoint; returns how many converted.
+/// Converts every pure diamond, to a fixpoint, and returns how many converted.
+/// Blocks are visited in index order, so equal MIR converts identically.
+/// `gpa` backs one temporary per-block pred count.
 pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
     const nb = mir.blockCount();
     if (nb == 0) return 0;
@@ -93,7 +64,7 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
 
 /// Validate one side: either the direct edge to what the other side joins at,
 /// or a single-pred all-pure block ending in a jump. Returns null on any
-/// disqualifier. NO MUTATION here — both sides validate before either moves.
+/// disqualifier. Does not mutate: both sides validate before either moves.
 fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32) ?Mir.Block {
     if (arm == x) return null; // back edge to the branching block itself
     if (preds[@intFromEnum(arm)] != 1) return null;
@@ -105,28 +76,23 @@ fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32
             .unary => |u| if (u.op == .opt_barrier) return null,
             // §3.2.2 a load is a pure read of the version it names, so it may
             // move into X. A store may not: both arms' versions would be live
-            // at the join, and a `select` of two versions of ONE storage has
+            // at the join, and a `select` of two versions of one storage has
             // nothing to select between (`Mir.Opcode.store`).
             .binary, .ternary, .load => {},
             .anew, .store => return null,
             .jump => |d| join = d.target,
-            // A collapsed phi row is dead (alias IS the rewrite — ssa.zig
-            // contract 1); a live one in a single-pred block cannot exist
-            // (Braun trivial-phi removal), so treat it as a disqualifier
-            // rather than trust that it never happens.
+            // A collapsed phi row is dead (the alias is the rewrite); a live one
+            // in a single-pred block cannot exist (trivial-phi removal), so it
+            // disqualifies rather than being trusted never to happen.
             .phi => if (mir.resolveAlias(mir.instResult(inst)) == mir.instResult(inst)) return null,
             .call, .branch => return null,
         }
         // §4.2.12 a domain-restricted op (ln, sqrt, pow, integer /, …) keeps
-        // its diamond, whatever its use count. Such an arm can never render
-        // branchless (render.eagerSafe refuses it), so converting it removes
-        // no branch — the lazy `(if (c) a else b)` is a branch too. It only
-        // cost: the arm's values leave their block, so nothing in the arm
-        // could be a statement any more, and every value it shared was
-        // re-rendered as a tree at each use (mesa: 3.0 MB of PTX where 0.65
-        // is enough). As a CFG arm the op runs only under its edge, and the
-        // edge guards every value it dominates, shared ones included, which
-        // the single-use walk in proof.markSelectArms cannot.
+        // its diamond. Such an arm can never render branchless
+        // (render.eagerSafe refuses it), so converting it removes no branch,
+        // and it would pull the arm's values out of their block so shared ones
+        // re-render as trees at each use. As a CFG arm the edge also guards
+        // every value it dominates, which proof.markSelectArms cannot.
         if (proof.domainOf(mir.instOp(inst)) != .all) return null;
     }
     const j = join orelse return null;
@@ -169,7 +135,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
         while (it.next()) |inst| {
             if (mir.instOp(inst) != .phi) continue;
             const r = mir.instResult(inst);
-            if (mir.resolveAlias(r) != r) continue; // collapsed — dead row
+            if (mir.resolveAlias(r) != r) continue; // collapsed: dead row
             if (phiValueFor(mir, inst, then_key) == null) return false;
             if (phiValueFor(mir, inst, else_key) == null) return false;
         }
@@ -191,7 +157,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     // One select per live join phi, then the fall-through jump. The cond is
     // peeled of `toBool` wrappers first: a select condition means "nonzero ⇒
     // then" (codegen's renderCond), which is exactly what `ine(x, 0)` asserts
-    // of x, so the wrapper adds nothing — and peeling it leaves the bare
+    // of x, so the wrapper adds nothing, and peeling it leaves the bare
     // comparison as the select's cond, where codegen can render it as a
     // lane-true S mask instead of an i64 round-trip.
     const cond = peelToBool(mir, br.cond);
@@ -211,12 +177,11 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     return true;
 }
 
-/// Strip nested `ine(x, 0)` wrappers, but ONLY when x is itself a predicate
-/// (§4.2.5/§4.2.8 comparison or lognot). The select cond reads "nonzero is
-/// true" either way, so value-wise any peel would be safe — but proof.zig's
-/// condFacts mines a bare `ine(x, 0)` for the §4.2.4 nonzero-divisor fact,
-/// and peeling a NON-predicate x would hand markSelectArms a cond it can
-/// derive no facts from, silently un-guarding `b != 0 ? a/b : 0`.
+/// Strip nested `ine(x, 0)` wrappers, but only when x is itself a predicate
+/// (§4.2.5/§4.2.8 comparison or lognot). Value-wise any peel is safe, but
+/// proof.zig's condFacts mines a bare `ine(x, 0)` for the §4.2.4
+/// nonzero-divisor fact; peeling a non-predicate x would silently un-guard
+/// `b != 0 ? a/b : 0`.
 fn peelToBool(mir: *const Mir, cond0: Mir.Value) Mir.Value {
     var cond = cond0;
     while (true) {
@@ -230,10 +195,9 @@ fn peelToBool(mir: *const Mir, cond0: Mir.Value) Mir.Value {
     }
 }
 
-/// `b`'s branch or jump, found by opcode and not by position: ssa.zig's
-/// contract 2 lets a phi row sit AFTER the terminator (phis are created on
-/// demand), exactly why analysis.buildCfg searches the same way. By position,
-/// such a phi made X look unterminated and a convertible diamond was skipped.
+/// `b`'s branch or jump, found by opcode and not by position: a phi row can
+/// sit after the terminator (ssa.zig mints phis on demand), which is also why
+/// analysis.buildCfg searches the same way.
 fn terminator(mir: *const Mir, b: Mir.Block) ?Mir.Inst {
     var it = mir.blockInsts(b);
     while (it.next()) |inst| switch (Mir.opClass(mir.instOp(inst))) {
@@ -365,7 +329,7 @@ test "a phi row after the branch neither blocks the conversion nor leaves the ch
     const cond = try mir.addBlockParam(a, 0);
     _ = try mir.emitJump(a, pre, entry);
     _ = try mir.emitBranch(a, entry, cond, left, right);
-    // ssa.zig contract 2: created on demand, after the terminator.
+    // A phi minted on demand sits after the terminator.
     const late = try mir.emitPhi(a, entry, &.{.{ .block = pre, .value = cond }});
     const lv = try mir.emit(a, left, .fadd, &.{ .f_one, .f_two });
     _ = try mir.emitJump(a, left, join);

@@ -1,41 +1,9 @@
-//! §5.6.1.2 charge sites: which charges `q` returns, one slot per site, and
-//! the rows each one stamps.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module, the branch
-//! topology and solve invariance, and returns a `QSites`. `dispatch.emitQ`
-//! formats it.
-//!
-//! LRM clauses this file's code cites: §1.3.1.2, §4.5.15, §5.4.2, §5.4.3,
-//! §5.6, §5.6.1.2, §5.6.1.3, §5.6.5.
-//!
-//! WHY PER SITE. A host that tapes one charge per residual ROW sums every
-//! branch charge meeting at a pin before its truncation-error check, so a
-//! junction charge it would leave out (ngspice's mos1trun.c checks qgs, qgd
-//! and qgb, never qbd/qbs) cannot be left out, and a rejection one charge
-//! alone would force (bjttrunc.c's qbc) is diluted into the sum. So `q`
-//! returns the charges themselves — `Lower.ChargeSite`, one per reactive term
-//! — and `q_stamps` says which rows each one enters with which sign. Every
-//! row is exactly `Σ sign · q[site]`, because a contribution's reactive value
-//! is exactly the signed sum of its sites and every row `emitStamps` used to
-//! write is a signed sum of contributions' reactive values:
-//!
-//!   - a flow contribution: +1 at hi, −1 at lo (§1.3.1.2), and −1 on a
-//!     sourced §5.4.2 free-flow row;
-//!   - a §1.3.4.2 flow-only signal-flow net: −1 on the net's own row;
-//!   - a potential contribution: −1 on its branch row (a flux, v − dφ/dt);
-//!   - a §5.6.1.3 runtime-selected branch row (§5.6.5 switch): −1 for the
-//!     potential's sites and −1 for the switch partner's flow — or, on a
-//!     COLLAPSIBLE branch, the partner's +1/−1 at hi/lo instead. The row
-//!     `S.sel`s between them, and exactly one side is nonzero on any path:
-//!     `discardOpposite` zeroes the other side's accumulator AND its sites,
-//!     and an unwritten one stays at its zero seed. So the static sum is the
-//!     select;
-//!   - a §5.4.3 port probe: minus the finished port row.
-//!
-//! WHICH SITES GET A SLOT. A site whose charge folds to a constant, or is
-//! solve-invariant (`plan/setup.zig`), has dq/dt ≡ 0 and contributes nothing
-//! to any row's current: no slot. Nor does a site that stamps no row (a
-//! ground–ground branch).
+//! §5.6.1.2 charge sites: lowered contributions, topology and solve
+//! invariance -> `QSites`, the charges `q` returns (one slot per reactive
+//! term, not per row, so a host's truncation-error check can include or skip
+//! each charge alone) and the signed rows each stamps. `dispatch.emitQ`
+//! formats it. Clauses: §1.3.1.2, §4.5.15, §5.4.2, §5.4.3, §5.6, §5.6.1.2,
+//! §5.6.1.3, §5.6.5.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -43,12 +11,14 @@ const Lower = @import("ir").Lower;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
 
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
 /// One row entry: row `row` gains `sign · q[slot]`.
 pub const Stamp = struct { slot: u32, row: u32, sign: f64 };
 
+/// The charges `q` returns, one slot per site, and where each one stamps.
 pub const QSites = struct {
     /// Slot → `Lowered.charge_sites` index, in source order.
     sites: []u32 = &.{},
@@ -59,6 +29,20 @@ pub const QSites = struct {
 /// One signed contribution term of a row, before sites are expanded.
 const Term = struct { sign: f64, contrib: u32 };
 
+/// Returns the charge-site slots and the rows each stamps; slices are owned
+/// by `in.arena`. Every row is exactly `sum(sign * q[site])`:
+///   - a flow contribution: +1 at hi, -1 at lo (§1.3.1.2), and -1 on a
+///     sourced §5.4.2 free-flow row;
+///   - a §1.3.4.2 flow-only signal-flow net: -1 on the net's own row;
+///   - a potential contribution: -1 on its branch row (a flux, v - dphi/dt);
+///   - a §5.6.1.3 runtime-selected branch row (§5.6.5 switch): -1 for the
+///     potential's sites and -1 for the switch partner's flow, or on a
+///     collapsible branch the partner's +1/-1 at hi/lo. The row `S.sel`s
+///     between them and `discardOpposite` zeroes the unused side's
+///     accumulator and sites, so the static sum is the select;
+///   - a §5.4.3 port probe: minus the finished port row.
+/// A site whose charge is constant or solve-invariant has dq/dt = 0 and gets
+/// no slot; nor does a site that stamps no row (a ground-ground branch).
 pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []const bool) Error!QSites {
     const a = in.arena;
     const lw = in.lowered;

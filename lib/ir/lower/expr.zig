@@ -3,9 +3,6 @@
 //! In: expression AST. Out: typed MIR values (`TypedValue`).
 //!
 //! LRM clauses this file's code cites: §3.3, §4.2.3, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_expr.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -41,16 +38,12 @@ const toBool = Lower.toBool;
 const unify = Lower.unify;
 const astTy = Lower.astTy;
 
-// ---------------------------------------------------------------------------
-// Class 4/5 — expressions (LRM §4.2), math (§4.3), signal access (§4.4)
-// ---------------------------------------------------------------------------
-
-/// Expression lowering. LRM §4. Returns the Value AND its LRM type, because
-/// every operator's opcode family depends on it (§4.2.1.1–§4.2.1.3).
+/// Lowers an expression, returning its value and its LRM type; every
+/// operator's opcode family depends on the type (LRM §4, §4.2.1.1–§4.2.1.3).
 pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (e == .none) return poison;
     const ex = &self.file.exprs;
-    // PROVENANCE. Every MIR instruction emitted while this node is being
+    // Provenance: every MIR instruction emitted while this node is being
     // lowered is stamped with its token (Mir.addInst reads the cursor), which
     // is how proof.zig turns a `Mir.Inst` back into a source span. Saved and
     // restored because lowering recurses: an operand must not leave the cursor
@@ -98,13 +91,13 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // there is nothing hierarchical left to do; E0901 is what is left
             // when it does not.
             const name = try flatName(self, e);
-            // §6.7.1's fifth bullet, and the ONLY one of the list that is a
+            // §6.7.1's fifth bullet, and the only one of the list that is a
             // prohibition: "It shall be an error to access analog variables
             // hierarchically." It has to be tested before the resolution below,
             // because the resolution succeeds — a flattened child's variable is
             // an ordinary variable of the flat design under its path name, so
             // nothing else would stop the read.
-            // …EXCEPT a §5.3.2 named-block local, which the LRM spells out the
+            // Except a §5.3.2 named-block local, which the LRM spells out the
             // other way: "All identifiers declared within a named sequential
             // block can be accessed outside the scope in which they are
             // declared." §6.7.1 is about reaching into another INSTANCE;
@@ -188,20 +181,14 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const at = try lower_param.subscriptBuf(self, &idx, chain.subs.len);
     var all_const = true;
     for (chain.subs, at) |s, *o| {
-        // `foldExpr(.., false)`, NOT `constEval`: a §3.4 parameter is
+        // `foldExpr(.., false)`, not `constEval`: a §3.4 parameter is
         // overridable by the model card, so folding `a[n-1]` through `n`'s
-        // DEFAULT bakes one element into the device and answers every other
-        // card with it. The same rule `foldExpr`'s own header states for a
-        // procedural `if (p > 0)`; a subscript is no different, and it fails
-        // louder — `parameter integer pwl_len = 0` folded `a[pwl_len-1]` to
-        // `a[-1]` and reported E0310 on legal source.
+        // default would bake one element into the device for every card.
         if (lower_constfold.foldExpr(self, s, false)) |c| {
             // §4.2.1.1 converts a real subscript by rounding to the nearest
             // integer; an infinity, a NaN, or a magnitude past i64 has none, so
-            // the subscript names no element. That is the same verdict E0310
-            // already reaches for a constant subscript outside the declared
-            // range — which is exactly what this is, once the converter
-            // declines to invent an index for it.
+            // the subscript names no element: E0310, as for a constant
+            // subscript outside the declared range.
             o.* = c.asIntExact() orelse {
                 try self.err(self.file.exprs.mainTok(s), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), name });
                 return poison;
@@ -376,35 +363,28 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
     return null;
 }
 
-/// §6.7 the flat spelling of a `.hier_ident` path: its parts joined by
-/// `Elaborate.sep`.
+/// Returns the flat spelling of a §6.7 `.hier_ident` path: its parts joined by
+/// `Elaborate.sep`. Flattening renamed each child entity to `path.name`, so
+/// this string is the name the flat design carries.
 ///
-/// That join is the whole out-of-module reference mechanism, and it is one line
-/// because of what elaboration already did: flattening renames a child's entity
-/// to `path.name` (Ruling E, `Elaborate.sep`), so the name §6.7 asks for and the
-/// name the flat design carries are the SAME STRING. Nothing here walks an
-/// instance tree, because there is no tree left to walk.
-///
-/// Arena-allocated per call. Cold: one path per source reference.
+/// Allocates the result in `self.arena` on every call.
 pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
     var parts = self.file.exprs.nameParts(e);
     // §6.2.1 the `$root` prefix: "used to unambiguously refer to a top-level
     // instance or to an instance path starting from the root of the instantiation
     // tree", against a plain path, where "the ambiguity is resolved by giving
     // priority to the local scope". Elaboration's flat namespace IS rooted — a
-    // name with no path prefix is a name of the top — so `$root.` means "do not
-    // apply the local scope", and dropping the prefix is how that is said. The
-    // segment after it names a TOP-LEVEL INSTANCE (§6.7's own `$root.mymodule.u1`
-    // is "absolute name"), and the one top-level instance a flattened design has
-    // is the device itself, so the top module's own name drops with it.
+    // name with no path prefix is a name of the top, so `$root.` is dropped.
+    // The segment after it names a top-level instance (§6.7's
+    // `$root.mymodule.u1`), and a flattened design's one top-level instance is
+    // the device itself, so the top module's name drops with it.
     //
-    // Not done in `Elaborate`'s clone: a `$root` path in the TOP module's body is
-    // never cloned (the tree-of-one returns by pointer), so the rule would only
-    // have applied to children. Here it applies to every unit.
+    // Not done in `Elaborate`'s clone: the top module's body is never cloned,
+    // so the rule would only reach children. Here it applies to every unit.
     if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) parts = parts[1..];
     // The top module's own name, with or without `$root`: IEEE 1364 §12.6's
     // upward name referencing, which §6.7.1's last paragraph adopts, lets a
-    // path open with the name of a module ABOVE the reference — §5.5.5's
+    // path open with the name of a module above the reference; §5.5.5's
     // example reads `V(top.a1.b)` from inside `b1`. The flattened namespace is
     // rooted at the top, so its name drops. A local of the same name wins
     // (§6.2.1 "priority to the local scope"): cloning has already renamed
@@ -484,13 +464,10 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     switch (ex.unOp(e)) {
         .plus => return a,
         .minus => {
-            // §4.2.3. Fold a LITERAL here instead of emitting `ineg(3)`. The
-            // §4.2.8 divisor proof reads an operand's interval, and proof.zig's
-            // `integerIv` gives every integer instruction the full i64 clamp —
-            // it has no transfer function for `ineg` — so `11 % -3` could not
-            // prove its divisor non-zero and died on E0601. A negative literal
-            // is a constant however the grammar spells it, so the fix belongs
-            // where the constant is built, not in a second range rule.
+            // §4.2.3. Fold a literal here instead of emitting `ineg(3)`: the
+            // §4.2.8 divisor proof (`integerIv`) has no transfer function for
+            // `ineg`, so `11 % -3` would fail to prove its divisor non-zero
+            // (E0601). A negative literal is a constant however it is spelled.
             switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
                 // §3.2 through the one constant kernel: -(-2^31) is -2^31.
                 .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, @import("frontend").constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
@@ -514,10 +491,8 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // inside the analog block and only have meaning when used in the
         // digital context." There is no carve-out and no analog form.
         //
-        // Unconditional, for the reason `isDigitalOnlySysFunc` gives at length:
-        // `parseAnalog` is the only producer of statements VerA lowers, so
-        // every expression that reaches here IS in the analog block and a
-        // context flag would read `true` at every call site.
+        // Unconditional: every expression lowering sees is in the analog
+        // block (see `isDigitalOnlySysFunc`).
         .reduce_and, .reduce_nand, .reduce_or, .reduce_nor => {
             // §4.2.1 first: a real operand has no bits to fold at all, and
             // E0319 names the operand rather than the context.
@@ -624,7 +599,7 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     }
 
-    // §4.2.7 && and || SHORT-CIRCUIT: the rhs must not be evaluated when the
+    // §4.2.7 && and || short-circuit: the rhs must not be evaluated when the
     // lhs already decides the result, so this needs real control flow.
     if (op == .logical_and or op == .logical_or) return lowerShortCircuit(self, e, op);
 
@@ -753,18 +728,18 @@ pub fn cmp(self: *Lower, op: Ast.BinaryOp, a: TypedValue, b: TypedValue) Oom!Mir
     return self.emit(opc, &.{ lv, rv });
 }
 
-/// §4.2.3 names THREE short-circuiting operators, "&&, ||, and ?:", and says of
+/// §4.2.3 names three short-circuiting operators, "&&, ||, and ?:", and says of
 /// all three that "any side effects or runtime errors that would have occurred
 /// due to evaluation of the short-circuited operand expression shall not occur";
 /// §4.2.12 says the same from the value side, naming only the arm it selects.
-/// So the arms are BRANCHES and not operands of a `select`: an inlined function
+/// So the arms are branches, not operands of a `select`: an inlined function
 /// that writes an `inout` formal (§4.7.2.4) must not run in the arm that was not
 /// chosen, and neither must a division the condition exists to guard.
 ///
 /// The shape is `lowerShortCircuit`'s — one place, one phi at the join. The one
 /// difference is the type: `&&` is integer by definition, while §4.2.1 makes a
-/// ternary's type the unification of BOTH arms, and neither arm's type is known
-/// until it has been lowered. So the then-arm is left UNTERMINATED while the
+/// ternary's type the unification of both arms, and neither arm's type is known
+/// until it has been lowered. So the then-arm is left unterminated while the
 /// else-arm is lowered, and both are finished afterwards, once `ty` is settled
 /// and the `.itof` each arm may need can still be emitted before its jump.
 /// Nothing between the two reads the then-arm's terminator: the SSA builder
@@ -777,11 +752,10 @@ fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §4.5.15 "Analog operators shall not be used inside conditional (if, case,
     // or ?:) statements unless the conditional expression controlling the
     // statement consists of terms which can not change their value during the
-    // course of a simulation." `?:` is in that list, and short-circuiting is
-    // precisely WHY: an operator in an arm loses its history on every step the
-    // arm is off. The two counters `lowerCondBody` raises for an `if` body are
-    // raised here for the same rule, and that is what lets E0514 in
-    // `lowerFilter` see it.
+    // course of a simulation." `?:` is in that list because an operator in an
+    // arm loses its history on every step the arm is off. The two counters
+    // `lowerCondBody` raises for an `if` body are raised here too, so E0514 in
+    // `lowerFilter` sees it.
     const static = lower_control.isAnalysisOrConst(self, cond) or try lower_control.isStaticValue(self, c);
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
@@ -822,14 +796,14 @@ fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return .{ .v = try self.builder.readVariable(place, join), .ty = ty };
 }
 
-/// §4.5.15 "It is important to ensure that ALL analog operators are evaluated
-/// EVERY ITERATION of a simulation to ensure that the internal state is
-/// maintained." Does this subtree hold one of the operators that rule protects?
+/// §4.5.15 "It is important to ensure that all analog operators are evaluated
+/// every iteration of a simulation to ensure that the internal state is
+/// maintained." Whether this subtree holds one of the operators that rule protects.
 /// `ddx` and `limexp` are the clause's own exceptions (see `isHistoryless`).
 ///
 /// ponytail: syntactic, and it does not look inside a §4.7 analog function
-/// body. An operator there is already E0422 territory, and the upgrade path if
-/// one ever is legal is a per-function flag computed when the function lowers.
+/// body. An operator there is already E0422; if one becomes legal, compute a
+/// per-function flag when the function lowers.
 fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
@@ -845,22 +819,16 @@ fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
 fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
     const ex = &self.file.exprs;
     // §4.5.15's evaluate-every-iteration rule wins over §4.2.7's skip when the
-    // rhs holds an analog operator: the skipped step feeds that operator site
-    // the branch-local zero instead of its real input, so its history is
-    // stranded and it diverges from an identical site outside the `||` — "the
-    // internal state ... corrupted or become out-of-date" the clause's closing
-    // sentence names. §4.2.3's "any side effects ... shall not occur" is about
-    // side effects and runtime errors; advancing an operator VerA is required
-    // to advance every iteration is neither.
-    //
-    // §4.5.15's restriction paragraph names `if`, `case` and `?:` and nothing
-    // else, so it does not make this spelling illegal and nothing here
-    // diagnoses it — it makes the two sites agree, which is what it asks for.
+    // rhs holds an analog operator: a skipped step would feed that operator the
+    // branch-local zero, and its state would go "out-of-date" as the clause
+    // warns. §4.2.3's "any side effects ... shall not occur" is about side
+    // effects and runtime errors, and advancing a required operator is neither.
+    // §4.5.15's restriction names only `if`, `case` and `?:`, so this spelling
+    // is legal and not diagnosed.
     if (hasStatefulOp(self, ex.rhs(e))) {
         const l = try self.toBool(try lowerExpr(self, ex.lhs(e)));
         const r = try self.toBool(try lowerExpr(self, ex.rhs(e)));
-        // `toBool` normalises both to 0/1, so max IS `||` and min IS `&&` —
-        // no opcode and no block.
+        // `toBool` normalises both to 0/1, so max is `||` and min is `&&`.
         return .{
             .v = try self.emit(if (op == .logical_and) .imin else .imax, &.{ l, r }),
             .ty = .integer,
@@ -930,35 +898,20 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .flow => {
             try lower_hier_name.refuseRuntime(self, self.file.exprs.mainTok(e), t.hi, t.lo);
             // §5.4.2.2 "Both the potential and the flow of a source branch are
-            // accessible in expressions anywhere in the module." For a FLOW
-            // source that access cannot be a solver unknown: a current source's
-            // branch flow has no node-derived value and no row pins it, so a
-            // read of the unknown answers its initial 0 whatever was
-            // contributed. What the branch flow of a flow source IS, by
-            // definition, is the value retained on the branch (§5.6.1.2) — so
-            // the read is the ACCUMULATOR, read at `self.cur`. WHERE `self.cur`
-            // is is the caller's statement of position semantics, and there are
-            // exactly two: an ORDINARY expression (an assignment's, a
-            // contribution's right side) reads mid-block and sees §5.6.1.2's
-            // sequential retention — a read above the first `<+` sees nothing
-            // retained — while a §9.4 display operand is lowered from
-            // `lowerDeferredDisplays` with `self.cur` past the whole block, so
-            // it sees the §9.4.1 CONVERGED end-of-cycle value, §5.6.1.3
-            // retention-select phis included (§5.8's conditional arms come out
-            // as `readVariable`'s phis with nothing written here).
+            // accessible in expressions anywhere in the module." A flow
+            // source's branch flow has no row pinning an unknown, so the read
+            // is the value retained on the branch (§5.6.1.2): the accumulator
+            // at `self.cur`. An ordinary expression reads mid-block and sees
+            // sequential retention; a §9.4 display operand is lowered from
+            // `lowerDeferredDisplays` past the whole block and sees the
+            // converged end-of-cycle value, retention-select phis included.
             //
-            // §5.6.6 FIRST: inside a `<+`'s own right-hand side, a read of the
-            // SAME branch is the implicit form — "the value of the target may
-            // be expressed in terms of itself" — and its value is the one "the
-            // underlying implementation ... will find", i.e. the branch-flow
-            // unknown, never the retained prefix. Ahead of `flowAccum` because
-            // the statement's own entry already exists by the time its rhs
-            // lowers (`contribIndex` runs first), and the accumulator it would
-            // find is exactly the stale self-reference §5.6.6 rules out.
-            // The unknown this mints is defined by codegen's `FreeFlow` row,
-            // `x[u] − Σ contributions = 0` — the same shape `portFlowRead`
-            // documents for `I(<p>)`. Without it the self-reference answered
-            // its seed of 0 and the model was silently linearised.
+            // §5.6.6 first: inside a `<+`'s own right-hand side, a read of the
+            // same branch is the implicit form, whose value is the branch-flow
+            // unknown, never the retained prefix. Checked ahead of `flowAccum`
+            // because `contribIndex` has already created the statement's own
+            // entry. Codegen's `FreeFlow` row defines the unknown,
+            // `x[u] − Σ contributions = 0`, like `portFlowRead`'s for `I(<p>)`.
             if (self.contrib_target) |ct| {
                 if (ct.access == .flow and t.access == .flow and
                     ct.hi == t.hi and ct.lo == t.lo and ct.br == t.br)
@@ -968,34 +921,20 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                     return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
                 }
             }
-            // Only once a flow contribution has ALREADY been lowered onto this
-            // pair, which is the distinction the clause draws: an uncontributed
-            // branch is a §5.4.2.1 flow PROBE — a short whose current is a
-            // genuine unknown of the solve — and a POTENTIAL source's branch
-            // current is pinned by the branch row codegen emits for it. Both of
-            // those keep the unknown and read it — the second of them including
-            // §5.6.8.1's hierarchical case, where the source this instance just
-            // created runs in PARALLEL with another instance's accumulator
+            // Only once a flow contribution has already been lowered onto this
+            // pair. An uncontributed branch is a §5.4.2.1 flow probe, and a
+            // potential source's branch current is pinned by its branch row;
+            // both read the unknown, including §5.6.8.1's hierarchical case
             // (`potentialSourceHere`).
             if (!potentialSourceHere(self, t)) if (flowAccum(self, t)) |acc| {
-                // §5.6.1.2: the retained value of a source branch is the WHOLE
-                // of what was contributed to it, and §5.4.2.2 makes that whole
-                // readable. No clause lets a reactive term count for the node
-                // equation and not for a probe.
+                // §5.6.1.2: the retained value of a source branch is the whole
+                // of what was contributed to it, reactive half included.
                 //
-                // The reactive half is retained as a CHARGE — the clause strips
-                // one `ddt` off the contributed term — so reading the FLOW back
-                // has to differentiate it again. That is a second `ddt`
-                // instance with its own operator state, which is what this
-                // `call` mints, and it is the honest cost: the current of a
-                // capacitor IS a derivative. A model computing its own
-                // dissipation, a charge-conservation check, or §5.4.3's
-                // transit-time term read zero until this existed.
-                //
-                // Only when there IS a reactive half. `.f_zero` is what the
-                // entry-block seed leaves when nothing wrote the place, so an
-                // ordinary resistive branch emits no operator and cannot newly
-                // trip §5.8.1's conditional-operator rule.
+                // The reactive half is retained as a charge, so reading the
+                // flow back differentiates it again with a second `ddt`
+                // instance of its own. Only when there is a reactive half: a
+                // resistive branch emits no operator and cannot trip §5.8.1's
+                // conditional-operator rule.
                 const r = try self.builder.readVariable(acc.resist, self.cur);
                 const q = try self.builder.readVariable(acc.react, self.cur);
                 const v = if (q == .f_zero) r else blk: {
@@ -1015,7 +954,7 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// already made it a flow source. Keyed exactly like `contribIndex` — on the
 /// canonicalised pair, so `I(n,p)` finds the one entry `I(p,n)` created.
 ///
-/// NOT keyed on the unit, unlike `discardOpposite`: §5.5.5 lets "a module
+/// Not keyed on the unit, unlike `discardOpposite`: §5.5.5 lets "a module
 /// access the potential and flow of a branch in another module instance ...
 /// providing that value is available in the other instance", and a hierarchical
 /// `I(x1.p, x1.n)` is exactly that read. §5.5.4's new-branch rule is about the
@@ -1033,16 +972,16 @@ fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
 /// §5.6.8.1: "Direct contribution statements can contribute to a branch between
 /// combinations of local and hierarchical nets. In these cases, a new unnamed
 /// branch is created in the module containing the direct contribution
-/// statements." So a potential `<+` written HERE is a source branch of THIS
+/// statements." So a potential `<+` written here is a source branch of this
 /// instance, in parallel with whatever another instance retained over the same
-/// node pair — §5.4.1's "only one unnamed branch between any two nets" is a
-/// PER-INSTANCE rule, and flattening has already collapsed the pairs.
+/// node pair: §5.4.1's "only one unnamed branch between any two nets" is a
+/// per-instance rule, and flattening has already collapsed the pairs.
 ///
 /// The flow of that source is the branch-current unknown codegen pins with its
-/// branch row, never the parallel branch's accumulator. Without this a parent's
-/// `I(drv.x, drv.y)` read back the CHILD's conduction current.
+/// branch row, never the parallel branch's accumulator, which would read back
+/// the child's conduction current.
 ///
-/// `unit` is the id of the contribution that OPENED the entry (see its doc), so
+/// `unit` is the id of the contribution that opened the entry (see its doc), so
 /// a second instance potential-sourcing a pair another already sources reads the
 /// accumulator instead — two ideal potential sources in parallel is a degenerate
 /// topology the clause does not describe either way.
@@ -1060,11 +999,10 @@ fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
 /// However (<>) is used to delimit the port name, e.g., I(<a>) accesses the
 /// current through module port a."
 ///
-/// By KCL that current is precisely the sum of everything this module stamps at
-/// `p`, i.e. the residual codegen is in the middle of assembling — so it cannot
-/// be an expression over the other units without a cycle. It becomes its own
-/// solver unknown, exactly like the §5.4.2 branch-flow unknown, and codegen
-/// pins it with the row `x[u] − Σ stamps at p`.
+/// By KCL that current is the sum of everything this module stamps at `p`, the
+/// residual codegen is assembling, so it cannot be an expression over the other
+/// units without a cycle. It becomes its own solver unknown, like the §5.4.2
+/// branch-flow unknown, and codegen pins it with the row `x[u] − Σ stamps at p`.
 fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
@@ -1142,7 +1080,7 @@ const binary_math = std.StaticStringMap(Mir.Opcode).initComptime(.{
     .{ "pow", .pow }, .{ "hypot", .hypot }, .{ "atan2", .atan2 },
 });
 
-/// §4.3 built-in math. `abs`/`min`/`max` keep integer operands integer
+/// Lowers a §4.3 built-in math call. `abs`/`min`/`max` keep integer operands integer
 /// (§4.3.1: "if both operands are integer the result is integer").
 pub fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
@@ -1185,11 +1123,9 @@ pub fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return poison;
 }
 
-/// E0512 with a suggestion drawn from everything that COULD have been called
-/// here: the module's §4.7 analog functions and the §4.3 built-ins of Tables
-/// 4-14/4-15. `m.functions` is a slice, not a map, so the candidates are
-/// collected before `didYouMean` sees them — and the built-in names ride in the
-/// same list so one call picks the single nearest of the whole set.
+/// Reports E0512 with a suggestion drawn from everything that could have been
+/// called here: the module's §4.7 analog functions and the §4.3 built-ins of
+/// Tables 4-14/4-15, in one candidate list so the single nearest name wins.
 pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     var b = self.errWith(self.file.exprs.mainTok(e), .E0512);
     b.msg("`{s}`", .{name});
@@ -1201,7 +1137,7 @@ pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     try names.appendSlice(self.arena, unary_math.keys());
     try names.appendSlice(self.arena, binary_math.keys());
     // §3.13.2 access functions land here too: the parser routes `Vv(p,n)` to a
-    // function call precisely BECAUSE `Vv` is not an access name, so `V` is the
+    // function call because `Vv` is not an access name, so `V` is the
     // answer far more often than any analog function is.
     var it = self.access_kind.keyIterator();
     while (it.next()) |k| try names.append(self.arena, k.*);
@@ -1210,6 +1146,7 @@ pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     return b.emit();
 }
 
+/// Reports E0506 (`name` takes `want` arguments) and returns the poison value.
 pub fn arityError(self: *Lower, e: Ast.ExprId, name: []const u8, want: usize) Oom!TypedValue {
     try self.err(self.file.exprs.mainTok(e), .E0506, "`{s}()` takes {d}", .{ name, want });
     return poison;

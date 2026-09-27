@@ -1,105 +1,9 @@
-//! The one runner binary and the one suite step, `zig build benchmark`: every
-//! fixture through VerA at full depth — compile, build the testbench, run it,
-//! judge the `ok=` columns — and time it.
+//! The suite runner behind `zig build benchmark`, `test-devices`, `test-1364`,
+//! `test-vpi-fixtures` and `test-spice`: fixtures -> verdicts on stderr and a
+//! timing table on stdout (one row per fixture, walk order, so two runs diff).
 //!
-//!   zig build benchmark                         # the suite, timed
-//!   zig build benchmark -- ch04                 # only paths matching `ch04`
-//!   zig build benchmark -- --strict             # unasserted and xfail FAIL
-//!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
-//!   zig build benchmark -- --coverage           # LRM clauses cited and uncited
-//!   zig build benchmark -- --against-openvaf    # the head-to-head
-//!   zig build benchmark -- --sweep              # the generated size sweep instead
-//!   zig build benchmark -Doptimize=ReleaseFast  # the only number that ships
-//!
-//! THIS WAS FOUR STEPS — `torture`, `torture-pending`, `conformance`,
-//! `benchmark` — over one executable with a mode argument. They are one because
-//! they were always one measurement of one suite: the same fixtures, the same
-//! judge (`tests/harness.zig`), the same `suite_options`. A run that scores VerA
-//! and a run that scores OpenVAF and a run that times VerA could each drift into
-//! a different fixture set, a different filter or a different verdict algebra
-//! while all three still printed a number. Now they cannot: there is one walk.
-//! `torture-pending` was that same run with `--fixture-root=tests/pending`, and
-//! it is a flag rather than a step because the tree it walks is the only thing
-//! that differed.
-//!
-//! ARGV[1] IS THE `vera` EXECUTABLE, from `run.addArtifactArg(exe)` — which is
-//! also what makes the built binary a dependency of the run. The suite itself
-//! compiles the engine IN-PROCESS and needs no binary; it is here because the
-//! `devices` run of this same executable spawns it, and because the spawn floor
-//! the head-to-head reports is measured by spawning it.
-//!
-//! ---------------------------------------------------------------------------
-//! WHAT IS TIMED, AND WHY IT IS NOT THE WHOLE SUITE RUN. The depth pass builds
-//! a native testbench per fixture, which is a `zig build-exe` — seconds of the
-//! Zig compiler's wall clock that are not VerA's. So the depth pass produces the
-//! VERDICTS, and a second, SEQUENTIAL pass produces the TIMES, and the thing it
-//! times is one accept/reject compilation: source in, device text out. That is
-//! exactly the work a foreign compiler is given, so the two columns are the same
-//! question. Two passes, because a parallel run measures the machine's load and
-//! a sequential suite run would take an hour.
-//!
-//! MIN-OF-N. Every source of noise on a shared machine is additive — a preempted
-//! run is slower than a clean one and never faster — so the minimum is the
-//! closest sample to "what this code costs", where a mean would mostly measure
-//! the load average of whoever ran it. The distribution is reported over
-//! FIXTURES, which is the variation that is about the compiler.
-//!
-//! **RELEASEFAST IS THE NUMBER THAT MEANS ANYTHING**, because it is what ships.
-//! `zig build benchmark` takes the tree's default `-Doptimize`, which is
-//! **Debug**, and Debug is ~8× slower (MEASURED on one tree, same commit:
-//! `lint` over the fixture set, 1959.5 ms Debug vs 247.0 ms ReleaseFast). A
-//! whole night of figures was once quoted as if it were the shipping number
-//! because the output did not say which it was, so the mode is now a `#` line at
-//! the head of the report, from `@import("builtin").mode` — the compiled-in
-//! truth, not a flag the runner can be lied to about.
-//!
-//! That label is honest only because `build.zig` gives this module and the
-//! `vera` module it imports the SAME `optimize`: `-O` is a per-module flag, so a
-//! bench built ReleaseFast against a Debug engine would print `ReleaseFast` over
-//! a Debug measurement. Which is also why this step does not silently force
-//! ReleaseFast on itself.
-//!
-//! NOTHING IS ASSERTED INSIDE THE TIMER. The deterministic claims this file owns
-//! — that a second `writeTree` writes 0 bytes, and that a generated shape has
-//! the `device.text.len`, `mir.defs.len` and `mir.insts.len` the table says —
-//! are `test` blocks at the foot of the file, so `zig build test` checks them in
-//! milliseconds and a size regression cannot wait for somebody to remember to
-//! run the bench. A wall-clock number cannot be asserted at all: it is a
-//! property of the machine, not of the compiler.
-//!
-//! NO MACHINE-READABLE SIDE CHANNEL, for the reason harness.zig gives: a second
-//! output format is a second thing to keep true. One TSV-ish table on stdout,
-//! one row per fixture in the walk's sorted order, so comparing two runs is
-//! `diff` and nothing else. The prose report — which fixture failed and why —
-//! stays on stderr where the suite has always written it. There is no committed
-//! artifact and no `--bless`: the timings are the machine's and belong to
-//! whoever ran it.
-//!
-//! ---------------------------------------------------------------------------
-//! `--sweep` — the generated size sweep, and the reason it is still here. `gen`
-//! emits a .va whose size is a parameter, and each of its three axes is swept
-//! 1 → 4096 with the other two pinned at 1. A slope is what settles a scope
-//! argument: "this scan is O(n²) and n is a netlist" and "this scan is flat to
-//! 4096" are the same wall-clock number at n = 8 and opposite conclusions, and
-//! only the sweep tells them apart. It is a flag and not the default because the
-//! fixtures are the workload the project's scope guarantees exists.
-//!
-//! FOUR PHASES, ON SEAMS THAT ALREADY EXISTED. The sweep adds no API to the
-//! engine and no hook inside it — it calls the same four entry points an
-//! embedder calls, in the same order `root.zig`'s pipeline does:
-//!
-//!   pp        `Preprocessor.process`                          text → text
-//!   lint      `vera.compileSourceOpts(gpa, src, .lint, .{})`  text → MIR
-//!   codegen   `result.generateDevice()`                       MIR → device.zig
-//!   rewrite   `orchestrator.writeTree` a SECOND time          device.zig → 0 bytes
-//!
-//! EACH ROW IS A PREFIX OF THE NEXT, not a slice of it, because each stage needs
-//! the one above it and there is no seam that resumes a compilation from the
-//! middle. So a row is "everything up to and including this", and the cost OF a
-//! stage is a subtraction the reader does: `lint - pp` is lex+parse+lower+prove,
-//! `codegen - lint` is stage 6. Reporting them cumulatively is what keeps the
-//! bench free of an engine hook — the alternative is four entry points that
-//! exist for no reason but to be timed, which is the API the doctrine deletes.
+//! Benchmark verdicts come from a depth pass (compile, build and run the
+//! testbench); times come from a separate sequential accept/reject pass.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -111,14 +15,8 @@ const options = @import("suite_options");
 
 const Io = std.Io;
 
-// Zig collects `test` blocks from a test artifact's ROOT source file and from
-// whatever those tests reference. An ordinary `@import` used only by non-test
-// code is not enough. Without this line `zig build test` ran four tests, all of
-// them this file's, and the sibling runners' never executed at all — including
-// the assertion lint and the verdict algebra, which build.zig's own comment
-// beside `test_step.dependOn` calls "what stops a fixture from asserting
-// nothing while looking like it does". They compiled on every run and checked
-// nothing. `torture` and `external` are referenced for the same reason.
+// Zig collects `test` blocks only from the root file and what its tests
+// reference, so the sibling runners' tests run only through this block.
 test {
     _ = harness;
     _ = torture;
@@ -128,16 +26,27 @@ test {
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
+/// Entry point. argv[1] is the `vera` executable (`run.addArtifactArg`), which
+/// `devices` spawns and the head-to-head's spawn floor times. Then either a
+/// mode word (`devices`, `ieee1364`, `vpi`, `spice`) or benchmark arguments:
+///
+///   zig build benchmark                         # the suite, timed
+///   zig build benchmark -- ch04                 # only paths matching `ch04`
+///   zig build benchmark -- --strict             # unasserted and xfail FAIL
+///   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
+///   zig build benchmark -- --coverage           # LRM clauses cited and uncited
+///   zig build benchmark -- --against-openvaf    # the head-to-head
+///   zig build benchmark -- --sweep              # the generated size sweep instead
+///   zig build benchmark -Doptimize=ReleaseFast  # the timing that ships
+///
+/// Returns the process exit code.
 pub fn main(init: std.process.Init) !u8 {
     var args = init.minimal.args.iterate();
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");
-    // `devices`, `ieee1364`, `vpi` and `spice` are the remaining words in argument
-    // position 2, and none is a mode of the benchmark: they are the other runs of this
-    // executable, whose cases need the BINARY (or a C compiler) rather than the
-    // engine. Everything else is a benchmark argument, including a bare filter
-    // word — which is why these two are matched exactly and not by prefix.
+    // The other runs of this executable, matched exactly: any other word,
+    // including a bare filter, is a benchmark argument.
     const first = args.next();
     if (first) |a| {
         if (std.mem.eql(u8, a, "devices")) return devices(init, vera_exe, &args, &digital_dirs);
@@ -159,26 +68,18 @@ fn usage(io: Io, why: []const u8) !u8 {
     return 2;
 }
 
-/// `root.zig` does not re-export `Mir` (wave 12 privatised it, and decision 4
-/// says a loud compile error is the desired signal). The type is still
-/// reachable through the result that carries it, which is the seam an embedder
-/// already has — so this needs no new `pub`.
+/// `root.zig` does not export `Mir`; the type is reached through the result
+/// that carries it, the seam an embedder already has.
 const Mir = @typeInfo(@FieldType(vera.CompileResult, "mir")).pointer.child;
 
-/// N for the sweep and for the spawn floor, and the estimator is the MIN over
-/// it. The min is right because every source of noise on a shared machine is
-/// additive — a preempted run is slower than a clean one and never faster — so
-/// the minimum is the closest sample to "what this code costs", where a mean
-/// would mostly measure the load average of whoever ran it.
+/// N for the sweep and for the spawn floor; the estimator is the min over it.
+/// Noise on a shared machine only ever adds time, so the min is the closest
+/// sample to the code's cost, where a mean measures the machine's load.
 const reps = 25;
 
-/// N per FIXTURE, which is smaller for a reason that is about cost and not
-/// about statistics: 1323 fixtures times N compilations, and with
-/// `--against-openvaf` times N subprocess spawns of a compiler that takes tens
-/// of milliseconds. 25 there would be twenty minutes of spawning. The min is
-/// still the estimator, and the distribution the report prints is over
-/// FIXTURES — 1323 samples of "what a compilation costs" — which is the
-/// variation that is about the compiler rather than about the machine.
+/// N per fixture, smaller than `reps` because `--against-openvaf` spawns a
+/// compiler N times per fixture. The min is still the estimator; the report's
+/// distribution is over fixtures, the variation that is about the compiler.
 const fixture_reps = 5;
 
 /// The sweep. Powers of eight, so a doubling and a squaring are visibly
@@ -243,50 +144,31 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 // ---------------------------------------------------------------------------
 
 /// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
-/// shape, in `sweep` order. These are pure functions of the source, so they are
-/// the same on every machine and in every optimize mode; a change here is a
-/// change in what VerA emits, and it must be explained in the commit that
-/// moves it.
-///
-/// The zero-count shift identity adds 130 bytes to the shared emitted helper;
-/// these shapes have unchanged MIR and runtime signatures.
-/// The source-defined min/max selection helpers add 418 shared bytes. All
-/// fifteen sizes below were remeasured after that repair; MIR counts agree.
-/// `deriv_reads`, `ddx_reads` and `jac_const` add 538 bytes to every shape:
-/// every column of every shape has a lane, so each emits two masks and an
-/// empty table.
-/// `contract_abi` adds 111 bytes to every shape: one doc line and one decl.
-/// `zResidual`, the rows `eval` and `evalQ` share, adds 162 bytes to every
-/// shape.
-/// Contract ABI 5 (the scalar family's helpers, `SimState` arguments, masked
-/// value types, the `constant` decl, and the Instance fields SimState took)
-/// adds 4360 bytes to the one-contribution shape.
-/// A fused chain deeper than `max_inline_depth` (256) keeps a statement every
-/// 256 links, which is what moves the n = 512 and n = 4096 points; before it
-/// the n = 4096 points overflowed the stack in the recursive renderer.
-/// MEASURED on this tree, not predicted: the numbers came out of this bench.
+/// shape, in `sweep` order, measured by this bench. Pure functions of the
+/// source, so the same on every machine and optimize mode: a change here is a
+/// change in what VerA emits, and the commit that moves it explains it.
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 28740, .defs = 8, .insts = 5 },
-        .{ .device = 29095, .defs = 35, .insts = 26 },
-        .{ .device = 31838, .defs = 258, .insts = 194 },
-        .{ .device = 54241, .defs = 2050, .insts = 1538 },
-        .{ .device = 236821, .defs = 16386, .insts = 12290 },
+        .{ .device = 28710, .defs = 8, .insts = 5 },
+        .{ .device = 29065, .defs = 35, .insts = 26 },
+        .{ .device = 31808, .defs = 258, .insts = 194 },
+        .{ .device = 54211, .defs = 2050, .insts = 1538 },
+        .{ .device = 236791, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 28740, .defs = 8, .insts = 5 },
-        .{ .device = 28922, .defs = 24, .insts = 19 },
-        .{ .device = 30378, .defs = 136, .insts = 131 },
-        .{ .device = 42083, .defs = 1032, .insts = 1027 },
-        .{ .device = 135844, .defs = 8200, .insts = 8195 },
+        .{ .device = 28710, .defs = 8, .insts = 5 },
+        .{ .device = 28892, .defs = 24, .insts = 19 },
+        .{ .device = 30348, .defs = 136, .insts = 131 },
+        .{ .device = 42053, .defs = 1032, .insts = 1027 },
+        .{ .device = 135814, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 28740, .defs = 8, .insts = 5 },
-        .{ .device = 29944, .defs = 50, .insts = 40 },
-        .{ .device = 39792, .defs = 386, .insts = 320 },
-        .{ .device = 120326, .defs = 3074, .insts = 2560 },
-        .{ .device = 778111, .defs = 24578, .insts = 20480 },
+        .{ .device = 28710, .defs = 8, .insts = 5 },
+        .{ .device = 29914, .defs = 50, .insts = 40 },
+        .{ .device = 39762, .defs = 386, .insts = 320 },
+        .{ .device = 120296, .defs = 3074, .insts = 2560 },
+        .{ .device = 778081, .defs = 24578, .insts = 20480 },
     },
 });
 
@@ -312,15 +194,9 @@ fn checkShape(gpa: Allocator, axis: Axis, i: usize) !Footprint {
 // The MIR footprint — the other half of a size regression
 // ---------------------------------------------------------------------------
 
-/// What one compilation's MIR actually costs in bytes, by column.
-///
-/// `mir.zig` is a set of `MultiArrayList`s, so a row costs the SUM of its
-/// field sizes and not `@sizeOf(Row)` (25 vs 28 for `InstRow`, 9 vs 16 for
-/// `ValueRow` — computed by `capacityInBytes` below rather than asserted, so it
-/// tracks the struct). The two dedup maps and the interner are excluded on
-/// purpose: they are build-time scratch that `deinit` drops, and no proposed
-/// layout change touches them. What is counted is exactly the surface an
-/// Air-shaped rewrite would move.
+/// What one compilation's MIR costs in bytes, by column. A `MultiArrayList` row
+/// costs the sum of its field sizes, not `@sizeOf(Row)`. The dedup maps and the
+/// interner are excluded: they are build-time scratch that `deinit` drops.
 const Footprint = struct {
     insts: u64 = 0,
     defs: u64 = 0,
@@ -357,26 +233,25 @@ fn emitFootprint(w: *Io.Writer, case: []const u8, n: u32, f: Footprint) !void {
 // The phases
 // ---------------------------------------------------------------------------
 
+/// The sweep's phases, each a prefix of the next (there is no seam that resumes
+/// a compilation midway), so a stage's own cost is a subtraction: `lint - pp`
+/// is lex+parse+lower+prove, `codegen - lint` is codegen.
+///   pp        `Preprocessor.process`                          text -> text
+///   lint      `vera.compileSourceOpts(gpa, src, .lint, .{})`  text -> MIR
+///   codegen   `result.generateDevice()`                       MIR -> device.zig
+///   rewrite   `orchestrator.writeTree` a second time          device.zig -> 0 bytes
 const Phase = enum { pp, lint, codegen, rewrite };
 
-/// `bytes` is what the phase HANDLED, and it differs per phase because the
-/// phases do: preprocessed text out of `pp`, the same text in for `lint`,
-/// device text out of `codegen`, and bytes actually hit on disk for `rewrite`
-/// — which is the one that is asserted, because it must be 0.
+/// `bytes` is what the phase handled: preprocessed text out of `pp`, the same
+/// text in for `lint`, device text out of `codegen`, bytes written to disk for
+/// `rewrite` (asserted 0 by a test, not here).
 const Sample = struct { min_ns: u64, bytes: u64 };
 
 /// Run `phase` over one generated source and return the bytes it handled.
 ///
-/// `keep` receives the `CompileResult` instead of freeing it, so `measure` can
-/// read the clock BEFORE the teardown runs — a compilation arena is one
-/// `munmap` but a device text is a `free` of up to a megabyte, and timing it
-/// would attribute the allocator's cost to codegen. It must already have
-/// capacity for `reps`, because a reallocation inside the timed region would be
-/// the very thing it exists to keep out.
-///
-/// `doNotOptimizeAway` on the two values a release build could otherwise prove
-/// unused (`result.mir`, the device length) is what stops it from deleting the
-/// work being timed.
+/// `keep` receives the `CompileResult` instead of freeing it, so the clock is
+/// read before teardown. Precondition: `keep` already has capacity for `reps`,
+/// so no reallocation lands inside the timed region.
 fn runPhase(
     gpa: Allocator,
     io: Io,
@@ -404,12 +279,9 @@ fn runPhase(
     std.mem.doNotOptimizeAway(device.len);
     if (phase == .codegen) return device.len;
 
-    // The rewrite phase: prime the tree, then write it AGAIN, which is the
-    // no-op recompile the whole incremental story rests on. That the second
-    // call writes 0 bytes is a deterministic claim, so it is a `test` at the
-    // foot of this file and NOT an assert in here — an `expectEqual` under
-    // the clock measures itself and fails a timing run for a reason that is
-    // not about timing.
+    // Prime the tree, then write it again: the no-op recompile. That it writes
+    // 0 bytes is a `test` at the foot of the file; an assert under the clock
+    // would time itself.
     _ = try rewrite(io, gpa, result.device, work_dir);
     return rewrite(io, gpa, result.device, work_dir);
 }
@@ -451,17 +323,16 @@ fn measure(
     return .{ .min_ns = min, .bytes = bytes };
 }
 
-/// Nanoseconds since `t0` on the monotonic clock. `std.time.Timer` no longer
-/// exists on 0.16 (std/time.zig is unit constants and `epoch` now), and
-/// `.awake` is the CLOCK_MONOTONIC it wrapped.
+/// Nanoseconds since `t0` on the monotonic (`.awake`) clock.
 fn elapsed(io: Io, t0: Io.Timestamp) u64 {
     const ns = t0.durationTo(.now(io, .awake)).nanoseconds;
     return @intCast(@max(ns, 0));
 }
 
-/// The mode the ENGINE was compiled in, and therefore the only thing that makes
-/// a `min_ns` mean something. `builtin.mode` is this module's own `-O`, which
-/// `build.zig` keeps equal to the `vera` module's; see the header.
+/// The mode the engine was compiled in, printed on every row because only a
+/// ReleaseFast time is the shipping number (Debug is several times slower).
+/// `builtin.mode` is this module's `-O`, which `build.zig` keeps equal to the
+/// `vera` module's.
 const mode = @tagName(@import("builtin").mode);
 
 fn emit(w: *Io.Writer, case: []const u8, n: u32, phase: Phase, s: Sample) !void {
@@ -513,8 +384,7 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
 
     if (do_sweep) return sweepReport(gpa, io, arena, w);
 
-    // Asked ONCE, before the walk: a missing compiler must fail in the first
-    // second and not after the depth pass has spent twenty minutes.
+    // Asked before the walk, so a missing compiler fails before the depth pass.
     var ov: ?external.Ctx = if (against_openvaf) (try probe(io, arena)) orelse return 2 else null;
 
     // `--coverage` is a question about the FIXTURES — which LRM clauses they
@@ -579,22 +449,11 @@ fn probe(io: Io, arena: Allocator) !?external.Ctx {
 }
 
 // ---------------------------------------------------------------------------
-// The head-to-head
-//
-// Published, so it must not flatter either side. Three rules hold it to that:
-//
-//   1. THE COMPARABLE UNIT. Both compilers are given the same fixture bytes and
-//      asked the same question — accept what the LRM says must compile, refuse
-//      what it says must not — and both are scored by `harness.judge`, the same
-//      function called twice. VerA's `ok=` columns are a question OpenVAF was
-//      never asked, so they are printed in a section marked VerA-only and never
-//      as a score anyone lost.
-//   2. THE SPAWN COST IS NAMED. VerA runs in-process; OpenVAF is a subprocess,
-//      and fork+exec+dynamic-link is in its number and in nothing of VerA's. So
-//      the floor is measured separately and VerA is reported BOTH ways.
-//   3. OUT OF SCOPE IS NOT A FAILURE. OpenVAF is Verilog-A; a large share of
-//      these fixtures are Verilog-AMS, which Annex C explicitly keeps out of the
-//      subset. Those are `n/a`, counted and reported as such.
+// The head-to-head. Both compilers get the same fixture bytes, the same
+// accept/refuse question and the same `harness.judge`; VerA's `ok=` columns
+// print in a VerA-only section. The subprocess spawn floor is measured and
+// VerA is reported both with and without it. Fixtures outside Annex C's
+// Verilog-A subset are `n/a`, not failures.
 // ---------------------------------------------------------------------------
 
 /// Did the compiler do what the fixture says? `n_a` is not a verdict about the
@@ -637,10 +496,8 @@ fn report(
     const fixtures = try harness.collect(arena, io, cfg.root, cfg.filter);
     if (fixtures.len == 0) return;
 
-    // The foreign compiler's own FAIL prose goes where the suite's report has
-    // always gone. VerA's accept/reject prose is DISCARDED: the depth pass
-    // above already printed a strictly stronger report of the same fixtures,
-    // and printing it twice would double every failure.
+    // VerA's accept/reject prose is discarded: the depth pass already printed
+    // a stronger report of the same fixtures.
     var err_buf: [4096]u8 = undefined;
     var stderr = Io.File.stderr().writer(io, &err_buf);
     const ew = &stderr.interface;
@@ -724,10 +581,8 @@ fn report(
                 _ = external.compileOnce(io, pa, c.argv, f, job) catch break;
                 ns = @min(ns, elapsed(io, t0));
             }
-            // One more spawn than the timing loop, deliberately: the verdict
-            // comes from `harness.judge`, the same function that judged VerA, so
-            // the two columns cannot drift apart. `Ctx` carries back the two
-            // facts the verdict vocabulary has no room for.
+            // One spawn beyond the timing loop, so the verdict comes from
+            // `harness.judge` like VerA's. `Ctx` carries back crash and size.
             const verdict = try harness.judge(gpa, io, pa, external.compiler(c), f, false, ew);
             if (ns != std.math.maxInt(u64)) row.ov_ns = ns;
             row.ov_ok = if (c.crashed) .crash else if (verdict == .pass) .yes else .no;
@@ -933,11 +788,8 @@ const Scope = enum { va, ams };
 /// `casex`, `casez` and digital behaviour, which is what the event and
 /// procedural keywords here are.
 ///
-/// Conservative on purpose: a keyword is listed only where the annex says so,
-/// so a fixture that is Verilog-AMS by SEMANTICS with no distinctive keyword
-/// scores as in scope and its refusal counts against the foreign compiler. That
-/// is the direction the error must run — a scope rule that guessed generously
-/// would quietly excuse real non-conformance.
+/// Conservative: a fixture that is Verilog-AMS only by semantics scores as in
+/// scope, so a scope rule never excuses a real refusal.
 const ams_only = [_][]const u8{
     // C.16
     "connect",    "connectmodule",       "connectrules", "driver_update",
@@ -953,11 +805,8 @@ const ams_only = [_][]const u8{
 
 /// Is this fixture inside the Verilog-A subset?
 ///
-/// Read at CODE level — outside comments and outside string literals — because
-/// these fixtures are documents: they open with a `//!` header that argues about
-/// the clause in prose, and "the connect rules of §7.6" in a paragraph is not a
-/// `connect` statement. A plain `indexOf` over the bytes scored 200-odd fixtures
-/// out of scope for their own commentary.
+/// Read outside comments and string literals: a `//!` header discussing "the
+/// connect rules of §7.6" is not a `connect` statement.
 fn scopeOf(source: []const u8) Scope {
     var i: usize = 0;
     while (i < source.len) {
@@ -1006,13 +855,11 @@ fn isIdent(c: u8) bool {
 
 // ---------------------------------------------------------------------------
 
-/// `--sweep`: the generated size sweep, which is about SLOPE and has no fixture
-/// and no second compiler in it. See the header.
+/// `--sweep`: each axis of `gen` swept over `sweep` with the others at 1. The
+/// slope is the point: an O(n^2) scan and a flat one can cost the same at n = 8.
 fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
-    // The footprint table first, and it is a separate pass rather than a column
-    // on the timing table: `bytes` there is what a PHASE handled, which is text
-    // for three of the four phases, and overloading it would make two different
-    // quantities share a heading. One compile per shape, outside every timer.
+    // The footprint table is its own pass, one compile per shape outside every
+    // timer: the timing table's `bytes` is a different quantity.
     try w.writeAll("case\tn\tinsts\tdefs\tblocks\textra\tmir_bytes\n");
     for (std.enums.values(Axis)) |axis| {
         for (sweep, 0..) |n, i| try emitFootprint(w, @tagName(axis), n, try checkShape(gpa, axis, i));
@@ -1038,21 +885,10 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
 }
 
 // ---------------------------------------------------------------------------
-// The `devices` mode — the tests that cannot be a `test` block, because the
-// thing under test does not exist until the `vera` BINARY has emitted it.
+// The `devices` mode: `vera --run x.v` transcripts against committed goldens,
+// which need the `vera` binary and so cannot be `test` blocks.
 //
-//   - CLI goldens. `vera --run x.v` is a subprocess, so its transcript is
-//     compared against a committed file.
-//   - Generated devices. `vera --emit-zig` produces a module, a host beside it
-//     calls its hooks and reads its state, and `vera.tb.buildExe` — the same
-//     spawner the torture suite uses per fixture — links the two.
-//
-// It lives on the RUNNER side and not in `build.zig` because every one of those
-// is a subprocess pipeline, and expressing a pipeline as build-graph artifacts
-// costs ten lines of plumbing per case for the privilege of running it in a
-// language that cannot read a file. Here it is a table and two loops.
-//
-//   zig build test                  # all of it
+//   zig build test-devices          # all of it
 //   zig build test-devices -- rng   # the cases whose name contains `rng`
 // ---------------------------------------------------------------------------
 
@@ -1060,18 +896,12 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
 /// semantics, so `.v` and not `.va`: the shared frontend plus `sim/`, with no
 /// analog path at all.
 ///
-/// WALKED, NOT LISTED, recursively. `tests/fixtures/ieee1364/<NN_clause>/` is
-/// the IEEE 1364-2005 suite, one directory per clause; `tests/fixtures/digital/`
-/// keeps the digital-context cases that are Verilog-AMS rules (wreal, the
-/// `--std` boundary). A table would be a second register of the same
-/// directories, and the one that rots is always the table.
+/// Walked recursively, not listed: `tests/fixtures/ieee1364/<NN_clause>/` (IEEE
+/// 1364-2005, one directory per clause) and `tests/fixtures/digital/`
+/// (digital-context Verilog-AMS rules such as wreal and the `--std` boundary).
 ///
-/// A `.v` needs either `.expected.txt` or `// digital-runner: reject`.
-/// Unmarked legacy negatives retain their analog route and are NOT digital
-/// diagnostic evidence. A support design with neither is not a case.
-/// That is how a design
-/// a fixture INSTANTIATES (D08's UDP libraries, M04's driver designs) sits in
-/// the same directory without being run on its own.
+/// A `.v` is a case when it has `.expected.txt` or `// digital-runner: reject`;
+/// a support design with neither (a UDP library a fixture instantiates) is not.
 const digital_dirs = [_][]const u8{ "digital", ieee1364_dir };
 const ieee1364_dir = "ieee1364";
 
@@ -1153,33 +983,17 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
 }
 
 // ---------------------------------------------------------------------------
-// The `vpi` mode — the 26 `.c` fixtures, which nothing read.
+// The `vpi` mode: every `.c` fixture under `vpi_dirs`, compiled (not linked or
+// run) against src/vpi/vpi_user.h, so the ABI the LRM describes is checked by
+// a C compiler. The fixtures that run are `build.zig`'s `vpi_runs`.
 //
-// `tests/harness.zig:collect` walks `.va` and `.v`; these are `.c`, and they
-// are not VerA source at all. A VPI fixture is a C translation unit: it
-// `#include`s a header, names constants and structs from it, and calls the
-// routines `src/vpi/root.zig` exports. So the question it asks is the ABI —
-// whether the surface the LRM describes EXISTS with the shape it describes —
-// and a C compiler is what asks it. `build.zig`'s comment beside `vpi_app`
-// already makes this argument for the one acceptance test; this generalises it
-// to the 26.
-//
-// COMPILE, NOT RUN, and the distinction is the release. Running them needs a
-// simulator host per design — `p02_design.v` elaborated through the digital
-// path, five `.va` designs through the analog one — plus the routines
-// themselves. That is P02 and P03, `ROADMAP.md` v0.9.0. v0.0.3 makes them
-// visible, and "does this even compile against the header we ship" is the
-// largest true statement available without implementing them.
-//
-//   zig build test-vpi-fixtures           # all 26
+//   zig build test-vpi-fixtures           # all of them
 //   zig build test-vpi-fixtures -- p03    # the ones whose name contains p03
 // ---------------------------------------------------------------------------
 
-/// Directories holding `.c` fixtures; legacy groups have their own shared header
-/// beside it (`p02_check.h`, `p03_vpi_analog.h`) which is why the fixture's own
-/// directory goes on the include path as well as `src/vpi`.
-/// ieee_pli clients use the production header directly. Their paired HDL and
-/// runtime markers are NOT executed by this compile-only runner.
+/// Directories holding `.c` fixtures. Some groups share a header beside them
+/// (`p02_check.h`, `p03_vpi_analog.h`), so the fixture's own directory goes on
+/// the include path as well as `src/vpi`.
 const vpi_dirs = [_][]const u8{ "ch11_vpi", "ch12_vpi_routines", "ieee_pli" };
 
 fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
@@ -1197,9 +1011,7 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
     const w = &stderr.interface;
     defer w.flush() catch {};
 
-    // One object path, reused: the loop is sequential, nothing reads the object
-    // back, and only its existence-or-not matters. `-o` still has to name
-    // something writable, so it names this.
+    // One object path, reused: the loop is sequential and nothing reads it.
     const work = options.work_root ++ "/vpi-fixtures";
     Io.Dir.cwd().createDirPath(io, work) catch {};
     const obj = try std.fs.path.join(arena_state.allocator(), &.{ work, "fixture.o" });
@@ -1233,22 +1045,10 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
             ran += 1;
             const pa = arena_state.allocator();
             const src = try std.fs.path.join(pa, &.{ dir_path, name });
-            // Compile to an object and stop: no link. Linking would answer a
-            // different and currently duller question — every routine these
-            // call beyond the eleven P01 exports is missing, which `grep
-            // 'export fn' src/vpi/root.zig` already says without a linker.
-            //
-            // `-c -o` and NOT `-fsyntax-only`, which looks like the tidier way
-            // to say "do not link" and is not: `zig cc` passes its own `-c`,
-            // `-fsyntax-only` then makes that argument unused, and `-Werror`
-            // turns the unused-argument warning into an error — so every
-            // fixture fails identically and the census reads 0/26 for a reason
-            // that has nothing to do with the fixtures.
-            //
-            // The flags are `vpi_app.c`'s, deliberately. These fixtures are the
-            // same kind of translation unit asking the same question, and a
-            // laxer `-W` set here would let a fixture pass that the acceptance
-            // test's own flags would refuse.
+            // `-c -o`, not `-fsyntax-only`: `zig cc` passes its own `-c`, which
+            // `-fsyntax-only` leaves unused, and `-Werror` fails every fixture on
+            // that warning. The flags are `vpi_app.c`'s, so no fixture passes
+            // here that the acceptance test's flags would refuse.
             const r = capture(pa, io, &.{
                 options.zig_exe, "cc",      "-std=c99", "-Wall", "-Werror",
                 "-c",            "-o",      obj,        "-I",    vpi_include,
@@ -1260,9 +1060,7 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
             };
             if (r.exit == 0) continue;
             failed += 1;
-            // One line of the compiler's own words. The whole log is available
-            // by running the command by hand; a census that printed it for
-            // thirteen fixtures would bury the census.
+            // One line of the compiler's words; the full log would bury the census.
             const first = std.mem.trim(u8, firstErrorLine(r.stderr), " \t\r");
             try w.print("FAIL {s}: {s}\n", .{ name, first });
         }
@@ -1302,47 +1100,20 @@ test "the first error line is the compiler's, not the last line of a log" {
 }
 
 // ---------------------------------------------------------------------------
-// The `spice` mode — the 7 `.sp` decks, which nothing read either.
+// The `spice` mode: each `.sp` deck (a SPICE netlist with `.hdl "model.va"`
+// cards and an `.expected.json` analytic oracle). The simulator that runs them
+// is not in this repository, so this checks the half it owns: the oracle
+// exists, every `.hdl` model resolves (`resolveModel`), and each compiles.
 //
-// A deck is not VerA source and never goes through `collect`: it is a SPICE
-// netlist — `.hdl "model.va"`, instance cards, a `.tran` or `.noise` card —
-// paired with an `.expected.json` carrying an ANALYTIC oracle (expected plot
-// columns, values, tolerances, and a hand derivation of why). Running one needs
-// a circuit simulator to link the compiled device and turn the Newton loop.
-// That simulator is ARPice and it is not in this repository (`ROADMAP.md §6`),
-// so these cannot be executed here at any release.
-//
-// What CAN be checked is the half this repository owns, and it is not nothing:
-// the deck is paired with an oracle, every model it names RESOLVES, and every
-// model VerA is asked to compile COMPILES. A deck whose `.hdl` points at
-// nothing is broken regardless of which simulator would run it.
-//
-// That is exactly what this found. All 7 decks name their models through an
-// `.assets/` subdirectory — `.hdl "a10_host.assets/a10_vsine.va"` — and no such
-// directory exists: the models sit in the deck's own directory under flattened
-// names, `a10_host.assets_a10_vsine.va`, with `/` turned into `_`. It is the
-// slug rule from `harness.zig:collect` applied to the tree itself, so a nested
-// fixture layout was flattened and the decks' relative references were not
-// updated with it. `resolveModel` absorbs that rather than papering over it.
-//
-//   zig build test-spice            # all 7
+//   zig build test-spice            # all of them
 //   zig build test-spice -- a10     # the decks whose name contains a10
 // ---------------------------------------------------------------------------
 
-/// Where a `.hdl` reference actually is.
-///
-/// Tried in order, and the ORDER is the point: the literal relative path first,
-/// so that if the tree is ever un-flattened this silently starts taking the
-/// correct branch and the fallback dies unused. Only then the flattened name —
-/// the reference with `/` replaced by `_`, matched as a SUFFIX of a file in the
-/// deck's own directory, because flattening also prefixed each name with the
-/// directories above it (`a06_ntab.assets/a06_ntab_lin.va` is filed as
-/// `a06_noisetables_a06_ntab.assets_a06_ntab_lin.va`).
-///
-/// A suffix and not a substring, and REQUIRED TO BE UNIQUE: a match that hits
-/// two files is reported unresolved rather than settled on whichever the
-/// directory yielded first. Guessing which model a deck meant is how a deck
-/// ends up silently testing the wrong device.
+/// Where a `.hdl` reference is. The literal relative path first; else the
+/// flattened name the fixture tree actually uses (`/` replaced by `_`, e.g.
+/// `a06_ntab.assets/a06_ntab_lin.va` filed as
+/// `a06_noisetables_a06_ntab.assets_a06_ntab_lin.va`), matched as a suffix of
+/// exactly one file in the deck's directory. Two matches are unresolved.
 fn resolveModel(arena: Allocator, io: Io, dir_path: []const u8, ref: []const u8) !?[]const u8 {
     const literal = try std.fs.path.join(arena, &.{ dir_path, ref });
     if (Io.Dir.cwd().access(io, literal, .{})) |_| return literal else |_| {}
@@ -1478,11 +1249,9 @@ fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
 }
 
 test "a flattened .assets reference is a suffix of the committed name" {
-    // Why resolveModel needs a fallback at all: every deck says
-    // `.hdl "a10_host.assets/a10_vsine.va"` and the tree was flattened under
-    // them. Only the slug half of the rule is pure, so only it is pinned here;
-    // the filesystem half is covered by the census, which reports 0/7 the
-    // moment resolution breaks.
+    // The decks say `.hdl "a10_host.assets/a10_vsine.va"` but the tree is
+    // flattened. Only the pure slug half is pinned here; the census covers the
+    // filesystem half.
     const ref = "a10_host.assets/a10_vsine.va";
     var flat: [64]u8 = undefined;
     @memcpy(flat[0..ref.len], ref);
@@ -2137,10 +1906,7 @@ const FuzzGen = struct {
     }
 };
 
-// orchestrator.zig's claim, and the whole basis of the incremental story:
-// writing a tree that is already on disk touches nothing. It is a `test` and
-// not an assert inside the timed `rewrite` phase for the reason the header
-// gives — an assertion under the clock measures itself.
+// orchestrator.zig's claim: writing a tree already on disk touches nothing.
 test "a second writeTree writes no bytes" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -2155,21 +1921,17 @@ test "a second writeTree writes no bytes" {
     try std.testing.expectEqual(@as(usize, 0), try rewrite(io, gpa, result.device, work));
 }
 
-// Every point of every axis, in `zig build test`: the table above is a size
-// regression on the emitted device, and a size regression that is only checked
-// when someone remembers to run the bench is not checked. The n = 4096 points
-// are also the renderer's stack-depth check, and cost about a second each.
+// Every point of every axis, in `zig build test`, so a size regression in the
+// emitted device fails the gate. The n = 4096 points are also the renderer's
+// stack-depth check.
 test "generated shapes emit the expected device and MIR size" {
     for (std.enums.values(Axis)) |axis| {
         for (0..5) |i| _ = try checkShape(std.testing.allocator, axis, i);
     }
 }
 
-// The scope rule decides which fixtures a Verilog-A compiler is SCORED on, so
-// getting it wrong publishes a wrong number in either direction: a false `ams`
-// excuses a real refusal, a false `va` invents one. The prose cases are the
-// ones that actually bit — these fixtures argue about their clause in a `//!`
-// header, and a byte-wise `indexOf` read the argument as the construct.
+// The scope rule decides what a Verilog-A compiler is scored on: a false `ams`
+// excuses a real refusal, a false `va` invents one.
 test "scope reads Annex C at code level, not in the prose that cites it" {
     try std.testing.expectEqual(Scope.va, scopeOf("I(a,b) <+ V(a,b) / r;"));
     try std.testing.expectEqual(Scope.ams, scopeOf("connectmodule l2e(in, out);"));

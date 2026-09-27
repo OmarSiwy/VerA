@@ -1,33 +1,9 @@
-//! VerA builds one binary and exposes compiler and runtime modules.
+//! Builds `vera` (src/main.zig), the `module_specs` module graph an embedder
+//! imports, one test artifact per module, and the suite steps, which all run
+//! tests/bench.zig with the built `vera` path and `b.args`.
 //!
-//! The binary is `vera`: `src/main.zig`, which compiles Verilog-A through the
-//! `lib/` modules and runs digital Verilog through `src/sim`.
-//! The modules are for an embedder — a simulator that wants to compile
-//! Verilog-A in-process rather than shell out. `lib/` is the compiler and
-//! `src/` is everything that runs after it; see `module_specs`.
-//!
-//! TWO TABLES AND THREE LOOPS, which is the whole file:
-//!
-//!   module_specs   the module graph, written down once
-//!   the `test` step, which is every module's own test artifact plus the above
-//!
-//! THERE IS ONE SUITE STEP, `benchmark`, and it is a run of `tests/bench.zig`
-//! with the `vera` binary's path and `b.args`. It was four — torture,
-//! torture-pending, conformance, benchmark — over that same one executable with
-//! a mode argument, which meant four ways for "the same fixtures, judged the
-//! same way" to stop being true. The differences between them are flags now:
-//! `--fixture-root=tests/pending`, `--against-openvaf`, `--strict`.
-//!
-//! WHAT IS NOT HERE, deliberately: anything whose input is the OUTPUT of the
-//! `vera` binary. Generated devices, the hosts that call into them, the CLI
-//! goldens — those are a subprocess pipeline, and expressing one as build-graph
-//! artifacts costs ten lines of plumbing per case in a language that cannot read
-//! a file. They are `tests/bench.zig devices`, which gets the binary's path from
-//! `run.addArtifactArg(exe)` and spawns it itself.
-//!
-//! `tools/contract.zig` is not build-script material either, in the opposite
-//! direction: it is compiled into every generated DEVICE and into no part of
-//! the compiler, which is why it sits in `tools/` and is a module here.
+//! Anything whose input is `vera`'s output (generated devices, transcripts,
+//! VPI applications) is spawned by the suite runner, not modelled as artifacts.
 
 const std = @import("std");
 
@@ -37,9 +13,8 @@ const ModuleSpec = struct {
     imports: []const []const u8 = &.{},
 };
 
-/// Order is the dependency order: a module may only import ones declared above
-/// it. `defineModules` panics otherwise, so a cycle is a build error and not a
-/// review note.
+/// The module graph in dependency order: a module may import only ones
+/// declared above it, and `defineModules` panics otherwise.
 const module_specs = [_]ModuleSpec{
     .{ .name = "contract", .path = "tools/contract.zig" },
 
@@ -51,12 +26,10 @@ const module_specs = [_]ModuleSpec{
     .{ .name = "backend", .path = "lib/backend/root.zig", .imports = &.{ "diag", "frontend", "ir", "kernels" } },
     .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
 
-    // src/ — what runs AFTER compilation. `sim` takes only the frontend: it is
-    // an interpreter over the shared AST, not a consumer of the pipeline. It
-    // takes `kernels` (std-only leaves) for the §9.4.3 C real conversion the
-    // analog devices already run, so both engines print one way — and its
-    // §17.2 files go through `file_kernels` too, or through the device's own
-    // table when a mixed simulation shares one (`contract.FileIo`, VAMS §9.5.1.2).
+    // src/: what runs after compilation. `sim` is an interpreter over the
+    // shared AST, not a consumer of the pipeline. It takes `kernels` so the
+    // §9.4.3 real conversion and §17.2 file I/O match the analog devices
+    // (`contract.FileIo`, LRM §9.5.1.2).
     .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "diag", "frontend", "kernels" } },
     .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" } },
 };
@@ -82,11 +55,10 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run every test suite");
 
-    // ONE TEST ARTIFACT PER MODULE, and not one artifact over `test_all.zig`:
-    // `zig test` collects tests only from the ROOT module's own file set, so a
-    // cross-module `_ = @import(...)` contributes ZERO tests. A module's tests
-    // run in a build of that module, or they do not run. Each gets a step of its
-    // own too, so `zig build test-ir` runs 66 tests without building the backend.
+    // One test artifact per module: `zig test` collects tests only from the
+    // root module's own file set, so a cross-module `_ = @import(...)`
+    // contributes none. Each also gets a step, so `zig build test-ir` runs
+    // without building the backend.
     const runner: std.Build.Step.Compile.TestRunner = .{
         .path = b.path("tools/zrunner.zig"),
         .mode = .simple,
@@ -97,10 +69,9 @@ pub fn build(b: *std.Build) void {
         b.step(b.fmt("test-{s}", .{m.name}), b.fmt("Run the {s} module tests only", .{m.name}))
             .dependOn(r);
     }
-    // The CLI has no tests of its own; what `test` owes it is that it COMPILES.
-    // A test artifact over main.zig analysed nothing (Zig is lazy and there was
-    // no test to reach it), so the dependency is on the executable itself —
-    // in BOTH languages, since only main.zig reads the option.
+    // The CLI has no tests, so `test` depends on the executable compiling, in
+    // both languages since only main.zig reads the option. A test artifact over
+    // main.zig would analyse nothing.
     test_step.dependOn(&exe.step);
     test_step.dependOn(&cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams).step);
     // `tests/test_all.zig` is the one compilation that has every module at once,
@@ -111,36 +82,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = mods,
     });
-    // ONE PATH, because the exhaustiveness guard (`tests/exhaustive.zig`) reads
-    // `lib/` and `src/` as SOURCE at test time and the test's cwd is wherever
-    // `zig build` was typed. It is absolute for the reason `fixture_root` is.
+    // `tests/exhaustive.zig` reads `lib/` and `src/` as source at test time,
+    // from whatever cwd `zig build` was typed in, so the path is absolute.
     const repo = b.addOptions();
     repo.addOption([]const u8, "repo_root", b.pathFromRoot("."));
     all_mod.addOptions("repo_options", repo);
     test_step.dependOn(testRun(b, "test_all", all_mod, runner));
 
-    // The suite runner's options are the FOUR PATHS it cannot compute itself,
-    // and nothing else. Every one is absolute and so needs `b.pathFromRoot` or
-    // `b.graph.zig_exe`; anything that was merely a default (the foreign
-    // compiler's command line, the fixture optimize mode) is a constant in the
-    // runner, where it is one edit instead of an option plumbed through two
-    // files. The two directories the SUITE is about are here because a runner
-    // that could disagree about which fixtures to walk, or about which LRM
-    // their `//! lrm` lines cite, would be grading a different suite under the
-    // same verdict vocabulary.
+    // The suite runner's options are only the absolute paths it cannot compute
+    // itself; defaults (the foreign compiler's command line, the fixture
+    // optimize mode) are constants in the runner. Fixing the fixture and LRM
+    // roots here keeps every runner grading the same suite.
     const o = b.addOptions();
     o.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
     o.addOption([]const u8, "docs_root", b.pathFromRoot("docs"));
     o.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-suite"));
     o.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
-    // The `.c` fixtures are compiled against the SHIPPED header, not a copy, so
-    // the directory is named here for the same reason `fixture_root` is: a
-    // runner that could disagree about which `vpi_user.h` it means would be
-    // grading a different ABI.
+    // The `.c` fixtures compile against the shipped header, not a copy.
     o.addOption([]const u8, "vpi_include", b.pathFromRoot("src/vpi"));
-    // Which `.c` fixtures RUN (`vpi_runs` below): `--coverage` counts a `.c`
-    // fixture's `//! lrm` tags only for these, because compiling is not
-    // runtime evidence. Passed, not copied, so the two cannot disagree.
+    // `--coverage` counts a `.c` fixture's `//! lrm` tags only for those in
+    // `vpi_runs`, since compiling is not runtime evidence.
     o.addOption([]const []const u8, "vpi_runs", &vpi_run_paths);
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
 
@@ -151,16 +112,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "vera", .module = byName(mods, "vera") }},
     });
     suite_mod.addOptions("suite_options", o);
-    // An executable and not a `test` block on purpose: a failing fixture must
-    // print the whole failing set in one run instead of aborting at the first
-    // assert. Its own unit tests (the assertion lint, the verdict tally, the
-    // emitted-size table) DO go on `test` — they are milliseconds, and they are
-    // what stops a fixture from asserting nothing while looking like it does.
+    // An executable, not a `test` block, so one run prints every failing
+    // fixture instead of stopping at the first. Its own unit tests (assertion
+    // lint, verdict tally, emitted-size table) do go on `test`.
     const suite_exe = b.addExecutable(.{ .name = "vera-suite", .root_module = suite_mod });
     test_step.dependOn(testRun(b, "suite", suite_mod, runner));
 
-    // THE suite step. No mode argument: the runner takes the `vera` path and
-    // then whatever the user wrote after `--`.
+    // The suite step: the runner takes the `vera` path, then whatever follows
+    // `--`.
     const bench = b.addRunArtifact(suite_exe);
     bench.addArtifactArg(exe);
     if (b.args) |a| bench.addArgs(a);
@@ -171,22 +130,16 @@ pub fn build(b: *std.Build) void {
             "that is the shipping number, and the default Debug is several times slower)",
     ).dependOn(&bench.step);
 
-    // The other run of the same executable: `vera --run` over every `.v` under
-    // `tests/fixtures/ieee1364/` and `tests/fixtures/digital/` that has a committed transcript beside it.
-    // `addArtifactArg` is what makes the built `vera` a dependency of this run,
-    // so it cannot race the compiler it is testing.
+    // `vera --run` over every `.v` under `tests/fixtures/ieee1364/` and
+    // `tests/fixtures/digital/` with a committed transcript beside it.
+    // `addArtifactArg` makes the built `vera` a dependency of this run.
     //
-    // NOT ON `test`, and that changed when `tests/pending` merged into the
-    // fixture tree: 62 of these 66 cases are D03 strengths, D06 delays, D08
-    // gates and D09 timing — approved behaviour this compiler does not have
-    // yet. They belong beside the clause they pin, and a red `zig build test`
-    // that is red on purpose is a gate nobody reads. `test` is the milliseconds
-    // that must be green; the suite is where the debt is counted.
+    // Not on `test`: `test` is the fast gate that must be green, and the suite
+    // is where unimplemented behaviour is counted.
     //
-    // NO `expectExitCode`, deliberately: a Run step with a stdio check becomes
-    // cacheable, and every real input of this one — the `.v` sources, the
-    // committed transcripts — is read at RUN time and invisible to the build
-    // graph, so a cached pass would be a pass for a golden nobody compared.
+    // No `expectExitCode`: a Run step with a stdio check becomes cacheable, and
+    // its real inputs (the `.v` sources and transcripts) are read at run time,
+    // invisible to the build graph, so a cached pass would compare nothing.
     const dev = b.addRunArtifact(suite_exe);
     dev.addArtifactArg(exe);
     dev.addArg("devices");
@@ -194,10 +147,9 @@ pub fn build(b: *std.Build) void {
     b.step("test-devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts")
         .dependOn(&dev.step);
 
-    // The two suites by language. `test-1364` is the IEEE 1364-2005 half alone
-    // (`tests/fixtures/ieee1364/`), the half Verilator can be run against;
-    // `-- --coverage` prints its clause inventory instead of running it.
-    // `test-ams` is `benchmark -- --strict` under the name of what it measures.
+    // The two suites by language. `test-1364` is `tests/fixtures/ieee1364/`
+    // alone (`-- --coverage` prints its clause inventory instead); `test-ams`
+    // is `benchmark -- --strict`.
     const v1364 = b.addRunArtifact(suite_exe);
     v1364.addArtifactArg(exe);
     v1364.addArg("ieee1364");
@@ -211,75 +163,38 @@ pub fn build(b: *std.Build) void {
     b.step("test-ams", "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)")
         .dependOn(&ams.step);
 
-    // The 26 `.c` fixtures. `harness.zig:collect` walks `.va` and `.v`; these
-    // are neither, and are not VerA source at all — a VPI fixture is a C
-    // translation unit, and the question it asks is whether the ABI exists with
-    // the shape Clause 11 and Clause 12 describe. A C compiler is what asks it,
-    // for the same reason `vpi_app.c` below is C and not a Zig test.
-    //
-    // It COMPILES them and reports a census; it does not link or run them.
-    // Running needs a simulator host per design — `p02_design.v` through the
-    // digital path, five `.va` designs through the analog one — and the
-    // routines themselves. That is P02 and P03, `ROADMAP.md` v0.9.0.
-    //
-    // NOT on `test`, for the reason `test-devices` gives above: 13 of the 26 do
-    // not compile today, because `src/vpi/vpi_user.h` declares the eleven P01
-    // object-model routines and nothing of §12.16's value access, §12.20's
-    // callbacks, the systf registration or the mcd family. A red `zig build
-    // test` that is red on purpose is a gate nobody reads.
-    //
-    // No `expectExitCode` here either, and for the same cacheability reason:
-    // every real input — the `.c` sources, the two shared headers,
-    // `src/vpi/vpi_user.h` — is read at RUN time by a spawned compiler and is
-    // invisible to the build graph.
+    // Every `.c` VPI fixture, compiled by a C compiler against
+    // `src/vpi/vpi_user.h` (LRM clauses 11 and 12) with a census reported; the
+    // ones that also run are `vpi_runs`, under `test`. No `expectExitCode`,
+    // for the cacheability reason `test-devices` gives.
     const vpi_fx = b.addRunArtifact(suite_exe);
     vpi_fx.addArtifactArg(exe);
     vpi_fx.addArg("vpi");
-    b.step("test-vpi-fixtures", "Compile the 26 .c VPI fixtures against src/vpi/vpi_user.h")
+    b.step("test-vpi-fixtures", "Compile the .c VPI fixtures against src/vpi/vpi_user.h")
         .dependOn(&vpi_fx.step);
 
-    // The 7 `.sp` decks. Also not VerA source: a SPICE netlist naming a model
-    // through `.hdl`, plus instance cards and an analysis card, paired with an
-    // `.expected.json` holding an analytic oracle.
-    //
-    // NOT executed, and not because of a missing release: running a deck needs
-    // a circuit simulator to link the compiled device and turn the Newton loop,
-    // and that simulator is ARPice, which is not in this repository
-    // (`ROADMAP.md §6`). The step checks the half that IS here — the deck has
-    // an oracle, every model it names resolves, every model compiles — and
-    // says plainly in its own output that it ran no circuit.
+    // The `.sp` decks: SPICE netlists naming models through `.hdl`, each
+    // paired with an `.expected.json` analytic oracle. Not executed: that
+    // needs the circuit simulator (ARPice, outside this repository). The step
+    // checks the oracle exists and every named model resolves and compiles.
     const spice = b.addRunArtifact(suite_exe);
     spice.addArtifactArg(exe);
     spice.addArg("spice");
     b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
         .dependOn(&spice.step);
 
-    // The VPI acceptance test, and the reason `test-vpi` is not just the module
-    // loop's `addTest`: a VPI implementation is only tested FROM C. The loop
-    // above already gave `vpi` its Zig tests, and a Zig test calling these
-    // functions checks that VerA agrees with itself. `tests/vpi_app.c` is a real
-    // C translation unit compiled against `src/vpi/vpi_user.h` — so every
-    // constant it names is the HEADER's number rather than the implementation's,
-    // and an assertion like `vpi_get(vpiType, m) == vpiModule` is what keeps the
-    // two in step — and linked against the `export fn`s in `src/vpi/root.zig`.
-    // That is the only way the ABI — the constant VALUES, the parameter types,
-    // the `char *` lifetimes — is under test at all.
+    // The VPI acceptance test. A VPI implementation is only tested from C:
+    // `tests/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
+    // it names is the header's number, and links against the `export fn`s in
+    // `src/vpi/root.zig`, which puts the ABI itself under test.
+    // `tests/vpi_host.zig` is the simulator half; it calls the application's
+    // `vlog_startup_routines` (LRM §12.33.2).
     //
-    // `tests/vpi_host.zig` is the SIMULATOR half: it elaborates
-    // `tests/vpi_design.va`, installs the object model, and calls §12.33.2's
-    // `vlog_startup_routines`, which is the application's only entry point.
-    //
-    // All three files were deleted by `2cc1c08`, a DOCS commit, and restored
-    // here from `2cc1c08^`. Nothing else in the tree had been updated to reflect
-    // their absence, which is why `src/vpi/root.zig` never stopped citing them.
-    //
-    // The host is built ONCE, as a static library exporting C's `main`, and
-    // each application is one C file linked against it: a Zig executable per
-    // application would compile the whole engine once per application.
-    // Where an analog application's device library is built (§12.31.3 needs
-    // a solver in this process: `vera.tb.renderVpiLib`), with what, and the
-    // `contract` it imports. The host runs with the cache as its cwd, so
-    // every path here is absolute.
+    // The host is built once, as a static library exporting C's `main`, and
+    // each application links against it, so the engine compiles once. The
+    // options say where an analog application's device library is built
+    // (`vera.tb.renderVpiLib`) and with what; the host runs with the cache as
+    // its cwd, so every path is absolute.
     const host_opts = b.addOptions();
     host_opts.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
     host_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
@@ -303,24 +218,17 @@ pub fn build(b: *std.Build) void {
     const test_vpi = &b.top_level_steps.get("test-vpi").?.step;
     const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/vpi_app.c", "tests");
     vpi_app.expectExitCode(0);
-    // The counts are the design's own shape (tests/vpi_design.va: three levels,
-    // two instances of one definition), and `checks` is how many assertions the
-    // application reached — a walk that returned early counts fewer of them and
-    // still exits 0, which is the failure this number is here to catch. The
-    // census line is asserted as well as the exit code, because an exit code
-    // alone cannot tell "every check passed" from "the startup table was never
-    // called".
+    // The counts are tests/vpi_design.va's shape, and `checks` is how many
+    // assertions the application reached: a walk that returns early, or a
+    // startup table never called, still exits 0.
     vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
     test_step.dependOn(&vpi_app.step);
     // `test-vpi` is a top-level step the module loop already created; this is
     // the C half joining it, rather than a second step with the same name.
     test_vpi.dependOn(&vpi_app.step);
 
-    // The C fixtures that RUN: each is paired with the design it was written
-    // against, executed on `src/sim`'s engine by `vpi.run.simulate`, and
-    // asserted by exit code and its exact stdout (and, where the fixture
-    // reports there, stderr). `test-vpi-fixtures` compiles all of them; these
-    // are the ones whose routines, design and engine exist end to end.
+    // The C fixtures that run: each against its design, asserted by exit code
+    // and exact stdout (and stderr where the fixture reports there).
     for (vpi_runs) |f| {
         const r = vpiApp(b, target, optimize, vpi_host, f.c, std.fs.path.dirname(f.c).?);
         r.addFileArg(b.path(f.design));
@@ -338,8 +246,8 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-/// The `vera` CLI. It takes the engine as MODULES: an `@import("root.zig")` by
-/// path would compile the entire engine a second time into its file set.
+/// The `vera` CLI. It imports the engine as modules; an `@import` by path
+/// would compile the engine a second time into its file set.
 fn cliExe(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -418,19 +326,17 @@ fn vpiApp(
 }
 
 /// One runnable VPI application: its C file, the design it runs against, and
-/// the exact output it must produce. The `checks=N` counts are read off the
-/// first green run, as `vpi_app.c`'s `checks=711` was: a run that returns
-/// early reaches fewer checks and still exits 0.
+/// the exact output it must produce. The `checks=N` count catches a run that
+/// returns early and still exits 0.
 const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
 
-/// NOT here, each for a reason outside the routine it exercises:
-///   p02_10  a $systf call in digital code — the engine has no user-systf call
-///   p02_11  an analog $systf — needs an analog solver in this process
+/// Not here, each for a reason outside the routine it exercises:
+///   p02_10  a $systf call in digital code: the engine has no user-systf call
 ///   p03_07/90, p02_11  an analog system TASK whose calltf writes an output
 ///           argument (§12.22.2's $resistor): the device calls user system
 ///           FUNCTIONS only (`contract.SystfHost` returns one value)
-///   p03_09  an `ac` analysis — no small-signal solve runs in this process
-///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
+///   p03_09  an `ac` analysis: no small-signal solve runs in this process
+///   audit_builtin_override, audit_lazy_arguments: a user $systf call,
 ///           as p02_10
 const vpi_runs = [_]VpiRun{
     .{
@@ -667,10 +573,9 @@ const vpi_run_paths = blk: {
     break :blk paths;
 };
 
-/// Create every module in `module_specs`, resolving each spec's imports against
-/// the ones already created. `addModule` and not `createModule` because an
-/// embedder takes the engine from here; the order of the table is the layering,
-/// and a forward reference is a panic rather than a silently different graph.
+/// Creates every module in `module_specs` with `addModule`, so an embedder can
+/// import it, resolving imports against modules already created. Panics on a
+/// forward reference.
 fn defineModules(b: *std.Build, target: std.Build.ResolvedTarget) []const std.Build.Module.Import {
     var created: std.ArrayList(std.Build.Module.Import) = .empty;
     for (module_specs) |spec| {

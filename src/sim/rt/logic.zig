@@ -62,7 +62,8 @@ fn wordsOf(comptime A: type) u32 {
 }
 
 /// `a` as words: a `W` is one.
-inline fn wide(a: anytype) Wide(wordsOf(@TypeOf(a))) {
+/// `a` as words, one when it is a `W`.
+pub inline fn wide(a: anytype) Wide(wordsOf(@TypeOf(a))) {
     if (@FieldType(@TypeOf(a), "v") == u64) return .{ .v = .{a.v}, .x = .{a.x} };
     return .{ .v = a.v, .x = a.x };
 }

@@ -1,77 +1,15 @@
-//! VerA plugged into the conformance harness — the torture suite.
-//!
-//! NOT AN ENTRY POINT. `tests/bench.zig` owns `main` and the only step,
-//! `benchmark`; this file is a value it imports: one `harness.Compiler`, plus
-//! the accept/reject-only reduction of the same compiler that the head-to-head
-//! against OpenVAF needs (see `acceptRejectCompiler`).
-//!
-//! `tests/harness.zig` owns the fixture format, the verdict algebra and the
-//! report; this file owns the one thing that is VerA's alone: what it MEANS for
-//! VerA to do what a fixture says.
-//!
-//!   `//! reject <substring>`   must NOT compile, and every substring must
-//!                              appear in the resulting diagnostic
-//!   `//! warn <substring>`     compiles, and every substring appears in a
-//!                              warning; `//! nowarn`: no warning at all
-//!   anything else              must compile, build a native testbench, RUN,
-//!                              and print `ok=1` for every assertion it makes
-//!
-//! The second half is why VerA is the runner with `runs = true`. An external
-//! compiler can be held to accept-or-refuse and no more; VerA is called
-//! in-process, its device is handed to `zig build-exe`, and the resulting binary
-//! is executed — so the `ok=` column, which is the only assertion this suite
-//! has, is actually evaluated. That is the depth `--against-openvaf` cannot
-//! reach, and the reason the report has a VerA-ONLY section: the `ok=` columns
-//! are not a score the other compiler lost, they are a question it was never
-//! asked.
-//!
-//! WHY A TRANSCRIPT SNAPSHOT IS NOT AN ORACLE, and what replaces it. The
-//! deleted `.expected.zig` files were VerA's own output fed back to it: a wrong
-//! answer, once recorded, was frozen as correct forever. So the ASSERTION is not
-//! the golden file. It is the `ok=` column the fixture itself computes:
-//!
-//!     `CHECKR("sin(0.5)", sin(0.5), 0.479425538604203, 1e-15);
-//!     -> sin(0.5) got=0.479425538604203 want=0.479425538604203 ok=1
-//!
-//! The `want` is a NUMERIC LITERAL, derived from the LRM or a reference
-//! implementation by a human, and the harness's `checkAssertions` REFUSES a
-//! fixture whose want is anything else. That is the mechanical part of
-//! "restricting and true": VerA cannot supply its own expectation, because an
-//! expression is not a literal.
-//!
-//! THERE IS NO GOLDEN FILE. Not "there is one and we also assert" — there is
-//! none, deliberately. A recorded transcript can only ever say "this is what
-//! VerA printed last time", which is the same self-confirming oracle the
-//! `.expected.zig` snapshots were, and it makes a diff the reviewer's whole job.
-//! Everything a fixture claims now lives in the fixture, so a `.va` is readable
-//! and reviewable on its own and there is no second file to drift out of step.
-//!
-//! FIXTURE BINARIES ARE BUILT `-ODebug`, and not out of timidity about floats:
-//! Zig has no `-ffast-math`, so float arithmetic is strict IEEE in every
-//! optimize mode unless the code asks for `@setFloatMode(.optimized)`, which a
-//! generated device does not. The reasons are that a testbench compiles for
-//! seconds and runs for microseconds — compile time IS the run time, and
-//! ReleaseFast would make the whole suite slower, not faster — and that Debug
-//! keeps the safety checks on, so a codegen bug traps loudly instead of
-//! producing a plausible wrong number. `--fixture-opt=ReleaseFast` exists to
-//! ask the separate, real question "does this still pass under optimization?",
-//! deliberately and not by default.
-//!
-//!   zig build benchmark                   # every fixture
-//!   zig build benchmark -- ch04           # only paths matching `ch04`
-//!   zig build benchmark -- --strict       # unasserted, refused and xfail FAIL
-//!   zig build benchmark -- --coverage     # LRM clauses cited, one-sided, uncited
-//!   zig build benchmark -- -j1            # one at a time, streaming; for debugging
-//!   zig build benchmark -- --fixture-opt=ReleaseFast
-//!   zig build benchmark -- --fixture-backend=llvm   # default: Backend.auto
-//!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
+//! VerA as a harness `Compiler` for `zig build benchmark`: fixture -> verdict.
+//! `//! reject` must refuse with every substring in the diagnostic; `//! warn`
+//! must compile with each substring in a warning; anything else must compile,
+//! build a native testbench, run, and print `ok=1` for every assertion. The
+//! `want` of an assertion is a hand-derived literal, so VerA never supplies its
+//! own expectation and no golden transcript exists.
 
 const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
 const options = @import("suite_options");
-/// The two directories the SUITE owns, shared with `harness.zig` and the other
-/// runner: which fixtures to walk, and which LRM their `//! lrm` lines cite.
+/// The suite's fixture root and LRM directory, shared with `harness.zig`.
 const suite = options;
 
 const Io = std.Io;
@@ -79,7 +17,8 @@ const Fixture = harness.Fixture;
 const Result = harness.Result;
 
 /// VerA at full depth: compile, build a testbench, run it, read the `ok=`
-/// columns. `cfg` is borrowed for its `fixture_opt`/`fixture_backend`.
+/// columns. `cfg` is borrowed for its `fixture_opt`/`fixture_backend` and must
+/// outlive the returned plug.
 pub fn compiler(cfg: *harness.Config) harness.Compiler {
     return .{
         .name = "vera",
@@ -90,22 +29,14 @@ pub fn compiler(cfg: *harness.Config) harness.Compiler {
     };
 }
 
-/// VerA held to exactly what a foreign compiler can be held to: did it accept
-/// what the LRM says must compile and refuse what it says must not?
-///
-/// This exists so the head-to-head's agreement column is the SAME question for
-/// both sides. Scoring VerA with the plug above instead would compare a
-/// compile-build-run verdict against an accept-or-refuse one and print the
-/// difference as if it were about the compilers. It is a strictly weaker claim
-/// than `compiler` makes, and the report says so where it prints it.
+/// VerA held to what a foreign compiler is held to (accept or refuse only), so
+/// the head-to-head's agreement column asks both sides the same question.
 pub fn acceptRejectCompiler() harness.Compiler {
     return .{
         .name = "vera",
         .runs = false,
-        // `//! xfail` is VerA's debt, but it is debt against the FULL claim —
-        // a fixture VerA compiles and then gets a wrong number from is unmet
-        // there and met here, and honouring the marker would turn that into an
-        // XPASS failure of a run that is not asking the question.
+        // `//! xfail` marks debt against the full claim; a fixture that compiles
+        // and then computes a wrong number is met here and would XPASS.
         .owns_xfail = false,
         .ctx = &no_ctx,
         .check = checkAcceptReject,
@@ -136,14 +67,9 @@ fn checkAcceptReject(
     return .unmet;
 }
 
-/// ONE accept/reject compilation, which is the unit the head-to-head times:
-/// source in, emitted device size out, or null when VerA refused it. Exactly
-/// the work `--against-openvaf` gives the other compiler and no more — no
-/// testbench is built and nothing is run, because nothing can be on that side.
-///
-/// It is this and not `check` because the `ok=` half costs a `zig build-exe`
-/// per fixture, which would put the Zig compiler's wall clock inside a number
-/// labelled as VerA's.
+/// One accept/reject compilation, the unit the head-to-head times: returns the
+/// emitted device's size, or null when VerA refused. No testbench is built, so
+/// no `zig build-exe` time lands in VerA's number.
 pub fn compileOnce(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !?usize {
     var outcome = try compileFixture(gpa, f, source, d);
     defer outcome.deinit(gpa);
@@ -179,10 +105,8 @@ const Failure = struct {
     generated: ?[]const u8 = null,
 };
 
-/// What one compilation did. `accepted` carries the emitted device's SIZE and
-/// not its text: the reject half never looks at it, and the head-to-head wants
-/// a number, so holding a megabyte of Zig alive past the compilation would only
-/// be there to be freed.
+/// What one compilation did. `accepted` carries the device's size, not its
+/// text: nothing downstream reads the text.
 const Outcome = union(enum) {
     accepted: usize,
     refused: Failure,
@@ -281,16 +205,11 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
     return .{ .accepted = generated.len };
 }
 
-/// A rejection is described by more than the returned error value: the `//!
-/// reject` lines are written in a vocabulary of PHASE labels ("ParseError",
-/// "DiagnosticsReported") as well as of error names and message substrings.
-/// Each label below is a fact derived from the failure, not an alias invented to
-/// make a fixture pass:
-///   `DiagnosticsReported` — the failure carries at least one diagnostic.
-///   `ParseError`          — every diagnostic came from stage 1/2/3, i.e. the
-///                           model never reached lowering.
-/// A lowering or proof rejection therefore still fails a fixture that demands
-/// `ParseError`; the labels discriminate.
+/// Whether the failure matches a `//! reject` pattern: a code, an error name,
+/// `@compileError` text, a diagnostic substring, or a phase label derived from
+/// the failure:
+///   `DiagnosticsReported`  the failure carries at least one diagnostic.
+///   `ParseError`           every diagnostic came from preprocess or parse.
 fn failureContains(f: Failure, pattern: []const u8) bool {
     if (asCode(pattern) != null) {
         for (0..f.diags.count()) |i| if (diagSays(&f.diags, i, pattern)) return true;
@@ -318,9 +237,7 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
 fn diagSays(bag: *const vera.diag.Bag, i: usize, pattern: []const u8) bool {
     const d = bag.at(i);
     if (asCode(pattern)) |want| return d.code == want;
-    // The title too, because migrating to codes moved a lot of wording out of
-    // the message and into `Info.title` — a fixture pinning the old prose
-    // still matches.
+    // The title too: much wording lives in `Info.title`, not the message.
     if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
     if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
     if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
@@ -353,9 +270,7 @@ fn warningsMet(bag: *vera.diag.Bag, f: Fixture, d: vera.tb.Directives, w: *Io.Wr
 
 /// A directive is either a CODE (`E0313`, `W0650`) or a message substring.
 ///
-/// Codes are the preferred form: they are stable, so the prose of a diagnostic
-/// can be improved without touching 301 fixtures, and they pin WHICH rule fired
-/// rather than how it happened to be worded.
+/// Codes are preferred: they are stable and pin which rule fired.
 fn asCode(pattern: []const u8) ?vera.diag.Code {
     if (pattern.len != 5) return null;
     if (pattern[0] != 'E' and pattern[0] != 'W') return null;
@@ -478,15 +393,8 @@ fn runAndCheck(
     };
     defer built.deinit(gpa);
     const bin = switch (built) {
-        // EVERY build failure is a bug, with no excused case. There used to be
-        // one: `contract.validate` refused `num_ports == 0`, so the legal portless
-        // module of §6.2 compiled and then had nowhere to run, which is what the
-        // harness's `cannot_run` verdict was built for. The guard was stale rather
-        // than right — the testbench has had a Newton solve since wave 4, and a
-        // device with zero terminals and one internal node has a residual it can
-        // solve — so relaxing it deleted the only known refusal along with the
-        // pattern match that excused it. Do not add the excuse back for a message
-        // you have not first tried to make impossible.
+        // Every testbench build failure is an engine bug; there is no excused
+        // case. Make a failure impossible before adding an excuse for it.
         .failed => |text| {
             try w.print(
                 "FAIL {s}: the generated testbench does not compile — an ENGINE bug:\n{s}\n",
@@ -558,20 +466,12 @@ fn countVerdicts(text: []const u8) Tally {
     return t;
 }
 
-/// Run the testbench and return everything it said. stderr, because that is
-/// where `std.debug.print` writes — both the model's `$strobe` output and the
-/// harness's residual dump, so the interleaving is the program's, not the OS's.
+/// Runs the testbench and returns its stderr, where both `$strobe` output and
+/// the residual dump go, in program order. Caller frees with `gpa`.
 ///
-/// The child runs IN its own work directory, which is what makes §9.5 testable.
-/// A fixture that opens a file opens it relative to the process cwd, so with an
-/// inherited cwd every §9.5 fixture wrote into the repository root and shared one
-/// namespace with the other 1149 — and the rules those fixtures pin are about
-/// exactly that namespace: `ch09_047_missing.dat` "is a name no fixture in this
-/// directory ever creates", and 052's Table 9-24 type "a" append would otherwise
-/// grow the same file on every run forever. One directory per fixture makes both
-/// claims hold by construction rather than by everyone remembering to.
-///
-/// `bin` is `<work>/<name>`, so from inside `work` it is `./<name>`.
+/// The child runs in its own work directory, so §9.5 file I/O resolves in a
+/// per-fixture namespace rather than the repository root. `bin` is
+/// `<work>/<name>`, so from inside `work` it is `./<name>`.
 fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, expected_exit: u8, plusargs: []const []const u8) ![]const u8 {
     var argv0_buf: [std.fs.max_path_bytes]u8 = undefined;
     const argv0 = try std.fmt.bufPrint(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
