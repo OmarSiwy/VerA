@@ -111,6 +111,13 @@ pub const Emitter = struct {
     /// Per first pc of a `disable` target (a named block, an inlined task
     /// copy), the pcs its process resumes at once disabled (§10.3).
     block_ends: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty,
+    /// Per `Run` net and driver, its row in `rt.net`'s tables; null for a
+    /// net that is its one plain driver's copy (`plainDriver`).
+    net_ix: []?u32 = &.{},
+    drv_ix: []?u32 = &.{},
+    /// The `Run` nets and drivers of those rows, in row order.
+    rt_nets: std.ArrayList(u32) = .empty,
+    rt_drivers: std.ArrayList(u32) = .empty,
 
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
         self.out.writer.print(f, args) catch return error.OutOfMemory;
@@ -297,6 +304,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     };
     if (r.drv.watched.items.len != 0) return self.refuse("VAMS §9.22 driver access");
     if (r.trans.len != 0) return self.refuse("a §7.6 pass switch");
+    try resolvedNets(self);
     // The time-0 queue in `Run.pending` order: every driver, declaration
     // assignment and process, as the pc it starts at.
     var order: std.ArrayList(u32) = .empty;
@@ -389,6 +397,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
     for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
     if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
+    try netTables(self);
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
@@ -871,6 +880,10 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
             if (r.net_of.get(o.slot)) |net| {
+                if (self.net_ix[net]) |k| {
+                    try self.print("            if (try s.release({d}, true)) try s.resolve({d});\n            continue :sw {d};\n", .{ o.slot, k, next });
+                    return;
+                }
                 const drivers = r.nets[net].drivers;
                 if (drivers.len != 1) return self.refuse("releasing a net without exactly one driver");
                 const at = for (r.code.items, 0..) |ins, i| {
@@ -996,40 +1009,210 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     try self.print(", {}, .{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ t.signed, scale.local_per_unit, scale.global_per_local });
 }
 
-/// `.continuous`: this driver's value is its net's (a plain net with one
-/// strong driver and no delay, `exec.plainCopy`), stored, then the driver
-/// re-arms on its operands.
+/// Is driver `i` its net's value as is (`exec.plainCopy`, with no delay)?
+/// It stores the net itself; every other driver resolves in `rt.net`.
+pub fn plainDriver(r: *const Run, i: u32) bool {
+    const d = r.drivers[i];
+    const n = r.nets[d.net];
+    const plain = switch (n.kind) {
+        .wire, .tri, .uwire => true,
+        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
+    };
+    return plain and d.source == .expr and n.drivers.len == 1 and !n.strength_read and
+        d.s0 == .strong and d.s1 == .strong and !d.delay.present and !n.delay.present;
+}
+
+/// `net_ix`/`drv_ix`: a row for every net some driver of which is not
+/// plain, and every net a switch reads the strength of (§7.12).
+fn resolvedNets(self: *Emitter) Error!void {
+    const r = self.r;
+    self.net_ix = try self.arena.alloc(?u32, r.nets.len);
+    self.drv_ix = try self.arena.alloc(?u32, r.drivers.len);
+    @memset(self.net_ix, null);
+    @memset(self.drv_ix, null);
+    for (r.nets, 0..) |n, k| {
+        const resolved = n.strength_read or for (n.drivers) |di| {
+            if (!plainDriver(r, di)) break true;
+        } else false;
+        if (!resolved) continue;
+        if (n.kind == .wreal) return self.refuse("a VAMS wreal net");
+        self.net_ix[k] = @intCast(self.rt_nets.items.len);
+        try self.rt_nets.append(self.arena, @intCast(k));
+        for (n.drivers) |di| {
+            self.drv_ix[di] = @intCast(self.rt_drivers.items.len);
+            try self.rt_drivers.append(self.arena, di);
+        }
+    }
+}
+
+/// `rt.Design.nets`/`drivers`/`udps`: `Run.nets` and `Run.drivers` of the
+/// `resolvedNets` rows, as `rt.net` reads them.
+fn netTables(self: *Emitter) Error!void {
+    const r = self.r;
+    if (self.rt_nets.items.len == 0) return;
+    try self.print("    .nets = &.{{", .{});
+    for (self.rt_nets.items) |k| {
+        const n = r.nets[k];
+        var strong = !n.strength_read;
+        for (n.drivers) |di| {
+            const d = r.drivers[di];
+            const or_z = switch (d.source) {
+                .gate => |g| switch (g.kind) {
+                    .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => true,
+                    .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => false,
+                },
+                .mos => true,
+                .expr, .bridge, .udp, .pull => false,
+            };
+            strong = strong and !or_z and d.s0 == .strong and d.s1 == .strong;
+        }
+        try self.print("\n        .{{ .kind = .{t}, .slot = {d}, .off = {d}, .width = {d}, .drivers = &.{{", .{ n.kind, n.slot, self.off[n.slot], r.values[n.slot].width });
+        for (n.drivers) |di| try self.print(" {d},", .{self.drv_ix[di].?});
+        try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(n.delay), n.charge, n.decay });
+    }
+    try self.print("\n    }},\n    .drivers = &.{{", .{});
+    var udps: std.ArrayList(*const @import("net.zig").Udp) = .empty;
+    for (self.rt_drivers.items) |di| {
+        const d = r.drivers[di];
+        r.scope = d.scope;
+        try self.print("\n        .{{ .net = {d}, .s0 = .{t}, .s1 = .{t}, .delay = {f}, .init = .{t}, .delay_bit = ", .{ self.net_ix[d.net].?, d.s0, d.s1, fmtDelay(d.delay), d.current.bit(0) });
+        switch (d.source) {
+            .expr => try self.print("null, .source = .expr }},", .{}),
+            .gate => |g| try self.print("{d}, .source = .{{ .gate = {d} }} }},", .{ g.out_bit orelse 0, g.out_bit orelse 0 }),
+            .udp => |u| {
+                try self.print("0, .source = .{{ .udp = {d} }} }},", .{udps.items.len});
+                try udps.append(self.arena, u);
+            },
+            .mos => |m| {
+                var data_net: ?u32 = null;
+                if (r.file.exprs.tag(m.data) == .ident) if (r.net_of.get(try self.slot(m.data))) |net| {
+                    data_net = self.net_ix[net];
+                };
+                try self.print("0, .source = .{{ .mos = .{{ .n_type = {}, .resistive = {}, .data_net = {?d} }} }} }},", .{ m.n_type, m.resistive, data_net });
+            },
+            .bridge => |b| try self.print("0, .source = .{{ .bridge = .{{ .src_off = {d}, .src_lo = {d}, .dst_lo = {d}, .width = {d} }} }} }},", .{ self.off[b.src], b.src_lo, b.dst_lo, b.width }),
+            .pull => |b| try self.print("0, .source = .{{ .pull = .{t} }} }},", .{b}),
+        }
+    }
+    try self.print("\n    }},\n", .{});
+    if (udps.items.len == 0) return;
+    try self.print("    .udps = &.{{", .{});
+    for (udps.items) |u| {
+        try self.print("\n        .{{ .sequential = {}, .ins = {d}, .state = .{t}, .rows = &.{{", .{ u.sequential, u.ins.len, u.state });
+        for (u.rows) |row| {
+            try self.print("\n            .{{ .state = {d}, .out = {d}, .edge_at = {?d}, .ins = &.{{", .{ row.state, row.out, row.edge_at });
+            for (row.ins) |sym| switch (sym) {
+                .level => |c| try self.print(" .{{ .level = {d} }},", .{c}),
+                .pair => |pr| try self.print(" .{{ .pair = .{{ {d}, {d} }} }},", .{ pr[0], pr[1] }),
+                .letter => |c| try self.print(" .{{ .letter = {d} }},", .{c}),
+            };
+            try self.print(" }} }},", .{});
+        }
+        try self.print("\n        }} }},", .{});
+    }
+    try self.print("\n    }},\n", .{});
+}
+
+fn fmtDelay(d: @import("net.zig").Delay) std.fmt.Alt(@import("net.zig").Delay, delayText) {
+    return .{ .data = d };
+}
+
+fn delayText(d: @import("net.zig").Delay, out: *std.Io.Writer) std.Io.Writer.Error!void {
+    try out.print(".{{ .rise = {d}, .fall = {d}, .off = {d}, .present = {} }}", .{ d.rise, d.fall, d.off, d.present });
+}
+
+/// `.continuous` (`exec`'s arm): driver `i`'s value. A plain driver stores
+/// its net (`exec.plainCopy`); any other hands its value to `rt.net`, which
+/// delays it (§6.1.3) or resolves the net (§7.9). Then it re-arms on its
+/// operands.
 fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     const r = self.r;
     const d = r.drivers[i];
     const n = r.nets[d.net];
     r.scope = d.scope;
-    const x = switch (d.source) {
-        .expr => |x| x,
-        .bridge, .gate, .udp, .mos, .pull => return self.refuse("a gate, switch, UDP or port bridge driver"),
-    };
-    const plain = switch (n.kind) {
-        .wire, .tri, .uwire => true,
-        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
-    };
-    if (!plain) return self.refuse("a §7.9 wired, pulled, supply, trireg or wreal net");
-    if (n.drivers.len != 1) return self.refuse("a net with more than one driver");
-    if (n.strength_read or d.s0 != .strong or d.s1 != .strong) return self.refuse("a driver strength other than strong");
-    if (d.delay.present or n.delay.present) return self.refuse("a delayed continuous assignment or net");
     const nw = try self.slotWidth(n.slot);
-    try self.print("            ", .{});
-    try self.store(n.slot, .blocking);
-    if (x.slice) |sl| {
-        const t = try expr.natural(self, x.e);
-        const ctx: Type = .{ .width = @max(t.width, sl.total), .signed = t.signed };
-        try self.print("L.part(", .{});
-        try expr.value(self, x.e, ctx);
-        try self.print(", {d}, {d}, {d})", .{ sl.lo, nw, ctx.width });
-    } else try expr.assigned(self, x.e, try slotType(self, n.slot));
-    try self.print(", {f});\n", .{full(nw)});
+    if (plainDriver(r, i)) {
+        const x = d.source.expr;
+        try self.print("            ", .{});
+        try self.store(n.slot, .blocking);
+        try driverValue(self, x.e, x.slice, n.slot);
+        try self.print(", {f});\n", .{full(nw)});
+    } else {
+        const k = self.drv_ix[i].?;
+        // `--two-state` keeps a delay or a logic gate: neither gives an x
+        // or z meaning. Strength, several drivers, three states do.
+        if (self.two_state) {
+            const two_ok = switch (n.kind) {
+                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and d.s0 == .strong and d.s1 == .strong,
+                .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
+            } and switch (d.source) {
+                .expr => true,
+                .gate => |g| switch (g.kind) {
+                    .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => true,
+                    .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => false,
+                },
+                .udp, .mos, .bridge, .pull => false,
+            };
+            if (!two_ok) return self.refuse("a §7.9 net resolved from strengths or several drivers, or a three-state, switch, UDP, port-window or pull driver");
+            // §7.14 picks the delay by the value transitioned to: with
+            // three different ones, an x or z decides when a value lands.
+            for ([_]@import("net.zig").Delay{ d.delay, n.delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
+                return self.refuse("a `delay3` whose rise, fall and turn-off differ, chosen by an x or z");
+        }
+        switch (d.source) {
+            .expr => |x| {
+                try self.print("            const p = L.planesOf(", .{});
+                try driverValue(self, x.e, x.slice, n.slot);
+                try self.print(");\n            try s.drive({d}, &p, false);\n", .{k});
+            },
+            .gate => |g| {
+                try bits(self, g.ins, g.lane);
+                try self.print("            try s.gate({d}, .{t}, &b);\n", .{ k, g.kind });
+            },
+            .udp => |u| {
+                if (u.ins.len > 64) return self.refuse("a UDP of more than 64 inputs");
+                try bits(self, u.ins, null);
+                try self.print("            try s.udp({d}, &b);\n", .{k});
+            },
+            .mos => |m| {
+                if (nw != 1) return self.refuse("a MOS switch driving a vector");
+                try bits(self, &.{ m.data, m.gate }, null);
+                try self.print("            try s.mos({d}, b[0], b[1]);\n", .{k});
+            },
+            .bridge => try self.print("            try s.bridge({d});\n", .{k}),
+            .pull => try self.print("            try s.pull({d});\n", .{k}),
+        }
+    }
     // A node is run by its settle event, not re-queued by its operands.
     if (self.role != .comb) try self.print("            s.armed[{d}] = true;\n", .{pc});
     try self.print("            return;\n", .{});
+}
+
+/// A continuous assignment's value in its net's type; with `slice`, the
+/// window of a §12.3.6 concatenated port it asserts.
+fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?@import("net.zig").Slice, net_slot: u32) Error!void {
+    if (slice) |sl| {
+        const t = try expr.natural(self, e);
+        const ctx: Type = .{ .width = @max(t.width, sl.total), .signed = t.signed };
+        try self.print("L.part(", .{});
+        try expr.value(self, e, ctx);
+        return self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(net_slot), ctx.width });
+    }
+    try expr.assigned(self, e, try slotType(self, net_slot));
+}
+
+/// `const b`: bit `lane` (0 without one) of each terminal in `ins`, as
+/// `exec.gateValue` reads it.
+fn bits(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
+    for (ins, 0..) |in, j| {
+        try self.print("            const in{d} = ", .{j});
+        const t = try expr.selfDetermined(self, in);
+        try self.print(";\n", .{});
+        if (t.width > 1) try self.print("            const bit{d} = L.low(L.part(in{d}, {d}, 1, {d}));\n", .{ j, j, lane.?, t.width }) else try self.print("            const bit{d} = L.low(in{d});\n", .{ j, j });
+    }
+    try self.print("            const b = [_]L.Bit{{", .{});
+    for (0..ins.len) |j| try self.print(" bit{d},", .{j});
+    try self.print(" }};\n", .{});
 }
 
 /// `exec.assignInt`: the Zig `i64` `v` assigned to `target`, through a

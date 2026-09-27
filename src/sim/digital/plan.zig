@@ -143,7 +143,8 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     var triggered: u32 = 0;
     const ranges = try disableRanges(self);
     for (procs, 0..) |*p, i| switch (r.code.items[p.entry]) {
-        .continuous => |d| try cands.append(a, .{
+        // A resolved net's driver is queued: `rt.net` delays or folds it.
+        .continuous => |d| if (emit.plainDriver(r, d)) try cands.append(a, .{
             .proc = @intCast(i),
             .inputs = reads[i].items,
             .outputs = try a.dupe(u32, &.{r.nets[r.drivers[d].net].slot}),
