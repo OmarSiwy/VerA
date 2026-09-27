@@ -491,11 +491,6 @@ pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
         // — a name on its own is complete, so there is nothing to judge.
         if (a.value == .none) continue;
         const name = self.file.str(a.name);
-        // VerA's `vera_seed` extends the value past §2.9's constant_expression:
-        // it is an analog expression `seed` evaluates before the first solve,
-        // so it may read what a device computes from its card and
-        // temperature, and never the solution (E0527, codegen).
-        if (std.mem.eql(u8, name, "vera_seed")) continue;
         const c = lower_constfold.constEval(self, a.value) orelse {
             var b = self.errWith(a.main_tok, .E0357);
             b.msg("`{s}`", .{name});

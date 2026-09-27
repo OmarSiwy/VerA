@@ -330,7 +330,6 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try vals.append(self.arena, tv.v);
     }
     const v = try self.call(name, vals.items);
-    if (std.mem.eql(u8, name, "$limit")) try lower_limit.recordSeed(self, e, v);
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
     // $feof): ordinary values, but each one moves or creates state the NEXT call
     // observes, so it is sequenced into the I/O phase like the tasks.

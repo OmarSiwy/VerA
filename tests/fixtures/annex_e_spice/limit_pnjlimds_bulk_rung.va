@@ -40,7 +40,7 @@
 //     of the $limit() function is the value of the access function
 //     reference": nothing moves and converged = 1.
 //
-// SEED. A "pnjlimds" leg is a branch of VerA's seed tree (`vera_seed`), the
+// SEED. A "pnjlimds" leg is a branch of VerA's seed tree, the
 // vbs leg at its default vcrit (vbd is derived through vds). Its nets are b
 // and si; b is the lowest port, so b = 0 and b - si = vcrit gives si = -0.6.
 // At the bias the model evaluates, §9.17.3's "When the simulator has

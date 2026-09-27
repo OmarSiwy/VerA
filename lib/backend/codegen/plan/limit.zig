@@ -27,13 +27,12 @@ pub const Limits = struct {
     declined: []Decline = &.{},
     /// `Lowered.num_ports` — what `writable` answers from.
     num_ports: usize = 0,
-    /// VerA's `vera_seed` opt-in: any site carries one, or any site is a
-    /// `pnjlimds` leg. Then `seed` is the branch tree `seed_steps` spells;
+    /// Any site carries a seed argument, or any site is a `pnjlimds` leg. Then `seed` is the branch tree `seed_steps` spells;
     /// otherwise it is the per-junction vcrit bias it always was.
     seed_tree: bool = false,
     /// The tree, root first per component, each node after the one it hangs off.
     seed_steps: []SeedStep = &.{},
-    /// One per `vera_seed` or tree edge that is not applied (W0854).
+    /// One per seed or tree edge that is not applied (W0854).
     seed_dropped: []Decline = &.{},
 
     /// The ladder `calls[i]` (a `fetlimds` site, either leg) belongs to:
@@ -191,13 +190,10 @@ pub const LimitCall = struct {
     /// The algorithm's numeric arguments as MIR values. `buildJobs` queues these
     /// as core jobs, so by emission time each has an `lo_idx` field.
     argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
-    /// VerA's `vera_seed` value for this site's branch, in the frame of `sign`;
-    /// `.undef` when the site carries none.
+    /// Optional argument after `sign`: the value this site's branch starts at
+    /// in `seed` (SPICE MODEINITJCT), in the frame of `sign`; `.undef` when
+    /// absent. §9.17.3 leaves the algorithm's arguments to the implementation.
     seed: Mir.Value = .undef,
-    /// The attribute's token, for its diagnostics.
-    seed_tok: u32 = 0,
-    /// The call's result, which `Lowered.limit_seeds` names the site by.
-    res: Mir.Value = .undef,
     /// Optional trailing argument: the FRAME SIGN. All three devsup.c
     /// limiters assume forward = positive; a PNP/PMOS model whose junction is
     /// forward at NEGATIVE probe voltage passes its `type` parameter here and
@@ -265,15 +261,11 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 continue;
             }
             const n = alg.arity();
-            if (d.args.len < 2 + n) {
-                try at.decline("too few arguments for the algorithm named", try std.fmt.allocPrint(g.arena, "`{t}` takes {d} argument(s) after its name", .{ alg, n }));
+            if (d.args.len < 2 + n or d.args.len > 4 + n) {
+                try at.decline(if (d.args.len < 2 + n) "too few arguments for the algorithm named" else "too many arguments for the algorithm named", try std.fmt.allocPrint(g.arena, "`{t}` takes {d} argument(s) after its name, then an optional sign, then an optional seed", .{ alg, n }));
                 continue;
             }
-            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok, .res = g.mir.instResult(inst) };
-            for (g.lowered.limit_seeds.items) |sd| if (sd.call == lc.res) {
-                lc.seed = sd.value;
-                lc.seed_tok = sd.tok;
-            };
+            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok };
             var bad = false;
             for (0..n) |k| {
                 const v = g.an.rv(d.args[2 + k]);
@@ -292,6 +284,12 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 const v = g.an.rv(d.args[2 + n]);
                 if (v != .f_zero and g.an.vty[@intFromEnum(v)] == .str) bad = true;
                 lc.sign = v;
+            }
+            // And one past the sign is the seed, arithmetic like `argv`.
+            if (d.args.len > 3 + n) {
+                const v = g.an.rv(d.args[3 + n]);
+                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
+                lc.seed = v;
             }
             if (bad) {
                 try at.decline("an algorithm argument is not real-valued", null);
@@ -337,15 +335,15 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     return lim;
 }
 
-/// One node of the `vera_seed` tree: `s[node] = s[from] ± raw(site)`, the
+/// One node of the seed tree: `s[node] = s[from] ± raw(site)`, the
 /// sign picked by which end of `site`'s branch `node` is. `from` is ground
 /// (0 V) when `none_u32`; `site == none_u32` is a component root, set to 0.
 pub const SeedStep = struct { node: u32, from: u32, site: u32 };
 
-/// VerA's `vera_seed` (§2.9) and SPICE `MODEINITJCT` (mos1load.c:397-408):
+/// `$limit`'s seed argument and SPICE `MODEINITJCT` (mos1load.c:397-408):
 /// ngspice starts a device at BRANCH values, vgs = vto, vds = 0, vbs = -1,
 /// and the limited image a host keeps is NODE values. So the branches are the
-/// edges of a graph over their nets: the sites carrying `vera_seed`, and the
+/// edges of a graph over their nets: the sites carrying a seed, and the
 /// pnjlim/pnjlimds legs at their default vcrit. A fetlimds vgd leg and a
 /// pnjlimds vbd leg are derived through vds and are never edges. Two sites on
 /// one net pair are one edge, an explicit seed beating a default; a second
@@ -353,18 +351,9 @@ pub const SeedStep = struct { node: u32, from: u32, site: u32 };
 /// component's root is ground if it holds it, else its lowest port, else its
 /// lowest net, at 0 V; every other node follows its edge from the root.
 fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
-    var dropped: std.ArrayList(Decline) = .empty;
-    // A seed on a site that is not honoured has no branch to start.
-    for (g.lowered.limit_seeds.items) |sd| {
-        for (lim.calls) |lc| {
-            if (lc.res == sd.call) break;
-        } else try dropped.append(g.arena, .{ .tok = sd.tok, .msg = "its `$limit` is not applied (W0853 says why)" });
-    }
     for (lim.calls) |lc| lim.seed_tree = lim.seed_tree or lc.seed != .undef or lc.alg == .pnjlimds;
-    if (!lim.seed_tree) {
-        lim.seed_dropped = dropped.items;
-        return;
-    }
+    if (!lim.seed_tree) return;
+    var dropped: std.ArrayList(Decline) = .empty;
     var edges: std.ArrayList(u32) = .empty;
     for (lim.calls, 0..) |lc, i| {
         const derived = switch (lc.alg) {
@@ -375,7 +364,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
         const explicit = lc.seed != .undef;
         if (derived) {
             if (explicit) try dropped.append(g.arena, .{
-                .tok = lc.seed_tok,
+                .tok = lc.tok,
                 .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is derived through vds, so it is not seeded on its own", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
                 .help = "seed the leg on the channel's source side instead",
             });
@@ -396,7 +385,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
             continue;
         }
         try dropped.append(g.arena, .{
-            .tok = lc.seed_tok,
+            .tok = lc.tok,
             .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is already seeded by an earlier site", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
         });
     }
@@ -425,7 +414,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
         const b = find(up, node(lc.lo, n));
         if (a == b) {
             try dropped.append(g.arena, .{
-                .tok = if (lc.seed != .undef) lc.seed_tok else lc.tok,
+                .tok = lc.tok,
                 .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) closes a loop of seeded branches", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
                 .help = "the other branches of the loop already fix it; drop this seed or one of theirs",
             });
@@ -607,7 +596,7 @@ test "an honoured pnjlim, and the declines that say why" {
     try std.testing.expect(std.mem.indexOf(u8, lim.declined[1].msg, "too few arguments") != null);
 }
 
-test "the vera_seed tree: an explicit seed opts in, a loop edge is dropped, ground roots its component" {
+test "the seed tree: an explicit seed opts in, a loop edge is dropped, ground roots its component" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     try f.init(&.{ "p", "a", "b", "c" });
     defer f.deinit();
@@ -619,11 +608,12 @@ test "the vera_seed tree: an explicit seed opts in, a loop edge is dropped, grou
     const pa = try f.probe(1);
     const pb = try f.probe(2);
     const pc = try f.probe(3);
-    const ab = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pb }), pnj, vt, vc });
+    const one = try f.mir.addFloatConst(a, 1.0);
+    const seed = try f.mir.addFloatConst(a, 0.1);
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pb }), pnj, vt, vc, one, seed });
     _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pb, pc }), pnj, vt, vc });
     _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pc }), pnj, vt, vc }); // closes a-b-c
     _ = try f.call("$limit", &.{ pc, pnj, vt, vc }); // V(c): c against ground
-    try f.lowered.limit_seeds.append(a, .{ .call = ab, .value = try f.mir.addFloatConst(a, 0.1), .tok = 0 });
     const an = try f.analysis();
 
     const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "p", "a", "b", "c" });
