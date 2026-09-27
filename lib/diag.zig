@@ -1,33 +1,9 @@
-//! Class 0 — the diagnostic system: collection, lint levels, provenance, and
-//! rendering.
+//! The diagnostic system: stage events -> one `Bag` of `Entry` rows -> text
+//! on a writer, or JSON for a tool.
 //!
-//! Transformation: (stage events) → one `Bag` of `Entry` rows → bytes on a
-//! writer, or JSON for a tool.
-//!
-//! WHY ONE BAG. Before this file every stage owned its own diagnostic struct,
-//! its own cap, its own allocator and its own idea of what a source location
-//! is (a line, a byte, a token index, a MIR instruction). Five collectors meant
-//! five conversion sites in the driver, five chances to drop a location, and no
-//! way to sort a parser error and a proof error into source order. There is now
-//! ONE collector, one currency (`Span`, a byte range in the preprocessed text),
-//! and one renderer.
-//!
-//! DOD
-//!   - One `Record` row per diagnostic, its labels and notes inline, plus
-//!     NUL-terminated text in one string pool. No per-entry allocation and
-//!     no pointers to fix up.
-//!   - Diagnostics are COLD by construction (capped at 64 per run, written
-//!     once, read once). So this file optimises for one thing only: never
-//!     paying anything on the path where no diagnostic is produced. The line
-//!     index and the sort happen lazily, after the first
-//!     entry exists.
-//!   - Everything the stages allocate lives in the compilation arena. The one
-//!     gpa copy happens in `detach`, at the API boundary, because a failed
-//!     compilation frees its arena on the way out — and that copy is two
-//!     `appendSlice`s instead of a walk over every string.
-//!
-//! SEVERITY comes from the code's first letter (`E`/`W`) — see diag_code.zig.
-//! There is no second table to desynchronise.
+//! Every stage reports into one collector with one location currency (`Span`,
+//! a byte range in the preprocessed text), so diagnostics from different stages
+//! sort into source order. A code's severity is its first letter (`E`/`W`).
 
 const std = @import("std");
 pub const Allocator = std.mem.Allocator;
@@ -40,6 +16,7 @@ pub const info = code_table.info;
 // Severity and lint levels
 // ---------------------------------------------------------------------------
 
+/// How a diagnostic affects the compilation; derived from its code by `severityOf`.
 pub const Severity = enum(u8) {
     err,
     warning,
@@ -52,8 +29,8 @@ pub const Severity = enum(u8) {
     }
 };
 
-/// Severity is a property of the CODE, read from its first letter. A code
-/// cannot change severity without changing its name, which is the point.
+/// Returns the severity carried by the code's first letter (`W` = warning,
+/// otherwise error), so a code cannot change severity without changing name.
 pub fn severityOf(c: Code) Severity {
     return switch (c.name()[0]) {
         'W' => .warning,
@@ -61,7 +38,7 @@ pub fn severityOf(c: Code) Severity {
     };
 }
 
-/// What the user asked us to do with a code. Mirrors rustc's lint levels.
+/// What the user asked to do with a code, after rustc's lint levels.
 pub const Level = enum(u8) {
     /// Do not collect it at all.
     allow,
@@ -74,10 +51,10 @@ pub const Level = enum(u8) {
     forbid,
 };
 
-/// Per-code level overrides from the command line. A sorted-by-nothing array
-/// with a linear scan: this is consulted once per diagnostic on a path that is
-/// already cold, and the override count is the number of flags a human typed.
+/// Per-code level overrides from the command line.
 pub const Levels = struct {
+    // ponytail: unsorted with a linear scan; consulted once per diagnostic,
+    // and the override count is the number of flags a human typed.
     items: std.ArrayList(Entry_) = .empty,
 
     const Entry_ = struct { code: Code, level: Level };
@@ -89,9 +66,11 @@ pub const Levels = struct {
         self.* = .empty;
     }
 
+    /// `CannotAllowError`: an `E` code asked for below `deny`.
+    /// `Forbidden`: the code is already `forbid`.
     pub const SetError = error{ CannotAllowError, Forbidden } || Allocator.Error;
 
-    /// Apply `--allow=X` / `--warn=X` / `--deny=X` / `--forbid=X`.
+    /// Records the level for `c` from `--allow=`/`--warn=`/`--deny=`/`--forbid=`.
     pub fn set(self: *Levels, gpa: Allocator, c: Code, level: Level) SetError!void {
         if (severityOf(c) == .err and level != .forbid and level != .deny)
             return error.CannotAllowError;
@@ -104,9 +83,8 @@ pub const Levels = struct {
         try self.items.append(gpa, .{ .code = c, .level = level });
     }
 
-    /// Default level of a code with no override. Errors are `deny` and stay there:
-    /// `--allow` on an `E` code is refused by `set`, because an error is a
-    /// statement about the program, not about our taste.
+    /// Returns the level of `c`: its override, else `deny` for an error and
+    /// `warn` for a warning. An error never drops below `deny` (`set` refuses).
     pub fn get(self: *const Levels, c: Code) Level {
         for (self.items.items) |it| {
             if (it.code == c) return it.level;
@@ -117,8 +95,8 @@ pub const Levels = struct {
         };
     }
 
-    /// Parse `allow=W0650` / `deny=W0650`. Returns false if the text is not a
-    /// level directive at all, so a caller can fall through to other flags.
+    /// Parses and applies `allow=W0650`-style text. Returns false when the text
+    /// is not a level directive, so a caller can fall through to other flags.
     pub fn parseFlag(self: *Levels, gpa: Allocator, text: []const u8) SetError!bool {
         const eq = std.mem.indexOfScalar(u8, text, '=') orelse return false;
         const level = std.meta.stringToEnum(Level, text[0..eq]) orelse return false;

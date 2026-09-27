@@ -1,36 +1,14 @@
-//! `vera` — the command-line driver, and the one place `lib/` and `src/` meet.
+//! `vera`, the command-line driver: argv -> a compiled, linted, generated or
+//! run artifact, with the library's diagnostics on stderr. `--run FILE.v` uses
+//! `src/sim` instead of the analog pipeline. Options: `usage_text`.
 //!
-//! The compiler is a library — `lib/`, taken here as the `vera` module — and
-//! this is the thin shell that makes its diagnostics reachable from a terminal.
-//! `--run FILE.v` is the other half: `src/sim`, which shares the library's
-//! frontend and diagnostic vocabulary and none of its pipeline.
-//!
-//! It exists because the diagnostics themselves
-//! advertise it: every rendered message ends with "run `vera --explain
-//! EXXXX`", and `--allow=`/`--deny=` are the documented way to tune the
-//! finiteness warning (W0650).
-//!
-//! usage:
-//!   vera [options] FILE.va      compile (or lint) one Verilog-A source
-//!   vera --explain CODE         print the catalogue entry for a code
-//!
-//! It is also the BUILD-TIME generator: `--emit-zig -o OUT.zig` is what a
-//! dependent build step runs once per `models/NAME.va`, which is why the
-//! module-name check and the `@compileError` gate live here rather than in a
-//! separate wrapper tool.
-//!
-//! options: `usage_text` below is the one list (`vera --help` prints it).
-//!
-//! exit status: 0 on success (warnings do not fail), 1 on a diagnosed error,
-//! 2 on a usage error. Conflicting flags are usage errors, not last-one-wins:
-//! `--lint` with any codegen mode (`--emit-zig`/`-o`/`--check`/`--emit-so`/
-//! `--emit-exe`/`--run`), and `--emit-exe`/`--run` with `--display=drop` —
-//! a testbench exists to print, so dropping its prints is a contradiction.
+//! Exit status: 0 on success (warnings do not fail), 1 on a diagnosed error,
+//! 2 on a usage error, including conflicting flags (never last-one-wins).
 
 const std = @import("std");
 const builtin = @import("builtin");
-/// `-Dlanguage=ams`. False is an IEEE 1364-2005 tool: every path past the
-/// digital one is comptime-dead, so the analog backend is never compiled in.
+/// `-Dlanguage=ams`. When false this is an IEEE 1364-2005 tool and the analog
+/// backend is comptime-dead.
 const ams = @import("build_options").ams;
 const vera = @import("vera");
 const digital = @import("sim").digital;
@@ -125,10 +103,9 @@ pub fn main(init: std.process.Init) !u8 {
     var display: vera.codegen.Display = .drop;
     var jac_f32 = false;
     var jac_f32_host = false;
-    // What the user actually TYPED, kept apart from the derived state above so
-    // conflicting spellings can be refused by name after the loop — argument
-    // order must not decide silently (`--emit-exe --display=drop` used to
-    // build a testbench whose model prints were all dropped, exit 0).
+    // What the user typed, kept apart from the derived state above so
+    // conflicting flags are refused by name after the loop, whatever their
+    // order.
     var lint_flag = false;
     var display_drop_flag = false;
     var codegen_flag: ?[]const u8 = null; // the last flag that implies codegen
@@ -280,11 +257,6 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // Conflicting flags are refused by NAME, whatever order they came in.
-    // Without this the last one silently won: `--emit-exe --display=drop`
-    // built a testbench with every model print discarded and exited 0, and
-    // `--emit-zig --lint` left `emit_zig` set while the pipeline stopped
-    // before codegen, so the "generated device" step read a lint result.
     // A testbench compiles for seconds and runs for microseconds; a `.so` is
     // the host's hot loop.
     const opt = optimize orelse if (exe_flag != null) std.builtin.OptimizeMode.Debug else .ReleaseFast;
@@ -293,6 +265,7 @@ pub fn main(init: std.process.Init) !u8 {
     // Release build under it is only as fast as Debug minus the safety checks.
     if ((exe_flag != null or emit_so) and backend == .self_hosted and opt != .Debug)
         try err.print("warning: --zig-backend=native does not optimise; the {t} artifact is unoptimised\n", .{opt});
+    // Conflicting flags are refused by name, whatever order they came in.
     if (exe_flag) |f| if (display_drop_flag) {
         try err.print(
             "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
@@ -338,8 +311,7 @@ pub fn main(init: std.process.Init) !u8 {
     var bag: diag.Bag = .init(gpa);
     defer bag.deinit(gpa);
 
-    // Decided once: `isTty` can fail, and re-asking it on three error paths is
-    // three more things that can go wrong while reporting an error.
+    // Decided once: `isTty` can fail, and an error path should not re-ask.
     const use_color = switch (color) {
         .always => true,
         .never => false,
@@ -460,12 +432,8 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // Diagnostics on a SUCCESSFUL compile — W0650 is the reason this path
-    // exists. DEFERRED, because codegen is a diagnostic-producing stage too
-    // (E0515: a §4.5 control argument that does not resolve is reported at the
-    // `.va` line, not pasted into the generated Zig as an `@compileError`), and
-    // `render` prints the whole bag — so there is exactly one call for every
-    // exit below rather than one per return path.
+    // Warnings on a successful compile, deferred to one call on every exit
+    // below: codegen reports too (E0515) and `render` prints the whole bag.
     defer report(&bag, err, json, use_color) catch {};
 
     if (codegen_flag == null) return 0;
@@ -493,9 +461,8 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     };
 
-    // A fatal generation error is a refusal by codegen. Writing the file
-    // anyway defers the real message to whoever compiles it, by which point it
-    // no longer names the .va that caused it.
+    // A fatal generation error is a refusal: writing the file anyway would
+    // move the message to whoever compiles it, away from the .va.
     if (result.device_has_compile_error) {
         try err.print(
             "error: {s}: codegen refused a construct; generated output is not usable\n",
@@ -504,10 +471,8 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
-    // --check: prove the generated Zig actually compiles, HERE, where the .va
-    // that produced it is still in hand. Without this a codegen bug surfaces
-    // as an error inside generated code in a build cache directory, with
-    // nothing pointing back at the source model.
+    // --check: type-check the generated Zig here, where the .va that
+    // produced it can still be named.
     if (check or emit_so) {
         const contract = contract_path orelse {
             try err.writeAll(
@@ -519,9 +484,8 @@ pub fn main(init: std.process.Init) !u8 {
         if (try typeCheck(gpa, io, err, zig_exe, contract, device, in_path)) |code| return code;
     }
 
-    // --emit-exe: the OTHER artifact. Same frontend, same device.zig; what
-    // changes is that the display tasks are real and a generated runner drives
-    // the module over the operating points its `//!` lines declare.
+    // --emit-exe: the same device with real display tasks, driven by a
+    // generated runner over the operating points its `//!` lines declare.
     if (exe_flag != null) {
         const contract = contract_path orelse {
             try err.writeAll(
@@ -622,8 +586,8 @@ pub fn main(init: std.process.Init) !u8 {
     return 0;
 }
 
-/// Write the sources `sim` compiles from (`sim_sources`, embedded at build
-/// time) under `dir`, and return the `contract` root among them: the path
+/// Writes the sources `sim` compiles from (`sim_sources`, embedded at build
+/// time) under `dir` and returns the `contract` root among them, the path
 /// `tb.buildExe` finds the tree from. Each file lands atomically, so a
 /// concurrent `vera` writing the same tree never exposes half a file.
 fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
@@ -696,9 +660,8 @@ fn emitDigital(
     return 0;
 }
 
-/// A compilation that failed: its diagnostics, then exit 1. A diagnosed
-/// failure has already said everything useful; the Zig error name would only
-/// add noise.
+/// Reports a failed compilation's diagnostics and returns exit code 1. The Zig
+/// error name is printed only for an undiagnosed failure.
 fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e: anyerror) !u8 {
     try report(bag, err, json, use_color);
     switch (e) {
@@ -713,18 +676,12 @@ fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
     return 2;
 }
 
-/// How long one device's `zig build-obj` gets before it is killed.
-///
-/// Three orders of magnitude of slack: the check costs 0.03–0.28 s per device
-/// and the whole 39-device ARPice catalog runs in about five seconds
-/// (measured 2026-09-10, cold and warm cache alike). Nothing that trips 120 s
-/// is slow — it is wedged. This bound exists because three of these were once
-/// found at 99% CPU for 82 minutes with the parent `zig build` waiting on them
-/// and not one line of diagnostic anywhere; an unbounded child is a hang the
-/// build cannot report, whatever the cause turns out to be.
+/// How long one device's `zig build-obj` gets before it is killed. A check
+/// takes well under a second per device, so a child past this is wedged, and
+/// an unbounded one is a hang the parent build cannot report.
 const check_budget_s = 120;
 
-/// Kills `child` once the budget is up. Returns whether it had to — a cancel
+/// Kills `child` once the budget is up. Returns whether it had to; a cancel
 /// (the check finished first) short-circuits the sleep and answers false.
 fn killAfter(io: Io, child: *std.process.Child, seconds: i64) bool {
     io.sleep(.fromSeconds(seconds), .awake) catch return false;
@@ -732,18 +689,12 @@ fn killAfter(io: Io, child: *std.process.Child, seconds: i64) bool {
     return true;
 }
 
-/// Run `zig build-obj` over the generated device with the `contract` module on
-/// the command line. Returns null when it type-checks, or the exit code to use.
+/// Runs `zig build-obj -fno-emit-bin` over the generated device with the
+/// `contract` module. Returns null when it type-checks, else the exit code.
 ///
-/// `build-obj`, not `build-lib`: this only has to prove the code is valid, and
-/// object emission skips linking entirely.
-///
-/// NOTE: this proves the FILE parses and its two `comptime` blocks hold, and
-/// nothing more. `-fno-emit-bin` analyses lazily and `contract.validate` is
-/// pure reflection — it says so itself, "a generic return cannot be checked
-/// without instantiating" — so no `eval`/`q` body is ever reached and a type
-/// error inside one exits 0 here. See docs/perf/veracheck-hang-2026-09-10.md
-/// in ARPice for the measurement and the fix.
+/// Proves only that the file parses and its `comptime` blocks hold: analysis
+/// is lazy and `contract.validate` is reflection, so a type error inside an
+/// `eval`/`q` body exits 0 here.
 fn typeCheck(
     gpa: std.mem.Allocator,
     io: Io,
@@ -769,7 +720,7 @@ fn typeCheck(
     defer gpa.free(root_arg);
 
     // `--dep` applies to the NEXT `-M`, and the FIRST `-M` is the root module —
-    // same ordering rule buildArgv() in orchestrator.zig follows.
+    // the ordering rule `buildArgv` in lib/backend/orchestrator.zig follows.
     const argv = [_][]const u8{
         zig_exe,      "build-obj",   "-fno-emit-bin",
         "--dep",      "contract",    root_arg,
@@ -786,7 +737,7 @@ fn typeCheck(
     // `concurrent`, not `async`: `async` is permitted to run the watchdog
     // inline on this thread, which would sleep out the whole budget before the
     // child was ever read from. An Io that cannot spare a second thread gets
-    // the old unbounded wait rather than a wrong one.
+    // an unbounded wait rather than a wrong one.
     var watchdog = io.concurrent(killAfter, .{ io, &child, check_budget_s }) catch null;
 
     var buf: [1 << 16]u8 = undefined;
@@ -798,7 +749,7 @@ fn typeCheck(
     // Retired BEFORE `wait` reaps, because after the reap this pid belongs to
     // whoever the OS hands it to next and a watchdog still holding it would
     // signal a stranger. `killAfter` reaps what it kills, so the timed-out
-    // path must not `wait` again — that is an assert in Child.wait.
+    // path must not `wait` again (an assert in Child.wait).
     const timed_out = if (watchdog) |*w| w.cancel(io) else false;
     if (timed_out) {
         try err.print(

@@ -1,23 +1,9 @@
-//! Every stage boundary is handled EXHAUSTIVELY, or says why it is not.
+//! Stage-boundary exhaustiveness guard: lib/ and src/ sources -> a failure for
+//! every `else =>` over a boundary enum whose line lacks `// else: <reason>`.
 //!
-//! Each stage of the pipeline (tokens → AST → MIR → device) drops what the next
-//! does not need. A `switch` over the previous stage's enum is where that choice
-//! is made, and `else =>` is where it is made silently: a variant added to
-//! `Ast.ExprTag` tomorrow compiles straight into every `else` that already
-//! exists, and nothing asks whether that walker should have seen it. The audit
-//! that motivated this found a dozen such arms giving wrong answers today.
-//!
-//! Zig already errors on a non-exhaustive switch WITHOUT `else`. This test
-//! closes the other half: a switch whose enum-literal prongs all name one
-//! BOUNDARY enum may not carry `else =>` unless the else line says
-//! `// else: <reason>`. It reads the real source with `std.zig.Ast`, because
-//! grep cannot tell which enum a switch is over and a label-set match can.
-//!
-//! RATCHET. The sites that existed when this landed are in `exhaustive.list`,
-//! keyed by (file, enclosing function, enum) and never by line, so a file split
-//! does not churn it. The test fails on a site that is NOT listed, and on a
-//! listed site that is gone. The list can only shrink. Names, not counts
-//! (AGENTS.md rule 3): a count can stand still while the membership moves.
+//! It parses the real source with `std.zig.Ast`, because only the prong labels
+//! say which enum a switch is over. `exhaustive.list` holds grandfathered
+//! sites as `<file> <fn> <enum>` keys; it only shrinks and is now empty.
 
 const std = @import("std");
 const Io = std.Io;
@@ -29,11 +15,9 @@ const repo_root = @import("repo_options").repo_root;
 
 /// The boundary enums, read from the real types so the registry cannot drift.
 /// A switch is attributed to the FIRST entry whose fields cover all its prong
-/// labels. `token.Tag` is the lexer→parser boundary and is registered LAST:
-/// its `plus`/`int_literal`/… overlap UnaryOp and ExprTag, which keep those
-/// switches. Nearly all of its `else` arms are the grammar's "not this
-/// production", and each says so; `Preprocessor.Directive` is the text→token
-/// boundary.
+/// labels, so an enum whose names overlap an earlier one's comes after it.
+/// `token.Tag` (lexer to parser) is last: its `plus`/`int_literal` overlap
+/// UnaryOp and ExprTag, which keep those switches.
 const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "Ast.ExprTag", .fields = std.meta.fieldNames(Ast.ExprTag) },
     .{ .name = "Ast.Stmt", .fields = std.meta.fieldNames(Ast.Stmt) },
@@ -47,7 +31,7 @@ const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "Mir.OpClass", .fields = std.meta.fieldNames(Mir.OpClass) },
     .{ .name = "Mir.DefKind", .fields = std.meta.fieldNames(Mir.DefKind) },
     .{ .name = "op.OpKind", .fields = std.meta.fieldNames(op.OpKind) },
-    // Last: its `ddt`/`cross`/… overlap OpKind, which keeps those switches.
+    // After OpKind: its `ddt`/`cross` overlap OpKind, which keeps those switches.
     .{ .name = "Mir.Callee", .fields = std.meta.fieldNames(Mir.Callee) },
     .{ .name = "Preprocessor.Directive", .fields = std.meta.fieldNames(@import("frontend").Preprocessor.Directive) },
     .{ .name = "token.Tag", .fields = std.meta.fieldNames(@import("frontend").token.Tag) },

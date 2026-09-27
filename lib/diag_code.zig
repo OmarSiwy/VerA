@@ -1,54 +1,38 @@
-//! Class 0 — the diagnostic code catalogue.
+//! The diagnostic code catalogue: one stable identifier per diagnosable
+//! condition, with its title, LRM clause and `--explain` text.
 //!
-//! One stable identifier per diagnosable condition, plus the LRM citation and
-//! the long-form explanation `--explain` prints. This file has NO imports on
-//! purpose: it is pure data, so every stage can name a code without pulling in
-//! the renderer, and `diag.zig` can import it without a cycle.
-//!
-//! RULES (read before adding a code)
-//!   - Codes are STABLE. Fixtures, docs and user build scripts pin them. A code
-//!     is never renumbered and never reused after retirement; retire by leaving
-//!     the enum field in place and marking the title `(retired)`.
-//!   - A code's prose lives in its `infoOf` arm; the enum is names only.
-//!   - The FIRST LETTER carries the severity: `E` = error, `W` = warning.
-//!     `diag.severityOf` reads it from `@tagName`, so there is no second table
-//!     to keep in sync.
-//!   - The NUMBER's leading digits are the engine's stage class, so a code says
-//!     which stage owns it:
-//!       01xx class 1  lexical + preprocessing      (preprocessor.zig, lexer.zig)
-//!       02xx class 2  syntax / annex A             (parser.zig)
-//!       03xx class 3  types, disciplines, decls    (lower.zig)
-//!       04xx class 4  behavioral semantics         (lower.zig)
-//!       05xx class 5  analog operators + math      (lower.zig)
-//!       06xx class 6  numerical safety / proof     (proof.zig)
-//!       07xx class 7  events + timing              (lower.zig)
-//!       08xx class 8  system tasks and functions   (lower.zig)
-//!       09xx class 9  hierarchy + elaboration      (lower.zig)
-//!       10xx class 10 runtime / artifact contract  (codegen.zig)
-//!   - The LRM citation lives HERE, once, not copied into a format string. A
-//!     message that still spells "(LRM 3.2.2)" inline is a bug: the renderer
-//!     prints `Info.lrm` under every diagnostic already.
-//!
-//! DOD: `Code` is an `enum(u16)` whose tag name IS the rendered spelling, so
-//! `@tagName` replaces a name table.
+//! No imports: every stage can name a code without pulling in the renderer,
+//! and `diag.zig` imports this file without a cycle.
 
-/// Static per-code documentation. All three fields are comptime string
-/// literals; nothing here is ever allocated.
+/// Static documentation for one code; every field is a comptime string literal.
 pub const Info = struct {
-    /// Short noun phrase, no trailing punctuation, no code, no location. This
-    /// is the headline: `error[E0313]: <title>`. Keep it stable-ish — fixtures
-    /// pin the CODE, so prose may be improved, but a title that changes meaning
-    /// wants a new code.
+    /// Headline after `error[E0313]: `: a lowercase noun phrase with no
+    /// trailing period, code or location. Fixtures pin the code, not the title,
+    /// but a title that changes meaning needs a new code.
     title: []const u8,
-    /// LRM clause, e.g. `"5.6.1"`, `"A.6.4"`, `"C.7"`. Empty when the condition
-    /// is an engine limit rather than a language rule (say so in `explain`).
+    /// LRM clause, e.g. `"5.6.1"`, `"A.6.4"`, `"C.7"`; the renderer prints it
+    /// under every diagnostic, so messages never spell it inline. Empty for an
+    /// engine limit rather than a language rule (`explain` then says so).
     lrm: []const u8,
-    /// Long form for `--explain`. Convention: what the rule is, why it exists,
-    /// then how to satisfy it. Wrapped at ~76 columns by the caller.
+    /// Long form for `--explain`: the rule, why it exists, how to satisfy it.
+    /// Authored pre-wrapped at 76 columns; `--explain` prints it verbatim.
     explain: []const u8,
 };
 
-/// Every diagnosable condition VerA can report. See the class ranges above.
+/// Every diagnosable condition VerA can report. The tag name is the rendered
+/// spelling.
+///
+/// Adding a code:
+///   - Codes are stable: fixtures, docs and user scripts pin them. A code is
+///     never renumbered or reused; retire one by keeping the field and giving
+///     it `retiredInfo`.
+///   - The first letter is the severity (`E` error, `W` warning).
+///   - The first two digits are the owning stage class:
+///       01 lexical and preprocessing    06 numerical safety (proof)
+///       02 syntax, annex A (parser)     07 events and timing
+///       03 types, disciplines, decls    08 system tasks and functions
+///       04 behavioral semantics         09 hierarchy and elaboration
+///       05 analog operators and math    10 runtime and artifact contract
 pub const Code = enum(u16) {
     // ---------------------------------------------------------------- class 1
     // Preprocessing directives (LRM 10) — preprocessor.zig.
@@ -415,26 +399,19 @@ pub const Code = enum(u16) {
     }
 };
 
-/// Documentation for a code — one indexed load, no jump table.
-///
-/// `Code`'s values are dense (0..N-1, asserted below), so the lookup is
-/// `table[@intFromEnum(c)]`. `table` is built at COMPTIME by evaluating the
-/// exhaustive switch in `infoOf` once per code, which is what keeps both
-/// properties at once: the switch still refuses to compile when a code arrives
-/// without an arm, and it still binds a code to its text BY NAME, so no entry
-/// can slide onto the wrong code the way a hand-written array literal allows.
-/// The switch itself never reaches the binary — in a Debug build it was 16.8 KB
-/// of `.text` for what is now a load.
+/// Returns the documentation for `c` with one indexed load.
 pub fn info(c: Code) Info {
     return table[@intFromEnum(c)];
 }
 
+// Built at comptime from the exhaustive `infoOf` switch: a code without an arm
+// fails to compile, text binds to a code by name, and the switch itself never
+// reaches the binary.
 const table = build: {
     const fields = @typeInfo(Code).@"enum".fields;
-    // Density is what makes a tag value usable as an index. Codes are never
-    // renumbered and retired ones keep their slot (see RULES above), so this
-    // holds by construction — it is asserted rather than assumed because the
-    // indexing above is silently wrong if it ever stops holding.
+    // Dense values make a tag usable as an index. Retired codes keep their
+    // slot, so this holds by construction; the indexing is silently wrong if
+    // it ever stops holding.
     for (fields, 0..) |f, i| {
         if (f.value != i) @compileError("Code values must be dense: " ++ f.name ++ " is out of sequence");
     }
@@ -452,9 +429,7 @@ fn retiredInfo(explanation: []const u8) Info {
     };
 }
 
-/// The catalogue proper. Exhaustive by construction: adding a `Code` without an
-/// arm here is a compile error, which is the point. Called only by `table`'s
-/// comptime initializer, so it costs nothing at runtime.
+/// The catalogue proper; called only by `table`'s comptime initializer.
 fn infoOf(c: Code) Info {
     return switch (c) {
         // ------------------------------------------------------------ class 1
@@ -5879,11 +5854,3 @@ test "every code has info and a well-formed name" {
         try std.testing.expect(i.explain.len > 0);
     }
 }
-
-// A "codes are unique" test used to sit here: 235 x 235 unrolled comparisons of
-// every field value and name against every other, costing 38 MB of test binary
-// and 1.2 s of build to assert two things the language already guarantees —
-// duplicate enum field NAMES are a compile error, and auto-numbered VALUES are
-// unique by construction. It could never fail. What is worth asserting is
-// DENSITY, since that is what `info`'s indexing rests on and it is not
-// guaranteed by anything; `table` does that with one comptime loop.
