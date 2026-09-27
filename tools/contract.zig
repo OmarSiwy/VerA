@@ -1310,8 +1310,8 @@ pub const family_fns = [_][]const u8{ "Of", "con", "probe", "sel" };
 /// `lt`/`le`/`eq` return `Of(0)`; `to(comptime m2)` widens and is a compile
 /// error unless `m ⊆ m2`; `ddxAt(comptime u)` is lane `u`, or 0 off the mask.
 pub const family_primitives = [_][]const u8{
-    "addC", "scale", "add",  "sub",  "neg",  "mul", "div", "exp", "log",
-    "expm1", "log1p", "sqrt", "pow", "sin",  "cos", "tanh", "sinh", "cosh",
+    "addC",  "scale", "add",  "sub", "neg", "mul",   "div",  "exp",  "log",
+    "expm1", "log1p", "sqrt", "pow", "sin", "cos",   "tanh", "sinh", "cosh",
     "atan",  "lt",    "le",   "eq",  "val", "ddxAt", "to",
 };
 
@@ -1515,7 +1515,6 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
 
 fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
     return struct {
-        const Fam = @This();
         pub const collapse_applied = collapsed;
 
         pub fn con(c: f64) Of(0) {
@@ -1560,6 +1559,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                     if (m == to_m) return a.d;
                     if (m == 0) return @splat(0.0);
                     const idx = comptime blk: {
+                        @setEvalBranchQuota(100_000);
                         var idx: [@popCount(to_m)]i32 = undefined;
                         var j: usize = 0;
                         for (0..64) |u| if ((to_m >> u) & 1 != 0) {
@@ -1663,25 +1663,6 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                 }
                 pub fn eq(a: T, b: anytype) Of(0) {
                     return con(@floatFromInt(@intFromBool(a.v == b.v)));
-                }
-                pub fn sel(c: T, a: anytype, b: anytype) Of(@TypeOf(a).mask | @TypeOf(b).mask) {
-                    return Fam.sel(c, a, b);
-                }
-                // ABI 4's min/max/abs/minC/maxC, for a device whose text still calls them.
-                pub fn min(a: T, b: anytype) Join(@TypeOf(b)) {
-                    return Fam.sel(a.lt(b), a, b);
-                }
-                pub fn max(a: T, b: anytype) Join(@TypeOf(b)) {
-                    return Fam.sel(b.lt(a), a, b);
-                }
-                pub fn abs(a: T) T {
-                    return if (a.v > 0.0) a else a.neg();
-                }
-                pub fn minC(a: T, c: f64) T {
-                    return if (c < a.v) con(c).to(m) else a;
-                }
-                pub fn maxC(a: T, c: f64) T {
-                    return if (a.v < c) con(c).to(m) else a;
                 }
             };
         }
@@ -1798,6 +1779,51 @@ pub const LegacyValue = struct {
         return .{ .v = if (c.v != 0.0) a.v else b.v };
     }
 };
+
+/// One distinct `Of` mask a device declares reals at, and how many it
+/// declares: data for a host's width policy (`laneMasks`), never a width.
+pub const LaneUse = struct { mask: u64, uses: u32 };
+
+/// `D.lane_masks`, or one dense entry (`derivReads`) for a device without it.
+pub fn laneMasks(comptime D: type) []const LaneUse {
+    if (@hasDecl(D, "lane_masks")) return &D.lane_masks;
+    return &.{.{ .mask = derivReads(D) & unknownsMask(D), .uses = 0 }};
+}
+
+/// Every unknown of `D` as a mask.
+fn unknownsMask(comptime D: type) u64 {
+    return if (nU(D) >= 64) ~@as(u64, 0) else (@as(u64, 1) << nU(D)) - 1;
+}
+
+/// The lanes residual row `r` carries: `jac_pattern[r]` inside
+/// `derivReads`, every read lane when the device declares no pattern.
+pub fn rowMask(comptime D: type, comptime r: usize) u64 {
+    const p = if (@hasDecl(D, "jac_pattern")) D.jac_pattern[r] else ~@as(u64, 0);
+    return p & derivReads(D) & unknownsMask(D);
+}
+
+/// The lanes charge site `k` carries: `q_site_pattern[k]` inside `derivReads`.
+pub fn siteMask(comptime D: type, comptime k: usize) u64 {
+    const p = if (@hasDecl(D, "q_site_pattern")) D.q_site_pattern[k] else ~@as(u64, 0);
+    return p & derivReads(D) & unknownsMask(D);
+}
+
+/// What `abi5.eval` returns for family `S`: row `r` as `S.Of(rowMask(D, r))`,
+/// in `U` order.
+pub fn Rows(comptime D: type, comptime S: type) type {
+    @setEvalBranchQuota(1_000_000);
+    var ts: [nU(D)]type = undefined;
+    for (&ts, 0..) |*t, r| t.* = S.Of(rowMask(D, r));
+    return @Tuple(&ts);
+}
+
+/// What `abi5.q` returns for family `S`: site `k` as `S.Of(siteMask(D, k))`.
+pub fn Sites(comptime D: type, comptime S: type) type {
+    @setEvalBranchQuota(1_000_000);
+    var ts: [nQ(D)]type = undefined;
+    for (&ts, 0..) |*t, k| t.* = S.Of(siteMask(D, k));
+    return @Tuple(&ts);
+}
 
 /// Checks family `S` against the numerics table at run time: every primitive
 /// over an edge-value grid against the reference family in f64, the pinned
@@ -2628,6 +2654,12 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "vpi_contrib_hi", {} },
     .{ "vpi_contrib_lo", {} },
     .{ "vpi_contrib_flow_u", {} },
+    // Contract ABI 5 preview (`codegen.Options.family`): the family entry
+    // points beside the ABI 4 ones, and the masks their reals are declared
+    // at (`laneMasks`). Transitional: the flip to abi_version 5 replaces the
+    // ABI 4 entries with these.
+    .{ "abi5", {} },
+    .{ "lane_masks", {} },
 });
 
 fn rejectStrayPubDecls(comptime D: type) void {
@@ -3210,6 +3242,14 @@ const MockAll = struct {
     pub fn vpiContribs(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance) [1][2]f64 {
         return .{.{ x[0].sub(x[1]).val() * m.g, 0.0 }};
     }
+    /// Contract ABI 5 preview: the resistor's rows for a family.
+    pub const lane_masks = [_]LaneUse{.{ .mask = 0b11, .uses = 1 }};
+    pub const abi5 = struct {
+        pub fn eval(comptime S: type, x: *const [n_u]f64, m: *const Model, _: *const Instance, _: f64) Rows(Self, S) {
+            const i = S.probe(0, x[0]).sub(S.probe(1, x[1])).scale(m.g);
+            return .{ i.to(rowMask(Self, 0)), i.neg().to(rowMask(Self, 1)) };
+        }
+    };
 };
 
 test "validate: minimal resistor" {
@@ -3662,6 +3702,16 @@ test "RefFamily sparse: Of(m) carries exactly m's lanes, joins on binary ops" {
     try testing.expect(@TypeOf(s) == S.Of(0b0101));
     try testing.expectEqual(@as(f64, 1.0), s.ddxAt(2));
     try testing.expectEqual(@as(u64, 0), @as(u64, @bitCast(s.ddxAt(0))));
+}
+
+test "abi5 preview: a family's rows carry the pattern's lanes" {
+    const S = RefFamily(f64, &.{ 0, 1 }, .{ .dense = false });
+    const r = MockAll.abi5.eval(S, &.{ 2.0, 1.0 }, &.{ .g = 0.5 }, &.{}, 0.0);
+    try testing.expect(@TypeOf(r[0]) == S.Of(rowMask(MockAll, 0)));
+    try testing.expectEqual(@as(f64, 0.5), r[0].val());
+    try testing.expectEqual(@as(f64, -0.5), r[1].ddxAt(0));
+    try testing.expectEqual(@as(f64, 0.5), r[1].ddxAt(1));
+    try testing.expectEqual(@as(usize, 1), laneMasks(MockAll).len);
 }
 
 test "RefFamily dense: one type, lanes where `lane` puts them" {
