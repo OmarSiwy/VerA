@@ -1,37 +1,9 @@
-//! Facts about a lowered module: the derived tables an emitter reads but does
-//! not decide. Built once per compilation, then read-only.
-//!
-//! Transformation: Mir + Lower → CFG, dominator tree, natural loops, flattened
-//! per-block instruction pools, hoisted instruction columns, and the value type
-//! and alias tables.
-//!
-//! WHAT BELONGS HERE, and it is a sharper line than "does not write output":
-//! everything in this file is true of the MIR regardless of what is emitted from
-//! it. Nothing here knows that the target is Zig. That is what makes a second
-//! backend — a netlist emitter reading the same MIR — a sibling file rather than
-//! a rewrite, and it is why `ir/` does not import `backend/`.
-//!
-//! What deliberately did NOT come here, having looked:
-//!   - `unit_names`, and `naming.Unit.target` with it. `enumerateUnits`
-//!     sanitizes into ZIG identifiers (naming.zig `sanitizeInto`), so the unit
-//!     list is already target-flavoured text, not a fact. `op_unit` indexes into
-//!     it and follows it. The unit ENUMERATION ORDER *is* normative — proof's
-//!     `Verdict.unit_modes` is indexed by it — so separating that order from the
-//!     sanitized strings is the follow-up if a second backend ever needs it.
-//!   - `lo_idx`/`lo_vals` and `planCommon`. Deduplicating unit targets into one
-//!     declaration that returns a struct of them is a Zig code-shape decision;
-//!     a netlist has no core struct.
-//!   - the per-unit tables (`needed`, `eager_use`, `slot`, `loop_recompute`, …).
-//!     Those are one emitter's scheduling policy, they are refilled per unit, and
-//!     they carry deliberate cross-unit residue. They stay with the emitter.
-//!
-//! Two builders here used to allocate that per-unit scratch as a side job,
-//! because they happened to know `nv` and `nb`: `buildValueTypes` — a typing pass
-//! — allocated eight unrelated tables. Those allocations moved to the emitter,
-//! which is where they are read.
-//!
-//! DOD: same ground rules as the rest of the engine. SoA, `enum(u32)` handles,
-//! arena-owned, two-pass count-then-fill for every pool so nothing regrows.
+//! Target-independent facts about a lowered module: Mir + Lowered → CFG,
+//! dominator tree, natural loops, flattened per-block instruction pools, and
+//! per-Value tables (type, alias snapshot, derivative dependencies, array
+//! owner, constant fold). Built once, then read-only. Nothing here knows the
+//! target is Zig, so `ir/` never imports `backend/`; per-unit scheduling tables
+//! belong to the emitter.
 
 const std = @import("std");
 const Mir = @import("mir.zig");
@@ -43,130 +15,107 @@ const Const = @import("frontend").constfold.Const;
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
 pub const Analysis = @This();
 
+/// Every builder here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 
 const none_u32 = std.math.maxInt(u32);
 
-/// How a Value is emitted: as the generic scalar `S` (real) or as a plain `i64`
-/// (LRM §3.2 integer). §4.2.1.1/§4.2.1.2 conversions are inserted at the use
+/// How a Value is emitted: as the generic scalar `S` (real), a plain `i64`
+/// (§3.2 integer) or a string. §4.2.1.1/§4.2.1.2 conversions are inserted at the use
 /// site, so a typing miss degrades to a redundant cast, never to code that does
 /// not compile.
 pub const VTy = Mir.callee.Ty;
 
+/// Owns every table below.
 arena: std.mem.Allocator,
 mir: *const Mir,
 lowered: *const Lowered,
 
+/// Block count.
 nb: u32 = 0,
+/// Reverse-postorder number per block, `none_u32` if unreachable.
 rpo_num: []u32 = &.{},
+/// Reachable blocks in reverse postorder.
 rpo: []u32 = &.{},
+/// Immediate dominator per block, `none_u32` if unreachable.
 idom: []u32 = &.{},
+/// Reachable predecessors per block.
 preds: [][]u32 = &.{},
+/// Successors per block, in branch order.
 succs: [][]u32 = &.{},
+/// Dominator-tree children per block, in RPO order.
 dom_kids: [][]u32 = &.{},
 /// Euler-tour numbering of the dominator tree, so `dominates` is O(1)
 /// instead of an idom walk (`none_u32` = block not in the tree).
 dom_in: []u32 = &.{},
 dom_out: []u32 = &.{},
-/// Per-block, and probed ONE BLOCK AT A TIME — the `dom_kids` filters below,
-/// `unit_plan.edgeAct`, the natural-loop walk. There is no whole-array set
-/// union or intersection over either of them anywhere.
-///
-/// `[]bool` on purpose, and MEASURED (ReleaseFast, all 1164 fixtures, block
-/// count sampled at every `prepare`): nb median 1, mean 2.9, p99 25, max 103.
-/// So each of these is ONE BYTE in the median compilation. A `bit_set` would
-/// add a shift and a mask to every probe to save 87 bytes at the largest
-/// fixture in the tree — a loss on speed and on readability at once. See
-/// unit_plan.zig's "THE SIDE TABLES STAY `[]bool`" for the full argument; it
-/// covers all ten of these tables and this is two of them.
+/// Block has two or more predecessors. `[]bool` because every probe is one
+/// block at a time and block counts are small.
 is_merge: []bool = &.{},
+/// Block is a loop header (it dominates one of its predecessors).
 is_loop: []bool = &.{},
-/// The OUTERMOST loop header whose natural loop contains this block, or
-/// `none_u32`. Outermost, not innermost, so a whole nest is one unit of
-/// decision in `planCommon` — see `loop_blocked`.
+/// The outermost loop header whose natural loop contains this block, or
+/// `none_u32`. Outermost, so a whole nest is one decision for the emitter.
 loop_of: []u32 = &.{},
-/// EVERY instruction of block `b`, in emission order:
-/// `inst_pool[inst_off[b]..inst_off[b + 1]]`. `prepare` used to walk the
-/// MIR's intrusive `next` chain six separate times (terminators, phi/stmt
-/// count, phi/stmt fill, `def_block`, `op_unit`, `$param_given`), and each
-/// `it.next()` is a dependent load — six latency-bound traversals of the
-/// whole model. AIR never has a chain at all: a block body is a `[]u32`
-/// window reinterpreted in place. Built by two walks, read by five.
+/// Every instruction of block `b`, in emission order:
+/// `inst_pool[inst_off[b]..inst_off[b + 1]]`. A flat window so later walks
+/// avoid chasing the MIR's intrusive `next` chain.
 inst_pool: []Mir.Inst = &.{},
 inst_off: []u32 = &.{},
 /// Non-aliased phis of block `b`, in emission order:
-/// `phi_pool[phi_off[b]..phi_off[b + 1]]`. `emitPhiCopies` runs once per CFG
-/// edge, so re-walking the block's instruction chain there is quadratic in
-/// the block's in-degree. Flat pool + offsets, not `[][]Inst`: one
-/// allocation, 4 bytes per phi, nothing derivable stored.
+/// `phi_pool[phi_off[b]..phi_off[b + 1]]`. The emitter reads it once per CFG
+/// edge, where re-walking the chain would be quadratic in in-degree.
 phi_pool: []Mir.Inst = &.{},
 phi_off: []u32 = &.{},
 /// Same shape, for the instructions a unit body can emit: everything except
-/// phis, terminators, and values aliased away. `emitBlockInsts` runs once
-/// per block PER UNIT, and the MIR's intrusive `next` chain makes that a
-/// pointer chase over the whole model each time.
+/// phis, terminators, and values aliased away. Read once per block per unit.
 stmt_pool: []Mir.Inst = &.{},
 stmt_off: []u32 = &.{},
 /// Merge-block dominator children of `b`: `mk_pool[mk_off[b]..mk_off[b+1]]`.
-/// `emitCode` runs per block per unit and used to rebuild this list into a
-/// fresh arena allocation every time; the CFG does not change between units.
 mk_pool: []u32 = &.{},
 mk_off: []u32 = &.{},
-/// MIR instruction columns, hoisted once. `mir.instOp`/`instResult` each
-/// re-derive the MultiArrayList base pointers per call.
+/// MIR `op` column, hoisted once (borrowed from `mir`).
 i_op: []const Mir.Opcode = &.{},
+/// MIR `result` column, hoisted once (borrowed from `mir`).
 i_res: []const Mir.Value = &.{},
+/// Terminator per block, `.none` if the block has none.
 term: []Mir.Inst = &.{},
 /// Block a Value is defined in (`none_u32` for constants/params/probes).
 def_block: []u32 = &.{},
 
+/// Value count, sentinels included.
 nv: u32 = 0,
+/// Emitted type per Value.
 vty: []VTy = &.{},
-/// `mir.resolveAlias` evaluated once for every Value. `rv` is on the render
-/// path of every unit (`renderVal`, `renderOp`, `livePhi`, `liveStmt`,
-/// `mark`, `emitUnits`), and `resolveAlias` is declared `*const` but WRITES:
-/// it path-compresses through the slice. Reading a snapshot instead makes
-/// `rv` one array load and makes the whole render path genuinely read-only,
-/// which is what per-unit parallelism will need. Costs `nv * 4` bytes.
-///
-/// INVARIANT: nothing calls `Mir.setAlias` after `prepare`.
+/// `mir.resolveAlias` evaluated once for every Value, so `rv` is one load and
+/// readers never write through `resolveAlias`'s path compression.
+/// Invariant: nothing calls `Mir.setAlias` after `build`/`buildStructure`.
 alias: []Mir.Value = &.{},
 
-/// Per Value: WHICH unknowns its derivative can be nonzero in — bit `u` set
-/// means `∂value/∂x[u]` may be nonzero. "No bit at all" is `dFree`.
-///
-/// This is the STRUCTURAL Jacobian, and it exists for the host's scatter: a
-/// residual row's local Jacobian is `n_u` wide by construction, but the model
-/// decides which of those columns can be nonzero, and the clear ones are
-/// stamps the host can drop at COMPILE time rather than adding zero to a
-/// matrix slot. Measured on ARPice's mos1: 37 of 128 (res + q) columns are
-/// live, so 71% of the per-instance scatter was adding structural zeros.
-///
-/// Sound in one direction: a SET bit is always safe (it costs a stamp that
-/// turns out to be zero). So every rule here over-approximates — a comparison
-/// (`lt`) and `$prev` both have identically zero derivative, and both are
-/// still credited with their operands' bits.
-///
-/// FOLDED when an unknown index reaches 64: one u64 per Value is the whole
-/// reason this is cheap, and no device in the catalog is near that. Unknown
-/// `u` then sets bit `u & 63` — still nonzero, so `dFree` stays exact — and
-/// `unknownDeps` answers "all bits", which is the dense fallback.
+/// Per Value: which unknowns its derivative can be nonzero in. Bit `u` set
+/// means `∂value/∂x[u]` may be nonzero; no bit at all is `dFree`. This is the
+/// structural Jacobian: a clear column is a stamp the host can drop at compile
+/// time. Sound in one direction: a set bit is always safe, so every rule
+/// over-approximates. When an unknown index reaches 64 the table folds
+/// (`deps_folded`): unknown `u` sets bit `u & 63`, so `dFree` stays exact,
+/// and `unknownDeps` answers all bits.
 deps: []u64 = &.{},
+/// Some unknown index is ≥ 64; see `deps`.
 deps_folded: bool = false,
 /// `deps` with a `dstop` passing its operand's bits through: which unknowns
-/// the VALUE can vary with (`xDep`). The same slice as `deps` when the module
+/// the value can vary with (`xDep`). The same slice as `deps` when the module
 /// has no `dstop`.
 xdeps: []u64 = &.{},
-/// §3.2.2 per Value: the `Lowered.mem_arrays` row an array VERSION belongs to
+/// §3.2.2 per Value: the `Lowered.mem_arrays` row an array version belongs to
 /// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
-/// Its `vty` is the ELEMENT type. Every version of one array is one storage.
+/// Its `vty` is the element type. Every version of one array is one storage.
 arr_of: []u32 = &.{},
 /// `foldConst`'s answer per Value: `[0]` sees a parameter as the host sets
 /// it, `[1]` looks through it to its declared default.
 folds: [2][]?Const = .{ &.{}, &.{} },
 
-/// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
-/// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
+/// Builds every table above. Tables are allocated in `arena` and borrow
+/// `mir`/`lowered`, which must outlive the result and not change after.
 pub fn build(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -179,21 +128,10 @@ pub fn build(
     return self;
 }
 
-/// The structural half alone: alias snapshot, CFG, dominator tree, natural
-/// loops, per-block pools. Everything `vty` and the hoisted value columns are
-/// NOT.
-///
-/// A second constructor rather than a flag, because it has a second caller with
-/// a different need: `proof.zig` runs at root.zig's stage 5, BEFORE codegen
-/// builds its own `Analysis` at stage 6, so it cannot share one — and a prover
-/// has no use for "how would this Value be spelled in the emitted struct".
-/// MEASURED with `zig build benchmark`, `contrib n=4096` lint phase, min of 25,
-/// **in DEBUG** (the run predates the bench printing its mode, and `zig build
-/// bench` with no `-Doptimize` is Debug; ReleaseFast is ~12× smaller — the same
-/// point is 8.80 ms there): 111.7 ms before the share, 117.1 ms if proof calls
-/// the full `build` (+4.8%, all of it `buildValueTypes` running twice per
-/// compile), 110.8 ms through this entry point. The claim is the +4.8% ratio,
-/// which is a comparison within one mode and does not move with it.
+/// Builds the structural half alone: alias snapshot, CFG, dominator tree,
+/// natural loops, per-block pools. `vty`, `deps`, `arr_of` and `folds` stay
+/// empty. For the prover, which runs before codegen's own `build` and needs
+/// no value types; building them twice per compile measured slower.
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -207,11 +145,12 @@ pub fn buildStructure(
     return self;
 }
 
+/// Returns the Value `v` aliases to (the snapshot of `Mir.resolveAlias`).
 pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
     return self.alias[@intFromEnum(v)];
 }
 
-/// Block `bi`'s instructions as a contiguous window — see `inst_pool`.
+/// Returns block `bi`'s instructions as a contiguous window (see `inst_pool`).
 pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
     return self.inst_pool[self.inst_off[bi]..self.inst_off[bi + 1]];
 }
@@ -237,10 +176,9 @@ fn buildCfg(self: *Analysis) Error!void {
     @memset(self.is_loop, false);
     @memset(self.loop_of, none_u32);
 
-    // Flatten the intrusive `next` chain ONCE (count, then fill — the same
-    // two-pass shape as `dom_kids`, so the pool never grows). Every later
-    // walk in `prepare` reads `blockInstsFlat` instead. Order is the chain
-    // order, which is emission order and therefore load-bearing.
+    // Flatten the intrusive `next` chain once (count, then fill, so the pool
+    // never grows). Order is the chain order, which is emission order and
+    // therefore load-bearing.
     self.inst_off = try a.alloc(u32, nb + 1);
     var n_insts: u32 = 0;
     for (0..nb) |bi| {
@@ -259,9 +197,9 @@ fn buildCfg(self: *Analysis) Error!void {
         }
     }
 
-    // Terminator + successors. ssa.zig warns that a phi may sit ANYWHERE in
-    // the chain (created on demand), so the terminator is found by opcode,
-    // not by position.
+    // Terminator + successors. A phi may sit anywhere in the chain (ssa.zig
+    // mints them on demand), so the terminator is found by opcode, not by
+    // position.
     var pred_count = try a.alloc(u32, nb);
     @memset(pred_count, 0);
     for (0..nb) |bi| {
@@ -331,11 +269,6 @@ fn buildCfg(self: *Analysis) Error!void {
             pred_count[s] += 1;
         }
     }
-    // SIMD TRIAGE — REJECTED on N, and the margin is three orders of magnitude.
-    // MEASURED over the 745 fixtures that compile: median `mir.blocks.len` is
-    // 1, p75 1, p90 7, p99 25, max 103. `preds` is a slice-of-slices, so the
-    // `.len` fields are not even contiguous; making them so would buy a loop
-    // whose median trip count is one.
     for (0..nb) |bi| self.is_merge[bi] = self.preds[bi].len > 1;
     self.is_merge[0] = false; // entry is never re-entered
 
@@ -370,8 +303,7 @@ fn buildCfg(self: *Analysis) Error!void {
         kid_count[p] += 1;
     }
 
-    // Merge-block dominator children, flattened in the same order the
-    // per-unit rebuild produced.
+    // Merge-block dominator children, flattened in `dom_kids` order.
     self.mk_off = try a.alloc(u32, nb + 1);
     var n_mk: u32 = 0;
     for (0..nb) |bi| {
@@ -392,8 +324,8 @@ fn buildCfg(self: *Analysis) Error!void {
         }
     }
 
-    // Euler tour of the dominator tree (explicit stack: 600 K-line models
-    // nest deeply enough to blow a recursive walk).
+    // Euler tour of the dominator tree (explicit stack: large models nest
+    // deeply enough to blow a recursive walk).
     self.dom_in = try a.alloc(u32, nb);
     self.dom_out = try a.alloc(u32, nb);
     @memset(self.dom_in, none_u32);
@@ -467,13 +399,12 @@ fn buildCfg(self: *Analysis) Error!void {
     // walk predecessors backwards from each back edge, stopping at the
     // header; every block reached is inside that loop.
     //
-    // NOT "everything the header dominates": that also covers the region
-    // past the loop's exit, so a model whose analog block opens with a `for`
-    // would lose hoisting for its entire body — which is the 182 MB output
-    // the shared core exists to prevent.
+    // Not "everything the header dominates": that also covers the region past
+    // the loop's exit, so a model whose analog block opens with a `for` would
+    // lose hoisting for its entire body.
     //
     // `rpo` visits an outer header before an inner one, and the first write
-    // wins, so `loop_of` ends up naming the OUTERMOST nest. That is what
+    // wins, so `loop_of` ends up naming the outermost nest. That is what
     // makes a nest one decision: re-materializing an inner loop needs the
     // outer loop's structure too, so they stand or fall together.
     var body: std.ArrayList(u32) = .empty;
@@ -509,8 +440,8 @@ fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
     return x;
 }
 
-/// `a` dominates `x` iff `x` sits inside `a`'s Euler-tour interval. Blocks
-/// outside the dominator tree (unreachable) dominate only themselves.
+/// Returns whether block `a` dominates block `x`. O(1) via the Euler-tour
+/// interval. Unreachable blocks dominate only themselves.
 pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
     const ia = self.dom_in[a];
     const ix = self.dom_in[x];
@@ -522,13 +453,10 @@ pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
 
 fn buildValueTypes(self: *Analysis) Error!void {
     const a = self.arena;
-    self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `prepare`
+    self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `buildStructure`
     self.def_block = try a.alloc(u32, self.nv);
     @memset(self.def_block, none_u32);
-    // No `vty` prefill: the base pass below assigns EVERY index in `0..nv`
-    // unconditionally (every arm of its switch yields a value, and `vty.len ==
-    // nv`), so a `.real` prefill was a second full pass writing bytes nothing
-    // ever read. See this wave's SIMD triage note above the base pass.
+    // No `vty` prefill: every arm of the base pass below assigns its index.
 
     for (0..self.nb) |bi| {
         for (self.blockInstsFlat(@intCast(bi))) |inst| {
@@ -538,22 +466,9 @@ fn buildValueTypes(self: *Analysis) Error!void {
         }
     }
 
-    // Base pass: constants and opcodes decide themselves.
-    //
-    // SIMD TRIAGE — REJECTED, and here is the measurement so it is not re-asked.
-    // It looks like a lane op (`DefKind` u8 in, `VTy` u8 out, no cross-element
-    // dependency), but it is not one, for two independent reasons:
-    //   - ELEMENT MIX. MEASURED over the 745 fixtures that compile: of 27,924
-    //     values, 69.3% are `inst_result` and 2.2% are `param_ref` — the two
-    //     arms that gather (`instOp`/`callTy`, `lower.params.items[p].ty`).
-    //     Only 28.5% of lanes are the pure kind→VTy map, so 5 in 7 elements
-    //     need a scalar fix-up whatever the load looks like.
-    //   - N. MEASURED: median `mir.defs.len` is 26 (nv 38), p99 198, max 917.
-    //     `suggestVectorLength(u8)` is 32 here, so the median fixture is one
-    //     partial vector. The skill's floor is a few hundred elements.
-    // Cost, MEASURED with callgrind over the same corpus (lint + codegen,
-    // ReleaseFast): this whole function is ~0.04% of pipeline instructions;
-    // analysis.zig + proof.zig + mir.zig together are 1.08%.
+    // Base pass: constants and opcodes decide themselves. Not a SIMD
+    // candidate: most elements gather (`instOp`, `params`), and value counts
+    // are small.
     try self.buildArrOf();
     var v: u32 = 0;
     while (v < self.nv) : (v += 1) {
@@ -578,13 +493,11 @@ fn buildValueTypes(self: *Analysis) Error!void {
         };
     }
     // Refine `select` and `phi` from their operands, to a fixpoint as
-    // `buildDeps` does. A fixed two sweeps was not enough: SSA construction
-    // creates a chain of joins outer-first, so the outer phi precedes its
-    // operand in value order and each sweep settles one more link. Three
-    // nested `if`s left the outer phi at `.real` while the held integer it
-    // carried was declared `integer` (ARPice docs/vera-gaps.md, `heldint`).
+    // `buildDeps` does: SSA construction creates a chain of joins outer-first,
+    // so the outer phi precedes its operand in value order and each sweep
+    // settles one more link.
     //
-    // Terminates: every refined value copies exactly ONE other value's type,
+    // Terminates: every refined value copies exactly one other value's type,
     // so the refined values form a functional graph. A chain settles one link
     // per sweep; a cycle (a loop-carried phi whose first operand leads back to
     // itself) is uniform after one sweep and then copies itself.
@@ -659,9 +572,8 @@ pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
 }
 
 test "a chain of joins built outer-first types every phi from the integer at its root" {
-    // ARPice docs/vera-gaps.md `heldint`: three nested `if`s, each join's
-    // first operand the join inside it, created outer-first as SSA
-    // construction does. Two sweeps in value order left `p3` at `.real`.
+    // Three nested `if`s, each join's first operand the join inside it,
+    // created outer-first as SSA construction does: two sweeps are not enough.
     const a = std.testing.allocator;
     var mir: Mir = .{};
     defer mir.deinit(a);
@@ -703,19 +615,20 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@intFromEnum(prod)]);
 }
 
+/// Returns the emitted type of `v`. Requires `build`, not `buildStructure`.
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
     return self.vty[@intFromEnum(v)];
 }
 
 // -------------------------------------------------- the derivative lattice --
 
-/// Fill `deps`: WHICH unknowns, and so also whether any (`dFree`). See `deps`.
+/// Fill `deps`: which unknowns, and so also whether any (`dFree`). See `deps`.
 ///
 /// Everything starts at no bits and a bit spreads from the probes outwards,
 /// so the fixpoint is monotone and cannot oscillate: the lattice only ever
 /// gains bits, and it terminates in at most (longest chain) sweeps. Value
 /// order is definition order except across a back edge, which is why this
-/// iterates rather than sweeping once — a loop-carried phi needs the round
+/// iterates rather than sweeping once: a loop-carried phi needs the round
 /// after its body.
 fn buildDeps(self: *Analysis) Error!void {
     // An unknown index ≥ 64 folds (see `deps`). Detected before the fixpoint
@@ -753,33 +666,26 @@ fn fixDeps(self: *const Analysis, stop: bool) Error![]u64 {
     return col;
 }
 
-/// One step of the lattice: `val`'s bits GIVEN the current answer for its
-/// operands in `col`. Every opcode is a function of its operands, so a result
-/// depends on a probe exactly when one of its operands does — every rule is
-/// "union of the operands whose derivative the contract propagates".
+/// One step of the lattice: `val`'s bits given the current answer for its
+/// operands in `col`. Every rule is "union of the operands whose derivative
+/// the contract propagates".
 fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) u64 {
     switch (self.mir.valueDef(self.rv(val))) {
-        // §4.4 access function: the probe IS x[u], so its derivative is the
+        // §4.4 access function: the probe is x[u], so its derivative is the
         // one unit vector.
         .block_param => |u| return @as(u64, 1) << @intCast(u & 63),
         .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
         .inst_result => |inst| {
             switch (self.mir.instData(inst)) {
                 .branch, .jump => return 0, // no result to speak of
-                // A call inherits from its ARGUMENTS and from nothing else.
-                // That holds for the whole of §4.5 — `ddt`, `idt`, `slew`,
-                // `transition` and the filters all propagate the derivative of
-                // the expression handed to them — and for ch9, where a systf's
-                // partials arrive through `SystfHost.call`. The one thing that
-                // would break it is a call reading a §4.4 probe the argument
-                // list does not name, and codegen has exactly one place that
-                // can spell a probe (`renderValueRef`'s `block_param` arm), so
-                // no rendering of a call reaches one.
-                //
-                // Not an optimisation for its own sake: `$temperature` is a
-                // call, so without this EVERY temperature-dependent parameter
-                // in a compact model is derivative-carrying — which is most of
-                // the prep in mos9 and all of it in BSIM4.
+                // A call inherits from its arguments and nothing else. That
+                // holds for all of §4.5 (each operator propagates the
+                // derivative of its argument) and for ch9, where a systf's
+                // partials arrive through `SystfHost.call`. A call cannot read
+                // a probe its arguments do not name: codegen spells a probe in
+                // one place only (`renderValueRef`'s `block_param` arm).
+                // Without this rule every `$temperature`-dependent parameter
+                // would carry a derivative.
                 .call => |c| {
                     var acc: u64 = 0;
                     for (c.args) |arg| acc |= self.depsIn(col, arg);
@@ -787,15 +693,14 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) 
                 },
                 .unary => |u| return if (stop and u.op == .dstop) 0 else self.depsIn(col, u.operand),
                 .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
-                // §4.2.12: the CONDITION does not matter. It selects between
+                // §4.2.12: the condition does not matter. It selects between
                 // arms rather than entering the value, so a conditional over
-                // two constants is constant however x steers it — the same
-                // reading `renderInst` already takes when it emits a Zig `if`
-                // — and `S.sel` lets the taken arm's derivative ride through.
+                // two constants is constant however x steers it, and `S.sel`
+                // lets the taken arm's derivative ride through.
                 .ternary => |t| return self.depsIn(col, t.then_val) | self.depsIn(col, t.else_val),
                 // §3.2.2 an array version carries the union of what was stored
                 // into it; a fresh one (zero, or the held `Instance` copy) is
-                // constant. The INDEX does not enter, for `select`'s reason:
+                // constant. The index does not enter, for `select`'s reason:
                 // it picks an element, and the picked element's derivative is
                 // what rides through.
                 .anew => return 0,
@@ -811,34 +716,22 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) 
     }
 }
 
-/// Is `v` independent of EVERY §4.4 probe, so that its derivative vanishes
-/// structurally? Resolves the alias first.
-///
-/// This is contract.zig's own rule for physics code — "everything not
-/// depending on x (param prep, temperature, geometry) stays plain f64; only
-/// x-dependent chains use S ops" — made available to the generator, which was
-/// the one writer of device code not following it.
-///
-/// It is worth a pass because `@setFloatMode(.strict)` forbids folding a
-/// multiply by a literal zero. A dual holding `splat(0)` therefore pays n_u
-/// real multiplies and an n_u-wide add at every operation it touches, and that
-/// arithmetic survives into the PTX (ARPice docs/gpu-device-eval.md §9.6).
-///
-/// Conservative in one direction only: `false` is always sound.
-///
-/// Not a table of its own: it is `deps[v] == 0`. It used to be a second
-/// `[]bool` fixpoint mirroring `defDeps` arm for arm — the same lattice twice.
+/// Returns whether `v` is independent of every §4.4 probe, so its derivative
+/// vanishes structurally (`deps[v] == 0`). Resolves the alias first.
+/// Conservative: `false` is always sound. Worth knowing because
+/// `@setFloatMode(.strict)` forbids folding a multiply by a literal zero, so a
+/// dual holding `splat(0)` would pay full-width arithmetic at every use.
 pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.depsOf(v) == 0;
 }
 
-/// Does `v`'s value vary with some §4.4 probe? `!dFree` except past a
-/// `dstop`, whose value varies while its derivative is zero.
+/// Returns whether `v`'s value varies with some §4.4 probe. `!dFree` except
+/// past a `dstop`, whose value varies while its derivative is zero.
 pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
     return self.depsIn(self.xdeps, v) != 0;
 }
 
-/// The raw word, folded or not — what the fixpoint and `dFree` read.
+/// The raw word, folded or not: what the fixpoint and `dFree` read.
 fn depsOf(self: *const Analysis, v: Mir.Value) u64 {
     return self.depsIn(self.deps, v);
 }
@@ -847,21 +740,20 @@ fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) u64 {
     return col[@intFromEnum(self.rv(v))];
 }
 
-/// Which unknowns `v`'s derivative can be nonzero in. All ones when the table
-/// is folded (an unknown index ≥ 64) — the sound answer, and the one that
-/// makes every consumer fall back to a dense Jacobian without a second code
-/// path.
+/// Returns which unknowns `v`'s derivative can be nonzero in. All ones when
+/// the table is folded (an unknown index ≥ 64), so consumers fall back to a
+/// dense Jacobian without a second code path.
 pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
     if (self.deps_folded) return std.math.maxInt(u64);
     return self.depsOf(v);
 }
 
-/// Is this block inside some loop's natural body?
+/// Returns whether `block` is inside some loop's natural body.
 pub fn inLoop(self: *const Analysis, block: u32) bool {
     return self.loop_of[block] != none_u32;
 }
 
-/// A phi whose result survives aliasing — the `phi_pool` filter, CFG-wide.
+/// A phi whose result survives aliasing: the `phi_pool` filter, CFG-wide.
 fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
     if (self.i_op[@intFromEnum(inst)] != .phi) return false;
     const r = self.i_res[@intFromEnum(inst)];
@@ -880,6 +772,8 @@ fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
     return r != .undef and self.rv(r) == r;
 }
 
+/// Returns the phi `inst`'s incoming value on the edge from block `from`, or
+/// `.undef` if it has none.
 pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
     const d = self.mir.instData(inst).phi;
     var i: u32 = 0;
@@ -891,10 +785,11 @@ pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
 }
 
 // ---------------------------------------------------------------------------
-// The VTy lattice — a Value's type is a property of the MIR, so both the
+// The VTy lattice: a Value's type is a property of the MIR, so both the
 // analysis that fills `vty` and the emitter that reads it use these.
 // ---------------------------------------------------------------------------
 
+/// Returns the emitted type of a §3.4 parameter declared with type `t`.
 pub fn tyOfParam(t: Ast.Type) VTy {
     return switch (t) {
         .real, .unspecified => .real,
@@ -903,26 +798,26 @@ pub fn tyOfParam(t: Ast.Type) VTy {
     };
 }
 
-/// A call's value type, by NAME: the `callee.zig` table's `ty` column, which
-/// `Lower.sysFuncTy` reads too, so the two sides of the MIR cannot disagree.
-/// For readers holding only a name; a MIR reader has `call.callee`.
+/// A call's value type by name, from `callee.zig`'s `ty` column. For readers
+/// holding only a name; a MIR reader has `call.callee`.
 fn callTy(name: []const u8) VTy {
     return Mir.callee.ty(Mir.Callee.fromName(name));
 }
 
 // ---------------------------------------------------------------------------
-// Constant folding — a property of the MIR, so it lives with the facts. Both
+// Constant folding: a property of the MIR, so it lives with the facts. Both
 // the emitter (parameter defaults, §4.5 operator control arguments) and the
 // per-unit planner fold through this.
 // ---------------------------------------------------------------------------
 
+/// A folded constant, as a real.
 pub const Folded = struct { f: f64 };
 
-/// §4.2 constant expression folding over MIR, used for parameter defaults
-/// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
-/// arguments. Anything touching an unknown or a call is not constant.
+/// Returns `v` as a §4.2 constant expression, or null. Used for parameter
+/// defaults (`parameter real b = a*2;`, §6.3.4) and §4.5 operator control
+/// arguments; anything touching an unknown or a call is not constant.
 /// `resolve_params` looks through a parameter to its declared default, which
-/// only a Model DEFAULT may do. O(1): a load from `folds`.
+/// only a Model default may do. O(1): a load from `folds`. Requires `build`.
 pub fn foldConst(self: *const Analysis, v: Mir.Value, resolve_params: bool) ?Folded {
     const c = self.folds[@intFromBool(resolve_params)][@intFromEnum(v)] orelse return null;
     return .{ .f = c.asReal() };
@@ -947,7 +842,7 @@ fn buildFolds(self: *Analysis) Error!void {
     }
 }
 
-/// `v`'s fold GIVEN the current answers for its operands. The operators are
+/// `v`'s fold given the current answers for its operands. The operators are
 /// the one constant kernel's (`opcode.fold`); this only decides which values
 /// are leaves.
 fn foldStep(self: *const Analysis, v: Mir.Value, col: []const ?Const, resolve_params: bool) ?Const {
@@ -959,7 +854,7 @@ fn foldStep(self: *const Analysis, v: Mir.Value, col: []const ?Const, resolve_pa
     switch (self.mir.valueDef(self.rv(v))) {
         .float_const => |x| return .{ .real = x },
         .int_const => |x| return .{ .int = x },
-        // Only a Model DEFAULT may look through a parameter: everywhere
+        // Only a Model default may look through a parameter: everywhere
         // else the value is whatever the host overrode it with.
         .param_ref => |p| return if (resolve_params) at(col, self.lowered.params.items[p].default) else null,
         .inst_result => |inst| switch (self.mir.instData(inst)) {
@@ -975,8 +870,8 @@ fn foldStep(self: *const Analysis, v: Mir.Value, col: []const ?Const, resolve_pa
                 const c = at(col, d.cond) orelse return null;
                 return at(col, if (c.isTrue()) d.then_val else d.else_val);
             },
-            // §9.15 a host-published `$simparam` under the SAME rule as
-            // `.param_ref` above: only a Model DEFAULT may look through it,
+            // §9.15 a host-published `$simparam` under the same rule as
+            // `.param_ref` above: only a Model default may look through it,
             // and what it sees is Table 9-27's declared value. That is what
             // `Model{}` means to a host that writes nothing; every other
             // reader gets `model.<field>` (codegen's `f64Const`), so the

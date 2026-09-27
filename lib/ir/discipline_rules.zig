@@ -1,5 +1,5 @@
 //! §3.6 disciplines and natures and §3.11.1 compatibility, read from the AST
-//! alone. The ONE owner of these rules: which declaration a discipline name
+//! alone. The one owner of these rules: which declaration a discipline name
 //! denotes (`declOf`), its domain (`domainOf`/`isContinuous`), its access
 //! spellings (`accessOf`), nature derivation (`baseNatureOf`/`idtNatureOf`)
 //! and §3.11.1 compatibility (`disciplineConflict`). Elaboration and lowering

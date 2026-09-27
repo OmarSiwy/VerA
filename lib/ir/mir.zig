@@ -1,27 +1,9 @@
-//! Class 4 — MIR (mid-level SSA IR). LRM §4.2 operators, §5 control flow.
-//! This is the engine's stable IR — the Zig-ZIR analogue in spirit.
-//!
-//! Transformation: lowering writes MIR; proof.zig reads it; codegen.zig walks it.
-//!
-//! DOD (this is the performance core):
-//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,block,tok}
-//!     (29 B/inst as SoA columns), NOT tagged unions in a linked list.
-//!   - Values, blocks, and the extra payload pool are separate SoA arrays.
-//!   - Every reference is a typed enum(u32) handle.
-//!   - Constants are deduped (fconst_map/iconst_map) at construction.
-//!
-//! CANONICALIZATION WARNING (for naming.zig / proof.zig): a Value's identity is
-//! its enum(u32) index, which RENUMBERS when the source changes. Never let that
-//! index leak into an emitted name or a content hash — canonicalize to stable
-//! leaf identities first (see naming.zig). Concretely: `v{@intFromEnum(v)}` in a
-//! declaration name or in a src_hash input reintroduces total-rebuild churn.
-//!
-//! DETERMINISM: every table here grows by append, so identical input yields
-//! identical indices. The two const maps and the alias map are LOOKUP-ONLY —
-//! never iterate them; HashMap iteration order is not part of the contract.
-//!
-//! This file IS the `Mir` struct (file-as-struct): `@import("mir.zig")` is both
-//! the namespace (`Mir.Value`, `Mir.Opcode`) and the value type (`mir: *Mir`).
+//! MIR, the SSA IR lowering writes and every later stage reads: §4.2
+//! operators, §4.3 math, §5.8/§5.9 control flow as blocks, phis and calls.
+//! Instructions, values and blocks are SoA columns addressed by typed
+//! `enum(u32)` handles; tables grow by append, so equal input gives equal
+//! indices. A Value index renumbers when the source changes, so it must never
+//! reach an emitted name or a content hash (naming.zig canonicalizes).
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -30,11 +12,15 @@ const assert = std.debug.assert;
 pub const opcode = @import("opcode.zig");
 /// What a `call` calls, and the per-callee fact table.
 pub const callee = @import("callee.zig");
+/// What a `call` calls (`callee.Callee`).
 pub const Callee = callee.Callee;
 
 const Mir = @This();
 
+/// Handle to an instruction row; `.none` ends a block's `next` chain.
 pub const Inst = enum(u32) { none = std.math.maxInt(u32), _ };
+/// Handle to an SSA value. Indices below `first_dynamic` are shared constants
+/// with no `defs` row.
 pub const Value = enum(u32) {
     // Reserved sentinels 0..9 (common constants); dynamic values from 10+.
     undef = 0,
@@ -54,19 +40,16 @@ pub const Value = enum(u32) {
     pub const first_dynamic: u32 = 10;
 
 };
+/// Handle to a basic block; block 0 is the entry.
 pub const Block = enum(u32) { entry = 0, _ };
-/// Interned string handle (call callees, §4.4 access names, ch9 sysfunc names).
-/// The SAME type the AST uses — one interning mechanism in the engine — but it
-/// indexes THIS Mir's `strings` table, not the AST's. `.none` is the absent
-/// sentinel. See `internString` / `strings.get`.
+/// Interned string handle (call names, §4.4 access names, ch9 arguments). The
+/// AST's type, but it indexes this Mir's `strings` table, not the AST's.
+/// `.none` is the absent sentinel.
 pub const StrId = Ast.StrId;
 
-/// Opcode set. LRM §4.2 (arith/rel/logic/bit/shift), §4.3 (math), casts.
-/// Closed enum → switch in hot loops (no vtable). Smallest tag. Every opcode
-/// has a row of IR facts in `opcode.zig`; adding one here is a compile error
-/// there until the row exists.
-///
-/// Naming convention: a leading `f` is the real-valued form, a leading `i` the
+/// Opcode set: §4.2 arithmetic, relational, logical, bitwise and shift
+/// operators, §4.3 math, casts. Every opcode has a row of facts in
+/// `opcode.zig`. Naming: a leading `f` is the real-valued form, a leading `i` the
 /// integer form. Math functions (§4.3) are always real-valued and carry the
 /// bare LRM name.
 pub const Opcode = enum(u8) {
@@ -147,37 +130,32 @@ pub const Opcode = enum(u8) {
     // --- casts §4.2.1.1 (real→integer, rounds) / §4.2.1.2 (integer→real) ---
     fi_cast,
     if_cast,
-    /// Optimization fence (no LRM basis, engine-internal): stops
-    /// codegen from folding/reassociating across it. Unary, value-preserving.
+    /// Optimization fence (engine-internal): stops codegen from folding or
+    /// reassociating across it. Unary, value-preserving.
     opt_barrier,
     /// Derivative stop (no LRM basis; VerA's `vera_nodiff` attribute, §2.9):
     /// the operand's value with every derivative lane zero. So its `deps` is
     /// empty although the value still varies with x (`Analysis.xDep`).
     dstop,
-    /// Committed-value latch (no LRM basis, engine-internal): reads the
-    /// Instance field `pb__<k>` holding the OPERAND's value at the last
-    /// accepted solve (`stateCtl(.commit)`); gradient zero. Exists for
-    /// §5.6.1.2 path-integrated reactive terms `A*ddt(B)` (ngspice
-    /// NIintegrate semantics, mesaload.c:341-344): q = path_acc + A·(B −
-    /// path_prev(B)), so the charge increment is A·ΔB — the capacitance
-    /// form — and dA rides the Jacobian only multiplied by ΔB, which is 0
-    /// at every committed point (AC sees exactly A·∂B/∂x) and O(dt) inside
-    /// a step (the legitimate Newton term).
+    /// Committed-value latch (engine-internal): reads the Instance field
+    /// `pb__<k>`, the operand's value at the last accepted solve; gradient
+    /// zero. Serves §5.6.1.2 path-integrated reactive terms `A*ddt(B)`:
+    /// q = path_acc + A·(B - path_prev(B)), so the charge increment is A·ΔB
+    /// (the capacitance form) and dA reaches the Jacobian only times ΔB,
+    /// which is 0 at every committed point (AC sees exactly A·∂B/∂x).
     path_prev,
-    /// Committed accumulator latch: reads `pq__<k>`, the SUM of the
-    /// operand's values over all accepted solves (`stateCtl(.commit)` does
-    /// `pq += operand`); gradient zero. Carries the path-integrated charge
-    /// base Σ A·ΔB for the `path_prev` scheme above. Because the base is
-    /// FIXED across one Newton attempt, the reactive residual is one smooth
-    /// function per attempt: its opening residual at the previous accepted
-    /// point is identically zero and its AD Jacobian is exact.
+    /// Committed accumulator latch: reads `pq__<k>`, the sum of the operand's
+    /// values over all accepted solves; gradient zero. Carries the charge base
+    /// Σ A·ΔB for `path_prev`. The base is fixed across one Newton attempt, so
+    /// the reactive residual is one smooth function per attempt and its AD
+    /// Jacobian is exact.
     path_acc,
     // --- value-form conditional §4.2.12 (`?:` that needs no CFG split) ---
     select,
     // --- §3.2.2 memory-backed arrays (`Lowered.mem_arrays`) ---
-    /// A fresh version of array `a` (an index into `Lowered.mem_arrays`, NOT a
-    /// Value): every element zero, or — for a §5.10 held array — the values
-    /// the last accepted evaluation left in its `Instance` field.
+    /// A fresh version of array `a` (an index into `Lowered.mem_arrays`, not a
+    /// Value): every element zero, or for a §5.10 held array the values the
+    /// last accepted evaluation left in its `Instance` field.
     anew,
     /// Element `b` of array version `a`; real / integer by the array's type.
     /// `b` is the flat element index, and any index outside `0..len` reads
@@ -185,11 +163,10 @@ pub const Opcode = enum(u8) {
     /// `runtimeArrayIndex` encodes an invalid subscript as -1).
     fload,
     iload,
-    /// Array version `a` with element `b` set to `c`: a NEW version. An index
+    /// Array version `a` with element `b` set to `c`: a new version. An index
     /// outside `0..len` writes nothing. Every version of one array shares one
-    /// storage, so a version is dead once a store has been made from it —
-    /// lowering never reads an older one, and no pass may make one live
-    /// again (if-conversion keeps any arm that stores).
+    /// storage, so a version is dead once a store has been made from it; no
+    /// pass may make one live again (if-conversion keeps any arm that stores).
     store,
     // --- control §5.8/§5.9 ---
     phi,
@@ -198,6 +175,7 @@ pub const Opcode = enum(u8) {
     call,
 };
 
+/// Operand shape of an opcode; selects the `InstData` variant.
 pub const OpClass = enum(u8) { unary, binary, ternary, phi, branch, jump, call, anew, load, store };
 
 /// Operand shape of an opcode. Drives `instData` decoding.
@@ -205,8 +183,8 @@ pub fn opClass(op: Opcode) OpClass {
     return opcode.get(op).class;
 }
 
-/// Does `op` produce an integer (LRM §3.2 integer) rather than a real?
-/// Relational/equality/logical operators yield integer 0/1 (§4.2.5, §4.2.8).
+/// Returns whether `op` yields a §3.2 integer rather than a real.
+/// Relational, equality and logical operators yield integer 0/1 (§4.2.5, §4.2.8).
 pub fn opIsInteger(op: Opcode) bool {
     return opcode.get(op).int;
 }
@@ -236,39 +214,31 @@ pub const InstRow = struct {
     /// The block whose `next` chain links this row. Never set by a caller:
     /// `addInst` stamps it and every relink restamps it.
     block: Block = .entry,
-    /// PROVENANCE: index of the token this instruction came from, for
-    /// diagnostics, or `no_tok`. Never set by a caller — `addInst` stamps it
-    /// from `Mir.cur_tok` (see there).
-    ///
-    /// DOD: this is a COLD column. `insts` is a MultiArrayList, so the bytes
-    /// live in their own run and no hot walk that asks for `.op`/`.a`/`.b`
-    /// touches them. It costs 4 bytes per instruction of memory and nothing
-    /// per instruction of bandwidth — which is what buys class-6 diagnostics
-    /// a source location at all (they used to report at line 0, column 0).
+    /// Index of the token this instruction came from, for diagnostics, or
+    /// `no_tok`. Never set by a caller: `addInst` stamps it from `cur_tok`.
+    /// A cold column; `instData` does not read it.
     tok: u32 = no_tok,
 };
 
-/// "This instruction has no AST origin" — a constant materialised by the SSA
-/// builder, say. It must NOT be spelled 0: token 0 is a real token (the first
-/// one in the file), so a zero default silently pointed every unattributed
-/// instruction at the top of the annex-D prelude, and diagnostics labelled
-/// themselves `discipline \logic ;`.
+/// "This instruction has no AST origin", such as a constant the SSA builder
+/// materialised. Not 0, because token 0 is the first real token of the file.
 pub const no_tok: u32 = std.math.maxInt(u32);
 
+/// First and last instruction of a block's `next` chain; `.none` when empty.
 pub const BlockRow = struct { first: Inst = .none, last: Inst = .none };
 
-/// How a Value came to be. Hot: proof.zig switches on this per value.
+/// How a Value came to be.
 pub const DefKind = enum(u8) {
     undef,
     float_const, // §4.2 constant expression, real
     int_const, // §4.2 constant expression, integer
     str_const, // §2.7 string literal (ch9 format args, §4.4 names)
-    param_ref, // §3.4 parameter — index into Lowered.params
+    param_ref, // §3.4 parameter: index into Lowered.params
     block_param, // §4.4 probe: index into the unknown vector (Lowered.nodes)
     inst_result, // result of an instruction
 };
 
-/// Decoded definition of a Value (see `valueDef`). Not stored — built on read.
+/// Decoded definition of a Value (see `valueDef`). Built on read, never stored.
 pub const Def = union(DefKind) {
     undef,
     float_const: f64,
@@ -299,42 +269,36 @@ pub const InstData = union(OpClass) {
     store: struct { arr: Value, index: Value, value: Value },
 };
 
+/// One phi operand: the value flowing in from predecessor `block`.
 pub const PhiPair = struct { block: Block, value: Value };
 
+/// The lowered module's name.
 name: []const u8 = "",
-/// IEEE 1364 §19.1, carried over by §10.1: was this module's declaration inside
-/// a `` `celldefine ``/`` `endcelldefine `` pair?
-///
-/// A TAG and nothing else — the directives change no semantics, which is why
-/// this is one bit beside the name rather than anything the lowering branches
-/// on. It exists so the fact survives the preprocessor: a cell module is a
-/// library cell, and the tools that care (a timing library, a dump filter, a
-/// netlister) ask the compiler because the source no longer says. `Lower` sets
-/// it from the positional `` `celldefine `` regions; ask any OTHER module's the
-/// same way, with `Preprocessor.CellRegion.inForce`.
+/// IEEE 1364 §19.1 (via §10.1): the module was declared inside a
+/// `` `celldefine ``/`` `endcelldefine `` pair. A tag only; nothing branches on
+/// it. It carries the fact past the preprocessor for tools that ask. For any
+/// other module, ask `Preprocessor.CellRegion.inForce`.
 is_cell: bool = false,
-/// PROVENANCE CURSOR. Whoever builds the MIR sets this to the token index of
-/// the AST node currently being lowered; `addInst` stamps it onto every row.
-///
-/// A cursor rather than a parameter on `emit`, because lowering emits from
-/// hundreds of call sites but visits AST nodes from a handful — one assignment
-/// per node beats threading a token through every operand helper, and there is
-/// no way for the two to disagree.
+/// Provenance cursor: the builder sets it to the token of the AST node being
+/// lowered, and `addInst` stamps it onto every row. A cursor rather than an
+/// `emit` parameter because lowering emits from hundreds of sites but visits
+/// AST nodes from a handful.
 cur_tok: u32 = no_tok,
+/// Instruction rows, indexed by `Inst`.
 insts: std.MultiArrayList(InstRow) = .empty,
+/// Block rows, indexed by `Block`.
 blocks: std.MultiArrayList(BlockRow) = .empty,
 /// Definition of every dynamic Value; index = @intFromEnum(v) - first_dynamic.
 defs: std.MultiArrayList(ValueRow) = .empty,
-/// Shared variable-length payload pool (call args, phi operands). SoA.
-/// (0.16: `std.ArrayList` IS the unmanaged list; `ArrayListUnmanaged` is the
-/// deprecated alias. Same spelling as ast.zig.)
+/// Shared variable-length payload pool (call args, phi operands).
 extra: std.ArrayList(u32) = .empty,
-/// String table — the AST's interner type, so "interned string" has one shape
-/// engine-wide. Slices are NOT copied: they must outlive the Mir (arena).
+/// String table (the AST's interner type). Slices are not copied: they must
+/// outlive the Mir.
 strings: Ast.StringInterner = .empty,
-/// Constant dedup (LRM §4 constant expressions). Cold maps, build-time only.
-/// Keyed by exact bits so -0.0 / 0.0 stay distinct and NaN payloads survive.
+/// Constant dedup, keyed by exact bits so -0.0 / 0.0 stay distinct and NaN
+/// payloads survive. Lookup only: iteration order is not deterministic.
 fconst_map: std.AutoHashMapUnmanaged(u64, Value) = .empty,
+/// Integer constant dedup. Lookup only.
 iconst_map: std.AutoHashMapUnmanaged(i64, Value) = .empty,
 /// Trivial-phi aliases (ssa.zig `tryRemoveTrivialPhi`). Union-find parent array
 /// parallel to `defs` (index = value - first_dynamic); an entry equal to its own
@@ -342,6 +306,7 @@ iconst_map: std.AutoHashMapUnmanaged(i64, Value) = .empty,
 /// emits a decl for them.
 alias: std.ArrayList(Value) = .empty,
 
+/// Frees every table. Keeps `name`, which the Mir does not own.
 pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
     self.insts.deinit(gpa);
     self.blocks.deinit(gpa);
@@ -356,7 +321,7 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
 
 // ---------------------------------------------------------------- values ----
 
-/// Register a new dynamic Value. Prefer the typed helpers below.
+/// Registers a new dynamic Value. Prefer the typed helpers below.
 fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Value {
     const i = self.defs.len + Value.first_dynamic;
     assert(i < std.math.maxInt(u32));
@@ -366,7 +331,7 @@ fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Va
     return v;
 }
 
-/// LRM §4.2 real constant, deduped. Common literals map onto the sentinels so
+/// Returns the §4.2 real constant `x`, deduped. Common literals map onto the sentinels so
 /// two spellings of `1.0` are the same Value in every compilation.
 pub fn addFloatConst(self: *Mir, gpa: std.mem.Allocator, x: f64) !Value {
     const bits: u64 = @bitCast(x);
@@ -384,7 +349,7 @@ pub fn addFloatConst(self: *Mir, gpa: std.mem.Allocator, x: f64) !Value {
     return gop.value_ptr.*;
 }
 
-/// LRM §4.2 integer constant, deduped.
+/// Returns the §4.2 integer constant `x`, deduped; 0, 1 and -1 are sentinels.
 pub fn addIntConst(self: *Mir, gpa: std.mem.Allocator, x: i64) !Value {
     switch (x) {
         0 => return .zero,
@@ -398,7 +363,7 @@ pub fn addIntConst(self: *Mir, gpa: std.mem.Allocator, x: i64) !Value {
     return gop.value_ptr.*;
 }
 
-/// LRM §2.7 string literal. The string itself is deduped by the interner; the
+/// Returns a §2.7 string literal Value. `bytes` must outlive the Mir. The string itself is deduped by the interner; the
 /// Value wrapper is not (a handful per module, and identical strings are
 /// behaviorally interchangeable).
 pub fn addStrConst(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !Value {
@@ -406,12 +371,12 @@ pub fn addStrConst(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !Value
     return self.addValue(gpa, .str_const, @intFromEnum(s));
 }
 
-/// LRM §3.4 parameter reference. `param` indexes Lowered.params.
+/// Returns a §3.4 parameter reference. `param` indexes `Lowered.params`.
 pub fn addParamRef(self: *Mir, gpa: std.mem.Allocator, param: u32) !Value {
     return self.addValue(gpa, .param_ref, param);
 }
 
-/// LRM §4.4 signal-access probe. `unknown` indexes the solver unknown vector
+/// Returns a §4.4 signal-access probe. `unknown` indexes the solver unknown vector
 /// (Lowered.nodes → the generated `U` enum, i.e. codegen's `x[unknown]`).
 /// V(a,b) lowers to fsub of two probes; a branch-current unknown gets its own
 /// `nodes` row.
@@ -419,14 +384,15 @@ pub fn addBlockParam(self: *Mir, gpa: std.mem.Allocator, unknown: u32) !Value {
     return self.addValue(gpa, .block_param, unknown);
 }
 
-/// Intern a name into this Mir's table. `bytes` is BORROWED (arena / source
-/// buffer) and must outlive the Mir. Idempotent, so the same callee name is one
+/// Interns a name into this Mir's table. `bytes` is borrowed and must outlive
+/// the Mir. Idempotent, so the same callee name is one
 /// StrId no matter how many call sites use it.
 pub fn internString(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !StrId {
     return self.strings.intern(gpa, bytes);
 }
 
-/// Definition of `value`. Sentinels are decoded without a table lookup.
+/// Returns the decoded definition of `value`. A `.str_const` slice borrows
+/// the string table.
 pub fn valueDef(self: *const Mir, value: Value) Def {
     switch (value) {
         .undef => return .undef,
@@ -453,7 +419,8 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
     };
 }
 
-/// Kind of `value`, read from the `kind` column without decoding the payload.
+/// Returns the kind of `value`, read from the `kind` column without decoding
+/// the payload.
 pub fn valueKind(self: *const Mir, value: Value) DefKind {
     return switch (value) {
         .undef => .undef,
@@ -465,26 +432,26 @@ pub fn valueKind(self: *const Mir, value: Value) DefKind {
 
 // --------------------------------------------------------------- aliases ----
 
-/// Record `from` ≡ `to` (ssa.zig trivial-phi removal). Idempotent overwrite.
-/// `from` is always a dynamic Value (a phi result); `to` may be a sentinel.
+/// Records `from` ≡ `to` (ssa.zig trivial-phi removal); overwrites.
+/// `from` must be a dynamic Value (a phi result); `to` may be a sentinel.
+/// Asserts that `from != to`.
 pub fn setAlias(self: *Mir, from: Value, to: Value) void {
     assert(from != to); // a self-alias would make resolveAlias non-terminating
     assert(@intFromEnum(from) >= Value.first_dynamic);
     self.alias.items[@intFromEnum(from) - Value.first_dynamic] = to;
 }
 
-/// True if `value` was collapsed onto another (codegen skips its decl).
+/// Returns whether `value` was collapsed onto another (codegen skips its decl).
 pub fn hasAlias(self: *const Mir, value: Value) bool {
     const i = @intFromEnum(value);
     if (i < Value.first_dynamic) return false;
     return self.alias.items[i - Value.first_dynamic] != value;
 }
 
-/// Follow the alias chain to the surviving Value. Union-find with path
-/// compression, so a chain is walked at full length at most once.
-///
-/// `*const` but mutates `alias`: compression is pure memoization, the resolved
-/// value is unchanged. Zig's const is shallow, so the slice pointee is writable.
+/// Returns the Value `value` aliases to at the end of its chain. Union-find
+/// with path compression: amortized near O(1).
+/// Takes `*const` but writes `alias` (compression), so it is not safe to call
+/// concurrently on one Mir. Asserts the chain has no cycle.
 pub fn resolveAlias(self: *const Mir, value: Value) Value {
     const fd = Value.first_dynamic;
     if (@intFromEnum(value) < fd) return value;
@@ -511,6 +478,7 @@ pub fn resolveAlias(self: *const Mir, value: Value) Value {
 
 // ---------------------------------------------------------------- blocks ----
 
+/// Appends an empty block.
 pub fn addBlock(self: *Mir, gpa: std.mem.Allocator) !Block {
     const i = self.blocks.len;
     assert(i < std.math.maxInt(u32));
@@ -518,14 +486,17 @@ pub fn addBlock(self: *Mir, gpa: std.mem.Allocator) !Block {
     return @enumFromInt(@as(u32, @intCast(i)));
 }
 
+/// Returns the number of blocks.
 pub fn blockCount(self: *const Mir) u32 {
     return @intCast(self.blocks.len);
 }
 
+/// Iterator over block handles `0..count`.
 pub const BlockIterator = struct {
     count: u32,
     i: u32 = 0,
 
+    /// Returns the next block, or null past the last.
     pub fn next(it: *BlockIterator) ?Block {
         if (it.i >= it.count) return null;
         defer it.i += 1;
@@ -533,17 +504,19 @@ pub const BlockIterator = struct {
     }
 };
 
-/// Blocks in creation order — the deterministic codegen walk order.
+/// Returns the blocks in creation order, the deterministic codegen walk order.
 pub fn blockIter(self: *const Mir) BlockIterator {
     return .{ .count = self.blockCount() };
 }
 
+/// Iterator over one block's instruction chain.
 pub const InstIterator = struct {
     /// Borrowed `next` column. Adding instructions invalidates it: iterate only
     /// after the block is built (codegen/proof are read-only passes).
     next_col: []const Inst,
     cur: Inst,
 
+    /// Returns the next instruction, or null at the end of the chain.
     pub fn next(it: *InstIterator) ?Inst {
         if (it.cur == .none) return null;
         const out = it.cur;
@@ -565,7 +538,7 @@ pub fn blockLast(self: *const Mir, block: Block) Inst {
     return self.blocks.items(.last)[@intFromEnum(block)];
 }
 
-/// Unlink every instruction of `from` after `after` (all of them when `after`
+/// Unlinks every instruction of `from` after `after` (all of them when `after`
 /// is `.none`) and relink them, in order, in front of `to`'s terminator. For a
 /// value computed after a join that one incoming edge has to carry: the
 /// operands must already be available at the end of `to`. True when there is
@@ -596,7 +569,7 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     return true;
 }
 
-/// Remove `inst` from `block`'s chain; the rows after it stay linked. The row
+/// Removes `inst` from `block`'s chain; the rows after it stay linked. The row
 /// is orphaned, not reused.
 pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
     const next = self.insts.items(.next);
@@ -612,7 +585,7 @@ pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
     next[@intFromEnum(inst)] = .none;
 }
 
-/// Relink every row of `from`, in order, at the end of `to`; `from` is left
+/// Relinks every row of `from`, in order, at the end of `to`; `from` is left
 /// empty.
 pub fn splice(self: *Mir, to: Block, from: Block) void {
     assert(to != from);
@@ -632,13 +605,13 @@ pub fn splice(self: *Mir, to: Block, from: Block) void {
 
 // ---------------------------------------------------------- instructions ----
 
-/// Append `row` to the end of `block` and link it in. Caller sets row.result
+/// Appends `row` to the end of `block` and links it in. Caller sets row.result
 /// (use `emit` to get a fresh result Value automatically).
 fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst {
     const i = self.insts.len;
     assert(i < std.math.maxInt(u32) - 1); // maxInt is Inst.none
     var stamped = row;
-    stamped.tok = self.cur_tok; // provenance — see InstRow.tok and cur_tok
+    stamped.tok = self.cur_tok; // provenance: see InstRow.tok and cur_tok
     stamped.block = block;
     try self.insts.append(gpa, stamped);
     const inst: Inst = @enumFromInt(@as(u32, @intCast(i)));
@@ -654,8 +627,9 @@ fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst
     return inst;
 }
 
-/// The workhorse: append a value-producing instruction and return its result.
-/// `ops` is 1..3 operands (see InstRow's encoding table).
+/// Appends a value-producing instruction to `block` and returns its result.
+/// Asserts that `ops` matches `op`'s class (see `InstRow`'s encoding table);
+/// phi, branch, jump, call and anew have their own builders.
 pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: []const Value) !Value {
     assert(ops.len >= 1 and ops.len <= 3);
     assert(switch (opClass(op)) {
@@ -677,7 +651,7 @@ pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: [
     return result;
 }
 
-/// §3.2.2 a fresh version of memory-backed array `array` (see `Opcode.anew`).
+/// Returns a fresh version of §3.2.2 memory-backed array `array` (see `Opcode.anew`).
 pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !Value {
     const result = try self.addValue(gpa, .inst_result, 0);
     const inst = try self.addInst(gpa, block, .{ .op = .anew, .a = array, .result = result });
@@ -685,7 +659,7 @@ pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !V
     return result;
 }
 
-/// LRM §5.8 two-way branch. Terminator; no result.
+/// Appends a §5.8 two-way branch, the block's terminator.
 pub fn emitBranch(self: *Mir, gpa: std.mem.Allocator, block: Block, cond: Value, then_block: Block, else_block: Block) !Inst {
     return self.addInst(gpa, block, .{
         .op = .branch,
@@ -695,14 +669,14 @@ pub fn emitBranch(self: *Mir, gpa: std.mem.Allocator, block: Block, cond: Value,
     });
 }
 
-/// LRM §5.9 unconditional jump. Terminator; no result.
+/// Appends a §5.9 unconditional jump, the block's terminator.
 pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block) !Inst {
     return self.addInst(gpa, block, .{ .op = .jump, .a = @intFromEnum(target) });
 }
 
-/// LRM §4.3/§4.5/§4.7/ch9 call by name (math builtin, analog operator, UDF,
-/// system function). `name` spells it; this is where it becomes a `Callee`,
-/// once, for every consumer. The raw name is kept for `.systf`.
+/// Appends a call by name (§4.3 math, §4.5 analog operator, §4.7 function,
+/// ch9 system function) and returns its result. The one place a name becomes
+/// a `Callee`; the raw name is kept for `.systf`.
 pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, args: []const Value) !Value {
     const start = try self.addExtra(gpa, &.{@intFromEnum(name)});
     _ = try self.addExtra(gpa, @ptrCast(args));
@@ -718,8 +692,8 @@ pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, a
     return result;
 }
 
-/// LRM §5.8/§5.9 phi. `pairs` may be empty for an incomplete phi (Braun);
-/// fill it later with `setPhiPairs`.
+/// Appends a phi and returns its result. `pairs` may be empty for an
+/// incomplete phi (Braun et al.); fill it later with `setPhiPairs`.
 pub fn emitPhi(self: *Mir, gpa: std.mem.Allocator, block: Block, pairs: []const PhiPair) !Value {
     const start = try self.addExtraPairs(gpa, pairs);
     const result = try self.addValue(gpa, .inst_result, 0);
@@ -733,44 +707,48 @@ pub fn emitPhi(self: *Mir, gpa: std.mem.Allocator, block: Block, pairs: []const 
     return result;
 }
 
-/// Replace a phi's operand list (Braun: sealBlock fills incomplete phis).
-/// ponytail: appends a fresh region and abandons the old one — a few dead u32s
-/// per filled phi. Compact the pool only if `extra` ever shows up in a profile.
+/// Replaces a phi's operand list (`sealBlock` fills incomplete phis).
+/// Asserts that `inst` is a phi. Invalidates slices previously returned by
+/// `instData`.
 pub fn setPhiPairs(self: *Mir, gpa: std.mem.Allocator, inst: Inst, pairs: []const PhiPair) !void {
+    // ponytail: appends a fresh region and abandons the old one, a few dead
+    // u32s per filled phi. Compact the pool only if `extra` shows in a profile.
     assert(self.insts.items(.op)[@intFromEnum(inst)] == .phi);
     const start = try self.addExtraPairs(gpa, pairs);
     self.insts.items(.b)[@intFromEnum(inst)] = start;
     self.insts.items(.c)[@intFromEnum(inst)] = @intCast(pairs.len);
 }
 
-/// Gathers every column, the cold `tok` and `next` included; a hot walk
-/// decodes through `instData` instead.
+/// Returns every column of `inst`, the cold `tok` and `next` included; a hot
+/// walk decodes through `instData` instead.
 pub fn instRow(self: *const Mir, inst: Inst) InstRow {
     return self.insts.get(@intFromEnum(inst));
 }
 
-/// Token this instruction was lowered from — the class-6 diagnostic location,
-/// or `no_tok` when it has no AST origin.
+/// Returns the token `inst` was lowered from (the finiteness diagnostics'
+/// location), or `no_tok` when it has no AST origin.
 pub fn instTok(self: *const Mir, inst: Inst) u32 {
     return self.insts.items(.tok)[@intFromEnum(inst)];
 }
 
+/// Returns the opcode of `inst`.
 pub fn instOp(self: *const Mir, inst: Inst) Opcode {
     return self.insts.items(.op)[@intFromEnum(inst)];
 }
 
-/// The block `inst` is linked into.
+/// Returns the block `inst` is linked into.
 pub fn instBlock(self: *const Mir, inst: Inst) Block {
     return self.insts.items(.block)[@intFromEnum(inst)];
 }
 
-/// The Value this instruction defines, or `.undef` for terminators.
+/// Returns the Value `inst` defines, or `.undef` for a terminator.
 pub fn instResult(self: *const Mir, inst: Inst) Value {
     return self.insts.items(.result)[@intFromEnum(inst)];
 }
 
-/// Decoded view of one instruction. Switch on the class, not on raw a/b/c.
-/// Reads only the `op`/`a`/`b`/`c` columns, never the cold `tok`/`next`.
+/// Returns the decoded view of `inst`. A call's `args` borrows `extra` and is
+/// invalidated by any later append to the pool. Reads only the `op`/`a`/`b`/`c`
+/// columns.
 pub fn instData(self: *const Mir, inst: Inst) InstData {
     const i = @intFromEnum(inst);
     const row: struct { op: Opcode, a: u32, b: u32, c: u32 } = .{
@@ -814,7 +792,7 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
     };
 }
 
-/// Operand `i` of a phi (0..count-1 from `instData(...).phi`).
+/// Returns operand `i` of a phi (0..count-1 from `instData(...).phi`).
 pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
     const n = @intFromEnum(inst);
     assert(self.insts.items(.op)[n] == .phi and i < self.insts.items(.c)[n]);
@@ -827,7 +805,8 @@ pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
 
 // ----------------------------------------------------------- extra pool ----
 
-/// Append raw u32s; returns the start index. Prefer the typed wrappers.
+/// Appends raw u32s and returns the start index. Prefer the typed wrappers.
+/// Invalidates slices previously returned by `instData`.
 pub fn addExtra(self: *Mir, gpa: std.mem.Allocator, words: []const u32) !u32 {
     const start = self.extra.items.len;
     assert(start < std.math.maxInt(u32));
