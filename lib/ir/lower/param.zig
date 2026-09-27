@@ -4,9 +4,6 @@
 //! ranges for proof.zig, and the variable slots the statement lowering assigns.
 //!
 //! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.1, §3.4.2, §3.4.4, §5.3.2, §5.10, §6.3.4, §6.6.1.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_param.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -57,12 +54,8 @@ pub const State = struct {
 /// are.
 const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
 
-// ---------------------------------------------------------------------------
-// Class 3 — parameters (LRM §3.4) and variables (§3.2)
-// ---------------------------------------------------------------------------
-
-/// LRM §3.4. Register a parameter: infer its type (§3.4.1), fold its default,
-/// and COPY decl.ranges into ParamInfo.ranges (§3.4.2 — the class-6 evidence).
+/// Registers a parameter: infers its type (§3.4.1), folds its default, and
+/// copies `decl.ranges` into `ParamInfo.ranges` for the prover (LRM §3.4, §3.4.2).
 pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     const name = self.file.str(decl.name);
 
@@ -89,8 +82,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // the dependent must follow an override of its base) — so what is policed
     // is the part no parameter dependence can excuse: a read of the operating
     // point or the simulation state, which has no value a model card could
-    // carry. Without this, `parameter real bad = $abstime;` compiled and the
-    // card silently read 0.0. Reported and then lowered anyway, like E0347.
+    // carry (`parameter real bad = $abstime;` would read 0.0). Reported and
+    // then lowered anyway, like E0347.
     if (simStateInDefault(self, decl.default)) |what| {
         try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
@@ -112,7 +105,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     const folded = over orelse declared;
     // §4.2.1.1 converts by "rounding the real number to the nearest integer",
     // and an infinity or a NaN has none: `parameterConst` leaves such a value
-    // real, and it used to reach the card as i64's saturation value.
+    // real, so it is refused here rather than saturated on the card.
     if (decl.ty == .integer) if (folded) |c| if (c == .real and !std.math.isFinite(c.real))
         try self.err(decl.main_tok, .E0368, "`{s}` = {d}", .{ name, c.real });
     try checkParamType(self, decl, name, folded);
@@ -137,12 +130,11 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // §6.3.4: "an update of gate_width, whether by a defparam statement or in
     // an instantiation statement for the module which defined these parameters,
     // automatically updates gate_cap". So a default that MENTIONS another
-    // parameter may NOT be frozen at the number it folds to under that
-    // parameter's declared default — the host overrides the base after
-    // elaboration and the dependent has to follow it. `foldExpr(..., false)` is precisely
-    // the fold that refuses to look through a parameter, so it is the "may this
-    // be baked into the model card?" test; `folded` above cannot be, for the
-    // §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
+    // parameter may not be frozen at its folded value: the host overrides the
+    // base after elaboration and the dependent has to follow it.
+    // `foldExpr(..., false)` refuses to look through a parameter, so it is the
+    // "may this be baked into the model card?" test; `folded` above cannot be,
+    // for the §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
     const default = if (over) |c| switch (c) {
         .int => |n| try self.mir.addIntConst(self.arena, n),
         .real => |n| try self.mir.addFloatConst(self.arena, n),
@@ -322,28 +314,19 @@ fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, fo
     });
 }
 
-/// §3.4.7's other form: `aliasparam m = $mfactor;`, which the clause prints
-/// beside `aliasparam trise = dtemp;` and which Syntax 3-2 does not cover —
-/// `aliasparam_declaration ::= aliasparam parameter_identifier =
-/// parameter_identifier ;` has an identifier on the right, so the form only
-/// exists in the clause's prose. It exists because "m" is what a SPICE netlist
-/// calls the shunt multiplicity and `$mfactor` is what §9.18 calls it, and a
-/// model has to answer to both spellings.
+/// Declares §3.4.7's `aliasparam m = $mfactor;` form, which the clause prints
+/// but Syntax 3-2 (identifier on the right) does not cover. Returns false when
+/// `target` is not `$mfactor`.
 ///
-/// THE ALIAS GETS THE STORAGE, which is the one design call here. §3.4.7 makes
-/// an alias a second name for one location, and §9.18's `$mfactor` has no
-/// location on VerA's model card at all — it is an `Instance` field the host
-/// writes, because §6.3.6 has the host scale the whole stamp by it. So the way
-/// to give the two names one location is the other direction: the alias becomes
-/// an ordinary real parameter (Table 9-29's top-level 1.0 as its default, which
-/// is exactly the value `$mfactor` had before anyone aliased it) and `$mfactor`
-/// reads it (`lowerSysCall`).
+/// The alias gets the storage: §9.18's `$mfactor` has no model-card location
+/// (it is an `Instance` field the host writes, §6.3.6), so the alias becomes an
+/// ordinary real parameter defaulting to Table 9-29's top-level 1.0, and
+/// `$mfactor` reads it (`lowerSysCall`).
 ///
-/// ponytail: the ceiling is that a host which writes `Instance.mfactor` AND
-/// overrides the alias has set the same physical quantity twice, and the
-/// equations then read the alias while the stamp is scaled by the field. The
-/// upgrade is for codegen to fold the model-card knob into `Instance.mfactor`
-/// at `derive` time, which needs the two structs to know about each other.
+/// ponytail: a host that writes `Instance.mfactor` and also overrides the alias
+/// sets one quantity twice; the equations read the alias while the stamp is
+/// scaled by the field. The upgrade is for codegen to fold the card knob into
+/// `Instance.mfactor` at `derive` time.
 pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
     if (!std.mem.eql(u8, target, "$mfactor")) return false;
     self.mfactor_param = @intCast(self.out.params.items.len);
@@ -351,6 +334,9 @@ pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom
     return true;
 }
 
+/// Appends a model-card parameter and binds `name` to its index. An integer
+/// localparam with a constant default reads as that constant; everything else
+/// reads the card.
 pub fn addParam(
     self: *Lower,
     name: []const u8,
@@ -476,15 +462,9 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
 
 /// §2.9's two rules about an attribute VALUE, and §2.9.2's four value domains.
 ///
-/// In lowering because "constant expression" is a question about the scopes: `z`
-/// is refused and `gain` is not, and only the declaration tables know which is
-/// which. The parser collects the specs (`Parser.parseAttributes`) and checks the
-/// one rule it alone can see, the nesting ban.
-///
-/// The attribute's TARGET is not recorded and is not needed: neither rule is
-/// about the decorated item, and §2.9 leaves what an attribute MEANS entirely to
-/// the tool that reads it — "properties about objects, statements and groups of
-/// statements in the HDL source that can be used by various tools".
+/// In lowering because "constant expression" depends on the declaration
+/// tables. The parser (`Parser.parseAttributes`) checks the nesting ban. The
+/// attribute's target is not needed: neither rule is about the decorated item.
 pub fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
     for (attrs) |a| {
         // §2.9: "If the value is not specified, then ... the default value is 1"
@@ -608,11 +588,14 @@ pub fn patternElems(self: *Lower, e: Ast.ExprId) Oom![]const Ast.ExprId {
     return out;
 }
 
+/// One declared array dimension, normalized so `lo <= hi`.
 pub const Bounds = struct {
     lo: i64,
     hi: i64,
+    /// The declaration wrote `[hi:lo]`.
     descending: bool = false,
 
+    /// Returns the number of indices in the dimension.
     pub fn count(b: Bounds) i64 {
         return b.hi - b.lo + 1;
     }
@@ -621,10 +604,8 @@ pub const Bounds = struct {
 /// §3.2/§3.2.2/§3.4.4 `{ [msb:lsb] }` — one `Bounds` per declared dimension,
 /// outermost first, so `flag_array[0:8][0:3]` is `{{0,8},{0,3}}`.
 ///
-/// §3.2 puts no limit on the count and neither does this: a multidimensional
-/// array is scalarized cell by cell (see `shapeCells`), exactly as the
-/// one-dimensional case always was, so a second dimension costs a longer key
-/// and nothing else.
+/// §3.2 puts no limit on the count: a multidimensional array is scalarized
+/// cell by cell (see `shapeCells`). Returns null after reporting E0307/E0308.
 pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u8) Oom!?[]const Bounds {
     if (dims.len == 0) {
         try self.err(tok, .E0307, "`{s}` has no dimensions", .{name});
@@ -675,11 +656,8 @@ pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
 /// and anything wider allocates. `indexChain` uses the same spill threshold.
 pub const max_stack_dims = 8;
 
-/// Scratch for ONE cell's subscripts, sized once for a whole `shapeSubscripts`
-/// walk. Eight copies of this line were written out inline across seven loops
-/// (`copyWholeArray` has both halves of a copy), each re-deciding the threshold
-/// — and each INSIDE its loop, so a nine-dimensional array paid an arena
-/// allocation per cell rather than one for the walk.
+/// Returns scratch for one cell's `n` subscripts: `buf` when it fits, else an
+/// arena slice. Call once per `shapeSubscripts` walk, not once per cell.
 pub fn subscriptBuf(self: *Lower, buf: *[max_stack_dims]i64, n: usize) Oom![]i64 {
     return if (n <= buf.len) buf[0..n] else try self.arena.alloc(i64, n);
 }
@@ -697,27 +675,18 @@ pub fn elemName(self: *Lower, name: []const u8, idx: []const i64) Oom![]const u8
     return out.toOwnedSlice(self.arena);
 }
 
-/// Widest `name[i][j]…` a legal model can produce without spilling: §2.7 caps
-/// an identifier at 1024 characters (the same source bound
-/// `naming.max_name_len` is sized from), plus four subscripts of `[`, a
-/// 20-character `i64` and `]`. A deeper array spills to the arena — see
-/// `elemKey`.
+/// Widest `name[i][j]…` formatted without spilling: §2.7's 1024-character
+/// identifier plus four subscripts of `[`, a 20-character `i64` and `]`. A
+/// deeper array spills to the arena (see `elemKey`).
 pub const elem_key_len = 1024 + 22 * 4;
 
 /// `name[i][j]` for a *lookup*, formatted into the caller's stack buffer.
 ///
-/// `HashMap.get` only compares the key, it never retains it, so the arena copy
-/// `elemName` makes is pure waste on this path — and it was paid once per
-/// *reference*, so a `c[0]` read in a loop body leaked a fresh string every
-/// time it was lowered. Now the arena sees `c[0]` once per compilation, at the
-/// declaration. Same trick as `naming.zig`'s fixed key buffer, and safe for the
-/// same reason: the slice never escapes the caller's frame.
+/// `HashMap.get` never retains the key, so a lookup needs no arena copy. The
+/// result borrows `buf` and must not outlive the caller's frame.
 ///
-/// ponytail: an over-long identifier, or an array of more than four dimensions,
-/// falls back to the arena rather than carrying a diagnostic of its own — the
-/// first is already rejected upstream, the second is legal §3.2 and only pays
-/// one allocation per reference. Silently truncating the key would alias two
-/// distinct elements, which is the one outcome that must not happen.
+/// ponytail: an over-long identifier, or more than four dimensions, falls back
+/// to the arena. Truncating the key instead would alias two distinct elements.
 pub fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []const i64) Oom![]const u8 {
     if (name.len > buf.len) return try elemName(self, name, idx);
     @memcpy(buf[0..name.len], name);
@@ -732,6 +701,8 @@ pub fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []co
 
 // ---- §3.2 variables and scopes ---------------------------------------------
 
+/// Pops the scope log back to `mark`, restoring each variable and array binding
+/// the scope shadowed.
 pub fn closeScope(self: *Lower, mark: usize) void {
     while (self.scope_log.items.len > mark) {
         const e = self.scope_log.pop().?;
@@ -758,6 +729,7 @@ fn shadowName(self: *Lower, name: []const u8) Oom!void {
     _ = self.arrays.remove(name);
 }
 
+/// Binds `name` to an array, remembering what it shadowed (§5.3.2).
 pub fn declareArray(self: *Lower, name: []const u8, info: ArrayInfo) Oom!void {
     try shadowName(self, name);
     try self.arrays.put(self.arena, name, info);
@@ -772,25 +744,19 @@ pub fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
 }
 
 /// §6.8: "An identifier shall be used to declare only one item within a scope.
-/// This rule means it is ILLEGAL TO DECLARE TWO OR MORE VARIABLES WHICH HAVE THE
-/// SAME NAME, or to name a task the same as a variable within the same module, or
+/// This rule means it is illegal to declare two or more variables which have the
+/// same name, or to name a task the same as a variable within the same module, or
 /// to give an instance the same name as the name of the net connected to its
 /// output."
 ///
-/// Checked across every kind a scope declares by name — parameters, variables,
-/// nets — not only variable against variable: a second parameter used to reach
-/// codegen as a duplicate struct field, and a net or parameter sharing a
-/// variable's name was silently rebound. The test is over ONE SCOPE'S
-/// DECLARATION LISTS rather than over `self.vars`: the lists are exactly the
-/// declarations of one scope (§6.8 lists what opens one), so shadowing an outer
-/// name cannot reach this. Net against net is left alone: a port direction and
-/// its discipline are two declarations of one item. So is a discipline against
-/// a variable — §7's connect modules write `reg out; ddiscrete out;` — so only a
-/// net declaration with no discipline (`wire x;`) is a second item beside a
-/// variable.
+/// Checked across parameters, variables and nets over one scope's declaration
+/// lists (not `self.vars`), so shadowing an outer name is not reported. Net
+/// against net is allowed (a port direction and its discipline declare one
+/// item), and so is a discipline against a variable (§7's `reg out; ddiscrete
+/// out;`); only a discipline-less net (`wire x;`) clashes with a variable.
 ///
-/// ponytail: O(n²) over one scope's names — ~1e6 u32 compares for a thousand-
-/// parameter compact model. A set per scope when a model makes that show.
+/// ponytail: O(n²) over one scope's names. A set per scope if a model makes
+/// that show.
 pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: []const Ast.VarDecl, nets: []const Ast.NetDecl) Oom!void {
     for (params, 0..) |p, i| {
         if (declares(params[0..i], p.name)) try dupItem(self, p.main_tok, p.name);
@@ -874,11 +840,9 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         }
         try declareArray(self, name, .{ .dims = dims, .ty = ty });
         // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
-        // the declaration takes an initializer exactly like the §3.4.4 array
-        // PARAMETER does, and dropping it silently zeroed every element. The
-        // pattern is positional over the declared range, so element k lands at
-        // its left bound first, following the declared direction, and
-        // one list per dimension for a multidimensional array (§3.3, §3.4.8).
+        // the declaration takes an initializer like a §3.4.4 array parameter.
+        // The pattern is positional from the left bound, following the declared
+        // direction, one list per dimension (§3.3, §3.4.8).
         const elems = try flattenPattern(self, decl.init, dims);
         var sub: [max_stack_dims]i64 = undefined;
         const idx = try subscriptBuf(self, &sub, dims.len);
@@ -943,10 +907,10 @@ fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
 /// initializer and memoized. Patching the entry def afterwards would leave it
 /// stale.
 ///
-/// `$held_real` / `$held_int` are synthetic callees — no LRM function has these
-/// names, and `naming.isStatefulAnalogOp` rejects them, so they create no unit
-/// and renumber no existing `Instance` state. The single argument is the index
-/// into `held_vars`, which is how codegen recovers the field.
+/// `$held_real` / `$held_int` are synthetic callees with no op kind
+/// (`callee.opKind`), so they create no unit and renumber no `Instance` state.
+/// The single argument is the index into `held_vars`, which is how codegen
+/// recovers the field.
 fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why) Oom!Mir.Value {
     // Emitted into the DECLARATION's block — `.entry`, unless the initializer
     // itself opened a diamond (§4.2.7 `&&`/`||` short-circuit), in which case it
@@ -1040,10 +1004,9 @@ pub fn writeElem(self: *Lower, name: []const u8, info: ArrayInfo, idx: []const i
 /// override it) or a call is runtime; a literal, a genvar (§3.5: an unrolled
 /// loop binds it) and a local constant are not.
 ///
-/// The answer only picks a representation — both lower every access — so a
-/// wrong guess costs speed and never meaning. A runtime-indexed array kept
-/// scalar reads through a `$idx` switch over every element and writes one
-/// masked select per element; txl.va's 5 x 2048 histories were 26 MB of Zig.
+/// The answer only picks a representation (both lower every access), so a
+/// wrong guess costs speed, never meaning: a runtime-indexed array kept scalar
+/// reads through a `$idx` switch and writes one masked select per element.
 pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     var vars: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
     defer vars.deinit(self.arena);
@@ -1121,7 +1084,7 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// evaluation (`avar = avar`: what it reads is what the last evaluation
 /// wrote). The rest are `.unless_invariant`: no read precedes a write, so the
 /// held value is seen only if whether a write runs changes between
-/// evaluations — `codegen.pruneHeld` asks solve invariance.
+/// evaluations, which `pruneHeld` (codegen/plan/setup.zig) decides.
 ///
 /// §3.2.2 an array is its scalarized elements, so a write whose subscripts
 /// are literals assigns that element, and an array read with a subscript that does not
@@ -1403,8 +1366,7 @@ fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 /// One walk, two modes: outside an event body we are only looking for the
 /// `@(...)`; inside one, every variable a statement WRITES has to survive to
 /// the next evaluation. "Writes" is `Ast.SourceFile.stmtWrites`, not only the
-/// assignment target: an output actual or a `$random` seed written only inside
-/// an event body used to revert to zero at the next evaluation.
+/// assignment target: an output actual or a `$random` seed counts too.
 fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
     if (in_event) {
@@ -1451,6 +1413,7 @@ const Held = struct {
     }
 };
 
+/// Returns a variable's §3.2 zero start; a string's is `.undef`.
 pub fn zeroOf(ty: Ty) Mir.Value {
     return switch (ty) {
         .real => .f_zero,

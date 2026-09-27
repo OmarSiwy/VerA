@@ -1,14 +1,9 @@
 //! §3.6 disciplines and natures, §3.11 net compatibility.
 //!
 //! In: discipline/nature declarations and net declarations. Out: `Lower.disciplines`,
-//! per-node disciplines, and the §3.11 compatibility diagnostics.
-//!
-//! LRM clauses this file's code cites: §3.6, §3.6.1, §3.6.1.2, §3.6.1.3, §3.6.1.4, §3.6.2.1, §3.6.2.2, §3.11, §3.11.1, §3.13.1, §4.4, §5.5.1.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_discipline.f(self, ...)`; `lower.zig` aliases only what other modules call.
-//!
-//! The rules themselves, over the AST alone, are `ir/discipline_rules.zig`.
+//! per-node disciplines, and the §3.11 compatibility diagnostics. The AST-only rules
+//! live in `ir/discipline_rules.zig`.
+//! LRM: §3.6, §3.6.1, §3.6.1.2-§3.6.1.4, §3.6.2.1, §3.6.2.2, §3.11, §3.11.1, §3.13.1, §4.4, §5.5.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -29,20 +24,17 @@ const emit = Lower.emit;
 
 // ---- §3.6 disciplines & natures --------------------------------------------
 
-/// Build the discipline table and the §3.6.1.4 access-name map. The
-/// preprocessor inlines annex D.1, so `electrical`/`thermal`/… arrive as
-/// ordinary declarations in `file.disciplines`.
+/// Builds the discipline table and the §3.6.1.4 access-name map. The
+/// preprocessor inlines annex D.1, so `electrical`, `thermal` and the rest arrive
+/// as ordinary declarations in `file.disciplines`.
 pub fn collectDisciplines(self: *Lower) Oom!void {
     // §4.4 the two standard access identifiers always resolve.
     try self.access_kind.put(self.arena, "V", .potential);
     try self.access_kind.put(self.arena, "I", .flow);
-    // §5.5.1 Syntax 5-3 / §4.4 the GENERIC access functions, which resolve on
-    // every discipline that binds the half they name. Registering them here
-    // rather than in a parallel table is what makes them "an alternative
-    // spelling": everything downstream — `branchOf`, `contribIndex`,
-    // `resolveLvalue`, the E0501/E0337 checks — sees an `Access` and cannot
-    // tell which word produced it. The single exemption is the §3.6.1.4 name
-    // match in `checkAccessMatch`.
+    // §5.5.1 Syntax 5-3 / §4.4 the generic access functions, which resolve on
+    // every discipline that binds the half they name. Registered in the same map
+    // so they are "an alternative spelling": downstream sees an `Access` and cannot
+    // tell which word produced it, except `checkAccessMatch`'s §3.6.1.4 name match.
     try self.access_kind.put(self.arena, lower_contrib.generic_potential, .potential);
     try self.access_kind.put(self.arena, lower_contrib.generic_flow, .flow);
 
@@ -55,8 +47,7 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
         // §3.6.2.1 "Conservative disciplines shall not have the same nature
         // specified for both the potential and the flow." The same clause makes
         // each nature's `access` the access function of its half, so one nature
-        // on both bindings gives one NAME two meanings — and `access_kind`
-        // below would keep whichever of the two it saw last.
+        // on both bindings gives one name two meanings.
         if (info.has_potential and d.potential == d.flow)
             try self.err(d.main_tok, .E0338, "`{s}` binds `{s}` to both its potential and its flow", .{
                 self.file.str(d.name), self.file.str(d.potential),
@@ -112,20 +103,17 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
     }
 }
 
-/// §3.6.1/§3.6.1.2/§3.13 — the rules the nature+discipline TABLE has to satisfy
-/// on its own, before a module refers to any of it. One pass, because all of
-/// them read the same two declaration lists.
+/// Checks the rules the nature and discipline declarations must satisfy on their
+/// own, before a module refers to them (LRM §3.6.1, §3.6.1.2, §3.13).
 ///
-/// WHY THE UNIQUENESS RULES ARE PER-FILE. §3.13.1 gives natures and disciplines
-/// one global scope, but VerA prepends annex D's `disciplines.vams` to EVERY
-/// compilation whether or not the source included it. A model that declares its
-/// own `nature My_Voltage; access = V;` never asked for annex D's `Voltage`, so
-/// comparing across the prelude would reject it for a declaration its author did
-/// not write. Within one file the comparison is exactly §3.13.1's.
+/// The uniqueness rules compare within one source file. §3.13.1 gives natures and
+/// disciplines one global scope, but VerA prepends annex D's `disciplines.vams` to
+/// every compilation, so comparing across that prelude would reject a model's own
+/// `nature My_Voltage; access = V;` for a declaration its author did not write.
 pub fn checkNatureTable(self: *Lower) Oom!void {
     const natures = self.file.natures;
     // §3.6.1.4 access identifier per nature, `.none` when it declares no
-    // `access` of its own (a derived nature inherits it — §3.6.1.2).
+    // `access` of its own (a derived nature inherits it, §3.6.1.2).
     const access = try self.arena.alloc(Ast.StrId, natures.len);
 
     for (natures, access) |*n, *acc| {
@@ -136,9 +124,7 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
         for (n.attrs, 0..) |a, ai| {
             const an = self.file.str(a.name);
             // §3.6.1.3 "The name of the attribute shall be unique in the nature
-            // being defined". Two values for one name leave `<nature>.<attr>`
-            // with no single reading — and the LAST one silently winning is
-            // exactly the failure mode that has no symptom.
+            // being defined". Otherwise the last value would silently win.
             // ponytail: O(n²) over the handful of attributes one nature has.
             for (n.attrs[0..ai]) |prev| {
                 if (prev.name != a.name) continue;
@@ -186,9 +172,8 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
     // §3.6.1.2 idt_nature "shall be the name (not a string) of a nature which
     // is defined elsewhere", and a derived nature that overrides it "shall be
     // related (share the same base nature) to the nature the parent uses".
-    // Both halves are one code: the integral's tolerance comes from that
-    // nature, and a name that resolves to nothing and a name that resolves to
-    // an unrelated quantity leave it equally undefined.
+    // Both halves share one code: an unresolved name and an unrelated nature
+    // leave the integral's tolerance equally undefined.
     for (natures) |*n| {
         const own = for (n.attrs) |a| {
             if (std.mem.eql(u8, self.file.str(a.name), "idt_nature")) break a;
@@ -234,11 +219,9 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
         }
     }
 
-    // §3.6.1/§3.6.2 same-KIND duplicates. E0336 above is the cross-kind case
-    // only, and a name declared twice as the same kind is the one that has no
-    // symptom: `disciplines`/the nature walk keep the last, so every net of the
-    // name silently gets the second declaration's access functions.
-    // Same per-file scoping as E0335, and for the same reason (see the header).
+    // §3.6.1/§3.6.2 same-kind duplicates (E0336 above is the cross-kind case).
+    // Without this the last declaration would silently win. Scoped per file,
+    // like E0335 (see the doc comment).
     for (natures, 0..) |*a, i| {
         for (natures[i + 1 ..]) |*b| {
             if (b.name != a.name or fileOf(self, a.main_tok) != fileOf(self, b.main_tok)) continue;
@@ -271,13 +254,8 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
     };
 }
 
-/// §3.6.1.2/§3.6.1.3 — the FORM each attribute's value has to take. The LRM
-/// spells three of them out and then makes one blanket statement about the
-/// rest, so this is four arms and not a table.
-///
-/// The identifier/string distinction is one character wide and means two
-/// different things: `access = V` introduces a callable name into every module
-/// that uses the discipline, `access = "V"` is a value nothing can call.
+/// §3.6.1.2/§3.6.1.3: the form each attribute's value has to take. `access = V`
+/// introduces a callable name; `access = "V"` is a value nothing can call.
 fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.NatureAttr, an: []const u8) Oom!void {
     const tag = self.file.exprs.tag(a.value);
     // §3.6.1.2: `access` "shall be an identifier (by name, not as a string)";
@@ -291,41 +269,37 @@ fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.NatureAtt
         });
         return;
     }
-    // §3.6.1.2: `units` "shall be a string" — §3.11.1's Units Value Rule
-    // compares two natures on it, which needs one comparable spelling.
+    // §3.6.1.2: `units` "shall be a string"; §3.11.1's Units Value Rule compares it.
     if (std.mem.eql(u8, an, "units")) {
         if (tag != .str_literal) try self.err(a.main_tok, .E0340, "`units` of `{s}` must be a string", .{
             self.file.str(n.name),
         });
         return;
     }
-    // §3.6.1.3 everything else — abstol included — "shall be constant". A
-    // nature is declared at source-text level (§3.13.1), outside every module,
-    // so there is no scope here in which a runtime name could resolve.
+    // §3.6.1.3 everything else, abstol included, "shall be constant". A nature is
+    // declared outside every module (§3.13.1), so no runtime name could resolve.
     if (lower_constfold.constEval(self, a.value) == null)
         try self.err(a.main_tok, .E0340, "`{s}` of `{s}` is not a constant expression", .{
             an, self.file.str(n.name),
         });
 }
 
-/// Which source file a token came from (§3.13.1 scope comparisons). The
-/// preprocessor's segment map is the only thing that still knows: by lowering,
-/// the prelude and the user's text are one byte stream.
+/// Which source file a token came from (§3.13.1 scope comparisons). Only the
+/// preprocessor's segment map still knows; the prelude and user text are one stream.
 fn fileOf(self: *const Lower, tok: u32) diag.FileId {
     return self.bag.locate(self.tokenSpan(tok), null).file;
 }
 
+/// The attributes `natureOf` resolves for one nature; null when neither it nor a parent sets one.
 pub const NatureAttrs = struct {
     abstol: ?f64 = null,
     access: ?[]const u8 = null,
-    /// §3.6.1.2 `units`, read for §3.11.1's Units Value Rule — the one rule
-    /// that relates two natures with no derivation between them.
+    /// §3.6.1.2 `units`, read for §3.11.1's Units Value Rule.
     units: ?[]const u8 = null,
 };
 
-/// §3.6.1.1 walk a (possibly derived) nature for `abstol` (§3.6.1.2),
-/// `access` (§3.6.1.4) and `units` (§3.6.1.2). Derived natures inherit what
-/// they do not override.
+/// Returns a nature's `abstol`, `access` and `units`, walking a derived nature's
+/// parents for what it does not override (LRM §3.6.1.1, §3.6.1.2, §3.6.1.4).
 pub fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     var out: NatureAttrs = .{};
     // ponytail: share the AST's 16-hop walk; extend it there if deeper inheritance is needed.
@@ -343,12 +317,13 @@ pub fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
 
 // ---- §3.11 net compatibility -----------------------------------------------
 
-/// `declOf` for a name lowering holds as a string (`node_disciplines`).
+/// Returns the declaration of the discipline named `name`, or null.
 pub fn disciplineDecl(self: *const Lower, name: []const u8) ?*const Ast.DisciplineDecl {
     return rules.declOf(self.file, self.file.strings.find(name) orelse return null);
 }
 
-/// `disciplineConflict` for two names lowering holds as strings.
+/// Returns why disciplines `an` and `bn` are incompatible, or null when they are
+/// compatible or either is undeclared (LRM §3.11.1).
 pub fn nodeDisciplineConflict(self: *const Lower, an: []const u8, bn: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, an, bn)) return null;
     const a = self.file.strings.find(an) orelse return null;
@@ -356,20 +331,15 @@ pub fn nodeDisciplineConflict(self: *const Lower, an: []const u8, bn: []const u8
     return rules.disciplineConflict(self.file, a, b);
 }
 
-/// §3.11: "Certain operations can be done on nets only if the two (or more)
-/// nets are compatible. For example, if an access function has two nets as
-/// arguments, they must be compatible." §3.12 states the same requirement for
-/// the two terminals of a branch declaration, and §7.4.3 for a continuous-time
-/// port connection — one rule (§3.11.1), so one helper and one code.
+/// Reports E0355 when nodes `hi` and `lo` have incompatible disciplines. Used for
+/// access-function arguments (LRM §3.11), branch terminals (§3.12) and port
+/// connections (§7.4.3).
 pub fn checkNetCompat(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
-    // §1.3.1.1 collapses every ground onto one global reference node, which is
-    // not a second NET the rule can be about: `V(p)` is `V(p, gnd)` and spans
-    // one discipline.
+    // §1.3.1.1: ground is the global reference, not a second net; `V(p)` spans one discipline.
     if (hi == ground or lo == ground) return;
     const an = self.out.nodes.items(.disc)[hi];
     const bn = self.out.nodes.items(.disc)[lo];
-    // A net with no discipline at all is E0337's, not this rule's: §3.11
-    // compares two disciplines and here there is only one.
+    // A net with no discipline is E0337's to report.
     if (an.len == 0 or bn.len == 0) return;
     const why = nodeDisciplineConflict(self, an, bn) orelse return;
     var d = self.errWith(tok, .E0355);

@@ -1,104 +1,9 @@
-//! Class 6 — Numerical safety / finiteness proof pass.
-//!
-//! LRM basis: §4.3.1/§4.3.2 math-function domains (Tables 4-14/4-15), §4.3.2
-//! "input outside the valid range shall report an error", §3.4.2 parameter
-//! value ranges, §3.6.1.2 nature tolerances, §4.5.15 operator restrictions,
-//! §5.8.4 conditional restrictions.
-//!
-//! Transformation: MIR + Lower side tables → per-unit float-mode verdict, OR a
-//! compile error for a provably-unsafe domain violation.
-//!
-//! CONTRACT:
-//!   - Runs on EVERY target (lint/debug/release). Debug and Release accept the
-//!     exact same set of models — no mode-specific semantics. Nothing in this
-//!     file reads a target.
-//!   - This pass does not synthesize runtime math-domain checks. System
-//!     functions can validate their own argument domains in emitted kernels.
-//!   - VerA is SPEC-FAITHFUL: `exp` (domain "All x", §4.3.2) is NEVER
-//!     rejected — the LRM permits inf and makes `limexp` (§4.5.13) optional.
-//!     Unprovable-finite units simply get `.strict` (below), not a rejection.
-//!   - The engine NEVER inserts a clamp, a floor or a `limexp`.
-//!   - DOMAIN CHECKS ARE THREE-WAY, not two (LRM §4.3.2 obliges reporting a
-//!     value that IS out of range, not rejecting a program whose values MIGHT
-//!     be):
-//!         provably OUTSIDE  -> compile error
-//!         provably INSIDE   -> ok, `.optimized` still reachable
-//!         unprovable        -> ACCEPTED, forfeits `finite` -> unit `.strict`
-//!     This is the same treatment `exp` gets above, and it is what keeps the
-//!     accepted set EQUAL to the LRM's. Interval arithmetic cannot decide the
-//!     common `x = V/(1+abs(V))` idiom (it must correlate two occurrences of
-//!     V), so a stronger abstract domain would not rescue those legal models —
-//!     only this policy does.
-//!   - `/` BY ZERO IS NOT AN ERROR. §4.2.4's only zero rule is "It shall be an
-//!     error to pass zero (0) as the second argument to the MODULUS operator".
-//!     `x/0.0` is an exact IEEE ±inf, so it is accepted and forfeits `finite`.
-//!     Rejecting it would refuse `I <+ V/r` — the plain resistor, and every
-//!     foundry compact model, which divide by unranged parameters.
-//!     `%` by a PROVABLY zero divisor is that rule, and so is E0601 (so is a
-//!     provably-zero integer `/`); an unprovable one is accepted like any
-//!     other domain. Integer `/` has no inf to fall back on, so codegen
-//!     guards it (`@divTrunc(i64, 0)` is illegal behavior in Zig) to yield 0,
-//!     and says so with W0653 — accepted, never silent; integer `%` has no
-//!     guarded form and stays E0601 unless proven non-zero.
-//!
-//! DOD: three SoA arrays indexed by `Mir.Value` (interval, finite bit, guard
-//! ref). Instructions are walked once, in dominator-tree preorder. No per-op
-//! allocation; all scratch lives in one arena that dies with `prove`.
-//!
-//! ─────────────────────────────────────────────────────────────────────────
-//! UNIT ORDERING (normative — naming.zig and codegen.zig MUST match)
-//!
-//!   unit_modes[i]  ↔  lower.contributions.items[i]
-//!
-//! One unit per `Lower.Contribution` (which is already one per (access, node
-//! pair), §5.6.1.3 — not one per `<+` statement; the exception is a §5.6.7
-//! INDIRECT contribution, where each statement is its own equation and so its
-//! own entry), in `Lowered.contributions` append order, `naming.Role.analog`,
-//! target = access + node pair. The mode is
-//! the JOIN over both `resist_val` (→ eval) and `react_val` (→ q): a unit gets
-//! `.optimized` only if BOTH its slices are proven finite, because codegen emits
-//! one `@setFloatMode` per unit function. A §5.6.7 indirect contribution needs
-//! no special case: its constraint row lives in `resist_val` like any other
-//! unit value (`react_val` stays `.f_zero`), so the same slice walk rates it.
-//!
-//! A §5.4.3 PORT PROBE (`I(<p>)`, `lower.port_probes`) adds NO unit and does
-//! not perturb this indexing. Like the branch-relation row of a §5.6 potential
-//! contribution, its row (`x[flow(<p>)] − res[p]`) is assembled inline in
-//! codegen's residual dispatcher out of values the contribution units already
-//! produced; there is no separate body to rate, so naming.zig and this file
-//! stay unchanged. If a future port form ever needs its own body, it becomes a
-//! new unit kind and the rule below applies.
-//!
-//! `unitCount(lower)` is the authoritative length. If naming.zig ever emits
-//! additional unit kinds (user functions §4.7, named blocks §5.3.2, analog-
-//! operator sub-units §4.5), they MUST be appended AFTER the contribution units
-//! and this file extended in the same commit — never interleaved.
-//! ─────────────────────────────────────────────────────────────────────────
-//!
-//! SOUNDNESS MODEL (read before touching `finite`)
-//!
-//! `.optimized` compiles to `@setFloatMode(.optimized)`, which asserts nnan AND
-//! ninf. A wrong `.optimized` is silent, Release-only, convergence-corrupting
-//! UB, so every rule below errs toward `.strict`.
-//!
-//!   1. INPUTS ARE FINITE. Solver unknowns (§4.4 probes) and model-card
-//!      parameters (§3.4) are finite IEEE doubles — that is the host artifact
-//!      contract. Being *finite* is
-//!      separate from being *bounded*: a probe is finite with an unknown
-//!      magnitude, so its interval is (-inf, inf) but its `finite` bit is set.
-//!      A parameter whose declared range explicitly ADMITS `inf` (`from [0:inf]`)
-//!      is not finite.
-//!   2. OVERFLOW IS TRACKED WHERE IT IS REAL. `exp`/`expm1`/`sinh`/`cosh`/`pow`
-//!      overflow at ordinary device magnitudes (exp(710)), so they are proven
-//!      exactly: unbounded argument ⇒ `.strict`.
-//!   3. `+ - * /` on finite operands are assumed not to overflow
-//!      (`Options.arith_overflow = .assume_absent`, the default): reaching 1e308
-//!      in a residual means the Newton iterate already diverged, which is the
-//!      host's convergence check, not a language property. Set
-//!      `.tracked` to demand bounded intervals there too — that is the
-//!      calibration knob, not a code change.
-//!   4. Anything unmodelled (a `call`: analog operators §4.5, ch9 system
-//!      functions) is non-finite. It costs `.strict`, never a wrong `.optimized`.
+//! Numerical-safety pass: MIR and `Lowered` in, a float-mode `Verdict` per contribution unit out,
+//! plus a compile error for any argument provably outside its math-function domain.
+//! LRM §4.3.1/§4.3.2 (Tables 4-14/4-15), §4.2.4, §3.4.2, §3.6.1.2, §4.5.15, §5.8.4.
+//! Domain checks are three-way: provably outside is an error, provably inside keeps `.optimized`,
+//! unprovable is accepted and costs `.strict`. `exp` and `/` by zero are never errors.
+//! The pass reads no target, inserts no clamp or `limexp`, and emits no runtime check.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -107,84 +12,84 @@ const Lower = @import("lower.zig");
 const Lowered = Lower.Lowered;
 const Analysis = @import("analysis.zig");
 const diag = @import("diag");
+/// `std.math`, shared with the `proof/` sub-files.
 pub const math = std.math;
 
-/// Per-unit float-mode decision. LRM §4.3 domains + finiteness.
+/// The float mode a unit's code may compile in (LRM §4.3).
+/// `.optimized` asserts nnan and ninf, so a wrong `.optimized` is silent undefined behavior in
+/// release builds, and every finiteness rule errs toward `.strict`:
+///  1. Solver unknowns (§4.4) and model-card parameters (§3.4) are finite doubles by the host
+///     contract; a probe's magnitude is still unknown. A parameter whose range admits `inf` is not
+///     finite.
+///  2. `exp`, `expm1`, `sinh`, `cosh` and `pow` overflow at device magnitudes, so their result is
+///     finite only for a bounded argument.
+///  3. `+ - * /` on finite operands do not overflow, unless `Options.arith_overflow` is `.tracked`.
+///  4. A `call` the prover does not model is not finite.
 pub const FloatMode = enum {
-    /// Proven finite (no NaN/Inf possible) → codegen emits @setFloatMode(.optimized).
+    /// Proven finite: codegen emits `@setFloatMode(.optimized)`.
     optimized,
-    /// Not provably finite (e.g. unbounded voltage exp) → @setFloatMode(.strict),
-    /// where inf is IEEE-defined and spec-legal. NOT an error.
+    /// Not provably finite: `@setFloatMode(.strict)`, where inf and NaN are IEEE-defined. Not an error.
     strict,
 
-    /// The mode a declaration SHARED by several units must compile in.
-    ///
-    /// SOUNDNESS: `.optimized` is full fast-math — it asserts `nnan` and `ninf`
-    /// (see the note at the head of this file). A subexpression hoisted out of a
-    /// `.strict` unit into a shared declaration is still reachable from that
-    /// unit, so compiling it fast-math would assert a finiteness fact that unit
-    /// never had. The join is therefore `.strict`-absorbing, and codegen folds
-    /// every consumer of a common declaration through it (`Gen.planCommon`).
-    ///
-    /// The other direction is free: a `.optimized` unit that loses fast-math
-    /// inside a shared callee is slower, never wrong — the same conservative
-    /// direction the file-scope math helpers already take (codegen.math_txt).
+    /// Returns the mode for code shared by both units: `.strict` absorbs.
+    /// A subexpression shared with a `.strict` unit stays reachable from it, so compiling it
+    /// fast-math would assert a finiteness fact that unit never had. Codegen folds the shared
+    /// core's mode through this join (`codegen/float/mode.zig` `coreMode`).
     pub fn strictest(a: FloatMode, b: FloatMode) FloatMode {
         return if (a == .strict or b == .strict) .strict else .optimized;
     }
 };
 
+/// The prover's result: one float mode per contribution unit and the domain-error count.
 pub const Verdict = struct {
-    /// One entry per source unit — see UNIT ORDERING in the file header.
+    /// `unit_modes[i]` rates `lowered.contributions.items[i]`: one unit per access and node pair
+    /// (§5.6.1.3), or per statement for a §5.6.7 indirect contribution. A unit is `.optimized`
+    /// only if both its `resist_val` and `react_val` slices are proven finite. §5.4.3 port probes
+    /// add no unit. Any new unit kind must be appended after the contribution units.
+    /// Allocated with the `gpa` passed to `prove`; free with `deinit`.
     unit_modes: []const FloatMode,
-    /// Number of §4.3.2 domain violations reported into the `diag.Bag`. Zero ⇒
-    /// the model is accepted and codegen may run. Non-zero ⇒ compile error;
-    /// `unit_modes` is still filled (all `.strict`) so a lint front-end reports
+    /// §4.3.2 domain violations reported into the `diag.Bag`. Zero means the model is accepted.
+    /// On errors `unit_modes` is still filled, all `.strict`, so a lint front end reports
     /// everything in one pass.
-    ///
-    /// The messages themselves are NOT here any more: they go straight into the
-    /// shared bag, which is what gives them a source location, a code, a fix
-    /// and a place in the global source ordering.
     error_count: u32,
 
+    /// Returns true when no domain error was reported.
     pub fn ok(self: Verdict) bool {
         return self.error_count == 0;
     }
 
+    /// Frees `unit_modes`; `gpa` must be the allocator passed to `prove`.
     pub fn deinit(self: Verdict, gpa: std.mem.Allocator) void {
         gpa.free(self.unit_modes);
     }
 };
 
+/// Prover knobs.
 pub const Options = struct {
-    /// If the host guarantees |unknown| ≤ B for every solver unknown, set it and
-    /// probe-dependent transcendentals become provable. `null` = unbounded
-    /// (still finite — see SOUNDNESS MODEL 1). This is the hardware knob: a real
-    /// solver has a real compliance limit that no language rule can see.
+    /// A host bound B with |unknown| <= B for every solver unknown. It makes probe-dependent
+    /// transcendentals provable. `null` means unbounded but still finite (rule 1 on `FloatMode`).
+    /// This is the hardware knob: a real solver has a compliance limit no language rule can see.
     unknown_bound: ?f64 = null,
-    /// SOUNDNESS MODEL 3. `.tracked` refuses to assume `+ - * /` stay in range.
+    /// Rule 3 on `FloatMode`: `.tracked` refuses to assume `+ - * /` stay in range.
     arith_overflow: enum { assume_absent, tracked } = .assume_absent,
 };
 
-/// Stop after this many; one bad expression otherwise reports a cascade.
+/// Maximum domain errors reported; one bad expression otherwise reports a cascade.
 pub const max_errors = 64;
 
-/// Number of source units — the length of `Verdict.unit_modes`. naming.zig must
-/// agree with this (assert it there).
+/// Returns the number of units, the length of `Verdict.unit_modes`.
+/// `naming.assertCanonicalOrder` asserts that codegen agrees.
 pub fn unitCount(lowered: *const Lowered) usize {
     return lowered.contributions.items.len;
 }
 
-// The lattice: intervals and math-function domains (§4.3.1/§4.3.2 Tables 4-14/4-15) — proof/lattice.zig
 const proof_lattice = @import("proof/lattice.zig");
+/// Returns whether a value is a 0/1 predicate (§4.2.5/§4.2.8).
 pub const isPredicateValue = proof_lattice.isPredicateValue;
+/// Returns the LRM domain an opcode's argument must satisfy.
 pub const domainOf = proof_lattice.domainOf;
 
-// ---------------------------------------------------------------------------
-// Entry points
-// ---------------------------------------------------------------------------
-
-/// Main entry. Prove domains, decide per-unit float mode. See UNIT ORDERING.
+/// Proves domains and rates each unit with default `Options`; see `proveOpts`.
 pub fn prove(
     gpa: std.mem.Allocator,
     mir: *const Mir,
@@ -194,6 +99,8 @@ pub fn prove(
     return proveOpts(gpa, mir, lowered, .{}, bag);
 }
 
+/// Proves every §4.3.2 domain, reports violations into `bag`, and rates each unit.
+/// Caller owns the returned `Verdict` and must free it with `deinit(gpa)`.
 pub fn proveOpts(
     gpa: std.mem.Allocator,
     mir: *const Mir,
@@ -213,11 +120,6 @@ pub fn proveOpts(
         .bag = bag,
     };
 
-    // The CFG, the dominator tree and the natural loops, from the ONE builder
-    // that owns them. This file used to carry a second Cooper/Harvey/Kennedy
-    // copy computing `idom`/`rpo_num` and nothing else; `Analysis` computes
-    // those PLUS `is_loop`/`loop_of`, which is the missing input for the
-    // loop-carried widening ceiling `walk` records.
     p.an = try Analysis.buildStructure(p.arena, mir, lowered);
 
     try p.seedValues(); // §3.4.2 param ranges, §4.2 constants, §4.4 probes
@@ -227,10 +129,7 @@ pub fn proveOpts(
     return p.verdict(); // per-unit join over the backward slices
 }
 
-// The prover: one dominator-order walk that rates every unit `.optimized` or `.strict` — proof/prover.zig
 const proof_prover = @import("proof/prover.zig");
-
-// Prover self-checks: source in, float-mode verdict and domain diagnostics out — proof/test.zig
 const proof_test = @import("proof/test.zig");
 
 test {

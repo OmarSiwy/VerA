@@ -4,9 +4,6 @@
 //! the stateful operators `op.OpKind` names.
 //!
 //! LRM clauses this file's code cites: §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_analog_op.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -31,45 +28,25 @@ const emit = Lower.emit;
 const call = Lower.call;
 const toReal = Lower.toReal;
 
-// ---- §4.5 analog operators / filters ---------------------------------------
-
-/// §4.5 analog operators. Each occurrence owns simulator state, so every one
-/// stays a distinct `call` instruction carrying its arguments — codegen
-/// allocates one Instance state slot per call site (§4.5.2).
-///
-/// Vector coefficient arguments (§4.5.11 laplace_*, §4.5.12 zi_*) are
-/// FLATTENED into the argument list as `<count>, e0, e1, …`, so the call is
-/// self-describing without a second pool.
-/// The two A.8.2 `analog_filter_function_call` names that keep NO history.
-///
-/// §5.8.1 bans "an analog operator" under a runtime condition, and both of these
-/// are listed in §4.5, so the letter of the rule covers them. Its stated reason
-/// does not: §4.5.6 makes `ddx` a derivative of the expression as it stands on
-/// THIS evaluation, and §4.5.13 makes `limexp` a piecewise-linear substitution
-/// for `exp` past a critical voltage. Neither reads a previous timestep, so
-/// neither can carry a wrong history out of a branch that was off — and E0514's
-/// whole claim is about corrupted history. Warning on them would be noise that
-/// teaches a modeller to silence the code; `vdmos.va` uses conditional `limexp`
-/// three times and is right to.
+/// Reports whether `name` is one of the two A.8.2 `analog_filter_function_call`
+/// names that keep no history (`ddx`, `limexp`). §5.8.1's ban on analog operators
+/// under a runtime condition exists to protect history, which neither reads, so
+/// E0514 exempts them.
 pub fn isHistoryless(name: []const u8) bool {
     return std.mem.eql(u8, name, "ddx") or std.mem.eql(u8, name, "limexp");
 }
 
-/// §4.5.15's placement rules for the analog operator `name` at `e`. EVERY path
-/// that lowers one calls this — `lowerFilter`, and `lowerReactive`'s `ddt`
-/// spine, which strips the call without going through `lowerFilter` and so
-/// once let `if (V(p) > 0) I(p) <+ ddt(V(p));` compile. False when the
-/// operator must not be lowered at all.
+/// Checks §4.5.15's placement rules for the analog operator `name` at `e`. Every
+/// path that lowers one must call this, including `lowerReactive`'s `ddt` spine,
+/// which bypasses `lowerFilter`. Returns false when the operator must not be lowered.
 pub fn checkOperatorPlace(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!bool {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx});
         return false;
     }
-    // §5.8.1 / §5.9: an analog operator is a state machine the kernel advances
-    // once per accepted step, on the straight-line spine of the analog block.
-    // Under a branch the solve can flip, the step its arm was off feeds it the
-    // type's zero instead of the real input, and its history is wrong from then
-    // on.
+    // §5.8.1 / §5.9: an analog operator's state advances once per accepted step.
+    // Under a branch the solve can flip, a step with its arm off feeds it zero
+    // and corrupts its history.
     if (self.cond_depth != self.static_cond_depth and !isHistoryless(name)) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0514);
         b.msg("`{s}`", .{name});
@@ -79,13 +56,16 @@ pub fn checkOperatorPlace(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!boo
     return true;
 }
 
+/// Lowers a §4.5 analog operator call. Each occurrence owns simulator state, so it
+/// stays a distinct `call` (one Instance state slot per site, §4.5.2). Vector
+/// coefficient arguments (§4.5.11, §4.5.12) are flattened as `<count>, e0, e1, ...`.
 pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const args = ex.args(e);
     if (!try checkOperatorPlace(self, e, name)) return poison;
 
-    // §4.5.6 ddx(f, V(node)) — the second argument is a probe, not a value:
+    // §4.5.6 ddx(f, V(node)): the second argument is a probe, not a value;
     // it names the unknown to differentiate with respect to.
     if (std.mem.eql(u8, name, "ddx")) {
         if (args.len != 2) return lower_expr.arityError(self, e, name, 2);
@@ -99,13 +79,9 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // or port or the flow through a branch, because these are the unknown
         // variables in the system of equations for the analog solver."
         //
-        // `V(p, n)` is neither. It is the DIFFERENCE of two unknowns, and the
-        // operator is defined as the partial derivative "holding all other
-        // unknowns fixed" — which V(p)-V(n) makes unanswerable, since d/dV(p)
-        // and -d/dV(n) are both defensible readings and they differ. §4.5.6's
-        // own vccs example puts the two-node probe in the EXPRESSION and a
-        // single-node probe in the second slot. A FLOW is exempt: a branch
-        // current is one unknown however many nets the branch spans.
+        // `V(p, n)` is neither: it is the difference of two unknowns, so the
+        // partial derivative "holding all other unknowns fixed" is ambiguous.
+        // A flow is exempt: a branch current is one unknown.
         if (t.access == .potential and t.lo != ground) {
             try self.err(self.file.exprs.mainTok(args[1]), .E0504, "a potential across two nets is not one unknown", .{});
             return poison;
@@ -113,19 +89,11 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try lower_hier_name.refuseRuntime(self, self.file.exprs.mainTok(args[1]), t.hi, t.lo);
         const u: u16 = switch (t.access) {
             .potential => t.hi,
-            // PEEK — never mint. §4.5.6's closing sentence: "If the expression
-            // does not depend explicitly on the unknown, then ddx() returns
-            // zero (0)." A flow no probe has made a system unknown CANNOT be
-            // depended on: the only way a branch current enters an expression
-            // is through an `I()` read, and every read routes through
-            // `flowUnknown` — including any inside THIS ddx's first argument,
-            // which was lowered above, so the peek runs after every mint that
-            // could matter. Minting here declared an unknown no equation ever
-            // pins (the probe-branch row only exists for a READ branch): an
-            // all-zero Jacobian row and a structurally singular system. And
-            // recording a branch READ instead would make the pair a flow-probe
-            // branch — a 0 V short §4.5.6 gives a derivative operator no
-            // license to add to the topology. Absent unknown = the plain 0.
+            // Peek, never mint: "If the expression does not depend explicitly on
+            // the unknown, then ddx() returns zero (0)." A branch current enters an
+            // expression only through an `I()` read, which mints it, and the first
+            // argument was lowered above. Minting here would add an unknown no
+            // equation pins, a singular system.
             .flow => self.out.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
                 return .{ .v = .f_zero, .ty = .real },
         };
@@ -137,14 +105,10 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return .{ .v = if (t.neg) try self.emit(.fneg, &.{d}) else d, .ty = .real };
     }
 
-    // A.8.2 fixes each operator's MANDATORY arguments — everything left of the
-    // grammar's first `[`. The per-slot loop below judges only slots that were
-    // WRITTEN (`ddt(,1.0)` → E0505), so a list that stops early has to be
-    // measured against the grammar here: `ddt()` otherwise skipped the loop
-    // entirely and became a silent zero, `absdelay(x)` a delay of nothing.
-    // The laplace forms mandate three slots — both vector commas sit outside
-    // the brackets, so a slot may be NULL (the loop's `nullZerosOk` carve-out
-    // governs which) but it must be THERE — and the zi forms four (…, T).
+    // A.8.2 fixes each operator's mandatory arguments (everything left of the
+    // grammar's first `[`). The per-slot loop below judges only written slots, so
+    // a short list is measured here. The laplace forms mandate three slots and the
+    // zi forms four; a slot may be null (see `nullZerosOk`) but must be present.
     const min_args: usize = if (std.mem.eql(u8, name, "absdelay"))
         2
     else if (std.mem.startsWith(u8, name, "laplace_"))
@@ -168,17 +132,12 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // A.8.2 analog_filter_function_call has no `analog_expression_or_null`
         // form: every declared argument must be present (§4.5.14).
         //
-        // §4.5.15 states the rule with its own escape hatch — "It is illegal to
-        // specify a null argument in the argument list of an analog operator,
-        // EXCEPT AS SPECIFIED ELSEWHERE in this document" — and §4.5.11/§4.5.12
-        // are what the exception points at, in the identical sentence: "The
-        // zeros argument may be represented as a null argument. The null
-        // argument is characterized by two adjacent commas (,,) in the argument
-        // list." §4.5.11.5's own band-limited-noise example writes it. An empty
-        // zeros vector is an empty PRODUCT, hence the numerator 1 — which is
-        // why the carve-out is only for the root forms (`*_zp`, `*_zd`), where
-        // the slot is a list of roots. In `*_np`/`*_nd` the same slot is a
-        // coefficient vector, and an empty one has no such reading.
+        // §4.5.15: "It is illegal to specify a null argument in the argument list
+        // of an analog operator, except as specified elsewhere in this document",
+        // and §4.5.11/§4.5.12
+        // are what the exception points at: "The zeros argument may be represented
+        // as a null argument." Empty zeros are an empty product, numerator 1, which
+        // only reads that way in the root forms (`*_zp`, `*_zd`).
         if (a == .none) {
             if (i == 1 and nullZerosOk(name)) {
                 try vals.append(self.arena, try self.mir.addIntConst(self.arena, 0));
@@ -188,10 +147,9 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         // A.8.3 `abstol_expression ::= constant_expression | nature_identifier`.
-        // The second arm is the ONLY place a nature name is a value, so it is
-        // resolved here and not in `lookupName`: natures and disciplines share
-        // one global scope (§3.13.1), and letting that scope answer general
-        // identifier lookup would shadow every variable named after a nature.
+        // The second arm is the only place a nature name is a value, so it is
+        // resolved here, not in `lookupName`, where it would shadow every
+        // variable named after a nature (§3.13.1's global scope).
         if (abstol_slot == i) {
             if (natureAbstol(self, a)) |t| {
                 try vals.append(self.arena, try self.mir.addFloatConst(self.arena, t));
@@ -229,19 +187,18 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return .{ .v = try self.call(callee, vals.items), .ty = .real };
 }
 
-/// Does `absdelay` call `e` interpolate quadratically? VerA's `vera_interp`
-/// attribute, innermost wins: the call's own suffix (`absdelay (* vera_interp
-/// = 2 *) (x, td)`), then the nearest enclosing statement's (`interp_stack`),
-/// then §4.5.7's "linear interpolation".
+/// Reports whether `absdelay` call `e` interpolates quadratically, from VerA's
+/// `vera_interp` attribute, innermost wins: the call's own suffix, then the nearest
+/// enclosing statement's (`interp_stack`), then §4.5.7's "linear interpolation".
 fn absdelayQuad(self: *Lower, e: Ast.ExprId) Oom!bool {
     if (self.file.exprLte(e, .vera_interp)) |a| return interpQuad(self, a);
     const s = self.interp_stack.items;
     return s.len != 0 and s[s.len - 1];
 }
 
-/// A `vera_interp` value: 1 is linear (§2.9's default when absent), 2 is
-/// quadratic. It must fold WITHOUT the model card — it picks the emitted
-/// kernel. E0524 otherwise, and the site keeps linear.
+/// Returns whether a `vera_interp` value selects quadratic (2) over linear (1, the
+/// §2.9 default when absent). It must fold without the model card because it picks
+/// the emitted kernel; otherwise reports E0524 and returns false.
 pub fn interpQuad(self: *Lower, a: Ast.LteAttr) Oom!bool {
     if (a.value == .none) return false;
     const c = lower_constfold.foldExpr(self, a.value, false) orelse {
@@ -256,7 +213,7 @@ pub fn interpQuad(self: *Lower, a: Ast.LteAttr) Oom!bool {
     return v == 2;
 }
 
-/// Which argument of an analog operator is its TOLERANCE, or null for an
+/// Which argument of an analog operator is its tolerance, or null for an
 /// operator that has none. §5.5.3, last sentence: "The abstol attribute of a
 /// nature may also be accessed simply by using the nature's identifier as the
 /// appropriate argument to the ddt(), idt(), or idtmod() operators described in
@@ -266,9 +223,8 @@ pub fn interpQuad(self: *Lower, a: Ast.LteAttr) Oom!bool {
 ///     4.5.4  idt(expr [, ic [, assert [, abstol|nature]]])
 ///     4.5.5  idtmod(expr [, ic [, modulus [, offset [, abstol|nature]]]])
 ///
-/// Every one is the LAST slot, but they are written out rather than computed
-/// from `args.len` because a call that has dropped a trailing argument would
-/// then read its `assert` or its `offset` as a tolerance.
+/// Written out rather than computed from `args.len`, so a call that dropped a
+/// trailing argument does not read its `assert` or `offset` as a tolerance.
 fn abstolSlot(name: []const u8) ?usize {
     if (std.mem.eql(u8, name, "ddt")) return 1;
     if (std.mem.eql(u8, name, "idt")) return 3;
@@ -276,17 +232,9 @@ fn abstolSlot(name: []const u8) ?usize {
     return null;
 }
 
-/// The abstol a bare `nature_identifier` in a tolerance slot stands for, or
-/// null when the expression is not one — in which case the caller lowers it as
-/// the `constant_expression` arm of A.8.3 and every ordinary diagnostic applies.
-///
-/// The ordinary scopes are consulted FIRST, so a variable or parameter that
-/// happens to share a nature's name still wins here exactly as it does
-/// everywhere else (§2.8). Only a name nothing else answers reaches the nature
-/// table.
-/// The §4.5.3/§5.5.3 tolerance slot as a value, with its diagnostics. Returns
-/// null when the slot holds an ordinary expression, which the caller lowers as
-/// A.8.3's `constant_expression` arm.
+/// Returns the §4.5.3/§5.5.3 tolerance slot's value when it names a nature or a
+/// nature attribute, reporting its diagnostics. Returns null when the slot holds an
+/// ordinary expression, which the caller lowers as A.8.3's `constant_expression` arm.
 pub fn lowerAbstolArg(self: *Lower, e: Ast.ExprId) Oom!?f64 {
     if (natureAbstol(self, e)) |t| return t;
     // A `.banned` reference has no value; `lowerExpr` is where E0359 lives, so
@@ -295,12 +243,12 @@ pub fn lowerAbstolArg(self: *Lower, e: Ast.ExprId) Oom!?f64 {
     return null;
 }
 
+/// The abstol a bare `nature_identifier` or `net.potential.abstol` in a tolerance
+/// slot stands for, or null. A variable or parameter with the same name wins (§2.8).
 fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
     const ex = &self.file.exprs;
     // §5.5.3's other spelling of the same value, `n1.potential.abstol`. Its last
-    // sentence makes the two interchangeable in this slot: "The abstol attribute
-    // of a nature may ALSO be accessed simply by using the nature's identifier
-    // as the appropriate argument to the ddt(), idt(), or idtmod() operators".
+    // sentence makes the two interchangeable in this slot.
     if (ex.tag(e) == .hier_ident) {
         // A `.banned` attribute is diagnosed by `lowerExpr`, which every caller
         // falls through to; returning null here is what routes it there.
@@ -320,41 +268,25 @@ fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
         return null;
     for (self.file.natures) |*n| {
         if (n.name != id) continue;
-        // §3.6.1.2 makes `abstol` mandatory on a base nature and inherited by a
-        // derived one, and `checkNatureTable` has already refused a nature with
-        // neither, so the fallback is only ever reached on a compile that is
-        // failing anyway. It is here so that this returns "yes, a nature" and
-        // the name does not also collect an E0314.
+        // Reached only for a nature `checkNatureTable` already refused (§3.6.1.2
+        // makes `abstol` mandatory); answering "a nature" avoids a second E0314.
         return lower_discipline.natureOf(self, id).abstol orelse 0;
     }
     return null;
 }
 
-/// §5.5.3 Syntax 5-4 `nature_attribute_reference ::= net_identifier .
-/// potential_or_flow . nature_attribute_identifier` — "the attributes for a net
-/// or a branch can be accessed by using the hierarchical referencing operator
-/// (.) to the potential or flow for the net or branch". §5.5.3's own twocap
-/// example is `ddt(V(a,b), a.potential.abstol)`.
-///
-/// A constant, resolved at elaboration: the net's discipline decides which
-/// nature each half binds, and a nature attribute "shall be constant"
-/// (§3.6.1.3). Null when the expression is a §6.8 hierarchical name instead,
-/// which is the other thing `.hier_ident` carries.
-///
-/// `abstol` comes from `DisciplineInfo` and not from the nature, deliberately:
-/// §3.6.2.3 lets a DISCIPLINE override its bound nature's tolerance, and that
-/// map is where the override has already been applied.
-///
-/// The sentence right after Syntax 5-4 is enforced by the same walk: "This
-/// syntax shall not be used for the access, ddt_nature, or idt_nature attributes
-/// of a nature, nor any other attribute whose value is not a constant
-/// expression." Those three name an IDENTIFIER, so there is nothing to fold —
-/// which is why the ban and the fold are one test (`.banned`) and not two.
+/// A resolved §5.5.3 `nature_attribute_reference` (`a.potential.abstol`): its
+/// constant value, or the attribute name when Syntax 5-4 bans it ("shall not be
+/// used for the access, ddt_nature, or idt_nature attributes ... nor any other
+/// attribute whose value is not a constant expression").
 pub const NatureRef = union(enum) {
     value: Const,
     /// The attribute named, for the message.
     banned: []const u8,
 };
+/// Resolves `e` as `net.potential.attr` or `net.flow.attr` through the net's
+/// discipline, or returns null when it is a §6.8 hierarchical name instead.
+/// `abstol` comes from `DisciplineInfo`, where a §3.6.2.3 discipline override is applied.
 pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
     const parts = self.file.exprs.nameParts(e);
     if (parts.len != 3) return null;
@@ -380,19 +312,10 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
     return .{ .value = lower_constfold.constEval(self, v) orelse return .{ .banned = attr } };
 }
 
-/// §4.5.5-§4.5.10 control-argument bounds. Each operator states its bound in
-/// one sentence and each bound is what makes the operator's own contract
-/// satisfiable — see E0516 for the five sentences.
-///
-/// FOLDED OPERANDS ONLY, and that restraint is the rule and not a shortcut:
-/// A.8.2 types these slots `analog_expression`, not `constant_expression`, so
-/// `transition(x, 0, tr, tf)` over parameters is a legal model whose signs are
-/// unknowable here. `constEval` returning null is silence. Rejecting what
-/// cannot be proven would break every parameterised rise time in the wild.
-///
-/// Here and not in codegen because this is a claim about the ARGUMENT: by the
-/// time a filter is a `call` its arguments are positional values and the LRM's
-/// own names for them — the words the diagnostic has to say — are gone.
+/// §4.5.5-§4.5.10 control-argument bounds (E0516). Only folded operands are judged:
+/// A.8.2 types these slots `analog_expression`, so a bound over parameters is
+/// legal and unknowable here. Checked in lowering, where the LRM's names for the
+/// arguments are still known for the message.
 fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId) Oom!void {
     const Bound = enum {
         positive,
@@ -430,7 +353,7 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
             .{ .i = 4, .arg = "time_tol", .want = .non_negative },
         }
     else if (std.mem.eql(u8, name, "slew"))
-        // Checked on the WRITTEN arguments, before §4.5.9's "if the
+        // Checked on the written arguments, before §4.5.9's "if the
         // max_neg_slew_rate is not specified, it defaults to the opposite of
         // the max_pos_slew_rate" can manufacture a well-signed second rate out
         // of a badly-signed first one.
@@ -451,8 +374,7 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
     }
 
     // §4.5.10: "The optional direction indicator shall evaluate to an integer
-    // expression +1, -1, or 0." An enumeration of three, not a range — +2 does
-    // not select anything and there is nothing to clamp it onto.
+    // expression +1, -1, or 0." An enumeration, not a range.
     if (std.mem.eql(u8, name, "last_crossing") and args.len > 1 and args[1] != .none) {
         if (lower_constfold.constEval(self, args[1])) |c| {
             const v = c.asReal();
@@ -462,11 +384,7 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
     }
 }
 
-/// §4.5.11/§4.5.12 filter coefficient vectors and §9.21/§4.6.4 noise data
-/// vectors: an assignment pattern `'{a,b}` or the name of an array parameter
-/// (§3.4.4). Flattened into the call as `<count>, e0, e1, …`, so the argument
-/// list stays self-describing. Returns false when `a` is an ordinary scalar.
-/// §4.5.11/§4.5.12: does this filter take its ZEROS as a root vector, so that
+/// §4.5.11/§4.5.12: does this filter take its zeros as a root vector, so that
 /// the null form `f(x, , poles, …)` reads as the empty product 1?
 fn nullZerosOk(name: []const u8) bool {
     const forms = [_][]const u8{ "laplace_zp", "laplace_zd", "zi_zp", "zi_zd" };
@@ -476,6 +394,9 @@ fn nullZerosOk(name: []const u8) bool {
     return false;
 }
 
+/// Appends a vector argument to `out` as `<count>, e0, e1, ...`: a §4.5.11/§4.5.12
+/// filter coefficient vector or §9.21/§4.6.4 data vector, spelled as an assignment
+/// pattern `'{a,b}` or an array name (§3.4.4). Returns false when `a` is a scalar.
 pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
@@ -489,7 +410,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
         .ident => {
             const name = self.file.str(ex.strOf(a));
             const info = self.arrays.get(name) orelse return false;
-            // §4.5.11's coefficient slot is a FLAT vector: a multidimensional
+            // §4.5.11's coefficient slot is a flat vector: a multidimensional
             // array has no reading as a list of poles and is left to the
             // ordinary path, which reports it (E0356).
             if (info.dims.len != 1) return false;
@@ -507,15 +428,14 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
     }
 }
 
-/// §4.6.4 noise sources. They contribute only in a small-signal noise
+/// Lowers a §4.6.4 noise source call. It contributes only in a small-signal noise
 /// analysis; codegen decides that from the call name (the value is 0 in DC).
 pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
-    // A.8.2 `ac_stim ( [ " analysis_identifier " [ , analog_expression ...` —
+    // A.8.2 `ac_stim ( [ " analysis_identifier " [ , analog_expression ...`:
     // the quotation marks are in the production, so the analysis name is a
-    // string LITERAL and nothing else (a string parameter is §4.6.4.3's
-    // allowance for a noise table's file name, not this one's).
+    // string literal.
     if (std.mem.eql(u8, name, "ac_stim")) if (ex.args(e).len != 0) {
         const a0 = ex.args(e)[0];
         if (a0 != .none and ex.tag(a0) != .str_literal) {
@@ -534,10 +454,8 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
     }
-    // Syntax 4-4: each noise function's optional last argument is `string` —
+    // Syntax 4-4: each noise function's optional last argument is `string`,
     // §4.6.4.1's "name argument [that] acts as a label for the noise source".
-    // A number there is no label, and read as a PSD operand it would be a
-    // second power the call does not have.
     const label_at: ?usize = if (std.mem.eql(u8, name, "white_noise") or
         std.mem.eql(u8, name, "noise_table") or std.mem.eql(u8, name, "noise_table_log"))
         1
@@ -556,26 +474,19 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     // §4.6.4 the PSD arguments, positionally: arg 0 is the power, arg 1 of
-    // `flicker_noise` is the exponent. Recorded HERE — this is the only place
-    // the call's arguments are lowered, and `noiseSrcsOf` walks the AST after
-    // the fact, where the MIR values are no longer reachable from the id.
-    // §4.6.3 has its OWN defaults for the same two slots — "The default
-    // magnitude is one (1) and the default phase is zero (0)" — and seeding
-    // them here is what makes a bare `ac_stim()` export the unit source the
-    // clause describes instead of a magnitude of zero.
+    // `flicker_noise` is the exponent. Recorded here, the only place the call's
+    // arguments are lowered. The seeds are §4.6.3's `ac_stim` defaults: "The
+    // default magnitude is one (1) and the default phase is zero (0)".
     var psd: [2]Mir.Value = if (std.mem.eql(u8, name, "ac_stim"))
         .{ .f_one, .f_zero }
     else
         .{ .f_zero, .f_one };
     var reals: usize = 0;
-    // §4.6.4.3/.4 the table itself. `appendVectorArg` writes the element COUNT
-    // and then the elements, so the pairs are the slice after that count — the
-    // same vector spelling §4.5.11's filter coefficients arrive in, which is
-    // why this needs no reader of its own.
+    // §4.6.4.3/.4 the table itself: `appendVectorArg` writes the count, then the
+    // elements, so the pairs are the slice after the count.
     var tab: ?struct { usize, usize } = null;
     // A.8.2's `noise_table_input_arg` is argument 0 of `noise_table`/
-    // `noise_table_log` and nothing else — the trailing `string` of every other
-    // form is §4.6.4's optional LABEL, which must not be read as a file name.
+    // `noise_table_log` only; every other form's trailing `string` is a label.
     const table_input = std.mem.eql(u8, name, "noise_table") or
         std.mem.eql(u8, name, "noise_table_log");
     for (ex.args(e), 0..) |a, ai| {
@@ -583,11 +494,8 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const at = vals.items.len;
         // §4.6.4.3's FILE form of the input: "When the input is a file name,
         // the indicated file will contain the frequency / power pairs. The
-        // file name argument shall be constant and will be either a string
-        // literal or a string parameter." Constant means the pairs are
-        // compile-time data, so they land in the SAME slot the vector form
-        // fills and everything downstream — the sort, the uniqueness rule, the
-        // comptime `noise_tables` export — is unchanged.
+        // file name argument shall be constant". So the pairs are compile-time
+        // data and land in the same slot the vector form fills.
         if (table_input and ai == 0) if (lower_constfold.constEval(self, a)) |c| if (c == .str) {
             if (try lower_table_model.readNoiseTableFile(self, e, c.str)) |pairs| {
                 try vals.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(pairs.len)));
@@ -625,32 +533,19 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return .{ .v = result, .ty = .real };
 }
 
-/// §4.6.4.6 `∂contribution/∂generator`, over the MIR that is already built.
-///
-/// A noise function is an AMPLITUDE and a contribution combines amplitudes
-/// linearly — that is what makes "perfectly correlated noise is generated by
-/// using the output of one noise function for more than one noise source"
-/// meaningful — so the derivative is a CONSTANT with respect to the generator
-/// and is exactly the factor the branch applies to it.
-///
-/// Over the DAG and not over the AST: re-lowering the expression to read its
-/// shape would duplicate every side effect in it, and the values this needs
-/// (the other operand of each multiply) already exist as SSA names. Nothing
-/// here evaluates anything; it emits a handful of arithmetic nodes that
-/// reference values the contribution already computed.
-///
-/// Three answers, and the difference between the last two is the whole reason
-/// this is not an optional:
+/// A §4.6.4.6 noise coefficient, `∂contribution/∂generator`. A noise function is an
+/// amplitude combined linearly, so for correlated noise ("the output of one noise
+/// function for more than one noise source") the derivative is the constant factor
+/// the branch applies to it:
 ///   absent     the generator does not occur here, so its coefficient is 0 and
 ///              this statement adds nothing to the branch's total;
 ///   nonlinear  it occurs in a shape no single factor describes (squared, in a
-///              denominator, inside a call), so there IS no coefficient;
+///              denominator, inside a call), so there is no coefficient;
 ///   value      the factor.
 pub const Coeff = union(enum) { absent, nonlinear, value: Mir.Value };
 
-/// `-v`, folded when `v` is a literal. A coefficient is very often a bare
-/// parameter or number, and a folded one renders inline in `noisePsd` instead
-/// of taking a core live-out slot for `0.0 - 3.0`.
+/// Returns `-v`, folded when `v` is a literal so the coefficient renders inline in
+/// `noisePsd` instead of taking a core live-out slot.
 pub fn coeffNeg(self: *Lower, v: Mir.Value) Oom!Mir.Value {
     if (self.mir.valueDef(self.mir.resolveAlias(v)) == .float_const)
         return self.mir.addFloatConst(self.arena, -self.mir.valueDef(self.mir.resolveAlias(v)).float_const);
@@ -666,6 +561,9 @@ fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
     return self.emit(.fmul, &.{ a, b });
 }
 
+/// Returns the coefficient of generator `n` in contribution value `v`, emitting the
+/// few arithmetic nodes it needs over values the MIR already holds (no re-lowering,
+/// so no side effect repeats).
 pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
     const gen = self.mir.resolveAlias(n);
     var reach = try reachOf(self, gen);
@@ -766,7 +664,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
                     return .{ .value = try self.emit(if (b.op == .fadd) .fadd else .fsub, &.{ da.value, db.value }) };
                 },
                 // The generator on both sides of a multiply is the generator
-                // SQUARED, which is not a linear source and has no coefficient.
+                // squared, which has no coefficient.
                 .fmul => {
                     if (da != .absent and db != .absent) return .nonlinear;
                     if (da == .absent) return .{ .value = try coeffMul(self, b.lhs, db.value) };
@@ -861,7 +759,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
                 => unreachable,
             }
         },
-        // §4.2.12 `?:` — either arm may carry the generator, and which arm runs
+        // §4.2.12 `?:`: either arm may carry the generator, and which arm runs
         // is a solve-time question, so the coefficient is the same conditional.
         .ternary => |t| {
             const dy = try coeffAt(self, t.then_val, gen, reach, depth + 1, path);
@@ -874,10 +772,9 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
                 if (dn == .absent) .f_zero else dn.value,
             }) };
         },
-        // §5.8 `if` and §4.2.12 `?:` BOTH arrive here: `lowerTernary` builds a
-        // CFG diamond and ifconv only turns it into a `.select` later. So this
-        // is the same answer as `.ternary`'s, spelled per incoming edge: the
-        // coefficient of a phi is the phi of the incoming coefficients.
+        // §5.8 `if` and §4.2.12 `?:` both arrive here as a CFG diamond (ifconv
+        // makes the `.select` later): the coefficient of a phi is the phi of the
+        // incoming coefficients.
         .phi => |p| {
             // An unsealed loop header's phi has no operands yet, so nothing is
             // known about what it carries.
@@ -892,7 +789,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
                 const pair = self.mir.phiPair(inst, @intCast(k));
                 const before = self.mir.blockLast(self.cur);
                 const d = try coeffAt(self, pair.value, gen, reach, depth + 1, &here);
-                // What that walk EMITTED (`x/r` has coefficient `1/r`) landed in
+                // What that walk emitted (`x/r` has coefficient `1/r`) landed in
                 // `self.cur`, after the join, where the edge from `pair.block`
                 // cannot carry it. Its operands are sub-terms of `pair.value`,
                 // so they exist at the end of that block: compute it there.
@@ -913,8 +810,8 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
             if (same) return .{ .value = coeffs[0].value };
             return .{ .value = try self.mir.emitPhi(self.arena, self.mir.instBlock(inst), coeffs) };
         },
-        // A call's arguments are reachable, so "does the generator occur in
-        // here at all" is answerable even though the derivative is not.
+        // A call's arguments are reachable, so whether the generator occurs is
+        // answerable even though the derivative is not.
         .call => |c| {
             for (c.args) |arg| if (try coeffAt(self, arg, gen, reach, depth + 1, path) != .absent) return .nonlinear;
             return .absent;

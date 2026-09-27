@@ -4,9 +4,6 @@
 //! and a diagnostic for every analog construct used in a discrete context.
 //!
 //! LRM clauses this file's code cites: §3.2.2, §4.4, §4.5.15, §4.7.1, §4.7.3, §5.2.1, §5.10.3, §7.2.2, §7.3, §7.3.1, §7.3.3, §7.3.5, §7.3.7, §8.5.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_context.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -29,14 +26,11 @@ const call = Lower.call;
 
 /// §7.2.2's two contexts, and the four rules the LRM states across them.
 ///
-/// A `Ast.DiscreteBlock` is not lowered as CODE: an `initial` block of constant
+/// A `Ast.DiscreteBlock` is not lowered as code: an `initial` block of constant
 /// assignments contributes its results (`collectInitialState`), and anything
-/// that needs an event queue and delta cycles makes the module MIXED — its
-/// digital half runs on the mixed-signal kernel beside the device, and what the
-/// analog block reads of it is a host-written input (`declareDiscreteInputs`).
-/// What is done here is the other half: the LRM states rules ABOUT a discrete context, and while the
-/// keyword was a hard syntax error not one of them could fire. All four are
-/// decidable from the AST alone, which is why this is a scan and not a lowering:
+/// that needs an event queue makes the module mixed, its digital half running
+/// on the mixed-signal kernel (`declareDiscreteInputs`). This scan enforces the
+/// rules the LRM states about a discrete context, all decidable from the AST:
 ///
 ///   §4.5.15  an analog operator "can not be used inside an initial or always
 ///            block"                                                  → E0422
@@ -49,9 +43,8 @@ const call = Lower.call;
 ///
 /// §7.2.2's first sentence is what makes the last two computable without a
 /// digital engine: "The domain of a variable is that of the context from which
-/// its value is assigned." So the set of ASSIGNMENT TARGETS in the discrete
-/// blocks IS the set of digital-owned variables, and no `reg`-ness, no driver
-/// state and no scheduler is needed to know it.
+/// its value is assigned." So the assignment targets in the discrete blocks are
+/// the digital-owned variables, with no driver state or scheduler needed.
 pub const DiscreteCtx = struct {
     /// Module-level variables assigned by a statement in an `initial` or
     /// `always` block → the token of the block that assigns it. Insertion
@@ -68,13 +61,13 @@ pub const DiscreteCtx = struct {
 };
 
 /// §8.5: does this module's discrete half need the event queue? An `always`
-/// block and a continuous assignment are PROCESSES — each re-runs whenever
+/// block and a continuous assignment are processes: each re-runs whenever
 /// what it reads changes — and an `initial` block that suspends (a delay, an
 /// event or level control, a nonblocking or intra-assignment-timed write) is
 /// one too. Anything else is `collectInitialState`'s constant shape, which
 /// needs no kernel and keeps its fast path.
 ///
-/// Takes the FILE rather than the `Lower`: it is a question about the AST.
+/// Takes the file rather than the `Lower`: it is a question about the AST.
 fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
     // §3.7 a wreal is a digital net, and only the digital kernel holds its
@@ -163,25 +156,6 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
     return hit;
 }
 
-/// §7.3.1 / §7.3.6.5 / §8.5, the analog block's view of a mixed module's
-/// digital half. Every variable a discrete process writes and every net a
-/// continuous assignment drives is DIGITAL-OWNED (§7.2.2: "the domain of a
-/// variable is that of the context from which its value is assigned"), and
-/// when the analog block reads one it reads the value of "the greatest digital
-/// time tick which is less than or equal to the analog time" (§7.3.6.5) — a
-/// value only the digital kernel can compute. So each becomes a HOST-WRITTEN
-/// input: a hidden §3.4 parameter of the same name, i.e. a `Model` field the
-/// mixed-signal host writes before every solve (and re-runs `precompute`
-/// after). Table 7-1 reads a bit grouping, a net and an `integer` alike as an
-/// integer, which is the parameter's type.
-///
-/// Called before the ports and nets are interned, so a digital-owned net never
-/// becomes an analog node and a digital-owned variable never an analog one.
-///
-// ponytail: a Model field is per MODEL, and a discrete input is per INSTANCE.
-// That is exact for the testbench (one instance) and wrong for a host that
-// instantiates one mixed device twice; the right home is an `Instance` field,
-// which is codegen's to emit.
 /// §6.5.3 "There can be a maximum of one driver of a real-valued net." A
 /// continuous assignment is a driver, and so is a net_decl_assignment
 /// (`wreal w = a;`). The digital runner makes the same check for a `.v`
@@ -198,7 +172,22 @@ fn checkWrealDrivers(self: *Lower, module: *const Ast.ModuleDecl, name: Ast.StrI
     }
 }
 
+/// Declares the analog block's view of a mixed module's digital half
+/// (§7.3.1, §7.3.6.5, §8.5). Every variable a discrete process writes and every
+/// net a continuous assignment drives is digital-owned (§7.2.2), and the analog
+/// block reads its value at "the greatest digital time tick which is less than
+/// or equal to the analog time" (§7.3.6.5). So each one the analog block reads
+/// becomes a host-written input: a hidden §3.4 parameter of the same name (a
+/// `Model` field the mixed-signal host writes before every solve), typed per
+/// Table 7-1. No-op for a module that is not mixed.
+///
+/// Must run before the ports and nets are interned, so a digital-owned net
+/// never becomes an analog node.
 pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // ponytail: a Model field is per model, and a discrete input is per
+    // instance. Exact for the testbench (one instance), wrong for a host that
+    // instantiates one mixed device twice; the right home is an `Instance`
+    // field, which is codegen's to emit.
     if (!isMixed(self.file, module)) return;
     self.out.mixed_signal = true;
     const ex = &self.file.exprs;
@@ -214,7 +203,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             try self.err(a.main_tok, .E0438, "", .{});
             continue;
         }
-        // The declaration kind decided E0438; the DOMAIN decides this one.
+        // The declaration kind decided E0438; the domain decides this one.
         // §7.2: "only digital blocks and primitives can drive a discrete net",
         // and §7.3: "Write operations of nets ... are only allowed from the
         // context of their domain" — and a continuous assignment is the
@@ -326,13 +315,12 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
 }
 
 /// Marks, in `marks` (indexed by `Ast.ExprId`), every expression §7.2.2's
-/// discrete context owns in a MIXED module (`isMixed`): the bodies of its
-/// `initial`/`always` blocks and its continuous assignments — and every
-/// module's task bodies. Those run on the
-/// mixed-signal kernel, which is four-state, so an x or z literal there is
-/// ordinary IEEE 1364 and not the analog backend's to refuse. A non-mixed
-/// module's `initial` is not marked: `collectInitialState` folds it into the
-/// analog variables' initial values, where an x has nowhere to live.
+/// discrete context owns in a mixed module (`isMixed`): the bodies of its
+/// `initial`/`always` blocks and continuous assignments, plus every module's
+/// task bodies. Those run on the four-state kernel, so an x or z literal there
+/// is ordinary IEEE 1364. A non-mixed module's `initial` is not marked:
+/// `collectInitialState` folds it into analog initial values, where an x has
+/// nowhere to live. `marks` must have one slot per expression id.
 pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
     const Mark = struct {
         file: *const Ast.SourceFile,
@@ -402,7 +390,7 @@ const Reads = struct {
     names: std.StringHashMapUnmanaged(u32) = .empty,
     guarded: std.StringHashMapUnmanaged(void) = .empty,
     /// §7.3.2 reads as an operand of `===`/`!==` or as a `case` subject,
-    /// counted: a name ALL of whose reads are these is read four-state.
+    /// counted: a name all of whose reads are these is read four-state.
     xz: std.StringHashMapUnmanaged(u32) = .empty,
     sites: std.ArrayList(Site) = .empty,
     in_d2a: bool = false,
@@ -506,7 +494,7 @@ fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: As
     return if (discipline_rules.isContinuous(file, n.discipline)) null else e;
 }
 
-/// Is `name` a NET of `module` — a declared net, or a port no variable
+/// Is `name` a net of `module`: a declared net, or a port no variable
 /// declaration re-declares (an undeclared port is an implicit wire)? A name
 /// declared as both a discipline net and a `reg` (`ddiscrete cm; reg cm;`,
 /// §7.6's connect modules) is the variable. Undeclared names are §6.8's.
@@ -532,7 +520,8 @@ fn probeOutsideEventFn(file: *const Ast.SourceFile, e: Ast.ExprId) ?Ast.ExprId {
     return null;
 }
 
-/// `isNetName` by spelling, for the tables keyed by string.
+/// Whether `name` is a net of `module` (`isNetName` by spelling, for the tables
+/// keyed by string).
 pub fn isNetSpelling(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, name: []const u8) bool {
     for (module.vars) |v| if (std.mem.eql(u8, file.str(v.name), name)) return false;
     for (module.nets) |n| if (std.mem.eql(u8, file.str(n.name), name)) return true;
@@ -540,10 +529,10 @@ pub fn isNetSpelling(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl,
     return false;
 }
 
-/// A.3.3 `inout_terminal ::= net_lvalue` (both terminals of a pass switch)
-/// and `output_terminal ::= net_lvalue` (the first terminal of a MOS/CMOS
-/// switch): §8.5.3.5 resolves a switch as a driver of the nets it joins, so
-/// a variable in one of those slots is E0483.
+/// Reports E0483 for a variable in a switch terminal slot. A.3.3
+/// `inout_terminal ::= net_lvalue` (both terminals of a pass switch) and
+/// `output_terminal ::= net_lvalue` (the first terminal of a MOS/CMOS switch):
+/// §8.5.3.5 resolves a switch as a driver of the nets it joins.
 pub fn checkSwitchTerminals(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     const ex = &self.file.exprs;
     for (module.switches) |sw| {
@@ -633,9 +622,12 @@ const EventRefs = struct {
     }
 };
 
+/// Reports the §7.2.2 discrete-context rules listed on `DiscreteCtx` (E0422,
+/// E0430, E0431, E0432) and the A/D boundary cases VerA refuses. No-op for a
+/// module with no discrete block.
 pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     if (module.discrete.len == 0) return;
-    // §7.3.6.1: a named event TRIGGERED in the analog context and named in the
+    // §7.3.6.1: a named event triggered in the analog context and named in the
     // digital one crosses the A/D boundary as an A2D event, which the
     // mixed-signal kernel does not carry yet. Refused rather than lowered as
     // two unrelated events that never meet. The other direction, a digital
@@ -651,8 +643,8 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
     }
 
     var ctx: DiscreteCtx = .{ .mixed = self.out.mixed_signal };
-    // ANALOG functions only. §4.7.3/§7.3.7's rule is that an *analog* function
-    // may not be called from the discrete context; a DIGITAL function called
+    // Analog functions only. §4.7.3/§7.3.7's rule is that an analog function
+    // may not be called from the discrete context; a digital function called
     // from a digital process is the ordinary case and must not be refused.
     for (module.functions) |f| {
         if (!f.is_analog) continue;
@@ -665,44 +657,23 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
     }
     // The continuous side second: §7.2.2's conflict and §5.2.1's read are both
     // "this analog statement, against what the discrete blocks own", so the
-    // discrete set has to be complete first. §7.2.2 is symmetric, and reporting
-    // it at the ANALOG statement is the choice the clause's own wording makes —
-    // "the domain of a variable is that of the context from which its value is
-    // assigned" gives the variable to whichever context is not the intruder, and
-    // a module with a discrete block in it has already been told about that.
+    // discrete set has to be complete first. §7.2.2 is symmetric; the conflict
+    // is reported at the analog statement.
     for (module.analog) |blk| try scanContext(self, blk.body, false, blk.is_initial, &ctx);
 }
 
-/// A.6.2 `initial_construct ::= initial statement`, lowered — as far as it can
-/// honestly be lowered by a compiler with no discrete kernel.
+/// Collects a non-mixed module's A.6.2 `initial` blocks as constant initial
+/// values.
 ///
-/// THE ONE SHAPE. A body of assignments of CONSTANT expressions to module
-/// variables. §7.2.2's first sentence is what makes that shape complete rather
-/// than a guess: "The domain of a variable is that of the context from which its
-/// value is assigned", so the target belongs to the discrete context, and §7.2.2
-/// then forbids the continuous context to assign it as well (E0432). The block
-/// runs once before the analysis, nothing else ever writes the variable, and the
-/// constant is therefore the value it holds for the whole analysis. §7.3.1
-/// Table 7-1 is the rest of the story — how the continuous context READS it —
-/// and for a `reg` the parser has already applied that table's `bit` row by
-/// declaring the grouping as one integer.
+/// The one shape accepted is a body of assignments of constant expressions to
+/// module variables. §7.2.2 gives such a target to the discrete context and
+/// forbids the continuous one to assign it (E0432), so the block runs once
+/// before the analysis and the constant is the variable's value throughout.
+/// This records the expression and `lowerModule` installs it as the variable's
+/// initial value, where an A.2.2.1 declaration assignment lands.
 ///
-/// So this records the expression and `lowerModule` installs it as the
-/// variable's initial value, exactly where an A.2.2.1 declaration assignment
-/// lands. No block is emitted, because there is no second point in time at which
-/// it could run.
-///
-/// EVERYTHING ELSE IS E0433, and deliberately so rather than "unimplemented":
-/// a delay or an event control has nothing to suspend on, a loop or a
-/// conditional is only worth writing over values that change during the run, and
-/// a non-constant right-hand side reads something no discrete kernel computed.
-/// Each of those has several possible readings and the LRM picks between them
-/// with §8.5's simulation cycle, which VerA does not have. Refusing is the
-/// answer that cannot be silently wrong.
-///
-// ponytail: no event queue, no delta cycles, no drivers. The upgrade path is a
-// discrete half in the engine, not a bigger version of this function — and if
-// one ever lands, this stays as its constant-folding fast path.
+/// Everything else is E0433: a delay, an event control, a loop, a conditional
+/// or a non-constant right-hand side needs §8.5's simulation cycle to read.
 pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // A mixed module's `initial` blocks run on the kernel, with the rest of
     // its digital half: their writes are discrete inputs, not constants.
@@ -776,14 +747,13 @@ fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// Collect discrete §7.2.2 assignment targets, then check the continuous side
 /// for both-context assignments and §5.2.1 digital reads in `analog initial`.
 /// The context is compile-time: each walk keeps its own early exits and visits.
-/// Runs only in a module that HAS a discrete block; ordinary analog pays nothing.
+/// Runs only in a module that has a discrete block.
 ///
-/// ponytail: a name declared in a NAMED BLOCK inside the discrete body shadows
-/// the module-level one, and this scan does not model that — the
-/// `self.vars.contains` filter is what keeps the false positive out, by only
-/// ever recording a name the module itself declared. A block-local `integer x`
-/// shadowing a module-level `real x` would still be recorded; give
-/// `Ast.SeqBlock` a scope walk here if a model ever does that.
+/// ponytail: a name declared in a named block inside the discrete body shadows
+/// the module-level one, and this scan does not model that; `self.vars.contains`
+/// keeps it to names the module declared, but a block-local `integer x`
+/// shadowing a module-level `real x` is still recorded. Give `Ast.SeqBlock` a
+/// scope walk here if a model needs it.
 fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
     if (id == .none or (!discrete and ctx.assigned.count() == 0)) return;
     const is_initial = if (discrete) {} else context;
@@ -791,7 +761,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
     // Every variable the statement writes, not only an assignment target: an
     // output actual and a `$random` seed assign too (`stmtWrites`). The target
     // of `bus[3] = ...` is the array, so `lvalueBase` walks down to the name —
-    // §7.2.2's domain is a property of the DECLARATION.
+    // §7.2.2's domain is a property of the declaration.
     const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
     defer writes.deinit(self.arena);
@@ -858,7 +828,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
         if (lower_event.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where })
         // §9.4.3's pairing rule — "For each % character (except %m, %% and
         // %l) that appears in a string, a corresponding expression argument
-        // shall be supplied" — is a property of the format TEXT, so it holds in
+        // shall be supplied" — is a property of the format text, so it holds in
         // the digital context too, where §9.4.7 adds %r to the letters it
         // counts. Judged here, before the digital kernel would meet the gap at
         // run time.
@@ -869,22 +839,14 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
         // The target is a write, collected above; only the value is read.
         .assign => |a| try scanContextExpr(self, a.value, discrete, is_initial, ctx),
         // §7.3, the write half: "Read operations of nets and variables in both
-        // domains are allowed from both contexts. WRITE operations of nets and
+        // domains are allowed from both contexts. Write operations of nets and
         // variables are only allowed from the context of their domain." A `<+`
-        // here writes a CONTINUOUS net from the discrete context, so it is
-        // refused whether or not the enclosing block is executable.
+        // here writes a continuous net from the discrete context, so it is
+        // refused even when the block itself is already refused (E0205 is
+        // about VerA; §7.3 is about the source).
         //
-        // This used to read "the block has already been refused, nothing to
-        // add", and that was the masking: the block's own E0205 says the
-        // construct is unsupported, which is a statement about VerA, while
-        // §7.3 is a statement about the SOURCE and holds in a compiler that
-        // supports `always` perfectly. The two answers are not
-        // interchangeable, and the clause's rule had no coverage at all while
-        // the weaker one stood in for it.
-        //
-        // NOT E0432 (§7.2.2, "assigned in both contexts"): that rule is about
-        // a variable with two writers and fires only when both exist. Here
-        // there is one writer, in the wrong domain.
+        // Not E0432 (§7.2.2, "assigned in both contexts"): that needs two
+        // writers. Here there is one writer, in the wrong domain.
         .contribute => |s| if (discrete) {
             try self.err(self.file.exprs.mainTok(s.lhs), .E0435, "contributed from {s}", .{ctx.where});
         } else try scanContextExpr(self, s.rhs, discrete, is_initial, ctx),
@@ -899,7 +861,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
 /// Every expression reachable from a context statement (`ExprStore.children`).
 /// §5.2.1: "digital values cannot be accessed from the analog initial block as
 /// they have not yet been assigned when the analog initial block is executed."
-/// Only the READ is diagnosed, and only inside an `analog initial` — the same
+/// Only the read is diagnosed, and only inside an `analog initial`; the same
 /// read from the ordinary analog block is what §7.3.1 Table 7-1 is the
 /// conversion table for.
 fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
@@ -936,7 +898,7 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
         // context": a monitored event in a digital event control is the
         // §5.10.3 function itself, so its argument rules hold here as they
         // do in an analog block (E0517), and a call inside its arguments is
-        // a call FROM the continuous context — §7.3.7's first sentence
+        // a call from the continuous context, so §7.3.7's first sentence
         // (E0436) applies to a digital function there.
         if (tag == .event_function) {
             try lower_event.checkEventArgBounds(self, e, self.file.str(ex.strOf(e)));
