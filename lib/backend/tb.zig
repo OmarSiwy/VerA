@@ -123,6 +123,9 @@ pub const Directives = struct {
     seeds: []const Binding = &.{},
     /// Whether any `//! seed` line was written (see `asserts_noise`).
     asserts_seed: bool = false,
+    /// `//! abstol <unknown> = v, ...`: the §3.6.1.2 tolerance the device
+    /// publishes for each named unknown (`u_abstol`). Lines accumulate.
+    abstols: []const Binding = &.{},
     /// `//! limit V(a) = v, ... -> V(b) = w, ..., converged = 0|1`, one case per
     /// line: `limit` run at the first point's `x` as `cur`, with `old` = `cur`
     /// except the lanes left of `->`, must return the lanes right of it (and
