@@ -121,6 +121,7 @@ pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .fi_cast = .{ .s = .custom, .pins_lanes = true, .host_f64 = null, .dev_safe = false, .libm = false },
     .if_cast = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "", "" }, .dev_safe = false, .libm = false },
     .opt_barrier = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "", "" }, .dev_safe = true, .libm = false },
+    .dstop = .{ .s = .custom, .pins_lanes = true, .host_f64 = &.{ "", "" }, .dev_safe = true, .libm = false },
     .path_prev = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .path_acc = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .select = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },

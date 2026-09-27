@@ -1091,6 +1091,10 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
             native = "--schedule=static";
             continue;
         }
+        if (std.mem.eql(u8, a, "--native=two-state")) {
+            native = "--two-state";
+            continue;
+        }
         if (std.mem.eql(u8, a, "--fuzz")) {
             const n = std.fmt.parseInt(u32, args.next() orelse "", 10) catch return usage(init.io, "--fuzz takes a count");
             return fuzz(init, vera_exe, n);
@@ -1661,6 +1665,11 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 //   zig build test-1364 -- --native            # all of IEEE 1364
 //   zig build test-1364 -- --native=static     # combinational logic levelized
 //   zig build test-devices -- --native d04     # the cases whose name has d04
+//   zig build test-1364 -- --native=two-state  # a report, not a gate: see below
+//
+// `--two-state` makes every x or z 0, so its transcript is not the golden.
+// A case passes when each line that differs shows an x or z digit in the
+// golden; FALLBACK is then every case `--two-state` refuses (E1101).
 // ---------------------------------------------------------------------------
 
 const NativeJob = struct {
@@ -1701,7 +1710,9 @@ const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool 
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
 fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    // An `//! xfail` names a 4-state gap, which a two-state report does not judge.
+    if (std.mem.eql(u8, schedule, "--two-state")) return nativeCase(arena, io, vera_exe, schedule, case, w);
+    const src =try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return nativeCase(arena, io, vera_exe, schedule, case, w);
     if (xfail.len == 0) {
@@ -1784,11 +1795,16 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const 
     if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
     const built = try capture(arena, io, argv.items);
+    const two_state = std.mem.eql(u8, schedule, "--two-state");
     const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {
         const rest = built.stderr[at + "not native (".len ..];
         break :blk rest[0 .. std.mem.indexOf(u8, rest, ")\n") orelse rest.len];
     } else null;
     const negative = harness.digitalNegative(source);
+    if (two_state and built.exit != 0) if (std.mem.indexOf(u8, built.stderr, "carries meaning: ")) |at| {
+        const rest = built.stderr[at + "carries meaning: ".len ..];
+        return .{ .pass = true, .fallback = rest[0 .. std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len] };
+    };
     if (built.exit != 0) {
         if (negative and harness.digitalRejectionMatches(source, built.exit, built.stderr)) return .{ .pass = true, .fallback = null, .refused = true };
         try w.print("FAIL {s}: vera --emit-exe exited {d}\n{s}\n", .{ case, built.exit, built.stderr });
@@ -1811,7 +1827,44 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const 
         return .{ .pass = false, .fallback = fallback };
     }
     const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
+    if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback };
     return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
+}
+
+/// `--native=two-state`'s judgement: every line of `got` that differs from
+/// `want` (line by line) differs where `want` shows an x or z digit.
+fn twoStateDiff(w: *Io.Writer, case: []const u8, want: []const u8, got: []const u8) !bool {
+    var wl = std.mem.splitScalar(u8, want, '\n');
+    var gl = std.mem.splitScalar(u8, got, '\n');
+    var differ: u32 = 0;
+    var line: u32 = 1;
+    while (true) : (line += 1) {
+        const a = wl.next();
+        const b = gl.next();
+        if (a == null and b == null) break;
+        if (a != null and b != null and std.mem.eql(u8, a.?, b.?)) continue;
+        differ += 1;
+        if (a != null and hasXz(a.?)) continue;
+        try w.print("FAIL {s}: line {d} differs with no x or z in the golden\n  want: {s}\n  got:  {s}\n", .{ case, line, a orelse "(none)", b orelse "(none)" });
+        return false;
+    }
+    if (differ != 0) try w.print("XZ {s}: {d} line(s) differ, each where the golden shows x or z\n", .{ case, differ });
+    return true;
+}
+
+/// A value token of `line` holds an x or z digit: a run of hex digits,
+/// `_`, x and z with at least one x or z (§17.1.1.3).
+fn hasXz(line: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, line, " \t=:,;()[]{}'\"/");
+    while (it.next()) |t| {
+        var xz = false;
+        for (t) |c| switch (c) {
+            'x', 'X', 'z', 'Z' => xz = true,
+            '0'...'9', 'a'...'f', 'A'...'F', '_' => {},
+            else => break,
+        } else if (xz) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

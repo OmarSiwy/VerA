@@ -198,7 +198,14 @@ pub fn emitFile(self: *Gen) Error!void {
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
     if (!self.float.pinned) try self.w("pub const lane_clean = true;\n\n", .{});
-    if (self.core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
+    if (self.core_sim.count() != 0) {
+        try self.w("pub const core_reads_simstate = true;\n", .{});
+        try self.w("pub const core_sim_fields = [_][]const u8{{", .{});
+        var it = self.core_sim.iterator();
+        var first = true;
+        while (it.next()) |sf| : (first = false) try self.w("{s}\"{t}\"", .{ if (first) " " else ", ", sf });
+        try self.w(" }};\n\n", .{});
+    }
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 

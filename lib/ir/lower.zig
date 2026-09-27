@@ -584,6 +584,9 @@ lte_stack: std.ArrayList(bool) = .empty,
 /// The same for `vera_interp`: true where the enclosing statement asks for
 /// quadratic `absdelay` interpolation (`lower_analog_op.absdelayQuad`).
 interp_stack: std.ArrayList(bool) = .empty,
+/// The same for `vera_nodiff`: true where assignments store no derivative
+/// (`lower_stmt.lowerAssign`).
+nodiff_stack: std.ArrayList(bool) = .empty,
 /// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
 /// `fadd`-chained directly: a call inside an `if` arm does not dominate the
 /// chain root at the end of the block. An SSA place does — seeded `.f_zero` in

@@ -178,7 +178,7 @@ test "codegen: Options.family types each merge by its unknowns, adds abi5; off, 
     };
 }
 
-test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
+test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate and the exact core_sim_fields" {
     // A device-resident host republishes t/dt/kind on the HOST Instance only,
     // so a core reading them there evals stale — the decl is how it knows to
     // keep such a device off the device. The resistor must NOT carry it (its
@@ -189,6 +189,7 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
         try std.testing.expect(std.mem.indexOf(u8, src, "core_reads_simstate") == null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "core_sim_fields") == null);
     }
     {
         var h: Harness = undefined;
@@ -202,6 +203,22 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
         try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+        // Exactly the one field `analysis()` reads, so a host that republishes
+        // it per analysis may keep the core device-resident.
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"analysis_kind\" };") != null);
+    }
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator,
+            \\module td(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p, n) <+ 1e-3 * idt(V(p, n), 0.0) + 1e-3 * V(p, n) * $abstime;
+            \\endmodule
+        , &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"abstime\", \"dt\" };") != null);
     }
 }
 
@@ -2976,6 +2993,66 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(limitDeclined(&h2, "no complete mode ladder"));
     try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
+}
+
+test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`" {
+    // ngspice fetlims against the `von` its PREVIOUS load stored
+    // (mos1load.c:351, :535), and §9.17.3 leaves the returned value to the
+    // simulator. So `limit` runs the core that computes its arguments at `old`,
+    // the previous iterate's limited point, never at the unlimited `cur`.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(g, s, d);
+        \\  inout g, s, d; electrical g, s, d, si;
+        \\  real von;
+        \\  analog begin
+        \\    von = 0.5 + 0.1 * V(d, si);
+        \\    I(si, s) <+ ($limit(V(g, si), "fetlim", von) - V(s)) / 1.0;
+        \\    I(d, si) <+ V(d, si) / 1e3;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "for (old, 0..) |xv, i| xr[i] = R.con(xv);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
+}
+
+test "codegen: §9.17.3 two pnjlimds legs + limvds emit ngspice's bulk rung" {
+    // mos1load.c:376-384: after the ladder, pnjlim ONE junction chosen by the
+    // LIMITED vds, from its raw value, and move only the bulk — a port here,
+    // written anyway (a host that masks ports only loses the clamp).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(d, g, s, b);
+        \\  inout d, g, s, b; electrical d, g, s, b, di, si;
+        \\  parameter real vt = 0.025, vcs = 0.6, vcd = 0.61, type = -1.0;
+        \\  real vds, vbs, vbd;
+        \\  analog begin
+        \\    vds = $limit(V(di, si), "limvds", type);
+        \\    vbs = $limit(V(b, si), "pnjlimds", vt, vcs, type);
+        \\    vbd = $limit(V(b, di), "pnjlimds", vt, vcd, type);
+        \\    I(d, di) <+ V(d, di) / 10.0;
+        \\    I(s, si) <+ V(s, si) / 10.0;
+        \\    I(di, si) <+ 1e-3 * vds;
+        \\    I(b, si) <+ 1e-14 * (limexp(vbs / vt) - 1.0);
+        \\    I(b, di) <+ 1e-14 * (limexp(vbd / vt) - 1.0);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "if (sgt * (x[@intFromEnum(U.di)] - x[@intFromEnum(U.si)]) >= 0.0) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "const vn = cur[@intFromEnum(U.b)] - cur[@intFromEnum(U.si)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.b)] = x[@intFromEnum(U.si)] + vl;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.b)] = x[@intFromEnum(U.di)] + vl;") != null);
+    // Neither channel node takes a junction's correction: the one write to
+    // si is the flat limvds clamp's own.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, s, "x[@intFromEnum(U.si)] -= vl - vn;"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, s, "x[@intFromEnum(U.di)] -= vl - vn;"));
+    // U = d, g, s, b, di, si: the rung writes b (bit 3), limvds si (bit 5).
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_writes: u64 = 0x28;") != null);
+    for (0..h.bag.count()) |i| try std.testing.expect(h.bag.at(i).code != .W0853);
 }
 
 /// Does the bag carry a W0853 whose message contains `why`?

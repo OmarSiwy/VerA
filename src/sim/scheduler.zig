@@ -121,6 +121,20 @@ pub const Scheduler = struct {
         return true;
     }
 
+    /// Cancel every pending event whose payload is in `[lo, hi)`; whether
+    /// any was. O(events ever allocated): IEEE 1364-2005 §10.3 `disable`
+    /// of a native design, whose payloads are the pcs its processes resume at.
+    pub fn cancelRange(self: *Scheduler, lo: u32, hi: u32) Error!bool {
+        try self.checkMutation();
+        var hit = false;
+        for (self.slots.items(.state), self.slots.items(.payload)) |*state, payload| {
+            if (state.* != .pending or payload < lo or payload >= hi) continue;
+            state.* = .cancelled;
+            hit = true;
+        }
+        return hit;
+    }
+
     /// The payload `handle` was scheduled with while its event is still
     /// pending, or null once it has dispatched or been cancelled. A caller that
     /// recycles payload rows asks this before cancelling, to learn which row

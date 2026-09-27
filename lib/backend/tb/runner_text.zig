@@ -117,6 +117,12 @@ pub const runner_body =
     \\    return @intFromEnum(u);
     \\}
     \\
+    \\/// A `//! seed` or `//! limit` want: equal to the 12 significant digits a
+    \\/// hand derivation writes.
+    \\fn near(got: f64, want: f64) bool {
+    \\    return @abs(got - want) <= 1e-12 * @abs(want) + 1e-15;
+    \\}
+    \\
     \\/// Forward-mode dual: value plus one partial per solver unknown. It is the
     \\/// contract's reference family in its dense layout, so the testbench runs
     \\/// the numerics every host is held to (`contract.RefFamily`).
