@@ -646,8 +646,26 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try assignInt(self, t.args[3], try std.fmt.allocPrint(self.arena, "q{d}.status", .{lb}));
                 },
                 .pla => return self.refuse("a §17.5 PLA task"),
-                .fclose, .fshow => return self.refuse("a §17.2 file task"),
-                .sshow => return self.refuse("$swrite or $sformat"),
+                .fclose => {
+                    try self.print("            s.fclose(", .{});
+                    try int64(self, t.args[0]);
+                    try self.print(");\n", .{});
+                },
+                // §17.2.2: the descriptor is read first; an x or z one
+                // prints nothing.
+                .fshow => |sh| {
+                    const lb = self.label();
+                    try self.print("            if (", .{});
+                    try int64(self, t.args[0]);
+                    try self.print(") |d{d}| {{\n            s.capture();\n", .{lb});
+                    try show(self, t.args[1..], sh);
+                    try self.print("            try s.fshow(d{d});\n            }}\n", .{lb});
+                },
+                .sshow => |sh| {
+                    try self.print("            s.capture();\n", .{});
+                    try show(self, t.args[1..], sh);
+                    try assignChars(self, t.args[0], "s.captured()");
+                },
                 .dump => return self.refuse("a §18 value change dump task"),
             }
             try self.print("            continue :sw {d};\n", .{next});
@@ -934,6 +952,17 @@ pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
     try self.print("            s.set({d}, L.k(@bitCast(@as(i64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
+}
+
+/// `system.stringValue` of the Zig `[]const u8` `v` assigned to `target`,
+/// through a scratch cell as wide as the target (§17.2.3: "the string
+/// assignment to variable rules").
+pub fn assignChars(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const ty = try targetType(self, target);
+    if (ty.real) return self.refuse("characters assigned to a real");
+    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
+    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, ty.width, v });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
 }
 
 /// `exec.eval(e, 0).asInt()` as a Zig `?i64`.

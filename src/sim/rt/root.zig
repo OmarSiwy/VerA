@@ -211,6 +211,9 @@ pub const State = struct {
     queues: system.Queues = .empty,
     /// `Run.random_seed`.
     random_seed: i32 = 0,
+    /// `capture`'s buffer, and `scan`'s characters.
+    cap: std.Io.Writer.Allocating,
+    scratch: std.heap.ArenaAllocator,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
@@ -244,6 +247,8 @@ pub const State = struct {
             .active = try gpa.alloc(u32, d.subs),
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
+            .cap = .init(gpa),
+            .scratch = .init(gpa),
             .stdout = undefined,
             .out = undefined,
             .io = init_.io,
@@ -670,6 +675,72 @@ pub const State = struct {
     /// §17.6.5 `$q_full` of queue `id`.
     pub fn queueFull(self: *const State, id: ?i64) @TypeOf(system.queueIsFull(undefined, null)) {
         return system.queueIsFull(&self.queues, id);
+    }
+
+    /// §17.2.1 `system.fopen` of the characters of `name` (`nw` bits) with
+    /// the type in `mode` (`mw` bits), or `mode` null for a multichannel
+    /// descriptor; `source` is the design's file, which a read looks beside.
+    pub fn fopen(self: *State, source: []const u8, name: anytype, comptime nw: u32, mode: anytype, comptime mw: u32) Error!i64 {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const mcd = @TypeOf(mode) == @TypeOf(null);
+        const m = if (mcd) null else try chars(a, mode, mw);
+        return system.fopen(system.own, a, source, try chars(a, name, nw), m, mcd);
+    }
+
+    /// `system.text` of a `w`-bit value.
+    fn chars(a: std.mem.Allocator, v: anytype, comptime w: u32) Error!?[]const u8 {
+        var buf = logic.planesOf(v);
+        return system.text(a, literal(&buf, w, false)) catch error.OutOfMemory;
+    }
+
+    /// `system.fileOp`.
+    pub fn fileOp(_: *const State, f: system.FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
+        return system.fileOp(system.own, f, x, y, z);
+    }
+
+    /// §17.2.7 `$fclose`.
+    pub fn fclose(_: *const State, d: ?i64) void {
+        _ = system.own.close((d orelse return) & 0xffff_ffff);
+    }
+
+    /// §17.2.4.3 `$sscanf` over the characters of `input` and `format`;
+    /// the scan's slices live until the next call.
+    pub fn scan(self: *State, input: anytype, comptime iw: u32, format: anytype, comptime fw: u32, outs: usize) Error!system.Scan {
+        _ = self.scratch.reset(.retain_capacity);
+        const a = self.scratch.allocator();
+        return .init(try chars(a, input, iw), try chars(a, format, fw), outs);
+    }
+
+    /// Everything printed until `captured` or `fshow` goes to a buffer.
+    pub fn capture(self: *State) void {
+        self.cap.clearRetainingCapacity();
+        self.out = &self.cap.writer;
+    }
+
+    /// Ends a `capture`: the bytes printed since, valid until the next one.
+    pub fn captured(self: *State) []const u8 {
+        self.out = &self.stdout.interface;
+        return self.cap.written();
+    }
+
+    /// §17.2.2: ends a `capture`, sending its bytes to descriptor `d`'s
+    /// channels (`system.channels`).
+    pub fn fshow(self: *State, d: i64) Error!void {
+        const bytes = self.captured();
+        try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes);
+    }
+
+    /// The characters `bytes` in the `w`-bit cell at word `off`, the last
+    /// one in the low byte, truncated or zero-filled on the left.
+    pub fn setChars(self: *State, off: u32, comptime w: u32, bytes: []const u8) void {
+        const n = comptime logic.words(w);
+        const v = self.v[off..][0..n];
+        @memset(v, 0);
+        @memset(self.x[off..][0..n], 0);
+        for (0..@min(bytes.len, n * 8)) |k| v[k / 8] |= @as(u64, bytes[bytes.len - 1 - k]) << @intCast(8 * (k % 8));
+        v[n - 1] &= logic.mask(w - 64 * (n - 1));
     }
 
     /// §17.9 `system.dist`, with the interpreter's W1151 warning where the

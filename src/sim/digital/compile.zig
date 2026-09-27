@@ -202,7 +202,7 @@ pub const SysFn = enum {
     /// never is, however constant its (absent) arguments — which a
     /// replication count and a case label both depend on — and neither is a
     /// question about the invocation.
-    fn constant(self: SysFn) bool {
+    pub fn constant(self: SysFn) bool {
         return switch (self) {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
