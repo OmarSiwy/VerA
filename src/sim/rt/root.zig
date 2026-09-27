@@ -208,6 +208,8 @@ pub const State = struct {
     mon_pending: bool = false,
     /// §17.6 the stochastic queues, by `q_id`.
     queues: system.Queues = .empty,
+    /// `Run.random_seed`.
+    random_seed: i32 = 0,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
@@ -667,6 +669,26 @@ pub const State = struct {
     /// §17.6.5 `$q_full` of queue `id`.
     pub fn queueFull(self: *const State, id: ?i64) @TypeOf(system.queueIsFull(undefined, null)) {
         return system.queueIsFull(&self.queues, id);
+    }
+
+    /// §17.9 `system.dist`, with the interpreter's W1151 warning where the
+    /// listing prints one.
+    pub fn dist(self: *State, f: system.Dist, seed: i32, a: i32, b: i32) ?system.Draw {
+        return system.dist(f, seed, a, b) orelse {
+            self.out.flush() catch {};
+            var buf: [256]u8 = undefined;
+            var e = std.Io.File.stderr().writer(self.io, &buf);
+            e.interface.writeAll("warning[W1151]: " ++ system.dist_warning ++ "\n") catch {};
+            e.interface.flush() catch {};
+            return null;
+        };
+    }
+
+    /// §17.9.1 a seedless `$random`.
+    pub fn random(self: *State) i32 {
+        const d = system.dist(.random, self.random_seed, 0, 0).?;
+        self.random_seed = d.seed;
+        return d.value;
     }
 
     /// `exec.delayOf` of a real delay (§9.7.1), rounded to the precision.

@@ -376,6 +376,24 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try emit.assignInt(self, args[1], try std.fmt.allocPrint(self.arena, "f{d}.status", .{lb}));
                     try self.print("            break :qf{d} L.k(@bitCast(f{d}.full), 0);\n            }}, 64, {d}, {})", .{ lb, lb, w, sg });
                 },
+                // §17.9, which writes its seed argument back.
+                .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
+                    if (args.len == 0) return self.print("L.rs(L.k(@as(u32, @bitCast(s.random())), 0), 32, {d}, {})", .{ w, sg });
+                    const lb = self.label();
+                    try self.print("L.rs(rd{d}: {{\n            const d{d} = s.dist(.{t}", .{ lb, lb, f.dist().? });
+                    for (0..3) |i| {
+                        if (i >= args.len) {
+                            try self.print(", 0", .{});
+                            continue;
+                        }
+                        try self.print(", @as(i32, @truncate(", .{});
+                        try emit.int64(self, args[i]);
+                        try self.print(" orelse 0))", .{});
+                    }
+                    try self.print(");\n            if (d{d}) |g{d}| {{\n", .{ lb, lb });
+                    try emit.assignInt(self, args[0], try std.fmt.allocPrint(self.arena, "g{d}.seed", .{lb}));
+                    try self.print("            }}\n            break :rd{d} L.k(@as(u32, @bitCast(if (d{d}) |g{d}| g{d}.value else 0)), 0);\n            }}, 32, {d}, {})", .{ lb, lb, lb, lb, w, sg });
+                },
                 .clog2 => {
                     try self.print("L.rs(L.k(L.clog2(", .{});
                     const t = try selfDetermined(self, args[0]);
