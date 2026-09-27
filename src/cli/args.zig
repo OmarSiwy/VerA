@@ -290,7 +290,7 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
         } else if (std.mem.eql(u8, arg, "--jac-f32-host")) {
             cli.jac_f32_host = true;
         } else if (std.mem.eql(u8, arg, "--contract")) {
-            cli.contract_path = args.next() orelse return try missing(err, "--contract", "a path");
+            cli.contract_path = try pathValue(args, err, "--contract", "a path") orelse return 2;
         } else if (std.mem.eql(u8, arg, "--param")) {
             const kv = args.next() orelse return try missing(err, "--param", "NAME=VALUE");
             const eq = std.mem.findScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
@@ -301,16 +301,13 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
             }
             try cli.overrides.append(gpa, .{ .name = kv[0..eq], .value = value });
         } else if (std.mem.eql(u8, arg, "--dyn")) {
-            cli.dyn_path = args.next() orelse return try missing(err, "--dyn", "a path");
+            cli.dyn_path = try pathValue(args, err, "--dyn", "a path") orelse return 2;
         } else if (std.mem.eql(u8, arg, "--work-dir")) {
-            cli.work_dir = args.next() orelse return try missing(err, "--work-dir", "a directory");
+            cli.work_dir = try pathValue(args, err, "--work-dir", "a directory") orelse return 2;
         } else if (std.mem.eql(u8, arg, "--debug-info")) {
             cli.debug_info = true;
         } else if (std.mem.eql(u8, arg, "--zig")) {
-            cli.zig_exe = args.next() orelse return try missing(err, "--zig", "a path");
-            // An empty path names no executable: refused here, not when the
-            // spawn fails later as `error.CompilerGone` (#47).
-            if (cli.zig_exe.len == 0) return try missing(err, "--zig", "a path");
+            cli.zig_exe = try pathValue(args, err, "--zig", "a path") orelse return 2;
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
             cli.optimize = optimize_names.get(arg["--optimize=".len..]) orelse {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
@@ -344,19 +341,19 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
                 return 2;
             };
         } else if (std.mem.eql(u8, arg, "-o")) {
-            cli.out_path = args.next() orelse return try missing(err, "-o", "a path");
+            cli.out_path = try pathValue(args, err, "-o", "a path") orelse return 2;
             cli.emit_zig = true;
             cli.codegen_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--expect-module=")) {
             cli.expect_module = arg["--expect-module=".len..];
         } else if (std.mem.eql(u8, arg, "--spice")) {
-            cli.spice_path = args.next() orelse return try missing(err, "--spice", "a path");
+            cli.spice_path = try pathValue(args, err, "--spice", "a path") orelse return 2;
         } else if (std.mem.eql(u8, arg, "--libmap")) {
-            try cli.libmaps.append(gpa, args.next() orelse return try missing(err, "--libmap", "a library map file"));
+            try cli.libmaps.append(gpa, try pathValue(args, err, "--libmap", "a library map file") orelse return 2);
         } else if (std.mem.eql(u8, arg, "-L")) {
             try cli.search.append(gpa, args.next() orelse return try missing(err, "-L", "a library name"));
         } else if (std.mem.eql(u8, arg, "-I")) {
-            try cli.include_dirs.append(gpa, args.next() orelse return try missing(err, "-I", "a directory"));
+            try cli.include_dirs.append(gpa, try pathValue(args, err, "-I", "a directory") orelse return 2);
         } else if (std.mem.startsWith(u8, arg, "--std=")) {
             cli.language = vera.KeywordSet.fromSpecifier(arg["--std=".len..]) orelse {
                 try err.print("error: `{s}`: not a `begin_keywords version specifier\n", .{arg});
@@ -484,6 +481,17 @@ pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
     return null;
 }
 
+/// The value after the path-valued `flag`, or null once `missing` printed
+/// `error: <flag> needs <what>`: the line ended there, or the value is empty,
+/// which names no file. Every path flag reads its value here, so an empty
+/// one is refused before anything opens or spawns it (#47).
+fn pathValue(args: anytype, err: *Io.Writer, flag: []const u8, what: []const u8) !?[]const u8 {
+    const v = args.next() orelse "";
+    if (v.len != 0) return v;
+    _ = try missing(err, flag, what);
+    return null;
+}
+
 /// Prints `error: <flag> needs <what>` on `w`; returns exit status 2.
 pub fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
     try w.print("error: {s} needs {s}\n", .{ flag, what });
@@ -593,8 +601,18 @@ test "parse: a flag that takes a value refuses a line that ends before it" {
     for (cases) |c| try expectRefused(&.{c[0]}, c[1]);
 }
 
-test "parse: --zig refuses an empty path; any other is taken as typed" {
-    try expectRefused(&.{ "--zig", "" }, "error: --zig needs a path\n");
+test "parse: every path-valued flag refuses an empty path; any other is taken as typed" {
+    const cases = [_][2][]const u8{
+        .{ "--contract", "error: --contract needs a path\n" },
+        .{ "--dyn", "error: --dyn needs a path\n" },
+        .{ "--work-dir", "error: --work-dir needs a directory\n" },
+        .{ "--zig", "error: --zig needs a path\n" },
+        .{ "-o", "error: -o needs a path\n" },
+        .{ "--spice", "error: --spice needs a path\n" },
+        .{ "--libmap", "error: --libmap needs a library map file\n" },
+        .{ "-I", "error: -I needs a directory\n" },
+    };
+    for (cases) |c| try expectRefused(&.{ c[0], "" }, c[1]);
     var l: Line = .init();
     defer l.deinit();
     _ = try l.read(&.{ "--zig", "/opt/zig-0.17/zig" });
