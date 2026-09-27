@@ -1,6 +1,7 @@
 //! Honoured `$limit(V(a,b), "alg", args…)` sites -> the device's `limit` hook
-//! (one clamp per site, writing a corrected `x`), `limit_reads`/`limit_writes`,
-//! and the cold-start `seed` (SPICE MODEINITJCT). LRM §4.5.15, §9.17.3.
+//! (one clamp per site, writing a corrected `x`) and the slice of the core its
+//! arguments need, `limit_reads`/`limit_writes`, and the cold-start `seed`
+//! (SPICE MODEINITJCT). LRM §4.5.15, §9.17.3.
 //! The host clamps `x` before `eval`, so `eval` renders the string form as the
 //! identity of its probe; a second clamp would use the wrong `x_old`. The
 //! user-function form is lowered instead. Limiters live in `limit_kernels.zig`.
@@ -11,6 +12,7 @@ const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
+const gen_unit = @import("codegen/unit.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
 // The pure half: which sites are honoured, and the questions both halves ask.
@@ -91,8 +93,9 @@ pub fn liveSets(g: *const Gen) Live {
 // -------------------------------------------------------------------- emit
 
 /// Returns true when a clamp reads a value out of the shared core at clamp
-/// time, so `limit` must run `core`. An argument that is a literal, a parameter
-/// or a `setup` root (latched in `Instance.su`) needs no core.
+/// time, so `limit` must run its slice of the core (`emitCore`). An argument
+/// that is a literal, a parameter or a `setup` root (latched in
+/// `Instance.su`) needs no core.
 pub fn usesCore(g: *const Gen) bool {
     for (g.limits.calls) |lc| {
         if (needsCore(g, lc.sign)) return true;
@@ -116,6 +119,50 @@ fn seedUsesCore(g: *const Gen) bool {
         if (needsCore(g, lc.argv[1]) or needsCore(g, lc.sign)) return true;
     }
     return false;
+}
+
+/// Returns `<core>__limit`, the declaration `emitCore` writes.
+fn coreName(g: *Gen) Error![]const u8 {
+    return std.fmt.allocPrint(g.arena, "{s}__limit", .{g.core.name});
+}
+
+/// Emits `<core>__limit`: the core's slice computing only the clamp arguments
+/// that are neither a leaf nor a setup root, so `limit` pays for its
+/// thresholds and not for every current and charge of the model. Called from
+/// `emitUnits`, so its range tiles with the other unit declarations.
+pub fn emitCore(g: *Gen) Error!void {
+    if (g.limits.calls.len == 0 or !usesCore(g)) return;
+    const idx = try g.arena.alloc(u32, g.an.nv);
+    @memset(idx, none_u32);
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    for (g.limits.calls) |lc| {
+        for ([_]Mir.Value{lc.sign} ++ lc.argv, 0..) |v, k| {
+            if (k > lc.alg.arity() or !needsCore(g, v)) continue;
+            const r = g.an.rv(v);
+            if (idx[@intFromEnum(r)] != none_u32) continue;
+            idx[@intFromEnum(r)] = @intCast(vals.items.len);
+            try vals.append(g.arena, r);
+        }
+    }
+    g.lim_idx = idx;
+    const saved = .{ g.core.lo_vals, g.plan.lo_idx, g.plan.lo_vals };
+    defer {
+        g.core.lo_vals = saved[0];
+        g.plan.lo_idx = saved[1];
+        g.plan.lo_vals = saved[2];
+    }
+    g.core.lo_vals = vals.items;
+    g.plan.lo_idx = idx;
+    g.plan.lo_vals = vals.items;
+    // `limit` runs on the value scalar alone, so, as in `setup`, its reals
+    // are no `lane_masks` data.
+    const n_masks = g.fam_masks.items.len;
+    defer g.fam_masks.shrinkRetainingCapacity(n_masks);
+    try gen_unit.emitCoreDecl(g, try coreName(g),
+        \\/// §4.5.15 the `$limit` arguments the core computes, and only what they
+        \\/// read: `limit` evaluates them at `old` once per instance per iterate.
+        \\
+    );
 }
 
 /// True when `v0` must be read from the core's live-outs (not a root or leaf).
@@ -216,12 +263,12 @@ pub fn emit(g: *Gen) Error!void {
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     // §9.17.3 leaves the return value to the simulator, and ngspice's loads
     // take every limiter argument from the PREVIOUS load (mos1load.c:351
-    // fetlims against the `von` stored at :535). So the core that computes
+    // fetlims against the `von` stored at :535). So the slice that computes
     // the arguments runs at `old`, the previous iterate's limited point.
     if (needs_core) try g.w(
-        \\    const m = core(S, zVals(S, &old), model, {s}, sim{s});
+        \\    const m = {s}(S, zVals(S, &old), model, {s}, sim{s});
         \\
-    , .{ probe_inst, g.heldArg(true) });
+    , .{ try coreName(g), probe_inst, g.heldArg(true) });
     try g.w("    var x = cur;\n", .{});
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
@@ -296,7 +343,7 @@ fn oneSign(g: *Gen, seen: *std.ArrayList(u32), v: Mir.Value) Error!void {
     for (seen.items) |s| if (s == k) return;
     try seen.append(g.gpa, k);
     try g.w("    const zsg__{d}: f64 = if (", .{k});
-    try writeArg(g, v);
+    try writeArg(g, v, g.lim_idx);
     try g.w(" < 0) -1.0 else 1.0;\n", .{});
 }
 
@@ -346,7 +393,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     });
     for (lc.argv[0..lc.alg.arity()]) |v| {
         try g.w(", ", .{});
-        try writeArg(g, v);
+        try writeArg(g, v, g.lim_idx);
     }
     try g.w(");\n", .{});
 
@@ -412,7 +459,7 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
         try g.w("            const sg: f64 = zsg__{d};\n", .{signKey(g, leg.sign)});
         try g.w("            const vl = sg * zFetlim(sg * vn, sg * vo, ", .{});
     }
-    try writeArg(g, leg.argv[0]);
+    try writeArg(g, leg.argv[0], g.lim_idx);
     try g.w(");\n", .{});
     try g.w("            x[@intFromEnum(U.{s})] -= vl - vn;\n", .{nw});
     const neg: []const u8 = if (inv) "-" else "";
@@ -459,9 +506,9 @@ fn emitJunction(g: *Gen, leg: LimitCall) Error!void {
         try g.w("            const sg: f64 = zsg__{d};\n", .{signKey(g, leg.sign)});
         try g.w("            const vl = sg * zPnjlim(sg * vn, sg * vo, ", .{});
     }
-    try writeArg(g, leg.argv[0]);
+    try writeArg(g, leg.argv[0], g.lim_idx);
     try g.w(", ", .{});
-    try writeArg(g, leg.argv[1]);
+    try writeArg(g, leg.argv[1], g.lim_idx);
     try g.w(");\n", .{});
     try g.w("            x[@intFromEnum(U.{s})] = x[@intFromEnum(U.{s})] + vl;\n", .{ nb, nj });
     try g.w("            if (vl != vn) ok = false;\n", .{});
@@ -478,15 +525,17 @@ fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
     if (lc.lo != none_u32) try g.w(" - {s}[@intFromEnum(U.{s})]", .{ arr, g.names.u_names[lc.lo] });
 }
 
-fn writeArg(g: *Gen, v: Mir.Value) Error!void {
+/// Writes argument `v`: a literal, a parameter, a setup root, or field
+/// `field[v]` of `m`, the core (`seed`) or `limit`'s slice of it (`emitCore`).
+fn writeArg(g: *Gen, v: Mir.Value, field: []const u32) Error!void {
     if (v == .f_zero) return g.w("0.0", .{});
     const i = @intFromEnum(g.an.rv(v));
     // Solve-invariant: `setup` latched it (codegen/setup.zig), so neither
     // `limit` nor `seed` evaluates the core for it.
     if (isRoot(g, v)) return g.w("{s}", .{try Gen.rootRef(g, v, false)});
     if (isLeaf(g, v)) return g.w("{s}", .{try g.f64Expr(v)});
-    const k = g.core.lo_idx[i];
-    std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
+    const k = field[i];
+    std.debug.assert(k != none_u32); // `buildJobs` and `emitCore` take every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
     // a family value, so it has no `.val()`.
     if (g.an.vty[i] == .int)
@@ -542,17 +591,17 @@ fn emitSeed(g: *Gen) Error!void {
         const on_lo = g.limits.writable(lc.lo);
         if (lc.sign != .f_zero) {
             try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.names.u_names[if (on_lo) lc.lo else lc.hi]});
-            try writeArg(g, lc.sign);
+            try writeArg(g, lc.sign, g.core.lo_idx);
             try g.w(" < 0) {s}", .{if (on_lo) "" else "-"});
-            try writeArg(g, lc.argv[1]);
+            try writeArg(g, lc.argv[1], g.core.lo_idx);
             try g.w(" else {s}", .{if (on_lo) "-" else ""});
-            try writeArg(g, lc.argv[1]);
+            try writeArg(g, lc.argv[1], g.core.lo_idx);
         } else if (on_lo) {
             try g.w("    s[@intFromEnum(U.{s})] = -", .{g.names.u_names[lc.lo]});
-            try writeArg(g, lc.argv[1]);
+            try writeArg(g, lc.argv[1], g.core.lo_idx);
         } else {
             try g.w("    s[@intFromEnum(U.{s})] = ", .{g.names.u_names[lc.hi]});
-            try writeArg(g, lc.argv[1]);
+            try writeArg(g, lc.argv[1], g.core.lo_idx);
         }
         try g.w("; // V({s},{s}) = {s}vcrit\n", .{
             plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
@@ -613,11 +662,11 @@ fn emitSeedTree(g: *Gen) Error!void {
         try g.w(" {s} ", .{if (st.node == lc.hi) "+" else "-"});
         if (lc.sign != .f_zero) {
             try g.w("@as(f64, if (", .{});
-            try writeArg(g, lc.sign);
+            try writeArg(g, lc.sign, g.core.lo_idx);
             try g.w(" < 0) -1.0 else 1.0) * ", .{});
         }
         try g.w("(", .{});
-        try writeArg(g, seedValue(lc));
+        try writeArg(g, seedValue(lc), g.core.lo_idx);
         try g.w("); // V({s},{s}) = {s}\n", .{
             plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
             if (lc.seed != .undef) "seed" else "vcrit",
