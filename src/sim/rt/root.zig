@@ -204,11 +204,7 @@ pub const Reach = packed struct(u8) {
     mon: bool = false,
     /// A §18 dump.
     dump: bool = false,
-    /// A continuous assignment is among the nodes: they settle before any
-    /// event control wakes, as `vera --run`'s fan-out runs first. Without
-    /// one, the nodes wake in suspension order among the event controls.
-    comb_first: bool = false,
-    _: u1 = 0,
+    _: u2 = 0,
 
     pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
 };
@@ -418,8 +414,8 @@ pub const View = struct {
 /// same waiter lists, fan-out and nonblocking rows, so a process wakes in
 /// the interpreter's order. Under `static`, combinational nodes run in one
 /// `settle` event in topological order, and a process that suspends only
-/// at its entry waits on a per-slot watcher list; a store still wakes
-/// event controls in suspension order, those two interleaved by `stamp`.
+/// at its entry waits on a per-slot watcher list; a store wakes those
+/// processes and the event controls in suspension order (`stamp`).
 pub const State = struct {
     gpa: std.mem.Allocator,
     v: []u64,
@@ -452,10 +448,8 @@ pub const State = struct {
     /// Per triggered process: the `stamp` of its suspension at its event
     /// control, 0 while it runs.
     waiting: []u64,
-    /// The last `stamp`, and the one of the latest settle event or
-    /// time-0 node suspension (`wakeTerms`).
+    /// The last `stamp`.
     seq: u64 = 0,
-    nodes_at: u64 = 0,
     repeats: []u64,
     /// §9.8.2: per `fork`, the arms still running.
     joins: []u32,
@@ -595,8 +589,6 @@ pub const State = struct {
                 }
                 self.changed.clearRetainingCapacity();
                 self.settle = .running;
-                // Stamped at the start: no process suspends while the nodes run.
-                self.nodes_at = self.stamp();
                 return settle_pc;
             }
             if (event.payload >= net.drive_base and event.payload < nba_payload) {
@@ -994,9 +986,9 @@ pub const State = struct {
 
     /// `exec.wake`: the continuous drivers reading `slot` first, then the
     /// event controls in the order they suspended. Under the static
-    /// schedule the nodes and triggered processes reading it take their
-    /// place in that order by `stamp`. A change of a slot the monitor
-    /// watches asks for its line (§17.1.3).
+    /// schedule the nodes reading it come before them, and the triggered
+    /// processes take their place in that order by `stamp`. A change of a
+    /// slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         return self.wakeOf(.all, slot, before, after);
     }
@@ -1009,17 +1001,16 @@ pub const State = struct {
             self.armed[pc] = false;
             try self.run(pc, null);
         };
-        if (reach.terms) return self.wakeTerms(reach, slot, before, after);
         if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
+        if (reach.terms) return self.wakeTerms(reach, slot, before, after);
         if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
     }
 
     /// `wake` of the event controls filed under `slot`, in the order they
-    /// suspended, each after the nodes and triggered processes that
-    /// suspended before it: `vera --run`'s order, so a process woken here
-    /// suspends again before they store what it waits for next.
+    /// suspended, each after the triggered processes that suspended before
+    /// it: `vera --run`'s order, so a process woken here suspends again
+    /// before they store what it waits for next.
     fn wakeTerms(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
-        var comb = reach.comb and self.sensed(slot);
         const list = &self.terms[slot];
         var keep: usize = 0;
         for (list.items) |t| {
@@ -1030,19 +1021,12 @@ pub const State = struct {
                 keep += 1;
                 continue;
             }
-            // ponytail: one stamp for every node, the latest; a stamp per
-            // node if a design needs `vera --run`'s order among them too.
-            if (comb and (reach.comb_first or self.nodes_at < s.seq)) {
-                comb = false;
-                try self.dirtyReaders(slot);
-            }
             if (reach.watch) try self.wakeWatchers(slot, before, after, s.seq);
             const pc = s.pc;
             self.retire(t.susp);
             try self.run(pc, null);
         }
         list.shrinkRetainingCapacity(keep);
-        if (comb) try self.dirtyReaders(slot);
         if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
     }
 
