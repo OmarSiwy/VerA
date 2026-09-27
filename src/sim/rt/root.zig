@@ -30,6 +30,7 @@ pub const logic = @import("logic.zig");
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
+const display = @import("../digital/display.zig");
 const W = logic.W;
 const Bit = logic.Bit;
 const two = logic.two;
@@ -675,13 +676,45 @@ pub const State = struct {
     /// listing prints one.
     pub fn dist(self: *State, f: system.Dist, seed: i32, a: i32, b: i32) ?system.Draw {
         return system.dist(f, seed, a, b) orelse {
-            self.out.flush() catch {};
-            var buf: [256]u8 = undefined;
-            var e = std.Io.File.stderr().writer(self.io, &buf);
-            e.interface.writeAll("warning[W1151]: " ++ system.dist_warning ++ "\n") catch {};
-            e.interface.flush() catch {};
+            self.warn("W1151", system.dist_warning, .{});
             return null;
         };
+    }
+
+    /// A run-time warning in `vera --run`'s words, on stderr.
+    fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+        self.out.flush() catch {};
+        var buf: [512]u8 = undefined;
+        var e = std.Io.File.stderr().writer(self.io, &buf);
+        e.interface.print("warning[" ++ code ++ "]: " ++ message ++ "\n", args) catch {};
+        e.interface.flush() catch {};
+    }
+
+    /// §17.2.9 `$readmemb`/`$readmemh` of the file `name` beside `source`
+    /// (`display.MemLoad`) into the array whose lowest address is `slot`,
+    /// at word `off`, each element `width` bits. `given` is how many of the
+    /// start and finish addresses `first`/`last` the call has (null: x or z).
+    pub fn readmem(self: *State, source: []const u8, name: []const u8, radix: fmt.Radix, width: u32, slot: u32, off: u32, low: i64, high: i64, given: u2, first: ?i64, last: ?i64) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const file = display.sideFile(self.io, a, source, name) catch return self.fail("the memory file cannot be read", .{});
+        var load: display.MemLoad = .init(file, radix, width, low, high, given, first, last);
+        const n = (width + 63) / 64;
+        const m = try a.alloc(u64, n);
+        @memset(m, std.math.maxInt(u64));
+        m[n - 1] = @as(u64, std.math.maxInt(u64)) >> @intCast(64 * n - width);
+        while (load.next(a) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("{s}", .{display.MemLoad.message(e)})) |w| {
+            const v = w.value.values();
+            const x = w.value.unknowns();
+            // `--two-state`: an x or z digit loads 0.
+            if (two) for (v, x) |*bv, *bx| {
+                bv.* &= ~bx.*;
+                bx.* = 0;
+            };
+            try self.store(slot + w.index, off + w.index * n, v, x, m);
+        }
+        if (load.mismatch()) |mm| self.warn("W1150", display.MemLoad.mismatch_text, .{ mm.found, mm.expected });
     }
 
     /// §17.9.1 a seedless `$random`.

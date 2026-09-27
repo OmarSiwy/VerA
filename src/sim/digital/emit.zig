@@ -613,7 +613,19 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print("            if (s.monitorEnable(true)) |k| try show(s, k);\n", .{})
                 else
                     try self.print("            _ = s.monitorEnable(false);\n", .{}),
-                .readmem => return self.refuse("$readmemb/$readmemh"),
+                // §17.2.9: the bounds are read now; the file when the task runs.
+                .readmem => |radix| {
+                    const base = try self.slot(t.args[1]);
+                    const arr = r.arrays.get(base).?;
+                    const name = r.file.str(r.file.exprs.strOf(t.args[0]));
+                    try self.print("            try s.readmem(\"{f}\", \"{f}\", .{t}, ", .{ std.zig.fmtString(r.file_name), std.zig.fmtString(name), radix });
+                    try self.print("{d}, {d}, {d}, {d}, {d}, {d}", .{ try self.slotWidth(base), base, self.off[base], arr.low, arr.high, t.args.len - 2 });
+                    for (2..4) |k| {
+                        try self.print(", ", .{});
+                        if (k < t.args.len) try int64(self, t.args[k]) else try self.print("null", .{});
+                    }
+                    try self.print(");\n", .{});
+                },
                 // §17.6: inputs read, the shared queue engine, then each
                 // output written as `exec.assignInt` writes it, status last.
                 .queue => |op| {
