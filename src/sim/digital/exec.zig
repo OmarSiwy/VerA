@@ -31,8 +31,6 @@ const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 const wordMask = @import("net.zig").wordMask;
-const wired = @import("net.zig").wired;
-const undriven = @import("net.zig").undriven;
 const Show = display.Show;
 const Overrides = @import("root.zig").Overrides;
 const driver = @import("driver.zig");
@@ -960,30 +958,22 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         n.resolved.unknowns()[last] &= wordMask(n.resolved.width, last);
     } else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
-        var bit: Int.Bit = .z;
-        if (tables) |table| {
-            // Each driver collapses on its own first, so that a strength
-            // that suppresses a value (`highz0` holding 0) drops out of the
-            // fold entirely instead of voting as a 0.
-            for (n.drivers) |d| bit = wired(table, bit, contribution(self.drivers[d], at).collapse());
-            if (bit == .z) bit = undriven(n.kind);
-        } else {
-            var acc: Signal = .{};
-            for (n.drivers) |d| acc = acc.combine(contribution(self.drivers[d], at));
-            // §7.9/§7.10: a `trireg` with no driver asserting anything is in
-            // the capacitive state, and what it asserts there is the charge
-            // it last held, at its charge strength. Checked before the net
-            // type's own pull so that a driven trireg never sees it.
-            if (n.kind == .trireg and acc.none()) {
-                acc = .of(current.bit(at), n.charge, n.charge);
-                floating += 1;
-            }
-            acc = acc.combine(netPull(n.kind));
-            n.signal[at] = acc;
-            bit = acc.collapse();
+        var acc: Signal = .{};
+        for (n.drivers) |d| {
+            const c = contribution(self.drivers[d], at);
+            acc = if (tables) |table| acc.combineWired(c, table) else acc.combine(c);
         }
-        if (tables != null) n.signal[at] = .of(bit, .strong, .strong);
-        setBit(n.resolved, at, bit);
+        // §7.9/§7.10: a `trireg` with no driver asserting anything is in
+        // the capacitive state, and what it asserts there is the charge
+        // it last held, at its charge strength. Checked before the net
+        // type's own pull so that a driven trireg never sees it.
+        if (n.kind == .trireg and acc.none()) {
+            acc = .of(current.bit(at), n.charge, n.charge);
+            floating += 1;
+        }
+        acc = acc.combine(netPull(n.kind));
+        n.signal[at] = acc;
+        setBit(n.resolved, at, acc.collapse());
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
     // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it sits

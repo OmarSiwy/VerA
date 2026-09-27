@@ -294,6 +294,9 @@ pub const Code = enum(u16) {
     E0522,
     E0523,
     E0524,
+    E0525,
+    E0526,
+    E0527,
     E0572,
     E0573,
     E0574,
@@ -402,6 +405,9 @@ pub const Code = enum(u16) {
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
+    /// A `$limit` seed on a branch `seed` does not start: named, never
+    /// silently dropped.
+    W0854,
 
     pub fn name(self: Code) []const u8 {
         return @tagName(self);
@@ -4026,6 +4032,52 @@ fn infoOf(c: Code) Info {
             \\The attribute is ignored and the site keeps linear interpolation.
             ,
         },
+        .E0525 => .{
+            .title = "vera_nodiff needs a constant value",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_nodiff *)` is VerA's attribute for storing the value of
+            \\every assignment inside a statement with no derivative, the frozen
+            \\coefficient a SPICE load stamps (ngspice's `geq = ag0 * C`). `= 0`
+            \\turns it off inside. The answer decides which derivatives the
+            \\emitted device computes, so it must fold before the model card
+            \\exists and may not name a parameter:
+            \\
+            \\    (* vera_nodiff *) begin capgs = capgs; end   // stopped
+            \\    (* vera_nodiff = 0 *) c = c;                 // not stopped
+            \\
+            \\The attribute is ignored and the statement stores derivatives.
+            ,
+        },
+        .E0526 => .{
+            .title = "vera_nodiff covers a contribution",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_nodiff *)` stops the derivative of the ASSIGNMENTS inside
+            \\it. A contribution inside it would leave its branch with no
+            \\Jacobian at all, and Newton cannot move a branch it cannot see.
+            \\Stop the coefficient instead and contribute outside:
+            \\
+            \\    (* vera_nodiff *) c = c;
+            \\    I(p, n) <+ ddt(c * V(p, n));
+            ,
+        },
+        .E0527 => .{
+            .title = "$limit seed reads the solution",
+            .lrm = "9.17.3",
+            .explain =
+            \\A string-form `$limit` takes, after its algorithm's arguments and
+            \\its sign, an optional seed: the value the site's branch starts at
+            \\before the first Newton iterate (SPICE's MODEINITJCT). 9.17.3
+            \\leaves the algorithm's arguments to the implementation. A seed may
+            \\read what the device computes from its card and temperature
+            \\(mos1load.c's `tVto`), but it is evaluated before any solution
+            \\exists, so it may not read a probe or anything computed from one:
+            \\
+            \\    vgs = type * $limit(V(g, si), "fetlimds", type * vonp, type, type * vtox);  // ok
+            \\    vds = $limit(V(di, si), "limvds", 1, V(d, s));                              // no
+            ,
+        },
         .E0572 => .{
             .title = "filter coefficient argument is not an array",
             .lrm = "4.5.1",
@@ -5755,7 +5807,7 @@ fn infoOf(c: Code) Info {
             \\decides the calls it can honour:
             \\
             \\  - the string names an algorithm VerA implements: pnjlim, fetlim,
-            \\    limvds, fetlimds, steplim. An unknown name, or none, leaves the
+            \\    limvds, fetlimds, pnjlimds, steplim. An unknown name, or none, leaves the
             \\    choice to the simulator "just as if no string had been
             \\    supplied", and VerA's choice is none;
             \\  - the first argument is a potential probe V(a) or V(a,b): there
@@ -5765,14 +5817,36 @@ fn infoOf(c: Code) Info {
             \\    `$limit(V(b,e), "pnjlim", vte, vcrit, type)`;
             \\  - at least one net is internal: the host never moves a port,
             \\    because other devices share it. A junction straight across
-            \\    two ports (no series resistance) has nothing to correct;
+            \\    two ports (no series resistance) has nothing to correct. A
+            \\    pnjlimds rung is the exception: it writes its bulk, port or not;
             \\  - the arguments the algorithm takes are present and real;
             \\  - a `fetlimds` site is one of two on the same gate, with a
-            \\    `limvds` across the two internal channel nodes.
+            \\    `limvds` across the two internal channel nodes; a `pnjlimds`
+            \\    site is one of two on the same bulk, with a `limvds` across
+            \\    their two channel nodes.
             \\
             \\The help line under the warning names the change for this call.
             \\Silence it for a model that converges without the clamp with
             \\`--allow=W0853`.
+            ,
+        },
+        .W0854 => .{
+            .title = "$limit seed is not applied here",
+            .lrm = "9.17.3",
+            .explain =
+            \\A `$limit` seed argument starts that site's BRANCH at a value (SPICE's
+            \\MODEINITJCT, mos1load.c:397-408), and the host's limited image
+            \\holds NODE values. So the seeded branches are solved into nodes as
+            \\a tree: each group of connected nets has one root at 0 V (ground,
+            \\else its lowest port, else its lowest net), and every other net
+            \\follows its branch. A seed that tree cannot take is dropped:
+            \\
+            \\  - its branch is the vgd leg of a fetlimds ladder or the vbd leg of
+            \\    a pnjlimds rung, which is derived through vds;
+            \\  - an earlier site already seeds the same pair of nets;
+            \\  - it closes a loop: the other branches already fix both its nets.
+            \\
+            \\A junction with no seed joins the tree at its vcrit.
             ,
         },
     };

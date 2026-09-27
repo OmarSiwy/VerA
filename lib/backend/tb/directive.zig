@@ -35,12 +35,15 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var warn: std.ArrayList([]const u8) = .empty;
     var plusargs: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList(NoiseWant) = .empty;
     var qsites: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
+    var seeds: std.ArrayList(Binding) = .empty;
+    var limits: std.ArrayList(tb.LimitCase) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -110,6 +113,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
+        } else if (std.mem.eql(u8, kw, "warn")) {
+            // One verbatim substring, as `reject`.
+            if (rest.len == 0) return error.BadSyntax;
+            try warn.append(arena, try arena.dupe(u8, rest));
+        } else if (std.mem.eql(u8, kw, "nowarn")) {
+            if (rest.len != 0) return error.BadSyntax;
+            d.nowarn = true;
         } else if (std.mem.eql(u8, kw, "noise")) {
             // `none` is the empty table, spelled rather than left as an absent
             // directive: "this model declares no generator" is a claim, and a
@@ -130,6 +140,18 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             if (rest.len == 0) return error.BadSyntax;
             if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
             d.asserts_qsite = true;
+        } else if (std.mem.eql(u8, kw, "seed")) {
+            if (rest.len == 0) return error.BadSyntax;
+            if (!std.mem.eql(u8, rest, "none")) try parseBindings(arena, rest, &seeds);
+            d.asserts_seed = true;
+        } else if (std.mem.eql(u8, kw, "limit")) {
+            const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
+            var old: std.ArrayList(Binding) = .empty;
+            var want: std.ArrayList(Binding) = .empty;
+            try parseBindings(arena, rest[0..at], &old);
+            try parseBindings(arena, rest[at + 2 ..], &want);
+            if (want.items.len == 0) return error.BadSyntax;
+            try limits.append(arena, .{ .old = old.items, .want = want.items });
         } else if (std.mem.eql(u8, kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
@@ -169,10 +191,16 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.reject = reject.items;
     d.plusargs = plusargs.items;
     if (d.expected_checks != null and d.reject.len != 0) return error.BadSyntax;
+    d.warn = warn.items;
+    // A refusal has no successful compile whose warnings could be judged.
+    if ((d.warn.len != 0 or d.nowarn) and d.reject.len != 0) return error.BadSyntax;
+    if (d.warn.len != 0 and d.nowarn) return error.BadSyntax;
     d.lrm = lrm.items;
     d.noise = noise.items;
     d.qsites = qsites.items;
     d.acstim = acstim.items;
+    d.seeds = seeds.items;
+    d.limits = limits.items;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);

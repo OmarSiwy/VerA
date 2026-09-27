@@ -50,6 +50,7 @@ const plan_limit = @import("codegen/plan/limit.zig");
 pub const Alg = plan_limit.Alg;
 pub const LimitCall = plan_limit.LimitCall;
 const Ladder = plan_limit.Ladder;
+const Rung = plan_limit.Rung;
 
 const none_u32 = std.math.maxInt(u32);
 
@@ -84,7 +85,7 @@ fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
 
 pub fn liveSets(g: *const Gen) Live {
     var lv: Live = .{};
-    // A core re-entry is seeded from EVERY entry of `cur` (`emit`'s `xr` loop),
+    // A core re-entry is seeded from EVERY entry of `old` (`emit`'s `xr` loop),
     // and n_u > 64 has no room in the mask — both answer "all of them".
     if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
@@ -99,16 +100,26 @@ pub fn liveSets(g: *const Gen) Live {
             lv.reads |= ubit(gs.hi) | ubit(gs.lo) | ubit(gd.lo);
             lv.writes |= ubit(gs.lo) | ubit(gd.lo);
         },
+        // The rung reads the bulk and both channel nodes, and writes the bulk.
+        .pnjlimds => {
+            const r = g.limits.rungOf(i).?;
+            if (i != @min(r.bs, r.bd)) continue;
+            const bs = g.limits.calls[r.bs];
+            lv.reads |= ubit(bs.hi) | ubit(bs.lo) | ubit(g.limits.calls[r.bd].lo);
+            lv.writes |= ubit(bs.hi);
+        },
         .limvds => if (!g.limits.limvdsClaimed(i)) unionSite(&lv, g, lc),
-        else => unionSite(&lv, g, lc),
+        .pnjlim, .fetlim, .steplim => unionSite(&lv, g, lc),
     };
     // `seed` corrects the same node `emitClamp` does, but OR it in rather than
     // rely on that: the host initialises `lim_x` through `seed` and reads it
     // back through `limit`, so a bit in one and not the other is a stale slot.
-    for (g.limits.calls) |lc| {
+    // The seed tree writes every node it places, its roots included.
+    for (g.limits.seed_steps) |st| lv.writes |= ubit(st.node);
+    if (!g.limits.seed_tree) for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         lv.writes |= ubit(if (g.limits.writable(lc.lo)) lc.lo else lc.hi);
-    }
+    };
     lv.reads |= lv.writes;
     return lv;
 }
@@ -132,6 +143,12 @@ pub fn usesCore(g: *const Gen) bool {
 /// `seed`'s narrower question: it reads only each pnjlim site's `vcrit` and
 /// that site's sign.
 fn seedUsesCore(g: *const Gen) bool {
+    for (g.limits.seed_steps) |st| {
+        if (st.site == none_u32) continue;
+        const lc = g.limits.calls[st.site];
+        if (needsCore(g, seedValue(lc)) or needsCore(g, lc.sign)) return true;
+    }
+    if (g.limits.seed_tree) return false;
     for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         if (needsCore(g, lc.argv[1]) or needsCore(g, lc.sign)) return true;
@@ -197,6 +214,18 @@ pub fn emit(g: *Gen) Error!void {
         if (d.help) |h| b.help("{s}", .{h});
         try b.emit();
     };
+    if (g.diags) |bag| for (g.limits.seed_dropped) |d| {
+        var b = bag.build(.codegen, .W0854, g.lowered.tokenSpan(d.tok));
+        b.msg("{s}", .{d.msg});
+        if (d.help) |h| b.help("{s}", .{h});
+        try b.emit();
+    };
+    // `seed` runs before any solve, so there is no x for a seed to read.
+    for (g.limits.calls) |lc| {
+        if (lc.seed == .undef or !g.an.xDep(lc.seed)) continue;
+        if (g.diags) |bag| try bag.add(.codegen, .E0527, g.lowered.tokenSpan(lc.tok), "", .{});
+        g.any_fatal = true;
+    }
     if (g.limits.calls.len == 0) return;
 
     const needs_core = usesCore(g);
@@ -223,9 +252,13 @@ pub fn emit(g: *Gen) Error!void {
         if (reads_inst) "inst" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
+    // §9.17.3 leaves the return value to the simulator, and ngspice's loads
+    // take every limiter argument from the PREVIOUS load (mos1load.c:351
+    // fetlims against the `von` stored at :535). So the core that computes
+    // the arguments runs at `old`, the previous iterate's limited point.
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
-        \\    for (cur, 0..) |xv, i| xr[i] = R.con(xv);
+        \\    for (old, 0..) |xv, i| xr[i] = R.con(xv);
         \\    const m = core(R, xr, model, {s}{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
@@ -233,7 +266,7 @@ pub fn emit(g: *Gen) Error!void {
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
     var any_pnjlim = false;
-    for (g.limits.calls) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .steplim;
+    for (g.limits.calls) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .pnjlimds or lc.alg == .steplim;
     if (any_pnjlim) try g.w("    var ok = true;\n", .{});
     try emitSigns(g);
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
@@ -243,8 +276,13 @@ pub fn emit(g: *Gen) Error!void {
             const lad = g.limits.ladderOf(i).?;
             if (i == @min(lad.gs, lad.gd)) try emitLadder(g, lad);
         },
+        // Likewise the bulk rung, at its earlier leg.
+        .pnjlimds => {
+            const r = g.limits.rungOf(i).?;
+            if (i == @min(r.bs, r.bd)) try emitRung(g, r);
+        },
         .limvds => if (!g.limits.limvdsClaimed(i)) try emitClamp(g, lc),
-        else => try emitClamp(g, lc),
+        .pnjlim, .fetlim, .steplim => try emitClamp(g, lc),
     };
     try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
 
@@ -284,8 +322,15 @@ fn emitSigns(g: *Gen) Error!void {
             try oneSign(g, &seen, g.limits.calls[lad.gd].sign);
             try oneSign(g, &seen, g.limits.calls[lad.ds].sign);
         },
+        .pnjlimds => {
+            const r = g.limits.rungOf(i).?;
+            if (i != @min(r.bs, r.bd)) continue;
+            try oneSign(g, &seen, g.limits.calls[r.bs].sign);
+            try oneSign(g, &seen, g.limits.calls[r.bd].sign);
+            try oneSign(g, &seen, g.limits.calls[r.ds].sign);
+        },
         .limvds => if (!g.limits.limvdsClaimed(i)) try oneSign(g, &seen, lc.sign),
-        else => try oneSign(g, &seen, lc.sign),
+        .pnjlim, .fetlim, .steplim => try oneSign(g, &seen, lc.sign),
     };
 }
 
@@ -338,6 +383,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
             .fetlim => "Fetlim",
             .limvds => "Limvds",
             .fetlimds => unreachable, // emitLadder owns every surviving site
+            .pnjlimds => unreachable, // emitRung owns every surviving site
             .steplim => "Steplim",
         },
         if (signed) "sg * " else "",
@@ -434,6 +480,50 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
     }
 }
 
+/// One `pnjlimds` pair + its `limvds`, emitted as ngspice's MOS bulk rung
+/// (mos1load.c:376-384): branch on the sign of the LIMITED vds — the ladder
+/// has already run — pnjlim the junction on the source side (vbs) or the
+/// drain side (vbd) from its RAW value against its old one, and put the bulk
+/// where that leaves the limited junction. The other junction follows through
+/// the limited vds, as ngspice derives it; only the bulk moves.
+fn emitRung(g: *Gen, r: Rung) Error!void {
+    const bs = g.limits.calls[r.bs];
+    const bd = g.limits.calls[r.bd];
+    const ds = g.limits.calls[r.ds];
+    const nb = g.names.u_names[bs.hi];
+    const ns = g.names.u_names[bs.lo];
+    const nd = g.names.u_names[bd.lo];
+    try g.w("    {{ // \"pnjlimds\" bulk rung (ngspice mos1load.c): pnjlim V({s},{s}) | V({s},{s})\n", .{ nb, ns, nb, nd });
+    try g.w("        // by the sign of the LIMITED V({s},{s}), then derive the other junction.\n", .{ nd, ns });
+    try writeSign(g, "sgt", ds.sign);
+    try g.w("        if (sgt * (x[@intFromEnum(U.{s})] - x[@intFromEnum(U.{s})]) >= 0.0) {{\n", .{ nd, ns });
+    try emitJunction(g, bs);
+    try g.w("        }} else {{\n", .{});
+    try emitJunction(g, bd);
+    try g.w("        }}\n    }}\n", .{});
+}
+
+/// One rung arm: pnjlim the RAW `V(hi, lo)` (from `cur`, before the ladder
+/// moved `lo`) and write the bulk `hi` to the limited value above `x[lo]`.
+fn emitJunction(g: *Gen, leg: LimitCall) Error!void {
+    const nb = g.names.u_names[leg.hi];
+    const nj = g.names.u_names[leg.lo];
+    try g.w("            const vn = cur[@intFromEnum(U.{s})] - cur[@intFromEnum(U.{s})];\n", .{ nb, nj });
+    try g.w("            const vo = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ nb, nj });
+    if (leg.sign == .f_zero) {
+        try g.w("            const vl = zPnjlim(vn, vo, ", .{});
+    } else {
+        try g.w("            const sg: f64 = zsg__{d};\n", .{signKey(g, leg.sign)});
+        try g.w("            const vl = sg * zPnjlim(sg * vn, sg * vo, ", .{});
+    }
+    try writeArg(g, leg.argv[0]);
+    try g.w(", ", .{});
+    try writeArg(g, leg.argv[1]);
+    try g.w(");\n", .{});
+    try g.w("            x[@intFromEnum(U.{s})] = x[@intFromEnum(U.{s})] + vl;\n", .{ nb, nj });
+    try g.w("            if (vl != vn) ok = false;\n", .{});
+}
+
 /// `const NAME: f64 = ±1.0` recovered from a sign argument, or the literal
 /// 1.0 when the site is unsigned.
 fn writeSign(g: *Gen, name: []const u8, v: Mir.Value) Error!void {
@@ -472,6 +562,7 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
 /// exponential is still Newton-tractable, which is exactly what `vcrit` IS.
 /// `fetlim`/`limvds` get nothing: a channel is well-conditioned at 0 V.
 fn emitSeed(g: *Gen) Error!void {
+    if (g.limits.seed_tree) return emitSeedTree(g);
     var any = false;
     for (g.limits.calls) |lc| {
         if (lc.alg == .pnjlim and lc.argv[1] != .f_zero) any = true;
@@ -530,4 +621,72 @@ fn emitSeed(g: *Gen) Error!void {
         });
     }
     try g.w("    return s;\n}}\n\n", .{});
+}
+
+/// The seed tree's `seed` (plan/limit.zig `planSeed`): the limited image a host
+/// starts from is NODE values, so each seeded branch is solved into them down
+/// the tree, root at 0 V. ngspice MODEINITJCT (mos1load.c:397-408) starts the
+/// branches, not the nodes, at vgs = vto, vds = 0, vbs = -1.
+fn emitSeedTree(g: *Gen) Error!void {
+    if (g.limits.seed_steps.len == 0) return;
+    const needs_core = seedUsesCore(g);
+    var reads_param = false;
+    var reads_root = false;
+    for (g.limits.seed_steps) |st| {
+        if (st.site == none_u32) continue;
+        const lc = g.limits.calls[st.site];
+        for ([_]Mir.Value{ seedValue(lc), lc.sign }) |v| {
+            if (v == .f_zero) continue;
+            reads_param = reads_param or paramLeaf(g, v);
+            reads_root = reads_root or isRoot(g, v);
+        }
+    }
+    try g.w(
+        \\/// SPICE `MODEINITJCT` with `$limit`'s seed argument: each seeded branch starts at
+        \\/// its own value (vcrit for a junction that names none), solved into node
+        \\/// values from a root at 0 V. These are the instance's private limited
+        \\/// image, and every lane written here is in `limit_writes`.
+        \\
+    , .{});
+    try g.w("pub fn seed({s}: *const Model, {s}: *const Instance) [n_u]?f64 {{\n", .{
+        if (needs_core or reads_param) "model" else "_",
+        if (needs_core or reads_root) "inst" else "_",
+    });
+    const probe_inst = if (needs_core) try g.probeInstance() else "inst";
+    if (needs_core) try g.w(
+        \\    var xr: [n_u]R = undefined;
+        \\    for (&xr) |*p| p.* = R.con(0.0);
+        \\    const m = core(R, xr, model, {s}{s});
+        \\
+    , .{ probe_inst, g.heldArg(true) });
+    try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
+    for (g.limits.seed_steps) |st| {
+        const nn = g.names.u_names[st.node];
+        if (st.site == none_u32) {
+            try g.w("    s[@intFromEnum(U.{s})] = 0.0; // root\n", .{nn});
+            continue;
+        }
+        const lc = g.limits.calls[st.site];
+        // lim(hi) = lim(lo) + sign·seed
+        try g.w("    s[@intFromEnum(U.{s})] = ", .{nn});
+        if (st.from == none_u32) try g.w("0.0", .{}) else try g.w("s[@intFromEnum(U.{s})].?", .{g.names.u_names[st.from]});
+        try g.w(" {s} ", .{if (st.node == lc.hi) "+" else "-"});
+        if (lc.sign != .f_zero) {
+            try g.w("@as(f64, if (", .{});
+            try writeArg(g, lc.sign);
+            try g.w(" < 0) -1.0 else 1.0) * ", .{});
+        }
+        try g.w("(", .{});
+        try writeArg(g, seedValue(lc));
+        try g.w("); // V({s},{s}) = {s}\n", .{
+            plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
+            if (lc.seed != .undef) "seed" else "vcrit",
+        });
+    }
+    try g.w("    return s;\n}}\n\n", .{});
+}
+
+/// A tree edge's value: its seed argument, else its junction's vcrit.
+fn seedValue(lc: LimitCall) Mir.Value {
+    return if (lc.seed != .undef) lc.seed else lc.argv[1];
 }

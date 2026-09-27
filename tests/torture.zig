@@ -11,6 +11,8 @@
 //!
 //!   `//! reject <substring>`   must NOT compile, and every substring must
 //!                              appear in the resulting diagnostic
+//!   `//! warn <substring>`     compiles, and every substring appears in a
+//!                              warning; `//! nowarn`: no warning at all
 //!   anything else              must compile, build a native testbench, RUN,
 //!                              and print `ok=1` for every assertion it makes
 //!
@@ -290,10 +292,8 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
 /// A lowering or proof rejection therefore still fails a fixture that demands
 /// `ParseError`; the labels discriminate.
 fn failureContains(f: Failure, pattern: []const u8) bool {
-    if (asCode(pattern)) |want| {
-        for (0..f.diags.count()) |i| {
-            if (f.diags.at(i).code == want) return true;
-        }
+    if (asCode(pattern) != null) {
+        for (0..f.diags.count()) |i| if (diagSays(&f.diags, i, pattern)) return true;
         return false;
     }
     if (std.mem.indexOf(u8, f.error_name, pattern) != null) return true;
@@ -309,20 +309,46 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
             return true;
         }
     }
-    // Substring match runs over the message AND the catalogue title, because
-    // migrating to codes moved a lot of wording out of the message and into
-    // `Info.title` — a fixture pinning the old prose still matches.
+    for (0..f.diags.count()) |i| if (diagSays(&f.diags, i, pattern)) return true;
+    return false;
+}
+
+/// Does diagnostic `i` say `pattern`: its code when `pattern` is one, else a
+/// substring of its message, point, catalogue title or a note.
+fn diagSays(bag: *const vera.diag.Bag, i: usize, pattern: []const u8) bool {
+    const d = bag.at(i);
+    if (asCode(pattern)) |want| return d.code == want;
+    // The title too, because migrating to codes moved a lot of wording out of
+    // the message and into `Info.title` — a fixture pinning the old prose
+    // still matches.
+    if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
+    if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
+    if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
     var nbuf: [vera.diag.max_children]vera.diag.Note = undefined;
-    for (0..f.diags.count()) |i| {
-        const d = f.diags.at(i);
-        if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
-        if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
-        if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
-        for (f.diags.notes(d, &nbuf)) |n| {
-            if (std.mem.indexOf(u8, n.text, pattern) != null) return true;
-        }
+    for (bag.notes(d, &nbuf)) |n| {
+        if (std.mem.indexOf(u8, n.text, pattern) != null) return true;
     }
     return false;
+}
+
+/// `//! warn`: every pattern names a warning in `bag`. `//! nowarn`: `bag`
+/// holds no warning. Detail goes to `w` on a miss.
+fn warningsMet(bag: *vera.diag.Bag, f: Fixture, d: vera.tb.Directives, w: *Io.Writer) !bool {
+    for (d.warn) |pattern| {
+        for (0..bag.count()) |i| {
+            if (bag.at(i).severity == .warning and diagSays(bag, i, pattern)) break;
+        } else {
+            try w.print("FAIL {s}: no warning matches: \"{s}\"\n", .{ f.path, pattern });
+            vera.diag.render(bag, w, .{ .explain_hint = false, .summary = false }) catch {};
+            return false;
+        }
+    }
+    if (d.nowarn and bag.count() != 0) {
+        try w.print("FAIL {s}: `//! nowarn`, and the compile warned:\n", .{f.path});
+        vera.diag.render(bag, w, .{ .explain_hint = false, .summary = false }) catch {};
+        return false;
+    }
+    return true;
 }
 
 /// A directive is either a CODE (`E0313`, `W0650`) or a message substring.
@@ -371,12 +397,14 @@ fn runAndCheck(
 ) !Result {
     // Stages 1-6 with §9.4 display ON. W0650 is about speed, and every fixture
     // that probes a node trips it; allowing it here keeps the transcript about
-    // the model rather than about float modes.
+    // the model rather than about float modes — unless a `//! warn` names it.
     var diags: vera.diag.Bag = .init(gpa);
     defer diags.deinit(gpa);
     var levels: vera.diag.Levels = .empty;
     defer levels.deinit(gpa);
-    try levels.set(gpa, .W0650, .allow);
+    for (d.warn) |p| {
+        if (std.mem.eql(u8, p, "W0650")) break;
+    } else try levels.set(gpa, .W0650, .allow);
 
     var opts: vera.Options = .{
         .file_name = f.path,
@@ -420,6 +448,7 @@ fn runAndCheck(
         try w.print("FAIL {s}: the device declares an `llvm.*` intrinsic; it cannot build under the self-hosted backend\n", .{f.path});
         return .unmet;
     }
+    if (!try warningsMet(&diags, f, d, w)) return .unmet;
 
     // VAMS §7: a module with a discrete half gets the mixed-signal runner.
     var dm = d;

@@ -163,6 +163,7 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .fi_cast = .{ .class = .unary, .int = true, .fold = .to_int },
     .if_cast = .{ .class = .unary, .fold = .to_real },
     .opt_barrier = .{ .class = .unary, .fold = .identity },
+    .dstop = .{ .class = .unary, .fold = .identity },
     .path_prev = .{ .class = .unary, .fold = .none },
     .path_acc = .{ .class = .unary, .fold = .none },
     .select = .{ .class = .ternary, .fold = .none },

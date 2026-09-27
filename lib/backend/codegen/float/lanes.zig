@@ -104,11 +104,12 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
 }
 
 /// An x-dependent value is about to be collapsed to one scalar decision —
-/// record that lanes are pinned. dFree values are lane-uniform (params,
-/// temperature, time), so collapsing them steers nothing.
+/// record that lanes are pinned. Values that do not vary with x are
+/// lane-uniform (params, temperature, time), so collapsing them steers
+/// nothing. `xDep`, not `dFree`: a `dstop` has no lanes and still varies.
 pub fn pinLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
-    if (self.an.dFree(v)) return;
+    if (!self.an.xDep(v)) return;
     self.float.pinned = true;
 }
 
