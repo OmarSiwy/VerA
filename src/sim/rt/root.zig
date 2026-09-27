@@ -169,9 +169,10 @@ const Susp = struct { pc: u32, gen: u32, alive: bool };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
-/// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`. A
-/// `quiet` slot has nothing to wake.
-const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool };
+/// holds THEN. `v`, `x` and `m` are `n` words each: the row's own `one`
+/// for a single word, else at `words[at..]`. A `quiet` slot has nothing to
+/// wake.
+const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool, one: [3]u64 = undefined };
 /// An `Nba` in flight past this timestep, owning its `v`, `x`, `m` words.
 const Late = struct { slot: u32, off: u32, n: u32, words: []u64 };
 /// The scheduler payload of the one NBA-region event that applies every
@@ -365,9 +366,9 @@ pub const State = struct {
                 continue;
             }
             if (event.payload != nba_payload) return event.payload;
-            for (self.rows.items, 0..) |row, i| {
+            for (self.rows.items, 0..) |*row, i| {
                 if (i != 0) try self.count(event.time);
-                const w = self.words.items[row.at..][0 .. 3 * row.n];
+                const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
                 if (row.quiet) {
                     if (!self.held(row.slot)) self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
                 } else try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
@@ -380,7 +381,7 @@ pub const State = struct {
 
     /// `Run.runUntil`'s zero-delay-loop guard, counted the same way: one
     /// event per nonblocking row.
-    fn count(self: *State, at: u64) Error!void {
+    inline fn count(self: *State, at: u64) Error!void {
         if (at != self.budget_time) {
             self.budget_time = at;
             self.budget_used = 0;
@@ -585,13 +586,14 @@ pub const State = struct {
     /// ponytail: a real's update is compared by its bits, not its value as
     /// `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
     pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
-        const at: u32 = @intCast(self.words.items.len);
-        if (@TypeOf(a) == W)
-            try self.words.appendSlice(self.gpa, &.{ a.v, a.x, m })
-        else
+        const quiet = reach == Reach{};
+        if (@TypeOf(a) == W) {
+            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
+        } else {
+            const at: u32 = @intCast(self.words.items.len);
             try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
-        try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = n, .at = at, .quiet = reach == Reach{} });
+            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = a.v.len, .at = at, .quiet = quiet });
+        }
         if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
 
