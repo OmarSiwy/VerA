@@ -16,6 +16,7 @@ const Gen = codegen.Gen;
 const gen_setup = @import("setup.zig");
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
+const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const assert = codegen.assert;
 const Error = codegen.Error;
@@ -32,7 +33,9 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     try self.ind(depth);
     if (!self.emitting_common) {
         try self.b("return ", .{});
+        if (self.fam) try family.openTo(self, family.mask(self, target));
         try gen_render.renderVal(self, target, .real);
+        if (self.fam) try self.b(")", .{});
         try self.b(";\n", .{});
         return;
     }
@@ -40,10 +43,13 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
+        const wrap = self.fam and self.an.arrOf(v) == null and self.an.vty[@intFromEnum(v)] == .real;
+        if (wrap) try family.openTo(self, family.mask(self, v));
         if (self.an.arrOf(v) != null)
             try gen_render.renderArrayOut(self, v)
         else
             try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
+        if (wrap) try self.b(")", .{});
         try self.b(",\n", .{});
     }
     try self.ind(depth);
@@ -76,13 +82,21 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     // without a probe) never touches `place`.
     const at_def = decl or self.place.items[self.plan.slot[i]].at_def;
     try self.ind(depth);
+    var m: ?u64 = null;
     if (at_def) {
-        try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
+        if (self.fam and self.an.vty[i] == .real) {
+            // Zig types it from the expression; `lane_masks` counts it.
+            try family.note(self, family.mask(self, @enumFromInt(i)));
+            try self.b("const t{d} = ", .{self.plan.slot[i]});
+        } else try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
     } else {
         try gen_unit.writeSlotRef(self, i);
         try self.b(" = ", .{});
+        m = gen_unit.slotMask(self, i);
+        if (m) |k| try family.openTo(self, k);
     }
     try gen_render.renderInst(self, inst);
+    if (m != null) try self.b(")", .{});
     try self.b(";\n", .{});
 }
 
@@ -270,14 +284,21 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         if (!slotted(self, inst)) continue;
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
         try self.ind(d2);
+        var m: ?u64 = null;
         if (par) {
-            try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
+            if (self.fam and self.an.vty[i] == .real)
+                try self.b("const c{d} = ", .{k})
+            else
+                try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
         } else {
             gen_unit.probeDef(self, self.plan.slot[i], false);
             try gen_unit.writeSlotRef(self, i);
             try self.b(" = ", .{});
+            m = gen_unit.slotMask(self, i);
+            if (m) |mk| try family.openTo(self, mk);
         }
         try gen_render.renderVal(self, self.an.phiIn(inst, from), self.an.vty[i]);
+        if (m != null) try self.b(")", .{});
         try self.b(";\n", .{});
         k += 1;
     }
@@ -286,9 +307,13 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     for (phis) |inst| {
         if (!slotted(self, inst)) continue;
         try self.ind(d2);
-        gen_unit.probeDef(self, self.plan.slot[@intFromEnum(self.an.i_res[@intFromEnum(inst)])], false);
-        try gen_unit.writeSlotRef(self, @intFromEnum(self.an.i_res[@intFromEnum(inst)]));
-        try self.b(" = c{d};\n", .{k});
+        const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+        gen_unit.probeDef(self, self.plan.slot[i], false);
+        try gen_unit.writeSlotRef(self, i);
+        if (gen_unit.slotMask(self, i)) |mk|
+            try self.b(" = zTo(S, 0x{x}, c{d});\n", .{ mk, k })
+        else
+            try self.b(" = c{d};\n", .{k});
         k += 1;
     }
     try self.ind(depth);

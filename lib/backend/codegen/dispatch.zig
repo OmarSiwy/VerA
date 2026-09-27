@@ -19,6 +19,7 @@ const gen_file = @import("file.zig");
 const gen_setup = @import("setup.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
+const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
@@ -55,6 +56,48 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     try emitPattern(self, any_q);
     try emitDisplay(self);
     if (self.vpi_contribs) try emitVpiContribs(self);
+    if (self.fam and self.names.n_u <= 64) try emitAbi5(self, any_q);
+}
+
+/// `Options.family`: `pub const abi5`, the family entry points beside the ABI
+/// 4 ones. Same core, same rows and sites, different `S` and `x`. Above 64
+/// unknowns no mask can name a lane, and there is none.
+fn emitAbi5(self: *Gen, any_q: bool) Error!void {
+    const held = self.heldArg(false);
+    try self.w(
+        \\/// Contract ABI 5 preview (`codegen.Options.family`): the entry points
+        \\/// for a scalar family (`contract.family_fns`). `contract_abi` stays 4;
+        \\/// `x` is the unknowns' values, and each reads as a probe on the lanes
+        \\/// `deriv_reads` names, a constant elsewhere.
+        \\pub const abi5 = struct {{
+        \\    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) contract.Rows(Self, S) {{
+        \\        const xs = zProbe(S, x);
+        \\
+    , .{});
+    if (self.eval_core)
+        try self.w("        return zResidual(S, xs, @call(.always_inline, core, .{{ S, xs, model, inst{s} }}));\n", .{held})
+    else
+        try self.w("        _ = model;\n        _ = inst;\n        return zResidual(S, xs, {{}});\n", .{});
+    try self.w("    }}\n", .{});
+    if (any_q) {
+        try self.w(
+            \\    pub fn q(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) contract.Sites(Self, S) {{
+            \\        const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst{s} }});
+            \\        return 
+        , .{held});
+        try writeSites(self);
+        try self.w(
+            \\;
+            \\    }}
+            \\    pub fn evalQ(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
+            \\        const xs = zProbe(S, x);
+            \\        const m = @call(.always_inline, core, .{{ S, xs, model, inst{s} }});
+            \\        return .{{ .res = zResidual(S, xs, m), .q = 
+        , .{held});
+        try writeSites(self);
+        try self.w(" }};\n    }}\n", .{});
+    }
+    try self.w("}};\n\n", .{});
 }
 
 /// `Options.vpi_contribs`: each §5.6 contribution row's resistive and
@@ -130,9 +173,10 @@ fn siteField(self: *const Gen, j: usize) u32 {
 
 /// `[n_q]S{ m.f<a>, m.f<b>, ... }`: every site's charge, in slot order.
 pub fn writeSites(self: *Gen) Error!void {
-    try self.b("[n_q]S{{", .{});
+    // `Options.family`: a family's sites are a tuple (`contract.Sites`).
+    try self.b("{s}", .{if (self.fam) "@as(zSites(S), .{" else "[n_q]S{"});
     for (0..self.qs.sites.len) |j| try self.b("{s}m.f{d}", .{ if (j == 0) " " else ", ", siteField(self, j) });
-    try self.b(" }}", .{});
+    try self.b(" }}{s}", .{if (self.fam) ")" else ""});
 }
 
 /// §5.6.1.2 the reactive residual, ONE CHARGE PER SITE (`plan/qsite.zig`):
@@ -299,11 +343,14 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("/// §5.6 the resistive rows over the core result `m`: `eval` and `evalQ`.\n", .{});
     try self.w("inline fn zResidual(comptime S: type, ", .{});
     const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
+    try self.w("x: {s}, ", .{if (self.fam) "anytype" else "[n_u]S"});
     const at_m = self.out.items.len;
-    try self.w("m: anytype) [n_u]S {{\n    ", .{});
+    try self.w("m: anytype) {s} {{\n    ", .{if (self.fam) "zRows(S)" else "[n_u]S"});
     const at_mut = self.out.items.len;
-    try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+    if (self.fam)
+        try self.w("var   res: zRows(S) = zRowsZero(S);\n", .{})
+    else
+        try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
     const stamps = try emitStamps(self, false);
     self.core_hoisted = false;
     // `uses_x` also counts a row that reads `x` only through the core, so ask
@@ -314,6 +361,7 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("    return res;\n}}\n\n", .{});
 
     try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
+    self.eval_core = self.core_wanted;
     if (self.core_wanted) {
         try self.w(
             \\pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_u]S {{
@@ -446,7 +494,9 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             try self.ind(2);
             patRow(self, @intCast(u), self.an.unknownDeps(val));
             linClear(self, u);
-            try self.b("res[@intFromEnum(U.{s})] = c;\n", .{self.names.u_names[u]});
+            try rowSet(self, u);
+            try self.b("c", .{});
+            try rowEnd(self);
             try self.ind(1);
             try self.b("}}\n", .{});
             continue;
@@ -464,12 +514,16 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     patRow(self, n, uBit(n) | self.an.unknownDeps(val));
                     linClear(self, n);
                     linTerm(self, n, n, 1);
-                    try self.b("res[@intFromEnum(U.{0s})] = x[@intFromEnum(U.{0s})].sub(c);\n", .{self.names.u_names[n]});
+                    try rowSet(self, n);
+                    try self.b("x[@intFromEnum(U.{s})].sub(c)", .{self.names.u_names[n]});
+                    try rowEnd(self);
                 } else {
                     try self.ind(2);
                     patRow(self, n, self.an.unknownDeps(val));
                     linClear(self, n);
-                    try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.names.u_names[n]});
+                    try rowSet(self, n);
+                    try self.b("c.neg()", .{});
+                    try rowEnd(self);
                 }
             } else {
                 // §1.3.1.2: the value flows INTO hi and OUT OF lo.
@@ -499,11 +553,12 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     try self.ind(2);
                     patRow(self, @intCast(u), nodeBit(c.hi) | nodeBit(c.lo) | self.an.unknownDeps(val));
                     linBranch(self, u, c.hi, c.lo);
-                    try self.b("res[@intFromEnum(U.{s})] = ", .{self.names.u_names[u]});
+                    try rowSet(self, u);
                     try nodeVoltage(self, c.hi);
                     try self.b(".sub(", .{});
                     try nodeVoltage(self, c.lo);
-                    try self.b(").sub(c);\n", .{});
+                    try self.b(").sub(c)", .{});
+                    try rowEnd(self);
                 } else {
                     const u = self.names.branch_u[i];
                     // §5.6.1.2 the reactive part of a branch relation is a
@@ -511,7 +566,9 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     try self.ind(2);
                     patRow(self, @intCast(u), self.an.unknownDeps(val));
                     linClear(self, u);
-                    try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.names.u_names[u]});
+                    try rowSet(self, u);
+                    try self.b("c.neg()", .{});
+                    try rowEnd(self);
                 }
             },
         }
@@ -533,7 +590,9 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             try self.ind(1);
             patRow(self, @intCast(f.u), uBit(f.u));
             linTerm(self, f.u, f.u, 1);
-            try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].add(x[@intFromEnum(U.{0s})]);\n", .{self.names.u_names[f.u]});
+            try rowSet(self, f.u);
+            try self.b("res[@intFromEnum(U.{0s})].add(x[@intFromEnum(U.{0s})])", .{self.names.u_names[f.u]});
+            try rowEnd(self);
         } else {
             // §5.4.2.1 "The branch potential of a flow probe is zero (0)" —
             // the ammeter of Figure 5-1. Its current is a real branch
@@ -544,11 +603,12 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             try self.ind(1);
             patRow(self, @intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
             linBranch(self, f.u, f.hi, f.lo);
-            try self.b("res[@intFromEnum(U.{s})] = ", .{self.names.u_names[f.u]});
+            try rowSet(self, f.u);
             try nodeVoltage(self, f.hi);
             try self.b(".sub(", .{});
             try nodeVoltage(self, f.lo);
-            try self.b(");\n", .{});
+            try self.b(")", .{});
+            try rowEnd(self);
         }
     };
 
@@ -575,13 +635,15 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
         try linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
-            try self.b("res[@intFromEnum(U.{s})] = res[@intFromEnum(U.{s})].neg();\n", .{
-                self.names.u_names[pp.u], self.names.u_names[pp.port],
-            });
+            try rowSet(self, pp.u);
+            try self.b("res[@intFromEnum(U.{s})].neg()", .{self.names.u_names[pp.port]});
+            try rowEnd(self);
         } else {
-            try self.b("res[@intFromEnum(U.{0s})] = x[@intFromEnum(U.{0s})].sub(res[@intFromEnum(U.{1s})]);\n", .{
+            try rowSet(self, pp.u);
+            try self.b("x[@intFromEnum(U.{0s})].sub(res[@intFromEnum(U.{1s})])", .{
                 self.names.u_names[pp.u], self.names.u_names[pp.port],
             });
+            try rowEnd(self);
         }
     }
 
@@ -708,7 +770,8 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try stamp(self, d, c.lo, "sub", "ib", uBit(u), col);
         try self.ind(d);
         patRow(self, @intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | switchRowDeps(self, i, c, react));
-        try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.names.u_names[u]});
+        try rowSet(self, u);
+        try self.b("S.sel(", .{});
         try coreRef(self, flag);
         try self.b(", ", .{});
         try nodeVoltage(self, c.hi);
@@ -716,15 +779,18 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try nodeVoltage(self, c.lo);
         try self.b(").sub(c), ", .{});
         try switchElse(self, partner, react);
-        try self.b(");\n", .{});
+        try self.b(")", .{});
+        try rowEnd(self);
     } else {
         try self.ind(d);
         patRow(self, @intCast(u), uBit(u) | switchRowDeps(self, i, c, react));
-        try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.names.u_names[u]});
+        try rowSet(self, u);
+        try self.b("S.sel(", .{});
         try coreRef(self, flag);
         try self.b(", c.neg(), ", .{});
         try switchElse(self, partner, react);
-        try self.b(");\n", .{});
+        try self.b(")", .{});
+        try rowEnd(self);
     }
     if (split) {
         try self.ind(3);
@@ -851,9 +917,22 @@ pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8
     patRow(self, node, bits);
     if (col) |k| linTerm(self, node, k, if (std.mem.eql(u8, opx, "add")) 1 else -1);
     try self.ind(depth);
-    try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].{1s}({2s});\n", .{
-        self.names.u_names[node], opx, val,
-    });
+    try rowSet(self, node);
+    try self.b("res[@intFromEnum(U.{s})].{s}({s})", .{ self.names.u_names[node], opx, val });
+    try rowEnd(self);
+}
+
+/// `res[@intFromEnum(U.<u>)] = `, and under `Options.family` the opening of
+/// `zRow(S, .<u>, `: row `u` is typed by its pattern (`contract.rowMask`),
+/// so every value assigned to it widens there. `rowEnd` closes it.
+fn rowSet(self: *Gen, u: u32) Error!void {
+    const n = self.names.u_names[u];
+    try self.b("res[@intFromEnum(U.{s})] = ", .{n});
+    if (self.fam) try self.b("zRow(S, .{s}, ", .{n});
+}
+
+fn rowEnd(self: *Gen) Error!void {
+    try self.b("{s};\n", .{if (self.fam) ")" else ""});
 }
 
 /// Row `node` gained a term whose derivative lives in `bits`. Ground has no
@@ -970,6 +1049,7 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
         try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});
+    if (self.fam) try family.emitLaneMasks(self, jc.mask);
 }
 
 /// The column bit of one unknown. Out of `u64` range answers "every
