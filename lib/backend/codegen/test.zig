@@ -3163,9 +3163,9 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
         "zAtan2", "zLimexp", "zWrap", "zLimitUf",
     };
     const uniform = [_][]const u8{
-        "zDdt",        "zIdt",      "zIdtAcc", "zIdtmod", "zSlew", "zTransFrac",
-        "zTransition", "zAbsdelay", "zLog10",  "zTan",    "zAsin", "zAcos",
-        "zAsinh",      "zAcosh",    "zAtanh",  "zPadInt",
+        "zIdt",        "zIdtAcc",   "zIdtmod", "zSlew",  "zTransFrac",
+        "zTransition", "zAbsdelay", "zLog10",  "zTan",   "zAsin",
+        "zAcos",       "zAsinh",    "zAcosh",  "zAtanh", "zPadInt",
     };
     const text = gen_kernel_text.math_txt ++ gen_kernel_text.ops_txt;
     var it = std.mem.splitSequence(u8, text, "\nfn ");

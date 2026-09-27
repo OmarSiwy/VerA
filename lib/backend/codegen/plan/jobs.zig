@@ -141,7 +141,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .mode = unitMode(from.unit_modes, i),
             .comment = switch (k) {
                 .bound_step, .discontinuity => "§9.17 analog kernel control request",
-                .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
+                .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
             },
             .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
         });
@@ -337,7 +337,7 @@ fn dynCtrlArgs(k: OpKind) []const usize {
         .absdelay => &.{ 1, 2 },
         .idt => &.{ 1, 2 }, // ic, assert
         .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
-        .none, .ddt, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
+        .none, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
     };
 }
 
@@ -360,8 +360,8 @@ test "jobs queue in insert-tolerant order: contributions, operator inputs, held 
     const a = f.alloc();
     const va = try f.probe(0);
     const vb = try f.probe(1);
-    const q = try f.call("ddt", &.{va}); // an operator unit, input V(a)
-    // I(a,b) <+ V(b) + ddt(V(a)): a resistive and a reactive target.
+    const q = try f.call("slew", &.{va}); // an operator unit, input V(a)
+    // I(a,b) <+ V(b) + ddt(slew(V(a))): a resistive and a reactive target.
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .resist_val = vb, .react_val = q });
     try f.lowered.charge_sites.append(a, .{ .contrib = 0, .sign = 1, .final = q });
     try f.lowered.held_vars.append(a, .{ .name = "h", .ty = .real, .init = .f_zero, .seed = .f_zero, .final = vb });

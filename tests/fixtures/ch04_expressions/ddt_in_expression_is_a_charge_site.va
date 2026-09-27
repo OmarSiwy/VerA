@@ -34,7 +34,6 @@
 //! analysis tran
 //! print none
 //! qsite ddtZ240- lte
-//! xfail C1: a ddt off a contribution's spine is differenced inside the device, so the host sees no charge site for it
 `include "check.vh"
 module ddt_in_expression_is_a_charge_site(p);
     inout p;

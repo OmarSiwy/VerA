@@ -63,13 +63,6 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .enable_arg = null,
         .shape = .none,
     },
-    .ddt = .{
-        .lrm = "§4.5.3",
-        .needs_input = true,
-        .needs_dt = false,
-        .enable_arg = null,
-        .slots = &.{.{ .suffix = "prev", .default = "0.0", .note = "§4.5" }},
-    },
     .idt = .{
         .lrm = "§4.5.4",
         .needs_input = true,
@@ -226,5 +219,5 @@ test "op_zig: the three §5.10.3 enable indices are the last argument" {
     try std.testing.expectEqual(@as(?u8, 4), get(.cross).enable_arg);
     try std.testing.expectEqual(@as(?u8, 3), get(.above).enable_arg);
     try std.testing.expectEqual(@as(?u8, 3), get(.timer).enable_arg);
-    try std.testing.expectEqual(@as(?u8, null), get(.ddt).enable_arg);
+    try std.testing.expectEqual(@as(?u8, null), get(.slew).enable_arg);
 }

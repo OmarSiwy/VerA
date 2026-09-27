@@ -13,6 +13,7 @@ const lower_control = @import("control.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
+const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const lower_table_model = @import("table_model.zig");
 const Ast = @import("frontend").Ast;
@@ -183,8 +184,30 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
+    if (std.mem.eql(u8, name, "ddt"))
+        return .{ .v = try opDdt(self, ex.mainTok(e), vals.items[0], opAbstol(self, args, 1), try lower_contrib.opSiteLte(self, e)), .ty = .real };
     const callee = if (std.mem.eql(u8, name, "absdelay") and try absdelayQuad(self, e)) "absdelay$quad" else name;
     return .{ .v = try self.call(callee, vals.items), .ty = .real };
+}
+
+/// §4.5.3 `ddt(x)` as the unknown §4.5.2 introduces: s, with the row
+/// s - d/dt(x) = 0 and x its charge. So DC reads the clause's zero, and the
+/// host integrates and truncation-checks x like any charge. Returns V(s).
+pub fn opDdt(self: *Lower, tok: u32, x: Mir.Value, abstol: f64, lte: bool) Oom!Mir.Value {
+    const s = try lower_node.opStateNode(self, "ddt", abstol);
+    const v = try lower_node.probe(self, s);
+    try lower_contrib.stampOpRow(self, tok, s, v, x, true, lte);
+    return v;
+}
+
+/// The tolerance of an operator's unknown: its §4.5.3/§4.5.4 abstol or nature
+/// argument in `slot`, folded at the parameters' declared defaults, else the
+/// 1e-6 an undisciplined net gets.
+fn opAbstol(self: *Lower, args: []const Ast.ExprId, slot: usize) f64 {
+    if (slot >= args.len or args[slot] == .none) return 1e-6;
+    if (natureAbstol(self, args[slot])) |t| return t;
+    const c = lower_constfold.constEval(self, args[slot]) orelse return 1e-6;
+    return if (c == .str) 1e-6 else c.asReal();
 }
 
 /// Reports whether `absdelay` call `e` interpolates quadratically, from VerA's

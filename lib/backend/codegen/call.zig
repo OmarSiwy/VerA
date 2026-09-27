@@ -536,7 +536,6 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
 pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
     const d = self.mir.instData(inst).call;
     return switch (d.callee) {
-        .ddt,
         .idt,
         .idtmod,
         .absdelay,
@@ -720,15 +719,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const name = d.name;
     const args = d.args;
     const k = Mir.callee.opKind(c);
-    // ddt/idt and the §4.5.11/§4.5.12 filters stay lane-exact: they branch
+    // idt and the §4.5.11/§4.5.12 filters stay lane-exact: they branch
     // only on `dt` and are S-linear over shared state. Every other operator
     // steers on or collapses a `.val()` of its input, so it pins.
     switch (k) {
-        .none, .ddt, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
+        .none, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
         .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| float_lanes.pinLanes(self, arg),
     }
     switch (c) {
-        .ddt,
         .idt,
         .idtmod,
         .absdelay,
@@ -1336,11 +1334,6 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
                     "sim.t, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
                 .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
             );
-            try opClose(self);
-        },
-        .ddt => {
-            try opOpen(self, fm);
-            try self.b("zDdt({s}, {s}, inst.{s}__prev, sim.dt)", .{ kS, in, n });
             try opClose(self);
         },
         // §4.5.4 `idt(expr, ic, assert)` "returns the initial conditions

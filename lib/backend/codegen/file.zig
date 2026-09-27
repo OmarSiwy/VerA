@@ -319,7 +319,14 @@ pub fn emitTopology(self: *Gen) Error!void {
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
     try self.w("pub const U = enum(u8) {{\n", .{});
     for (self.names.u_names, 0..) |n, i| {
-        const kindc: []const u8 = if (i < self.lowered.num_ports) "port" else if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) "branch flow" else "internal";
+        const kindc: []const u8 = if (i < self.lowered.num_ports)
+            "port"
+        else if (plan_topo.isFlowUnknown(self.input(), @intCast(i)))
+            "branch flow"
+        else if (i < self.lowered.nodes.len and self.lowered.nodes.items(.kind)[i] == .op_state)
+            "§4.5.2 operator unknown"
+        else
+            "internal";
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
     try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
@@ -404,6 +411,7 @@ pub fn abstolOf(self: *const Gen, i: u32) f64 {
     if (i < self.lowered.nodes.len) switch (self.lowered.nodes.items(.kind)[i]) {
         .net => {},
         .branch_flow, .port_flow => |n| idx = n,
+        .op_state => |t| return t,
     };
     if (idx == Lower.ground or idx >= self.lowered.nodes.len)
         return if (flow) 1e-12 else 1e-6;
@@ -814,7 +822,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             // Every `.static` and `.none` row: already handled above, or
             // (§9.17) writing the two unconditional fields and no per-unit
             // one at all.
-            .none, .ddt, .idt, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => {},
+            .none, .idt, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => {},
         }
     }
     // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
@@ -883,7 +891,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                     "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
                     .{self.names.unit_names[i]},
                 ),
-                .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+                .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
             }
         }
     }
@@ -932,7 +940,7 @@ fn fsmStateCtl(self: *const Gen) bool {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => return true,
-            .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     return false;
@@ -998,7 +1006,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w("    }} else {{\n", .{});
@@ -1012,7 +1020,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .none, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w(
