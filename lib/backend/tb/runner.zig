@@ -140,6 +140,15 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §9.17.3 the published cold start -----------------------------------
     if (d.asserts_seed) try emitSeedCheck(arena, &out, d);
 
+    // --- §3.6.1.2 the published tolerances ----------------------------------
+    for (d.abstols) |b| try print(&out, arena,
+        \\    if (comptime std.meta.stringToEnum(D.U, "{0f}")) |u| {{
+        \\        const g = u_abstol[@intFromEnum(u)];
+        \\        std.debug.print("abstol[{0f}] got={{e}} want={{e}} ok={{d}}\n", .{{ g, @as(f64, {1f}), @intFromBool(near(g, {1f})) }});
+        \\    }} else std.debug.print("abstol[{0f}] got=none want={{e}} ok=0\n", .{{@as(f64, {1f})}});
+        \\
+    , .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+
     // --- one straight-line block per operating point ------------------------
     // Sweep outer, time inner. Each sweep point is its own transient run with a
     // fresh `State`, so no bias inherits another's §4.5 operator history.
@@ -193,6 +202,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 "        var state = newState(&{s}, &inst);\n",
             .{ if (d.solve_free) "null" else "0.0", mdl },
         );
+        for (d.op_states) |u| try print(&out, arena, "        forced[{d}] = null;\n", .{u});
         for (d.bias) |b|
             try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
@@ -256,6 +266,16 @@ pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) 
     var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
     for (d.params) |card| for (lowered.params.items) |p| {
         if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
+    };
+    return out.items;
+}
+
+/// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
+pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
+    var out: std.ArrayList(u16) = .empty;
+    for (lowered.nodes.items(.kind), 0..) |k, i| switch (k) {
+        .op_state => try out.append(arena, @intCast(i)),
+        .net, .branch_flow, .port_flow => {},
     };
     return out.items;
 }
@@ -609,6 +629,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
             \\        var state = newState(&{s}, &inst);
             \\
         , .{ if (d.solve_free) "null" else "0.0", mdl });
+        for (d.op_states) |u| try print(&out, arena, "        forced[{d}] = null;\n", .{u});
         for (d.bias) |b|
             try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|

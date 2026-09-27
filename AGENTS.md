@@ -269,8 +269,9 @@ A verdict is the whole token `ok=1`; `ok=10` fails. Without `//! checks` the
 runner only needs a nonempty, all-passing transcript.
 
 Device-table directives assert what a device PUBLISHES to a host, as
-`got=/want= ok=` lines: `//! noise`, `//! acstim`, and `//! qsite` (one line
-per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order).
+`got=/want= ok=` lines: `//! noise`, `//! acstim`, `//! qsite` (one line
+per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order), and
+`//! abstol <unknown> = v` (the §3.6.1.2 `u_abstol` entry).
 
 **Vendor attributes.** VerA reads three §2.9 attributes. `vera_lte` is a
 prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)

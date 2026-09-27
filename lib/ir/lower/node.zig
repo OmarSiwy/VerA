@@ -39,6 +39,8 @@ pub const State = struct {
     spellings: std.StringHashMapUnmanaged(void) = .empty,
     /// Deduped probe Value per `nodes` row; `.undef` = not probed yet.
     probe_cache: std.ArrayList(Mir.Value) = .empty,
+    /// `op_state` rows minted so far, the `<k>` of `opStateNode`'s spelling.
+    op_states: u16 = 0,
 };
 
 /// Reports whether `dname` is a §1.3.4 signal-flow discipline: exactly one of its
@@ -214,6 +216,14 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
         return;
     };
     try self.out.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
+}
+
+/// Mints the §4.5.2 unknown one analog operator site introduces, spelled
+/// `<op>$<k>`. Never deduped: each site owns its own unknown and row.
+pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u16 {
+    const name = try std.fmt.allocPrint(self.arena, "{s}${d}", .{ op, self.node_state.op_states });
+    self.node_state.op_states += 1;
+    return appendNode(self, name, "", .{ .op_state = abstol });
 }
 
 /// The one place a `nodes` row is created, fixing its kind and spelling together.

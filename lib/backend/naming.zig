@@ -316,20 +316,20 @@ test "same-target collisions take group-local ordinals, first stays bare" {
     const a = f.arena.allocator();
 
     _ = try f.mir.addBlock(a);
-    const ddt = try f.mir.internString(a, "ddt");
+    const slew = try f.mir.internString(a, "slew");
     const transition = try f.mir.internString(a, "transition");
     const ln = try f.mir.internString(a, "ln"); // not an analog operator: no unit
-    _ = try f.mir.emitCall(a, .entry, ddt, &.{});
+    _ = try f.mir.emitCall(a, .entry, slew, &.{});
     _ = try f.mir.emitCall(a, .entry, ln, &.{});
     _ = try f.mir.emitCall(a, .entry, transition, &.{});
-    _ = try f.mir.emitCall(a, .entry, ddt, &.{});
+    _ = try f.mir.emitCall(a, .entry, slew, &.{});
 
     var got: std.ArrayList([]const u8) = .empty;
     try f.names(&got);
     try std.testing.expectEqual(@as(usize, 3), got.items.len);
-    try std.testing.expectEqualStrings("mymod__analog_op__ddt", got.items[0]);
+    try std.testing.expectEqualStrings("mymod__analog_op__slew", got.items[0]);
     try std.testing.expectEqualStrings("mymod__analog_op__transition", got.items[1]);
-    try std.testing.expectEqualStrings("mymod__analog_op__ddt__1", got.items[2]);
+    try std.testing.expectEqualStrings("mymod__analog_op__slew__1", got.items[2]);
 }
 
 test "sanitize is injective on the names that would otherwise collide" {
@@ -375,10 +375,10 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
 
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
     _ = try f.mir.addBlock(a);
-    const ddt = try f.mir.internString(a, "ddt");
+    const slew = try f.mir.internString(a, "slew");
     const bs = try f.mir.internString(a, "$bound_step");
     const disc = try f.mir.internString(a, "$discontinuity");
-    _ = try f.mir.emitCall(a, .entry, ddt, &.{});
+    _ = try f.mir.emitCall(a, .entry, slew, &.{});
     // `Lower.finishKernelCtl` appends these last, in this order.
     _ = try f.mir.emitCall(a, .entry, bs, &.{});
     _ = try f.mir.emitCall(a, .entry, disc, &.{});
@@ -388,7 +388,7 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
     try std.testing.expectEqual(@as(usize, 4), got.items.len);
     // Contributions first: proof indexes `unit_modes` by this order.
     try std.testing.expectEqualStrings("mymod__analog__I_drain_source", got.items[0]);
-    try std.testing.expectEqualStrings("mymod__analog_op__ddt", got.items[1]);
+    try std.testing.expectEqualStrings("mymod__analog_op__slew", got.items[1]);
     // The `$` is dropped, not escaped to `Z24`.
     try std.testing.expectEqualStrings("mymod__analog_op__bound_step", got.items[2]);
     try std.testing.expectEqualStrings("mymod__analog_op__discontinuity", got.items[3]);
