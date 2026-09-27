@@ -689,6 +689,7 @@ rejects an AMS `CLAUSES.tsv` row that names it.
 |---|---|---|
 | 16, and §14.6.3, §17.2.10 | SDF back-annotation | `$sdf_annotate` is refused, E1102 |
 | 28 | protected envelopes | any `` `pragma protect `` is refused, E0146 |
+| 14, 15: the clauses that describe simulation (§14.3.2-§14.6.4.2, §15.2-§15.3.6, §15.5-§15.8) | path delays and pulse limits applied, timing checks evaluated, notifiers toggled | W0251 on the specify block, naming its timing checks |
 
 Chapters 21 to 25 (the PLI 1.0 TF and ACC routines) are not in this table:
 IEEE 1364-2005 §1.6 removed their text, each is one sentence pointing at 1.6,

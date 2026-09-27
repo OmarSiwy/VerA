@@ -324,42 +324,42 @@
 14.2.7.3	-	Negative polarity
 14.3	-	Assigning delays to module paths
 14.3.1	-	Specifying transition delays on module paths
-14.3.2	-	Specifying x transition delays
-14.3.3	-	Delay selection
-14.4	-	Mixing module path delays and distributed delays
-14.5	-	Driving wired logic
-14.6	-	Detailed control of pulse filtering behavior
-14.6.1	-	Specify block control of pulse limit values
-14.6.2	-	Global control of pulse limit values
+14.3.2	not-supported	Specifying x transition delays	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.3.3	not-supported	Delay selection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.4	not-supported	Mixing module path delays and distributed delays	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.5	not-supported	Driving wired logic	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6	not-supported	Detailed control of pulse filtering behavior	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.1	not-supported	Specify block control of pulse limit values	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.2	not-supported	Global control of pulse limit values	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 14.6.3	not-supported	SDF annotation of pulse limit values	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
-14.6.4	-	Detailed pulse control capabilities
-14.6.4.1	-	On-event versus on-detect pulse filtering
-14.6.4.2	-	Negative pulse detection
+14.6.4	not-supported	Detailed pulse control capabilities	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.4.1	not-supported	On-event versus on-detect pulse filtering	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.4.2	not-supported	Negative pulse detection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 15	-	Timing checks
 15.1	-	Overview
-15.2	-	Timing checks using a stability window
-15.2.1	-	$setup
-15.2.2	-	$hold
-15.2.3	-	$setuphold
-15.2.4	-	$removal
-15.2.5	-	$recovery
-15.2.6	-	$recrem
-15.3	-	Timing checks for clock and control signals
-15.3.1	-	$skew
-15.3.2	-	$timeskew
-15.3.3	-	$fullskew
-15.3.4	-	$width
-15.3.5	-	$period
-15.3.6	-	$nochange
+15.2	not-supported	Timing checks using a stability window	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.1	not-supported	$setup	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.2	not-supported	$hold	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.3	not-supported	$setuphold	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.4	not-supported	$removal	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.5	not-supported	$recovery	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.6	not-supported	$recrem	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3	not-supported	Timing checks for clock and control signals	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.1	not-supported	$skew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.2	not-supported	$timeskew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.3	not-supported	$fullskew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.4	not-supported	$width	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.5	not-supported	$period	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.6	not-supported	$nochange	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
 15.4	-	Edge-control specifiers
-15.5	-	Notifiers: user-defined responses to timing violations
-15.5.1	-	Requirements for accurate simulation
-15.5.2	-	Conditions in negative timing checks
-15.5.3	-	Notifiers in negative timing checks
-15.5.4	-	Option behavior
-15.6	-	Enabling timing checks with conditioned events
-15.7	-	Vector signals in timing checks
-15.8	-	Negative timing checks
+15.5	not-supported	Notifiers: user-defined responses to timing violations	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.1	not-supported	Requirements for accurate simulation	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.2	not-supported	Conditions in negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.3	not-supported	Notifiers in negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.4	not-supported	Option behavior	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.6	not-supported	Enabling timing checks with conditioned events	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.7	not-supported	Vector signals in timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.8	not-supported	Negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
 16	not-supported	Backannotation using the standard delay format (SDF)	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 16.1	not-supported	The SDF annotator	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 16.2	not-supported	Mapping of SDF constructs to Verilog	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
