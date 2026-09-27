@@ -578,8 +578,8 @@ pub const gm = struct {
         try std.testing.expect(std.math.isNan(softExpm1(std.math.nan(f64))));
         // The host branch must still BE std's, so expm1/atan are unchanged
         // for every build that is not a GPU kernel.
-        try std.testing.expectEqual(std.math.expm1(0.7), expm1(0.7));
-        try std.testing.expectEqual(std.math.atan(0.7), atan(0.7));
+        try std.testing.expectEqual(std.math.expm1(@as(f64, 0.7)), expm1(0.7));
+        try std.testing.expectEqual(std.math.atan(@as(f64, 0.7)), atan(0.7));
 
         // atan's device branch is std's own vector body, so it is not
         // bit-identical to the scalar one -- pin the gap at an ulp.
@@ -1261,6 +1261,717 @@ pub fn checkScalar(comptime S: type) void {
     inline for (s_primitives) |p| {
         if (!@hasDecl(S, p))
             @compileError(@typeName(S) ++ ": scalar S is missing contract primitive `" ++ p ++ "`");
+    }
+}
+
+// ============================================================================
+// Scalar families (contract ABI 5, previewed at contract_abi 4)
+// ============================================================================
+//
+// ABI 5 replaces the one scalar `S` with a FAMILY: the device asks the host for
+// `S.Of(mask)`, the scalar carrying the derivative lanes of exactly the
+// unknowns `mask` names, and a device's value is typed by the unknowns it can
+// depend on. `abi_version` stays 4 until the flip; a device built with the
+// family preview exposes the new entry points under `pub const abi5` beside
+// its ABI 4 ones.
+//
+// THE NUMERICS, pinned per primitive so every family computes one thing.
+// Values are bit-exact except the transcendentals (exp log expm1 sin cos tanh
+// sinh cosh atan pow), whose last ulp is the host's. Lanes follow the formula
+// with one rounding per listed operation; FMA is optional.
+//
+//   add sub neg      IEEE; a lane present in one operand is copied (negated for sub)
+//   mul              a·b; lanes mulAdd(b.d, a.v, a.d·b.v), a one-sided operand one product
+//   div              a.v·(1/b.v); lanes mulAdd(b.d, −q, a.d)·(1/b.v), an `Of(0)` divisor a.d·(1/b.v)
+//   scale addC       a·c, a+c; lanes a.d·c, a.d
+//   exp log expm1    d·e, d·(1/v), d·exp(v)
+//   log1p sqrt       d·(1/(1+v)), d·(0.5/s) (0 unless s > 0)
+//   sin cos          d·cos, d·(−sin)
+//   tanh sinh cosh   d·(1−th²), d·cosh, d·sinh
+//   atan             d·(1/(1+v²))
+//   pow(x, c)        host pow; lanes d·(c·p/x), or d·(c·pow(0, c−1)) at x = 0; a non-finite slope is 0
+//   lt le eq         IEEE compare → 1.0/0.0 (NaN gives 0), no lanes: `Of(0)`
+//   sel(c, a, b)     c ≠ 0 ? a : b (a NaN c picks a), the winner's lanes widened to both
+//   to(m)            the same value, lanes widened to `m`; the new ones are exactly +0
+//
+// §4.3.1 spells min, max and abs as conditionals, and the reference family's
+// ABI 4 members follow those spellings: min = (x < y) ? x : y, max =
+// (x > y) ? x : y, abs = (x > 0) ? x : −x, minC(a, c) = (c < a) ? c : a,
+// maxC(a, c) = (a < c) ? c : a, each carrying the selected operand's lanes.
+
+/// The family decls a host passes as `comptime S` (ABI 5): `Of(comptime m:
+/// u64) type`, `con(f64) Of(0)`, `probe(comptime u: usize, f64) Of(1 << u)`,
+/// `sel(c, a, b)` joining `a` and `b`. The device calls `probe` only for `u`
+/// in `derivReads`, and names only masks inside it.
+pub const family_fns = [_][]const u8{ "Of", "con", "probe", "sel" };
+
+/// What every `Of(m)` value carries (ABI 5). A binary operation takes any
+/// `Of(m')` operand and returns `Of(m | m')`; a unary one keeps `Of(m)`;
+/// `lt`/`le`/`eq` return `Of(0)`; `to(comptime m2)` widens and is a compile
+/// error unless `m ⊆ m2`; `ddxAt(comptime u)` is lane `u`, or 0 off the mask.
+pub const family_primitives = [_][]const u8{
+    "addC", "scale", "add",  "sub",  "neg",  "mul", "div", "exp", "log",
+    "expm1", "log1p", "sqrt", "pow", "sin",  "cos", "tanh", "sinh", "cosh",
+    "atan",  "lt",    "le",   "eq",  "val", "ddxAt", "to",
+};
+
+/// Structural check of a family: its decls, and the primitives of `Of(0)`
+/// and `Of(1)`.
+pub fn checkFamily(comptime S: type) void {
+    if (@hasDecl(S, "collapse_applied") and @TypeOf(S.collapse_applied) != bool)
+        @compileError(@typeName(S) ++ ": family collapse_applied must be bool");
+    inline for (family_fns) |f| {
+        if (!@hasDecl(S, f)) @compileError(@typeName(S) ++ ": family is missing `" ++ f ++ "`");
+    }
+    inline for (.{ S.Of(0), S.Of(1) }) |T| inline for (family_primitives) |p| {
+        if (!@hasDecl(T, p)) @compileError(@typeName(T) ++ ": family value is missing primitive `" ++ p ++ "`");
+    };
+}
+
+/// `lane[u]` for an unknown the family does not carry.
+pub const no_lane: u8 = std.math.maxInt(u8);
+
+pub const RefOptions = struct {
+    /// Every `Of(m)` is one type carrying every lane `lane` maps: the ABI 4
+    /// layout, and itself a complete ABI 4 scalar (`checkScalar`). Otherwise
+    /// `Of(m)` carries exactly `m`'s lanes, in unknown order.
+    dense: bool,
+    collapse_applied: bool = false,
+};
+
+/// The reference family: the numerics table above, lanes of float type `L`
+/// (`f64`, or `f32` under `jac_f32`) beside an `f64` value. `lane[u]` is the
+/// lane unknown `u` occupies in the dense layout, or `no_lane`; a sparse
+/// `Of(m)` refuses at compile time a mask naming an unknown `lane` does not
+/// carry. Transcendentals go through `gm`, so the family compiles for NVPTX
+/// and AMDGCN too.
+pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: RefOptions) type {
+    return if (opts.dense) RefDense(L, lane, opts.collapse_applied) else RefSparse(L, lane, opts.collapse_applied);
+}
+
+const fma_lanes = switch (@import("builtin").cpu.arch) {
+    .x86_64 => std.Target.x86.featureSetHas(@import("builtin").cpu.features, .fma),
+    .aarch64, .nvptx64, .amdgcn => true,
+    else => false,
+};
+
+inline fn laneFma(comptime T: type, a: T, b: T, c: T) T {
+    return if (fma_lanes) @mulAdd(T, a, b, c) else a * b + c;
+}
+
+/// `pow`'s lane coefficient (§7[2]): c·p/x off zero, c·pow(0, c−1) at it, 0
+/// when that is not finite.
+fn powSlope(x: f64, c: f64, p: f64) f64 {
+    const s = if (x != 0.0) c * p / x else c * gm.pow(x, c - 1.0);
+    return if (std.math.isFinite(s)) s else 0.0;
+}
+
+/// `sqrt`'s lane coefficient: 0.5/s, and 0 unless s > 0.
+fn sqrtSlope(s: f64) f64 {
+    return if (s > 0.0) 0.5 / s else 0.0;
+}
+
+fn laneWidth(comptime lane: []const u8) usize {
+    var n: usize = 0;
+    for (lane) |l| {
+        if (l != no_lane) n = @max(n, @as(usize, l) + 1);
+    }
+    return n;
+}
+
+fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
+    return struct {
+        v: f64,
+        /// An array, not a vector, so a host's scatter loop may index it at
+        /// run time; the arithmetic below runs on it as `V`.
+        d: [N]L = @splat(0.0),
+        pub const collapse_applied = collapsed;
+        const N = laneWidth(lane);
+        const V = @Vector(N, L);
+        const T = @This();
+        inline fn k(c: f64) V {
+            return @splat(@as(L, @floatCast(c)));
+        }
+        inline fn lv(a: T) V {
+            return a.d;
+        }
+        fn map(a: T, v: f64, c: f64) T {
+            return .{ .v = v, .d = lv(a) * k(c) };
+        }
+
+        pub fn Of(comptime _: u64) type {
+            return T;
+        }
+        pub fn con(c: f64) T {
+            return .{ .v = c };
+        }
+        pub fn probe(comptime u: usize, v: f64) T {
+            var d: [N]L = @splat(0.0);
+            if (lane[u] != no_lane) d[lane[u]] = 1.0;
+            return .{ .v = v, .d = d };
+        }
+        pub fn to(a: T, comptime _: u64) T {
+            return a;
+        }
+        pub fn val(a: T) f64 {
+            return a.v;
+        }
+        pub fn ddxAt(a: T, comptime u: usize) f64 {
+            if (lane[u] == no_lane) return 0.0;
+            return a.d[lane[u]];
+        }
+        pub fn add(a: T, b: T) T {
+            return .{ .v = a.v + b.v, .d = lv(a) + lv(b) };
+        }
+        pub fn sub(a: T, b: T) T {
+            return .{ .v = a.v - b.v, .d = lv(a) - lv(b) };
+        }
+        pub fn neg(a: T) T {
+            return .{ .v = -a.v, .d = -lv(a) };
+        }
+        pub fn mul(a: T, b: T) T {
+            return .{ .v = a.v * b.v, .d = laneFma(V, lv(b), k(a.v), lv(a) * k(b.v)) };
+        }
+        pub fn div(a: T, b: T) T {
+            const inv = 1.0 / b.v;
+            const q = a.v * inv;
+            return .{ .v = q, .d = laneFma(V, lv(b), k(-q), lv(a)) * k(inv) };
+        }
+        pub fn scale(a: T, c: f64) T {
+            return map(a, a.v * c, c);
+        }
+        pub fn addC(a: T, c: f64) T {
+            return .{ .v = a.v + c, .d = a.d };
+        }
+        pub fn exp(a: T) T {
+            const e = gm.exp(a.v);
+            return map(a, e, e);
+        }
+        pub fn log(a: T) T {
+            return map(a, gm.log(a.v), 1.0 / a.v);
+        }
+        pub fn expm1(a: T) T {
+            return map(a, gm.expm1(a.v), gm.exp(a.v));
+        }
+        pub fn log1p(a: T) T {
+            return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v));
+        }
+        pub fn sqrt(a: T) T {
+            const s = @sqrt(a.v);
+            return map(a, s, sqrtSlope(s));
+        }
+        pub fn sin(a: T) T {
+            return map(a, gm.sin(a.v), gm.cos(a.v));
+        }
+        pub fn cos(a: T) T {
+            return map(a, gm.cos(a.v), -gm.sin(a.v));
+        }
+        pub fn tanh(a: T) T {
+            const th = gm.tanh(a.v);
+            return map(a, th, 1.0 - th * th);
+        }
+        pub fn sinh(a: T) T {
+            return map(a, gm.sinh(a.v), gm.cosh(a.v));
+        }
+        pub fn cosh(a: T) T {
+            return map(a, gm.cosh(a.v), gm.sinh(a.v));
+        }
+        pub fn atan(a: T) T {
+            return map(a, gm.atan(a.v), 1.0 / (1.0 + a.v * a.v));
+        }
+        pub fn pow(a: T, c: f64) T {
+            const p = gm.pow(a.v, c);
+            return map(a, p, powSlope(a.v, c, p));
+        }
+        pub fn lt(a: T, b: T) T {
+            return con(@floatFromInt(@intFromBool(a.v < b.v)));
+        }
+        pub fn le(a: T, b: T) T {
+            return con(@floatFromInt(@intFromBool(a.v <= b.v)));
+        }
+        pub fn eq(a: T, b: T) T {
+            return con(@floatFromInt(@intFromBool(a.v == b.v)));
+        }
+        pub fn sel(c: T, a: T, b: T) T {
+            return if (c.v != 0.0) a else b;
+        }
+        pub fn min(a: T, b: T) T {
+            return if (a.v < b.v) a else b;
+        }
+        pub fn max(a: T, b: T) T {
+            return if (a.v > b.v) a else b;
+        }
+        pub fn abs(a: T) T {
+            return if (a.v > 0.0) a else a.neg();
+        }
+        pub fn minC(a: T, c: f64) T {
+            return if (c < a.v) con(c) else a;
+        }
+        pub fn maxC(a: T, c: f64) T {
+            return if (a.v < c) con(c) else a;
+        }
+    };
+}
+
+fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
+    return struct {
+        const Fam = @This();
+        pub const collapse_applied = collapsed;
+
+        pub fn con(c: f64) Of(0) {
+            return .{ .v = c, .d = .{} };
+        }
+        pub fn probe(comptime u: usize, v: f64) Of(@as(u64, 1) << u) {
+            return .{ .v = v, .d = @splat(1.0) };
+        }
+        pub fn sel(c: anytype, a: anytype, b: anytype) Of(@TypeOf(a).mask | @TypeOf(b).mask) {
+            const r = @TypeOf(a).mask | @TypeOf(b).mask;
+            return if (c.v != 0.0) a.to(r) else b.to(r);
+        }
+
+        pub fn Of(comptime m: u64) type {
+            @setEvalBranchQuota(100_000);
+            for (0..64) |u| {
+                if ((m >> u) & 1 != 0 and (u >= lane.len or lane[u] == no_lane))
+                    @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} names unknown {d}, which `lane` does not carry", .{ m, u }));
+            }
+            return struct {
+                v: f64,
+                d: V align(@alignOf(L)),
+                pub const mask = m;
+                const V = @Vector(@popCount(m), L);
+                const T = @This();
+                inline fn k(c: f64) V {
+                    return @splat(@as(L, @floatCast(c)));
+                }
+                fn map(a: T, v: f64, c: f64) T {
+                    return .{ .v = v, .d = a.d * k(c) };
+                }
+                fn Join(comptime B: type) type {
+                    return Of(m | B.mask);
+                }
+                inline fn kj(comptime B: type, c: f64) @Vector(@popCount(m | B.mask), L) {
+                    return @splat(@as(L, @floatCast(c)));
+                }
+
+                /// This value's lanes in `to_m`'s layout; new lanes are exactly +0.
+                inline fn spread(a: T, comptime to_m: u64) @Vector(@popCount(to_m), L) {
+                    if (m & ~to_m != 0) @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} does not widen to 0x{x}", .{ m, to_m }));
+                    if (m == to_m) return a.d;
+                    if (m == 0) return @splat(0.0);
+                    const idx = comptime blk: {
+                        var idx: [@popCount(to_m)]i32 = undefined;
+                        var j: usize = 0;
+                        for (0..64) |u| if ((to_m >> u) & 1 != 0) {
+                            idx[j] = if ((m >> u) & 1 != 0) @popCount(m & ((@as(u64, 1) << u) - 1)) else -1;
+                            j += 1;
+                        };
+                        break :blk idx;
+                    };
+                    const z: @Vector(1, L) = @splat(0.0);
+                    return @shuffle(L, a.d, z, idx);
+                }
+
+                pub fn to(a: T, comptime to_m: u64) Of(to_m) {
+                    return .{ .v = a.v, .d = a.spread(to_m) };
+                }
+                pub fn val(a: T) f64 {
+                    return a.v;
+                }
+                pub fn ddxAt(a: T, comptime u: usize) f64 {
+                    if ((m >> u) & 1 == 0) return 0.0;
+                    return a.d[@popCount(m & ((@as(u64, 1) << u) - 1))];
+                }
+
+                pub fn add(a: T, b: anytype) Join(@TypeOf(b)) {
+                    const r = m | @TypeOf(b).mask;
+                    return .{ .v = a.v + b.v, .d = a.spread(r) + b.spread(r) };
+                }
+                pub fn sub(a: T, b: anytype) Join(@TypeOf(b)) {
+                    const r = m | @TypeOf(b).mask;
+                    return .{ .v = a.v - b.v, .d = a.spread(r) - b.spread(r) };
+                }
+                pub fn neg(a: T) T {
+                    return .{ .v = -a.v, .d = -a.d };
+                }
+                pub fn mul(a: T, b: anytype) Join(@TypeOf(b)) {
+                    const B = @TypeOf(b);
+                    const r = m | B.mask;
+                    if (B.mask == 0) return .{ .v = a.v * b.v, .d = a.spread(r) * kj(B, b.v) };
+                    if (m == 0) return .{ .v = a.v * b.v, .d = b.spread(r) * kj(B, a.v) };
+                    return .{ .v = a.v * b.v, .d = laneFma(@Vector(@popCount(r), L), b.spread(r), kj(B, a.v), a.spread(r) * kj(B, b.v)) };
+                }
+                pub fn div(a: T, b: anytype) Join(@TypeOf(b)) {
+                    const B = @TypeOf(b);
+                    const r = m | B.mask;
+                    const inv = 1.0 / b.v;
+                    const q = a.v * inv;
+                    if (B.mask == 0) return .{ .v = q, .d = a.spread(r) * kj(B, inv) };
+                    return .{ .v = q, .d = laneFma(@Vector(@popCount(r), L), b.spread(r), kj(B, -q), a.spread(r)) * kj(B, inv) };
+                }
+                pub fn scale(a: T, c: f64) T {
+                    return map(a, a.v * c, c);
+                }
+                pub fn addC(a: T, c: f64) T {
+                    return .{ .v = a.v + c, .d = a.d };
+                }
+                pub fn exp(a: T) T {
+                    const e = gm.exp(a.v);
+                    return map(a, e, e);
+                }
+                pub fn log(a: T) T {
+                    return map(a, gm.log(a.v), 1.0 / a.v);
+                }
+                pub fn expm1(a: T) T {
+                    return map(a, gm.expm1(a.v), gm.exp(a.v));
+                }
+                pub fn log1p(a: T) T {
+                    return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v));
+                }
+                pub fn sqrt(a: T) T {
+                    const s = @sqrt(a.v);
+                    return map(a, s, sqrtSlope(s));
+                }
+                pub fn sin(a: T) T {
+                    return map(a, gm.sin(a.v), gm.cos(a.v));
+                }
+                pub fn cos(a: T) T {
+                    return map(a, gm.cos(a.v), -gm.sin(a.v));
+                }
+                pub fn tanh(a: T) T {
+                    const th = gm.tanh(a.v);
+                    return map(a, th, 1.0 - th * th);
+                }
+                pub fn sinh(a: T) T {
+                    return map(a, gm.sinh(a.v), gm.cosh(a.v));
+                }
+                pub fn cosh(a: T) T {
+                    return map(a, gm.cosh(a.v), gm.sinh(a.v));
+                }
+                pub fn atan(a: T) T {
+                    return map(a, gm.atan(a.v), 1.0 / (1.0 + a.v * a.v));
+                }
+                pub fn pow(a: T, c: f64) T {
+                    const p = gm.pow(a.v, c);
+                    return map(a, p, powSlope(a.v, c, p));
+                }
+                pub fn lt(a: T, b: anytype) Of(0) {
+                    return con(@floatFromInt(@intFromBool(a.v < b.v)));
+                }
+                pub fn le(a: T, b: anytype) Of(0) {
+                    return con(@floatFromInt(@intFromBool(a.v <= b.v)));
+                }
+                pub fn eq(a: T, b: anytype) Of(0) {
+                    return con(@floatFromInt(@intFromBool(a.v == b.v)));
+                }
+                pub fn sel(c: T, a: anytype, b: anytype) Of(@TypeOf(a).mask | @TypeOf(b).mask) {
+                    return Fam.sel(c, a, b);
+                }
+                // ABI 4's min/max/abs/minC/maxC, for a device whose text still calls them.
+                pub fn min(a: T, b: anytype) Join(@TypeOf(b)) {
+                    return Fam.sel(a.lt(b), a, b);
+                }
+                pub fn max(a: T, b: anytype) Join(@TypeOf(b)) {
+                    return Fam.sel(b.lt(a), a, b);
+                }
+                pub fn abs(a: T) T {
+                    return if (a.v > 0.0) a else a.neg();
+                }
+                pub fn minC(a: T, c: f64) T {
+                    return if (c < a.v) con(c).to(m) else a;
+                }
+                pub fn maxC(a: T, c: f64) T {
+                    return if (a.v < c) con(c).to(m) else a;
+                }
+            };
+        }
+    };
+}
+
+/// The device's value-only scalar `R` as it stands at contract_abi 4, bit for
+/// bit: IEEE `/`, `@abs`, `@min`/`@max`. What a host passes to the value-only
+/// entry points (`setup`, `collapse`, `derive`, `noisePsd`, `updateState`) to
+/// keep their bytes when those become family-generic.
+pub const LegacyValue = struct {
+    v: f64,
+    const T = @This();
+    pub fn Of(comptime _: u64) type {
+        return T;
+    }
+    pub fn probe(comptime _: usize, v: f64) T {
+        return .{ .v = v };
+    }
+    pub fn to(a: T, comptime _: u64) T {
+        return a;
+    }
+    pub fn con(c: f64) T {
+        return .{ .v = c };
+    }
+    pub fn val(a: T) f64 {
+        return a.v;
+    }
+    pub fn ddxAt(_: T, comptime _: usize) f64 {
+        return 0.0;
+    }
+    pub fn add(a: T, b: T) T {
+        return .{ .v = a.v + b.v };
+    }
+    pub fn sub(a: T, b: T) T {
+        return .{ .v = a.v - b.v };
+    }
+    pub fn neg(a: T) T {
+        return .{ .v = -a.v };
+    }
+    pub fn mul(a: T, b: T) T {
+        return .{ .v = a.v * b.v };
+    }
+    pub fn div(a: T, b: T) T {
+        return .{ .v = a.v / b.v };
+    }
+    pub fn scale(a: T, c: f64) T {
+        return .{ .v = a.v * c };
+    }
+    pub fn addC(a: T, c: f64) T {
+        return .{ .v = a.v + c };
+    }
+    pub fn exp(a: T) T {
+        return .{ .v = gm.exp(a.v) };
+    }
+    pub fn log(a: T) T {
+        return .{ .v = gm.log(a.v) };
+    }
+    pub fn expm1(a: T) T {
+        return .{ .v = gm.expm1(a.v) };
+    }
+    pub fn log1p(a: T) T {
+        return .{ .v = std.math.log1p(a.v) };
+    }
+    pub fn sqrt(a: T) T {
+        return .{ .v = @sqrt(a.v) };
+    }
+    pub fn sin(a: T) T {
+        return .{ .v = gm.sin(a.v) };
+    }
+    pub fn cos(a: T) T {
+        return .{ .v = gm.cos(a.v) };
+    }
+    pub fn tanh(a: T) T {
+        return .{ .v = gm.tanh(a.v) };
+    }
+    pub fn sinh(a: T) T {
+        return .{ .v = gm.sinh(a.v) };
+    }
+    pub fn cosh(a: T) T {
+        return .{ .v = gm.cosh(a.v) };
+    }
+    pub fn atan(a: T) T {
+        return .{ .v = gm.atan(a.v) };
+    }
+    pub fn abs(a: T) T {
+        return .{ .v = @abs(a.v) };
+    }
+    pub fn minC(a: T, c: f64) T {
+        return .{ .v = @min(a.v, c) };
+    }
+    pub fn maxC(a: T, c: f64) T {
+        return .{ .v = @max(a.v, c) };
+    }
+    pub fn min(a: T, b: T) T {
+        return .{ .v = @min(a.v, b.v) };
+    }
+    pub fn max(a: T, b: T) T {
+        return .{ .v = @max(a.v, b.v) };
+    }
+    pub fn pow(a: T, c: f64) T {
+        return .{ .v = gm.pow(a.v, c) };
+    }
+    pub fn lt(a: T, b: T) T {
+        return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) };
+    }
+    pub fn le(a: T, b: T) T {
+        return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) };
+    }
+    pub fn eq(a: T, b: T) T {
+        return .{ .v = @floatFromInt(@intFromBool(a.v == b.v)) };
+    }
+    pub fn sel(c: T, a: T, b: T) T {
+        return .{ .v = if (c.v != 0.0) a.v else b.v };
+    }
+};
+
+/// Checks family `S` against the numerics table at run time: every primitive
+/// over an edge-value grid against the reference family in f64, the pinned
+/// edge cases of pow, div, the compares and `sel`, the §4.3.1 spellings of
+/// min/max/abs when `S` still carries them, and one mask join per binary
+/// operation. Values must match bit for bit (transcendentals within 1 ulp);
+/// lanes within 1e-6 relative, which admits f32 lanes and an unfused host,
+/// and only where the operands, the value and the lane are finite and inside
+/// f32's range: past that a dense host's `0·inf` is NaN on a lane a sparse
+/// one never computes, and an f32 lane rightly flushes or overflows.
+/// Prints the first mismatch and returns `error.FamilyMismatch`.
+pub fn expectFamily(comptime S: type) !void {
+    @setEvalBranchQuota(100_000);
+    checkFamily(S);
+    const Ref = RefFamily(f64, &.{ 0, 1 }, .{ .dense = false });
+    const nan = std.math.nan(f64);
+    const inf = std.math.inf(f64);
+    const grid = [_]f64{ 0.0, -0.0, 0.5, 1.5, -2.25, 3.0, 1e-310, 1e300, -1e300, inf, -inf, nan };
+    // f32 lanes: a lane 1 + 2^-40 rounds to 1.
+    const narrow = S.probe(0, 1.0).scale(1.0 + 0x1p-40).ddxAt(0) == 1.0;
+
+    const unary = .{ "neg", "exp", "log", "expm1", "log1p", "sqrt", "sin", "cos", "tanh", "sinh", "cosh", "atan" };
+    inline for (unary) |op| for (grid) |x| {
+        const got = @field(S.Of(1), op)(S.probe(0, x));
+        const want = @field(Ref.Of(1), op)(Ref.probe(0, x));
+        try famExpect(op, narrow, x, 0, got, want, !std.mem.eql(u8, op, "neg"));
+    };
+    for (grid) |x| for ([_]f64{ 3.0, 2.0, 1.0, 0.5, 0.0, -1.0, -2.5 }) |c| {
+        try famExpect("pow", narrow, x, c, S.probe(0, x).pow(c), Ref.probe(0, x).pow(c), true);
+        try famExpect("scale", narrow, x, c, S.probe(0, x).scale(c), Ref.probe(0, x).scale(c), false);
+        try famExpect("addC", narrow, x, c, S.probe(0, x).addC(c), Ref.probe(0, x).addC(c), false);
+    };
+    const binary = .{ "add", "sub", "mul", "div", "lt", "le", "eq" };
+    inline for (binary) |op| for (grid) |x| for (grid) |y| {
+        const got = @field(S.Of(1), op)(S.probe(0, x), S.probe(1, y));
+        const want = @field(Ref.Of(1), op)(Ref.probe(0, x), Ref.probe(1, y));
+        try famExpect(op, narrow, x, y, got, want, false);
+        const got0 = @field(S.Of(1), op)(S.probe(0, x), S.con(y));
+        const want0 = @field(Ref.Of(1), op)(Ref.probe(0, x), Ref.con(y));
+        try famExpect(op, narrow, x, y, got0, want0, false);
+        // The join: the operands' lanes land on their own unknowns.
+        if (comptime op.len == 3 and @TypeOf(got) != S.Of(0b11)) {
+            std.debug.print("expectFamily: {s} of Of(1) and Of(2) is not Of(3)\n", .{op});
+            return error.FamilyMismatch;
+        }
+    };
+    for (grid) |c| for (grid) |x| {
+        try famExpect("sel", narrow, c, x, S.sel(S.con(c), S.probe(0, x), S.probe(1, 2.0)), Ref.sel(Ref.con(c), Ref.probe(0, x), Ref.probe(1, 2.0)), false);
+    };
+
+    // The pinned edge cases (value, lane): signs of zero and infinities exact.
+    // `div`'s pins are values only: at a zero or infinite divisor its lanes
+    // are not finite, and a dense host's are NaN where a sparse one's are not.
+    const Pin = struct { what: []const u8, x: f64, y: f64, v: f64, d: ?f64 };
+    const pins = [_]Pin{
+        .{ .what = "pow", .x = -2, .y = 3, .v = -8, .d = 12 },
+        .{ .what = "pow", .x = -2, .y = 2, .v = 4, .d = -4 },
+        .{ .what = "pow", .x = -2, .y = 0.5, .v = nan, .d = 0 },
+        .{ .what = "pow", .x = 0, .y = 2, .v = 0, .d = 0 },
+        .{ .what = "pow", .x = 0, .y = 1, .v = 0, .d = 1 },
+        .{ .what = "pow", .x = 0, .y = 0, .v = 1, .d = 0 },
+        .{ .what = "pow", .x = 0, .y = 0.5, .v = 0, .d = 0 },
+        .{ .what = "pow", .x = 0, .y = -1, .v = inf, .d = 0 },
+        .{ .what = "pow", .x = -0.0, .y = -1, .v = -inf, .d = 0 },
+        .{ .what = "div", .x = 0, .y = 0, .v = nan, .d = null },
+        .{ .what = "div", .x = 1, .y = 0, .v = inf, .d = null },
+        .{ .what = "div", .x = 1, .y = -0.0, .v = -inf, .d = null },
+        .{ .what = "div", .x = 1, .y = inf, .v = 0, .d = null },
+        .{ .what = "div", .x = inf, .y = inf, .v = nan, .d = null },
+        .{ .what = "sel", .x = nan, .y = 5, .v = 5, .d = 1 },
+        .{ .what = "lt", .x = nan, .y = 1, .v = 0, .d = 0 },
+        .{ .what = "le", .x = 1, .y = nan, .v = 0, .d = 0 },
+        .{ .what = "eq", .x = nan, .y = nan, .v = 0, .d = 0 },
+    };
+    for (pins) |p| {
+        const a = S.probe(0, p.y);
+        const r = if (std.mem.eql(u8, p.what, "pow"))
+            S.probe(0, p.x).pow(p.y).to(0b11)
+        else if (std.mem.eql(u8, p.what, "div"))
+            S.probe(0, p.x).div(S.con(p.y)).to(0b11)
+        else if (std.mem.eql(u8, p.what, "sel"))
+            S.sel(S.con(p.x), a, S.con(0.0)).to(0b11)
+        else if (std.mem.eql(u8, p.what, "lt"))
+            S.probe(0, p.x).lt(S.con(p.y)).to(0b11)
+        else if (std.mem.eql(u8, p.what, "le"))
+            S.probe(0, p.x).le(S.con(p.y)).to(0b11)
+        else
+            S.probe(0, p.x).eq(S.con(p.y)).to(0b11);
+        if (!famSame(r.val(), p.v) or (p.d != null and !famSame(r.ddxAt(0), p.d.?))) {
+            std.debug.print("expectFamily: {s}({e}, {e}) = ({e}, lane {e}), pinned ({e}, lane {?e})\n", .{ p.what, p.x, p.y, r.val(), r.ddxAt(0), p.v, p.d });
+            return error.FamilyMismatch;
+        }
+    }
+    // `to`'s new lanes are exactly +0.
+    const w = S.con(2.0).to(0b11);
+    if (@as(u64, @bitCast(w.ddxAt(0))) != 0 or @as(u64, @bitCast(w.ddxAt(1))) != 0) {
+        std.debug.print("expectFamily: to() gave a new lane that is not +0\n", .{});
+        return error.FamilyMismatch;
+    }
+
+    // §4.3.1's spellings, where the family still carries ABI 4's members.
+    if (@hasDecl(S.Of(1), "abs")) {
+        const Tri = struct { what: []const u8, x: f64, y: f64, v: f64, d: f64 };
+        const tris = [_]Tri{
+            .{ .what = "min", .x = nan, .y = 1, .v = 1, .d = 0 },
+            .{ .what = "max", .x = nan, .y = 1, .v = 1, .d = 0 },
+            .{ .what = "min", .x = 1, .y = nan, .v = nan, .d = 0 },
+            .{ .what = "min", .x = -0.0, .y = 0.0, .v = 0.0, .d = 0 },
+            .{ .what = "min", .x = 0.0, .y = -0.0, .v = -0.0, .d = 0 },
+            .{ .what = "max", .x = 0.0, .y = -0.0, .v = -0.0, .d = 0 },
+            .{ .what = "abs", .x = 0.0, .y = 0, .v = -0.0, .d = -1 },
+            .{ .what = "abs", .x = -0.0, .y = 0, .v = 0.0, .d = -1 },
+            .{ .what = "abs", .x = -3, .y = 0, .v = 3, .d = -1 },
+            .{ .what = "minC", .x = 2, .y = 2, .v = 2, .d = 1 },
+            .{ .what = "maxC", .x = 2, .y = 2, .v = 2, .d = 1 },
+            .{ .what = "minC", .x = 3, .y = 2, .v = 2, .d = 0 },
+            .{ .what = "maxC", .x = 1, .y = 2, .v = 2, .d = 0 },
+        };
+        for (tris) |t| {
+            const x = S.probe(0, t.x);
+            const r = if (std.mem.eql(u8, t.what, "min"))
+                x.min(S.con(t.y))
+            else if (std.mem.eql(u8, t.what, "max"))
+                x.max(S.con(t.y))
+            else if (std.mem.eql(u8, t.what, "abs"))
+                x.abs()
+            else if (std.mem.eql(u8, t.what, "minC"))
+                x.minC(t.y)
+            else
+                x.maxC(t.y);
+            if (!famSame(r.val(), t.v) or !famSame(r.ddxAt(0), t.d)) {
+                std.debug.print("expectFamily: {s}({e}, {e}) = ({e}, lane {e}), §4.3.1 gives ({e}, lane {e})\n", .{ t.what, t.x, t.y, r.val(), r.ddxAt(0), t.v, t.d });
+                return error.FamilyMismatch;
+            }
+        }
+    }
+}
+
+/// Bits equal, or both NaN.
+fn famSame(a: f64, b: f64) bool {
+    return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b)) or (std.math.isNan(a) and std.math.isNan(b));
+}
+
+fn famClose(a: f64, b: f64, rel: f64) bool {
+    if (famSame(a, b) or (a == 0 and b == 0)) return true;
+    return std.math.isFinite(a) and std.math.isFinite(b) and @abs(a - b) <= rel * @max(@abs(a), @abs(b));
+}
+
+fn inF32(x: f64) bool {
+    return x == 0 or (@abs(x) >= std.math.floatMin(f32) and @abs(x) <= std.math.floatMax(f32));
+}
+
+fn famUlps(a: f64, b: f64) u64 {
+    const ia: i64 = @bitCast(a);
+    const ib: i64 = @bitCast(b);
+    if ((ia < 0) != (ib < 0)) return if (a == b) 0 else std.math.maxInt(u64);
+    return @abs(ia - ib);
+}
+
+fn famExpect(comptime op: []const u8, narrow: bool, x: f64, y: f64, got: anytype, want: anytype, transcendental: bool) !void {
+    const gv = got.val();
+    const wv = want.val();
+    const v_ok = famSame(gv, wv) or (transcendental and famUlps(gv, wv) <= 1);
+    const lanes = std.math.isFinite(x) and std.math.isFinite(y) and std.math.isFinite(wv);
+    // Past f32's range an f32 lane rightly flushes or overflows, and so does
+    // a coefficient on its way into one.
+    const in_range = !narrow or (inF32(x) and inF32(y) and inF32(want.ddxAt(0)) and inF32(want.ddxAt(1)));
+    inline for (0..2) |u| {
+        // A dense host's `0·inf` on a lane the sparse reference never carries.
+        const dense_nan = (@TypeOf(want).mask >> u) & 1 == 0 and std.math.isNan(got.ddxAt(u));
+        if (!v_ok or (lanes and in_range and !dense_nan and !famClose(got.ddxAt(u), want.ddxAt(u), 1e-6))) {
+            std.debug.print("expectFamily: {s}({e}, {e}) = ({e}, lane{d} {e}), reference ({e}, lane{d} {e})\n", .{ op, x, y, gv, u, got.ddxAt(u), wv, u, want.ddxAt(u) });
+            return error.FamilyMismatch;
+        }
     }
 }
 
@@ -2918,4 +3629,49 @@ test "§4.6.4.4 noise_table_log is a straight line on a log-log plot" {
     // A flat log table is flat, not NaN: log(p2) - log(p1) = 0 is a legal line.
     const flat: NoiseTable = .{ .interp = .log, .points = &.{ .{ 1, 2e-9 }, .{ 100, 2e-9 } } };
     try testing.expectApproxEqRel(@as(f64, 2e-9), noiseTableAt(flat, 7), 1e-12);
+}
+
+test "RefFamily meets the numerics table: dense and sparse, f64 and f32 lanes" {
+    const lane = [_]u8{ 0, 1 };
+    try expectFamily(RefFamily(f64, &lane, .{ .dense = false }));
+    try expectFamily(RefFamily(f64, &lane, .{ .dense = true }));
+    try expectFamily(RefFamily(f32, &lane, .{ .dense = false }));
+    try expectFamily(RefFamily(f32, &lane, .{ .dense = true }));
+    // Dense is a whole ABI 4 scalar too; LegacyValue is one, and a family.
+    checkScalar(RefFamily(f64, &lane, .{ .dense = true }));
+    checkScalar(LegacyValue);
+    checkFamily(LegacyValue);
+}
+
+test "RefFamily sparse: Of(m) carries exactly m's lanes, joins on binary ops" {
+    const S = RefFamily(f64, &.{ 0, 1, 2, 3 }, .{ .dense = false });
+    try testing.expectEqual(@as(usize, 3 * 8), @sizeOf(S.Of(0b0101))); // the value and two lanes
+    const a = S.probe(0, 2.0);
+    const c = S.probe(2, 3.0);
+    const p = a.mul(c);
+    try testing.expect(@TypeOf(p) == S.Of(0b0101));
+    try testing.expectEqual(@as(f64, 3.0), p.ddxAt(0));
+    try testing.expectEqual(@as(f64, 2.0), p.ddxAt(2));
+    try testing.expectEqual(@as(f64, 0.0), p.ddxAt(1));
+    // An `Of(0)` divisor contributes no lanes: d(a/k) = da/k.
+    const q = c.div(S.con(4.0));
+    try testing.expect(@TypeOf(q) == S.Of(0b0100));
+    try testing.expectEqual(@as(f64, 0.25), q.ddxAt(2));
+    // `sel` widens both arms to the join; `to` pads with +0.
+    const s = S.sel(S.con(0.0), a, c);
+    try testing.expect(@TypeOf(s) == S.Of(0b0101));
+    try testing.expectEqual(@as(f64, 1.0), s.ddxAt(2));
+    try testing.expectEqual(@as(u64, 0), @as(u64, @bitCast(s.ddxAt(0))));
+}
+
+test "RefFamily dense: one type, lanes where `lane` puts them" {
+    const S = RefFamily(f64, &.{ 1, no_lane, 0 }, .{ .dense = true, .collapse_applied = true });
+    try testing.expect(S.Of(0b1) == S.Of(0b100));
+    try testing.expect(S.collapse_applied);
+    const x = S.probe(0, 3.0).mul(S.probe(2, 5.0)).add(S.probe(1, 7.0));
+    try testing.expectEqual(@as(f64, 22.0), x.val());
+    try testing.expectEqual(@as(f64, 5.0), x.ddxAt(0));
+    try testing.expectEqual(@as(f64, 0.0), x.ddxAt(1)); // not carried
+    try testing.expectEqual(@as(f64, 3.0), x.ddxAt(2));
+    try testing.expectEqual([2]f64{ 3.0, 5.0 }, x.d);
 }
