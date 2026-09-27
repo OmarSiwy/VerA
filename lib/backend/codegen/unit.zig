@@ -17,6 +17,7 @@ const gen_render = @import("render.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
+const cg_limit = @import("../cg_limit.zig");
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
@@ -41,6 +42,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     // the ranges still tile.
     if (self.core.name.len != 0) try self.w("const core = {s};\n\n", .{self.core.name});
     try emitCommon(self);
+    try cg_limit.emitCore(self);
     // §4.5.11/§4.5.12 the coefficient reader is named from the operator's
     // unit (`<unit>__sec`), not a Unit of its own, so the ordering in
     // naming.zig/proof.zig is untouched. It reads `Model` alone, so it is
@@ -76,6 +78,35 @@ pub fn emitUnits(self: *Gen) Error!void {
 /// public for unit files to reach it, which `contract.validate` rejects.
 pub fn emitCommon(self: *Gen) Error!void {
     if (self.core.lo_vals.len == 0) return;
+    const n = self.jobs.list.len;
+    try emitCoreDecl(self, self.core.name, try std.fmt.allocPrint(self.arena, core_doc, .{ n, n }));
+}
+
+const core_doc =
+    \\/// The whole model, evaluated ONCE per residual: the {d} source units
+    \\/// share one CFG, so they share one declaration and `eval`/`q` read
+    \\/// their targets out of the returned struct.
+    \\
+    \\/// Inlined at every host-scalar site (`@call(.always_inline, ...)` in
+    \\/// `eval`/`q`/`evalQ`), which destructure the returned struct at
+    \\/// once: behind a call boundary the unknowns argument and the
+    \\/// {d}-field result both go to memory, the host's Dual derivative
+    \\/// vectors spill instead of staying in registers, and no live-out the
+    \\/// caller drops can be dead-coded. Measured on ARPice
+    \\/// devices/mos6_inverter: 45.3 ms inline vs 64.9 ms out-of-line
+    \\/// (+43%), tran/fourbitadder +40%, scaling/parallel_inverters_500
+    \\/// +51%. NOT `inline fn`, so the value-only `core(S, zVals(...))`
+    \\/// sites — updateState, noisePsd, collapse, seed — share ONE
+    \\/// out-of-line instantiation per family instead of each inlining the
+    \\/// model.
+    \\
+;
+
+/// Emits declaration `name` computing `self.core.lo_vals` and returning them
+/// as a struct: the shared core, or a caller's slice of it with `core.lo_vals`
+/// and `plan.lo_idx`/`lo_vals` swapped (`cg_limit.emitCore`), under doc
+/// comment `doc`.
+pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     self.emitting_common = true;
     defer self.emitting_common = false;
 
@@ -99,27 +130,9 @@ pub fn emitCommon(self: *Gen) Error!void {
     try self.plan.analyze(.undef, self.emitting_common); // `emitting_common` ⇒ the live-outs are the targets
 
     const lo = self.out.items.len;
-    try self.w(
-        \\/// The whole model, evaluated ONCE per residual: the {d} source units
-        \\/// share one CFG, so they share one declaration and `eval`/`q` read
-        \\/// their targets out of the returned struct.
-        \\
-        \\/// Inlined at every host-scalar site (`@call(.always_inline, ...)` in
-        \\/// `eval`/`q`/`evalQ`), which destructure the returned struct at
-        \\/// once: behind a call boundary the unknowns argument and the
-        \\/// {d}-field result both go to memory, the host's Dual derivative
-        \\/// vectors spill instead of staying in registers, and no live-out the
-        \\/// caller drops can be dead-coded. Measured on ARPice
-        \\/// devices/mos6_inverter: 45.3 ms inline vs 64.9 ms out-of-line
-        \\/// (+43%), tran/fourbitadder +40%, scaling/parallel_inverters_500
-        \\/// +51%. NOT `inline fn`, so the value-only `core(S, zVals(...))`
-        \\/// sites — updateState, noisePsd, collapse, limit, seed — share ONE
-        \\/// out-of-line instantiation per family instead of each inlining the
-        \\/// model.
-        \\
-    , .{ self.jobs.list.len, self.jobs.list.len });
+    try self.w("{s}", .{doc});
     const at_fn = self.out.items.len;
-    try self.w("fn {s}(comptime S: type, ", .{self.core.name});
+    try self.w("fn {s}(comptime S: type, ", .{name});
     const at_x = self.out.items.len;
     try self.w("x: {s}, ", .{xType(self)});
     const at_model = self.out.items.len;
@@ -175,7 +188,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
     if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
     try self.w("}}\n\n", .{});
-    try gen_file.recordUnitFile(self, self.core.name, lo, at_fn);
+    try gen_file.recordUnitFile(self, name, lo, at_fn);
 }
 
 /// Returns the unit enumerated from operator call `inst`, or `none_u32`.

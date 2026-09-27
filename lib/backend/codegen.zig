@@ -296,6 +296,9 @@ pub const Gen = struct {
     jobs: plan_jobs.Jobs = .{},
     /// The shared core's live-outs, latches, name and float mode (`plan/core.zig`).
     core: plan_core.Core = .{},
+    /// Value → field of `limit`'s slice of the core, or `none_u32`
+    /// (`cg_limit.emitCore`); empty when `limit` reads nothing off the core.
+    lim_idx: []u32 = &.{},
     /// Solve invariance per value, block and loop (`plan/setup.zig`).
     sinv: plan_setup.Sinv = .{},
     /// §5.6.1.2 the charge sites `q` returns and the rows they stamp
