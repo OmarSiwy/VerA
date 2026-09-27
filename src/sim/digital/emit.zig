@@ -388,10 +388,15 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     , .{});
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s);\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
-    // The settle event: each dirty node in topological order, a direct call.
+    // The settle event: the nodes in topological order, 64 to a dirty word.
     if (p.node_pc.len != 0) {
         try self.print("fn settle(s: *S) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{});
-        for (p.node_pc, 0..) |pc, n| try self.print("    if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry_of[pc].?, pc });
+        var lo: usize = 0;
+        while (lo < p.node_pc.len) : (lo += 64) {
+            try self.print("    if (s.dirty[{d}] != 0) {{\n", .{lo / 64});
+            for (p.node_pc[lo..@min(lo + 64, p.node_pc.len)], lo..) |pc, n| try settleNode(self, p, pc, @intCast(n), entry_of[pc].?);
+            try self.print("        s.dirty[{d}] = 0;\n    }}\n", .{lo / 64});
+        }
         try self.print("    s.settle = .idle;\n}}\n\n", .{});
     }
 
@@ -436,6 +441,62 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// Node `n`, whose evaluation starts at `pc` in `fn proc<entry>`, in the
+/// settle event. A continuous assignment of a value that reads only nets
+/// and variables runs whenever a node of its word is dirty: with no operand
+/// changed it computes the value its net already holds, and storing that
+/// changes nothing (§6.1), so the node's own dirty bit need not be tested.
+/// Any other node runs when its bit says an input changed.
+fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!void {
+    const r = self.r;
+    const i = switch (r.code.items[pc]) {
+        .continuous => |i| i,
+        else => return self.print("        if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry, pc }),
+    };
+    const d = r.drivers[i];
+    const slot = r.nets[d.net].slot;
+    r.scope = d.scope;
+    r.pc = pc;
+    switch (d.source) {
+        .expr => |x| if (!pure(self, x.e) or r.reals.contains(slot))
+            return self.print("        if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry, pc }),
+        .gate => {},
+        .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
+    }
+    try self.print("        {{\n", .{});
+    if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
+    if (self.watched[slot]) {
+        var wakes = self.reach[slot];
+        wakes.comb = false;
+        try self.print("            try s.putNode({f}, {d}, {d}, ", .{ fmtReach(wakes), slot, self.off[slot] });
+    } else try self.print("            s.set({d}, ", .{self.off[slot]});
+    switch (d.source) {
+        .expr => |x| try driverValue(self, x.e, x.slice, slot),
+        .gate => |g| try gateLogic(self, g.kind, g.ins.len),
+        .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
+    }
+    try self.print(", {f}", .{full(try self.slotWidth(slot))});
+    if (self.watched[slot]) {
+        try self.print(", &.{{", .{});
+        for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
+        try self.print(" }}", .{});
+    }
+    try self.print(");\n        }}\n", .{});
+}
+
+/// Does `e` read only nets and variables: no system or user function,
+/// whose value or effect a re-evaluation could change?
+fn pure(self: *Emitter, e: Ast.ExprId) bool {
+    const ex = &self.r.file.exprs;
+    switch (ex.tag(e)) {
+        .sys_call, .call => return false,
+        else => {}, // else: every other form is pure when its operands are
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and !pure(self, c)) return false;
+    return true;
 }
 
 /// Does the design call a §18 dump task?

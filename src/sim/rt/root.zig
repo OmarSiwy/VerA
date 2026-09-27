@@ -512,6 +512,33 @@ pub const State = struct {
         try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
     }
 
+    /// `put` of a combinational node's output while the settle event runs
+    /// it, whether or not an input changed: the value is stored as is, and
+    /// the readers in `senses` (`word` counted from `off`) whose bits moved
+    /// are marked dirty here, without a branch; `reach` is woken as `put`
+    /// wakes it. A node reached in topological order only marks later ones.
+    pub inline fn putNode(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype, comptime senses: []const Sense) Error!void {
+        if (self.held(slot)) return;
+        const s = logic.wide(a);
+        const n = s.v.len;
+        const mw: [n]u64 = if (@TypeOf(m) == comptime_int or @TypeOf(m) == u64) .{m} else m;
+        const before = logic.low(self.get(off));
+        var d: [n]u64 = undefined;
+        inline for (0..n) |j| {
+            const o = self.get(off + j);
+            const nv = (o.v & ~mw[j]) | (s.v[j] & mw[j]);
+            const nx = (o.x & ~mw[j]) | (s.x[j] & mw[j]);
+            d[j] = (nv ^ o.v) | (nx ^ o.x);
+            self.v[off + j] = nv;
+            if (!two) self.x[off + j] = nx;
+        }
+        inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
+        if (@as(u8, @bitCast(reach)) == 0) return;
+        var any: u64 = 0;
+        for (d) |x| any |= x;
+        if (any != 0) try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
+    }
+
     /// `put` of a real (§4.8, `exec.store`): it changes when its value
     /// does, so -0.0 over 0.0 is no change and a NaN always is one.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
