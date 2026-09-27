@@ -426,6 +426,7 @@ pub fn main(init: std.process.Init) !u8 {
         .display = display,
         .jac_f32 = jac_f32,
         .jac_f32_host = jac_f32_host,
+        .family = @import("build_options").abi5,
         .param_overrides = overrides.items,
     };
     const target: vera.Target = if (codegen_flag == null) .lint else .build;

@@ -122,6 +122,10 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.out.appendSlice(self.gpa, math_txt);
     try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try self.out.appendSlice(self.gpa, ops_txt);
+    if (self.fam) {
+        try self.out.appendSlice(self.gpa, gen_kernel_text.family_txt);
+        try self.out.appendSlice(self.gpa, gen_kernel_text.family_dev_txt);
+    }
     if (f.timer) try self.out.appendSlice(self.gpa, timer_txt);
     if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, hist_quad_txt);
@@ -223,6 +227,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
     try p.appendSlice(self.arena, prelude_math_txt);
+    if (self.fam) try p.appendSlice(self.arena, gen_kernel_text.prelude_family_txt);
     if (f.timer) try p.appendSlice(self.arena, prelude_timer_txt);
     if (f.hist) try p.appendSlice(self.arena, prelude_hist_txt);
     if (f.hist_quad) try p.appendSlice(self.arena, gen_kernel_text.prelude_hist_quad_txt);
@@ -250,6 +255,10 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     try publish(self.arena, &hz, math_txt);
     try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try publish(self.arena, &hz, ops_txt);
+    if (self.fam) {
+        try hz.appendSlice(self.arena, "const zdr = contract.derivReads(@import(\"device.zig\"));\n");
+        try publish(self.arena, &hz, gen_kernel_text.family_txt);
+    }
     if (f.timer) try publish(self.arena, &hz, timer_txt);
     if (f.hist) try publish(self.arena, &hz, hist_txt);
     if (f.hist_quad) try publish(self.arena, &hz, hist_quad_txt);
