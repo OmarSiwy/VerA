@@ -1,21 +1,10 @@
-//! §12.16 vpi_get_value and §12.30 vpi_put_value, and cbValueChange's
-//! delivery — values in every Table 12-4 format.
-//!
-//! WHERE A VALUE COMES FROM. Two places, and an object has at most one:
-//!   - a DIGITAL object (`Obj.slot`) reads `digital.Run.values[slot]`, the
-//!     engine's own four-state storage. Its two bit planes ARE Figure 12-10's
-//!     aval/bval (frontend/integer.zig: value, unknown = 00/10/11/01 for
-//!     0/1/X/Z), so every format here is a reading of those planes and nothing
-//!     is converted between state encodings.
-//!   - an ANALOG parameter (`Obj.value`) reads the constant lowering folded
-//!     for it (`Lowered.consts`) — the one value an analog compile knows without
-//!     running the device. Node and branch values live in a compiled device
-//!     this process does not run, and are not answered.
-//!
-//! WRITES go through the engine's own write path (`exec.store` now,
-//! `exec.enqueue` of a `.write` later), so a put wakes processes waiting on the
-//! object and fires value-change callbacks exactly as a procedural assignment
-//! does.
+//! §12.16 vpi_get_value, §12.30 vpi_put_value and cbValueChange delivery, in
+//! every Table 12-4 format. A digital object reads the engine's four-state
+//! planes (Figure 12-10's aval/bval, unconverted); a parameter reads its folded
+//! constant; an analog call argument or derivative object reads what the last
+//! calltf saw or put. Node and branch values are §12.10's, in `analog.zig`.
+//! Puts go through the engine's write path, so they wake waiting processes
+//! and fire value-change callbacks as a procedural assignment does.
 
 const std = @import("std");
 const sim = @import("sim");
@@ -149,12 +138,9 @@ pub fn hasValue(o: *const Obj) bool {
 // The formats
 // ---------------------------------------------------------------------------
 
-/// One routine's value storage. §12.16: "The memory for the union members
-/// str, time, vector, strength, and misc ... shall be provided by the routine
-/// vpi_get_value(). This memory shall only be valid until the next call" —
-/// and a value-change callback's value is "free[d] upon the return of the
-/// callback", so the callback delivery owns a set of its own and a
-/// vpi_get_value made INSIDE a callback does not clobber what it was handed.
+/// One routine's value storage, valid until that routine's next call
+/// (§12.16). Callback delivery owns its own (`cb_store`), so a vpi_get_value
+/// inside a callback does not clobber the value the callback was handed.
 pub const Store = struct {
     str: std.ArrayList(u8) = .empty,
     vec: std.ArrayList(VecVal) = .empty,
@@ -162,10 +148,11 @@ pub const Store = struct {
 };
 
 var get_store: Store = .{};
+/// The store value-change callbacks deliver from.
 pub var cb_store: Store = .{};
 
-/// Fill `v` from `o` in the format `v.format` names. Errors are recorded and
-/// leave `v` as it was.
+/// Fills `v` from `o` in the format `v.format` names, into `st`'s storage.
+/// Errors are recorded (`vpi_chk_error`) and leave `v` as it was.
 pub fn read(o: *const Obj, v: *Value, st: *Store) void {
     const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else {
         root.fail("NOVALUE", "vpi_get_value: `{s}` has no value this process can read", .{o.full});
@@ -431,11 +418,10 @@ pub export fn vpi_get_value(obj: vpiHandle, value_p: ?*Value) void {
 // §12.30 vpi_put_value
 // ---------------------------------------------------------------------------
 
-/// One event a put scheduled. The HANDLE is `live`'s key; the record itself
-/// stays in `events` while the event can still fire, so an inertial or
-/// transport put can find it after the application freed its handle —
-/// "Calling vpi_free_object() on the handle shall free the handle but shall
-/// not effect the event."
+/// One event a put scheduled. The handle is `live`'s key; the record stays in
+/// `events` while the event can still fire, so a later inertial or transport
+/// put can cancel it after the application freed the handle (§12.30: freeing
+/// the handle "shall not effect the event").
 pub const Event = struct {
     handle: sim.scheduler.Handle,
     slot: u32,
@@ -445,11 +431,14 @@ pub const Event = struct {
 var events: std.ArrayList(*Event) = .empty;
 var live: std.AutoHashMapUnmanaged(usize, *Event) = .empty;
 
+/// Returns `h` as a live scheduled-event handle, or null; never dereferences
+/// a foreign pointer.
 pub fn asEvent(h: vpiHandle) ?*Event {
     const p = h orelse return null;
     return live.get(@intFromPtr(p));
 }
 
+/// Invalidates `e`'s handle; a still-scheduled event fires regardless.
 pub fn freeEvent(e: *Event) void {
     _ = live.remove(@intFromPtr(e));
 }
@@ -460,6 +449,7 @@ pub fn scheduled(e: *const Event) bool {
     return r.scheduler.payloadOf(e.handle) != null;
 }
 
+/// Drops every event record and handle.
 pub fn reset() void {
     for (events.items) |e| gpa.destroy(e);
     events.clearAndFree(gpa);

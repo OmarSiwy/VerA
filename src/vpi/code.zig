@@ -1,34 +1,9 @@
-//! §11.6.3, §11.6.16–§11.6.24 — the BEHAVIOURAL objects: processes,
-//! statements, continuous assignments, tasks and functions, named events and
-//! the expressions they hold, materialized from the source AST into the one
-//! fixed object array root.zig hands handles into (AST in -> `Obj` rows out).
-//!
-//! LRM clauses this code cites: §11.6.3 (scope, task, function, io decl),
-//! §11.6.10 (named event), §11.6.16 (task and function call), §11.6.17
-//! (continuous assignment), §11.6.18/§11.6.19 (simple and compound
-//! expressions), §11.6.20 (contribs), §11.6.21 (process, block, statement,
-//! event statement), §11.6.22 (assignment, delay/event/repeat control, while,
-//! repeat, wait, for, forever), §11.6.23 (if, if-else, case), §11.6.24 (assign
-//! statement, deassign, force, release, disable), §12.11 (the delays a
-//! continuous assignment and a delay control carry).
-//!
-//! ONE CLASS FOR ALL OF THEM. Every object here is a root `Obj` of kind
-//! `.code`, typed by `vtype` (the Annex G object number `vpi_get(vpiType)`
-//! returns) and carrying its diagram's edges as DATA: `edges` are the single
-//! arrows (tag -> object), `lists` the double arrows (tag -> objects),
-//! `props` the int/bool properties. vpi_handle, vpi_iterate and vpi_get answer
-//! a `.code` object by looking the tag up in those rows — so what a diagram
-//! draws is exactly what the builder below wrote, and a tag it did not write
-//! is "no such relationship" (an error), never a guess.
-//!
-//! An edge the diagram DRAWS but this object does not have — an if with no
-//! else is a vpiIf and draws no vpiElseStmt at all, but an assignment with no
-//! intra-assignment delay still draws vpiDelayControl — is written with
-//! `none`: vpi_handle then answers NULL with no error (§11.5.3's "no object").
-//!
-//! Identifiers resolve to the objects the model already holds — a `bus` in an
-//! expression IS the §11.6.8 net object (§11.6.18: "simple expr" is the class
-//! of nets, regs, variables, parameters, memories and their selects).
+//! The behavioural VPI objects (§11.6.3, §11.6.10, §11.6.13-§11.6.24): source
+//! AST -> `.code` rows in root.zig's fixed object array, plus §12.11
+//! vpi_get_delays and §12.29 vpi_put_delays. Every row is typed by `vtype`
+//! (Annex G) and carries its diagram as data: `edges` (single arrows),
+//! `lists` (double arrows), `props`. A tag the builder did not write is an
+//! error; an edge written as `none` answers NULL with no error (§11.5.3).
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -196,8 +171,11 @@ pub const vpiDirect: c_int = 735;
 /// §11.6.19 `accessfunc`, an access function applied to a branch or nodes.
 pub const vpiAccessFunc: c_int = 736;
 
+/// A single arrow: `vpi_handle(tag, obj)` answers object `to` (or `none`).
 pub const Edge = struct { tag: c_int, to: u32 };
+/// A double arrow: `vpi_iterate(tag, obj)` walks `items`.
 pub const List = struct { tag: c_int, items: []const u32 };
+/// An int or bool property `vpi_get(prop, obj)` answers.
 pub const Prop = struct { prop: c_int, value: c_int };
 
 /// The `vpi_get_str(vpiType)` spelling of every type this file makes.
@@ -499,9 +477,6 @@ pub const Builder = struct {
         return n;
     }
 
-    /// A delay3's literal values, in the module's time unit: IEEE 1364
-    /// §7.14's rise, fall, and turn-off. A value that is not a literal is not
-    /// folded here, and the object then holds no delays (§12.11 refuses).
     /// §11.6.15 a module path: `vpiModPathIn` / `vpiModPathOut` path terms
     /// (each ->vpiExpr its terminal, with vpiDirection and vpiEdge),
     /// ->vpiCondition its `if` expression, and vpiPathType, vpiPolarity,
@@ -594,6 +569,8 @@ pub const Builder = struct {
 
     // ------------------------------------------------------------ statements
 
+    /// Builds the object for statement `id` and its children; returns its
+    /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
         if (id == .none) return none;
         const f = b.file;
@@ -789,6 +766,8 @@ pub const Builder = struct {
         }
     }
 
+    /// Builds or resolves the object for expression `id`; returns its index,
+    /// or `none` for `.none` or a form this model does not hold.
     pub fn expr(b: *Builder, id: Ast.ExprId) Error!u32 {
         if (id == .none) return none;
         const ex = &b.file.exprs;

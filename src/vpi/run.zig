@@ -1,28 +1,7 @@
-//! The simulation a VPI application's time callbacks run inside: the digital
-//! engine (`src/sim/digital`), driven one time queue at a time.
-//!
-//! IEEE 1364 §11.4's loop is the engine's `runUntil`. What §12.31.2 adds is a
-//! set of moments INSIDE that loop an application can be called at, and this
-//! file is the loop with those moments cut into it:
-//!
-//!   for each time t that holds an event or a time callback, in order:
-//!     cbNextSimTime                  "before execution of events in the next
-//!                                     event queue"
-//!     cbAtStartOfSimTime, cbAfterDelay
-//!                                    "before execution of events in a
-//!                                     specified time queue" — even an empty one
-//!     every event at t               `runUntil(t)`
-//!     cbReadWriteSynch               "after execution of events", and what it
-//!                                     schedules at t runs before the next step
-//!     cbReadOnlySynch                the same, with writes refused
-//!
-//! §12.31.2 "A callback can be set for any time, even if no event is present",
-//! so a callback's time is a time the loop visits whether or not the engine
-//! has anything there — the clock is advanced to it explicitly.
-//!
-//! THE CLOCK is `now`, in engine ticks (the global precision). Before `attach`
-//! and after the run it holds its last value, so `vpi_get_time` in a
-//! cbEndOfSimulation reads the time the run ended at.
+//! The digital run a VPI application's time callbacks live in: the engine's
+//! IEEE 1364 §11.4 loop (`src/sim/digital`), driven one time queue at a time
+//! with §12.31.2's callback moments cut into it, plus §12.15 vpi_get_time,
+//! §12.36 vpi_sim_control and §11.6.25 time queues.
 
 const std = @import("std");
 const sim = @import("sim");
@@ -37,17 +16,20 @@ const vpiHandle = root.vpiHandle;
 var engine: ?*digital.Run = null;
 var clock: u64 = 0;
 
+/// Returns the clock in engine ticks. After the run it holds the time the run
+/// ended at, so a cbEndOfSimulation reads that.
 pub fn now() u64 {
     return clock;
 }
 
-/// Bind the engine an `openDigital` model was built over. Time 0: nothing has
-/// dispatched yet, and §12.31.4's cbStartOfSimulation is "beginning of time 0".
+/// Binds the engine an `openDigital` model was built over, at its current
+/// time (0: §12.31.4's cbStartOfSimulation is "beginning of time 0").
 pub fn attach(r: *digital.Run) void {
     engine = r;
     clock = r.scheduler.now;
 }
 
+/// Unbinds the engine and invalidates every time-queue handle.
 pub fn detach() void {
     engine = null;
     clock = 0;
@@ -61,9 +43,18 @@ pub fn attached() ?*digital.Run {
     return engine;
 }
 
-/// Run the attached design to completion — `$finish`, an empty queue, or a
-/// finish an application requested — firing every callback on the way, then
-/// §12.31.4's cbEndOfSimulation.
+/// Runs the attached design to `$finish`, an empty queue, or an application's
+/// vpiFinish, then fires §12.31.4's cbEndOfSimulation. Each time `t` that
+/// holds an event or a time callback (§12.31.2: "even if no event is
+/// present") runs, in order:
+///
+///   cbNextSimTime                     "before execution of events in the
+///                                     next event queue"
+///   cbAtStartOfSimTime, cbAfterDelay  before the queue's events, even empty
+///   every event at t                  `runUntil(t)`
+///   cbReadWriteSynch                  after the events; what it schedules
+///                                     at t runs before t is left
+///   cbReadOnlySynch                   the same, with writes refused
 pub fn simulate() digital.Error!void {
     const r = engine orelse return;
     callback.startOfSimulation();
@@ -147,6 +138,8 @@ pub fn timeNow(obj: vpiHandle, t: *Time) void {
     fillTime(clock, obj, t);
 }
 
+/// Fills both of `t`'s forms from `ticks`: high/low in ticks, and `real` in
+/// `obj`'s module time unit (in ticks when `obj` is NULL).
 pub fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
     t.high = @truncate(ticks >> 32);
     t.low = @truncate(ticks);
@@ -194,15 +187,11 @@ pub const vpiSetInteractiveScope: c_int = 69;
 /// VAMS §12.36 names it and gives no number; VerA allocates it (vpi_user.h).
 pub const vpiRejectTransientStep: c_int = 730;
 
-/// "shall return 1 (true) if successful; 0 (false) on a failure".
+/// §12.36: returns 1 on success, 0 on failure.
 ///
-/// vpiFinish — "cause $finish built-in Verilog system task to be executed upon
-/// return of user function". The engine is told to finish now, which is the
-/// same thing from where a user function sits: a callback runs between two
-/// dispatches (or inside a store, which completes), nothing further is
-/// dispatched, and the loop above ends the run and fires cbEndOfSimulation at
-/// the time the request was made. The diagnostic-level argument is read and
-/// not printed.
+/// vpiFinish ends the run where it is: a callback sits between dispatches, so
+/// finishing now is "upon return of user function", and cbEndOfSimulation
+/// fires at the request's time. The diagnostic-level argument is ignored.
 ///
 /// ponytail: vpiStop, vpiReset and vpiSetInteractiveScope all need an
 /// interactive mode or a restartable run, and VerA's engine has neither, so
@@ -255,6 +244,8 @@ const gpa = std.heap.smp_allocator;
 var queues: std.AutoHashMapUnmanaged(u64, *Queue) = .empty;
 var queue_live: std.AutoHashMapUnmanaged(usize, *Queue) = .empty;
 
+/// Returns `h` as a live time-queue handle, or null; never dereferences a
+/// foreign pointer.
 pub fn asQueue(h: vpiHandle) ?*Queue {
     const p = h orelse return null;
     return queue_live.get(@intFromPtr(p));
@@ -297,6 +288,7 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
 // Tests: a real digital run, driven through the loop above.
 // ---------------------------------------------------------------------------
 
+/// Test fixture: elaborates Verilog `source` and opens it as the VPI design.
 pub const Harness = struct {
     arena: std.heap.ArenaAllocator,
     bag: @import("vera").diag.Bag,
