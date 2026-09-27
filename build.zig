@@ -57,8 +57,6 @@ pub fn build(b: *std.Build) void {
 
     const fmt = b.addFmt(.{
         .paths = &.{ "lib", "src", "tests", "tools", "build.zig" },
-        // TODO: drop once wave11/sim merges; src/sim is zig-fmt clean there.
-        .exclude_paths = &.{"src/sim"},
         .check = true,
     });
     b.step("fmt-check", "Fail on any file `zig fmt` would change").dependOn(&fmt.step);
