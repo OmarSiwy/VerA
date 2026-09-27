@@ -391,14 +391,17 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word,
     // each word a function of its own so no one function grows with the
-    // design (the compiler's time does, faster than its size).
+    // design (the compiler's time does, faster than its size). A word gets
+    // the view's fields and rebuilds it: passed whole, the view is read
+    // through a pointer again after every store.
     if (p.node_pc.len != 0) {
         try self.print("fn settle(s: rt.View) rt.Error!void {{\n", .{});
-        for (0..(p.node_pc.len + 63) / 64) |w| try self.print("    if (s.dirty[{d}] != 0) try @call(.never_inline, settle{d}, .{{s}});\n", .{ w, w });
+        for (0..(p.node_pc.len + 63) / 64) |w| try self.print("    if (s.dirty[{d}] != 0) try @call(.never_inline, settle{d}, .{{ s.s, s.v, s.x, s.dirty }});\n", .{ w, w });
         try self.print("    s.s.settle = .idle;\n}}\n\n", .{});
         var lo: usize = 0;
         while (lo < p.node_pc.len) : (lo += 64) {
-            try self.print("fn settle{d}(s: rt.View) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{lo / 64});
+            try self.print("fn settle{d}(st: *S, v: [*]u64, x: [*]u64, dirty: [*]u64) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{lo / 64});
+            try self.print("    const s: rt.View = .{{ .s = st, .v = v, .x = x, .dirty = dirty }};\n", .{});
             for (p.node_pc[lo..@min(lo + 64, p.node_pc.len)], lo..) |pc, n| try settleNode(self, p, pc, @intCast(n), entry_of[pc].?);
             try self.print("    s.dirty[{d}] = 0;\n}}\n\n", .{lo / 64});
         }
