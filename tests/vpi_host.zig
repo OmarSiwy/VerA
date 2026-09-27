@@ -1,29 +1,9 @@
-//! The simulator half of `zig build test-vpi`.
-//!
-//! LRM §12.33.2 puts the application's entry point in `vlog_startup_routines`,
-//! an array "provided with a VPI-compliant product" whose entries "shall be
-//! added by the user" — so a VPI application is not a program with a `main`, it
-//! is a table of functions a simulator calls. This file is the simulator side
-//! of that arrangement, in two shapes:
-//!
-//!   no argument     the P01 object-model test: elaborate tests/vpi_design.va
-//!                   through the ordinary (analog) engine, install it, call
-//!                   `vlog_startup_routines` and §12.31.4's cbEndOfCompile.
-//!   <design.v>      a C fixture paired with a DIGITAL design: elaborate it on
-//!                   `src/sim`'s engine, install it, call the startup table,
-//!                   fire cbEndOfCompile, then RUN it — `vpi.run.simulate`,
-//!                   the loop the time and value-change callbacks fire from —
-//!                   and write the design's own transcript to stdout.
-//!
-//! Every application is a real C translation unit compiled against
-//! src/vpi/vpi_user.h and linked against the `export fn`s in src/vpi, which is
-//! the only way the ABI — the constant VALUES, the parameter types, the
-//! `char *` lifetimes — is under test at all. A Zig test calling the same
-//! functions checks that VerA agrees with itself.
-//!
-//! The application reports by EXIT CODE and a census line, and `zig build`
-//! asserts both, so a startup table that silently never ran is a failure
-//! rather than a pass.
+//! The simulator half of `zig build test-vpi`: a design plus a C application
+//! (its `vlog_startup_routines`, LRM §12.33.2) -> the application's exit code.
+//! No argument elaborates tests/vpi_design.va; `<design.va> <app>` runs the
+//! analog analyses the app's banner asks for; `<design.v>` runs the digital
+//! engine with time and value-change callbacks. Applications are real C against
+//! src/vpi/vpi_user.h, so the ABI itself is under test.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -68,10 +48,10 @@ fn host(design: ?[]const u8, app: ?[]const u8) !u8 {
     return 0;
 }
 
-/// An analog design, modelled as `vpi.open` models it: declarations and
-/// folded parameters, no run — the device that would run it is compiled for
-/// a host process this is not. Its include path is the design's directory and
-/// the one above it, which is where tests/fixtures keeps `check.vh`.
+/// An analog design, opened as `vpi.open` models it. When the application's
+/// banner asks for analyses, the device is built as a shared library and
+/// `vpi.analog_run` walks them. The include path is the design's directory and
+/// the one above it, where tests/fixtures keeps `check.vh`.
 fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     const io = Io.Threaded.global_single_threaded.io();
     const gpa = std.heap.page_allocator;
@@ -88,7 +68,7 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     defer vpi.close();
 
     // The analyses the application asks for (`*! analysis` in its banner,
-    // p03_SPEC.md's tag grammar). None: the P04 shape — declarations only.
+    // p03_SPEC.md's tag grammar). None: declarations only.
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
