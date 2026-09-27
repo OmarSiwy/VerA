@@ -1,11 +1,8 @@
-//! §7.8 automatic insertion of connect modules.
-//!
-//! In: one module's instance list, at one level of the hierarchy. Out: the same
-//! list with every mixed port re-pointed at a digital segment, plus one
-//! synthetic instance of the selected connect module per segment, for the
-//! ordinary flatten to inline like any other child.
-//!
-//! LRM clauses this file's code cites: §3.11.1, §7.6, §7.7.1, §7.7.3, §7.7.4, §7.8, §7.8.1, §7.8.2, §7.8.3, §7.8.4, §7.8.5.
+//! §7.8 automatic insertion of connect modules: one module's instance list →
+//! the same list with every mixed port re-pointed at a new segment, plus one
+//! synthetic instance of the selected connect module per segment for the
+//! flatten to inline like any other child. LRM §3.11.1, §7.6, §7.7.1, §7.7.3,
+//! §7.8.1 to §7.8.5.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -45,10 +42,12 @@ const Hit = struct {
 /// The instances of `module` as §7.8.4 leaves them: every port matched by a
 /// connect statement is bound to a fresh digital segment instead of its upper
 /// connection, and the connect module instances bridging the two are appended
-/// AFTER the originals, so `module.instances.len` is the index at which the
-/// auto-inserted ones begin. `module.instances` itself when nothing is mixed.
+/// after the originals, so `module.instances.len` is the index at which the
+/// auto-inserted ones begin. Returns `module.instances` itself when nothing is
+/// mixed; otherwise the list is new, in the arena. Reports E0922 for a port
+/// that matches more than one connect statement.
 ///
-/// §7.8.4, whose rules this is: "A connection shall be selected for a port only
+/// §7.8.4: "A connection shall be selected for a port only
 /// if one of the connections to the port is digital and the other is analog.
 /// In this case, the port shall match one (and only one) connect statement";
 /// "The connect module for a port shall be instantiated in the context of the
@@ -58,8 +57,8 @@ const Hit = struct {
 /// module. All other ports shall have an instance of the selected connect
 /// module".
 ///
-/// A mixed port no statement matches is left joined, as it was before this
-/// pass existed: the discipline resolution of §7.4 still judges it.
+/// A mixed port no statement matches is left joined, and §7.4's discipline
+/// resolution judges it.
 ///
 /// ponytail: rules are read only from connect modules with exactly one
 /// continuous and one discrete port (every §7.6 example), and a port is judged
@@ -125,7 +124,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
 
     for (hits.items, 0..) |h, hi| {
         const r = rules.items[h.rule];
-        // The bridge's port that faces the LOWER connection, and the one that
+        // The bridge's port that faces the lower connection, and the one that
         // takes the upper: the discrete port when the child's side is digital,
         // the continuous one when it is analog (m03_09's shape).
         const low_analog = domain(file, h.bottom) == .continuous;
@@ -133,10 +132,10 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         // §7.8.3 "The default is merged." And §7.8.2 overrides `split` on an
         // analog lower connection: "there shall never be more than one analog
         // node representing a signal", so those ports always share one.
-        // ponytail: §7.8.3.2 Example 3 leaves the INSTANCE count of an analog
+        // ponytail: §7.8.3.2 Example 3 leaves the instance count of an analog
         // split unstated; one is the count that keeps the node count right.
         const merged = r.ins.mode != .split or low_analog;
-        // A merged port joins the bridge an EARLIER port of its group made.
+        // A merged port joins the bridge an earlier port of its group made.
         const first = if (merged) for (hits.items[0..hi]) |g| {
             if (g.sig == h.sig and g.rule == h.rule and g.bottom == h.bottom) break g;
         } else null else null;
@@ -173,13 +172,13 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     return out.items;
 }
 
-/// The module `inst` elaborates to: the one it names, or — §6.9.3 — the module
+/// The module `inst` elaborates to: the one it names, or (§6.9.3) the module
 /// at the end of the paramset §6.4.2 selects for it. "Automatic insertion of
 /// connect modules is a post-elaboration operation ... It should also occur
 /// after the paramset selection as the choice for a particular module
 /// instantiation may affect the disciplines of the connected nets." The ports
-/// whose disciplines decide whether a connection is mixed are the SELECTED
-/// module's, so an instance naming a paramset is judged like any other.
+/// whose disciplines decide whether a connection is mixed are the selected
+/// module's.
 ///
 /// Quiet: selection proper (`elab_paramset.selectParamset`) runs again when the
 /// instance is inlined and reports anything wrong there, once. A set that does
@@ -249,8 +248,8 @@ fn domain(file: *const Ast.SourceFile, d: Ast.StrId) ?Ast.DisciplineDecl.Domain 
     return discipline.domainOf(discipline.declOf(file, d) orelse return null);
 }
 
-/// §7.7.1 read against the connect module: its two ports split into the
-/// continuous and the discrete side (§7.6 "The port disciplines define the
+/// Reads a §7.7.1 connect statement as a `Rule`: the module's two ports split
+/// into the continuous and the discrete side (§7.6 "The port disciplines define the
 /// default type of disciplines which shall be bridged by the connect module.
 /// The directional qualifiers of the discrete port determine the default
 /// scenarios"), then the statement's overrides applied by domain ("one shall
@@ -295,11 +294,10 @@ pub fn ruleOf(self: *Flatten, ins: *const Ast.ConnectInsertion, report: bool) Er
 
 /// §7.6 Table 7-2, "The following combinations of directional qualifiers are
 /// supported for the continuous and discrete disciplines of a connect module":
-/// input/output, output/input, inout/inout — read after §7.7.1's direction
+/// input/output, output/input, inout/inout, read after §7.7.1's direction
 /// overrides, which "are used to define the type of connect module". Any other
 /// pair names no scenario the module could be inserted in, so the statement
-/// that designates it a connect module is refused. A port with no direction
-/// is not judged here.
+/// is refused (E0982). A port with no direction is not judged here.
 pub fn checkDirections(self: *Flatten, r: Rule) Error!void {
     const c = r.cont.dir;
     const d = r.disc.dir;
@@ -315,9 +313,9 @@ pub fn checkDirections(self: *Flatten, r: Rule) Error!void {
 /// the statement's `#(...)` is an A.4.1 parameter_value_assignment on the
 /// module it names, so a name that module does not declare, a localparam
 /// (§3.4.5) or an ordered list longer than its overridable parameters is the
-/// same E0907 an instance gets — judged at the statement, where it is
-/// written, whether or not any port in the design ever selects it. `report`
-/// as in `ruleOf`; the answer is whether every entry named a parameter.
+/// same E0907 an instance gets, judged at the statement whether or not any
+/// port selects it. `report` as in `ruleOf`. Returns whether every entry
+/// named an overridable parameter.
 pub fn paramsDeclared(self: *Flatten, ins: *const Ast.ConnectInsertion, m: *const Ast.ModuleDecl, report: bool) Error!bool {
     const file = self.ctx.file;
     if (ins.params.len == 0) return true;
@@ -355,13 +353,13 @@ pub fn paramsDeclared(self: *Flatten, ins: *const Ast.ConnectInsertion, m: *cons
 
 /// Does connect rule `r` bridge a port of direction `dir` whose upper and
 /// lower connections have these disciplines? §7.6's three examples, which
-/// state the matching in terms of DATA FLOW: a d2a (discrete input, continuous
+/// state the matching in terms of data flow: a d2a (discrete input, continuous
 /// output) "can bridge a mixed input port whose upper connection is compatible
 /// with discipline ddiscrete and whose lower connection is compatible with
 /// electrical, or a mixed output port whose upper connection is compatible
 /// with discipline electrical and whose lower connection is compatible with
 /// ddiscrete"; an inout/inout bidir "can bridge any mixed port". So the rule's
-/// INPUT side faces the port's source: the upper connection of an input port,
+/// input side faces the port's source: the upper connection of an input port,
 /// the lower of an output port. "Compatible" is §3.11.1's.
 fn matches(file: *const Ast.SourceFile, r: Rule, dir: Ast.Direction, upper: Ast.StrId, lower: Ast.StrId) bool {
     const compat = struct {

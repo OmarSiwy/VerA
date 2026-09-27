@@ -1,11 +1,7 @@
-//! Hierarchical names: instance paths and the flat names they produce.
-//!
-//! In: an instance path. Out: the flat, injective name the lowered design uses.
-//!
-//! LRM clauses this file's code cites: §3.6.1.4, §3.6.5, §3.11, §4.4, §5.5.1, §6.2.2, §6.3.6, §6.4, §6.4.2, §6.5.8, §6.7, §7.4, E.3.2.1.
-//!
-//! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
-//! directly, `elab_names.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
+//! Hierarchical names: an instance path and a local name → the flat, injective
+//! name the lowered design uses; module and paramset lookup; access-function
+//! respelling across a port join; constant folding of instance bounds.
+//! LRM §3.6.1.4, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.7, §7.4, E.3.2, E.3.3.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -19,13 +15,15 @@ const Unit = Flatten.Unit;
 
 // ---- names ------------------------------------------------------------
 
-/// `path ++ local`, interned. The flat name IS the §6.7 path, so the path
-/// table (`Design.names`) needs no row for it.
+/// Returns `path ++ local`, interned. The flat name is the §6.7 path, so the
+/// path table (`Design.names`) needs no row for it.
 pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId {
     const s = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
     return self.ctx.file.intern(self.ctx.arena, s);
 }
 
+/// Binds `local` to its flat name `path ++ local` in `unit`'s rename map,
+/// unless it is already bound (a port joined to the parent's net).
 pub fn bind(self: *Flatten, unit: *Unit, path: []const u8, local: Ast.StrId) Error!void {
     // A port already bound to the parent's net keeps that binding: `inout p;
     // electrical p;` leaves a NetDecl behind for the same name, and rewriting
@@ -34,48 +32,33 @@ pub fn bind(self: *Flatten, unit: *Unit, path: []const u8, local: Ast.StrId) Err
     try unit.rename.put(self.ctx.arena, local, try join(self, path, local));
 }
 
-/// The flat spelling of a name in the unit being cloned. A name with no
-/// entry is not the unit's — a block-local, a function formal, or an
-/// undeclared net §3.6.5 makes implicit — and keeps its own spelling.
+/// Returns the flat spelling of a name in the unit being cloned. A name with
+/// no entry is not the unit's (a block-local, a function formal, or a §3.6.5
+/// implicit net) and keeps its own spelling.
 pub fn flat(self: *Flatten, local: Ast.StrId) Ast.StrId {
     return self.unit.rename.get(local) orelse local;
 }
 
-/// The net a port connection names. §6.2.2 allows an expression; VerA takes
-/// a scalar net reference, which is what a topology join can be expressed as
-/// without introducing a node and an equation for the expression's value.
+/// Returns the net a port connection names, or null when it is not a plain
+/// identifier. §6.2.2 allows an expression; VerA takes a scalar net
+/// reference, which a topology join can express without a new node.
 pub fn netRefName(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
     if (e == .none) return null;
     if (self.ctx.file.exprs.tag(e) != .ident) return null;
     return self.ctx.file.exprs.strOf(e);
 }
 
-/// E.3.3 name scoping: "in the resolution hierarchy of names during
-/// elaboration a module or paramset defined in the Verilog-AMS will always be
-/// selected in favor of a SPICE primitive, model, or subcircuit using exactly
-/// the same name". So the user's declarations first, the shipped Annex E
-/// prelude second — which is the whole of the rule, because the prelude is a
-/// prefix of `modules` (see `Ast.SourceFile.builtin_modules`).
+/// Returns the module `name` denotes, or null. Lookup order: user modules,
+/// then the shipped Annex E prelude, since E.3.3 selects "a module or
+/// paramset defined in the Verilog-AMS ... in favor of a SPICE primitive,
+/// model, or subcircuit using exactly the same name". Last, E.2.1: "if no
+/// exact match is found, the mixed-case name shall match the same name
+/// defined within SPICE regardless of the case", over the netlist-derived
+/// modules only (already lower-cased).
 ///
-/// E.3.3's "may issue a warning stating that the Verilog-AMS module ... is
-/// used instead of the SPICE primitive" is declined: `may`, and a warning on
-/// every use of a common word like `resistor` is noise.
-///
-/// THE THIRD ARM IS E.2.1's SECOND SENTENCE: "if no exact match is found, the
-/// mixed-case name shall match the same name defined within SPICE regardless
-/// of the case." Scoped to the netlist-derived tail of the prelude
-/// (`Ast.SourceFile.netlistModules`) and reached only after both exact passes
-/// fail, which is exactly what the clause says: the case-sensitive arm is
-/// "from within Verilog-AMS HDL, a mixed-case name matches the same name with
-/// an identical case", and E.3.3 adds that a differing-case match "does not
-/// interfere" with the SPICE object. Names arrive from the netlist already
-/// lower-cased (`spice_cards`), so one `eqlIgnoreCase` is the whole rule.
-///
-/// A netlist `.MODEL resistor` and Table E.1's `resistor` are ordered
-/// primitive-first here, by the exact-match pass. Annex E does not say which
-/// wins — E.3.3 only orders a Verilog-AMS module against a SPICE object, not
-/// two SPICE objects — and no fixture pins it; primitive-first is chosen
-/// because Table E.1 is the part the LRM standardises.
+/// E.3.3's optional shadowing warning is not issued. A netlist `.MODEL` and a
+/// Table E.1 primitive of the same name resolve primitive-first; Annex E
+/// does not order two SPICE objects, and Table E.1 is the standardised one.
 pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
     for (self.ctx.file.userModules()) |*m| if (m.name == name) return m;
     for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*m| {
@@ -93,10 +76,11 @@ pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
 /// of a second paramset. A chain of paramsets may be defined, but the last
 /// paramset in the chain shall reference a module."
 ///
-/// The links, near (the one the instance named) to far. `.none` only when a
-/// link's second identifier names neither — E0904, reported here.
+/// Appends the chain's links to `out`, near (the one the instance named) to
+/// far. Returns false after reporting E0904 when a link names neither a
+/// module nor a paramset, or the chain is a cycle.
 ///
-/// The chain is walked by NAME and the first declaration of that name wins.
+/// The chain is walked by name and the first declaration of that name wins.
 /// §6.4.2's selection rules are written for "every instance that references
 /// that name", and a chain link is not an instance, so an overloaded inner
 /// link has no instance context to select against.
@@ -137,15 +121,14 @@ pub fn chainEnd(self: *Flatten, ps: *const Ast.ParamsetDecl) Error!?*const Ast.M
     return findModule(self, chain.items[chain.items.len - 1].target).?;
 }
 
-/// Annex E — is `m` one of the shipped Table E.1 primitives? Identity, not
-/// name: a user module called `resistor` shadows the primitive (E.3.3, see
-/// `findModule`) and must NOT get E.3.2's treatment, because E.3.2.1 says the
-/// port_discipline machinery "shall only apply to analog primitives ... for
-/// other modules as well as the ports of all other modules it shall be
-/// ignored".
+/// Returns whether `m` is one of the shipped Table E.1 primitives (Annex E).
+/// Identity, not name: a user module called `resistor` shadows the primitive
+/// (E.3.3, see `findModule`) and must not get E.3.2's treatment: E.3.2.1's
+/// port_discipline "shall only apply to analog primitives ... for other
+/// modules as well as the ports of all other modules it shall be ignored".
 ///
 /// Table E.1's own rows only: a module synthesized from a netlist `.MODEL`
-/// card is a wrapper AROUND a primitive, not a primitive, and its body is one
+/// card is a wrapper around a primitive, not a primitive, and its body is one
 /// instantiation with no access function of its own to substitute.
 pub fn isPrimitive(self: *Flatten, m: *const Ast.ModuleDecl) bool {
     for (self.ctx.file.tablePrimitives()) |*p| {
@@ -154,7 +137,8 @@ pub fn isPrimitive(self: *Flatten, m: *const Ast.ModuleDecl) bool {
     return false;
 }
 
-/// E.3.2.1 `port_discipline`: "The value shall be of type string and the
+/// Checks every E.3.2.1 `port_discipline` attribute on `inst` (E0358).
+/// "The value shall be of type string and the
 /// value must be a valid discipline of domain continuous. This attribute
 /// shall only apply to analog primitives or the ports of analog primitives;
 /// for other modules as well as the ports of all other modules it shall be
@@ -197,8 +181,8 @@ pub fn checkPortDiscipline(self: *Flatten, module: *const Ast.ModuleDecl, inst: 
 /// `port_discipline` on its connection, else the one on the instance ("It
 /// shall only apply to either the analog primitive itself or the port to which
 /// it is attached"; E.3.2.1's `motor1` example overrides the instance's per
-/// port). Null when neither carries a valid one — `checkPortDiscipline` has
-/// already said why an invalid one is not.
+/// port). Null when neither carries a valid one; `checkPortDiscipline`
+/// reports an invalid one.
 pub fn portDisciplineAttr(self: *Flatten, module: *const Ast.ModuleDecl, inst: *const Ast.Instance, conn: Ast.PortConn) ?Ast.StrId {
     var on_inst: ?Ast.StrId = null;
     for (module.attrs) |a| {
@@ -250,32 +234,20 @@ fn decorates(self: *Flatten, t: u32, inst: *const Ast.Instance) bool {
     return true;
 }
 
-/// E.3.2 the access function a shipped primitive's `V` or `I` means on the
-/// net its port was connected to.
+/// Returns the access function a shipped primitive's `V` or `I` means on the
+/// net its port was connected to (E.3.2).
 ///
-/// Table E.1's Behavior column is written in V and I for every row, including
-/// rows whose ports need not be electrical: E.3.2 exists precisely so a
-/// primitive can "be used in any design, including mixed disciplines", and
-/// E.3.2.1's own example is a `vcvs` whose output pair is electrical and whose
-/// control pair is `rotational_omega` — one instance, two natures, one
-/// equation `V(p,n) = gain*V(ps,ns)`. So the table's V is "the potential of
-/// this port pair" and its I is "the flow", and the concrete spelling is the
-/// access function (§3.6.1.4) of whatever discipline the port resolved to.
+/// Table E.1's Behavior column writes V and I for every row, but E.3.2 lets a
+/// primitive "be used in any design, including mixed disciplines" (E.3.2.1's
+/// `vcvs` with a `rotational_omega` control pair). So V is the port pair's
+/// potential and I its flow, spelled with the §3.6.1.4 access function of the
+/// discipline the net resolved to. The discipline is read from the net,
+/// where `walkInstances` binds E.3.2's three sources in order.
 ///
-/// The discipline itself is read from the NET, not from the attribute here.
-/// E.3.2 orders the three sources — the attribute, "the resolution of the
-/// discipline", then electrical — and `walkInstances` binds them to the net
-/// in that order (`portDisciplineAttr` first, the primitive's `electrical`
-/// last, `prim_ports`), because after the flatten a connected port IS the
-/// parent's net (Ruling E). An attribute asking for a discipline a declared
-/// net does not have is the §3.11 error (E0355) at that binding. The
-/// ceiling: an UNCONNECTED port of a primitive carrying the attribute keeps
-/// the prelude's `electrical`, and a primitive cloned before a LATER level
-/// resolves its net keeps V/I.
-///
-/// Applies to the prelude's bodies only (`Unit.primitive`). A user module's
-/// `V` is a request for V, and getting Theta instead would be a compiler
-/// rewriting the source.
+/// Limits: an unconnected primitive port carrying the attribute keeps the
+/// prelude's `electrical`, and a primitive cloned before a later level
+/// resolves its net keeps V/I. Applies to prelude bodies only
+/// (`Unit.primitive`); a user module's `V` means V.
 pub fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.StrId {
     const which: Ast.PotentialOrFlow = blk: {
         const a_ = self.ctx.file.str(access);
@@ -294,8 +266,8 @@ pub fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.S
 /// child, that declaration is the child's own: §7.4 resolves disciplines only
 /// for nets "whose discipline is undeclared", and §6.5.8 lets one node carry
 /// several continuous disciplines. So an access on a bound port is judged
-/// against the port's LOCAL discipline (`Unit.port_disc`) — E0501 here, since
-/// after the join lowering sees only the parent's net — and then respelled as
+/// against the port's local discipline (`Unit.port_disc`), E0501 here since
+/// after the join lowering sees only the parent's net, and then respelled as
 /// the same half of the net it was joined to, the rewrite `primitiveAccess`
 /// makes for Table E.1's V and I. `net` is the terminal as the child wrote it,
 /// `flat_net` the same terminal cloned.
@@ -324,32 +296,21 @@ pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net:
     return discipline.accessOf(file, disc, half) orelse access;
 }
 
-/// §6.3.6's two automatic scaling rules, applied to one already-cloned
-/// branch access. `flow_scale` is the running `$mfactor` product the unit
-/// was instantiated with, as an expression in the flat namespace.
+/// Returns `value` multiplied or divided (`op`) by the unit's running
+/// `$mfactor` product when `access` is the flow access of `net`'s discipline,
+/// else null (§6.3.6's two automatic scaling rules).
 ///
 ///     "All contributions to a branch flow quantity in the analog block
 ///      shall be multiplied by $mfactor. The value returned by any branch
 ///      flow probe in the analog block ... shall be divided by $mfactor."
 ///
-/// The clause's own justification is why this is arithmetic on the SOURCE
-/// and not a knob the host turns: "the behavior of the module in the design
-/// is identical to the behavior of a quantity $mfactor of identical modules
-/// with the same connections". A flattened child IS the design, so the only
-/// place those $mfactor copies can come from is its own equations. (The
-/// TOP's $mfactor is a different thing and stays with the host, which scales
-/// the whole stamp by it — Table 9-29 gives the top the value 1.0, so
-/// `unit.mfactor` is `.none` there and nothing here fires.)
+/// A flattened child's $mfactor copies exist only in its own equations, so
+/// the scaling is source arithmetic. The top's $mfactor stays with the host
+/// (Table 9-29's 1.0; `unit.mfactor` is `.none` there and nothing fires).
 ///
-/// Is this access a FLOW? The discipline of the net the terminal resolved to
-/// names a flow nature, and §3.6.1.4's `access` attribute of that nature is
-/// the spelling — the same three-step lookup `primitiveAccess` does, for the
-/// same reason: `I` is electrical's spelling and not every discipline's.
-///
-/// ponytail: a NAMED branch (`I(br)`) is not in `disc_of`, so it is left
+/// ponytail: a named branch (`I(br)`) is not in `disc_of`, so it is left
 /// unscaled; the upgrade is a branch → net map here. Rules 3 and 4 (noise
-/// power, multiplied for a flow contribution and divided for a potential
-/// one) are likewise not applied — `mfactor_flow_noise.va` and
+/// power) are not applied; `mfactor_flow_noise.va` and
 /// `mfactor_potential_noise.va` pin the unscaled top-level case only.
 pub fn mfactorScale(
     self: *Flatten,
@@ -373,16 +334,15 @@ pub fn mfactorScale(
     });
 }
 
-/// §6.2.2 an instance array bound: a constant expression, folded by the one
-/// constant kernel (§4.2's integer typing, every operator); a real-valued
-/// bound is not one. §3.4 makes a parameter a constant expression, so a bound
-/// may read one — its value as this instance sees it, override included.
+/// Folds a §6.2.2 instance array bound, written in the current unit's local
+/// names, to an integer; null when it does not fold or is real. A bound may
+/// read a parameter (§3.4), with this instance's overrides applied.
 pub fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = true }) orelse return null;
     return if (c == .int) c.int else null;
 }
 
-/// `constInt` for an expression already in the FLAT namespace (a cloned
+/// `constInt` for an expression already in the flat namespace (a cloned
 /// declaration's range, say), so no name is renamed.
 pub fn constIntFlat(self: *Flatten, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = false }) orelse return null;
@@ -390,14 +350,15 @@ pub fn constIntFlat(self: *Flatten, e: Ast.ExprId) ?i64 {
 }
 
 /// `constfold.fold`'s identifiers, answered from the parameters flattened so
-/// far. The bound is written in the instantiating module's LOCAL names, while
-/// every value in `self.params` is already in the FLAT namespace — so only the
-/// first lookup renames. A scalar parameter only; anything else declines.
+/// far. The bound is written in the instantiating module's local names, while
+/// every value in `self.params` is already flat, so only the first lookup
+/// renames. A scalar parameter only; anything else declines.
 const ParamEnv = struct {
     self: *Flatten,
     local: bool,
     depth: u8 = 0,
 
+    /// Resolves an identifier to a flattened scalar parameter's folded value.
     pub fn leaf(env: ParamEnv, e: Ast.ExprId) ?constfold.Const {
         const self = env.self;
         const ex = &self.ctx.file.exprs;
@@ -412,9 +373,11 @@ const ParamEnv = struct {
         };
         return null;
     }
+    /// Refuses no binary operator.
     pub fn refuse(_: ParamEnv, _: Ast.ExprId) bool {
         return false;
     }
+    /// Leaves `>>>` operand signedness unknown.
     pub fn signed(_: ParamEnv, _: Ast.ExprId) ?bool {
         return null;
     }

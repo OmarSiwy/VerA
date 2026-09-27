@@ -1,127 +1,57 @@
-//! Class 9 — elaboration. LRM §6.2.2 (instantiation), §6.3 (parameter
-//! overrides), §6.7 (hierarchical names).
-//!
-//! ELABORATION FLATTENS, AND THE MIR NEVER LEARNS ABOUT HIERARCHY. That is the
-//! design decision this file exists to hold, so it is written down here rather
-//! than spread across the consumers:
-//!
-//!   - VerA emits ONE device. A §6.2.2 module hierarchy is a STRUCTURAL
-//!     description that collapses at elaboration by construction: what a
-//!     simulator stamps is one residual over terminals plus internal nodes.
-//!     There is no runtime hierarchy in the artifact, so a hierarchy in the IR
-//!     would be a concept with no consumer.
-//!   - Flattening therefore leaves mir.zig, ssa.zig, analysis.zig, proof.zig,
-//!     codegen.zig and tb.zig UNCHANGED. A hierarchical MIR makes all six learn
-//!     a new concept for the same emitted device.
-//!   - §6.7 out-of-module references in Verilog-A are STATIC — a parameter read
-//!     or a node reference resolvable at elaboration time — so flattening does
-//!     not foreclose them, PROVIDED the flatten records the hierarchical path of
-//!     every entity it renames and can resolve a path back to the flat entity.
-//!     `Flatten.names` is that table.
-//!   - What flattening DOES foreclose is runtime dynamic hierarchical access:
-//!     `$simprobe` with a computed path, and the unregistered-VPI family. Both
-//!     are independently blocked on there being no VPI host, so the loss is
-//!     accepted rather than designed around.
-//!
-//! HOW IT FLATTENS: AST → AST. The output is one synthesized `Ast.ModuleDecl`
-//! holding the top's declarations followed by a renamed COPY of every reachable
-//! instance's, and lowering walks it exactly as it walked a hand-written module.
-//! The copy is real — expressions and statements are cloned into the same
-//! append-only stores, with a StrId→StrId map applied to the names — because the
-//! alternative is a per-instance name environment inside lowering, and lowering
-//! keys twenty flat tables by name over eight thousand lines. One walk here,
-//! versus a scope concept everywhere there.
-//!
-//! The single-module case never enters the clone at all: `elaborate` returns the
-//! parsed `ModuleDecl` by pointer when the top has no instances, so the 1000-odd
-//! fixtures with nothing to elaborate go through a pointer copy and cannot
-//! change behaviour.
-//!
-//! WHAT ELSE LANDED HERE, because each is a question about the instance tree and
-//! about nothing else: §6.3.1 `defparam` (an override applied on the way down,
-//! keyed by the path it names), §6.4 `paramset` instantiation with §6.4.2's
-//! range-based selection, and Annex F.2's discipline resolution — which in a
-//! flattened design is the port binding itself, since collapsing every segment of
-//! one signal into one node IS F.2's parent/child relation. That includes step
-//! 4.b's multi-candidate arm: the §7.7.2 `connect ... resolveto` statements of a
-//! `connectrules` block (parsed since the AMS turn) resolve a net whose segments
-//! declare more than one matching-domain discipline, `resolveto exclude` refuses
-//! one (E0917), and an UNKNOWN result with a mixed-port connection is the
-//! F.2.1/F.2.2 fourth-bullet error, E0903 (`resolveMultiCandidates`).
-//!
-//! §7.8 connect-module insertion is here too, per level of the walk
-//! (`elaborate/insert.zig`): a port whose two connections are of different
-//! domains and that one §7.7.1 statement matches is re-pointed at a segment,
-//! and the selected connect module is inlined between the two like any child.
-//! The flattened design carries both halves: the analog half lowers into the
-//! device, and the digital half runs on the mixed runner, whose engine
-//! elaborates the source hierarchy plus the bridges listed in `Design.inserts`.
-//!
-//! §6.5.7.1's vector-net distribution across an instance array is not here —
-//! a port connection has to be a scalar net reference.
+//! Elaboration: a parsed `Ast.SourceFile` → one flattened `Design` whose top
+//! module holds a renamed copy of every reachable instance, so nothing after
+//! this stage sees hierarchy. LRM §6.2.2 instantiation, §6.3 parameter
+//! overrides and §6.3.1 defparam, §6.4 paramsets, §6.6 if-generate, §6.7
+//! hierarchical names (`Design.names`), §7.8 connect-module insertion, and
+//! Annex F.2 discipline resolution.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
-// §9.13's argument table and the kernels it names — `rewriteParamsetDist` folds
-// an in-paramset draw with the SAME code a device embeds, so the two cannot
-// disagree on the stream.
 const discipline = @import("discipline_rules.zig");
+// `rewriteParamsetDist` folds an in-paramset §9.13 draw with the same kernel a
+// device embeds, so the two cannot disagree on the stream.
 const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
 /// (a file of `discipline`/`nature` declarations is legal), but a device needs
-/// one. The caller turns this into E1001 — elaboration does not diagnose it,
-/// because "no module here" is only an error relative to what was ASKED for.
+/// one. The caller reports E1001, since "no module" is only an error relative
+/// to what was asked for.
 ///
-/// `DiagnosticsReported`: something in the instance tree was diagnosed here and
-/// the flattened module would be a lie. Same contract as lowering's.
+/// `DiagnosticsReported`: something in the instance tree was diagnosed; the
+/// bag holds the diagnostics and no design is returned.
 pub const Error = error{ OutOfMemory, NoModule, DiagnosticsReported };
 
-/// §6.7 the separator between levels of a flattened hierarchical name.
+/// The separator between levels of a flattened hierarchical name (LRM §6.7).
 ///
-/// A period, for two reasons. It is the separator §6.7 itself writes
-/// (`hierarchical_identifier ::= { identifier [ [ expr ] ] . } identifier`), so
-/// a flattened name reads the way the source would have referred to it — and
-/// these names land in diagnostics and in the emitted device's identifiers, so
-/// readable is a requirement, not a nicety.
-///
-/// And it does not collide, though NOT for the reason this comment used to give.
-/// §2.8 simple identifiers are alphanumeric plus `_`/`$`, but §2.8.1 ends an
-/// escaped identifier at white space and admits every printable character before
-/// it, so `\x.y ` is the identifier `x.y` and a raw join of it under instance
-/// `u` gives `u.x.y` — the same string as net `y` inside instance `x` inside
-/// `u`. What buys the property is `parser.internTok`, which substitutes a space
-/// for a period in an escaped identifier as it interns it; read its comment for
-/// the argument. From here on a period in a name IS a join, which makes the
-/// unmangling a `split` and the mangling injective.
+/// A period, as §6.7's `hierarchical_identifier` writes it, so a flat name in
+/// a diagnostic or an emitted identifier reads like the source reference. An
+/// escaped identifier may contain a period (§2.8.1, `\x.y `), but
+/// `parser.internTok` interns that period as a space, so a period in a flat
+/// name is always a join and the mangling is injective.
 pub const sep = '.';
 
 /// §6.2.2 how deep the instance tree may go before the walk gives up.
 ///
-/// A cycle is caught by name before this is reached (E0905 keeps the module
-/// stack), so hitting the limit means a genuinely deep but finite design. 64 is
-/// far past anything a device model is written as, and the point of the number
-/// is that a wrong answer is a diagnostic rather than a stack overflow.
+/// A cycle is caught by name first (E0905 keeps the module stack), so hitting
+/// the limit means a deep but finite design. The limit turns that into a
+/// diagnostic instead of a stack overflow.
 const max_depth = 64;
 
 /// The elaborated design lowering walks: one module with the hierarchy already
-/// applied.
+/// applied. Runtime dynamic hierarchical access (`$simprobe` with a computed
+/// path) cannot be answered from it; every §6.7 reference must resolve here.
 pub const Design = struct {
     /// The root of §6.2.2's instance tree, with every reachable child inlined:
     /// the module whose ports are the device's terminals.
     top: *const Ast.ModuleDecl,
-    /// §6.7 hierarchical path → the flat name that path denotes. Ruling E point
-    /// 3's table, and the piece a naive flatten omits.
+    /// §6.7 hierarchical path → the flat name that path denotes.
     ///
-    /// Holds only the rows that are NOT the identity. The mangling IS the path
-    /// (`Elaborate.sep`), which is why a §6.7 reference costs lowering a string
-    /// join and no tree walk, and why every reader does `get(p) orelse p`. The
-    /// rows that make the table necessary: a child port CONNECTED to a parent
-    /// net is the same signal as that net, so `u.a` has to resolve to `p` —
-    /// there is no node called `u.a` in the flattened design, and §6.7.1 still
-    /// lets `V(u.a)` name it.
+    /// Holds only the rows that are not the identity: the flat name is the
+    /// path joined with `sep`, so every reader does `get(p) orelse p`. The rows
+    /// are connected child ports: `u.a` bound to parent net `p` has no node of
+    /// its own, and §6.7.1 still lets `V(u.a)` name it.
     ///
     /// Empty for a tree of one: with nothing renamed there is no path but the
     /// module's own names, and those resolve without it.
@@ -130,30 +60,22 @@ pub const Design = struct {
     /// descriptions without being declared." One entry per instance port actual
     /// naming a net the instantiating module never declared.
     ///
-    /// Reported rather than acted on. The flatten's own answer to one of these
-    /// is already right — the child's declaration supplies the discipline, which
-    /// is what §7.4 resolution would have done — and the only open question is
-    /// whether the implicit net is LEGAL, which IEEE 1364 §19.2
-    /// `default_nettype decides. That is a text-stream fact positioned by byte
-    /// offset, and this pass sees neither the directives nor the offsets, so the
-    /// call belongs to the stage that holds both (`Lower.rejectImplicitNet`).
+    /// Reported, not judged: the child's declaration already supplies the
+    /// discipline (§7.4), and legality is IEEE 1364 §19.2 `default_nettype`, a
+    /// positional directive this pass cannot see (`Lower.rejectImplicitNet`).
     implicit_nets: []const NameSite = &.{},
     /// §6.2.2 "a blank port connection shall represent the situation where the
     /// port is not to be connected", for an `input` port. One entry per such
     /// port, naming the internal net the flatten gave it.
     ///
-    /// Same division of labour: IEEE 1364 §19.10 `unconnected_drive is what
-    /// decides whether the port arrives driven or floating, and it is positional
-    /// text (`Lower.applyUnconnectedDrive`).
+    /// Judged later for the same reason: IEEE 1364 §19.10 `unconnected_drive`
+    /// is positional text (`Lower.applyUnconnectedDrive`).
     unconnected_inputs: []const NameSite = &.{},
     /// §9.15 Table 9-28's two hierarchy rows, indexed by `Ast.AnalogBlock.unit`:
     /// "module" is "the name of the module from which $simparam$str is called"
     /// and "instance" is "the hierarchical name of the instance". Flattening
-    /// erases both — every block ends up in the top's namespace — but the walk
-    /// HAS them, so it publishes them rather than letting §9.15 answer with the
-    /// top's name and an empty string. §9.16's sibling scope reads `path` for
-    /// the same reason: "look for an instance called inst_name IN THE PARENT OF
-    /// THE CURRENT INSTANCE".
+    /// erases both, so the walk publishes them here. §9.16's sibling scope
+    /// ("in the parent of the current instance") reads `path` too.
     units: []const UnitPath = &.{},
     /// §7.8.4 every port an automatic connect module was inserted on, for the
     /// mixed-signal runner: its digital engine elaborates the SOURCE hierarchy,
@@ -162,9 +84,8 @@ pub const Design = struct {
     /// §6.5.7.1 "a vector port can be connected to a vector net or
     /// concatenated net expression of the matching width". One entry per port
     /// connected to a concatenation: the child's vector, renamed to a flat
-    /// name of its own, whose element k (declaration order, msb first — IEEE
-    /// 1364 §12.3.9.2 binds the port's MSB to the expression's MSB) IS the
-    /// parent net `elems[k]`. Lowering interns no node for it: each element
+    /// name of its own, whose element k (declaration order, msb first per IEEE
+    /// 1364 §12.3.9.2) is the parent net `elems[k]`. Lowering interns no node for it: each element
     /// aliases its net's node (`Lower.lowerModule`).
     port_concats: []const PortConcat = &.{},
     /// §6.5.7.1 "The sizes of the ports and net must match." One entry per
@@ -178,6 +99,8 @@ pub const Design = struct {
     ps_hidden: []const []const u8 = &.{},
 };
 
+/// One `Design.port_widths` row: a port bound to a flat net, for the §6.5.7.1
+/// size check.
 pub const PortWidth = struct {
     net: []const u8,
     /// Cloned into the flat namespace, as `PortConcat.range` is.
@@ -185,7 +108,10 @@ pub const PortWidth = struct {
     main_tok: u32,
 };
 
+/// One `Design.port_concats` row: a vector port bound to a concatenation of
+/// parent nets (LRM §6.5.7.1).
 pub const PortConcat = struct {
+    /// The port's flat name.
     name: []const u8,
     /// The child's declared range, cloned into the flat namespace so a
     /// parameter in it folds against the instance's own overrides.
@@ -198,7 +124,7 @@ pub const PortConcat = struct {
 /// name. In the module instance at `path` (instance prefix, separator
 /// included, empty at the top), port `port` of child `inst` is connected to
 /// the bridge `name`'s `lower_port` instead of its upper connection, and the
-/// bridge — an instance of `module` — takes that upper connection on
+/// bridge (an instance of `module`) takes that upper connection on
 /// `upper_port`. Merged ports share a bridge, so `name` repeats. The segment
 /// between the child and the bridge is `name ++ sep ++ lower_port`.
 pub const Inserted = struct {
@@ -212,8 +138,7 @@ pub const Inserted = struct {
 };
 
 /// One entry of `Design.units`. `path` is the instance prefix, separator
-/// included and empty at the top, so `path ++ local` is the flat name — the
-/// same join `Flatten.join` makes.
+/// included and empty at the top, so `path ++ local` is the flat name.
 pub const UnitPath = struct {
     module: []const u8,
     path: []const u8,
@@ -241,8 +166,10 @@ pub const Ctx = struct {
     bag: *diag.Bag,
 };
 
-/// Elaborate `ctx.file` into the design lowering walks. Borrows: every pointer
-/// in the result points into the arena, which outlives it.
+/// Elaborates `ctx.file` into the design lowering walks. Every pointer in the
+/// result points into `ctx.arena`. A top with no instances, defparams or
+/// generate instances is returned by pointer, exactly as parsed. §6.5.7.1's
+/// distribution of a vector net across an instance array is not supported.
 pub fn elaborate(ctx: Ctx) Error!Design {
     if (ctx.file.userModules().len == 0) return error.NoModule;
     const top = try pickTop(ctx);
@@ -259,15 +186,9 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     try @import("frontend").wreal.check(ctx.file, ctx.tok_starts, ctx.bag);
     if (ctx.bag.failed()) f.had_error = true;
 
-    // The tree of one. Returned BY POINTER, so a module with no children is
-    // handed to lowering as the parser built it — same ids, same order, same
-    // slices. This is the whole regression argument for putting a pass in front
-    // of lowering: the case that does not need it does not touch it.
-    //
-    // A `defparam` with no instance to override is NOT that case: §6.3.1's path
-    // names a parameter "in any module instance throughout the design", so with
-    // no instance it names nothing, and E0907 is owed. The flatten is where that
-    // is noticed, so the shortcut is declined for it.
+    // A tree of one goes to lowering by pointer, untouched. A `defparam` with
+    // no instance still takes the flatten: §6.3.1's path then names nothing,
+    // and the flatten is where that E0907 is reported.
     var gen: std.ArrayList(Ast.Instance) = .empty;
     for (top.analog) |blk| try genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
     if (top.instances.len == 0 and top.defparams.len == 0 and gen.items.len == 0) {
@@ -278,18 +199,6 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     return f.run(top);
 }
 
-/// Which module is the device (§6.2.2).
-///
-/// "The one nothing instantiates" — a root of the instance graph. With no
-/// instantiation anywhere every module is trivially a root and the first
-/// declaration wins, which is what a single-module file has always got; the
-/// count only starts mattering once a file declares a child, and a child may be
-/// declared FIRST (tests/fixtures/ch03_data_types/34_implicit_nets.va does).
-///
-/// Several roots is not diagnosed. A.1.2 lets a source_text hold unrelated
-/// descriptions, `check.vh` fixtures do, and §6.2.1 gives no rule for choosing
-/// between them — so the first one in source order is the answer, exactly as it
-/// was before there were edges to count.
 /// §6.6 every module instance in a generate block under `id`, schemes aside.
 fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
     if (id == .none) return;
@@ -308,22 +217,21 @@ fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.mem.A
     }
 }
 
+/// Which module is the device (§6.2.2): the first user module, in source
+/// order, that nothing instantiates. A child may be declared before its
+/// parent. Several roots are not diagnosed: A.1.2 lets a source_text hold
+/// unrelated descriptions and §6.2.1 gives no rule for choosing between them.
 fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
     const mods = ctx.file.modules;
     // Annex E: a candidate is a module the USER wrote. The shipped Table E.1
     // primitives instantiate nothing, so all nineteen are roots of the instance
     // graph and one of them would win every time. They still count as
-    // instantiATORS below — a primitive that grew a child would be an edge like
-    // any other — which is why only the outer loop is narrowed.
+    // instantiators, so only the outer loop is narrowed.
     for (ctx.file.userModules()) |*m| {
-        // §7.6: a connect module is what the INSERTION PHASE puts on a mixed
-        // net — "the disciplines of mixed nets are determined prior to the
-        // connect module insertion phase" — not a design root. VerA does no
-        // insertion, so nothing instantiates one and every connect module in
-        // the file looks like a root here; picking one as the device would
-        // elaborate a bridge as if the user had asked for it. Skipped in both
-        // loops below, which makes a file of nothing but connect modules the
-        // `NoModule` it already was when the keyword was a syntax error.
+        // §7.6: a connect module is placed by the insertion phase, not a
+        // design root. Insertion runs later, during the walk, so here every
+        // connect module looks like a root. Skipped in both loops, so a file
+        // of only connect modules is `NoModule`.
         if (m.is_connect) continue;
         var instantiated = false;
         for (mods) |*other| {
@@ -332,11 +240,8 @@ fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
             for (other.instances) |inst| try gen.append(ctx.arena, inst);
             for (gen.items) |inst| {
                 if (inst.module == m.name) instantiated = true;
-                // §6.4 an instance that names a PARAMSET is an instance of the
-                // module the paramset specializes, so it is an incoming edge on
-                // that module. Without this the specialized module looks like a
-                // root and a file whose paramset comes first elaborates the wrong
-                // one — which is the whole of `pickTop`'s job.
+                // §6.4 an instance that names a paramset is an incoming edge on
+                // the module the paramset specializes.
                 for (ctx.file.paramsets) |ps| {
                     if (ps.name != inst.module) continue;
                     // §6.4 "A chain of paramsets may be defined, but the last
@@ -389,17 +294,14 @@ const Fate = enum {
     /// flat namespace by `inlineInstance`. `Flatten` holds a list of the same
     /// name, and `run` publishes it.
     merged,
-    /// Applied by the walk and gone after it — nothing downstream reads it.
+    /// Applied by the walk and gone after it; nothing downstream reads it.
     consumed,
 };
 
-/// EVERY field of `Ast.ModuleDecl`, classified. `EnumFieldStruct` with no
-/// default makes each entry required, so a field added to `ModuleDecl` is a
-/// compile error here until someone decides what a CHILD's copy of it becomes.
-/// That is the point: a child's `initial` blocks used to vanish because the
-/// synthesized module simply never named `discrete`, and nothing noticed.
-/// `run` builds its output from this table, so the table cannot drift from
-/// what is published.
+/// Every field of `Ast.ModuleDecl`, classified. `EnumFieldStruct` with no
+/// default makes each entry required, so a field added to `ModuleDecl` does
+/// not compile until someone decides what a child's copy of it becomes. `run`
+/// builds its output from this table, so the two cannot drift.
 const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, null) = .{
     .name = .top,
     .ports = .top, // §6.5 the device's terminals are the top's
@@ -431,8 +333,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     // §8.5.3.5 switches, run by the digital engine; merged like gates.
     .switches = .merged,
     // A.7 specify paths and timing checks: read only by the VPI's §11.6.15
-    // model, which walks each module's OWN declaration, never the flattened
-    // one — so the flat design keeps the top's, as it does its tasks.
+    // model, which walks each module's own declaration, never the flattened
+    // one, so the flat design keeps the top's.
     .paths = .top,
     .timing_checks = .top,
     .attrs = .merged,
@@ -442,6 +344,9 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .main_tok = .top,
 };
 
+/// The flatten's state: the synthesized module's declaration lists, the rename
+/// map of the unit being cloned, and the side tables `Design` publishes. Every
+/// allocation is in `ctx.arena`.
 pub const Flatten = struct {
     ctx: Ctx,
     had_error: bool = false,
@@ -476,44 +381,27 @@ pub const Flatten = struct {
     /// See `Design.inserts`.
     inserts: std.ArrayList(Inserted) = .empty,
 
-    /// The discipline every flat net has been DECLARED with, keyed by the flat
-    /// name — §3.10's precedence orders 1 and 2 after they have been decided.
-    /// This used to scan `self.nets`, which grows with every inlined instance port, so
-    /// resolving the N-th instance's bindings cost a walk over everything
-    /// already flattened. Four sites append a net and all four go through
-    /// `addNet`, which is what makes this table and `self.nets` agree by
-    /// construction rather than by care.
+    /// The discipline every flat net has been declared with, keyed by the flat
+    /// name: §3.10's precedence orders 1 and 2 after they have been decided.
+    /// Every net append goes through `addNet`, which keeps this table and
+    /// `self.nets` in agreement. The top's ports are seeded first (`run`),
+    /// since a discipline resolved up the hierarchy lands on one of them.
     ///
-    /// The top's ports are seeded FIRST (`run`), because the scan this replaces
-    /// read them first: §6.5 the device's terminals are the top's, and a
-    /// discipline resolved up the hierarchy lands on one of them.
-    ///
-    /// ONE discipline per net — the answer every consumer reads — and Annex
-    /// F.2.1 step 4.b is why a second slot was never added here: 4.b needs the
-    /// SET of candidates FILTERED BY DOMAIN ("more than one candidate whose
-    /// domain matches"), and the mixed-port bullet under it needs a segment
-    /// from the OTHER domain, so an arrival-ordered pair decides
-    /// `annex_f_resolution/unknown_discipline_mixed_port.va`'s
-    /// {continuous, continuous, discrete} correctly only if the source happens
-    /// to write its two continuous instances first. The shape that decides it
-    /// is the full per-net segment list, and that is `segs` — a SIDE table,
-    /// so this map keeps being the one-slot answer and no reader learns a
-    /// second concept.
+    /// One discipline per net, the answer every consumer reads. Annex F.2.1
+    /// step 4.b needs the full candidate set per net, and that is `segs`.
     disc_of: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
 
     /// Annex F.2.1 step 4.b's input, per flat net: EVERY discipline a child
     /// segment declared onto it, in arrival order, with the token of the first
-    /// segment for the diagnostic. Fed by `resolveDiscipline` — the one place
-    /// a port binding contributes a declared discipline to a parent net — and
-    /// consumed once, after the walk, by `resolveMultiCandidates`. An ARRAY
+    /// segment for the diagnostic. Fed by `resolveDiscipline` and consumed
+    /// once, after the walk, by `resolveMultiCandidates`. An array
     /// hash map so the post-pass visits nets in first-binding order and a
     /// design with two errors reports them deterministically.
     segs: std.AutoArrayHashMapUnmanaged(Ast.StrId, Segs) = .empty,
 
-    /// The flat nets whose discipline came from a BOUND PORT rather than from a
-    /// declaration — §3.6.5's implicit nets, which is exactly the set §7.4.4.1's
-    /// continuous-wins rule is about. Without it that rule cannot be applied
-    /// without also being able to overrule a real declaration.
+    /// The flat nets whose discipline came from a bound port rather than a
+    /// declaration: §3.6.5's implicit nets, the set §7.4.4.1's continuous-wins
+    /// rule may overrule without overruling a real declaration.
     port_resolved: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 
     /// E.3.2's LAST source, deferred: every bound port of an analog primitive,
@@ -523,52 +411,46 @@ pub const Flatten = struct {
     prim_ports: std.ArrayList(struct { path: []const u8, port: Ast.Port, bound: Ast.StrId }) = .empty,
 
     /// `Design.implicit_nets` / `Design.unconnected_inputs`, collected on the
-    /// way through and published unchanged. Both are pure observations — see
-    /// their doc comments for why the judging happens a stage later.
+    /// way through and published unchanged.
     implicit_nets: std.ArrayList(NameSite) = .empty,
     unconnected_inputs: std.ArrayList(NameSite) = .empty,
     port_concats: std.ArrayList(PortConcat) = .empty,
     port_widths: std.ArrayList(PortWidth) = .empty,
 
-    /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
-    /// the parameter it overrides — the declaring module's own path joined with
-    /// the path the source wrote, which is the same string the flattened
-    /// parameter will be called. Collected on the way DOWN (`walkInstances`),
+    /// §6.3.1 every `defparam` seen so far, keyed by the absolute flat name of
+    /// the parameter it overrides: the declaring module's path joined with the
+    /// path the source wrote. Collected on the way down (`walkInstances`),
     /// which is before any instance below it is inlined, so a defparam is always
     /// in the map before the parameter it names is created.
     defparams: std.StringHashMapUnmanaged(Defparam) = .empty,
 
     /// Annex F.2.1 step 3 / §3.10 precedence order 1: every OUT-OF-CONTEXT
     /// discipline declaration, keyed by the absolute flat name of the net segment
-    /// it declares — the same key shape as `defparams`, and for the same reason.
+    /// it declares, the same key shape as `defparams`.
     /// "Apply all out-of-context node and signal declarations. For example,
     /// electrical top.middle.bottom.sig; overrides any discipline which may be
     /// declared for sig in the module where sig was declared."
     ooc: std.StringHashMapUnmanaged(Ast.NetDecl) = .empty,
 
-    /// The rename map in force while cloning the CURRENT unit's body, plus the
-    /// per-instance rewrites §9.19 and §9.18 need. Swapped by `inlineInstance`
-    /// around the recursive call, so it is a stack discipline, not a field that
-    /// outlives its unit.
+    /// The rename map in force while cloning the current unit's body, plus the
+    /// per-instance rewrites §9.19 and §9.18 need. `inlineInstance` saves and
+    /// restores it around the recursive call.
     unit: Unit = .{},
 
-    /// True while `paramsetOverrides` clones text written INSIDE a §6.4
-    /// paramset body — the one scope §9.13.1/§9.13.2 admit a distribution
+    /// True while `paramsetOverrides` clones text written inside a §6.4
+    /// paramset body, the one scope §9.13.1/§9.13.2 admit a distribution
     /// call's `type_string` in. Set and cleared with the `unit` swap there;
     /// read by `cloneExpr`'s sys_call arm (`rewriteParamsetDist`).
     in_paramset: bool = false,
 
     /// True while cloning the branch a `<+` or an indirect assignment DRIVES.
     /// §6.3.6's second automatic rule divides "the value returned by any branch
-    /// flow PROBE" by $mfactor, and a contribution's left-hand side is not a
-    /// probe of the branch — it is the branch. Read by `cloneExpr`'s
-    /// branch_access arm, which cannot otherwise tell the two apart.
+    /// flow probe" by $mfactor, and a contribution's left-hand side is the
+    /// branch, not a probe of it. Read by `cloneExpr`'s branch_access arm.
     contrib_target: bool = false,
 
     /// One `segs` row: the disciplines a net's child segments declared, and
-    /// where the first one was declared (the diagnostic anchor — the same
-    /// "the DECLARATION's token" convention `resolveDiscipline`'s addNet
-    /// states).
+    /// the token of the first declaration (the diagnostic anchor).
     const Segs = struct {
         /// `.none` for an undeclared port: see `resolveDiscipline`.
         discs: std.ArrayList(Ast.StrId) = .empty,
@@ -577,7 +459,10 @@ pub const Flatten = struct {
         tok: u32,
     };
 
+    /// Per-instance clone state: the rename map and the §9.18/§9.19 answers
+    /// that differ from one instance of a module to the next.
     pub const Unit = struct {
+        /// Local name → flat name for this unit's declarations and ports.
         rename: Rename = .empty,
         /// §9.19 `$port_connected`: the child's local port name → was it given
         /// an expression in the connection list. Empty for the top, whose ports
@@ -590,17 +475,14 @@ pub const Flatten = struct {
         /// the join, whose discipline may be another one; `localAccess` checks
         /// this unit's access names against this, not against that.
         port_disc: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
-        /// Annex E — is the unit being cloned a SHIPPED Table E.1 primitive.
-        /// The one thing that is true of the prelude's bodies and of no user
-        /// module: their `V`/`I` is Table E.1's nature-neutral spelling of the
-        /// port pair's potential and flow, not a request for those two access
-        /// functions. See `primitiveAccess`.
+        /// Annex E: the unit is a shipped Table E.1 primitive, whose `V`/`I`
+        /// is a nature-neutral spelling of the port pair's potential and flow,
+        /// not those two access functions. See `primitiveAccess`.
         primitive: bool = false,
         /// §9.18 the value `$mfactor` has in this unit, as an EXPRESSION in the
         /// flat namespace. `.none` at the top, where codegen answers Table
-        /// 9-29's 1.0; below it the running product, which is why no constant
-        /// folding is needed to get §9.18's "times the parent's value, and so
-        /// on, until the top level is reached" right.
+        /// 9-29's 1.0; below it the running product of §9.18's "times the
+        /// parent's value", so no constant folding is needed.
         mfactor: Ast.ExprId = .none,
         /// §6.6 the conjunction of if-generate schemes that brings this unit
         /// into existence, in the flat namespace; `.none` when nothing does.
@@ -615,9 +497,9 @@ pub const Flatten = struct {
     /// brings it into existence, cloned into this unit's flat namespace.
     /// "At most one generate block instantiated from a set of alternatives":
     /// an if-generate's arms are gated `c` and `!c`, and `inlineInstance`
-    /// lowers each child's analog blocks under its gate — the same runtime
-    /// diamond `checkGenScheme` gives the analog items of an arm, so a model
-    /// card overriding the scheme's parameter selects the arm it names.
+    /// lowers each child's analog blocks under its gate, as `checkGenScheme`
+    /// does for an arm's analog items, so a model card overriding the
+    /// scheme's parameter selects the arm it names.
     /// ponytail: if-generate only. A loop or case generate's instance is
     /// E0235 (`refuseGen`): the loop needs one renamed instance per
     /// iteration, the case an equality chain per arm.
@@ -665,6 +547,8 @@ pub const Flatten = struct {
         });
     }
 
+    /// Reports `code` at `tok` and marks the flatten failed, so `elaborate`
+    /// returns `error.DiagnosticsReported` once the walk ends.
     pub fn err(self: *Flatten, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
         self.had_error = true;
         return self.ctx.bag.add(.lower, code, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, tok), fmt, args);
@@ -702,7 +586,7 @@ pub const Flatten = struct {
         try self.walkInstances(top, "", &stack, 0);
 
         // E.3.2.2 "If there are no continuous disciplines defined on the net
-        // segment, then the discipline shall default to electrical" — the
+        // segment, then the discipline shall default to electrical": the
         // primitive's own declaration, on a net nothing else resolved.
         for (self.prim_ports.items) |pp| {
             const d = self.disc_of.get(pp.bound) orelse .none;
@@ -711,25 +595,20 @@ pub const Flatten = struct {
         }
 
         // Annex F.2.1 step 4's multi-candidate arm, over the segment sets the
-        // walk collected — after the walk because 4.b matches the COMPLETE
+        // walk collected. After the walk because 4.b matches the complete
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
 
-        // §5.2 analog blocks are CONCURRENT, so the order they land in carries no
-        // meaning of its own — except through one rule that is stated in program
-        // order: §5.4.2.2's flow read, where `I(b)` after a flow contribution to
-        // `b` is the retained value and before one mints an unknown (lower.zig).
-        // A child's equations are not statements of the parent's body, so a
-        // parent reading the flow of a child's branch — E.3's Behavior column
-        // read through §6.7.1, which is how Table E.1 is observable at all — must
-        // see the child's contribution however the two blocks were written. The
-        // top's own blocks therefore go in LAST, after every inlined child's.
+        // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
+        // ordered: `I(b)` after a flow contribution to `b` reads the retained
+        // value, before one it mints an unknown. A parent reading a child's
+        // branch flow through §6.7.1 must see the child's contribution, so the
+        // top's own blocks go last, after every inlined child's.
         try self.analog.appendSlice(self.ctx.arena, top.analog);
 
         // §6.3.1 a defparam names "the parameter ... in any module instance
-        // throughout the design" — so one that matched nothing named nothing.
-        // Reported after the whole walk and not at the declaration, because that
-        // is the first moment it is known: the instance a path names may be
+        // throughout the design", so one that matched nothing named nothing.
+        // Reported after the walk because the instance a path names may be
         // several levels below the module the defparam is written in.
         var it = self.defparams.iterator();
         while (it.next()) |dp| if (!dp.value_ptr.used) try self.err(
@@ -769,9 +648,8 @@ pub const Flatten = struct {
         stack: *std.ArrayList(Ast.StrId),
         depth: u32,
     ) Error!void {
-        // §6.3.1 before the children, because a defparam applies DOWNWARD: its
-        // path starts at an instance of this module and the values it overrides
-        // are created as those instances are inlined below.
+        // §6.3.1 before the children: a defparam applies downward, and the
+        // parameters it overrides are created as those instances are inlined.
         for (module.defparams) |dp| {
             const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(dp.path) });
             try self.defparams.put(self.ctx.arena, key, .{
@@ -780,14 +658,12 @@ pub const Flatten = struct {
             });
         }
 
-        // Annex F.2.1 step 3, same reason — an out-of-context declaration names a
-        // segment BELOW this module, so it has to be in hand before the walk
-        // reaches it. Its own error half is here too: "more than one conflicting
-        // out-of-context discipline declaration for the same hierarchical segment
-        // of a signal is an error", and §3.10 adds that two declarations at one
-        // level of precedence are illegal whether or not the disciplines are
-        // compatible — so this is a duplicate-KEY test and not a compatibility
-        // test.
+        // Annex F.2.1 step 3, for the same reason: an out-of-context
+        // declaration names a segment below this module. "More than one
+        // conflicting out-of-context discipline declaration for the same
+        // hierarchical segment of a signal is an error", and §3.10 makes two
+        // declarations at one precedence level illegal even when compatible,
+        // so this is a duplicate-key test, not a compatibility test.
         for (module.nets) |n| {
             if (!elab_resolve.isOoc(self.ctx.file.str(n.name))) continue;
             const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(n.name) });
@@ -807,10 +683,9 @@ pub const Flatten = struct {
         const insts = try elab_insert.plan(self, module, path);
 
         // E.3.2's first source, "A port_discipline attribute on the analog
-        // primitive", bound for every primitive of this level BEFORE any is
-        // inlined — so E.3.2.2's scan, which gives an unattributed primitive
-        // "the same discipline" as the others on its segment, finds the
-        // segment resolved whatever order the source wrote the instances in.
+        // primitive", bound for every primitive of this level before any is
+        // inlined, so E.3.2.2's "the same discipline" scan for an unattributed
+        // primitive finds the segment resolved in any source order.
         // ponytail: a primitive reached through a paramset keeps only the
         // default; `selectParamset` diagnoses, so it is not run twice.
         for (module.instances) |*inst| {
@@ -835,14 +710,10 @@ pub const Flatten = struct {
             const auto = idx >= module.instances.len and idx < insts.len;
             const gate: Ast.ExprId = if (idx < insts.len) .none else gated.items[idx - insts.len].gate;
             // §3.6.5, the structural half: an actual that names nothing `module`
-            // declared is an implicit net. Collected HERE and not in
-            // `inlineInstance`, which is the only other place a connection list
-            // is read, because the question is "did THIS module declare it" and
-            // this is the only loop that still has `module` in hand — one level
-            // down the names have been flattened and the answer is unrecoverable.
-            //
-            // Not an error and not a declaration: see `Design.implicit_nets`.
-            // The source's own connections, not `plan`'s segments, which are.
+            // declared is an implicit net (see `Design.implicit_nets`).
+            // Collected here, not in `inlineInstance`, because only this loop
+            // still has `module` in hand; one level down the names are flat.
+            // Reads the source's own connections, not `plan`'s segments.
             if (!auto and idx < module.instances.len) try self.checkVariableActuals(module, &module.instances[idx]);
             if (!auto) for ((if (idx < module.instances.len) module.instances[idx] else inst).ports) |c| {
                 const n = elab_names.netRefName(self, c.expr) orelse continue;
@@ -853,17 +724,14 @@ pub const Flatten = struct {
                 });
             };
 
-            // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`
-            // — one production, two things it can name, and §6.4 says a paramset
-            // "can be instantiated exactly like a module". A module first: §6.4.2
-            // selection only runs when there is nothing else the name could be.
+            // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`:
+            // §6.4 says a paramset "can be instantiated exactly like a module".
+            // A module wins; §6.4.2 selection runs only when nothing else matches.
             //
-            // A.5.4 `udp_instantiation` arrives here too: a NAMED udp_instance
-            // is one token from a module_instance and the parser leaves it one
-            // (`parseUdpInst`), so its `#( … )` reads as a
-            // parameter_value_assignment. It is A.2.2.3's `delay2` — at most
-            // two values, positional — and, like the unnamed form, the
-            // instance reaches no analog device (W0252).
+            // A.5.4: a named udp_instance parses as a module instance
+            // (`parseUdpInst`), so its `#( … )` arrives as a
+            // parameter_value_assignment. It is A.2.2.3's `delay2` (at most two
+            // positional values), and the instance reaches no analog device (W0252).
             if (for (self.ctx.file.udps) |u| {
                 if (u.name == inst.module) break true;
             } else false) {
@@ -897,8 +765,8 @@ pub const Flatten = struct {
             }
 
             // §6.2.2 `name_of_module_instance ::= module_instance_identifier
-            // [ range ]` — one instance per element, each separately addressable
-            // per §6.7's `adder1[5].sum`.
+            // [ range ]`: one instance per element, each addressable as §6.7's
+            // `adder1[5].sum`.
             var lo: i64 = 0;
             var hi: i64 = 0;
             var is_array = false;
@@ -984,15 +852,13 @@ pub const Flatten = struct {
             };
             const actual: ?Ast.StrId = if (conn) |c| elab_names.netRefName(self, c.expr) else null;
             if (actual) |n| {
-                // The port IS the parent's net. No new node, no new
-                // declaration: that identity is what makes the flatten a
-                // topology join rather than a copy.
+                // The port is the parent's net: no new node, no new declaration.
                 // ponytail: the parent map already owns this lookup and fallback.
                 const bound = parent.rename.get(n) orelse n;
                 try unit.rename.put(self.ctx.arena, p.name, bound);
-                // §6.7.1 the port still HAS a hierarchical name, and probing it
-                // is legal — so the path has to resolve to the net it was joined
-                // to. These are the only rows `Design.names` holds.
+                // §6.7.1 the port still has a hierarchical name that may be
+                // probed, so the path resolves to the net it was joined to.
+                // These are the only rows `Design.names` holds.
                 try self.names.put(
                     self.ctx.arena,
                     try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
@@ -1012,9 +878,8 @@ pub const Flatten = struct {
             } else {
                 // §6.2.2 "a blank port connection shall represent the situation
                 // where the port is not to be connected", and an omitted named
-                // port is the same thing. Unconnected still needs a node — the
-                // child's equations reference it — so it becomes an internal net
-                // of the device, carrying the port's own discipline.
+                // port is the same thing. The child's equations still reference
+                // it, so it becomes an internal net carrying the port's discipline.
                 const internal = try elab_names.join(self, path, p.name);
                 try unit.rename.put(self.ctx.arena, p.name, internal);
                 try elab_resolve.addNet(self, .{
@@ -1025,11 +890,10 @@ pub const Flatten = struct {
                     .discipline = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline,
                     .main_tok = p.main_tok,
                 });
-                // IEEE 1364 §19.10's subject, exactly: an UNCONNECTED INPUT
-                // port. `p.main_tok` is the port's own declaration, inside the
-                // child's module definition, which is the position the directive
-                // is looked up at — §19.10 pulls the unconnected inputs of the
-                // modules DECLARED between the pair, not of the instances.
+                // IEEE 1364 §19.10 applies to unconnected input ports of the
+                // modules declared between the directive pair, so the site is
+                // the port's declaration in the child (`p.main_tok`), not the
+                // instance.
                 if (p.direction == .input) try self.unconnected_inputs.append(self.ctx.arena, .{
                     .name = self.ctx.file.str(internal),
                     .main_tok = p.main_tok,
@@ -1092,12 +956,9 @@ pub const Flatten = struct {
             out.name = elab_names.flat(self, n.name);
             out.range = try elab_clone.cloneDim(self, n.range);
             out.init = try elab_clone.cloneExpr(self, n.init);
-            // §3.10 precedence order 1, on an INTERNAL net of the child. This
-            // is the clause's own printed example read literally: "electrical
-            // top.middle.bottom.sig; overrides any discipline which may be
-            // DECLARED FOR sig IN THE MODULE WHERE sig WAS DECLARED" — so the
-            // thing it overrides is a local declaration, and a local
-            // declaration of a net that is not a port is this loop.
+            // §3.10 precedence order 1 on an internal net of the child: an
+            // out-of-context declaration "overrides any discipline which may
+            // be declared for sig in the module where sig was declared".
             if (try elab_resolve.oocDiscipline(self, path, n.name)) |d| out.discipline = d;
             try elab_resolve.addNet(self, out);
         }
@@ -1203,9 +1064,10 @@ pub const Flatten = struct {
         self.unit = parent;
     }
 
-    /// §6.2.2 which connection binds `port` (the i'th declared port), or null
-    /// for "not in the list at all".
     // ponytail: binding needs only the connection list and port, not flattening state.
+    /// Returns the connection that binds `port`, the i'th declared port, or
+    /// null when the list does not mention it (§6.2.2). The first entry decides
+    /// between named and ordered binding; a named list takes the first match.
     pub fn connectionFor(inst: *const Ast.Instance, port: Ast.Port, i: usize) ?Ast.PortConn {
         const named = inst.ports.len != 0 and inst.ports[0].name != .none;
         if (!named) return if (i < inst.ports.len) inst.ports[i] else null;
@@ -1213,17 +1075,12 @@ pub const Flatten = struct {
         return null;
     }
 
-    /// Did `module` declare a net called `name`? §3.6.5's test, and the whole of
-    /// it: a net reference resolves to a §6.5 port of this module or to a §3.6.3
-    /// net declaration in its body, and anything else the name could be — a
-    /// parameter, a variable, a genvar — is not a net, so an actual that names
-    /// one is a different error (E0906) and not an implicit net.
-    ///
-    /// ponytail: a linear scan per connection, so quadratic in a module's own
-    /// declaration count. The bound is one module's source text and the constant
-    /// is an integer compare; a hash set here would be built and thrown away for
-    /// every instance. Build one per module the day a generated netlist puts
-    /// thousands of nets and thousands of instances in one file.
+    // ponytail: a linear scan per connection, quadratic in one module's
+    // declaration count. Build a per-module set if a generated netlist puts
+    // thousands of nets and instances in one module.
+    /// Returns whether `module` declares a net `name`, as a §6.5 port or a
+    /// §3.6.3 net declaration (§3.6.5's test). A parameter, variable or genvar
+    /// is not a net, so an actual naming one is E0906, not an implicit net.
     pub fn declares(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
         for (module.ports) |p| if (p.name == name) return true;
         for (module.nets) |n| if (n.name == name) return true;
@@ -1235,8 +1092,7 @@ pub const Flatten = struct {
     /// either the ports or the internal nets of module A." A VARIABLE of A is
     /// neither, so it cannot stand as the actual of B's continuous port: there is
     /// no node for the port to join (§6.5.1 lists the port expressions, every one
-    /// of them a net), and `declares` above already says why it is not an
-    /// implicit net either.
+    /// of them a net), and it is not an implicit net either (`declares`).
     ///
     /// Only a port of CONTINUOUS discipline: a real variable driving a discrete
     /// or `wreal` input is a real EXPRESSION, which §3.7 and IEEE 1364's input
@@ -1259,7 +1115,7 @@ pub const Flatten = struct {
 
     /// The ways a connection list can be malformed: longer than the port list,
     /// naming a port that does not exist, mixing the two spellings, or naming
-    /// one port twice. §6.2.2 permits it to be SHORTER — that is the
+    /// one port twice. §6.2.2 permits it to be shorter: that is the
     /// omitted-port spelling of "not to be connected".
     ///
     /// The list's FIRST entry decides which spelling it is (`connectionFor`
@@ -1276,9 +1132,8 @@ pub const Flatten = struct {
                 "`{s}` declares {d} port{s}, and this instance connects {d}",
                 .{ self.ctx.file.str(child.name), child.ports.len, if (child.ports.len == 1) "" else "s", inst.ports.len },
             );
-            // A `.name(...)` later in an ordered list used to bind by POSITION
-            // with the name silently ignored — the one shape of §6.2's mix the
-            // named loop below cannot see, because the whole list was ordered.
+            // An ordered list binds by position, so a `.name(...)` inside one
+            // would be ignored silently; the named loop below cannot see it.
             for (inst.ports) |c| if (c.name != .none) try self.err(
                 c.main_tok,
                 .E0906,
@@ -1301,9 +1156,9 @@ pub const Flatten = struct {
                 });
                 continue;
             }
-            // 1364-2005 §12.3.6 (the base standard §6.2.2 builds on): a port is
-            // connected at most once — `connectionFor`'s first-match-wins made a
-            // second `.a(...)` vanish without a trace.
+            // IEEE 1364 §12.3.6: a port is connected at most once.
+            // `connectionFor` takes the first match, so a second `.a(...)`
+            // would otherwise be dropped silently.
             for (inst.ports[0..i]) |prev| if (prev.name == c.name) {
                 try self.err(c.main_tok, .E0906, "`{s}` is connected twice", .{self.ctx.file.str(c.name)});
                 break;
@@ -1311,7 +1166,10 @@ pub const Flatten = struct {
         }
     }
 
-    /// §6.3 bind `#(...)` to the child's parameters, and §9.18's `.$mfactor`.
+    /// Binds an instance's `#(...)` to `child`'s parameters into `over` (§6.3),
+    /// applies matching defparams last (§6.3.1), and sets `unit`'s §9.18
+    /// `$mfactor` product and §9.19 `$param_given` answers. Reports E0907 and
+    /// E0908 on bad overrides.
     pub fn collectOverrides(
         self: *Flatten,
         inst: *const Ast.Instance,
@@ -1322,24 +1180,20 @@ pub const Flatten = struct {
         path: []const u8,
     ) Error!void {
         // §9.18/Table 9-29: `$mfactor_resolved = $mfactor_specified *
-        // $mfactor_hier`. Carried as an EXPRESSION and not a number: the top's
-        // own `$mfactor` is a value the host supplies (codegen answers Table
-        // 9-29's 1.0), so the product is exact without folding anything, and a
-        // specified factor may be any constant expression over the parent's
-        // parameters.
+        // $mfactor_hier`, carried as an expression: the top's `$mfactor` is
+        // host-supplied, and a specified factor may be any constant
+        // expression over the parent's parameters.
         var mfactor = parent.mfactor;
 
         const named = inst.params.len != 0 and inst.params[0].name != .none;
         // §3.4.5: local parameters "cannot directly be modified with the
         // defparam statement or by the ordered or named parameter value
-        // assignment" — so §6.3's "in the order of their declaration" is an
-        // order over the OVERRIDABLE parameters only, and an ordered value
-        // steps past every `is_local` entry instead of landing on it. The
-        // named arm refuses a localparam by name below, for the same clause.
+        // assignment", so §6.3's declaration order counts overridable
+        // parameters only and an ordered value skips every `is_local` entry.
+        // The named arm refuses a localparam by name below.
         var ord: usize = 0;
         for (inst.params) |o| {
-            // The value is the PARENT's expression, so it is cloned under the
-            // parent's map, not the child's.
+            // The value is the parent's expression, cloned under the parent's map.
             const saved = self.unit;
             self.unit = parent.*;
             const value = elab_clone.cloneExpr(self, o.value) catch |e| {
@@ -1420,13 +1274,10 @@ pub const Flatten = struct {
         // starts at the parent's value rather than at `.none`.
         unit.mfactor = mfactor;
 
-        // §6.3.1 LAST, and that order is the rule: "If a defparam assignment
-        // conflicts with a module instance parameter, the parameter in the
-        // module shall take the value specified by the defparam." So it
-        // overwrites whatever `#(...)` put there, whichever came first in the
-        // text. §3.4.5 is still honoured — a localparam was refused above and a
-        // defparam onto one would be refused here for the same reason, which is
-        // why the lookup is over the child's OVERRIDABLE parameters.
+        // §6.3.1 last: "If a defparam assignment conflicts with a module
+        // instance parameter, the parameter in the module shall take the value
+        // specified by the defparam." It overwrites `#(...)` whatever the text
+        // order. §3.4.5 still holds: only overridable parameters are looked up.
         for (child.params) |p| {
             if (p.is_local) continue;
             const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) });
@@ -1435,30 +1286,28 @@ pub const Flatten = struct {
             try over.put(self.ctx.arena, p.name, dp.value);
         }
 
-        // §9.19 `$param_given` — decided here, once, for every parameter of the
-        // child. It is a question about the INSTANTIATION, so it has one answer
-        // per flattened parameter and the clone can substitute a literal.
+        // §9.19 `$param_given` is a fact about the instantiation, one answer
+        // per flattened parameter, so the clone can substitute a literal.
         for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
         for (child.aliasparams) |al| if (over.contains(al.target))
             try unit.given.put(self.ctx.arena, al.alias, true);
     }
 
-    // §6.4 paramsets: choosing and applying a paramset for an instance — elaborate/paramset.zig
     const elab_paramset = @import("elaborate/paramset.zig");
+    /// Returns whether a named instance override lands on paramset parameter
+    /// `name`, directly or through a §3.4.7 alias.
     pub const overridesParam = elab_paramset.overridesParam;
 
-    // Annex F.2 discipline resolution across the hierarchy — elaborate/resolve.zig
     const elab_resolve = @import("elaborate/resolve.zig");
+    /// Checks the names every §7.7 `connectrules` statement uses, once per
+    /// compilation.
     pub const checkConnectRules = elab_resolve.checkConnectRules;
+    /// Checks that every net declaration in every user module names a declared
+    /// discipline (A.2.1.3, E0371).
     pub const checkNetDisciplines = elab_resolve.checkNetDisciplines;
 
-    // §7.8 automatic insertion of connect modules — elaborate/insert.zig
     const elab_insert = @import("elaborate/insert.zig");
-
-    // Hierarchical names: instance paths and the flat names they produce — elaborate/names.zig
     const elab_names = @import("elaborate/names.zig");
-
-    // The clone: copying a child module's AST into the flat design — elaborate/clone.zig
     const elab_clone = @import("elaborate/clone.zig");
 };
 
@@ -1547,11 +1396,9 @@ test "the top is the module nothing instantiates, whatever the source order" {
     try std.testing.expectEqual(@as(usize, 1), design.top.analog.len);
 }
 
-/// Annex E — the prelude is only a prefix of `modules` if the PREPROCESSOR ran,
-/// so this is the one fixture that goes through it. `builtin_modules` is set the
-/// way every non-test caller sets it (see `root.zig` stage 3); getting that wiring
-/// wrong makes a Table E.1 primitive the top of every design, which is exactly
-/// what this test would catch.
+/// Annex E: the prelude is a prefix of `modules` only if the preprocessor ran,
+/// so this fixture goes through it and sets `builtin_modules` as `root.zig`
+/// stage 3 does.
 fn parseWithPrelude(out: *Fixture, text: []const u8) !void {
     const arena = out.arena.allocator();
     out.bag = diag.Bag.init(arena);
@@ -1659,14 +1506,14 @@ test "§6.3.6 a scaled instance's flow contribution is multiplied, its flow prob
     try std.testing.expectEqual(@as(usize, 2), design.top.analog.len);
 
     // Rule 1: the FLOW contribution's value is `V(a,b) * 4.0`. The left-hand
-    // side is untouched — it names the branch, it is not a read of it.
+    // side is untouched: it names the branch and is not a read of it.
     const flow = f.file.stmt(design.top.analog[0].body).contribute;
     try std.testing.expectEqual(Ast.ExprTag.branch_access, x.tag(flow.lhs));
     try std.testing.expectEqual(Ast.BinaryOp.mul, x.binOp(flow.rhs));
     try std.testing.expectEqual(@as(f64, 4.0), x.realValue(x.rhs(flow.rhs)));
 
     // Rule 2: the POTENTIAL contribution is not scaled, but the flow probe
-    // inside it is divided — one instance of 4 copies carries a quarter each.
+    // inside it is divided: one instance of 4 copies carries a quarter each.
     const pot = f.file.stmt(design.top.analog[1].body).contribute;
     try std.testing.expectEqual(Ast.ExprTag.branch_access, x.tag(pot.lhs));
     try std.testing.expectEqual(Ast.BinaryOp.div, x.binOp(pot.rhs));
@@ -1691,7 +1538,7 @@ test "§6.3.1 a defparam beats the instance's own override, and an unmatched one
     const design = try elaborate(f.ctx());
     try std.testing.expectEqualStrings("u.g", f.file.str(design.top.params[0].name));
     // §6.3: "the parameter in the module shall take the value specified by the
-    // defparam" — 5.0, not the instance's 2.0, whichever came first in the text.
+    // defparam": 5.0, not the instance's 2.0, whichever came first in the text.
     const v = design.top.params[0].default;
     try std.testing.expectEqual(@as(f64, 5.0), f.file.exprs.realValue(v));
 
@@ -1894,7 +1741,7 @@ test "Annex F.2.1 step 4.b: resolveto resolves the multi-candidate net, no rule 
     };
 
     // Bullet 3: {fa, fb} matches the statement's list (order-free), so the net
-    // is fc — which is neither candidate, per §7.7.2.1's "need not be one of
+    // is fc, which is neither candidate, per §7.7.2.1's "need not be one of
     // the disciplines specified".
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer f.deinit();
@@ -1941,7 +1788,7 @@ test "Annex F.2.1 step 4.b: resolveto resolves the multi-candidate net, no rule 
     try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
     try std.testing.expectEqual(diag.Code.E0903, g.bag.at(0).code);
 
-    // Bullet 4, legal half: same unknown, no discrete segment — the net keeps
+    // Bullet 4, legal half: same unknown, no discrete segment: the net keeps
     // the first arrival and the design elaborates.
     var h: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer h.deinit();
@@ -2003,7 +1850,7 @@ test "a connect module is never the top (§7.6), and a hand-placed one is inline
     try std.testing.expectEqualStrings("top", f.file.str(design.top.name));
 
     // §7.1: connect modules "can be manually inserted (by the user)", so
-    // naming one inlines it like any child — its analog block included.
+    // naming one inlines it like any child, its analog block included.
     var g: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer g.deinit();
     try parse(&g,
