@@ -143,7 +143,7 @@ pub const Prover = struct {
                     self.finite[i] = iv.excludesInf();
                     // A written range that admits infinity is almost always a
                     // typo for the open bound (W0651).
-                    if (!self.finite[i]) try self.warnInfiniteRange(pi, iv);
+                    if (!self.finite[i]) try self.warnInfiniteRange(pi);
                 },
                 // §4.4 solver unknown: finite by the host contract, magnitude
                 // unknown unless the host declares one (Options.unknown_bound).
@@ -1149,22 +1149,28 @@ pub const Prover = struct {
 
     /// W0651: a `from [0:inf]` range admits infinity as a value, which costs every unit
     /// downstream its proof. The open bound admits the same finite values and keeps it.
-    fn warnInfiniteRange(self: *Prover, pi: u32, iv: proof_lattice.Interval) !void {
+    fn warnInfiniteRange(self: *Prover, pi: u32) !void {
         if (!self.bag.enabled(.W0651)) return;
         if (pi >= self.lowered.params.items.len) return;
         const pinfo = self.lowered.params.items[pi];
-        // Only worth saying for a written range; an unranged parameter is the
-        // ordinary case, and W0650 covers it.
-        if (pinfo.ranges.len == 0) return;
         // A §3.4.2 string value set (`from '{"NMOS", "PMOS"}`) has no bounds
         // to close; `paramInterval` returns `.top` for every string parameter.
         if (pinfo.ty == .string) return;
+        // Only a `from` bound WRITTEN as a closed `inf` (§3.4.2 "The keyword inf
+        // can be used to indicate infinity") admits infinity. `exclude 0` alone,
+        // or a bound naming another parameter, leaves the interval unbounded
+        // without admitting it; W0650 covers those.
+        const inf = math.inf(f64);
+        const side: []const u8 = for (pinfo.ranges) |r| {
+            if (r.kind != .from or r.strings != null) continue;
+            if (r.lo_inclusive and (self.foldBound(r.lo) orelse 0) == -inf) break "lower";
+            const hi = if (r.hi == .none) r.lo else r.hi;
+            if (r.hi_inclusive and (self.foldBound(hi) orelse 0) == inf) break "upper";
+        } else return;
 
         var b = self.bag.build(.proof, .W0651, self.lowered.tokenSpan(pinfo.tok));
         b.msg("`{s}`", .{pinfo.name});
-        b.point("{s} bound is closed on infinity", .{
-            if (!math.isFinite(iv.lo) and !iv.lo_open) @as([]const u8, "lower") else "upper",
-        });
+        b.point("{s} bound is closed on infinity", .{side});
         b.help("close the bound instead: `[0:inf)` admits the same finite values", .{});
         try b.emit();
     }
