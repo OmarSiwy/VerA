@@ -55,6 +55,57 @@ fn scanAccept(self: *Gen) Error!Accept {
     return a;
 }
 
+/// Emits `<core>__state`, the core's slice computing only what `updateState`
+/// reads: the path-latch operands, every stateful operator's arguments the
+/// core carries, and the held values. Called from `emitUnits`, so its range
+/// tiles with the other unit declarations.
+pub fn emitCore(self: *Gen) Error!void {
+    if (!(try scanAccept(self)).uses_core) return;
+    const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
+    @memset(keep, false);
+    for (self.core.prev_lo) |k| keep[k] = true;
+    for (self.core.acc_lo) |k| keep[k] = true;
+    for (self.core.held_idx) |k| if (k != none_u32) {
+        keep[k] = true;
+    };
+    for (self.names.units, 0..) |u, i| {
+        if (u.role != .analog_op or !opHasState(u.op)) continue;
+        const inst = self.names.opInstOf(@intCast(i)) orelse continue;
+        for (self.mir.instData(inst).call.args) |a| {
+            const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
+            if (k != none_u32) keep[k] = true;
+        }
+    }
+    self.state_core = try gen_unit.sliceCore(self, "state", keep,
+        \\/// §4.5.2 what `updateState` reads off the core, and only what that
+        \\/// reads: the accepted point's operator inputs, latches and held values.
+        \\
+    );
+}
+
+/// Emits `<core>__iter`, the core's slice computing only the §9.17.3
+/// limiter values `advanceIteration` stores and the §9.17.1 request
+/// `checkConvergence` tests: both run once per Newton iterate.
+pub fn emitIterCore(self: *Gen) Error!void {
+    const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
+    @memset(keep, false);
+    var any = false;
+    for (self.lowered.limit_slots.items) |slot| if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |k| {
+        keep[k] = true;
+        any = true;
+    };
+    if (self.lowered.uses.contains(.reject_iteration)) {
+        keep[gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).?] = true;
+        any = true;
+    }
+    if (!any) return;
+    self.iter_core = try gen_unit.sliceCore(self, "iter", keep,
+        \\/// §9.17 what the per-iterate hooks read off the core, and only what
+        \\/// that reads.
+        \\
+    );
+}
+
 /// Writes `State`, `initState`, `updateState`, `state_class`, `stateCtl`,
 /// `advanceIteration` and `acceptQ`. Operator history lives in `Instance`
 /// (eval reads it); `State` carries only the contract's bookkeeping.
@@ -93,9 +144,14 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     const at_sim = self.out.items.len;
     try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
     const body = self.out.items.len;
-    // One core evaluation serves every operator's input.
-    if (uses_core) try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+    // One slice evaluation serves every operator's input.
+    const full = self.core;
+    if (uses_core) {
+        self.core = self.state_core;
+        try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
+    }
     try emitAcceptBody(self, acc);
+    self.core = full;
     gen_unit.patchUnless(self, at_s, body, "S");
     gen_unit.patchUnless(self, at_model, body, "model");
     gen_unit.patchUnless(self, at_x, body, "x");
@@ -395,6 +451,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
 /// with that iterate's x) and, for `$reject_iteration`, `checkConvergence`.
 fn emitAdvanceIteration(self: *Gen) Error!void {
     if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.reject_iteration)) return;
+    const full = self.core;
+    defer self.core = full;
+    if (self.iter_core.lo_vals.len != 0) self.core = self.iter_core;
     var uses_core = false;
     for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
     const uses_inst = uses_core or self.lowered.limit_slots.items.len != 0;
@@ -403,8 +462,8 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
         core_name, if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_", if (uses_core) "sim" else "_",
     });
     if (uses_core) try self.w(
-        "    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n",
-        .{ try gen_setup.probeInstance(self), self.heldArg(true) },
+        "    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n",
+        .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) },
     );
     for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
@@ -416,7 +475,7 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
     if (self.lowered.uses.contains(.reject_iteration)) {
         try self.w("pub fn checkConvergence(comptime S: type, model: *const Model, inst: *const Instance, x: [n_u]f64, sim: contract.SimState) bool {{\n", .{});
         const probe_inst = try gen_setup.probeInstance(self);
-        try self.w("    return core(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
+        try self.w("    return {s}(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ self.core.name, probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
 }
 

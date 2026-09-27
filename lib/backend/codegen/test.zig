@@ -340,10 +340,11 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     try std.testing.expect(std.mem.indexOf(u8, src, "inst: InstancePtr, sim: contract.SimState, comptime held: bool) struct {") != null);
     // The append and the store that reads it back are skippable; the
     // initial-step zeroing is read by the residual in the same evaluation.
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "if (held) zArrSt("));
+    // Both appear twice: in the core, and in `updateState`'s slice of it.
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "if (held) zArrSt("));
     try std.testing.expect(std.mem.indexOf(u8, src, "p0 = &inst.") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "core, .{ S, xs, model, inst, sim, false })") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "core(S, zVals(S, &x), model, inst, sim, true)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core__state(S, zVals(S, &x), model, inst, sim, true)") != null);
     // The read-back carries V's derivative, but into nothing eval returns,
     // so the storage stays plain.
     try std.testing.expect(std.mem.indexOf(u8, src, "var a0: [4]f64 = undefined;") != null);
@@ -443,10 +444,10 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
     defer h.deinit();
     const o = try h.genOut(std.testing.allocator);
 
-    // The merged core and the §4.5.11 `__sec` coefficient reader derived from
-    // the laplace operator: every shape `emitUnits` can still produce for a
-    // model with no §9.4 display unit.
-    try std.testing.expectEqual(@as(usize, 2), o.names.len);
+    // The merged core, `updateState`'s slice of it and the §4.5.11 `__sec`
+    // coefficient reader derived from the laplace operator: every shape
+    // `emitUnits` can still produce for a model with no §9.4 display unit.
+    try std.testing.expectEqual(@as(usize, 3), o.names.len);
     for (o.names, o.unit_lo, o.unit_hi, 0..) |name, lo, hi, i| {
         // Tiling: `Output`'s invariant, and what lets the writer rebuild
         // device.zig as prologue ++ imports ++ tail with nothing dropped.
@@ -908,7 +909,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     // arguments, and only the model knows which.
     const body = src[at..];
     const ret = std.mem.indexOf(u8, body, "return .{").?;
-    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(S, zVals(S, &x), model, inst, sim)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "rn__common__core__noise(S, zVals(S, &x), model, inst, sim)") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body[ret .. ret + 120], ".white = m.f"));
     // Both powers are solve-invariant, so the core returns them as `setup`
     // roots, and `setup` divides by rs only on the `rs > 0` arm, leaving the
@@ -1324,8 +1325,14 @@ test "codegen: §4.5 operator state is keyed to the stable unit id" {
     // The operator's input is a core field, not a declaration of its own; the
     // state field carries `naming.zig`'s key.
     try std.testing.expect(std.mem.indexOf(u8, src, "zTransition(zL(S, ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const m = core(S, zVals(S, &x), model, inst, sim);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const m = tr__common__core__state(S, zVals(S, &x), model, inst, sim);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn updateState(") != null);
+    // `updateState`'s slice returns the operator input alone: the residual
+    // stays in the core, and the accepted step never pays for it.
+    const at = std.mem.indexOf(u8, src, "fn tr__common__core__state(").?;
+    const sig = src[at..std.mem.indexOfPos(u8, src, at, "} {").?];
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f1:") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const State = struct {") != null);
 }
 
