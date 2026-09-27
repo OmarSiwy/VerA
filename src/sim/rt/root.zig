@@ -13,10 +13,13 @@
 //!
 //! That is the `fifo` schedule. The `static` one keeps the queue only for
 //! what needs it: a combinational node (a continuous assignment, an
-//! `always @*`) is marked dirty when a bit it reads changes and every dirty
-//! node runs in one `settle` event, in topological order; an `always @(event)`
-//! whose body never suspends waits on a static per-slot watcher list, not on
-//! a suspension record. Both are orders §11.4.1 leaves to the simulator.
+//! `always @*`) is marked dirty when a bit it reads changes, and one
+//! `settle` event runs, in topological order, each word of 64 nodes that
+//! holds a dirty one (a continuous assignment of nets and variables whether
+//! or not it is dirty: unchanged inputs store an unchanged value); an
+//! `always @(event)` whose body never suspends waits on a static per-slot
+//! watcher list, not on a suspension record. Both are orders §11.4.1 leaves
+//! to the simulator. A store wakes only what its slot's `Reach` names.
 //!
 //! A net resolved from several drivers, strengths, gates, UDPs, switches
 //! or delays (§7.9, §6.1.3) resolves in `net.zig`, on `digital/net.zig`'s
@@ -105,8 +108,6 @@ pub const Design = struct {
     joins: u32 = 0,
     /// `Run.subs.len`: the tasks and functions (§10).
     subs: u32 = 0,
-    /// Some `assign` or `force` (§9.3) can hold a slot.
-    overrides: bool = false,
     /// What a `$dumpvars` (§18) can select; null when the design has none.
     vcd: ?*const vcd.Catalog = null,
     /// §7.9 the nets resolved from their drivers, those drivers, and the
@@ -144,13 +145,35 @@ pub const Edge = enum(u2) {
 
 pub const Error = error{Failed} || std.mem.Allocator.Error || std.Io.Writer.Error;
 
+/// What can observe a change of a slot, as `digital/plan.zig` found it: a
+/// store's `wake` does only these.
+pub const Reach = packed struct(u8) {
+    /// Continuous drivers the fan-out queues (§6.1).
+    fan: bool = false,
+    /// Combinational nodes (`Design.comb`).
+    comb: bool = false,
+    /// Triggered processes (`Design.watchers`).
+    watch: bool = false,
+    /// A process suspended at an event control (`State.watch`).
+    terms: bool = false,
+    /// The §17.1.3 monitor.
+    mon: bool = false,
+    /// A §18 dump.
+    dump: bool = false,
+    _: u2 = 0,
+
+    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
+};
+
 /// `exec.Susp` without the task activation, which no native process has.
 const Susp = struct { pc: u32, gen: u32, alive: bool };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
-/// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`.
-const Nba = struct { slot: u32, off: u32, n: u32, at: u32 };
+/// holds THEN. `v`, `x` and `m` are `n` words each: the row's own `one`
+/// for a single word, else at `words[at..]`. A `quiet` slot has nothing to
+/// wake.
+const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool, one: [3]u64 = undefined };
 /// An `Nba` in flight past this timestep, owning its `v`, `x`, `m` words.
 const Late = struct { slot: u32, off: u32, n: u32, words: []u64 };
 /// The scheduler payload of the one NBA-region event that applies every
@@ -173,8 +196,94 @@ const late_base: u32 = 3 << 30;
 const Layers = struct { assign: ?Range = null, force: ?Range = null };
 const Range = struct { start: u32, end: u32 };
 
+/// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
+/// declares `vera_overrides`.
+const overrides = @hasDecl(@import("root"), "vera_overrides");
+
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
+
+/// `get` of planes `v`, `x`.
+inline fn peek(v: [*]const u64, x: [*]const u64, off: u32) W {
+    return .{ .v = v[off], .x = if (two) 0 else x[off] };
+}
+
+/// `getw` of planes `v`, `x`.
+inline fn peekw(v: [*]const u64, x: [*]const u64, off: u32, comptime n: u32) logic.Wide(n) {
+    return .{ .v = v[off..][0..n].*, .x = if (two) @splat(0) else x[off..][0..n].* };
+}
+
+/// `set` of planes `v`, `x`.
+inline fn poke(v: [*]u64, x: [*]u64, off: u32, a: anytype, m: anytype) void {
+    if (@TypeOf(a) != W) {
+        for (v[off..][0..a.v.len], x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
+            ov.* = (ov.* & ~am) | (av & am);
+            ox.* = (ox.* & ~am) | (ax & am);
+        }
+        return;
+    }
+    const bits: u64 = m;
+    v[off] = (v[off] & ~bits) | (a.v & bits);
+    if (!two) x[off] = (x[off] & ~bits) | (a.x & bits);
+}
+
+/// A settle event's hold on a `State`: its planes and dirty words as
+/// pointers read once, which stay in registers across the event's stores;
+/// through `State` each is read again after every store. Neither moves
+/// while a design runs.
+pub const View = struct {
+    s: *State,
+    v: [*]u64,
+    x: [*]u64,
+    dirty: [*]u64,
+
+    pub inline fn get(self: View, off: u32) W {
+        return peek(self.v, self.x, off);
+    }
+
+    pub inline fn getw(self: View, off: u32, comptime n: u32) logic.Wide(n) {
+        return peekw(self.v, self.x, off, n);
+    }
+
+    pub inline fn set(self: View, off: u32, a: anytype, m: anytype) void {
+        poke(self.v, self.x, off, a, m);
+    }
+
+    /// Clear combinational node `n`'s dirty bit; whether it was set. The
+    /// settle event takes every node in topological order, so a node only
+    /// ever dirties one it has not reached yet.
+    pub inline fn take(self: View, n: u32) bool {
+        const bit = @as(u64, 1) << @intCast(n % 64);
+        const was = self.dirty[n / 64] & bit != 0;
+        self.dirty[n / 64] &= ~bit;
+        return was;
+    }
+
+    /// `put` of the whole of a combinational node's output while the
+    /// settle event runs it, whether or not an input changed: the value is
+    /// stored as is, and the readers in `senses` (`word` counted from `off`)
+    /// whose bits moved are marked dirty here, without a branch; `reach` is
+    /// woken as `put` wakes it. A node reached in topological order only
+    /// marks later ones.
+    pub inline fn putNode(self: View, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
+        if (self.s.held(slot)) return;
+        const s = logic.wide(a);
+        const n = s.v.len;
+        const before = logic.low(self.get(off));
+        var d: [n]u64 = undefined;
+        inline for (0..n) |j| {
+            const o = self.get(off + j);
+            d[j] = (s.v[j] ^ o.v) | (s.x[j] ^ o.x);
+            self.v[off + j] = s.v[j];
+            if (!two) self.x[off + j] = s.x[j];
+        }
+        inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
+        if (@as(u8, @bitCast(reach)) == 0) return;
+        var any: u64 = 0;
+        for (d) |x| any |= x;
+        if (any != 0) try self.s.wakeOf(reach, slot, before, logic.low(self.get(off)));
+    }
+};
 
 pub const State = struct {
     gpa: std.mem.Allocator,
@@ -200,10 +309,8 @@ pub const State = struct {
     /// Per plane word of a slot with node readers: the bits that changed
     /// since its readers were last marked.
     diff: []u64,
-    /// One bit per combinational node, set while the settle event runs; it
-    /// runs them from `cursor` up.
+    /// One bit per combinational node, set while the settle event runs.
     dirty: []u64,
-    cursor: u32 = 0,
     settle: enum { idle, queued, running } = .idle,
     watch_start: []const u32,
     watchers: []const Watcher,
@@ -282,7 +389,7 @@ pub const State = struct {
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
-            .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
+            .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
             .catalog = d.vcd,
             .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
             .nets = try .init(gpa, d.nets, d.drivers, d.udps),
@@ -346,10 +453,13 @@ pub const State = struct {
                 continue;
             }
             if (event.payload != nba_payload) return event.payload;
-            for (self.rows.items, 0..) |row, i| {
+            for (self.rows.items, 0..) |*row, i| {
                 if (i != 0) try self.count(event.time);
-                const w = self.words.items[row.at..][0 .. 3 * row.n];
-                try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
+                if (row.quiet) {
+                    if (self.held(row.slot)) continue;
+                    if (row.n == 1) self.set(row.off, W{ .v = row.one[0], .x = row.one[1] }, row.one[2]) else self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                } else try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
             }
             self.rows.clearRetainingCapacity();
             self.words.clearRetainingCapacity();
@@ -359,7 +469,7 @@ pub const State = struct {
 
     /// `Run.runUntil`'s zero-delay-loop guard, counted the same way: one
     /// event per nonblocking row.
-    fn count(self: *State, at: u64) Error!void {
+    inline fn count(self: *State, at: u64) Error!void {
         if (at != self.budget_time) {
             self.budget_time = at;
             self.budget_used = 0;
@@ -369,33 +479,18 @@ pub const State = struct {
             return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
     }
 
-    /// The next dirty combinational node of this settle event, in
-    /// topological order, or null when none is left.
-    pub fn nextDirty(self: *State) ?u32 {
-        while (self.cursor < self.dirty.len) : (self.cursor += 1) {
-            const w = self.dirty[self.cursor];
-            if (w != 0) {
-                self.dirty[self.cursor] = w & (w - 1);
-                return self.cursor * 64 + @ctz(w);
-            }
-        }
-        self.cursor = 0;
-        self.settle = .idle;
-        return null;
-    }
-
     /// Mark dirty the nodes that read a bit of `slot` changed since the
     /// last call, then forget those changes.
     fn markReaders(self: *State, slot: u32) void {
         const senses = self.comb[self.comb_start[slot]..self.comb_start[slot + 1]];
+        // Held here, not re-read from `self` after each store to `dirty`.
+        const diff = self.diff;
+        const dirty = self.dirty;
         for (senses) |e| {
-            const hit = self.diff[e.word] & e.mask != 0;
-            self.dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
-            // A node's successors come after it, so a running settle only
-            // ever gains bits above its cursor; this keeps it right regardless.
-            self.cursor = @min(self.cursor, if (hit) e.node / 64 else self.cursor);
+            const hit = diff[e.word] & e.mask != 0;
+            dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
         }
-        if (senses.len != 0) @memset(self.diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
+        if (senses.len != 0) @memset(diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
     }
 
     /// Whether a node reads some bit of `slot`.
@@ -447,53 +542,64 @@ pub const State = struct {
 
     /// The value of at most 64 bits at word `off`.
     pub inline fn get(self: *const State, off: u32) W {
-        return .{ .v = self.v[off], .x = if (two) 0 else self.x[off] };
+        return peek(self.v.ptr, self.x.ptr, off);
     }
 
     /// The `n`-word value at word `off`.
     pub inline fn getw(self: *const State, off: u32, comptime n: u32) logic.Wide(n) {
-        return .{ .v = self.v[off..][0..n].*, .x = if (two) @splat(0) else self.x[off..][0..n].* };
+        return peekw(self.v.ptr, self.x.ptr, off, n);
     }
 
     /// The bits `m` of the value at word `off` become `a`'s, for a slot no
     /// event control, driver or node can be waiting on.
     pub inline fn set(self: *State, off: u32, a: anytype, m: anytype) void {
-        if (@TypeOf(a) != W) {
-            for (self.v[off..][0..a.v.len], self.x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
-                ov.* = (ov.* & ~am) | (av & am);
-                ox.* = (ox.* & ~am) | (ax & am);
-            }
-            return;
-        }
-        const bits: u64 = m;
-        self.v[off] = (self.v[off] & ~bits) | (a.v & bits);
-        if (!two) self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
+        poke(self.v.ptr, self.x.ptr, off, a, m);
+    }
+
+    /// The settle event's hold on the planes and dirty words.
+    pub inline fn view(self: *State) View {
+        return .{ .s = self, .v = self.v.ptr, .x = self.x.ptr, .dirty = self.dirty.ptr };
+    }
+
+    /// The bits `m` of the words from `off` become `v`/`x`'s.
+    fn merge(self: *State, off: u32, v: []const u64, x: []const u64, m: []const u64) void {
+        poke(self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
     }
 
     /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
     /// nothing happens unless the value changes; then every waiter it
-    /// matches wakes. `a` is a `logic.T`, `m` the `logic.M` of its width.
-    pub inline fn put(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+    /// matches wakes, of those `reach` names. `a` is a `logic.T`, `m` the
+    /// `logic.M` of its width.
+    pub inline fn put(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         if (@TypeOf(a) != W) return self.store(slot, off, &a.v, &a.x, &m);
-        return self.putWord(slot, off, 0, a, m);
+        return self.putWord(reach, slot, off, 0, a, m);
     }
 
     /// `put` of the bits `m` of word `j` alone: a bit-select of a wide slot
     /// touches one word. An edge is its least significant bit's (§9.7.2),
     /// which only word 0 holds.
-    pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+    pub inline fn putWord(self: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
         if (self.held(slot)) return;
         const at = off + j;
         const o = self.get(at);
         const nv = (o.v & ~m) | (a.v & m);
         const nx = (o.x & ~m) | (a.x & m);
         const d = (nv ^ o.v) | (nx ^ o.x);
+        if (comptime reach == Reach{ .comb = true }) {
+            // Only nodes read the slot: the store does not branch on the
+            // data, and only its first change of the step reaches `dirtyReaders`.
+            self.v[at] = nv;
+            if (!two) self.x[at] = nx;
+            self.diff[at] |= d;
+            if (!self.pending[slot] and d != 0) try self.dirtyReaders(slot);
+            return;
+        }
         if (d == 0) return;
         const before = logic.low(self.get(off));
         self.v[at] = nv;
         if (!two) self.x[at] = nx;
-        if (self.sensed(slot)) self.diff[at] |= d;
-        try self.wake(slot, before, logic.low(self.get(off)));
+        if (reach.comb and self.sensed(slot)) self.diff[at] |= d;
+        try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
     }
 
     /// `put` of a real (§4.8, `exec.store`): it changes when its value
@@ -541,21 +647,22 @@ pub const State = struct {
     /// `a` in the NBA region.
     /// ponytail: a real's update is compared by its bits, not its value as
     /// `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
-    pub fn nba(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
-        const at: u32 = @intCast(self.words.items.len);
-        if (@TypeOf(a) == W)
-            try self.words.appendSlice(self.gpa, &.{ a.v, a.x, m })
-        else
+    pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        const quiet = reach == Reach{};
+        if (@TypeOf(a) == W) {
+            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
+        } else {
+            const at: u32 = @intCast(self.words.items.len);
             try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
-        try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = n, .at = at });
+            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = a.v.len, .at = at, .quiet = quiet });
+        }
         if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
 
     /// §9.2.2 `<= #d`: `nba` of the update `after` ticks later. At 0 it
     /// joins this step's rows, the order its own event would take.
-    pub fn nbaAfter(self: *State, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        if (after == 0) return self.nba(slot, off, a, m);
+    pub fn nbaAfter(self: *State, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        if (after == 0) return self.nba(reach, slot, off, a, m);
         const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
         const words = try self.gpa.alloc(u64, 3 * n);
         if (@TypeOf(a) == W) @memcpy(words, &[3]u64{ a.v, a.x, m }) else @memcpy(words, &(a.v ++ a.x ++ m));
@@ -591,7 +698,7 @@ pub const State = struct {
     /// its own process's (`exec.store`'s guard; an `assign` holds only a
     /// variable, which `compile` ensures).
     inline fn held(self: *const State, slot: u32) bool {
-        if (self.layers.len == 0 or self.overriding) return false;
+        if (!overrides or self.overriding) return false;
         const l = self.layers[slot];
         return l.assign != null or l.force != null;
     }
@@ -704,18 +811,29 @@ pub const State = struct {
     /// schedule the nodes and triggered processes reading it come between.
     /// A change of a slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
-        if (self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
-        if (self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
-        if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
+        return self.wakeOf(.all, slot, before, after);
+    }
+
+    /// `wake` of what `reach` names alone.
+    inline fn wakeOf(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
+        if (reach.mon and self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
+        if (reach.dump and self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
+        if (reach.fan and slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);
         };
-        if (slot + 1 < self.comb_start.len and self.comb_start[slot] != self.comb_start[slot + 1]) try self.dirtyReaders(slot);
-        if (slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+        if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
+        if (reach.watch and slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
             if (!self.waiting[w.proc] or !w.edge.matches(before, after)) continue;
             self.waiting[w.proc] = false;
             try self.run(w.pc, null);
         };
+        if (reach.terms) try self.wakeTerms(slot, before, after);
+    }
+
+    /// `wake` of the event controls filed under `slot`, in the order they
+    /// suspended.
+    fn wakeTerms(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         const list = &self.terms[slot];
         var keep: usize = 0;
         for (list.items) |t| {
