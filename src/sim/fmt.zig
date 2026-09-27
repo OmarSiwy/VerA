@@ -1,12 +1,9 @@
-//! IEEE 1364-2005 §17.1 value formatting, with no engine attached.
-//!
-//! In: an operand's planes, width and signedness, a radix and a field width
-//! (or a time and the `$timeformat` state). Out: bytes on a writer. The
-//! interpreter (`digital/display.zig`) and a native executable (`rt/`) both
-//! print through these, so the two cannot disagree about a digit.
-//!
-//! Clauses: §9.4.3 Table 9-22 conversions; IEEE 1364-2005 §17.1.1.3/§17.1.1.4
-//! sizing and unknown digits, §17.1.1.7 `%s`/`%c`, §17.3 `%t`, §19.8 units.
+//! An operand's planes, width and signedness, radix and field width (or a
+//! time and the `$timeformat` state) -> its IEEE 1364-2005 §17.1 text.
+//! The interpreter (`digital/display.zig`) and a native executable (`rt/`)
+//! both print through these, so the two cannot disagree about a digit.
+//! Clauses: VAMS §9.4.3 Table 9-22; IEEE 1364-2005 §17.1.1.3, §17.1.1.4,
+//! §17.1.1.7, §17.3, §19.8.
 const std = @import("std");
 const Int = @import("frontend").Integer;
 
@@ -83,10 +80,10 @@ pub fn text(out: *std.Io.Writer, v: Int.Literal, char: bool, width: ?u32) std.Io
     try out.writeAll(t);
 }
 
-/// §17.3 `%t`. The operand is a time in the INVOKING MODULE'S TIME UNIT —
-/// which is what `$time` returns and what a literal `1` in that position
-/// means — and `$timeformat`'s `units_number` says which power of ten of a
-/// second to report it in. So the printed number is
+/// §17.3 `%t`. The operand is a time in the invoking module's time unit
+/// (what `$time` returns, and what a literal `1` there means), and
+/// `$timeformat`'s `units_number` says which power of ten of a second to
+/// report it in. So the printed number is
 ///
 ///     value · 10^(unit_exp − units_number)
 ///
@@ -124,15 +121,15 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 /// that is the whole split: a hex digit is four bits of this operand and
 /// says nothing about the other bits, so a group that is entirely unknown
 /// prints as unknown while its neighbours print normally. A decimal
-/// rendering has no such locality — one unknown bit makes the whole number
-/// unknown — which is why §17.1.1.4 gives it its own rule.
+/// rendering has no such locality (one unknown bit makes the whole number
+/// unknown), which is why §17.1.1.4 gives it its own rule.
 pub fn value(out: *std.Io.Writer, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
     var buf: [1024]u8 = undefined;
     const t = if (radix == .decimal)
         try decimalText(&buf, v)
     else
         groupText(&buf, v, radix);
-    // §17.1.1.3's automatic size. Right-justified with LEADING SPACES, not
+    // §17.1.1.3's automatic size. Right-justified with leading spaces, not
     // zeros: `%d` of an 8-bit 7 is "  7" and not "007". A group radix is
     // already exactly its own width, so padding only ever shows up under
     // decimal or an explicit format width.
@@ -143,7 +140,7 @@ pub fn value(out: *std.Io.Writer, v: Int.Literal, radix: Radix, width: ?u32) Err
 
 /// §17.1.1.3: "a radix conversion is sized to the operand's declared width,
 /// and the default decimal field is sized to the largest value the operand
-/// can hold". For a signed operand the largest PRINTED value is the
+/// can hold". For a signed operand the largest printed value is the
 /// negative one, because of its sign: a 32-bit `integer` is 11 columns
 /// ("-2147483648"), not 10.
 pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
@@ -166,8 +163,8 @@ pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
 
 /// A power-of-two radix, most significant group first. Bits past the
 /// operand's width are absent, not zero: they contribute nothing to the
-/// digit's value AND nothing to its unknown-ness, which is what makes an
-/// all-x 8-bit operand print "xxx" in octal rather than "Xxx" — the top
+/// digit's value and nothing to its unknown-ness, which is what makes an
+/// all-x 8-bit operand print "xxx" in octal rather than "Xxx": the top
 /// group holds two x bits and no third bit at all.
 pub fn groupText(buf: []u8, v: Int.Literal, radix: Radix) []const u8 {
     const per = radix.perDigit();
@@ -193,8 +190,8 @@ pub fn groupText(buf: []u8, v: Int.Literal, radix: Radix) []const u8 {
             }
         }
         // §17.1.1.4: all unknown prints lowercase, partly unknown prints
-        // uppercase — the case is the whole signal that the digit's known
-        // bits were thrown away.
+        // uppercase; the case is the only sign that the digit's known bits
+        // were thrown away.
         buf[out] = if (xs == present) 'x' //
         else if (zs == present) 'z' //
         else if (xs != 0) 'X' //
@@ -206,11 +203,10 @@ pub fn groupText(buf: []u8, v: Int.Literal, radix: Radix) []const u8 {
 }
 
 /// Decimal, where one unknown bit poisons the whole number (§17.1.1.4).
-///
-/// ponytail: 64 bits. A wider `%d` needs a bignum divide, and nothing in
-/// the LRM's own examples or this suite prints one; the refusal is explicit
-/// (`error.TooWide`) rather than a silent truncation.
+/// Returns error.TooWide for a known operand wider than 64 bits.
 pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
+    // ponytail: 64 bits, refused rather than truncated; a bignum divide if
+    // a wider `%d` is ever printed.
     if (v.hasUnknown()) {
         var xs: u32 = 0;
         var zs: u32 = 0;
