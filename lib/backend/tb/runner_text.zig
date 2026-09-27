@@ -117,6 +117,12 @@ pub const runner_body =
     \\    return @intFromEnum(u);
     \\}
     \\
+    \\/// A `//! seed` or `//! limit` want: equal to the 12 significant digits a
+    \\/// hand derivation writes.
+    \\fn near(got: f64, want: f64) bool {
+    \\    return @abs(got - want) <= 1e-12 * @abs(want) + 1e-15;
+    \\}
+    \\
     \\/// Forward-mode dual: value plus one partial per solver unknown. This is
     \\/// the same scalar the engine instantiates for the Jacobian, written out
     \\/// here so the testbench has no dependency beyond the device itself.

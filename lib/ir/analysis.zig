@@ -153,6 +153,10 @@ alias: []Mir.Value = &.{},
 /// `unknownDeps` answers "all bits", which is the dense fallback.
 deps: []u64 = &.{},
 deps_folded: bool = false,
+/// `deps` with a `dstop` passing its operand's bits through: which unknowns
+/// the VALUE can vary with (`xDep`). The same slice as `deps` when the module
+/// has no `dstop`.
+xdeps: []u64 = &.{},
 /// §3.2.2 per Value: the `Lowered.mem_arrays` row an array VERSION belongs to
 /// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
 /// Its `vty` is the ELEMENT type. Every version of one array is one storage.
@@ -678,6 +682,27 @@ test "a chain of joins built outer-first types every phi from the integer at its
     for ([_]Mir.Value{ p1, p2, p3 }) |p| try std.testing.expectEqual(VTy.int, an.tyOf(p));
 }
 
+test "a dstop clears the derivative bits and keeps the value varying" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    const lowered: Lowered = .{ .file = &file };
+    _ = try mir.addBlock(a);
+    const va = try mir.addBlockParam(a, 0);
+    const vb = try mir.addBlockParam(a, 1);
+    const stopped = try mir.emit(a, .entry, .dstop, &.{va});
+    const prod = try mir.emit(a, .entry, .fmul, &.{ stopped, vb });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    try std.testing.expect(an.dFree(stopped) and an.xDep(stopped));
+    // The product keeps its other operand's lane, and varies through both.
+    try std.testing.expectEqual(@as(u64, 0b10), an.unknownDeps(prod));
+    try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@intFromEnum(prod)]);
+}
+
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
     return self.vty[@intFromEnum(v)];
 }
@@ -700,26 +725,39 @@ fn buildDeps(self: *Analysis) Error!void {
         const d = self.mir.valueDef(@enumFromInt(v0));
         if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
     }
-    self.deps = try self.arena.alloc(u64, self.nv);
-    @memset(self.deps, 0);
+    self.deps = try self.fixDeps(true);
+    // Only a `dstop` tells the two tables apart.
+    self.xdeps = self.deps;
+    for (0..self.mir.insts.len) |i| {
+        if (self.mir.instOp(@enumFromInt(@as(u32, @intCast(i)))) != .dstop) continue;
+        self.xdeps = try self.fixDeps(false);
+        break;
+    }
+}
+
+/// The lattice's fixpoint; `stop` says whether a `dstop` clears its bits.
+fn fixDeps(self: *const Analysis, stop: bool) Error![]u64 {
+    const col = try self.arena.alloc(u64, self.nv);
+    @memset(col, 0);
     var changed = true;
     while (changed) {
         changed = false;
         var v: u32 = 0;
         while (v < self.nv) : (v += 1) {
-            const now = self.defDeps(@enumFromInt(v));
-            if (now == self.deps[v]) continue;
-            self.deps[v] = now;
+            const now = self.defDeps(@enumFromInt(v), col, stop);
+            if (now == col[v]) continue;
+            col[v] = now;
             changed = true;
         }
     }
+    return col;
 }
 
 /// One step of the lattice: `val`'s bits GIVEN the current answer for its
-/// operands. Every opcode is a function of its operands, so a result depends
-/// on a probe exactly when one of its operands does — every rule is "union of
-/// the operands whose derivative the contract propagates".
-fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
+/// operands in `col`. Every opcode is a function of its operands, so a result
+/// depends on a probe exactly when one of its operands does — every rule is
+/// "union of the operands whose derivative the contract propagates".
+fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) u64 {
     switch (self.mir.valueDef(self.rv(val))) {
         // §4.4 access function: the probe IS x[u], so its derivative is the
         // one unit vector.
@@ -744,28 +782,28 @@ fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
                 // the prep in mos9 and all of it in BSIM4.
                 .call => |c| {
                     var acc: u64 = 0;
-                    for (c.args) |arg| acc |= self.depsOf(arg);
+                    for (c.args) |arg| acc |= self.depsIn(col, arg);
                     return acc;
                 },
-                .unary => |u| return self.depsOf(u.operand),
-                .binary => |b| return self.depsOf(b.lhs) | self.depsOf(b.rhs),
+                .unary => |u| return if (stop and u.op == .dstop) 0 else self.depsIn(col, u.operand),
+                .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
                 // §4.2.12: the CONDITION does not matter. It selects between
                 // arms rather than entering the value, so a conditional over
                 // two constants is constant however x steers it — the same
                 // reading `renderInst` already takes when it emits a Zig `if`
                 // — and `S.sel` lets the taken arm's derivative ride through.
-                .ternary => |t| return self.depsOf(t.then_val) | self.depsOf(t.else_val),
+                .ternary => |t| return self.depsIn(col, t.then_val) | self.depsIn(col, t.else_val),
                 // §3.2.2 an array version carries the union of what was stored
                 // into it; a fresh one (zero, or the held `Instance` copy) is
                 // constant. The INDEX does not enter, for `select`'s reason:
                 // it picks an element, and the picked element's derivative is
                 // what rides through.
                 .anew => return 0,
-                .load => |l| return self.depsOf(l.arr),
-                .store => |st| return self.depsOf(st.arr) | self.depsOf(st.value),
+                .load => |l| return self.depsIn(col, l.arr),
+                .store => |st| return self.depsIn(col, st.arr) | self.depsIn(col, st.value),
                 .phi => |d| {
                     var acc: u64 = 0;
-                    for (0..d.count) |k| acc |= self.depsOf(self.mir.phiPair(inst, @intCast(k)).value);
+                    for (0..d.count) |k| acc |= self.depsIn(col, self.mir.phiPair(inst, @intCast(k)).value);
                     return acc;
                 },
             }
@@ -794,9 +832,19 @@ pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.depsOf(v) == 0;
 }
 
+/// Does `v`'s value vary with some §4.4 probe? `!dFree` except past a
+/// `dstop`, whose value varies while its derivative is zero.
+pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
+    return self.depsIn(self.xdeps, v) != 0;
+}
+
 /// The raw word, folded or not — what the fixpoint and `dFree` read.
 fn depsOf(self: *const Analysis, v: Mir.Value) u64 {
-    return self.deps[@intFromEnum(self.rv(v))];
+    return self.depsIn(self.deps, v);
+}
+
+fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) u64 {
+    return col[@intFromEnum(self.rv(v))];
 }
 
 /// Which unknowns `v`'s derivative can be nonzero in. All ones when the table

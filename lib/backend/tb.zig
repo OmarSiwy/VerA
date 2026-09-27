@@ -58,6 +58,10 @@ pub const Error = Allocator.Error || error{
 /// One `name = value` binding: a model parameter, or a fixed unknown.
 pub const Binding = struct { name: []const u8, value: f64 };
 
+/// One `//! limit` line: the `old` lanes that differ from `cur`, and the
+/// wanted outputs; `converged` is the pseudo-lane of the verdict.
+pub const LimitCase = struct { old: []const Binding, want: []const Binding };
+
 /// One `//! sweep <unknown> = v, v, …` line.
 pub const Sweep = struct { name: []const u8, values: []const f64 };
 
@@ -199,6 +203,18 @@ pub const Directives = struct {
     /// judged as `got=/want= ok=` lines, like `noise`.
     qsites: []const []const u8 = &.{},
     asserts_qsite: bool = false,
+    /// `//! seed V(a) = v, ...`: exactly the lanes the device's §9.17.3 cold
+    /// start (`seed`) returns non-null, with their values; every other lane
+    /// must be null, and every non-null one must be in `limit_writes`.
+    /// `//! seed none` asserts no lane is seeded. Lines accumulate.
+    seeds: []const Binding = &.{},
+    asserts_seed: bool = false,
+    /// `//! limit V(a) = v, ... -> V(b) = w, ..., converged = 0|1`, one case per
+    /// line: `limit` run at the first point's `x` as `cur`, with `old` = `cur`
+    /// except the lanes left of `->`, must return the lanes right of it (and
+    /// the verdict, if named). The testbench never limits on its own, so a
+    /// published clamp is observable only through this.
+    limits: []const LimitCase = &.{},
     /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
     /// fixture: it must NOT compile, and every substring here must appear
     /// somewhere in the resulting diagnostic. A fixture that cannot run states

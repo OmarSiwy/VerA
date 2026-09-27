@@ -846,6 +846,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.Dynamic
                 .fi_cast,
                 .if_cast,
                 .opt_barrier,
+                .dstop,
                 .path_prev,
                 .path_acc,
                 .select,
