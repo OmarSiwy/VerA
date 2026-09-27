@@ -1,13 +1,9 @@
-//! Control-flow reconstruction: MIR's CFG emitted as structured Zig.
-//!
-//! In: one unit's MIR blocks, dominator tree and slot plan. Out: the unit body
-//! as nested labelled blocks, `while (true)` loops, `if`s and out-of-SSA phi
-//! copies (the dominator-tree scheme described in `codegen.zig`'s header).
-//!
-//! LRM clauses this file's code cites: §5.6.1.3.
-//!
-//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_cfg.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! Control-flow reconstruction: one unit's MIR blocks, dominator tree and slot
+//! plan in, structured Zig out (Ramsey, "Beyond Relooper"). A merge block Y
+//! that is an immediate dominator child of X becomes a labelled block opened in
+//! X and closed before Y's code, so every edge into Y is `break :B<Y>`; a back
+//! edge is `continue :L<X>`. Exact for every reducible CFG. Phis are copied on
+//! each incoming edge. LRM clauses cited: §5.6.1.3.
 
 const std = @import("std");
 const float_lanes = @import("float/lanes.zig");
@@ -23,11 +19,8 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 
-// ---- control-flow reconstruction ------------------------------------------
-
-/// A unit returns its one contribution value; the common declaration
-/// returns the whole cache; `setup` stores its roots. Same exit points either
-/// way, so this is the one place that knows the difference.
+/// Writes a body's exit: a unit returns its contribution value, the shared
+/// core returns its whole cache, and `setup` stores its roots.
 pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     if (self.su.mode) return gen_setup.emitStores(self, depth, "");
     try self.ind(depth);
@@ -56,6 +49,8 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     try self.b("}};\n", .{});
 }
 
+/// Writes block `bi`'s statements. `decl` is the straight-line path, which
+/// declares every slot at its definition.
 pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
     for (stmts) |inst| {
@@ -100,6 +95,8 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     try self.b(";\n", .{});
 }
 
+/// Writes block `bi` and the dominator subtree it heads, wrapping a loop
+/// header in `L<bi>: while (true)`.
 pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
     if (self.an.is_loop[bi]) {
         // `setup` ends at a loop with a per-eval branch: nothing it can reach
@@ -124,10 +121,12 @@ pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
     }
 }
 
+/// Writes block `bi` inside the labelled blocks of the merge children it
+/// dominates, then each of those children after its label closes.
 pub fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void {
     const mc = self.an.mk_pool[self.an.mk_off[bi]..self.an.mk_off[bi + 1]];
     var depth = depth0;
-    // Where the INNERMOST label (`mc[0]`, opened last) begins — the peephole
+    // Start of the innermost label (`mc[0]`, opened last); the peephole
     // below rewinds to it.
     var at_inner: usize = 0;
     var i = mc.len;
@@ -143,13 +142,9 @@ pub fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void 
     try emitBlockInsts(self, bi, depth, false);
     try emitTerm(self, bi, depth, target);
 
-    // PEEPHOLE. `B{k}: { break :B{k}; }` is a labelled block whose only
-    // statement is to leave it, and an empty one says the same thing — both
-    // mean "fall through to `k`'s own code", which is emitted right after
-    // the closing brace either way. This is what `planDeadBranches` leaves
-    // behind once the `if` that used to sit here is gone: measured on
-    // `bsimsoi_va`, 2 262 of a unit's remaining 3 207 lines. Rewinding `out`
-    // is the same reserve-and-back-patch `emitUnit` uses for the signature.
+    // Peephole: `B{k}: { break :B{k}; }` and `B{k}: {}` both fall through to
+    // `k`'s code, emitted right after the brace anyway, so the label is
+    // dropped by rewinding `out`. `planDeadBranches` leaves many of these.
     const dropped = mc.len != 0 and isFallThrough(self, body_start, depth, mc[0]);
     if (dropped) {
         self.out.shrinkRetainingCapacity(at_inner);
@@ -168,8 +163,8 @@ pub fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void 
 }
 
 /// Is everything emitted since `at` exactly "leave the block labelled `k`"?
-/// A break to any OTHER label is not the same thing: dropping this label
-/// would then let control fall into `k`'s code instead of past it.
+/// A break to any other label is not: dropping the label would then let
+/// control fall into `k`'s code instead of past it.
 fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     const body = self.out.items[at..];
     if (body.len == 0) return true;
@@ -182,6 +177,8 @@ fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     return std.mem.eql(u8, body[depth * 4 ..], want);
 }
 
+/// Writes block `bi`'s terminator: the unit's return, a jump edge, or an
+/// `if` over both branch edges.
 pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
     const t = self.an.term[bi];
     if (t == .none) {
@@ -231,6 +228,8 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
     }
 }
 
+/// Writes `cond` as a Zig bool (`!= 0` on its scalar value) and pins lanes
+/// if it depends on x.
 pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
     float_lanes.pinLanes(self, cond);
     const v = self.an.rv(cond);
@@ -244,6 +243,8 @@ pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
     }
 }
 
+/// Writes the edge `from -> to`: its phi copies, then `continue` for a back
+/// edge, `break` into a merge block, or `to`'s subtree inline.
 pub fn emitEdge(self: *Gen, from: u32, to: u32, depth: u32, target: Mir.Value) Error!void {
     try emitPhiCopies(self, from, to, depth);
     if (self.an.is_loop[to] and self.an.dominates(to, from)) {
@@ -257,12 +258,11 @@ pub fn emitEdge(self: *Gen, from: u32, to: u32, depth: u32, target: Mir.Value) E
     }
 }
 
-/// SSA-out-of-form on the edge `from → to`. Emitted through temporaries only
-/// when an incoming value READS a phi of `to` itself (the swap idiom, or a
-/// loop counter's `i + 1`): assigned in sequence, a later copy would then see
-/// an earlier one's new value. Every other group — 309 of bsim4va's 310 — is
-/// written straight into the slots, which is the same values in the same
-/// order without a `{ const cK = ..; slot = cK; }` block per edge.
+/// Writes the phi copies on the edge `from -> to`. They go through
+/// temporaries only when an incoming value reads a phi of `to` itself (a swap,
+/// or a loop counter's `i + 1`), where sequential assignment would let a
+/// later copy see an earlier one's new value. Otherwise they are written
+/// straight into the slots.
 pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     const phis = self.an.phi_pool[self.an.phi_off[to]..self.an.phi_off[to + 1]];
     var n: u32 = 0;
@@ -321,10 +321,8 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
 }
 
 /// Does rendering `v` read the slot of a phi defined in block `to`? Walks the
-/// INLINE tree `renderVal` would print and stops at anything materialized —
-/// a slot, a cache field or a setup field is a name, and only a phi slot
-/// of `to` is one the copies on this edge overwrite. Past the depth cap it
-/// answers yes, which keeps the temporaries: the safe side.
+/// inline tree `renderVal` would print and stops at materialized values.
+/// Answers yes past the depth cap, which keeps the temporaries.
 fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
     if (depth > 64) return true;
     const v = self.an.rv(v0);
@@ -346,7 +344,8 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
     };
 }
 
-/// A pooled phi this unit actually materializes into a local slot.
+/// Returns whether this unit materializes the pooled phi `inst` into a
+/// local slot.
 pub fn slotted(self: *const Gen, inst: Mir.Inst) bool {
     const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
     return self.plan.needed[i] and self.plan.slot[i] != none_u32;

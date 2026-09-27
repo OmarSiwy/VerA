@@ -1,24 +1,9 @@
-//! The LANE story of the generated device: when may `eval`/`q` be
-//! instantiated with a lane-parallel `S` (one operating point per lane), and
-//! which selects run branchless so a vector `S` has nothing to steer on.
-//!
-//! AGENTS.md §5: SIMD-first applies to the EMITTED device — its `eval` is the
-//! hot loop this project exists to make fast — and the decisions that govern
-//! its lanes used to be scattered through `Gen`. They are here:
-//!
-//!   - `pinLanes` / `pinCrossing`: an x-dependent value collapsed to one
-//!     scalar decision (a `.val()` comparison, a lazy `if`, an int cast, an
-//!     event operator, a value-collapsing helper, a per-call draw, a host
-//!     crossing) sets `Float.pinned`.
-//!   - `batch_ok`: a device that finishes with `pinned` false gets
-//!     `pub const batch_ok = true;` (`file.zig`), the batch permission
-//!     the testbench's `laneCheck` asserts.
-//!   - `eagerSafe` / `eagerCostly`: under `Float.strict` a real select whose
-//!     inline arms are total and cheap renders as the contract's `sel` mask —
-//!     true per lane — instead of a lazy `if`.
-//!
-//! The float MODE half (strict vs optimized, the f32 Jacobian permission) is
-//! `mode.zig`. Emit-side: these read the slice plan through `*Gen`.
+//! Lane decisions of the generated device, read through `*Gen`. A lane is
+//! dirty once an x-dependent value collapses to one scalar decision
+//! (`pinLanes`, `pinCrossing` set `Float.pinned`). A device with no dirty lane
+//! emits `batch_ok = true`: `eval`/`q` are exact per point on a multi-point `V`.
+//! Under `.strict`, a select with total, cheap inline arms renders as `sel`
+//! (`eagerSafe`, `eagerCostly`). The float mode half is `mode.zig`.
 
 const std = @import("std");
 const codegen = @import("../../codegen.zig");
@@ -27,29 +12,15 @@ const gen_render = @import("../render.zig");
 const Mir = @import("ir").Mir;
 const proof = @import("ir").proof;
 
-/// Would evaluating this arm eagerly run a libm call that the branch would
-/// have skipped? `eagerSafe` answers whether both arms MAY be evaluated;
-/// this answers whether they SHOULD.
+/// Returns whether evaluating `v`'s inline subtree eagerly would run a libm
+/// call the branch would have skipped. `eagerSafe` says whether both arms
+/// may run; this says whether they should. A `materialized` value already
+/// ran, so it never counts.
 ///
-/// Branchless is the right default because the arms are a few FP ops and a
-/// mispredict costs more than both. A transcendental inverts that: `exp` is
-/// ~50 instructions, so a `sel` over it pays for the arm that is thrown
-/// away every single time. mos1 measured 2.00 `exp` per instance-eval
-/// against ngspice's 1.45 for exactly this reason — the b-s junction kept
-/// its `if` (a multi-use domain op blocked if-conversion) while the
-/// identical b-d junction was flattened, so both of ITS arms run forever.
-///
-/// The cost of saying no is a data-dependent branch and a lane pin. That
-/// was the argument for keeping these eager — a lane-parallel S has no
-/// single `.val()` to steer on. It does not survive measurement: an
-/// instance-parallel S would have to take BOTH junction arms anyway, which
-/// is what collapses that design's kernel speedup from 3.6x to 1.67x, and
-/// the sparse stamp it cannot vectorize at all (195 Ir/instance at W=1,
-/// 196 at W=4) caps the whole idea at 1.17x end-to-end. Not a lever worth
-/// protecting with a real per-iterate cost.
-///
-/// Only the INLINE tree counts: a `materialized` value is a statement that
-/// already ran, so hoisting it into a select changes nothing.
+/// Branchless wins when the arms are a few FP ops. A transcendental pays for
+/// the discarded arm on every eval, which costs more than the branch and the
+/// lane pin it brings (measured on mos1; instance-parallel `S` caps at 1.17x
+/// end to end because the sparse stamp does not vectorize).
 pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (depth > 64) return false;
     const v = self.an.rv(v0);
@@ -72,13 +43,11 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
     };
 }
 
-/// May `v`'s inline-rendered subtree run UNCONDITIONALLY in a `.strict`
-/// unit? True for anything already materialized (slots/cache/phi vars are
-/// computed before the select either way), leaves, and trees of ops that
-/// are total on all of R under IEEE semantics: no call, and
-/// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
-/// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
-/// "inline" here is exactly what `renderVal` would inline.
+/// Returns whether `v`'s inline subtree may run unconditionally in a
+/// `.strict` unit. True for materialized values, leaves, and trees of ops
+/// total on all of R under IEEE semantics: no call, and
+/// `proof.domainOf == .all` (which excludes ln/sqrt/pow and the trapping
+/// idiv/imod/fmod). "Inline" matches what `renderVal` inlines.
 pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (depth > 64) return false;
     const v = self.an.rv(v0);
@@ -103,19 +72,19 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     };
 }
 
-/// An x-dependent value is about to be collapsed to one scalar decision —
-/// record that lanes are pinned. Values that do not vary with x are
-/// lane-uniform (params, temperature, time), so collapsing them steers
-/// nothing. `xDep`, not `dFree`: a `dstop` has no lanes and still varies.
+/// Records that `v` is about to collapse to one scalar decision, pinning
+/// lanes if `v` varies with x. Params, temperature and time are
+/// lane-uniform. Tests `xDep`, not `dFree`: a `dstop` has no lanes and still
+/// varies. No effect while emitting the display unit.
 pub fn pinLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
     if (!self.an.xDep(v)) return;
     self.float.pinned = true;
 }
 
-/// A crossing that is one scalar per CALL, not per lane — a §9.13 draw, a
-/// systf's `.val()` hand-off to the host: it pins unconditionally, except in
-/// the §9.4 display unit, which is not part of the residual.
+/// Records a crossing that is one scalar per call, not per lane (a §9.13
+/// draw, a systf's `.val()` hand-off). Pins unconditionally, except in the
+/// §9.4 display unit, which is not part of the residual.
 pub fn pinCrossing(self: *Gen) void {
     self.float.pinned = self.float.pinned or !self.emitting_display;
 }
