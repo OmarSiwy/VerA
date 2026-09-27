@@ -8,7 +8,7 @@ each release (`AGENTS.md` §0 rule 1).
 An earlier version of this file carried a 26-rung release ladder, per-release
 detail and three appendices of reconciled numbers. Most of those rungs landed on
 `main` out of order and without a release being cut; only `v0.0.1` is tagged.
-§3 starts again at v0.1.0, the current tree. The old version, and the audit
+§3 starts again at v0.9.0, the current tree. The old version, and the audit
 notes this file's open items came from, are at git revision `8b1514d4` (local
 tag `audit-docs-2026-09`). Read one with `git show 8b1514d4:<path>`.
 
@@ -28,11 +28,17 @@ Zero XFAIL means every marker's gap is implemented. If a marker's fixture is one
 that a conforming implementation would also fail, fix the fixture and write the
 derivation in its header. Never loosen the compiler to fit it.
 
-**B. Every inherited IEEE 1364-2005 obligation is closed or classified.**
-`zig build test-1364 -- --coverage` lists no uncited or one-way clause that is
-not classified. The §§17-18 obligations in `CLAUSE-AUDIT.md` §7.1 are all
-closed. A closed obligation has a positive behavioural test, an invalid-input
-test and a recorded result. "It compiles" closes nothing.
+**B. Every IEEE 1364-2005 clause VerA implements has two-way evidence; the
+rest are classified.** `zig build test-1364 -- --coverage` lists no uncited or
+one-way clause that is not classified. In scope: chapters 3 to 13, 14 and 15
+as far as VerA models them (specify paths and timing checks are parsed and
+visible to VPI), 17 to 19, 26 and 27 (VPI) and Annex A. Out of scope, each
+classified `not_supported` in `tests/fixtures/ieee1364/CLAUSES.tsv` and refused
+with a named diagnostic: 16 (SDF back-annotation), 20 to 25 (PLI 1.0 `tf_` and
+`acc_` routines) and 28 (protected envelopes). The §§17-18 obligations in
+`CLAUSE-AUDIT.md` §7.1 are all closed. A closed obligation has a positive
+behavioural test, an invalid-input test and a recorded result. "It compiles"
+closes nothing.
 
 **C. Every LRM clause has two-way evidence or a classification.**
 Every clause that `zig build benchmark -- --coverage` finds in `docs/` is either
@@ -111,28 +117,25 @@ any of those. A refactor that keeps goldens byte-identical is a patch.
 
 ### 3.1 The ladder
 
-v0.1.0 is the tree as it stands. The rows after it come from §5 and are
-ordered by dependency: tooling first, then the language gaps that evidence
-fixtures need, then the evidence itself. A row whose answer waits on a §5.1
-decision stays open without blocking the rest of its release.
+v0.9.0 is the tree as it stands (§3.2). Each row after it comes from §5 and is
+ordered by dependency. A consumer-visible change needs a minor (§3), so the
+releases after 0.9 count 0.10, 0.11 and so on; a row with no consumer-visible
+change ships as a patch of the minor before it.
 
 | Version | Content | Closes | Gate |
 |---|---|---|---|
-| **v0.1.0** | The current tree (§3.2) | the old ladder's v0.0.2 to v0.9.1 rungs, except the Windows port and what §5 lists | `tools/conformance.sh --changelog v0.1.0`; every `build.zig` step green |
-| v0.1.1 | Hygiene, no consumer-visible change: `zig fmt --check` clean over `lib/`, `src/`, `tests/`, `tools/` and run by `zig build test`; the §5.5 fixture headers; `CLAUSE-AUDIT.md` refreshed (§5.8); passing fixtures from branch `audit-wip/ch5`; `a04_rollback_rollback_host.zig` wired or deleted; CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
-| v0.2.0 | The Windows port, alone (§1 F) | clause F | `zig build -Dtarget=x86_64-windows` |
-| v0.3.0 | Native `.v` executables: the `--schedule=static` fork hang, then build time (native backend for Debug builds; one 2-state build under `--state=auto`) | §5.3 native row | `test-1364 -- --native` differential, `tools/vs-verilator.sh` |
-| v0.4.0 | AMS source the LRM forbids is refused, with named diagnostics; the diagnostic wording rows | §5.2 AMS rows, §5.4 AMS rows | `--strict`; one `//! reject` per row with a legal neighbour |
-| v0.5.0 | AMS source the LRM allows compiles and computes right | §5.3 AMS rows | `--strict`; each row's xfail fixture flips |
-| v0.6.0 | IEEE 1364 language gaps: net arrays, upward hierarchical references, continuous assignment in a generate block (the digital xfail), then §5.2 and §5.3's IEEE rows | §5.2, §5.3 IEEE rows | `test-1364`, `--strict` |
-| v0.6.x | Measure B evidence: positive and reject pairs for uncited and one-way IEEE 1364 clauses. Fixtures only; a defect they find ships in its own minor | §1 B | `test-1364 -- --coverage` |
-| v0.7.x | Measure C tail and §5.7: the clauses `--coverage` lists as one-way or uncited, and the untested obligations | §1 C, §5.7 | `benchmark -- --coverage` |
-| v0.8.0 | §1 E: the implementation-defined list (`CLAUSE-AUDIT.md` §5.3 plus §5.6's last row) published with a test per choice; each resource limit bounded by a fixture and a named diagnostic | §1 E | `zig build test`, `--strict` |
-| v1.0.0 | The conformance statement: §1's measures at their targets, the configuration it was measured on (§1 G), the implementation-defined list and the resource-limit table | nothing new | every `build.zig` step green, `publish.yaml --check` |
+| **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.sh --changelog v0.9.0`; every `build.zig` step green |
+| v0.9.1 | Hygiene: the §5.5 fixture headers, `CLAUSE-AUDIT.md` refreshed (§5.8), the passing fixtures on branch `audit-wip/ch5`, the rollback host wired or deleted, CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
+| v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/vs-verilator.sh` |
+| v0.11.0 | Measure B scoped: the out-of-scope 1364 chapters classified and refused with named diagnostics (§1 B) | the classification half of §1 B | `test-1364 -- --coverage`: no unclassified clause outside the §1 B scope |
+| v0.12.0 | Measure A to zero: the AMS and digital XFAILs implemented, and the AMS rows of §5.2 and §5.3 | §1 A; §5.2, §5.3 AMS rows | `--strict` exits 0 |
+| v0.13.0 | IEEE 1364 language gaps: net arrays, upward hierarchical references, continuous assignment in a generate block, then §5.2 and §5.3's IEEE rows | §5.2, §5.3 IEEE rows | `test-1364`, `--strict` |
+| v0.13.x | Measure B evidence: positive and reject pairs for every in-scope clause. Fixtures only; a defect they find ships in the next minor | §1 B | `test-1364 -- --coverage` |
+| v0.14.0 | The Windows port, alone | §1 F | `zig build -Dtarget=x86_64-windows` |
+| v0.14.x | Measure C's tail, the §5.7 untested obligations, the implementation-defined list and the resource-limit table | §1 C, §1 E, §5.7 | `benchmark -- --coverage`; each limit fails with a named diagnostic |
+| **v1.0.0** | The conformance statement | nothing new | every §1 item holds at one commit |
 
-v1.0.0 adds no code. If it needs code, the ladder is not finished.
-
-### 3.2 What v0.1.0 contains
+### 3.2 What v0.9.0 contains
 
 Each line names the file or command that shows it in the tree, and the merge
 that landed it.
