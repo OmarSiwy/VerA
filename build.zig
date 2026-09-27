@@ -242,6 +242,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "vera", .module = byName(mods, "vera") },
+            // `golden` snapshots a `.v` design's `digital.emit.program` text.
+            .{ .name = "sim", .module = byName(mods, "sim") },
         },
     });
     suite_mod.addOptions("suite_options", o);
@@ -298,7 +300,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-spice", .mode = "spice", .desc = "Run the .sp decks on sim.spice and grade each against its oracle" },
         // What vera says about every fixture, snapshotted so a refactor phase
         // can prove it changed nothing (AGENTS.md §4).
-        .{ .name = "golden", .mode = "golden", .desc = "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)" },
+        .{ .name = "golden", .mode = "golden", .desc = "Snapshot `vera --emit-zig`, the testbench runner, the `--emit-so` tree and the `.v` program text of every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)" },
         // specification/UNITS.md and the architecture map in AGENTS.md, read from the code.
         .{ .name = "archmap", .mode = "archmap", .desc = "Regenerate specification/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)" },
     }) |s| {

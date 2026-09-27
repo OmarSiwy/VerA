@@ -7,14 +7,29 @@
 //!   zig build golden -- diff          # before vs after; exit 1 on a difference
 //!   zig build golden -- diff A B      # two tags, or two snapshot directories
 //!
-//! A snapshot is `.zig-cache/vera-golden/<tag>/`, one `<path>.txt` per `.va`
-//! and `.v` under `tests/fixtures` (`vera --emit-zig` stdout, then a last line
-//! `exit=<code>`) and one `<path>.stderr`. stderr is captured apart because the
-//! message text is held too, not only the device, and because vera writes the
-//! device at file offset 0, so a shared file would lose the warnings.
+//! A snapshot is `.zig-cache/vera-golden/<tag>/`, per `.va` and `.v` under
+//! `tests/fixtures`:
 //!
-//! `diff` ignores the repository root: a diagnostic names its fixture by
-//! absolute path, so two checkouts differ in exactly that and nothing else.
+//!   <path>.txt           `vera --emit-zig` stdout, then a last line `exit=<code>`
+//!   <path>.stderr        its stderr: the message text is held too, and vera
+//!                        writes the device at offset 0, so one file would
+//!                        lose the warnings
+//!   <path>.runner.txt    a `.va` with a `//!` line: the testbench runner
+//!                        `tb.renderRunner` gives `--emit-exe` (`runner`)
+//!   <path>.so/...        a `.va`: the tree `--emit-so` writes before `zig`
+//!                        runs, `shim.zig` and the split device (`soTree`)
+//!   <path>.program.txt   a `.v`: the executable root `--emit-exe` builds
+//!                        (`digital.emit.program`)
+//!
+//! The last three are made in-process through `vera`'s and `sim`'s API, not by
+//! spawning. A kind that fails is `error=<name>` in its own file (a `.so` tree
+//! is then `<path>.so.error.txt`), so it hides no other kind.
+//!
+//! Every file is written with the checkout's root cut out (`unrooted`): the
+//! fixture's absolute path reaches diagnostics, device and program text
+//! (`$fopen`, `$readmem`, the fallback's `file_name`), so two worktrees'
+//! snapshots are equal byte for byte. `diff` cuts it again, for snapshots an
+//! older tree wrote.
 //!
 //! Not a cacheable build step: the build graph cannot see fixture contents, so
 //! a cached run would compare nothing (`build.zig`'s note on `test-devices`).
@@ -22,6 +37,8 @@
 const std = @import("std");
 const options = @import("suite_options");
 const harness = @import("../harness.zig");
+const vera = @import("vera");
+const digital = @import("sim").digital;
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -80,18 +97,21 @@ const Pool = struct {
         }
     }
 
-    /// `vera --emit-zig` on one fixture: stdout to `<rel>.txt`, stderr to
-    /// `<rel>.stderr`, then `exit=<code>` appended to the `.txt`. The include
-    /// path is the shared `tests/fixtures` and the fixture's own directory.
+    /// One fixture's files (the header lists them): `vera --emit-zig`, then
+    /// the in-process kinds. The include path is the shared `tests/fixtures`
+    /// and the fixture's own directory. Only an I/O failure of the snapshot
+    /// itself is returned; a kind's own failure is its `error=` file.
     fn one(pool: *Pool, rel: []const u8) !void {
         var arena_state: std.heap.ArenaAllocator = .init(pool.gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         const io = pool.io;
         const src = try std.fs.path.join(arena, &.{ options.fixture_root, rel });
-        const txt = try std.mem.concat(arena, u8, &.{ pool.out, "/", rel, ".txt" });
-        const err = try std.mem.concat(arena, u8, &.{ pool.out, "/", rel, ".stderr" });
+        const base = try std.mem.concat(arena, u8, &.{ pool.out, "/", rel });
+        const txt = try std.mem.concat(arena, u8, &.{ base, ".txt" });
+        const err = try std.mem.concat(arena, u8, &.{ base, ".stderr" });
         try Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(txt).?);
+        const includes: []const []const u8 = &.{ options.fixture_root, std.fs.path.dirname(src).? };
 
         const code: u32 = code: {
             const out_file = try Io.Dir.cwd().createFile(io, txt, .{});
@@ -116,12 +136,115 @@ const Pool = struct {
                 .unknown => |u| u,
             };
         };
-        const out_file = try Io.Dir.cwd().openFile(io, txt, .{ .mode = .read_write });
-        defer out_file.close(io);
-        var line: [32]u8 = undefined;
-        try out_file.writePositionalAll(io, try std.mem.print(&line, "exit={d}\n", .{code}), try out_file.length(io));
+        try save(io, arena, txt, try arena.print("{s}exit={d}\n", .{ try readAll(io, arena, txt), code }));
+        try save(io, arena, err, try readAll(io, arena, err));
+
+        const source = try readAll(io, arena, src);
+        if (std.mem.endsWith(u8, rel, ".v")) {
+            const text = program(arena, io, src, includes, source) catch |e| try arena.print("error={t}\n", .{e});
+            return save(io, arena, try std.mem.concat(arena, u8, &.{ base, ".program.txt" }), text);
+        }
+        if (harness.hasDirective(source)) {
+            const text = runner(pool.gpa, arena, src, includes, source) catch |e| try arena.print("error={t}\n", .{e});
+            try save(io, arena, try std.mem.concat(arena, u8, &.{ base, ".runner.txt" }), text);
+        }
+        const so = try std.mem.concat(arena, u8, &.{ base, ".so" });
+        if (soTree(pool.gpa, io, arena, src, includes, source, so)) |_| {
+            for (try fileList(arena, io, so)) |p| {
+                const path = try std.fs.path.join(arena, &.{ so, p });
+                try save(io, arena, path, try readAll(io, arena, path));
+            }
+        } else |e| try save(io, arena, try std.mem.concat(arena, u8, &.{ so, ".error.txt" }), try arena.print("error={t}\n", .{e}));
     }
 };
+
+fn readAll(io: Io, arena: Allocator, path: []const u8) ![]u8 {
+    return Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited);
+}
+
+/// Writes `text` to `path` with the checkout's root cut out (`unrooted`).
+fn save(io: Io, arena: Allocator, path: []const u8, text: []const u8) !void {
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = try unrooted(arena, text) });
+}
+
+/// The runner `vera --emit-exe` renders for a `//!` fixture, from the inputs
+/// the fixture suite gives it (`torture.zig`'s `runAndCheck`): display on, the
+/// directives' SPICE text and discipline resolution, the shape cards compiled
+/// in, the contract checks on.
+fn runner(gpa: Allocator, arena: Allocator, src: []const u8, includes: []const []const u8, source: []const u8) ![]const u8 {
+    const d = try vera.tb.parse(arena, source);
+    var bag: vera.diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    var opts: vera.Options = .{
+        .file_name = src,
+        .include_dirs = includes,
+        .diags = &bag,
+        .display = if (d.display_record) .record else .emit,
+        .spice_netlist = d.spice,
+        .spice_path = src,
+        .discipline_resolution = d.discipline_resolution,
+    };
+    var result = try vera.compileSourceOpts(gpa, source, .build, opts);
+    defer result.deinit();
+    // §3.4 a shape card is a compile-time value: compile again, as vera does.
+    opts.param_overrides = try vera.tb.shapeOverrides(arena, d, result.lowered);
+    if (opts.param_overrides.len != 0) {
+        bag.deinit(gpa);
+        bag = .init(gpa);
+        const again = try vera.compileSourceOpts(gpa, source, .build, opts);
+        result.deinit();
+        result = again;
+    }
+    var dm = d;
+    dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
+    dm.op_states = try vera.tb.opStates(arena, result.lowered);
+    dm.mem_bytes = vera.tb.memBytes(result.lowered);
+    dm.validate_contract = true;
+    return vera.tb.renderRunner(arena, std.fs.path.stem(src), dm);
+}
+
+/// The tree `vera --emit-so` writes for a `.va` device before `zig` runs
+/// (`orchestrator.writeTree`): `shim.zig`, and the split `device.zig`, `h.zig`
+/// and `u/*.zig`. A split LLVM build's part and chunk shims and the engine
+/// root are written only beside a `zig` child; `driver/shim.zig`'s whole-file
+/// tests pin those.
+fn soTree(gpa: Allocator, io: Io, arena: Allocator, src: []const u8, includes: []const []const u8, source: []const u8, dir: []const u8) !void {
+    var bag: vera.diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    // `.record` is `vera`'s default display (`args.Cli`), not `Options`'.
+    var result = try vera.compileSourceOpts(gpa, source, .build, .{ .file_name = src, .include_dirs = includes, .diags = &bag, .display = .record });
+    defer result.deinit();
+    const device = try result.generateOutput();
+    if (result.device_has_compile_error) return error.CodegenRefused;
+    _ = try vera.orchestrator.writeTree(io, gpa, .{
+        .work_dir = dir,
+        .name = try vera.orchestrator.fileStem(arena, result.mir.name),
+        .optimize = .fast,
+        .backend = .llvm,
+        .modules = &.{},
+    }, device);
+}
+
+/// The executable root `vera --emit-exe` builds for a `.v` design with default
+/// flags (`src/cli/digital.zig`'s `emitDigital`): native, or the interpreter
+/// fallback, whose reason is in its header.
+fn program(arena: Allocator, io: Io, src: []const u8, includes: []const []const u8, source: []const u8) ![]const u8 {
+    var bag: vera.diag.Bag = .init(arena);
+    const opts: digital.Options = .{ .file_name = src, .include_dirs = includes, .io = io };
+    var sink: Io.Writer.Discarding = .init(&.{});
+    var r = try digital.elaborate(arena, source, opts, &bag, &sink.writer);
+    if (bag.failed()) return error.DigitalFailed;
+    const prog = try digital.emit.program(arena, &r, .{
+        .source = source,
+        .file_name = opts.file_name,
+        .include_dirs = opts.include_dirs,
+        .language = opts.language,
+        .lib = opts.lib,
+        .more = opts.more,
+        .search = opts.search,
+    }, .static, .auto);
+    return prog.text;
+}
 
 /// Every `.va` and `.v` under `tests/fixtures`, relative to it.
 fn fixtureList(arena: Allocator, io: Io) ![]const []const u8 {
@@ -144,8 +267,8 @@ fn snapshot(gpa: Allocator, io: Io, arena: Allocator, vera_exe: []const u8, out:
     Io.Dir.cwd().deleteTree(io, out) catch {};
     try Io.Dir.cwd().createDirPath(io, out);
     // Absolute, because each child runs from the repository root.
-    const vera = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, arena);
-    var pool: Pool = .{ .io = io, .gpa = gpa, .vera = vera, .out = out, .rels = try fixtureList(arena, io) };
+    const exe = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, arena);
+    var pool: Pool = .{ .io = io, .gpa = gpa, .vera = exe, .out = out, .rels = try fixtureList(arena, io) };
     const jobs = std.Thread.getCpuCount() catch 1;
     var group: Io.Group = .init;
     var hands: usize = 0;

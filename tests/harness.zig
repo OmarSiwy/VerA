@@ -552,7 +552,7 @@ fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[
 /// must stay that rule: this decides whether a file is collected and `tb.parse`
 /// decides whether it asserts anything, so a disagreement collects a fixture
 /// that then reports nothing.
-fn hasDirective(source: []const u8) bool {
+pub fn hasDirective(source: []const u8) bool {
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
         if (std.mem.startsWith(u8, std.mem.trim(u8, raw, " \t\r"), "//!")) return true;
