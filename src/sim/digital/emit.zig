@@ -1155,12 +1155,12 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     r.scope = d.scope;
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
-        if (d.source == .gate) try bits(self, d.source.gate.ins, d.source.gate.lane);
+        if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
         try self.print("            ", .{});
         try self.store(n.slot, .blocking);
         switch (d.source) {
             .expr => |x| try driverValue(self, x.e, x.slice, n.slot),
-            .gate => |g| try self.print("rt.net.gateValue(.{t}, &b)", .{g.kind}),
+            .gate => |g| try gateLogic(self, g.kind, g.ins.len),
             .bridge, .udp, .mos, .pull => unreachable, // `plainDriver` admits these two
         }
         try self.print(", {f});\n", .{full(nw)});
@@ -1226,6 +1226,40 @@ fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?@import("net.zig").Slice, 
         return self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(net_slot), ctx.width });
     }
     try expr.assigned(self, e, try slotType(self, net_slot));
+}
+
+/// `const w<j>`: bit `lane` (0 without one) of each terminal in `ins`, as
+/// a one-bit value.
+fn planes(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
+    for (ins, 0..) |in, j| {
+        const nt = try expr.natural(self, in);
+        try self.print("            const w{d} = ", .{j});
+        // `selfDetermined` reads a real as a 64-bit integer.
+        if (nt.real or nt.width > 1) try self.print("L.part(", .{});
+        const t = try expr.selfDetermined(self, in);
+        if (t.width > 1) try self.print(", {d}, 1, {d})", .{ lane.?, t.width });
+        try self.print(";\n", .{});
+    }
+}
+
+/// A plain logic gate's output from `planes`' `n` inputs: §7.8.5's tables
+/// for these eight are the §5.1.10 bitwise operators folded from their
+/// identity, which read z as x as the tables do.
+fn gateLogic(self: *Emitter, kind: Ast.GateKind, n: usize) Error!void {
+    const op, const invert = switch (kind) {
+        .g_and, .g_buf => .{ "and", false },
+        .g_nand => .{ "and", true },
+        .g_or => .{ "or", false },
+        .g_nor => .{ "or", true },
+        .g_xor => .{ "xor", false },
+        .g_xnor, .g_not => .{ "xor", true },
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => unreachable, // `plainDriver` admits none
+    };
+    if (invert) try self.print("L.not(", .{});
+    for (0..n) |_| try self.print("L.bitwise(.@\"{s}\", ", .{op});
+    try self.print("L.k({d}, 0)", .{@intFromBool(std.mem.eql(u8, op, "and"))});
+    for (0..n) |j| try self.print(", w{d}, 1)", .{j});
+    if (invert) try self.print(", 1)", .{});
 }
 
 /// `const b`: bit `lane` (0 without one) of each terminal in `ins`, as
