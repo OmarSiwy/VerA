@@ -105,8 +105,6 @@ pub const Design = struct {
     joins: u32 = 0,
     /// `Run.subs.len`: the tasks and functions (§10).
     subs: u32 = 0,
-    /// Some `assign` or `force` (§9.3) can hold a slot.
-    overrides: bool = false,
     /// What a `$dumpvars` (§18) can select; null when the design has none.
     vcd: ?*const vcd.Catalog = null,
     /// §7.9 the nets resolved from their drivers, those drivers, and the
@@ -194,6 +192,10 @@ const late_base: u32 = 3 << 30;
 /// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
 const Layers = struct { assign: ?Range = null, force: ?Range = null };
 const Range = struct { start: u32, end: u32 };
+
+/// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
+/// declares `vera_overrides`.
+const overrides = @hasDecl(@import("root"), "vera_overrides");
 
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
@@ -302,7 +304,7 @@ pub const State = struct {
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
-            .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
+            .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
             .catalog = d.vcd,
             .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
             .nets = try .init(gpa, d.nets, d.drivers, d.udps),
@@ -636,7 +638,7 @@ pub const State = struct {
     /// its own process's (`exec.store`'s guard; an `assign` holds only a
     /// variable, which `compile` ensures).
     inline fn held(self: *const State, slot: u32) bool {
-        if (self.layers.len == 0 or self.overriding) return false;
+        if (!overrides or self.overriding) return false;
         const l = self.layers[slot];
         return l.assign != null or l.force != null;
     }

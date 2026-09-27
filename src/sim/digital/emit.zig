@@ -336,6 +336,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
+    for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
     const seen = try self.arena.alloc(bool, r.code.items.len);
     @memset(seen, false);
     var procs: std.ArrayList(plan.Proc) = .empty;
@@ -414,7 +415,6 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
-    for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
     if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try netTables(self);
     try table(self, "order", order.items);
