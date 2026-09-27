@@ -520,6 +520,9 @@ pub const Code = enum(u16) {
     /// IEEE 1364-2005 §17.1.1.2 C's '-', '+' or ' ' flag on a digital-context
     /// conversion that is not a real one.
     E0827,
+    /// §9.4.3 an analog-context format's field width or precision past
+    /// VerA's limit of 2^30.
+    E0828,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -6047,6 +6050,26 @@ fn infoOf(c: Code) Info {
             \\than read it and print the field as if it were not there. Drop the
             \\flag, or format a real with %e, %f or %g. ('#' outside %e, %f and %g
             \\is E0825.)
+            ,
+        },
+        .E0828 => .{
+            .title = "a format field width or precision past VerA's limit",
+            .lrm = "9.4.3",
+            .explain =
+            \\9.4.3 gives the real conversions "the full formatting capabilities
+            \\available in the C language", and VerA reads a width and a
+            \\precision on every conversion. Neither the clause nor C bounds
+            \\them; a device has to. Its field is composed in a buffer sized at
+            \\compile time from the width and the precision, and its real
+            \\conversion counts digit positions as 32-bit integers, so VerA
+            \\takes a width or precision up to 2^30 (1073741824) in an
+            \\analog-context format, the limit in specification/Vague_Decisions.md
+            \\section 7. A larger one, or one too long to be a number at all, is
+            \\refused here rather than overflow the device's arithmetic.
+            \\
+            \\A field that wide is already a gigabyte of text. Write a smaller
+            \\width or precision. (The digital context writes its padding as it
+            \\goes and takes any width.)
             ,
         },
         .E0817 => .{

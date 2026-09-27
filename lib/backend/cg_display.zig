@@ -104,14 +104,17 @@ const PrintArg = struct {
 
     /// Bytes of per-op scratch the emitted block declares, or null for the
     /// modes that render straight into the print's argument tuple.
+    /// Lowering bounds every width and precision a source writes at 2^30
+    /// (E0828, #45); the sums saturate besides, so no spec can overflow
+    /// them, and a saturated row is E1011's (`fits`).
     fn scratch(self: PrintArg) ?usize {
         const n: ?usize = switch (self.how) {
             .ascii => @sizeOf(i64),
             .pad => 24, // i64's widest decimal (20 chars) plus slack
-            .cint => @max(24, self.spec.w() + 2), // the full zero-filled field
+            .cint => @max(24, self.spec.w() +| 2), // the full zero-filled field
             // The widest `%f` body is a sign, f64's 309 integer digits, the
             // point and the precision; the field can be wider still.
-            .creal => @max(self.spec.w(), self.spec.p(6) + 320) + 8,
+            .creal => @max(self.spec.w(), self.spec.p(6) +| 320) +| 8,
             else => null,
         };
         if (n) |bytes| assert(bytes > 0);
@@ -950,6 +953,8 @@ pub fn translateFormat(
         };
         const width_at = i;
         while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
+        // An overflow saturates; lowering has refused any field past 2^30
+        // (E0828), so only a format it never judged could reach that.
         if (i > width_at)
             spec.width = std.fmt.parseUnsigned(usize, src[width_at..i], 10) catch std.math.maxInt(usize);
         if (i < src.len and src[i] == '.') {

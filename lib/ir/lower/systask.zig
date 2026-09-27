@@ -677,31 +677,49 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 }
 
 /// One conversion `nextConv` found: its letter, lowercased, whether its
-/// flags carried '#', and whether anything (a flag, a width, a precision)
-/// stood between the `%` and the letter.
-const Conv = struct { letter: u8, alt: bool, prefixed: bool = false };
+/// flags carried '#', whether anything (a flag, a width, a precision) stood
+/// between the `%` and the letter, and the larger of its width and
+/// precision (0 when neither is written; saturating).
+const Conv = struct { letter: u8, alt: bool, prefixed: bool = false, field: u64 = 0 };
+
+/// The largest field width or precision an analog-context format may
+/// write (#45; `specification/Vague_Decisions.md` §7): 2^30. The device
+/// kernel `str_kernels.zCReal` indexes digits as i32, the precision plus
+/// f64's 309 integer digits and its rounding position, and `cg_display`
+/// sizes each field's scratch as width + precision + 328 bytes in a u64;
+/// at 2^30 both are exact with room to spare. Past it is E0828.
+const max_format_field: u64 = 1 << 30;
 
 /// §9.4.3 `%[flags][width][.precision]conv`: the next conversion at or after
 /// `i.*`, `%%` included (letter '%'), with `i.*` moved past it; null when
 /// the format ends first. The flags are `str_kernels.zcFlag`'s set, the one
 /// `cg_display` and `zSFormatRt` read, so a flag is never taken for the
-/// letter (#41); of them only '#' is reported, and the width and precision
-/// are skipped unread.
+/// letter (#41); of them only '#' is reported. A digit is read as a digit
+/// before as a flag, so the '0' of `%10d` is part of the width while a
+/// leading '0' (the flag) adds nothing to it.
 fn nextConv(fmt: []const u8, i: *usize) ?Conv {
     const p = std.mem.findScalarPos(u8, fmt, i.*, '%') orelse return null;
     i.* = p + 1;
     var alt = false;
+    var run: u64 = 0; // the number being read: the width, then the precision
+    var field: u64 = 0;
     while (i.* < fmt.len) : (i.* += 1) {
         const c = fmt[i.*];
-        if (str_k.zcFlag(c)) |f| {
+        if (std.ascii.isDigit(c)) {
+            run = run *| 10 +| (c - '0');
+            field = @max(field, run);
+        } else if (c == '.') {
+            run = 0;
+        } else if (str_k.zcFlag(c)) |f| {
             alt = alt or f == str_k.zc_alt;
-        } else if (c != '.' and !std.ascii.isDigit(c)) break;
+            run = 0;
+        } else break;
     }
     if (i.* >= fmt.len) return null;
     const letter = std.ascii.toLower(fmt[i.*]);
     const prefixed = i.* > p + 1;
     i.* += 1;
-    return .{ .letter = letter, .alt = alt, .prefixed = prefixed };
+    return .{ .letter = letter, .alt = alt, .prefixed = prefixed, .field = field };
 }
 
 /// §9.4.3: "for each % character (except %m, %% and %l) ... a corresponding
@@ -804,6 +822,10 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
                 try self.err(tok, .E0826, "a flag, width or precision before the second `%` of `%%`", .{});
                 continue;
             }
+            // #45: source text writes the width and precision, so their
+            // bound is a diagnostic here, never an assert downstream.
+            if (cv.field > max_format_field)
+                try self.err(tok, .E0828, "`%{c}` has a field width or precision past {d}", .{ cv.letter, max_format_field });
             // §9.4.3 grants C's '#' to Table 9-23's real conversions only.
             if (cv.alt and !str_k.zcAltOk(cv.letter))
                 try self.err(tok, .E0825, "`%#{c}`: '#' is C's alternative form, which §9.4.3 grants only to %e, %f and %g", .{cv.letter});
@@ -1391,6 +1413,13 @@ test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neigh
         .{ .src = "analog begin $strobe(\"%5%\"); I(p) <+ V(p); end", .code = .E0826 },
         .{ .src = "analog begin $strobe(\"%-%%d\", 1); I(p) <+ V(p); end", .code = .E0826 },
         .{ .src = "analog begin $strobe(\"%#%\"); I(p) <+ V(p); end", .code = .E0826 },
+        // #45: a width or precision of 2^30 = 1073741824 is the limit
+        // (`max_format_field`); one more, or one that overflows a u64, is
+        // E0828, never the unchecked arithmetic codegen used to reach.
+        .{ .src = "analog begin $strobe(\"%1073741824d|%10.1073741824f\", 1, 1.5); I(p) <+ V(p); end", .code = null },
+        .{ .src = "analog begin $strobe(\"%1073741825d\", 1); I(p) <+ V(p); end", .code = .E0828 },
+        .{ .src = "analog begin $strobe(\"%.1073741825f\", 1.5); I(p) <+ V(p); end", .code = .E0828 },
+        .{ .src = "analog begin $strobe(\"%-099999999999999999999999e\", 1.5); I(p) <+ V(p); end", .code = .E0828 },
         // §9.5.3: `$swrite` writes into a string variable.
         .{ .src = "analog begin $swrite(x, \"a\"); I(p) <+ V(p); end", .code = .E0813 },
         // §9.5.4.2's six conversion codes, and nothing else.
@@ -1427,6 +1456,23 @@ test "§9.4.3 nextConv: C11 7.21.6.1's five flags, '#' included, never read as t
             try std.testing.expectEqual(w.prefixed, got.prefixed);
         }
         try std.testing.expect(nextConv(c.fmt, &i) == null);
+    }
+    // #45: the field is the larger of the width and the precision; a '0'
+    // inside a number is a digit, a leading one the flag; a u64 overflow
+    // saturates.
+    const fields = [_]struct { fmt: []const u8, field: u64 }{
+        .{ .fmt = "%d", .field = 0 },
+        .{ .fmt = "%10d", .field = 10 },
+        .{ .fmt = "%010.3f", .field = 10 },
+        .{ .fmt = "%3.100e", .field = 100 },
+        .{ .fmt = "%.0f", .field = 0 },
+        .{ .fmt = "%-+ 0#7g", .field = 7 },
+        .{ .fmt = "%99999999999999999999999d", .field = std.math.maxInt(u64) },
+    };
+    for (fields) |c| {
+        var i: usize = 0;
+        const got = nextConv(c.fmt, &i) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(c.field, got.field);
     }
     // §9.4.3's count: `%#m` and `%#l` consume nothing, `%#g` one argument.
     try std.testing.expect(!consumes('m') and !consumes('l') and !consumes('%'));
