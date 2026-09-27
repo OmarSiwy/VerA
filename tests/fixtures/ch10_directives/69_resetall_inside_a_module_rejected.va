@@ -10,7 +10,7 @@
 // what 36 and 56 in this directory write.
 //
 // (§10.3 says `default_transition may appear "only outside of module
-// definitions" too, and d10_SPEC.md records why that one is left untested;
+// definitions" too, and tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 records why that one is left untested;
 // §19.6's sentence has no such problem.)
 //
 // E0236 is VerA's code for this rule.

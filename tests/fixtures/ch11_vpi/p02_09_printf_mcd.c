@@ -44,7 +44,7 @@
  * 12.26 reserves channels 1, 2 and 3. The first channel an application can be
  * given is therefore channel 4, whose mcd is 1<<3 = 8, and the second is
  * channel 5, mcd 1<<4 = 16. That is a derivation from two sentences rather than
- * one sentence quoted, and it is flagged as such in SPEC.md; what is beyond
+ * one sentence quoted, and it is flagged as such in tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4; what is beyond
  * argument, and is asserted separately below, is that neither descriptor may
  * collide with the reserved 0x7.
  *
@@ -61,7 +61,7 @@
  *
  * WHEN. cbEndOfCompile: none of this needs a simulation. The design still runs
  * to completion afterwards, so this application's expected stdout transcript
- * has three lines, listed in SPEC.md.
+ * has three lines, listed in tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4.
  */
 
 //! lrm 12.2

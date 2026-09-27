@@ -136,9 +136,9 @@
 //
 //   FAIL ...: `//!` directive: UnknownDirective
 //
-// rather than as the module-item diagnostic its SPEC.md lists. 10-15 each
+// rather than as the module-item diagnostic its tests/fixtures/ch07_mixed_signal/m04_SPEC.md at 8b1514d4 lists. 10-15 each
 // carried one until it was deleted from all six; this file never did. The
-// MANIFEST records the same defect in ten `.v` files ("an invented mechanism
+// tests/fixtures/MANIFEST.md at 8b1514d4 records the same defect in ten `.v` files ("an invented mechanism
 // written to look like a checked one"). `timescale` in the SOURCE — a
 // `` `timescale `` compiler directive, §10.2 — is a separate thing from a `//!`
 // tag. This file carries one (1ns/1ns, as 10-15 do) so that the `#1` and `#39`

@@ -80,7 +80,7 @@
 // THE TWO `//! noise` LINES BELOW CARRY `rtol=1e-3`, for the same reason the
 // `CHECKR`s do. Both densities are proportional to `id`, and `id` moves by up
 // to 6.81e-4 relative depending on which k/q set §9.15 leaves the implementation
-// free to pick. SPEC.md's directive grammar defaults numeric fields to 1e-12
+// free to pick. tests/fixtures/ch04_expressions/a06_SPEC.md at 8b1514d4's directive grammar defaults numeric fields to 1e-12
 // relative, which is right for `a06_psd_white_flicker_export.va` (pure `P_K`
 // arithmetic, no $vt in the path) and WRONG here: at 1e-12 an implementation
 // using Annex D.2's own default constants would fail this fixture, which is

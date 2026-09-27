@@ -108,7 +108,7 @@ you read.
 
 B and C count citations without executing fixtures. It is not a conformance score:
 XFAILs and implementation-limit rejections can supply citations, and a clause
-can contain multiple untested rules. See \`docs/CONFORMANCE.md\`.
+can contain multiple untested rules. See \`docs/CLAUSE-AUDIT.md\`.
 EOF
 )"
 

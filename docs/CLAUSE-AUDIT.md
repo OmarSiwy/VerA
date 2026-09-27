@@ -3,6 +3,11 @@
 Owner: Q01 in [the implementation plan](../../ARPice/docs/verilog-ams-conformance-plan.md).
 Status: **open**. This document is the inventory, not the result.
 
+Citations below of a `COVERAGE.md`, a `*_SPEC.md`, `tests/fixtures/MANIFEST.md`,
+`docs/CONFORMANCE.md`, `docs/PLAN.md` or a `docs/conformance-*.md` name files
+removed from the tree. Read them at git revision `8b1514d4`
+(`git show 8b1514d4:<path>`). Their open items are in `docs/ROADMAP.md`.
+
 This is an audit artifact. It records what was checked, against what, and with
 what evidence. It does not change the compiler and it does not close anything.
 Where it disagrees with another document in this repository, the disagreement is
@@ -18,7 +23,7 @@ files, 477 of which assert that the compiler *refuses* something.
 ## Provenance — read this before quoting any number below
 
 Incremental source/evidence review, 2026-09-23: the new inherited task/math,
-scope and VCD reports linked from `CONFORMANCE.md` supersede affected historical
+scope and VCD reports (`docs/conformance-ieee-*.md`) supersede affected historical
 claims. Rows17.7-01/-02 and17.11-01 are corrected below; the old aggregate
 status tallies are historical and have **not** been recomputed as an atomic
 measure B. In particular, a previously verified label contradicted by a new
@@ -56,7 +61,7 @@ dated separately.**
 |---|---|---|
 | §1 measured baseline | **re-measured at HEAD** | 2026-09-21 |
 | §2 classification vocabulary | unchanged; definitions, not measurements | 2026-09-16 |
-| §3 `COVERAGE.md` reconciliation | **NOT re-derived.** Its counts are against 1301 fixtures and 22 `COVERAGE.md` files totalling 3694 lines; the tree now has 1558 and 4174. Treat every count in §3 as stale | 2026-09-16 |
+| §3 `COVERAGE.md` reconciliation | **removed** with the per-chapter `COVERAGE.md` files; both are at git revision `8b1514d4` | — |
 | §4 obligation inventory | **fully re-derived at HEAD**, row by row | 2026-09-21 |
 | §5 separation of obligation kinds | §5.4 and §5.6 corrected; §5.1–§5.3, §5.5 unchanged | mixed, marked per table |
 | §6 rejection-fixture audit | **NOT re-derived.** Its 452-of-1301 is now 477-of-1558 | 2026-09-16 |
@@ -135,7 +140,6 @@ Work it in this order; each part is independently completable.
 |---|---|---|
 | [1](#1-measured-baseline) | What was actually run, and what did it say? | done, dated below |
 | [2](#2-classification-vocabulary) | What do the seven verdicts mean here? | done |
-| [3](#3-coveragemd-reconciliation) | Which `COVERAGE.md` claims are stale or contradicted? | done for counts and for every claim reachable from the source; row-level clause re-reads remain |
 | [4](#4-inherited-ieee-1364-1718-obligation-inventory) | The inherited system-task and VCD obligations, one row each | drafted; needs an IEEE 1364-2005 copy to confirm subclause numbering |
 | [5](#5-separation-of-obligation-kinds) | Resource limit vs unspecified vs implementation-defined vs optional vs mandatory | done for the cases the source actually contains |
 | [6](#6-rejection-fixture-audit) | Which rejections are "illegal source" and which are "legal but unsupported"? | done at the diagnostic level; per-fixture re-reads listed |
@@ -271,126 +275,6 @@ they are not verdicts on a clause but properties of this implementation:
 A rule of application, used throughout: **"the compiler refuses it" is never
 `verified`.** It is `missing` if the construct is legal, or `verified` on the
 *prohibition* if the construct is illegal — and those two are different rows.
-
----
-
-## 3. `COVERAGE.md` reconciliation
-
-> **NOT re-derived at HEAD — this section is 2026-09-16.** It counts 22
-> `COVERAGE.md` files totalling 3694 lines against 1301 fixtures; the tree now
-> has 22 files totalling **4174** lines against **1558** fixtures. Every count
-> below is stale, and the §7.3 worklist items that act on it (1–4) are re-scoped
-> accordingly. The *claims* it settles about compiler behaviour were checked
-> against the source and mostly still hold; the §4 re-derivation found four that
-> no longer do and they are named in §7.3 item 12.
-
-22 `COVERAGE.md` files, 3694 lines. Every numeric inventory claim was recounted
-against the directory. Every claim about compiler behavior that the source can
-settle was checked against the source.
-
-### 3.1 Stale inventory counts
-
-Measured with `ls *.va | wc -l` and `grep -l '^//! reject' *.va | wc -l`.
-
-| File | Claim | Measured | Verdict |
-|---|---|---|---|
-| `ch01_intro/COVERAGE.md:13` | "25 `.va` files: 8 reject, 17 run" | 27 files, 8 reject, 19 run | **stale** — `lrm_1_2.va`, `lrm_1_3.va` are unmentioned anywhere in the file |
-| `ch02_lexical/COVERAGE.md:9` | "Sixty-three `.va` files. Thirty-four carry a `//! reject` arm, twenty-nine run" | 64 files, 35 reject, 29 run | **stale** — and 21 fixtures, all rejections, are named nowhere in the file (list below) |
-| `ch04_expressions/COVERAGE.md:4` | "149 `.va` fixtures, of which 52 are `//! reject`, 97 run and assert" | 172 files, 53 reject, 119 run | **badly stale** — 24 fixtures unmentioned, including whole feature groups (below) |
-| `ch05_analog_behavior/COVERAGE.md:4` | "123 `.va` fixtures, of which 33 are `//! reject`, 90 run and assert" | 124 files, 33 reject, 91 run | **stale** — 7 fixtures unmentioned |
-| `annex_e_spice/COVERAGE.md:274` | "Forty-one files, all mapped above" | 43 files | **stale** — `spice_digit_names.va` and `spice_keyword_names.va` are absent from the fixture-name audit list (both *are* named in table rows above it) |
-| `annex_e_spice/COVERAGE.md:290-292` | "Thirty-two fixtures carry `//! bias` … six `//! solve` … **None carries `//! temp`**" | 34 bias, 8 solve, **1 temp** (`spice_name_shadow.va`) | **stale, and the `temp` claim is used as an argument** — the sentence justifies the `resistor` tc1/tc2 gap by the absence of `//! temp`, and a `//! temp` fixture exists |
-
-All 17 other `COVERAGE.md` inventory claims recount correctly:
-`annex_a` 44/14/30, `annex_b` 27/24/3, `annex_c` 31/22/9, `annex_d` 27/6/21,
-`annex_f` 11/4/7, `annex_g` 23/14/9, `annex_h` 9/0/9, `ch03` 133/58/75,
-`ch06` 97/31/66, `ch07` 50/29/21, `ch08` 30/10/20, `ch09` 207/53/154,
-`ch10` 50, `ch11` 27/2/25, `ch12` 38/35/3, `combined` 22/0/22,
-`exhaustive` 45/0/45.
-
-`annex_e_spice/COVERAGE.md:16-18` pre-emptively warns "Counts elsewhere in this
-file may still be stale; the ROWS say what is true." That warning is accurate
-and should be read as a defect, not as a disclaimer that discharges one.
-
-#### Fixtures named nowhere in their chapter's `COVERAGE.md`
-
-`ch04_expressions` (24) — the significant ones are whole groups, not strays:
-
-- noise topology: `148_white_noise_topology.va`, `149_flicker_noise_topology.va`,
-  `150_noise_source_through_variable.va`, `160_noise_kinds_in_ternary.va`,
-  `161_partially_correlated_noise.va`, `lrm_4_6_4_3.va`, `lrm_4_6_4_5.va`
-- Laplace / Z-transform: `151_laplace_zd_dc_gain.va`, `152_laplace_np_dc_gain.va`,
-  `153_laplace_nd_dc_gain.va`, `154_laplace_zp_lrm_example.va`,
-  `155_zi_dc_gains.va`, `156_zi_sampling_period.va`
-- numeric edges: `157_punctured_divisor_accepted.va`, `157_shift_negative_count.va`,
-  `158_ddx_unprobed_flow_is_zero.va`, `158_pow_even_exponent_accepted.va`,
-  `158_pow_negative_base_runtime_exponent.va`,
-  `159_hypot_fmod_extreme_magnitude.va`, `180_pow_parameter_derivative.va`
-- other: `120_operator_in_case_rejected.va`, `157_function_local_parameter_shadow.va`,
-  `159_operator_missing_mandatory_argument.va`, `lrm_4_7_2.va`
-
-Direction of the error matters: for §4.6.4 and §4.5.11/§4.5.12 the doc
-**understates** — evidence exists that the doc does not credit. For the header
-count it **overstates** internal consistency. Both are defects, but the fix is
-different: the first is a table edit, the second is a recount.
-
-`ch02_lexical` (21), all rejection fixtures:
-`05_xz_integer_rejected`, `14_real_leading_dot_rejected`,
-`15_real_trailing_dot_rejected`, `16_real_dot_exponent_rejected`,
-`24_question_digit_rejected`, `25_base_sign_between_base_and_digits_rejected`,
-`41_base_apostrophe_whitespace_rejected`, `42_decimal_xz_multidigit_rejected`,
-`43_real_leading_dot_exponent_rejected`, `44_real_leading_dot_scale_rejected`,
-`45_real_trailing_dot_scale_rejected`, `46_scale_factor_whitespace_rejected`,
-`49_illegal_base_letter_rejected`, `50_hex_without_base_rejected`,
-`56_scale_factor_alphabet_rejected`, `57_real_underscore_after_dot_rejected`,
-`58_exponent_and_scale_factor_rejected`, `61_long_digits_truncate`,
-`62_wide_literal_backend_boundary`, `63_unknown_decimal_backend_boundary`,
-`64_leading_zero_size_rejected`.
-(Several *are* referenced by number only — "`25` (sign between base and digits)"
-at `ch02_lexical/COVERAGE.md:28` — which is why they do not grep. That is a
-readability defect rather than a coverage one, but it defeats the mechanical
-cross-check the file elsewhere relies on.)
-
-`ch05_analog_behavior` (7): `absdelay_short_delay.va`,
-`event_cross_param_direction.va`, `inductor_dc_short.va`,
-`jump_in_function_binds_function_loop.va`,
-`jump_in_function_outside_loop_invalid.va`, `lrm_5_6_8_2.va`,
-`static_switch_elision.va`.
-
-### 3.2 Claims contradicted by the source or by the suite
-
-| Claim | Where | What the evidence says |
-|---|---|---|
-| "`06` does not compile" | `ch09_system_tasks/COVERAGE.md:37` (row `s9.4.4`) | `06_display_formats.va` is not a `//! reject` fixture, carries 4 `CHECK` macros, and is inside the 1301/1301 strict pass. It compiles and asserts. The same `COVERAGE.md` says so twice, at rows `s9.4.3` and `s9.5.3`. **Self-contradictory; the `s9.4.4` half is stale.** |
-| `s9.4.1` credits `04_display_monitor.va` for the `$monitor` row without qualification | `ch09_system_tasks/COVERAGE.md:34` | §9.4.1 requires `$monitor` to display **only when an argument changed value compared with the last accepted step**. `src/backend/codegen.zig:5562-5572` puts `$monitor` in the same `void_tasks` list as `$display`, and `src/backend/codegen.zig:2863-2872` emits every display task into the per-accepted-point display unit unconditionally. There is no change-detection state anywhere in `src/backend/`. The fixture pins an argument value, which a `$display` would also satisfy. **`$monitor` semantics are `missing`; the row reads as covered.** |
-| `s9.4.1` credits `05_display_debug.va` in the same list | `ch09_system_tasks/COVERAGE.md:34` | §9.4.1: "`$debug` … displays its arguments **for each iteration of the analog solver**." `$debug` is in the same `void_tasks` list and the same accepted-point unit. Its defining difference from `$strobe` is not implemented. The `s9.4.6` row is honest about this ("no fixture"); the `s9.4.1` row is not. |
-| ch07 `s7-3-2` credits `case_equality.va` (E0323) as "the strongest coverage in the chapter" | `ch07_mixed_signal/COVERAGE.md:49` | §7.3.2 (`docs/ch7-mixed-signal.html`) lists the case equality operator `===`, the case inequality operator `!==`, and the `case`/`casex`/`casez` statements as **features Verilog-AMS supports in the analog context**, with a worked `a2d` example using `===` four times. The `// error` lines in the clause's `converter` example are the x/z *literal and value* lines, not the operators. Refusing `===` is over-rejection of legal AMS source. See 6.2. |
-| `annex_e_spice` E.3.2.2 | `annex_e_spice/COVERAGE.md:216-224` | Already self-classified as "PARTLY implemented without one, which is the worse of the two states". **Correct, and adopted here as `implemented-without-evidence`.** Kept as the template for how a row should read. |
-| `docs/CONFORMANCE-GAPS.md:44-46` host numbers ("295 unit tests", "494/616", "370 unit tests") | — | Not verifiable from this worktree; they describe ARPice. Flagged as **unverifiable-here**, not as wrong. They must carry the command and date that produced them or be moved to the repository that can re-run them. |
-| `docs/CONFORMANCE-GAPS.md:44` "**1,301/1,301 strict fixtures pass**" | — | The number is correct (§1). The surrounding bullet lists it beside "VerA build, 370 unit tests", which invites sourcing it from `zig build test`, where it does not come from. Add the command. |
-
-### 3.3 Claims checked and found accurate
-
-Recorded so they are not re-litigated:
-
-- `ch10_directives/COVERAGE.md:13-18` — `` `default_discipline ``/`` `default_transition ``
-  parsed and consumed, and the five 1364 directives accepted-and-ignored. Confirmed
-  at `src/frontend/preprocessor.zig:205-214` (`.ignored` for `default_nettype`,
-  `celldefine`, `endcelldefine`, `unconnected_drive`, `nounconnected_drive`) and
-  `:1095-1096` for the two that are applied.
-- `ch11_vpi/COVERAGE.md:61-66` — "These results do not assess conformity of the
-  standard C API, its object model or callbacks." Accurate and correctly scoped.
-- `ch09_system_tasks/COVERAGE.md:51` (`s9.5.6`) — `$fflush` "is genuinely a no-op
-  and says so". Confirmed: `src/backend/file_kernels.zig:384-389`, every write is
-  positional and unbuffered, so there is no buffer to flush.
-- `ch09_system_tasks/COVERAGE.md:42` (`s9.5.1`) — descriptor bit encodings.
-  Confirmed at `src/backend/file_kernels.zig:130-133` (mcd `1 << (k+1)`, fd
-  `(1<<31) | (k+3)`) and the mcd fan-out on write at `:193-203`; `zfSlot` at `:161-170` documents that the lowest set bit above bit 0 names the channel for every single-channel operation.
-- `annex_c_analog_subset/COVERAGE.md:13-15` — "Annex C defines the optional
-  Verilog-A subset, not VerA's full-AMS target. Rejection of a legal AMS construct
-  records an implementation gap, not conformance." This is the correct framing and
-  every other chapter should adopt it verbatim. One place in the **compiler** still
-  does not: see 6.2.
 
 ---
 
@@ -733,7 +617,7 @@ grammar (Annex A), not in G.
 | `$ferror` errno values | C errno where an obvious match exists | yes, `file_kernels.zig:139-151` | deliberately **not** asserted — correct, §9.5.7 fixes no value |
 | `$stop` implemented as print-and-exit-0 in a batch artifact | print-and-exit | yes, `cg_display.zig:249`, with the upgrade path named | yes, `174_stop_terminates.va` — but the test pins the *simplification*, not the clause |
 | Table E.1 primitive Behavior for `diode`/`bjt`/`mosfet`/`jfet`/`mesfet`/`tline` | E.2 makes these "implementation dependent" | yes, in each `primitive_*.va` header | port order and parameter names only, correctly |
-| Table E.1 `inductor` row printed as `I = l * integral(V)` where physics divides | fixture uses `l = 1`, the one value where both readings agree | yes, `annex_e_spice/COVERAGE.md` | declines to decide — correct |
+| Table E.1 `inductor` row printed as `I = l * integral(V)` where physics divides | fixture uses `l = 1`, the one value where both readings agree | yes, `annex_e_spice/primitive_inductor.va:26-33` | declines to decide — correct |
 | SPICE flavor read by `src/frontend/spice_cards.zig` | one flavor, `.MODEL`/`.SUBCKT` | partly | E.1.1's antecedent is made true for one flavor; the flavor is not named in a support statement |
 
 Gap: there is no single published list of implementation-defined choices. Q04
@@ -1035,16 +919,16 @@ implementation still produce the same coverage report** (§7.3 item 9).
 
 ### 7.3 Immediate worklist, cheapest first
 
-**Walked at HEAD 2026-09-21.** Items 1–4 act on §3, which was not re-derived, so
-their targets moved; each says how. Items 10–12 are new and come from the §4
+**Walked at HEAD 2026-09-21.** Items 1–4 acted on §3 and the `COVERAGE.md`
+files, which are removed; they are closed. Items 10–12 are new and come from the §4
 re-derivation.
 
 | # | Item | State at HEAD |
 |---|---|---|
-| 1 | **Recount five `COVERAGE.md` headers** (§3.1) and add the unmentioned fixtures to their chapter tables | **open, re-scoped.** The "52 unmentioned fixtures" was against 1301; the tree is 1558 and the 22 `COVERAGE.md` files grew 3694 → 4174 lines. The count must be retaken before the work is done, not after |
-| 2 | **Fix `ch09_system_tasks/COVERAGE.md:37`** — "`06` does not compile" is false | **open, citation dead.** That file was rewritten since 2026-09-16 and `:37` is now other text. The underlying claim is still worth fixing; find it by content, not line |
-| 3 | **Qualify the `$monitor` and `$debug` credits** at `ch09_system_tasks/COVERAGE.md:34` | **open, re-scoped.** 17.1-12 is no longer `missing` — it is `implemented-without-evidence` in analog and `verified` in digital. 17.1-14 `$debug` is still `missing`. The qualification is now *narrower* than the item asks for |
-| 4 | **Fix `annex_e_spice/COVERAGE.md:274,290-292`** — "43 not 41 files" | **open, both numbers stale.** The directory holds **56** `.va` files at HEAD. The `//! temp` argument the item raises is unaffected and still stands |
+| 1 | ~~**Recount five `COVERAGE.md` headers** (§3.1) and add the unmentioned fixtures to their chapter tables~~ | **closed**: the file it edits was removed (at `8b1514d4`) |
+| 2 | ~~**Fix `ch09_system_tasks/COVERAGE.md:37`** — "`06` does not compile" is false~~ | **closed**: the file it edits was removed (at `8b1514d4`) |
+| 3 | ~~**Qualify the `$monitor` and `$debug` credits** at `ch09_system_tasks/COVERAGE.md:34`~~ | **closed**: the file it edits was removed (at `8b1514d4`) |
+| 4 | ~~**Fix `annex_e_spice/COVERAGE.md:274,290-292`** — "43 not 41 files"~~ | **closed**: the file it edits was removed (at `8b1514d4`) |
 | 5 | **Rename the seven `annex_c_analog_subset/*_rejected.va`** whose constructs are legal AMS (§6.3) to `_unsupported` | **open, not started.** 16 `_rejected.va` and **0** `_unsupported.va` in that directory at HEAD |
 | 6 | **Add the three missing resource-limit fixtures** (§5.4) | **partly done, and the list grew to four.** `s01_13_long_record_is_not_truncated.va` covers the long input line and the long formatted string — both bounds also moved 512 → 4096. Still open: two instances opening files, 31-channel exhaustion, and the newly-enumerated white-space window |
 | 7 | **E0323, the stale analog-subset exemption inside the compiler** (§6.2) | **open, now named in measure A.** `lib/ir/lower.zig:8120`. It is XFAIL `annex_a_syntax/66_case_equality_in_analog.va` — "§7.3.2 lists both case operators as supported there". D-track work; recording it is this document's job and it is recorded |
@@ -1062,8 +946,7 @@ re-derivation.
 - **No `.zig` source was modified, and no fixture was added, renamed or deleted** —
   by either pass. Release v0.0.2 changes no code; `ROADMAP.md §4` scopes it that
   way deliberately.
-- **§3 and §6 were not re-derived at HEAD.** Both carry a banner saying so. §3's
-  counts are against 1301 fixtures and 3694 lines of `COVERAGE.md`; §6's
+- **§6 was not re-derived at HEAD.** It carries a banner saying so. Its
   population is 452 rejection fixtures of 1301, now 477 of 1558.
 - **The `.v`, `.c` and `.sp` populations were outside measure A when §4 was
   re-derived, and release v0.0.3 changed that.** See §1.1 b′ for the new shape.

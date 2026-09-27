@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.6.20 contribs: the class carries `-> flow — bool: vpiFlow`, so the object
 // model distinguishes a flow contribution from a potential one. Every other
 // contribution in this chapter is `I(...) <+`, which can only ever make that

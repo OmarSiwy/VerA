@@ -1,6 +1,6 @@
 // VCD-ORACLE-001: this retained golden is an implementation snapshot.
 // Compare semantic checkpoints/values, not arbitrary IDs, layout or ordering;
-// retain metadata independently. See docs/conformance-vcd-review.md.
+// retain metadata independently. See docs/conformance-vcd-review.md at 8b1514d4.
 //
 // The checkpoint half of the inherited §18.1 VCD task family: $dumpoff,
 // $dumpon and $dumpall. 11_vcd_dumpvars.v pins the file format; this file pins
@@ -52,7 +52,7 @@
 // The same CONVENTION as 11_vcd_dumpvars.v applies: identifier codes assigned
 // from `!` in $var declaration order, and $date/$version/$comment deleted and
 // the $timescale body stripped of whitespace before comparison, by the
-// token-based normaliser in SPEC.md (a line-oriented `sed` range mis-deletes
+// token-based normaliser in tests/fixtures/ch09_system_tasks/d09_SPEC.md at 8b1514d4 (a line-oriented `sed` range mis-deletes
 // when `$date … $end` lands on a single line).
 //
 //! inherited IEEE 1364-2005 18.1 ($dumpoff, $dumpon, $dumpall)

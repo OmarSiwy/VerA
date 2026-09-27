@@ -20,7 +20,7 @@
 // primitives) would be the same test with a different identifier, because the
 // convention lives entirely in identifier TEXT that no parser interprets — the
 // same reason connect_generated_split_name was deleted. They are recorded in
-// COVERAGE.md, not written as fixtures.
+// tests/fixtures/ch07_mixed_signal/COVERAGE.md at 8b1514d4, not written as fixtures.
 //
 // THE VERDICT RESTS ON THE GENERATED NAME. `a__gate_instance__in1` names no
 // parameter of the elaborated design — E0907 — because there is no auto-

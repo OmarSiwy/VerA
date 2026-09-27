@@ -85,7 +85,7 @@
 //! emitted device does `@import("contract")` itself, so `contract` has to be a
 //! dependency of the `device` module, not only of `root`. Writing both `--dep`
 //! flags before `-Mroot` — as an earlier revision of this header and of
-//! SPEC.md did — gives `root` two dependencies and `device` none, and the
+//! tests/fixtures/ch04_expressions/a04_SPEC.md at 8b1514d4 did — gives `root` two dependencies and `device` none, and the
 //! build dies with
 //!
 //!     /tmp/a04_rollback.zig:7:26: error: no module named 'contract'

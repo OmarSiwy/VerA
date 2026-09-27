@@ -29,7 +29,7 @@
 // small-vs-large is observable only through `%v` (missing,
 // docs/CLAUSE-AUDIT.md row 17.1-07) or through a switch primitive (D08).
 // The three trireg columns therefore pin only that the strengths are LEGAL and
-// change no stored value. See SPEC.md, "Deliberately NOT covered".
+// change no stored value. See tests/fixtures/ieee1364/07_gate_switch_level/d03_SPEC.md at 8b1514d4, "Deliberately NOT covered".
 //
 //! lrm annex A.2.1.3
 //! lrm annex A.2.2.2

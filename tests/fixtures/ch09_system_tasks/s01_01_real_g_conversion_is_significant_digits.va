@@ -19,7 +19,7 @@
 // hold. An implementation that follows the printed example is following the
 // LRM, so a fixture asserting the C reading of an EXPLICIT precision field
 // would fail a conforming tool. Those two rows are therefore withdrawn; see
-// the WITHDRAWN note at the bottom and SPEC.md.
+// the WITHDRAWN note at the bottom and tests/fixtures/ch09_system_tasks/s01_SPEC.md at 8b1514d4.
 //
 // WHAT SURVIVES: `%g` WITH NO PRECISION FIELD. There the contradiction does not
 // arise — there is no digit for the example to reinterpret — and the answer is
@@ -82,7 +82,7 @@
 // preference: (a) an Accellera erratum or a later LRM revision correcting the
 // "three (3) fractional digits" example; (b) the IEEE 1364-2005 §17.1.1.2 text
 // landing in docs/, if it states the C `%g` precision rule without the gloss —
-// it is not in the offline set today, the same reason SPEC.md gives for not
+// it is not in the offline set today, the same reason tests/fixtures/ch09_system_tasks/s01_SPEC.md at 8b1514d4 gives for not
 // writing the `%v` strength spellings from memory. Until one of those happens,
 // VerA's `1234.568` for `%.3g` is the reading the LRM prints and this row does
 // not object to it.

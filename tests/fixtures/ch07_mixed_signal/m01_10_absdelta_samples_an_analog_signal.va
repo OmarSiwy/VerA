@@ -62,7 +62,7 @@
 // CLAIM 1'S BOUND IS ONE STEP, NOT ZERO, AND THAT IS AN M02 DEPENDENCY.
 // Asserting `tracked == V(e_in)` to float slack would additionally assert that a
 // value written by a digital `always` is visible to the analog block at the SAME
-// instant — the zero-delay A2D/D2A boundary question that this row's SPEC.md
+// instant — the zero-delay A2D/D2A boundary question that this row's tests/fixtures/ch07_mixed_signal/m01_SPEC.md at 8b1514d4
 // explicitly defers to M02. Until M02 settles it, the honest bound is one
 // reported step (0.5) plus window (0.1). A tool that treated delta = 0 as "no
 // events" leaves `tracked` at the §3.2 default 0.0 and still fails from t = 10n

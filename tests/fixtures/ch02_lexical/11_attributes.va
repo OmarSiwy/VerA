@@ -5,7 +5,7 @@
 // `conductance` still holds the §2.6.2 scaled literal `1m` = 1e-3 after four
 // attributes were attached to it, and the module still conducts. Missing
 // metadata/report observations are tracked in AMS-ATTR-DESC-HELP,
-// AMS-ATTR-OP-YES and AMS-ATTR-MULT-NONE (docs/rules/ams-attributes.json).
+// AMS-ATTR-OP-YES and AMS-ATTR-MULT-NONE, open in docs/ROADMAP.md.
 //! lrm 2.9
 //! lrm 3.4.3
 `include "check.vh"

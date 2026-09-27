@@ -22,7 +22,7 @@
 // §6.5.7.1 narrows. No row owns that claim now. It can come back only if
 // (a) 1364-2005 clause 12 is added to `docs/`, AND (b) someone resolves the
 // conflict with §6.5.7.1 in favour of the base standard — a fixture cannot
-// assume that resolution. See SPEC.md.
+// assume that resolution. See tests/fixtures/ieee1364/07_gate_switch_level/d03_SPEC.md at 8b1514d4.
 //
 // NOT asserted here: that a mismatched connection is DIAGNOSED. §6.5.7.1 states
 // a constraint on legal source and names no diagnostic, and the inherited
