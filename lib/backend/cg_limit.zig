@@ -201,12 +201,6 @@ fn readsRoot(g: *const Gen) bool {
     return false;
 }
 
-/// Does the `$limit` family evaluate the core ANYWHERE — so the file needs
-/// `R`? Only when a clamp reads an argument live; a setup root is a field.
-pub fn needsR(g: *const Gen) bool {
-    return usesCore(g);
-}
-
 pub fn emit(g: *Gen) Error!void {
     if (g.diags) |bag| for (g.limits.declined) |d| {
         var b = bag.build(.codegen, .W0853, g.lowered.tokenSpan(d.tok));
@@ -247,9 +241,11 @@ pub fn emit(g: *Gen) Error!void {
         \\/// other derived, exactly ngspice's MOS ladder (emitLadder).
         \\
     , .{});
-    try g.w("pub fn limit({s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64) contract.LimitResult(n_u) {{\n", .{
+    try g.w("pub fn limit(comptime {s}: type, {s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64, {s}: contract.SimState) contract.LimitResult(n_u) {{\n", .{
+        if (needs_core) "S" else "_",
         if (needs_core or readsParam(g)) "model" else "_",
         if (reads_inst) "inst" else "_",
+        if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     // §9.17.3 leaves the return value to the simulator, and ngspice's loads
@@ -257,9 +253,7 @@ pub fn emit(g: *Gen) Error!void {
     // fetlims against the `von` stored at :535). So the core that computes
     // the arguments runs at `old`, the previous iterate's limited point.
     if (needs_core) try g.w(
-        \\    var xr: [n_u]R = undefined;
-        \\    for (old, 0..) |xv, i| xr[i] = R.con(xv);
-        \\    const m = core(R, xr, model, {s}{s});
+        \\    const m = core(S, zVals(S, &old), model, {s}, sim{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
     try g.w("    var x = cur;\n", .{});
@@ -546,11 +540,11 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     const k = g.core.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
-    // a Dual — no `.v` to read.
+    // a family value — no `.val()` to read.
     if (g.an.vty[i] == .int)
         try g.w("m.f{d}", .{k})
     else
-        try g.w("m.f{d}.v", .{k});
+        try g.w("m.f{d}.val()", .{k});
 }
 
 /// SPICE `MODEINITJCT`. Newton started at 0 V on a junction sees no current
@@ -581,15 +575,16 @@ fn emitSeed(g: *Gen) Error!void {
         \\/// re-imposes every source constraint over them.
         \\
     , .{});
-    try g.w("pub fn seed({s}: *const Model, {s}: *const Instance) [n_u]?f64 {{\n", .{
+    try g.w("pub fn seed(comptime {s}: type, {s}: *const Model, {s}: *const Instance, {s}: contract.SimState) [n_u]?f64 {{\n", .{
+        if (needs_core) "S" else "_",
         if (needs_core or readsParam(g)) "model" else "_",
         if (reads_inst) "inst" else "_",
+        if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     if (needs_core) try g.w(
-        \\    var xr: [n_u]R = undefined;
-        \\    for (&xr) |*p| p.* = R.con(0.0);
-        \\    const m = core(R, xr, model, {s}{s});
+        \\    const xr: [n_u]zOf(S, 0) = @splat(S.con(0.0));
+        \\    const m = core(S, xr, model, {s}, sim{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
     try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
@@ -648,15 +643,16 @@ fn emitSeedTree(g: *Gen) Error!void {
         \\/// image, and every lane written here is in `limit_writes`.
         \\
     , .{});
-    try g.w("pub fn seed({s}: *const Model, {s}: *const Instance) [n_u]?f64 {{\n", .{
+    try g.w("pub fn seed(comptime {s}: type, {s}: *const Model, {s}: *const Instance, {s}: contract.SimState) [n_u]?f64 {{\n", .{
+        if (needs_core) "S" else "_",
         if (needs_core or reads_param) "model" else "_",
         if (needs_core or reads_root) "inst" else "_",
+        if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     if (needs_core) try g.w(
-        \\    var xr: [n_u]R = undefined;
-        \\    for (&xr) |*p| p.* = R.con(0.0);
-        \\    const m = core(R, xr, model, {s}{s});
+        \\    const xr: [n_u]zOf(S, 0) = @splat(S.con(0.0));
+        \\    const m = core(S, xr, model, {s}, sim{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
     try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});

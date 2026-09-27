@@ -52,7 +52,7 @@ pub const math_txt =
     \\fn zMin(comptime S: type, a: S, b: S) S { return a.lt(b).sel(a, b); }
     \\fn zMax(comptime S: type, a: S, b: S) S { return b.lt(a).sel(a, b); }
     \\
-    \\/// Device-routed f64 transcendentals for the SCALAR paths (`R`, the
+    \\/// Device-routed f64 transcendentals for the SCALAR paths (the
     \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
     \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
     \\/// those targets have no libm — `@exp`/`@log` on an f64 die at PTX
@@ -304,30 +304,27 @@ pub const domain_report_txt =
     \\
 ;
 
-/// Contract ABI 5 family preview (`codegen/family.zig`), emitted after
-/// `ops_txt` in a device built with `Options.family`: the helpers every body
-/// and kernel call site reaches a family through. `zdr` is the device's
-/// `deriv_reads` — declared by `family_dev_txt` in device.zig and by the
-/// `h.zig` head — so a mask never names a lane the host was not asked for.
+/// The scalar-family helpers (`codegen/family.zig`), emitted after `ops_txt`:
+/// what every body and kernel call site reaches a family through. `zdr` is
+/// the device's `deriv_reads`, declared by `family_dev_txt` in device.zig and
+/// by the `h.zig` head, so a mask never names a lane the host was not asked
+/// for.
 pub const family_txt =
-    \\// ---- contract ABI 5 family preview ----
+    \\// ---- the scalar family (`contract.family_fns`) ----
     \\//
-    \\// `S` is a family (`contract.family_fns`) or an ABI 4 scalar. A real is
-    \\// typed `zOf(S, m)`, `m` the unknowns it may depend on; on an ABI 4
-    \\// scalar every helper here is the identity, so one text serves both.
+    \\// A real is typed `zOf(S, m)`, `m` the unknowns it may depend on.
     \\
     \\fn zOf(comptime S: type, comptime m: u64) type {
     \\    @setEvalBranchQuota(1_000_000);
-    \\    return if (@hasDecl(S, "Of")) S.Of(m & zdr) else S;
+    \\    return S.Of(m & zdr);
     \\}
     \\/// `a` widened to `zOf(S, m)`: a compile error when `a` carries a lane
     \\/// `m` does not name.
     \\fn zTo(comptime S: type, comptime m: u64, a: anytype) zOf(S, m) {
-    \\    return if (comptime @hasDecl(S, "Of")) a.to(m & zdr) else a;
+    \\    return a.to(m & zdr);
     \\}
     \\/// A body's hoisted real slots, one mask each.
     \\fn zSlots(comptime S: type, comptime ms: []const u64) type {
-    \\    if (!@hasDecl(S, "Of")) return [ms.len]S;
     \\    @setEvalBranchQuota(1_000_000);
     \\    var ts: [ms.len]type = undefined;
     \\    for (ms, &ts) |m, *t| t.* = zOf(S, m);
@@ -339,13 +336,12 @@ pub const family_txt =
     \\/// §4.3.1 "abs(x) is equivalent to (x > 0) x : -x": a family carries no
     \\/// `abs`, so the conditional is spelled here.
     \\fn zAbs(comptime S: type, a: anytype) @TypeOf(a) {
-    \\    return if (comptime @hasDecl(S, "Of")) S.sel(S.con(0.0).lt(a), a, a.neg()) else a.abs();
+    \\    return S.sel(S.con(0.0).lt(a), a, a.neg());
     \\}
-    \\/// `zOf(S, m)` as one ABI 4 scalar, for the kernels above, which are
+    \\/// `zOf(S, m)` as one scalar type, for the kernels above, which are
     \\/// written against one: every operation of the kernel runs at mask `m`.
     \\/// min, max, abs and the slew clamps are §4.3.1's conditionals.
     \\fn zL(comptime S: type, comptime m: u64) type {
-    \\    if (!@hasDecl(S, "Of")) return S;
     \\    return struct {
     \\        v: zOf(S, m),
     \\        const T = @This();
@@ -384,44 +380,45 @@ pub const family_txt =
     \\    };
     \\}
     \\fn zLw(comptime S: type, comptime m: u64, a: anytype) zL(S, m) {
-    \\    return if (comptime @hasDecl(S, "Of")) .{ .v = zTo(S, m, a) } else a;
+    \\    return .{ .v = zTo(S, m, a) };
     \\}
     \\fn zLu(comptime S: type, comptime m: u64, a: zL(S, m)) zOf(S, m) {
-    \\    return if (comptime @hasDecl(S, "Of")) a.v else a;
+    \\    return a.v;
     \\}
     \\
     \\
 ;
 
-/// device.zig's half of the family preview: `zdr`, the rows and charge sites
-/// as a family returns them, and the probes `abi5`'s entries seed.
+/// device.zig's half of the family helpers: `zdr`, a row as the family
+/// returns it, and the unknowns an entry point hands its core.
 pub const family_dev_txt =
     \\const zdr = contract.derivReads(Self);
-    \\fn zRows(comptime S: type) type {
-    \\    return if (@hasDecl(S, "Of")) contract.Rows(Self, S) else [n_u]S;
-    \\}
-    \\fn zSites(comptime S: type) type {
-    \\    return if (@hasDecl(S, "Of")) contract.Sites(Self, S) else [contract.nQ(Self)]S;
-    \\}
     \\fn zRow(comptime S: type, comptime r: U, a: anytype) zOf(S, contract.rowMask(Self, @intFromEnum(r))) {
     \\    return zTo(S, contract.rowMask(Self, @intFromEnum(r)), a);
     \\}
-    \\fn zRowsZero(comptime S: type) zRows(S) {
-    \\    var r: zRows(S) = undefined;
+    \\fn zRowsZero(comptime S: type) contract.Rows(Self, S) {
+    \\    var r: contract.Rows(Self, S) = undefined;
     \\    inline for (0..n_u) |u| r[u] = zTo(S, contract.rowMask(Self, u), S.con(0.0));
     \\    return r;
     \\}
-    \\/// The unknowns as `abi5`'s entries read them: a probe for each lane the
-    \\/// device reads, a constant for every other.
+    \\/// The unknowns as an entry point's core reads them: a probe for each
+    \\/// lane the device reads, a constant for every other.
     \\fn zX(comptime S: type) type {
     \\    @setEvalBranchQuota(1_000_000);
     \\    var ts: [n_u]type = undefined;
-    \\    for (&ts, 0..) |*t, u| t.* = zOf(S, @as(u64, 1) << u);
+    \\    for (&ts, 0..) |*t, u| t.* = zOf(S, if (u < 64) @as(u64, 1) << u else ~@as(u64, 0));
     \\    return @Tuple(&ts);
     \\}
     \\fn zProbe(comptime S: type, x: *const [n_u]f64) zX(S) {
     \\    var p: zX(S) = undefined;
-    \\    inline for (0..n_u) |u| p[u] = if (comptime (zdr >> u) & 1 != 0) S.probe(u, x[u]) else S.con(x[u]);
+    \\    inline for (0..n_u) |u| p[u] = if (comptime u >= 64 or (zdr >> u) & 1 != 0) S.probe(u, x[u]) else S.con(x[u]);
+    \\    return p;
+    \\}
+    \\/// The unknowns as values only, for the entry points that read the core
+    \\/// without lanes.
+    \\fn zVals(comptime S: type, x: *const [n_u]f64) [n_u]zOf(S, 0) {
+    \\    var p: [n_u]zOf(S, 0) = undefined;
+    \\    for (&p, x) |*o, v| o.* = S.con(v);
     \\    return p;
     \\}
     \\
@@ -870,7 +867,6 @@ pub const prelude_head_txt =
     \\const Model = dev.Model;
     \\const Instance = dev.Instance;
     \\const InstancePtr = contract.InstancePtr(dev);
-    \\const AnalysisKind = dev.AnalysisKind;
     \\const n_u = contract.nU(dev);
     \\
 ;
@@ -965,50 +961,3 @@ pub const display_txt =
     \\
 ;
 
-/// Plain-f64 instantiation of the scalar interface. `updateState` has to run a
-/// unit body on the accepted solution, where derivatives are meaningless.
-pub const rscalar_txt =
-    \\/// Value-only scalar: `updateState` runs unit bodies on the accepted
-    \\/// solution, where no derivative is wanted.
-    \\const R = struct {
-    \\    v: f64,
-    \\    const T = @This();
-    \\    pub fn con(c: f64) T { return .{ .v = c }; }
-    \\    pub fn val(a: T) f64 { return a.v; }
-    \\    pub fn ddxAt(_: T, _: usize) f64 { return 0.0; }
-    \\    pub fn add(a: T, b: T) T { return .{ .v = a.v + b.v }; }
-    \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
-    \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
-    \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
-    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v / b.v }; }
-    \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * c }; }
-    \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
-    \\    // Transcendentals via zDev* (math_txt): this type also compiles in
-    \\    // the GPU StateKernel, where the raw builtins have no libcall. The
-    \\    // host branch of each IS the builtin — host output is unchanged.
-    \\    pub fn exp(a: T) T { return .{ .v = zDevExp(a.v) }; }
-    \\    pub fn log(a: T) T { return .{ .v = zDevLog(a.v) }; }
-    \\    pub fn expm1(a: T) T { return .{ .v = zDevExpm1(a.v) }; }
-    \\    pub fn log1p(a: T) T { return .{ .v = std.math.log1p(a.v) }; }
-    \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
-    \\    pub fn sin(a: T) T { return .{ .v = zDevSin(a.v) }; }
-    \\    pub fn cos(a: T) T { return .{ .v = zDevCos(a.v) }; }
-    \\    pub fn tanh(a: T) T { return .{ .v = zDevTanh(a.v) }; }
-    \\    pub fn sinh(a: T) T { return .{ .v = zDevSinh(a.v) }; }
-    \\    pub fn cosh(a: T) T { return .{ .v = zDevCosh(a.v) }; }
-    \\    pub fn atan(a: T) T { return .{ .v = zDevAtan(a.v) }; }
-    \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
-    \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, c) }; }
-    \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, c) }; }
-    \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
-    \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
-    \\    pub fn pow(a: T, c: f64) T { return .{ .v = zDevPow(a.v, c) }; }
-    \\    // Contract masks and select (see contract.zig's S notes).
-    \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
-    \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
-    \\    pub fn eq(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v == b.v)) }; }
-    \\    pub fn sel(c: T, a: T, b: T) T { return .{ .v = if (c.v != 0.0) a.v else b.v }; }
-    \\};
-    \\
-    \\
-;

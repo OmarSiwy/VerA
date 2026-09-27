@@ -68,14 +68,14 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // §3.4.5 localparam is re-derived even with no `//! param` line, since the
     // point of `derive` is also that a localparam is not overridable.
     try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
         \\    shapeCheck(&model);
         \\
         \\    var inst: D.Instance = .{};
         \\
     );
     try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
-    try print(&out, arena, "    inst.analysis_kind = .{t};\n", .{d.analysis});
+    try print(&out, arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     // §2.8.3/§12.32: this testbench IS a host, so it answers for the device's
     // unresolved `$name`s like any other. It binds `no_vpi_app` rather than
     // being exempt from `validateHost` — an exemption for the tool's own host is
@@ -206,7 +206,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                     .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
                 );
             }
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
             // §6.3.4 again: the hoisted prep derives from the swept card too.
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm, &inst);\n");
@@ -257,19 +257,19 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // and answers with its DC form (§4.5.4 the initial condition,
             // §4.5.11 the filter's DC gain).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
-            try print(&out, arena, "        inst.abstime = {f};\n        inst.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
+            try print(&out, arena, "        sim_state.t = {f};\n        sim_state.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
             // Both are written at every point, never left over from the last
             // one: the guard codegen emits reads the field as it stands when
             // `eval`/`display` runs, so a stale `true` would fire the body a
             // second time.
-            try print(&out, arena, "        inst.is_initial_step = {};\n        inst.is_final_step = {};\n", .{
+            try print(&out, arena, "        sim_state.initial_step = {};\n        sim_state.final_step = {};\n", .{
                 k == 0 and (per_block or n == 0),
                 k + 1 == d.times.len and (per_block or n + 1 == points.len),
             });
             // §5.2.1 `analog initial` is re-executed per SUB-TASK, which in this
             // runner is one point of the sweep: the first time step of every
             // block, whether or not that block is the first of the analysis.
-            // That is the one place it differs from `is_initial_step` above, and
+            // That is the one place it differs from `initial_step` above, and
             // the difference is only visible under `//! psweep` — where the
             // clause's "if a parameter ... is changed during a sub-task ... the
             // analog initial block shall be re-executed" is exactly the case.
@@ -279,7 +279,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // came in as a constraint row — and everything else is now the
             // number the device's own equations put there.
             try print(&out, arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
-            try print(&out, arena, "        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
+            try print(&out, arena, "        point({d}, &x, &{s}, &inst);\n", .{ n, mdl });
             // §4.6.4.1/.2 the PSD is a function of the BIAS, so unlike the
             // topology it cannot be printed once beside the comptime table.
             // The first point is the one a fixture states: it is the only
@@ -404,7 +404,7 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
         \\
         \\    // §9.17.3 the cold start a host writes into its limited image.
         \\    {
-        \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(&model, &inst) else @splat(null);
+        \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(Val, &model, &inst, sim_state) else @splat(null);
         \\        var want: [n_u]?f64 = @splat(null);
         \\
     );
@@ -434,7 +434,7 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
             \\            if (comptime !@hasDecl(D, "limit")) {{
             \\                std.debug.print("limit[{d}] got=none want=limit ok=0\n", .{{}});
             \\            }} else {{
-            \\                const r = D.limit(&{s}, &inst, x, old);
+            \\                const r = D.limit(Val, &{s}, &inst, x, old, sim_state);
             \\
         , .{ k, mdl });
         for (c.want) |b| {
@@ -532,10 +532,10 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     for (d.waves, 0..) |wv, k|
         try print(&out, arena, "        set(a.x, a.forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
-        \\        a.inst.abstime = t;
-        \\        a.inst.dt = dt;
-        \\        a.inst.is_initial_step = first;
-        \\        a.inst.is_final_step = last;
+        \\        sim_state.t = t;
+        \\        sim_state.dt = dt;
+        \\        sim_state.initial_step = first;
+        \\        sim_state.final_step = last;
         \\        a.inst.is_analog_initial = first;
         \\        a.solved = solve(a.x, a.forced, a.model, a.inst);
         \\        a.t = t;
@@ -543,7 +543,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
         \\    pub fn finish(a: *Analog) !void {
         \\        a.flush();
-        \\        point(a.n.*, a.x, a.t, a.model, a.inst);
+        \\        point(a.n.*, a.x, a.model, a.inst);
         \\        stepPost(a.model, a.inst, a.x, a.state, a.solved);
         \\        // §7.3.6.4: what the accepted solution left in each held variable.
         \\        inline for (a2d_ports, 0..) |p, i| {
@@ -641,13 +641,13 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         });
     }
     try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
         \\    shapeCheck(&model);
         \\    var inst: D.Instance = .{};
         \\
     );
     try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
-    try print(&out, arena, "    inst.analysis_kind = .{t};\n", .{d.analysis});
+    try print(&out, arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
@@ -671,7 +671,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
                 try print(&out, arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{ std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v) });
                 try print(&out, arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
             }
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
         }
         try print(&out, arena,
@@ -752,14 +752,14 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         });
     }
     try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(&g_model);
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &g_model);
         \\    shapeCheck(&g_model);
         \\    g_inst = .{};
         \\
     );
     try print(&out, arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
-        \\    g_inst.analysis_kind = @enumFromInt(kind);
+        \\    sim_state = .{ .kind = @enumFromInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
         \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model, &g_inst);
@@ -784,10 +784,10 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     for (d.waves, 0..) |wv, k|
         try print(&out, arena, "    set(&g_x, &g_forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
-        \\    g_inst.abstime = t;
-        \\    g_inst.dt = dt;
-        \\    g_inst.is_initial_step = first;
-        \\    g_inst.is_final_step = last;
+        \\    sim_state.t = t;
+        \\    sim_state.dt = dt;
+        \\    sim_state.initial_step = first;
+        \\    sim_state.final_step = last;
         \\    g_inst.is_analog_initial = first;
         \\    g_solved = solve(&g_x, &g_forced, &g_model, &g_inst);
         \\    return g_solved;
@@ -919,7 +919,7 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"noisePsd\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try print(out, arena, "            const psd = D.noisePsd(x, &{s}, &inst);\n", .{mdl});
+    try print(out, arena, "            const psd = D.noisePsd(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
     for (d.noise, 0..) |w, k| {
         if (!w.needsPoint()) continue;
         try print(out, arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
@@ -1029,7 +1029,7 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"acStim\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try print(out, arena, "            const stim = D.acStim(x, &{s}, &inst);\n", .{mdl});
+    try print(out, arena, "            const stim = D.acStim(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
     for (d.acstim, 0..) |w, k| {
         if (!w.needsPoint()) continue;
         try print(out, arena, "            if (comptime D.ac_gens.len > {d}) {{\n", .{k});

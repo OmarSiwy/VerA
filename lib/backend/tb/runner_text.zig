@@ -1,4 +1,4 @@
-//! The runner's fixed text: the Newton solver and the `@Vector(NL, f64)` lanes it drives.
+//! The runner's fixed text: the Newton solver and the differential gates it runs at every point.
 //!
 //! Zig source text, a template emitted into every generated testbench. Nothing here runs in the
 //! compiler.
@@ -138,135 +138,38 @@ pub const runner_body =
     \\    for (&l, 0..) |*e, u| e.* = u;
     \\    break :blk l;
     \\};
+    \\/// The value family of the value-only entry points (`updateState`,
+    \\/// `noisePsd`, `limit`, `seed`, `collapse`, `derive`, the iteration hooks).
+    \\const Val = contract.LegacyValue;
     \\
-    \\/// Value-form batch scalar: NL operating points per eval call, one per
-    \\/// lane. Only instantiated for a device that declared `lane_clean` —
-    \\/// codegen's promise that nothing in eval/q steers on a `.val()` of an
-    \\/// x-dependent value, which is what makes `val` returning lane 0 safe:
-    \\/// on a lane-clean device it is only ever called on lane-uniform values.
-    \\/// Per lane it computes `Dual`'s values: `contract.RefFamily`'s division
-    \\/// and its §4.3.1 spellings of min, max and abs.
-    \\const NL = 4;
-    \\const VF = @Vector(NL, f64);
-    \\const Vec = struct {
-    \\    v: VF,
-    \\    const T = @This();
-    \\    fn map1(a: T, comptime f: anytype) T { // std.math fns are generic
-    \\        var r: VF = undefined;
-    \\        inline for (0..NL) |i| r[i] = f(a.v[i]);
-    \\        return .{ .v = r };
-    \\    }
-    \\    pub fn con(c: f64) T { return .{ .v = @splat(c) }; }
-    \\    pub fn val(a: T) f64 { return a.v[0]; }
-    \\    pub fn ddxAt(_: T, _: usize) f64 { return 0.0; }
-    \\    pub fn add(a: T, b: T) T { return .{ .v = a.v + b.v }; }
-    \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
-    \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
-    \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
-    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v * (ones / b.v) }; }
-    \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * @as(VF, @splat(c)) }; }
-    \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + @as(VF, @splat(c)) }; }
-    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
-    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
-    \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
-    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
-    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
-    \\    pub fn abs(a: T) T { return .{ .v = @select(f64, a.v > zeros, a.v, -a.v) }; }
-    \\    pub fn expm1(a: T) T { return map1(a, std.math.expm1); }
-    \\    pub fn log1p(a: T) T { return map1(a, std.math.log1p); }
-    \\    pub fn tanh(a: T) T { return map1(a, std.math.tanh); }
-    \\    pub fn sinh(a: T) T { return map1(a, std.math.sinh); }
-    \\    pub fn cosh(a: T) T { return map1(a, std.math.cosh); }
-    \\    pub fn atan(a: T) T { return map1(a, std.math.atan); }
-    \\    pub fn minC(a: T, c: f64) T { const k: VF = @splat(c); return .{ .v = @select(f64, k < a.v, k, a.v) }; }
-    \\    pub fn maxC(a: T, c: f64) T { const k: VF = @splat(c); return .{ .v = @select(f64, a.v < k, k, a.v) }; }
-    \\    pub fn min(a: T, b: T) T { return .{ .v = @select(f64, a.v < b.v, a.v, b.v) }; }
-    \\    pub fn max(a: T, b: T) T { return .{ .v = @select(f64, a.v > b.v, a.v, b.v) }; }
-    \\    pub fn pow(a: T, c: f64) T {
-    \\        var r: VF = undefined;
-    \\        inline for (0..NL) |i| r[i] = std.math.pow(f64, a.v[i], c);
-    \\        return .{ .v = r };
-    \\    }
-    \\    const ones: VF = @splat(1.0);
-    \\    const zeros: VF = @splat(0.0);
-    \\    pub fn lt(a: T, b: T) T { return .{ .v = @select(f64, a.v < b.v, ones, zeros) }; }
-    \\    pub fn le(a: T, b: T) T { return .{ .v = @select(f64, a.v <= b.v, ones, zeros) }; }
-    \\    pub fn eq(a: T, b: T) T { return .{ .v = @select(f64, a.v == b.v, ones, zeros) }; }
-    \\    pub fn sel(c: T, a: T, b: T) T { return .{ .v = @select(f64, c.v != zeros, a.v, b.v) }; }
-    \\};
-    \\
-    \\comptime { // pinned to the contract's list, so a new primitive cannot miss one
-    \\    contract.checkScalar(Dual);
-    \\    contract.checkScalar(Vec);
+    \\comptime {
+    \\    contract.checkFamily(Dual);
+    \\    contract.checkFamily(Val);
     \\}
     \\
-    \\/// The batch differential gate (ref/SIMD-Strategies T8): one vector eval
-    \\/// over NL perturbed copies of the operating point must agree with NL
-    \\/// scalar evals, lane by lane. Bit equality is the expectation — the same
-    \\/// IEEE ops run in the same order per lane — with a 1e-12 relative escape
-    \\/// for a vectorizer that contracts differently than the scalar pipeline.
-    \\/// Prints nothing on success, so transcripts never move; a mismatch is a
-    \\/// loud failure of the run.
-    \\fn laneCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime !(@hasDecl(D, "lane_clean") and D.lane_clean)) return;
-    \\    var xs: [NL][n_u]f64 = undefined;
-    \\    var xv: [n_u]Vec = undefined;
-    \\    for (0..NL) |k| {
-    \\        const s = 1.0 + 1.0e-3 * @as(f64, @floatFromInt(k));
-    \\        for (0..n_u) |i| xs[k][i] = x[i] * s + 1.0e-3 * @as(f64, @floatFromInt(k));
-    \\    }
-    \\    for (0..n_u) |i| {
-    \\        // Through an array: a vector index must be comptime-known.
-    \\        var lanes: [NL]f64 = undefined;
-    \\        for (0..NL) |k| lanes[k] = xs[k][i];
-    \\        xv[i] = .{ .v = lanes };
-    \\    }
-    \\    const rv = D.eval(Vec, xv, model, inst, t);
-    \\    for (0..NL) |k| {
-    \\        var xd: [n_u]Dual = undefined;
-    \\        for (0..n_u) |i| {
-    \\            xd[i] = .{ .v = xs[k][i] };
-    \\            xd[i].d[i] = 1.0;
-    \\        }
-    \\        const rs = D.eval(Dual, xd, model, inst, t);
-    \\        for (0..n_u) |i| {
-    \\            const lanes: [NL]f64 = rv[i].v;
-    \\            laneAssert("res", i, k, lanes[k], rs[i].v);
-    \\        }
-    \\    }
-    \\    if (comptime @hasDecl(D, "q")) {
-    \\        const qv = qRowsOf(Vec, xv, model, inst, t);
-    \\        for (0..NL) |k| {
-    \\            var xd: [n_u]Dual = undefined;
-    \\            for (0..n_u) |i| xd[i] = .{ .v = xs[k][i] };
-    \\            const qs = qRowsOf(Dual, xd, model, inst, t);
-    \\            for (0..n_u) |i| {
-    \\                const lanes: [NL]f64 = qv[i].v;
-    \\                laneAssert("q", i, k, lanes[k], qs[i].v);
-    \\            }
-    \\        }
-    \\    }
-    \\}
+    \\/// The analysis in force, as every entry point reads it.
+    \\var sim_state: contract.SimState = .{};
     \\
     \\/// The fused differential gate: `evalQ` shares ONE core call between the
     \\/// two halves, so it must return exactly what the separate `eval` and `q`
     \\/// return. Same ops, same order, same core — bit equality, no epsilon.
     \\/// A mismatch means the shared-core hoist changed the physics, which is
     \\/// the only way this refactor can be wrong.
-    \\fn fusedCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\fn fusedCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    if (comptime !@hasDecl(D, "evalQ")) return;
-    \\    const xd = seed(x);
-    \\    const both = D.evalQ(Dual, xd, model, inst, t);
-    \\    const res = D.eval(Dual, xd, model, inst, t);
-    \\    const qq = D.q(Dual, xd, model, inst, t);
+    \\    const both = D.evalQ(Dual, x, model, inst, sim_state);
+    \\    const both_res: [n_u]Dual = both.res;
+    \\    const both_q: [n_q]Dual = both.q;
+    \\    const res: [n_u]Dual = D.eval(Dual, x, model, inst, sim_state);
+    \\    const qq: [n_q]Dual = D.q(Dual, x, model, inst, sim_state);
     \\    for (0..n_u) |i| {
-    \\        fusedAssert("res", i, both.res[i].v, res[i].v);
-    \\        for (0..n_u) |j| fusedAssert("dres", i, both.res[i].d[j], res[i].d[j]);
+    \\        fusedAssert("res", i, both_res[i].v, res[i].v);
+    \\        for (0..n_u) |j| fusedAssert("dres", i, both_res[i].d[j], res[i].d[j]);
     \\    }
     \\    // §5.6.1.2 one charge per site (`contract.nQ`), compared as sites.
     \\    for (0..n_q) |k| {
-    \\        fusedAssertSite("q", k, both.q[k].v, qq[k].v);
-    \\        for (0..n_u) |j| fusedAssertSite("dq", k, both.q[k].d[j], qq[k].d[j]);
+    \\        fusedAssertSite("q", k, both_q[k].v, qq[k].v);
+    \\        for (0..n_u) |j| fusedAssertSite("dq", k, both_q[k].d[j], qq[k].d[j]);
     \\    }
     \\}
     \\
@@ -277,82 +180,75 @@ pub const runner_body =
     \\/// Jacobian entry, and that is the one way the declaration can be wrong.
     \\/// The converse is legal: the pattern over-approximates on purpose, and a
     \\/// set bit that happens to be zero at this bias costs one stamp.
-    \\fn patternCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    const xd = seed(x);
-    \\    const r = D.eval(Dual, xd, model, inst, t);
+    \\fn patternCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    const r = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
     \\    if (comptime @hasDecl(D, "jac_pattern")) patAssert("res", D.jac_pattern, &r);
     \\    if (comptime @hasDecl(D, "jac_rows")) rowAssert("res", D.jac_rows, &r);
     \\    if (comptime @hasDecl(D, "q")) {
-    \\        const qr = qRowsOf(Dual, xd, model, inst, t);
+    \\        const qr = withConst(Dual, qRowsOf(Dual, x, model, inst), model, true);
     \\        if (comptime @hasDecl(D, "q_pattern")) patAssert("q", D.q_pattern, &qr);
     \\        if (comptime @hasDecl(D, "q_rows")) rowAssert("q", D.q_rows, &qr);
     \\    }
     \\}
     \\
-    \\/// The narrow-lane gate, the one a host relies on when it seeds a Dual only
-    \\/// for `contract.derivReads(D)` and stamps `contract.jacConst(D)` for every
-    \\/// other column. The Jacobian is computed twice at this point:
-    \\///   WIDE    every unknown seeded, as `seed` does;
-    \\///   NARROW  lanes seeded only for deriv_reads, jac_const for the rest;
-    \\/// and the two must agree BIT FOR BIT, value and every partial, eval and q.
-    \\/// A lane this Dual keeps for an unseeded unknown is simply zero, so a
-    \\/// seeded lane runs the same IEEE ops as the wide one and any difference
-    \\/// is the device's claim being wrong — a column it called constant that is
-    \\/// not, or a `ddxAt` it reads without declaring.
-    \\///
-    \\/// ONE ESCAPE, and it is not a tolerance: on a constant column a zero
-    \\/// matches a zero of either sign. jac_const cannot carry a signed zero —
-    \\/// an absent entry is 0 by contract — while the wide Dual writes −0.0
-    \\/// wherever a `neg` meets an empty lane. Every nonzero compares by bits.
+    \\/// The constant-column gate, the one a host relies on when it stamps
+    \\/// `contract.jacConst(D)` for every column outside `contract.derivReads(D)`
+    \\/// (the device reads no lane there). The promise is that such a column
+    \\/// enters every row linearly with the exact coefficient the table states,
+    \\/// so a unit step on it moves each row by that coefficient: checked on
+    \\/// `eval` and on the reactive rows, to the rounding of the rows' own
+    \\/// magnitude. A zero step answer matches an absent entry.
     \\///
     \\/// Run under BOTH collapse settings (`collapse_applied` false, then true),
     \\/// stamping a guarded entry exactly when `contract.jacConstApplies` says a
     \\/// host would: its `Model` flag set and the collapse state it names.
     \\///
-    \\/// Always on, not behind a flag: it is four more evals of a fixture-sized
-    \\/// device, and a gate that has to be asked for is one somebody forgets.
-    \\fn narrowCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    inline for (.{ false, true }) |collapsed| narrowCheckAs(collapsed, x, t, model, inst);
+    \\/// Always on, not behind a flag: a gate that has to be asked for is one
+    \\/// somebody forgets.
+    \\fn narrowCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    inline for (.{ false, true }) |collapsed| narrowCheckAs(collapsed, x, model, inst);
     \\}
     \\
-    \\fn narrowCheckAs(comptime collapsed: bool, x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\fn narrowCheckAs(comptime collapsed: bool, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    const Dl = DualC(collapsed);
-    \\    var wide: [n_u]Dl = undefined;
-    \\    var narrow: [n_u]Dl = undefined;
-    \\    for (0..n_u) |i| {
-    \\        wide[i] = .{ .v = x[i] };
-    \\        wide[i].d[i] = 1.0;
-    \\        narrow[i] = .{ .v = x[i] };
-    \\        if (hasLane(i)) narrow[i].d[i] = 1.0;
+    \\    const r0: [n_u]Dl = D.eval(Dl, x, model, inst, sim_state);
+    \\    const q0: [n_u]Dl = if (comptime @hasDecl(D, "q")) qRowsOf(Dl, x, model, inst) else undefined;
+    \\    for (0..n_u) |c| {
+    \\        if (hasLane(c)) continue;
+    \\        var xs = x.*;
+    \\        xs[c] += 1.0;
+    \\        const r1: [n_u]Dl = D.eval(Dl, &xs, model, inst, sim_state);
+    \\        narrowAssert(Dl, "res", false, model, c, &r0, &r1);
+    \\        if (comptime @hasDecl(D, "q")) {
+    \\            const q1: [n_u]Dl = qRowsOf(Dl, &xs, model, inst);
+    \\            narrowAssert(Dl, "q", true, model, c, &q0, &q1);
+    \\        }
     \\    }
-    \\    narrowAssert(Dl, "res", false, model, &D.eval(Dl, wide, model, inst, t), &D.eval(Dl, narrow, model, inst, t));
-    \\    if (comptime @hasDecl(D, "q"))
-    \\        narrowAssert(Dl, "q", true, model, &qRowsOf(Dl, wide, model, inst, t), &qRowsOf(Dl, narrow, model, inst, t));
     \\}
     \\
-    \\/// The family gate (contract ABI 5 preview). A device built with the family
-    \\/// text also answers `abi5.eval`/`abi5.q` for a sparse family, whose each
-    \\/// real carries only the lanes of the unknowns it may depend on, and those
-    \\/// must be `Dual`'s: every value bit for bit, and every lane `deriv_reads`
-    \\/// names equal, a lane the sparse value does not carry reading as zero.
-    \\/// Two escapes, neither a tolerance: zeros match whatever their sign, and
+    \\/// The family gate. The device's rows on a SPARSE family, whose each value
+    \\/// carries only the lanes of the unknowns it may depend on, must be
+    \\/// `Dual`'s: every value bit for bit, and every lane `deriv_reads` names
+    \\/// equal, a lane the sparse value does not carry reading as zero. Two
+    \\/// escapes, neither a tolerance: zeros match whatever their sign, and
     \\/// `Dual`'s NaN may stand where the sparse value has no lane — a dense
-    \\/// `0·inf` on a lane that is structurally zero. The columns outside
-    \\/// `deriv_reads` are `narrowCheck`'s.
-    \\fn sparseCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime !@hasDecl(D, "abi5")) return;
+    \\/// `0·inf` on a lane that is structurally zero. Above 64 unknowns no mask
+    \\/// names a lane and there is nothing to compare.
+    \\fn sparseCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime n_u > 64) return;
     \\    const Sp = contract.RefFamily(f64, &lane_of, .{ .dense = false });
-    \\    const xd = seed(x);
-    \\    const want = D.eval(Dual, xd, model, inst, t);
-    \\    const got = D.abi5.eval(Sp, x, model, inst, t);
+    \\    const want: [n_u]Dual = D.eval(Dual, x, model, inst, sim_state);
+    \\    const got = D.eval(Sp, x, model, inst, sim_state);
     \\    inline for (0..n_u) |r| sparseAssert("res", u_names[r], got[r], want[r]);
-    \\    if (comptime @hasDecl(D, "q") and @hasDecl(D.abi5, "q")) {
-    \\        const wq = D.q(Dual, xd, model, inst, t);
-    \\        const gq = D.abi5.q(Sp, x, model, inst, t);
+    \\    if (comptime @hasDecl(D, "q")) {
+    \\        const wq: [n_q]Dual = D.q(Dual, x, model, inst, sim_state);
+    \\        const gq = D.q(Sp, x, model, inst, sim_state);
     \\        inline for (0..n_q) |k| sparseAssert("q site", std.fmt.comptimePrint("{d}", .{k}), gq[k], wq[k]);
-    \\        const both = D.abi5.evalQ(Sp, x, model, inst, t);
-    \\        inline for (0..n_u) |r| sparseAssert("evalQ res", u_names[r], both.res[r], want[r]);
-    \\        inline for (0..n_q) |k| sparseAssert("evalQ q site", std.fmt.comptimePrint("{d}", .{k}), both.q[k], wq[k]);
+    \\        if (comptime @hasDecl(D, "evalQ")) {
+    \\            const both = D.evalQ(Sp, x, model, inst, sim_state);
+    \\            inline for (0..n_u) |r| sparseAssert("evalQ res", u_names[r], both.res[r], want[r]);
+    \\            inline for (0..n_q) |k| sparseAssert("evalQ q site", std.fmt.comptimePrint("{d}", .{k}), both.q[k], wq[k]);
+    \\        }
     \\    }
     \\}
     \\
@@ -362,7 +258,7 @@ pub const runner_body =
     \\        std.process.exit(1);
     \\    }
     \\    inline for (0..n_u) |u| {
-    \\        const carried = u < 64 and (@TypeOf(got).mask >> u) & 1 != 0;
+    \\        const carried = (@TypeOf(got).mask >> u) & 1 != 0;
     \\        const g = got.ddxAt(u);
     \\        const w = want.d[u];
     \\        const same = @as(u64, @bitCast(g)) == @as(u64, @bitCast(w)) or (g == 0.0 and w == 0.0) or
@@ -380,29 +276,23 @@ pub const runner_body =
     \\    return u >= 64 or (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
     \\}
     \\
-    \\fn narrowAssert(comptime Dl: type, what: []const u8, react: bool, model: *const D.Model, w: *const [n_u]Dl, nr: *const [n_u]Dl) void {
+    \\/// Column `c`'s unit step moved every row by `r1 - r0`; each must be the
+    \\/// `jac_const` entry a host would stamp (0 when there is none), to the
+    \\/// rounding of the rows' magnitude.
+    \\fn narrowAssert(comptime Dl: type, what: []const u8, react: bool, model: *const D.Model, c: usize, r0: *const [n_u]Dl, r1: *const [n_u]Dl) void {
     \\    for (0..n_u) |i| {
-    \\        if (@as(u64, @bitCast(w[i].v)) != @as(u64, @bitCast(nr[i].v))) {
-    \\            std.debug.print("narrow_check FAIL: {s}[{s}]: wide {e} vs narrow {e}\n", .{ what, u_names[i], w[i].v, nr[i].v });
-    \\            std.process.exit(1);
+    \\        var k: f64 = 0.0;
+    \\        inline for (comptime contract.jacConst(D)) |e| {
+    \\            if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == c and
+    \\                contract.jacConstApplies(D, e, model, Dl.collapse_applied)) k = if (react) e.c else e.g;
     \\        }
-    \\        for (0..n_u) |j| {
-    \\            var k: f64 = nr[i].d[j];
-    \\            if (!hasLane(j)) {
-    \\                k = 0.0;
-    \\                inline for (comptime contract.jacConst(D)) |e| {
-    \\                    if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == j and
-    \\                        contract.jacConstApplies(D, e, model, Dl.collapse_applied)) k = if (react) e.c else e.g;
-    \\                }
-    \\                if (k == 0.0 and w[i].d[j] == 0.0) continue;
-    \\            }
-    \\            if (@as(u64, @bitCast(w[i].d[j])) == @as(u64, @bitCast(k))) continue;
-    \\            std.debug.print("narrow_check FAIL: d{s}[{s}]/dx[{s}]: wide {e} vs narrow {e}{s}{s}\n", .{
-    \\                what, u_names[i], u_names[j], w[i].d[j], k, if (hasLane(j)) "" else " (jac_const)",
-    \\                if (Dl.collapse_applied) " [collapse applied]" else "",
-    \\            });
-    \\            std.process.exit(1);
-    \\        }
+    \\        const moved = r1[i].v - r0[i].v;
+    \\        const tol = 1e-9 * @max(@abs(r0[i].v), @abs(r1[i].v)) + 1e-300;
+    \\        if (@abs(moved - k) <= tol) continue;
+    \\        std.debug.print("narrow_check FAIL: d{s}[{s}]/dx[{s}]: a unit step moves the row by {e}, jac_const says {e}{s}\n", .{
+    \\            what, u_names[i], u_names[c], moved, k, if (Dl.collapse_applied) " [collapse applied]" else "",
+    \\        });
+    \\        std.process.exit(1);
     \\    }
     \\}
     \\
@@ -448,18 +338,20 @@ pub const runner_body =
     \\/// reactive residual's rows through `q_stamps`.
     \\const n_q = contract.nQ(D);
     \\
-    \\fn qRowsOf(comptime Sc: type, x: [n_u]Sc, model: *const D.Model, inst: contract.InstancePtr(D), t: f64) [n_u]Sc {
-    \\    return contract.qRows(D, Sc, D.q(Sc, x, model, inst, t));
+    \\fn qRowsOf(comptime Sc: type, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) [n_u]Sc {
+    \\    return contract.qRows(D, Sc, D.q(Sc, x, model, inst, sim_state));
     \\}
     \\
-    \\/// Bit equality is the expectation — the same IEEE ops run in the same
-    \\/// order per lane — with a 1e-12 relative escape for a vectorizer that
-    \\/// contracts differently than the scalar pipeline.
-    \\fn laneAssert(what: []const u8, i: usize, k: usize, a: f64, b: f64) void {
-    \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
-    \\    if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) return;
-    \\    std.debug.print("lane_check FAIL: {s}[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ what, u_names[i], k, a, b });
-    \\    std.process.exit(1);
+    \\/// The whole local Jacobian a host assembles: the device's lanes on the
+    \\/// columns in `deriv_reads`, `jac_const` on the rest (`g` of `eval`, `c`
+    \\/// of the reactive rows).
+    \\fn withConst(comptime Dl: type, rows: [n_u]Dl, model: *const D.Model, react: bool) [n_u]Dl {
+    \\    var out = rows;
+    \\    inline for (comptime contract.jacConst(D)) |e| {
+    \\        if (contract.jacConstApplies(D, e, model, Dl.collapse_applied))
+    \\            out[@intFromEnum(e.row)].d[@intFromEnum(e.col)] = if (react) e.c else e.g;
+    \\    }
+    \\    return out;
     \\}
     \\
     \\/// §4.5.2 accepted-step bookkeeping. `void` for a module with no stateful
@@ -479,7 +371,7 @@ pub const runner_body =
     \\/// would claim more than it proves.
     \\fn step(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
     \\    if (State == void) return;
-    \\    _ = D.updateState(model, inst, x.*, state);
+    \\    _ = D.updateState(Val, model, inst, x.*, state, sim_state);
     \\}
     \\
     \\/// Iteration history advances independently of accepted-time operators.
@@ -491,7 +383,7 @@ pub const runner_body =
     \\
     \\fn commitCharge(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64) void {
     \\    if (comptime !@hasDecl(D, "q")) return;
-    \\    const qq = qRowsOf(Dual, seed(x), model, inst, inst.abstime);
+    \\    const qq = qRowsOf(Dual, x, model, inst);
     \\    for (0..n_u) |i| q_prev[i] = qq[i].v;
     \\}
     \\
@@ -501,10 +393,10 @@ pub const runner_body =
     \\fn acceptCheck(model: *const D.Model, inst: *const D.Instance, x: *const [n_u]f64, state: *const State) void {
     \\    if (comptime !@hasDecl(D, "acceptQ") or State == void) return;
     \\    var iw = inst.*;
-    \\    const want = D.q(Dual, seed(x), model, &iw, inst.abstime);
+    \\    const want: [n_q]Dual = D.q(Dual, x, model, &iw, sim_state);
     \\    var ic = inst.*;
     \\    var sc = state.*;
-    \\    const got = D.acceptQ(Dual, seed(x), model, &ic, &sc);
+    \\    const got: [n_q]Dual = D.acceptQ(Dual, x, model, &ic, &sc, sim_state);
     \\    for (0..n_q) |i| {
     \\        if (@as(u64, @bitCast(got[i].v)) == @as(u64, @bitCast(want[i].v)) and
     \\            std.mem.eql(u8, std.mem.asBytes(&got[i].d), std.mem.asBytes(&want[i].d))) continue;
@@ -521,22 +413,13 @@ pub const runner_body =
     \\        // read the same evaluated state, even when their inputs depend
     \\        // on one another. These two fields are owned by iteration hooks.
     \\        var next = inst.*;
-    \\        D.advanceIteration(model, &next, x.*);
+    \\        D.advanceIteration(Val, model, &next, x.*, sim_state);
     \\        step(model, inst, x, state);
     \\        if (@hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
     \\        if (@hasField(D.Instance, "newton_iteration")) inst.newton_iteration = next.newton_iteration;
     \\        return;
     \\    };
     \\    step(model, inst, x, state);
-    \\}
-    \\
-    \\fn seed(x: *const [n_u]f64) [n_u]Dual {
-    \\    var out: [n_u]Dual = undefined;
-    \\    for (0..n_u) |i| {
-    \\        out[i] = .{ .v = x[i] };
-    \\        out[i].d[i] = 1.0;
-    \\    }
-    \\    return out;
     \\}
     \\
     \\const u_names = blk: {
@@ -548,37 +431,35 @@ pub const runner_body =
     \\
     \\/// One operating point: the bias, then whatever the model prints, then the
     \\/// residual it stamps and the Jacobian the solver would see.
-    \\fn point(n: usize, x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\fn point(n: usize, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    std.debug.print("--- point {d} ---\n", .{n});
     \\    for (0..n_u) |i| std.debug.print("  x[{s}] = {e:.6}\n", .{ u_names[i], x[i] });
-    \\    if (inst.abstime != 0.0 or inst.dt != 0.0)
-    \\        std.debug.print("  t = {e:.6}  dt = {e:.6}\n", .{ inst.abstime, inst.dt });
+    \\    if (sim_state.t != 0.0 or sim_state.dt != 0.0)
+    \\        std.debug.print("  t = {e:.6}  dt = {e:.6}\n", .{ sim_state.t, sim_state.dt });
     \\
     \\    // §5.10.5 the host's breakpoint hook, when codegen emitted one (only a
     \\    // module with a `timer` has one). Printed OUTSIDE `print_residual`
     \\    // because it is not part of the residual and the fixtures that test it
     \\    // are `print none`; `@hasDecl` keeps every other transcript unchanged.
     \\    if (@hasDecl(D, "nextBreakpoint")) {
-    \\        if (D.nextBreakpoint(model, t)) |bp|
+    \\        if (D.nextBreakpoint(model, sim_state.t)) |bp|
     \\            std.debug.print("  next_bp = {e:.6}\n", .{bp})
     \\        else
     \\            std.debug.print("  next_bp = none\n", .{});
     \\    }
     \\
     \\    // Differential gates — silent on success, fail the run loudly.
-    \\    laneCheck(x, t, model, inst);
-    \\    fusedCheck(x, t, model, inst);
-    \\    patternCheck(x, t, model, inst);
-    \\    narrowCheck(x, t, model, inst);
-    \\    sparseCheck(x, t, model, inst);
+    \\    fusedCheck(x, model, inst);
+    \\    patternCheck(x, model, inst);
+    \\    narrowCheck(x, model, inst);
+    \\    sparseCheck(x, model, inst);
     \\
-    \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
-    \\    if (@hasDecl(D, "display")) D.display(Dual, xd, model, inst, t);
+    \\    if (@hasDecl(D, "display")) D.display(Dual, x, model, inst, sim_state);
     \\    if (!print_residual) return;
     \\
-    \\    const res = D.eval(Dual, xd, model, inst, t);
+    \\    const res = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
     \\    for (0..n_u) |i| {
     \\        std.debug.print("  res[{s}] = {e:.6}\n", .{ u_names[i], res[i].v });
     \\        for (0..n_u) |j| {
@@ -589,7 +470,7 @@ pub const runner_body =
     \\    // §5.6.1.2 the reactive half, when the model has one. Its derivative is
     \\    // the capacitance/inductance matrix the host multiplies by d/dt.
     \\    if (@hasDecl(D, "q")) {
-    \\        const qq = qRowsOf(Dual, xd, model, inst, t);
+    \\        const qq = withConst(Dual, qRowsOf(Dual, x, model, inst), model, true);
     \\        for (0..n_u) |i| {
     \\            if (qq[i].v == 0.0 and allZero(qq[i].d)) continue;
     \\            std.debug.print("  q[{s}] = {e:.6}\n", .{ u_names[i], qq[i].v });
@@ -704,17 +585,16 @@ pub const runner_body =
     \\    var worst_dx: f64 = 0.0;
     \\    var iter: usize = 0;
     \\    while (iter < solve_max_iter) : (iter += 1) {
-    \\        if (@hasDecl(D, "advanceIteration")) if (iter != 0) D.advanceIteration(model, inst, previous);
+    \\        if (@hasDecl(D, "advanceIteration")) if (iter != 0) D.advanceIteration(Val, model, inst, previous, sim_state);
     \\        previous = x.*;
-    \\        const xd = seed(x);
-    \\        var r = D.eval(Dual, xd, model, inst, inst.abstime);
+    \\        var r = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
     \\        // §5.6.1.2 backward Euler — see the header. Value and derivative
     \\        // both, so the capacitance matrix reaches the Jacobian too.
-    \\        if (comptime @hasDecl(D, "q")) if (inst.dt > 0.0) {
-    \\            const qq = qRowsOf(Dual, xd, model, inst, inst.abstime);
+    \\        if (comptime @hasDecl(D, "q")) if (sim_state.dt > 0.0) {
+    \\            const qq = withConst(Dual, qRowsOf(Dual, x, model, inst), model, true);
     \\            for (0..n_u) |i| {
-    \\                r[i].v += (qq[i].v - q_prev[i]) / inst.dt;
-    \\                for (0..n_u) |j| r[i].d[j] += qq[i].d[j] / inst.dt;
+    \\                r[i].v += (qq[i].v - q_prev[i]) / sim_state.dt;
+    \\                for (0..n_u) |j| r[i].d[j] += qq[i].d[j] / sim_state.dt;
     \\            }
     \\        };
     \\        var a: [n_u][n_u]f64 = undefined;
@@ -750,7 +630,7 @@ pub const runner_body =
     \\            }
     \\        }
     \\        for (0..n_u) |i| x[i] += dx[i];
-    \\        const can_converge = if (@hasDecl(D, "checkConvergence")) D.checkConvergence(model, inst, x.*) else true;
+    \\        const can_converge = if (@hasDecl(D, "checkConvergence")) D.checkConvergence(Val, model, inst, x.*, sim_state) else true;
     \\        if (settled and can_converge) return true;
     \\    }
     \\    // A testbench that does not converge must FAIL, loudly and by exit
@@ -884,7 +764,7 @@ pub const vpi_lib_body =
     \\/// output for it, then the accepted-step bookkeeping every §4.5 operator
     \\/// reads its history from.
     \\export fn vera_vpi_accept() callconv(.c) void {
-    \\    if (@hasDecl(D, "display")) D.display(Dual, seed(&g_x), &g_model, &g_inst, g_inst.abstime);
+    \\    if (@hasDecl(D, "display")) D.display(Dual, &g_x, &g_model, &g_inst, sim_state);
     \\    stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved);
     \\}
     \\const n_rows = if (@hasDecl(D, "vpiContribs")) D.vpi_contrib_access.len else 0;
@@ -901,7 +781,7 @@ pub const vpi_lib_body =
     \\/// (2 per row).
     \\export fn vera_vpi_rows(out: [*]f64) callconv(.c) void {
     \\    if (comptime n_rows == 0) return;
-    \\    const v = D.vpiContribs(Dual, seed(&g_x), &g_model, &g_inst);
+    \\    const v = D.vpiContribs(Dual, &g_x, &g_model, &g_inst, sim_state);
     \\    for (v, 0..) |r, k| {
     \\        out[2 * k] = r[0];
     \\        out[2 * k + 1] = r[1];
