@@ -1,14 +1,8 @@
-//! One expression -> one Zig expression over `rt.logic`, for `emit.zig`.
-//!
-//! In: an AST expression in the scope `Emitter.r.scope` names, and the type
-//! its context gives it. Out: Zig text of type `rt.logic.W`, whose value is
-//! what `exec.evalContext` computes for the same expression in the same
-//! context. The walk is `evalContext`'s, arm for arm: which operand is
-//! context-determined, which self-determined and which takes the common type
-//! of a comparison is decided here exactly as there (IEEE 1364-2005 §5.5.1
-//! Table 5-22, §5.5.2), and every constant is folded by `evalContext` itself.
-//!
-//! Clauses: §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
+//! An AST expression in `Emitter.r.scope`, and its context's type -> Zig text
+//! over `rt.logic` whose value is what `exec.evalContext` computes. The walk is
+//! `evalContext`'s arm for arm, so operand sizing and signedness match it, and
+//! `evalContext` itself folds every constant. IEEE 1364-2005 §5.5.1 Table
+//! 5-22, §5.5.2, §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
 //! concatenation, §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -355,7 +349,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     });
                 },
                 // §17.10: `vera` takes no plusargs, so every query is "no
-                // match" — an integer zero, the variable left alone.
+                // match": an integer zero, the variable left alone.
                 .test_plusargs, .value_plusargs => try self.print("L.rs(L.k(0, 0), 32, {d}, {})", .{ w, sg }),
                 // §17.8: `$rtoi` truncates, `$realtobits` is the 64 bits.
                 .rtoi => {

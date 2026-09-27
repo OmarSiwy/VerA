@@ -1,13 +1,9 @@
-//! VAMS §9.22/§9.23 connect-module driver access, and §9.22.6/§7.9
-//! driver-receiver segregation.
-//!
-//! In: the elaborated nets and driver rows of a digital `Run`. Out: at
-//! elaboration, every inserted segment a connect module drives split into its
-//! drivers' net and its receivers' net (`segregate`); at run time the values of
-//! `$driver_count` … `$receiver_count`, and the wake-ups of `driver_update`.
-//!
-//! Clauses: VAMS §7.9, §9.22, §9.22.1–§9.22.6, §9.23, §9.23.1–§9.23.4, Annex
-//! D.3; IEEE 1364-2005 §7.10 (the strength scale §9.22.4 encodes).
+//! The elaborated nets and driver rows of a digital `Run` -> connect-module
+//! driver access. At elaboration, every inserted segment a connect module
+//! drives splits into its drivers' net and its receivers' net (`segregate`);
+//! at run time, the values of `$driver_count` … `$receiver_count` and the
+//! wake-ups of `driver_update`. VAMS §7.9, §9.22.1-§9.22.6, §9.23.1-§9.23.4,
+//! Annex D.3; IEEE 1364-2005 §7.10 (the strength scale §9.22.4 encodes).
 
 const std = @import("std");
 const Front = @import("frontend");
@@ -22,12 +18,11 @@ const Driver = @import("net.zig").Driver;
 const Signal = @import("net.zig").Signal;
 const filled = @import("net.zig").filled;
 
-/// docs/ROADMAP.md §7 item 1, settled 2026-09-24 by the user: `driver_update`
-/// does NOT fire for a connect module's OWN driver of the signal (the
-/// `assign d = out;` of §9.22.6). The reading is §9.22.6's separation of the
-/// two: that driver "will drive the receivers", apart from "the drivers of the
-/// connect module digital port", which are the ordinary drivers §9.22 ¶3's
-/// access functions see. m04_12 pins it: `true` shifts every `updates` by one.
+/// Whether `driver_update` fires for a connect module's own driver of the
+/// signal (the `assign d = out;` of §9.22.6). It does not: §9.22.6 separates
+/// that driver, which "will drive the receivers", from "the drivers of the
+/// connect module digital port", the ordinary drivers §9.22 ¶3's access
+/// functions see (docs/ROADMAP.md §7 item 1). Fixture m04_12 pins it.
 pub const cm_driver_updates = false;
 
 pub const State = struct {
@@ -124,7 +119,7 @@ fn isConnect(r: *const Run, scope: u32) bool {
 }
 
 /// §9.22.1 the `i`'th ordinary driver of `net`, "arbitrarily numbered from 0
-/// to N-1" — here in declaration order — or its count N when `i` is null.
+/// to N-1" (here in declaration order), or its count N when `i` is null.
 fn ordinary(r: *const Run, net: u32, i: ?u64) union(enum) { count: u32, driver: ?u32 } {
     var n: u32 = 0;
     for (r.nets[net].drivers) |d| {
@@ -172,7 +167,7 @@ fn watch(r: *Run, slot: u32, net: u32, reg: bool) Error!void {
 
 /// `exec.store` wrote `slot`. §9.22.5: "an update is defined as the addition
 /// of a new pending value to the driver. This is true whether or not there is
-/// a change in the resolved value of the signal" — so a `reg` driver updates on
+/// a change in the resolved value of the signal", so a `reg` driver updates on
 /// every assignment, changed or not. A nonblocking one already updated when it
 /// was scheduled (`scheduled`), so its maturing in the NBA region is not a
 /// second update.
@@ -193,7 +188,7 @@ pub fn scheduled(r: *Run, slot: u32) Error!void {
     for (r.drv.sources.items) |s| if (s.slot == slot and s.reg) try exec.wake(r, key(s.net), .x, .x);
 }
 
-// ---- the access functions (§9.22.1–§9.22.4, §9.23.1–§9.23.4) ----------------
+// ---- the access functions (§9.22.1 to §9.22.4, §9.23.1 to §9.23.4) ----------------
 
 pub const Fn = enum { count, receiver_count, state, strength, delay, next_state, next_strength, type };
 
@@ -289,7 +284,7 @@ pub fn evalReal(r: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
 const Pend = struct { bit: Int.Bit, time: u64 };
 
 /// The earliest value scheduled onto driver `dr` and not yet active: its own
-/// A.6.1 delayed transition, or — a `reg` driver — a scheduled write of the
+/// A.6.1 delayed transition, or, for a `reg` driver, a scheduled write of the
 /// variable it carries (§9.23's "a non-blocking assign with delays").
 fn pending(r: *Run, a: std.mem.Allocator, di: u32) Error!?Pend {
     const dr = r.drivers[di];
