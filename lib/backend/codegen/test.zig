@@ -137,7 +137,7 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try std.testing.expect(std.mem.indexOf(u8, host, "pub const jac_f32_host = true;") != null);
 }
 
-test "codegen: Options.family types each merge by its unknowns, adds abi5; off, not a byte of it" {
+test "codegen: the family text types each merge by its unknowns" {
     // a = 0, c = 1, b = 2: the `if` merges exp(V(a,c)), lanes {a, c}, with
     // V(b), lane {b}, so the slot both arms write and the field are 0x7.
     const src =
@@ -158,10 +158,7 @@ test "codegen: Options.family types each merge by its unknowns, adds abi5; off, 
     defer v.deinit(std.testing.allocator);
     var fatal = false;
     const a = h.arena_state.allocator();
-    const off = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{})).text;
-    const on = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{ .family = true })).text;
-    for ([_][]const u8{ "abi5", "zOf(", "zTo(", "lane_masks", "zSlots(" }) |s|
-        try std.testing.expect(std.mem.indexOf(u8, off, s) == null);
+    const on = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{})).text;
     for ([_][]const u8{
         "fn d__common__core(comptime S: type, x: anytype, ",
         "    f0: zOf(S, 0x7),\n",
@@ -169,7 +166,7 @@ test "codegen: Options.family types each merge by its unknowns, adds abi5; off, 
         "h[0] = zTo(S, 0x7, x[@intFromEnum(U.b)]);",
         "        .f0 = zTo(S, 0x7, t",
         "res[@intFromEnum(U.a)] = zRow(S, .a, res[@intFromEnum(U.a)].add(c));",
-        "pub const abi5 = struct {",
+        "pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {",
         "pub const lane_masks = [_]contract.LaneUse{",
         "    .{ .mask = 0x7, .uses = ",
     }) |s| if (std.mem.indexOf(u8, on, s) == null) {
@@ -178,18 +175,15 @@ test "codegen: Options.family types each merge by its unknowns, adds abi5; off, 
     };
 }
 
-test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate and the exact core_sim_fields" {
-    // A device-resident host republishes t/dt/kind on the HOST Instance only,
-    // so a core reading them there evals stale — the decl is how it knows to
-    // keep such a device off the device. The resistor must NOT carry it (its
-    // updateState epilogue latch, when present, is not a core read).
+test "codegen: a core reads time and analysis from its SimState argument, and names it only then" {
+    // The resistor's core reads none of it, so its `sim` is discarded.
     {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator, resistor_va, &h);
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, ", _  : contract.SimState) struct {") != null);
         try std.testing.expect(std.mem.indexOf(u8, src, "core_reads_simstate") == null);
-        try std.testing.expect(std.mem.indexOf(u8, src, "core_sim_fields") == null);
     }
     {
         var h: Harness = undefined;
@@ -197,64 +191,52 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
             \\module ak(p, n);
             \\  inout p, n;
             \\  electrical p, n;
-            \\  analog I(p, n) <+ V(p, n) * (analysis("tran") ? 2.0 : 1.0);
+            \\  analog I(p, n) <+ V(p, n) * (analysis("tran") ? 2.0 : 1.0) + 1e-3 * V(p, n) * $abstime;
             \\endmodule
         , &h);
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
-        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
-        // Exactly the one field `analysis()` reads, so a host that republishes
-        // it per analysis may keep the core device-resident.
-        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"analysis_kind\" };") != null);
-    }
-    {
-        var h: Harness = undefined;
-        try Harness.run(std.testing.allocator,
-            \\module td(p, n);
-            \\  inout p, n;
-            \\  electrical p, n;
-            \\  analog I(p, n) <+ 1e-3 * idt(V(p, n), 0.0) + 1e-3 * V(p, n) * $abstime;
-            \\endmodule
-        , &h);
-        defer h.deinit();
-        const src = try h.gen(std.testing.allocator);
-        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_sim_fields = [_][]const u8{ \"abstime\", \"dt\" };") != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "InstancePtr, sim: contract.SimState) struct {") != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "(sim.kind == .tran or sim.kind == .ic)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "S.con(sim.t)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "analysis_kind") == null);
     }
 }
 
-test "codegen: core_reads_simstate counts `analog initial` and the Newton iteration" {
-    // Both are Instance fields the HOST rewrites between evaluations
-    // (`is_analog_initial` per sub-task, `newton_iteration` through
-    // beginSolve/advanceIteration), which the old text scan did not list.
-    const srcs = [_][]const u8{
-        \\module ai(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  real g;
-        \\  analog initial g = 2.0;
-        \\  analog begin
-        \\    I(p, n) <+ g * V(p, n);
-        \\    if (V(p, n) > 1.0) g = 1.0;
-        \\  end
-        \\endmodule
-        ,
-        \\module it(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  analog I(p, n) <+ V(p, n) * $simparam("iteration", 1.0);
-        \\endmodule
+test "codegen: `constant` is declared exactly for a Jacobian no x can move" {
+    const cases = [_]struct { body: []const u8, want: ?[]const u8 }{
+        // V/r with r from the card; a capacitor; an inductor.
+        .{ .body = "I(p, n) <+ V(p, n) / r;", .want = ".{ .g = true, .c = false }" },
+        .{ .body = "I(p, n) <+ ddt(1e-12 * V(p, n));", .want = ".{ .g = true, .c = true }" },
+        .{ .body = "V(p, n) <+ 1e-9 * ddt(I(p, n));", .want = ".{ .g = true, .c = true }" },
+        // A partial that moves with x, with time, or with the branch x took.
+        .{ .body = "I(p, n) <+ exp(V(p, n));", .want = null },
+        .{ .body = "I(p, n) <+ 1e-3 * V(p, n) * $abstime;", .want = null },
+        .{ .body = "if (V(p, n) > 0) I(p, n) <+ V(p, n) / r; else I(p, n) <+ 2.0 * V(p, n);", .want = null },
     };
-    for (srcs) |text| {
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module k(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  parameter real r = 1000.0 from (0:inf);
+            \\  analog {s}
+            \\endmodule
+        , .{c.body});
+        defer std.testing.allocator.free(src);
         var h: Harness = undefined;
-        try Harness.run(std.testing.allocator, text, &h);
+        try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
-        const src = try h.gen(std.testing.allocator);
-        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+        const out = try h.gen(std.testing.allocator);
+        const at = std.mem.indexOf(u8, out, "pub const constant: contract.Constant = ");
+        if (c.want) |w| {
+            try std.testing.expect(std.mem.startsWith(u8, out[at.? + "pub const constant: contract.Constant = ".len ..], w));
+        } else try std.testing.expect(at == null);
     }
 }
 
 test "codegen: State.t_prev exists only for a reader, and state_class is declared" {
-    // A constant-td `absdelay` pushes its ring on `inst.abstime` and never
+    // A constant-td `absdelay` pushes its ring on `sim.t` and never
     // reads `t_prev`; `idt` integrates over `dt = abstime - t_prev`. A
     // nonlinear `ddt` lowers to the §5.6.1.2 path latches alone.
     const cases = [_]struct { src: []const u8, t_prev: bool, class: []const u8 }{
@@ -283,7 +265,7 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
         try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "t_prev: f64") != null);
-        try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "state.t_prev = inst.abstime;") != null);
+        try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "state.t_prev = sim.t;") != null);
         const decl = try std.fmt.allocPrint(h.arena_state.allocator(), "pub const state_class: contract.StateClass = {s};", .{c.class});
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
     }
@@ -311,7 +293,7 @@ test "codegen: a vera_interp = 2 absdelay site publishes exactly a linear site's
     }
     defer for (&hs) |*h| h.deinit();
     try std.testing.expect(std.mem.indexOf(u8, out[0], "zAbsdelayQ(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out[1], "zAbsdelayQ(S,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out[1], "zAbsdelayQ(zL(S,") != null);
     try std.testing.expectEqual(std.mem.count(u8, out[0], "d__analog_op__absdelay__"), std.mem.count(u8, out[1], "d__analog_op__absdelay__"));
     try std.testing.expect(std.mem.indexOf(u8, out[1], "Z24") == null);
     const delays = "pub fn delays(_: *const Model) [2]f64 {\n    return .{ 0.000000001, 0.000000002 };\n}";
@@ -357,13 +339,13 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "inst: InstancePtr, comptime held: bool) struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst: InstancePtr, sim: contract.SimState, comptime held: bool) struct {") != null);
     // The append and the store that reads it back are skippable; the
     // initial-step zeroing is read by the residual in the same evaluation.
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "if (held) zArrSt("));
     try std.testing.expect(std.mem.indexOf(u8, src, "p0 = &inst.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "core, .{ S, x, model, inst, false })") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "core(R, xr, model, inst, true)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core, .{ S, xs, model, inst, sim, false })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core(S, zVals(S, &x), model, inst, sim, true)") != null);
     // The read-back carries V's derivative, but into nothing eval returns,
     // so the storage stays plain.
     try std.testing.expect(std.mem.indexOf(u8, src, "var a0: [4]f64 = undefined;") != null);
@@ -383,7 +365,7 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     // keys still exist (naming.zig, proof.zig, the `Instance` state fields) but
     // no longer name a declaration.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(comptime S: type,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "contract.validate(Self)") != null);
     // no reactive part ⇒ no q()
@@ -420,7 +402,7 @@ test "codegen: two contributions sharing a subexpression evaluate it ONCE" {
     // of times the model runs per Newton iteration.
     try std.testing.expectEqual(
         @as(usize, 1),
-        std.mem.count(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));"),
+        std.mem.count(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));"),
     );
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     // The costly part — `exp` — is emitted once. That is the whole scaling
@@ -447,7 +429,7 @@ test "codegen: one declaration even for a single contribution" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(") != null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));"));
 }
 
 test "codegen: the unit ranges tile the emission and each names its own decl" {
@@ -537,7 +519,7 @@ test "codegen: every split unit file passes AstGen, hoist arrays included" {
     const o = try h.genOut(std.testing.allocator);
     const gpa = std.testing.allocator;
     try std.testing.expect(o.names.len != 0);
-    try std.testing.expect(std.mem.indexOf(u8, o.text, "var h: [") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o.text, "var h: zSlots(S, &.{") != null);
     for (o.unit_lo, o.unit_fn, o.unit_hi) |lo, fn_at, hi| {
         // `orchestrator.writeTree`'s unit file.
         const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
@@ -652,15 +634,15 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
 
     // The whole point: ONE core call for both halves. Two would make `evalQ`
     // exactly the `eval` + `q` it exists to replace.
-    try std.testing.expect(std.mem.count(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })") == 1);
+    try std.testing.expect(std.mem.count(u8, fused, "@call(.always_inline, core, .{ S, xs, model, inst, sim })") == 1);
     // ...and it is hoisted ABOVE both halves: the resistive rows are `eval`'s
     // own `zResidual`, handed this core result.
-    try std.testing.expect(std.mem.indexOf(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })").? <
-        std.mem.indexOf(u8, fused, "zResidual(S, x, m)").?);
-    try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_q]S }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "@call(.always_inline, core, .{ S, xs, model, inst, sim })").? <
+        std.mem.indexOf(u8, fused, "zResidual(S, xs, m)").?);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: contract.Rows(Self, S), q: contract.Sites(Self, S) }") != null);
     // §5.6.1.2 the reactive half is the charge sites, read off the same core.
-    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = zResidual(S, x, m), .q = [n_q]S{ m.f") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_u]S {\n    return zResidual(S, x, @call(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = zResidual(S, xs, m), .q = @as(contract.Sites(Self, S), .{ m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {\n    const xs = zProbe(S, x);\n    return zResidual(S, xs, @call(") != null);
     // The one `ddt` site stamps +p and −n (§1.3.1.2).
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const n_q: usize = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".{ .site = 0, .row = .p, .sign = 1.0 },\n    .{ .site = 0, .row = .n, .sign = -1.0 },") != null);
@@ -720,7 +702,7 @@ test "codegen: minmax tie derivatives use source-defined mask selection" {
         try Harness.run(std.testing.allocator, input, &h);
         defer h.deinit();
         const src = try h.gen(std.testing.allocator);
-        const call = if (std.mem.endsWith(u8, name, "min")) "zMin(S, " else "zMax(S, ";
+        const call = if (std.mem.endsWith(u8, name, "min")) "zMin(zL(S, " else "zMax(zL(S, ";
         try std.testing.expect(std.mem.indexOf(u8, src, call) != null);
         try std.testing.expect(std.mem.indexOf(u8, src, "return a.lt(b).sel(a, b);") != null);
         try std.testing.expect(std.mem.indexOf(u8, src, "return b.lt(a).sel(a, b);") != null);
@@ -860,7 +842,7 @@ test "codegen: a §5.6 potential contribution gets its own branch-current unknow
     // codegen appends the unknown AFTER `nodes` — existing indices hold.
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28pZ2cnZ29, // branch flow") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_kinds") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c));") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const num_ports: usize = 2;") != null);
 }
 
@@ -938,7 +920,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     // arguments, and only the model knows which.
     const body = src[at..];
     const ret = std.mem.indexOf(u8, body, "return .{").?;
-    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(R, xr, model, inst)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(S, zVals(S, &x), model, inst, sim)") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body[ret .. ret + 120], ".white = m.f"));
     // Both powers are solve-invariant, so the core returns them as `setup`
     // roots — and `setup` divides by rs only on the `rs > 0` arm, leaving the
@@ -947,7 +929,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
         const f = body[i + ".white = m.f".len ..];
         const end = std.mem.indexOfScalar(u8, f, '.').?;
-        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = S.con(inst.su.r[", .{f[0..end]});
+        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = zTo(S, 0x0, S.con(inst.su.r[", .{f[0..end]});
         defer std.testing.allocator.free(decl);
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
         k = i + 1;
@@ -1251,13 +1233,13 @@ test "codegen: §5.6.7 indirect contribution is a nullor row, ASYMMETRIC-safe" {
     // The source current is a solver unknown; the KCL stamps are its only
     // occurrence outside its own row (a nullor).
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28outZ2cgndZ29, // branch flow") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "res[@intFromEnum(U.flowZ28outZ2cgndZ29)] = c;\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "res[@intFromEnum(U.flowZ28outZ2cgndZ29)] = zRow(S, .flowZ28outZ2cgndZ29, c);\n") != null);
     // ... and NOT the direct-contribution row `V(hi,lo) − c`.
-    try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c);") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c));") == null);
 
     // THE trap: the row must be a function of `x`, or the host's dual-number
     // Jacobian has a zero column and Newton can never move the source.
-    const key = "fn amp__common__core(comptime S: type, x: [n_u]S";
+    const key = "fn amp__common__core(comptime S: type, x: anytype";
     try std.testing.expect(std.mem.indexOf(u8, src, key) != null);
     const unit = src[std.mem.indexOf(u8, src, key).?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
@@ -1358,8 +1340,8 @@ test "codegen: §4.5 operator state is keyed to the stable unit id" {
     try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__t0: f64 = 0.0") != null);
     // The operator's INPUT is a core field now, not a declaration of its own —
     // but the state field, and therefore `naming.zig`'s key, is untouched.
-    try std.testing.expect(std.mem.indexOf(u8, src, "zTransition(S, ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const m = core(R, xr, model, inst);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zTransition(zL(S, ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const m = core(S, zVals(S, &x), model, inst, sim);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn updateState(") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const State = struct {") != null);
 }
@@ -1384,7 +1366,7 @@ test "codegen: §4.5.11 laplace_nd emits a real filter, not a compile error" {
     // so the unit's parameter must stay NAMED. Was patched to `_`, which made
     // every filter-in-a-contribution device fail to compile on `model`.
     try std.testing.expect(std.mem.indexOf(u8, src, "__sec(model)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "core(comptime S: type, x: [n_u]S, model: *const Model") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core(comptime S: type, x: anytype, model: *const Model") != null);
 }
 
 test "codegen: a non-const analog-operator control argument is a LOUD compile error" {
@@ -1435,7 +1417,7 @@ test "codegen: §5.4.3 I(<p>) is a solver unknown pinned to the KCL sum at p" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "res[@intFromEnum(U.flowZ28Z3caZ3eZ29)] = x[@intFromEnum(U.flowZ28Z3caZ3eZ29)].sub(res[@intFromEnum(U.a)]);",
+        "res[@intFromEnum(U.flowZ28Z3caZ3eZ29)] = zRow(S, .flowZ28Z3caZ3eZ29, x[@intFromEnum(U.flowZ28Z3caZ3eZ29)].sub(res[@intFromEnum(U.a)]));",
     ) != null);
     // THE REACTIVE HALF: the one charge site stamps `−q_a` on the same row,
     // so the total residual is x − (I_dc + d/dt q_a).
@@ -1446,7 +1428,7 @@ test "codegen: §5.4.3 I(<p>) is a solver unknown pinned to the KCL sum at p" {
     ) != null);
     // The row is emitted AFTER the contribution stamps it reads.
     const stamp_at = std.mem.indexOf(u8, src, "res[@intFromEnum(U.a)].add(c)").?;
-    const row_at = std.mem.indexOf(u8, src, "= x[@intFromEnum(U.flowZ28Z3caZ3eZ29)].sub(").?;
+    const row_at = std.mem.indexOf(u8, src, "= zRow(S, .flowZ28Z3caZ3eZ29, x[@intFromEnum(U.flowZ28Z3caZ3eZ29)].sub(").?;
     try std.testing.expect(stamp_at < row_at);
 }
 
@@ -1466,7 +1448,7 @@ test "codegen: a port whose only branch goes to ground still gets its unknown" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "res[@intFromEnum(U.flowZ28Z3cpZ3eZ29)] = x[@intFromEnum(U.flowZ28Z3cpZ3eZ29)].sub(res[@intFromEnum(U.p)]);",
+        "res[@intFromEnum(U.flowZ28Z3cpZ3eZ29)] = zRow(S, .flowZ28Z3cpZ3eZ29, x[@intFromEnum(U.flowZ28Z3cpZ3eZ29)].sub(res[@intFromEnum(U.p)]));",
     ) != null);
     // No reactive part anywhere ⇒ no q() at all, so no port row is missing.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(") == null);
@@ -1706,8 +1688,8 @@ test "codegen: §9.4 a display unit that reads an operator input opens the cache
     , &h);
     defer h.deinit();
     const exe = try h.genDisplay(std.testing.allocator);
-    const at = std.mem.indexOf(u8, exe, "zTransition(S, c.f").?;
-    const open = std.mem.lastIndexOf(u8, exe[0..at], "const c = @call(.always_inline, core, .{ S, x, model, inst });");
+    const at = std.mem.indexOf(u8, exe, "zLw(S, 0x3, c.f").?;
+    const open = std.mem.lastIndexOf(u8, exe[0..at], "const c = @call(.always_inline, core, .{ S, x, model, inst, sim });");
     const head = std.mem.lastIndexOf(u8, exe[0..at], "\nfn ") orelse 0;
     try std.testing.expect(open != null and open.? > head);
 }
@@ -1805,7 +1787,7 @@ test "codegen: a unit whose target is defined in one arm returns a VALUE, not un
     // written into the signature, and it closes with `\n} {`.
     const end = std.mem.indexOfPos(u8, src, at, "\n}\n").?;
     const body = src[at..end];
-    // Hoisted slots share one `var h: [n]S`, so the carve-out is no longer a
+    // Hoisted slots share one `var h: zSlots(...)`, so the carve-out is no longer a
     // property of each declaration — the array itself is declared `undefined`.
     // It is now the pair of facts below: the array is EXACTLY as long as the
     // number of zero-seeds, so no element of it can reach the `return`
@@ -1816,13 +1798,13 @@ test "codegen: a unit whose target is defined in one arm returns a VALUE, not un
     // phi). Every other slot is a `const` at its definition, which is what
     // `probeBody` is for — so counting the hoists is counting exactly the values
     // that could reach the `return` without being written.
-    try std.testing.expect(std.mem.indexOf(u8, body, "    var h: [2]S = undefined;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "    var h: zSlots(S, &.{ 0x3, 0x3 }) = undefined;") != null);
     var hoists: usize = 0;
     var it = std.mem.splitScalar(u8, body, '\n');
     while (it.next()) |line| {
         if (!std.mem.startsWith(u8, line, "    h[")) continue;
         hoists += 1;
-        try std.testing.expect(std.mem.endsWith(u8, line, "= S.con(0.0);"));
+        try std.testing.expect(std.mem.endsWith(u8, line, "= zTo(S, 0x3, S.con(0.0));"));
     }
     try std.testing.expectEqual(@as(usize, 2), hoists);
 }
@@ -1859,7 +1841,7 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
         },
         .{
             .call = "slew(V(p, n), 2e8)",
-            .want = "inst.dt, 200000000.0, @abs(200000000.0))",
+            .want = "sim.dt, 200000000.0, @abs(200000000.0))",
         },
     };
     for (cases) |c| {
@@ -1919,9 +1901,10 @@ test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's b
     const src = try h.gen(std.testing.allocator);
 
     // The rhs of the `&&` is emitted at all — it used to be dropped entirely.
-    try std.testing.expect(std.mem.indexOf(u8, src, ".abs()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zAbs(S, ") != null);
 
-    var it = std.mem.splitScalar(u8, src, '\n');
+    // The model's own slots, past the file-scope helpers.
+    var it = std.mem.splitScalar(u8, src[std.mem.indexOf(u8, src, "// ---- the model, in one declaration ----").?..], '\n');
     while (it.next()) |line| {
         const decl = std.mem.trimStart(u8, line, " ");
         if (!std.mem.startsWith(u8, decl, "var t")) continue;
@@ -1972,7 +1955,7 @@ test "codegen: §4.5.7 a delay computed from parameters renders as an expression
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "inst.dt, (model.len) * (@sqrt((model.l) * (model.c))))",
+        "sim.dt, (model.len) * (@sqrt((model.l) * (model.c))))",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
 }
@@ -2000,7 +1983,7 @@ test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8",
+        "pub fn collapse(comptime S: type, model: *const Model, inst: *const Instance) [n_u]?u8",
     ) != null);
     // The internal node AND the branch-flow unknown both alias onto the port,
     // so the pair's stamps land on one slot and cancel.
@@ -2054,7 +2037,7 @@ test "codegen: table capture is isolated from topology queries" {
     const src = try h.gen(std.testing.allocator);
     const collapse = src[std.mem.indexOf(u8, src, "pub fn collapse(") orelse return error.NoCollapse ..];
     try std.testing.expect(std.mem.indexOf(u8, collapse, "var pin = inst.*;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, collapse, "core(R, xr, model, &pin)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, collapse, "core(S, xr, model, &pin, .{})") != null);
 }
 
 test "codegen: no collapse hook without the zero-short pattern" {
@@ -3014,7 +2997,7 @@ test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`"
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "for (old, 0..) |xv, i| xr[i] = R.con(xv);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "core(S, zVals(S, &old), model, inst, sim)") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
 }
 
@@ -3238,7 +3221,7 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
-    // The `lane_clean` promise is only as good as its pins, and the pins are
+    // The `batch_ok` promise is only as good as its pins, and the pins are
     // hand-placed at emission sites — fixture 158 (zPow) proved a forgotten
     // one ships a false promise. This binds the two mechanically: any helper
     // in the emitted math/ops templates whose BODY reads `.val(` must appear

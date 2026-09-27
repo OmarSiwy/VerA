@@ -541,7 +541,7 @@ error has nothing to reject and belongs in §5's classified set instead.
 ### v0.7.0 — `ARCHITECTURE.md §6` phase 5
 **Scope.** `codegen/{emit,float,events,feat}/`. The one architecture release with
 a user-visible justification: the decisions governing the emitted device's lane
-behaviour — `pinLanes`, `lane_pinned`, `lane_clean`, `jac_f32`, `cur_strict` —
+behaviour — `pinLanes`, `lane_pinned`, `batch_ok`, `jac_f32`, `cur_strict` —
 are five fields scattered through a 91-field `Gen`, and this gathers them so
 "what makes a lane dirty?" is one file. `Gen` ~55 → ~20.
 **Does not do.** **Does not add SIMD to the compiler.** `ARCHITECTURE.md §7`

@@ -33,9 +33,9 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     try self.ind(depth);
     if (!self.emitting_common) {
         try self.b("return ", .{});
-        if (self.fam) try family.openTo(self, family.mask(self, target));
+        try family.openTo(self, family.mask(self, target));
         try gen_render.renderVal(self, target, .real);
-        if (self.fam) try self.b(")", .{});
+        try self.b(")", .{});
         try self.b(";\n", .{});
         return;
     }
@@ -43,7 +43,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
-        const wrap = self.fam and self.an.arrOf(v) == null and self.an.vty[@intFromEnum(v)] == .real;
+        const wrap = self.an.arrOf(v) == null and self.an.vty[@intFromEnum(v)] == .real;
         if (wrap) try family.openTo(self, family.mask(self, v));
         if (self.an.arrOf(v) != null)
             try gen_render.renderArrayOut(self, v)
@@ -84,7 +84,7 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     try self.ind(depth);
     var m: ?u64 = null;
     if (at_def) {
-        if (self.fam and self.an.vty[i] == .real) {
+        if (self.an.vty[i] == .real) {
             // Zig types it from the expression; `lane_masks` counts it.
             try family.note(self, family.mask(self, @enumFromInt(i)));
             try self.b("const t{d} = ", .{self.plan.slot[i]});
@@ -286,7 +286,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         try self.ind(d2);
         var m: ?u64 = null;
         if (par) {
-            if (self.fam and self.an.vty[i] == .real)
+            if (self.an.vty[i] == .real)
                 try self.b("const c{d} = ", .{k})
             else
                 try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
