@@ -25,6 +25,12 @@
 //! or delays (§7.9, §6.1.3) resolves in `net.zig`, on `digital/net.zig`'s
 //! tables.
 //!
+//! `--state=auto` (`auto`): the design's functions twice, `Phase(false)` and
+//! `Phase(true)`. It runs 4-state until a time step begins with no x or z
+//! any process can still read, then 2-state, where a read's x half is the
+//! constant 0. Storing an x or z there reruns it all 4-state, so its
+//! transcript is always the 4-state one.
+//!
 //! `interpret` is the executable of a design `digital/emit.zig` did not make
 //! native: the embedded source through the interpreter, exactly `vera --run`.
 const std = @import("std");
@@ -115,7 +121,71 @@ pub const Design = struct {
     nets: []const net.Net = &.{},
     drivers: []const net.Driver = &.{},
     udps: []const net.Udp = &.{},
+    /// `--state=auto`: the plane words (first word, count) of the slots
+    /// whose value at a time-step boundary nothing reads before a whole
+    /// write (`digital/plan.zig` `stepLocal`), an x in which does not keep
+    /// the design 4-state.
+    dead: []const [2]u32 = &.{},
 };
+
+/// The dispatch of one phase: `Code(k).dispatch` of the emitted root.
+pub const Dispatch = fn (*State, u32) Error!void;
+
+/// The `main` of a `--state=auto` executable: `four` (`Phase(false)`)
+/// until a time step begins with no live x or z (`State.boundary`), `two`
+/// (`Phase(true)`) after. A store of an x or z in the 2-state phase
+/// (`error.Rerun`) runs the design again from time 0, all 4-state; the
+/// transcript up to that store was the 4-state one already, so only the
+/// rerun's output past it is printed. Run with the argument
+/// `--vera-state`, it says which ran in one `vera-state:` line on stderr.
+pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
+    var s: State = undefined;
+    s.init(init_, d, units) catch |e| return s.exit(e);
+    s.live = s.gpa.alloc(u64, d.x.len) catch |e| return s.exit(e);
+    @memset(s.live, std.math.maxInt(u64));
+    for (d.dead) |w| @memset(s.live[w[0]..][0..w[1]], 0);
+    const failed = loop(&s, four, two_);
+    if (failed == null or failed.? != error.Rerun) {
+        if (s.two) report(init_, "vera-state: 2-state from tick {d}\n", .{s.two_at}) else report(init_, "vera-state: 4-state\n", .{});
+        return s.exit(failed);
+    }
+    report(init_, "vera-state: 2-state from tick {d}, rerun 4-state at tick {d}\n", .{ s.two_at, s.budget_time });
+    s.out.flush() catch return 1;
+    const printed = s.stdout.pos;
+    var r: State = undefined;
+    r.init(init_, d, units) catch |e| return r.exit(e);
+    // ponytail: the rerun's whole transcript in memory; a writer that drops
+    // the first `printed` bytes if a transcript outgrows it.
+    var mem: std.Io.Writer.Allocating = .init(r.gpa);
+    r.out = &mem.writer;
+    const again = loop(&r, four, null);
+    const code = r.exit(again);
+    const text = mem.written();
+    s.out.writeAll(text[@min(printed, text.len)..]) catch return 1;
+    s.out.flush() catch return 1;
+    return code;
+}
+
+/// Dispatch every event of `s` in its phase; how the run ended.
+fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
+    while (true) {
+        const pc = (@call(.always_inline, State.next, .{s}) catch |e| return e) orelse return null;
+        (if (two_ != null and s.two) two_.?(s, pc) else four(s, pc)) catch |e| return e;
+    }
+}
+
+fn report(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
+    var args = init_.minimal.args.iterate();
+    _ = args.skip();
+    const asked = while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--vera-state")) break true;
+    } else false;
+    if (!asked) return;
+    var buf: [128]u8 = undefined;
+    var e = std.Io.File.stderr().writer(init_.io, &buf);
+    e.interface.print(f, values) catch {};
+    e.interface.flush() catch {};
+}
 
 /// Node `node` reads the bits `mask` of plane word `word`.
 pub const Sense = struct { node: u32, word: u32, mask: u64 };
@@ -143,7 +213,9 @@ pub const Edge = enum(u2) {
     }
 };
 
-pub const Error = error{Failed} || std.mem.Allocator.Error || std.Io.Writer.Error;
+/// `Rerun`: a `--state=auto` executable's 2-state phase met an x or z it
+/// cannot hold (`Phase`); `auto` runs the design again, 4-state.
+pub const Error = error{ Failed, Rerun } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// What can observe a change of a slot, as `digital/plan.zig` found it: a
 /// store's `wake` does only these.
@@ -203,9 +275,9 @@ const overrides = @hasDecl(@import("root"), "vera_overrides");
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
 
-/// `get` of planes `v`, `x`.
-inline fn peek(v: [*]const u64, x: [*]const u64, off: u32) W {
-    return .{ .v = v[off], .x = if (two) 0 else x[off] };
+/// `get` of planes `v`, `x`; `k` as `poke`'s.
+inline fn peek(comptime k: bool, v: [*]const u64, x: [*]const u64, off: u32) W {
+    return .{ .v = v[off], .x = if (k) 0 else x[off] };
 }
 
 /// `getw` of planes `v`, `x`.
@@ -213,18 +285,93 @@ inline fn peekw(v: [*]const u64, x: [*]const u64, off: u32, comptime n: u32) log
     return .{ .v = v[off..][0..n].*, .x = if (two) @splat(0) else x[off..][0..n].* };
 }
 
-/// `set` of planes `v`, `x`.
-inline fn poke(v: [*]u64, x: [*]u64, off: u32, a: anytype, m: anytype) void {
+/// `set` of planes `v`, `x`; `k`: the x plane is zero and stays so, and
+/// is not written.
+inline fn poke(comptime k: bool, v: [*]u64, x: [*]u64, off: u32, a: anytype, m: anytype) void {
     if (@TypeOf(a) != W) {
-        for (v[off..][0..a.v.len], x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
-            ov.* = (ov.* & ~am) | (av & am);
+        for (v[off..][0..a.v.len], a.v, m) |*ov, av, am| ov.* = (ov.* & ~am) | (av & am);
+        if (!k) for (x[off..][0..a.v.len], a.x, m) |*ox, ax, am| {
             ox.* = (ox.* & ~am) | (ax & am);
-        }
+        };
         return;
     }
     const bits: u64 = m;
     v[off] = (v[off] & ~bits) | (a.v & bits);
-    if (!two) x[off] = (x[off] & ~bits) | (a.x & bits);
+    if (!k) x[off] = (x[off] & ~bits) | (a.x & bits);
+}
+
+/// The design's plane accessors in one phase of a `--state=auto`
+/// executable (`auto`). `Phase(false)` is `State`'s and `View`'s own.
+/// `Phase(true)` runs only while the x plane is zero (`State.two`): a
+/// read's x half is the constant 0, so every operator's x half folds away
+/// where it is compiled, and a store of an x or z bit, the one way an x
+/// could reach the planes again, fails with `error.Rerun` before it lands.
+/// The operators stay IEEE 1364's, so an x a known operand makes (`/` by
+/// 0, an out-of-range select) is printed or compared exactly; only
+/// storing it ends the phase. `s` is a `*State` or a `View`.
+pub fn Phase(comptime k: bool) type {
+    return struct {
+        pub inline fn get(s: anytype, off: u32) W {
+            var a = s.get(off);
+            if (k) a.x = 0;
+            return a;
+        }
+
+        pub inline fn getw(s: anytype, off: u32, comptime n: u32) logic.Wide(n) {
+            var a = s.getw(off, n);
+            if (k) a.x = @splat(0);
+            return a;
+        }
+
+        pub inline fn set(s: anytype, off: u32, a: anytype, m: anytype) Error!void {
+            if (!k) return s.set(off, a, m);
+            try known(a, m);
+            poke(true, planeV(s), undefined, off, a, m);
+        }
+
+        pub inline fn put(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+            if (k) try known(a, m);
+            if (@TypeOf(a) != W) return s.store(slot, off, &a.v, &a.x, &m);
+            return s.putWordAs(k, reach, slot, off, 0, a, m);
+        }
+
+        pub inline fn putWord(s: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+            if (k) try known(a, m);
+            return s.putWordAs(k, reach, slot, off, j, a, m);
+        }
+
+        pub inline fn putNode(s: View, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
+            if (k) try known(a, @as(@TypeOf(a.x), if (@TypeOf(a) == W) std.math.maxInt(u64) else @splat(std.math.maxInt(u64))));
+            return s.putNodeAs(k, reach, slot, off, a, senses);
+        }
+
+        pub inline fn nba(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+            if (k) try known(a, m);
+            // In line, as a design in one phase gets it.
+            return @call(.always_inline, State.nba, .{ s, reach, slot, off, a, m });
+        }
+
+        pub inline fn nbaAfter(s: *State, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+            if (k) try known(a, m);
+            return s.nbaAfter(reach, after, slot, off, a, m);
+        }
+    };
+}
+
+inline fn planeV(s: anytype) [*]u64 {
+    return if (@TypeOf(s) == View) s.v else s.v.ptr;
+}
+
+/// `error.Rerun` if a bit `m` selects of `a` is x or z.
+inline fn known(a: anytype, m: anytype) Error!void {
+    var any: u64 = 0;
+    if (@TypeOf(a) == W) any = a.x & m else for (a.x, m) |x, b| {
+        any |= x & b;
+    }
+    if (any != 0) {
+        @branchHint(.cold);
+        return error.Rerun;
+    }
 }
 
 /// A settle event's hold on a `State`: its planes and dirty words as
@@ -238,7 +385,7 @@ pub const View = struct {
     dirty: [*]u64,
 
     pub inline fn get(self: View, off: u32) W {
-        return peek(self.v, self.x, off);
+        return peek(two, self.v, self.x, off);
     }
 
     pub inline fn getw(self: View, off: u32, comptime n: u32) logic.Wide(n) {
@@ -246,7 +393,7 @@ pub const View = struct {
     }
 
     pub inline fn set(self: View, off: u32, a: anytype, m: anytype) void {
-        poke(self.v, self.x, off, a, m);
+        poke(two, self.v, self.x, off, a, m);
     }
 
     /// Clear combinational node `n`'s dirty bit; whether it was set. The
@@ -266,22 +413,27 @@ pub const View = struct {
     /// woken as `put` wakes it. A node reached in topological order only
     /// marks later ones.
     pub inline fn putNode(self: View, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
+        return self.putNodeAs(two, reach, slot, off, a, senses);
+    }
+
+    /// `putNode`; `k` as `poke`'s.
+    pub inline fn putNodeAs(self: View, comptime k: bool, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
         if (self.s.held(slot)) return;
         const s = logic.wide(a);
         const n = s.v.len;
-        const before = logic.low(self.get(off));
+        const before = logic.low(peek(k, self.v, self.x, off));
         var d: [n]u64 = undefined;
         inline for (0..n) |j| {
-            const o = self.get(off + j);
+            const o = peek(k, self.v, self.x, off + j);
             d[j] = (s.v[j] ^ o.v) | (s.x[j] ^ o.x);
             self.v[off + j] = s.v[j];
-            if (!two) self.x[off + j] = s.x[j];
+            if (!k) self.x[off + j] = s.x[j];
         }
         inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
         if (@as(u8, @bitCast(reach)) == 0) return;
         var any: u64 = 0;
         for (d) |x| any |= x;
-        if (any != 0) try self.s.wakeOf(reach, slot, before, logic.low(self.get(off)));
+        if (any != 0) try self.s.wakeOf(reach, slot, before, logic.low(peek(k, self.v, self.x, off)));
     }
 };
 
@@ -358,6 +510,15 @@ pub const State = struct {
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
+    /// `--state=auto` (`auto`): per plane word, the bits that must be known
+    /// before the 2-state phase may begin (empty: never); the phase has
+    /// begun (`Phase(true)`), and at which tick; the time steps begun, and
+    /// the count at which the planes are next looked at.
+    live: []u64 = &.{},
+    two: bool = false,
+    two_at: u64 = 0,
+    steps: u64 = 0,
+    look_at: u64 = 1,
     stdout: std.Io.File.Writer,
     out: *std.Io.Writer,
     io: std.Io,
@@ -458,7 +619,12 @@ pub const State = struct {
                 const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
                 if (row.quiet) {
                     if (self.held(row.slot)) continue;
-                    if (row.n == 1) self.set(row.off, W{ .v = row.one[0], .x = row.one[1] }, row.one[2]) else self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                    if (row.n != 1) {
+                        self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                    } else if (self.two) {
+                        // `Phase(true).nba` let no x into the row.
+                        poke(true, self.v.ptr, self.x.ptr, row.off, W{ .v = row.one[0], .x = 0 }, row.one[2]);
+                    } else self.set(row.off, W{ .v = row.one[0], .x = row.one[1] }, row.one[2]);
                 } else try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
             }
             self.rows.clearRetainingCapacity();
@@ -473,10 +639,28 @@ pub const State = struct {
         if (at != self.budget_time) {
             self.budget_time = at;
             self.budget_used = 0;
+            if (self.live.len != 0 and !self.two) self.boundary(at);
         }
         self.budget_used += 1;
         if (self.budget_used > budget)
             return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
+    }
+
+    /// A time step begins and every process is suspended: if no bit `live`
+    /// names is x or z, the 2-state phase begins. The x left in the other
+    /// words (`Design.dead`) is never read before it is overwritten. Looked
+    /// at on the 1st, 2nd, 4th, ... step, so a design that keeps an x costs
+    /// a scan per doubling.
+    fn boundary(self: *State, at: u64) void {
+        self.steps += 1;
+        if (self.steps != self.look_at) return;
+        self.look_at *= 2;
+        var any: u64 = 0;
+        for (self.x, self.live) |x, l| any |= x & l;
+        if (any != 0) return;
+        @memset(self.x, 0);
+        self.two = true;
+        self.two_at = at;
     }
 
     /// Mark dirty the nodes that read a bit of `slot` changed since the
@@ -542,7 +726,7 @@ pub const State = struct {
 
     /// The value of at most 64 bits at word `off`.
     pub inline fn get(self: *const State, off: u32) W {
-        return peek(self.v.ptr, self.x.ptr, off);
+        return peek(two, self.v.ptr, self.x.ptr, off);
     }
 
     /// The `n`-word value at word `off`.
@@ -553,7 +737,7 @@ pub const State = struct {
     /// The bits `m` of the value at word `off` become `a`'s, for a slot no
     /// event control, driver or node can be waiting on.
     pub inline fn set(self: *State, off: u32, a: anytype, m: anytype) void {
-        poke(self.v.ptr, self.x.ptr, off, a, m);
+        poke(two, self.v.ptr, self.x.ptr, off, a, m);
     }
 
     /// The settle event's hold on the planes and dirty words.
@@ -563,7 +747,7 @@ pub const State = struct {
 
     /// The bits `m` of the words from `off` become `v`/`x`'s.
     fn merge(self: *State, off: u32, v: []const u64, x: []const u64, m: []const u64) void {
-        poke(self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
+        poke(two, self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
     }
 
     /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
@@ -579,9 +763,14 @@ pub const State = struct {
     /// touches one word. An edge is its least significant bit's (§9.7.2),
     /// which only word 0 holds.
     pub inline fn putWord(self: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+        return self.putWordAs(two, reach, slot, off, j, a, m);
+    }
+
+    /// `putWord`; `k` as `poke`'s.
+    pub inline fn putWordAs(self: *State, comptime k: bool, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
         if (self.held(slot)) return;
         const at = off + j;
-        const o = self.get(at);
+        const o = peek(k, self.v.ptr, self.x.ptr, at);
         const nv = (o.v & ~m) | (a.v & m);
         const nx = (o.x & ~m) | (a.x & m);
         const d = (nv ^ o.v) | (nx ^ o.x);
@@ -589,17 +778,17 @@ pub const State = struct {
             // Only nodes read the slot: the store does not branch on the
             // data, and only its first change of the step reaches `dirtyReaders`.
             self.v[at] = nv;
-            if (!two) self.x[at] = nx;
+            if (!k) self.x[at] = nx;
             self.diff[at] |= d;
             if (!self.pending[slot] and d != 0) try self.dirtyReaders(slot);
             return;
         }
         if (d == 0) return;
-        const before = logic.low(self.get(off));
+        const before = logic.low(peek(k, self.v.ptr, self.x.ptr, off));
         self.v[at] = nv;
-        if (!two) self.x[at] = nx;
+        if (!k) self.x[at] = nx;
         if (reach.comb and self.sensed(slot)) self.diff[at] |= d;
-        try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
+        try self.wakeOf(reach, slot, before, logic.low(peek(k, self.v.ptr, self.x.ptr, off)));
     }
 
     /// `put` of a real (§4.8, `exec.store`): it changes when its value
@@ -625,6 +814,7 @@ pub const State = struct {
     /// `put` of the bits `m` of an `n`-word value at runtime width.
     pub fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
         if (self.held(slot)) return;
+        if (self.two) for (x, m) |a, b| if (a & b != 0) return error.Rerun;
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
         const before = logic.low(W{ .v = sv[0], .x = sx[0] });
@@ -650,7 +840,11 @@ pub const State = struct {
     pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         const quiet = reach == Reach{};
         if (@TypeOf(a) == W) {
-            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
+            // Grown out of line, appended in line: a design in two phases
+            // calls this from twice the sites, and LLVM then leaves a whole
+            // `append` out of line on the hottest path of an NBA design.
+            if (self.rows.items.len == self.rows.capacity) try self.rows.ensureUnusedCapacity(self.gpa, 1);
+            self.rows.appendAssumeCapacity(.{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
         } else {
             const at: u32 = @intCast(self.words.items.len);
             try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
@@ -742,6 +936,7 @@ pub const State = struct {
         self.depth += 1;
         self.active[sub] += 1;
         if (fill.len == 0) return;
+        if (self.two) return error.Rerun;
         try self.saved.appendSlice(self.gpa, self.v[lo..][0..fill.len]);
         try self.saved.appendSlice(self.gpa, self.x[lo..][0..fill.len]);
         @memcpy(self.v[lo..][0..fill.len], fill);
@@ -992,6 +1187,7 @@ pub const State = struct {
         system.plaEval(p, rows, literal(&ib, iw, false), out);
         const on = comptime logic.words(ow);
         for (self.v[cell..][0..on], self.x[cell..][0..on], out.values(), out.unknowns()) |*v, *x, ov, ox| {
+            if (self.two and ox != 0) return error.Rerun;
             // `--two-state`: an output no row decides is 0.
             v.* = if (two) ov & ~ox else ov;
             x.* = if (two) 0 else ox;
