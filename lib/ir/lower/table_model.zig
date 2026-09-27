@@ -4,9 +4,6 @@
 //! the table kernel reads.
 //!
 //! LRM clauses this file's code cites: §3.4.8, §4.5.11, §4.6.4, §4.6.4.3, §9.20, §9.21, §9.21.1, §9.21.2, §9.21.5.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_table_model.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -25,37 +22,30 @@ const toReal = Lower.toReal;
 
 /// This file's private state on `Lower` (`Lower.table_model_state`).
 pub const State = struct {
-    /// Source identity survives repeated analog-function inlining.
+    /// The source expression of each array-source snapshot site, so a site keeps
+    /// its identity across repeated analog-function inlining.
     table_sources: std.ArrayList(Ast.ExprId) = .empty,
 };
 
 // ---- §9.21 $table_model -----------------------------------------------------
 
-/// §9.21 Syntax 9-16, rewritten into ONE self-describing call:
+/// Lowers a §9.21 `$table_model` call (Syntax 9-16) into one self-describing call:
 ///
 ///     $table_model(ND, NP, NCOL, dep, "<interp/extrap>", snapshot_site, previous_call, in₀…in_{ND-1}, row₀…row_{NP-1})
 ///
-/// — the dimensionality, the sample count, the column count, the dependent
-/// COLUMN the selector picked, one interpolation and two extrapolation control characters per
-/// dimension, then the lookup point and the flat row-major sample block. The
-/// block has been projected onto the columns the lookup reads, so the column
-/// count is always `nd + 1` and the dependent is always the last of them.
+/// the dimensionality, sample count, column count, dependent column, one
+/// interpolation and two extrapolation control characters per dimension, the lookup
+/// point, and the flat row-major sample block. The block is projected onto the
+/// columns the lookup reads, so NCOL is `nd + 1` with the dependent last.
 ///
-/// Everything §9.21.2 and §9.21.1 decide is decided HERE, and the reason is the
-/// same one that puts §9.20's rules in lowering: none of it is a value. The
-/// control string is a constant, so a string that is not one §9.21.2 describes
-/// is reported rather than approximated (E0815) and §9.21.2's `I` columns are
-/// projected out of the block before it is emitted; the data source is a set of
-/// ARRAY IDENTIFIERS or a file name, neither of which survives into MIR. What
-/// reaches codegen is a call whose every operand is a number, a string or a
-/// probe. The schemes themselves (Table 9-30) and the runtime conditions
-/// (Table 9-31's `E`, §9.21's conflicting duplicates) belong to the kernel,
-/// because both need the lookup point.
+/// The control string and data source are resolved here because neither survives
+/// into MIR; a control string §9.21.2 does not describe reports E0815. The
+/// interpolation schemes (Table 9-30) and runtime conditions (Table 9-31's `E`,
+/// conflicting duplicates) belong to the kernel, which has the lookup point.
 ///
-/// A FILE data source is currently read at compile time. Runtime file capture
-/// remains a conformance gap when the file changes before the first call.
-/// Array-source calls carry a unique snapshot site; codegen captures their
-/// rows at the first executed call, including conditionally reached calls.
+/// A file data source is read at compile time, so a file that changes before the
+/// first call is not seen (a known gap against §9.21.1). Array sources carry a
+/// unique snapshot site; codegen captures their rows at the first executed call.
 pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -107,8 +97,8 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var np: usize = 0;
     var ctl: []const u8 = "";
     if (cols.items.len != 0) {
-        // `table_model_array ::= 1st_dim_array_identifier [, …], output_array_identifier`
-        // — one column per dimension plus at least one dependent.
+        // `table_model_array ::= 1st_dim_array_identifier [, …], output_array_identifier`:
+        // one column per dimension plus at least one dependent.
         if (ns > 1) {
             try self.err(self.file.exprs.mainTok(e), .E0815, "an array data source takes at most one control string", .{});
             return poison;
@@ -137,13 +127,10 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         ctl = strs[1];
-        // §9.21.1: "The state of the data source is captured on the FIRST CALL
-        // to the table model function." An absent file is therefore the CALL's
-        // error, not the compilation's — a site that never executes makes no
-        // first call and captures nothing. The bytes are still read eagerly
-        // (they have to be constants in the device), but a failure to find them
-        // lowers to an EMPTY data set, which `zTable` refuses the moment a
-        // lookup reaches it and never otherwise.
+        // §9.21.1: "The state of the data source is captured on the first call
+        // to the table model function." An absent file is the call's error, not the
+        // compilation's, so it lowers to an empty data set that `zTable` refuses
+        // only when a lookup reaches it.
         var absent = false;
         if (try readTableFile(self, e, strs[0], "$table_model", .E0815, &absent)) |nums| {
             if (nums.cols <= nd) {
@@ -182,11 +169,10 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     keep[nd] = (try parseTableCtl(self, e, ctl, nd, ncol, ext, keep[0..nd])) orelse return poison;
 
     // Project the sample block onto the columns the lookup actually reads.
-    // §9.21.2's `I` ("Ignore this input column") and every dependent the
-    // selector did NOT pick are dead weight in a device that snapshots its rows,
-    // and dropping them here is what keeps the kernel's `dim`-is-`column`
-    // indexing — and its sort — true for the general case. After this the block
-    // is `nd` independents outermost-first followed by the one dependent.
+    // §9.21.2's `I` ("Ignore this input column") and every unselected dependent
+    // are dropped, which keeps the kernel's `dim`-is-`column` indexing and its
+    // sort valid. After this the block is `nd` independents outermost-first
+    // followed by the one dependent.
     const proj = try self.arena.alloc(Mir.Value, np * (nd + 1));
     for (0..np) |r| for (keep, 0..) |c, j| {
         proj[r * (nd + 1) + j] = rows[r * ncol + c];
@@ -235,9 +221,8 @@ fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
 }
 
 /// One column of an array data source: an array name (§9.21.1 "via array
-/// variable names") or a pattern (". Arrays may be specified directly via the
-/// concatenation operator"). The same two shapes §4.5.11's coefficient slot
-/// takes, so `appendVectorArg` is the reader for both.
+/// variable names") or a pattern ("Arrays may be specified directly via the
+/// concatenation operator"). `appendVectorArg` reads both shapes.
 fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     return switch (ex.tag(a)) {
@@ -247,25 +232,17 @@ fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
     };
 }
 
+/// A parsed data file: row-major values and the column count every row shares.
 pub const TableFile = struct { vals: []const f64, cols: usize };
 
-/// A sample table is text; 16 MiB is ~700k rows of three columns, well past what
-/// a device that re-sorts its block per evaluation can afford anyway.
+/// A size cap on a data file; the device re-sorts its block per evaluation, so a
+/// larger table is impractical anyway.
 const max_table_bytes: usize = 16 << 20;
 
-/// §4.6.4.3's file input, flattened to `f0, p0, f1, p1, …` — the same layout the
-/// vector form produces, so the caller's two spellings converge here.
-///
-/// TWO COLUMNS, exactly: "the indicated file will contain the frequency / power
-/// PAIRS … Each frequency / power pair shall be separated by a newline and the
-/// numbers in the pair shall be separated by one or more spaces or tabs." A
-/// third column is not a wider pair, it is a file the clause does not describe,
-/// and reading it as pairs would silently re-pair the whole table.
-///
-/// Everything else the clause asks of the input — ascending order, unique
-/// frequencies, non-negative power — is checked in codegen's `planNoiseTable`,
-/// where the vector form's identical values are checked; this reads the bytes
-/// and nothing more.
+/// Reads a §4.6.4.3 `noise_table` file as `f0, p0, f1, p1, ...`, the layout the
+/// vector form produces. Returns null after reporting E0519 when the file cannot be
+/// read or its lines do not hold exactly one frequency/power pair. Ordering and sign
+/// rules are checked in codegen's `planNoiseTable`, as for the vector form.
 pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]const f64 {
     const f = (try readTableFile(self, e, name, "noise_table", .E0519, null)) orelse return null;
     if (f.cols != 2) {
@@ -280,27 +257,14 @@ pub fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]
 /// continue to the end of that line. They may appear anywhere in the file. Blank
 /// lines are ignored. The numbers shall be real or integer."
 ///
-/// SHARED WITH §4.6.4.3's `noise_table` file input, whose own text format is the
-/// same rule in different words — "Each frequency / power pair shall be
-/// separated by a newline and the numbers in the pair shall be separated by one
-/// or more spaces or tabs … Comments begin with '#' and end with a newline …
-/// the numbers shall be real or integer". `who` and `code` are the caller's
-/// vocabulary, because a §4.6.4 diagnostic that says `$table_model` names the
-/// wrong clause. The COLUMN COUNT is the caller's too: §9.21 wants one column
-/// per dimension plus a dependent and §4.6.4.3 wants exactly two.
-///
-/// Resolved against the `include_dirs` the caller passed, which is where the
-/// source file's own directory is: §9.21 says nothing about the search path, and
-/// a data file sits beside the model that names it exactly as an `include does.
-/// `missing` non-null defers the NOT-FOUND case to the caller instead of
-/// diagnosing it — see `lowerTableModel`, which owes §9.21.1's "captured on the
-/// first call" a data source whose absence is the CALL's error and not the
-/// compilation's. Only that case: a file that exists and is not a table is read
-/// either way, so its diagnostic stays here.
+/// Shared with §4.6.4.3's `noise_table` file input, which states the same format;
+/// `who` and `code` name the caller's clause in diagnostics, and the caller checks
+/// the column count. Resolved against `include_dirs`, like an `include (§9.21 names
+/// no search path). A non-null `missing` defers only the not-found case to the caller
+/// (see `lowerTableModel`); a malformed file is reported here either way.
 //
-// ponytail: so an unexecuted site naming a MALFORMED file is still refused,
-// where an unexecuted site naming an ABSENT one is not. Give the parse failures
-// the same treatment when a fixture asks; nothing in the suite does today.
+// ponytail: an unexecuted site naming a malformed file is still refused, where one
+// naming an absent file is not. Defer parse failures too when a fixture needs it.
 fn readTableFile(
     self: *Lower,
     e: Ast.ExprId,
@@ -358,24 +322,15 @@ fn readTableFile(
 }
 
 /// §9.21.2 the control string. Writes `3*nd` control bytes into `ext`
-/// (interpolation, low extrapolation, high extrapolation) and the source COLUMN
-/// each dimension reads into `cmap`, and returns the dependent COLUMN index — or
+/// (interpolation, low extrapolation, high extrapolation) and the source column
+/// each dimension reads into `cmap`, and returns the dependent column index, or
 /// null when the string is not one §9.21.2 describes.
 ///
-/// Table 9-30's `D`, `1`, `2` and `3` all become the dimension's interpolation
-/// byte and are decided in the kernel. `I` never reaches the kernel: it is
-/// "Ignore this input column", a statement about the DATA SOURCE and not about a
-/// dimension, so it spends a column in `cmap` without spending a dimension and
-/// the caller projects that column out of the sample block entirely.
-///
-/// THE DEPENDENT COLUMN is therefore counted in columns, not in dimensions.
-/// Table 9-32 states the arithmetic twice by example — `"I,1CC,1CC;3"` has "at
-/// least 6 column[s]" (3 leading + selector 3) and `"3,D,I,1;3"` interpolates
-/// "dependent variable 3 (column 7)" (4 leading + 3) — and its first row states
-/// the no-sub-string case, "Dimensionality of the data is assumed to be N.
-/// Column N+1 is taken as the dependent", with N the number of `table_inputs`.
-/// Both are the one rule `leading = nd + (ignored columns)`: a dimension without
-/// a sub-string still owns a column.
+/// Table 9-30's `D`, `1`, `2` and `3` become the dimension's interpolation byte.
+/// `I` ("Ignore this input column") spends a column in `cmap` but no dimension, and
+/// the caller projects that column out. So the dependent is counted in columns:
+/// `leading = nd + ignored columns`, as Table 9-32's examples show (`"I,1CC,1CC;3"`
+/// needs "at least 6 column[s]"; `"3,D,I,1;3"` reads "column 7").
 fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8, cmap: []usize) Oom!?usize {
     // "the function defaults to performing linear interpolation and linear
     // extrapolation in both dimensions" (§9.21.5), which Table 9-32's first row
@@ -400,9 +355,8 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
     var it = std.mem.splitScalar(u8, head, ',');
     while (it.next()) |raw| {
         const s = std.mem.trim(u8, raw, " \t");
-        // Table 9-30 `I`, "Ignore this input column". It marks a COLUMN, so it
-        // takes no dimension and admits no extrapolation characters — there is
-        // no end of an ignored column to extrapolate off.
+        // Table 9-30 `I`, "Ignore this input column". It marks a column, so it
+        // takes no dimension and admits no extrapolation characters.
         if (s.len != 0 and s[0] == 'I') {
             if (s.len != 1) {
                 try self.err(self.file.exprs.mainTok(e), .E0815, "`{s}`: Table 9-30's `I` ignores a column and takes no extrapolation characters", .{s});
