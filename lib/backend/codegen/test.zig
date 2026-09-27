@@ -203,6 +203,38 @@ test "codegen: a core reads time and analysis from its SimState argument, and na
     }
 }
 
+test "codegen: `constant` is declared exactly for a Jacobian no x can move" {
+    const cases = [_]struct { body: []const u8, want: ?[]const u8 }{
+        // V/r with r from the card; a capacitor; an inductor.
+        .{ .body = "I(p, n) <+ V(p, n) / r;", .want = ".{ .g = true, .c = false }" },
+        .{ .body = "I(p, n) <+ ddt(1e-12 * V(p, n));", .want = ".{ .g = true, .c = true }" },
+        .{ .body = "V(p, n) <+ 1e-9 * ddt(I(p, n));", .want = ".{ .g = true, .c = true }" },
+        // A partial that moves with x, with time, or with the branch x took.
+        .{ .body = "I(p, n) <+ exp(V(p, n));", .want = null },
+        .{ .body = "I(p, n) <+ 1e-3 * V(p, n) * $abstime;", .want = null },
+        .{ .body = "if (V(p, n) > 0) I(p, n) <+ V(p, n) / r; else I(p, n) <+ 2.0 * V(p, n);", .want = null },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module k(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  parameter real r = 1000.0 from (0:inf);
+            \\  analog {s}
+            \\endmodule
+        , .{c.body});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const out = try h.gen(std.testing.allocator);
+        const at = std.mem.indexOf(u8, out, "pub const constant: contract.Constant = ");
+        if (c.want) |w| {
+            try std.testing.expect(std.mem.startsWith(u8, out[at.? + "pub const constant: contract.Constant = ".len ..], w));
+        } else try std.testing.expect(at == null);
+    }
+}
+
 test "codegen: State.t_prev exists only for a reader, and state_class is declared" {
     // A constant-td `absdelay` pushes its ring on `sim.t` and never
     // reads `t_prev`; `idt` integrates over `dt = abstime - t_prev`. A

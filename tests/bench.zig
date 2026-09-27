@@ -259,7 +259,8 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 /// `zResidual`, the rows `eval` and `evalQ` share, adds 162 bytes to every
 /// shape.
 /// Contract ABI 5 (the scalar family's helpers, `SimState` arguments, masked
-/// value types) adds 4846 bytes to the one-contribution shape.
+/// value types) adds 4846 bytes to the one-contribution shape, and the
+/// `constant` decl every linear shape now carries 216 more.
 /// A fused chain deeper than `max_inline_depth` (256) keeps a statement every
 /// 256 links, which is what moves the n = 512 and n = 4096 points; before it
 /// the n = 4096 points overflowed the stack in the recursive renderer.
@@ -267,25 +268,25 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 29226, .defs = 8, .insts = 5 },
-        .{ .device = 29581, .defs = 35, .insts = 26 },
-        .{ .device = 32324, .defs = 258, .insts = 194 },
-        .{ .device = 54727, .defs = 2050, .insts = 1538 },
-        .{ .device = 237307, .defs = 16386, .insts = 12290 },
+        .{ .device = 29442, .defs = 8, .insts = 5 },
+        .{ .device = 29797, .defs = 35, .insts = 26 },
+        .{ .device = 32540, .defs = 258, .insts = 194 },
+        .{ .device = 54943, .defs = 2050, .insts = 1538 },
+        .{ .device = 237523, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 29226, .defs = 8, .insts = 5 },
-        .{ .device = 29408, .defs = 24, .insts = 19 },
-        .{ .device = 30864, .defs = 136, .insts = 131 },
-        .{ .device = 42569, .defs = 1032, .insts = 1027 },
-        .{ .device = 136330, .defs = 8200, .insts = 8195 },
+        .{ .device = 29442, .defs = 8, .insts = 5 },
+        .{ .device = 29624, .defs = 24, .insts = 19 },
+        .{ .device = 31080, .defs = 136, .insts = 131 },
+        .{ .device = 42785, .defs = 1032, .insts = 1027 },
+        .{ .device = 136546, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 29226, .defs = 8, .insts = 5 },
-        .{ .device = 30430, .defs = 50, .insts = 40 },
-        .{ .device = 40278, .defs = 386, .insts = 320 },
-        .{ .device = 120812, .defs = 3074, .insts = 2560 },
-        .{ .device = 778597, .defs = 24578, .insts = 20480 },
+        .{ .device = 29442, .defs = 8, .insts = 5 },
+        .{ .device = 30646, .defs = 50, .insts = 40 },
+        .{ .device = 40494, .defs = 386, .insts = 320 },
+        .{ .device = 121028, .defs = 3074, .insts = 2560 },
+        .{ .device = 778813, .defs = 24578, .insts = 20480 },
     },
 });
 

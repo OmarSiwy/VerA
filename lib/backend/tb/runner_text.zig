@@ -226,6 +226,29 @@ pub const runner_body =
     \\    }
     \\}
     \\
+    \\/// The constant-stamp gate. A device that declares `constant` promises its
+    \\/// Jacobian (`g`) or capacitance matrix (`c`) is the same at every x, so a
+    \\/// host builds the stamp once: the whole local matrix, `jac_const`
+    \\/// included, must come out the same at a second, unrelated bias, to the
+    \\/// rounding of its own entries.
+    \\fn constCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !@hasDecl(D, "constant")) return;
+    \\    var xs: [n_u]f64 = undefined;
+    \\    for (&xs, x, 0..) |*o, v, i| o.* = v * 1.5 - 0.25 - 0.125 * @as(f64, @floatFromInt(i));
+    \\    if (comptime D.constant.g) constAssert("res", withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false), withConst(Dual, D.eval(Dual, &xs, model, inst, sim_state), model, false));
+    \\    if (comptime D.constant.c and @hasDecl(D, "q")) constAssert("q", withConst(Dual, qRowsOf(Dual, x, model, inst), model, true), withConst(Dual, qRowsOf(Dual, &xs, model, inst), model, true));
+    \\}
+    \\
+    \\fn constAssert(what: []const u8, a: [n_u]Dual, b: [n_u]Dual) void {
+    \\    for (0..n_u) |i| for (0..n_u) |j| {
+    \\        const p = a[i].d[j];
+    \\        const q = b[i].d[j];
+    \\        if (p == q or @abs(p - q) <= 1e-12 * @max(@abs(p), @abs(q))) continue;
+    \\        std.debug.print("const_check FAIL: d{s}[{s}]/dx[{s}] is {e} at one bias and {e} at another, but the device declares it constant\n", .{ what, u_names[i], u_names[j], p, q });
+    \\        std.process.exit(1);
+    \\    };
+    \\}
+    \\
     \\/// The family gate. The device's rows on a SPARSE family, whose each value
     \\/// carries only the lanes of the unknowns it may depend on, must be
     \\/// `Dual`'s: every value bit for bit, and every lane `deriv_reads` names
@@ -453,6 +476,7 @@ pub const runner_body =
     \\    patternCheck(x, model, inst);
     \\    narrowCheck(x, model, inst);
     \\    sparseCheck(x, model, inst);
+    \\    constCheck(x, model, inst);
     \\
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
