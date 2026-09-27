@@ -477,12 +477,11 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
         .gate => |g| try gateLogic(self, g.kind, g.ins.len),
         .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
     }
-    try self.print(", {f}", .{full(try self.slotWidth(slot))});
     if (self.watched[slot]) {
         try self.print(", &.{{", .{});
         for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
         try self.print(" }}", .{});
-    }
+    } else try self.print(", {f}", .{full(try self.slotWidth(slot))});
     try self.print(");\n        }}\n", .{});
 }
 
