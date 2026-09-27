@@ -1,9 +1,6 @@
-//! Test-only: a hand-built `Mir` + `Lowered`, and the `Analysis` over them —
-//! the "few lines of setup" a `plan/` function needs. `naming.zig`'s own
-//! `Fixture` is the pattern; this one adds the analysis the planners read.
-//!
-//! Not a fixture parser: every test states its MIR instruction by instruction,
-//! so what a plan is asked about is on the page next to what it answers.
+//! Test-only: a hand-built `Mir` + `Lowered` and the `Analysis` over them,
+//! the setup a `plan/` test needs. Every test states its MIR instruction by
+//! instruction, so what a plan is asked about sits next to what it answers.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -11,6 +8,7 @@ const Analysis = @import("ir").Analysis;
 const Lowered = @import("ir").Lowered;
 const Ast = @import("frontend").Ast;
 
+/// A hand-built module for one planner test. Set `arena`, then `init`.
 pub const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     mir: Mir = .{ .name = "mymod" },
@@ -31,15 +29,17 @@ pub const Fixture = struct {
         f.arena.deinit();
     }
 
+    /// The fixture's arena; everything it allocates is freed by `deinit`.
     pub fn alloc(f: *Fixture) std.mem.Allocator {
         return f.arena.allocator();
     }
 
-    /// `V(net)` — the probe value of unknown `u`.
+    /// `V(net)`: the probe value of unknown `u`.
     pub fn probe(f: *Fixture, u: u32) !Mir.Value {
         return f.mir.addBlockParam(f.alloc(), u);
     }
 
+    /// Emits a call to the callee spelled `name` in the entry block.
     pub fn call(f: *Fixture, name: []const u8, args: []const Mir.Value) !Mir.Value {
         const a = f.alloc();
         return f.mir.emitCall(a, .entry, try f.mir.internString(a, name), args);

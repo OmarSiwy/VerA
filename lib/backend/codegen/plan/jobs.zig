@@ -1,17 +1,7 @@
-//! Jobs: every value the shared core returns, and why — resolved before a
-//! single unit is written.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the plans it
-//! depends on (`Names`, the `$limit` sites, the small-signal rows) and returns
-//! the job list. The ONE fact it needs from the renderer — whether a §4.5
-//! control argument renders host-side or only off the core — is a parameter,
-//! `dyn.isDynamic(v)`, rather than a `*Gen`, so a test passes a stub.
-//!
-//! LRM clauses this file's code cites: §4.5, §4.6.3, §4.6.4, §5.6, §5.6.1.2,
-//! §5.6.1.3, §5.6.7, §5.10, §5.10.3.3, §9.4, §9.13, §9.17, §9.21.1.
-//!
-//! Cut verbatim from `codegen/unit.zig` (`Job`, `buildJobs`) and
-//! `codegen.zig` (`dynCtrlArgs`, `unitComment`); only the receiver changed.
+//! Jobs: the lowered module and the plans it depends on (`Names`, `$limit`
+//! sites, small-signal rows) -> every value the shared core returns, and why,
+//! resolved before a unit is written. Clauses: §4.5, §4.6.3, §4.6.4, §5.6,
+//! §5.6.1.2, §5.6.1.3, §5.6.7, §5.10, §5.10.3.3, §9.4, §9.13, §9.17, §9.21.1.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -28,6 +18,7 @@ const unitMode = @import("../float/mode.zig").unitMode;
 
 const none_u32 = std.math.maxInt(u32);
 
+/// The planned core targets.
 pub const Jobs = struct {
     /// Every unit function to emit, resolved before any of them is written.
     list: []Job = &.{},
@@ -52,13 +43,12 @@ pub const From = struct {
     q_sites: []const u32 = &.{},
 };
 
-/// One emitted unit function, resolved BEFORE anything is written.
+/// One emitted unit function, resolved before anything is written.
 ///
-/// `plan_core.plan` has to know the exact set of units and their targets in
-/// order to count how many of them share a value, and `emitUnits` has to
-/// emit exactly that set — a disagreement between the two would leave a
-/// value rendered as a cache read in a unit whose slice was never counted.
-/// One list, built once, walked twice.
+/// `plan_core.plan` counts how many units share a value, and `emitUnits`
+/// must emit exactly that set: a disagreement would leave a value rendered as
+/// a cache read in a unit whose slice was never counted. One list, built
+/// once, walked twice.
 pub const Job = struct {
     kind: Kind,
     /// The declaration name. Only the §9.4 display job is emitted as a
@@ -74,8 +64,9 @@ pub const Job = struct {
     /// coefficient reader is emitted right after it; `none_u32` otherwise.
     sec_of: u32 = none_u32,
 
-    /// Why the target is in the core. `buildJobs` queues the kinds in this
-    /// order, which is the insert-tolerance order of the core's fields.
+    /// Why the target is in the core. `plan` queues the kinds in this order,
+    /// which is the order of the core's fields: a model that gains a target
+    /// of one kind appends fields and renumbers none of the earlier kinds.
     pub const Kind = enum {
         /// §5.6 a contribution's resistive target.
         resist,
@@ -110,6 +101,11 @@ pub const Job = struct {
     };
 };
 
+/// Returns every core target in queue order (`Job.Kind`); slices are owned by
+/// `self.arena`. `dyn.isDynamic(v)` answers whether a §4.5 control argument
+/// renders only off the core, so a test can pass a stub. Fails on
+/// allocation, on a display name over `naming.max_name_len`, or with `dyn`'s
+/// error.
 pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     var out: Jobs = .{};
     var jobs: std.ArrayList(Job) = .empty;
@@ -150,18 +146,12 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
         });
     }
-    // §4.5 Table 4-20's DYNAMIC control arguments, on exactly the terms the
-    // `$limit` arguments below are queued on: `updateState` has only ONE
-    // core sweep, so an argument it must read on the accepted solution has
-    // to be a field of it. The table is normative — for `absdelay` the
-    // dynamic arguments are `expr, td`, for `idt` they are `expr, ic,
-    // assert`, for `idtmod` `expr, ic, modulus, offset` — and VerA used to
-    // refuse every one of them with E0515, which is the opposite of what
-    // the table says.
-    //
-    // ONLY the arguments that do not fold are queued. A literal or a model
-    // parameter still renders over Model and puts nothing in the core, so
-    // every device that exists today is byte-identical.
+    // §4.5 Table 4-20's dynamic control arguments: `updateState` has one core
+    // sweep, so an argument it must read on the accepted solution has to be a
+    // field of it. The table is normative (`absdelay`: `expr, td`; `idt`:
+    // `expr, ic, assert`; `idtmod`: `expr, ic, modulus, offset`). Only
+    // arguments that do not fold are queued: a literal or model parameter
+    // renders over Model and puts nothing in the core.
     for (from.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const inst = from.names.opInstOf(@intCast(i)) orelse continue;
@@ -180,11 +170,8 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         }
     }
     // §5.10 the end-of-block value of every held variable, so `updateState`
-    // can store it back. Queued AFTER the operator inputs and before the
-    // §9.4 display job for the same insert-tolerance reason: a model that
-    // gains a held variable appends a core field, it renumbers none.
-    //
-    // `.strict` unconditionally: proof.zig rates contributions only.
+    // can store it back. `.strict` unconditionally: proof.zig rates
+    // contributions only.
     for (self.lowered.held_vars.items) |h| {
         try jobs.append(self.arena, .{
             .kind = .held,
@@ -193,11 +180,8 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .comment = "§5.10 event-assigned variable, held across evaluations",
         });
     }
-    // §4.5.15 the arguments of every honoured `$limit`, so `limit` can read
-    // them out of the core instead of re-deriving the temperature prelude.
-    // Queued after the held variables and before the §9.4 display job for
-    // the same insert-tolerance reason: a model that gains a `$limit`
-    // appends core fields, it renumbers none.
+    // §4.5.15 the arguments of every honoured `$limit`, so `limit` reads them
+    // from the core instead of re-deriving the temperature prelude.
     for (from.limits) |lc| {
         // A literal or parameter seed is written in place (`writeArg`);
         // queued, it would make every other use of that constant read `c`.
@@ -228,11 +212,8 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .comment = "§9.17.1 iteration rejection",
     });
     // §5.6.1.3 the retention flags of every runtime-selected branch row
-    // (see `Retention.runtime`), so `emitResidual` can read them as core
-    // fields. Queued after the limit arguments and before the §9.4 display
-    // job for the same insert-tolerance reason as both neighbours — and a
-    // module whose every potential contribution is unconditional queues
-    // NOTHING here, so its core fields do not move.
+    // (`Retention.runtime`), read by `emitResidual` as core fields. A module
+    // whose potential contributions are all unconditional queues nothing.
     for (self.lowered.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
         const ret = plan_topo.retention(self, c);
@@ -253,28 +234,18 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             });
         }
     }
-    // §4.6.4 the PSD argument of every noise generator, so `noisePsd` can
-    // read the model's OWN expression out of the core instead of a host
-    // guessing it back off the Jacobian. Queued after the retention flags
-    // and before the §9.4 display job for the same insert-tolerance reason
-    // as every neighbour.
+    // §4.6.4 the PSD argument of every noise generator, so `noisePsd` reads
+    // the model's own expression out of the core.
     //
-    // The POWER is always routed through the core, even when it folds to a
-    // model constant, because §4.6.4's generators are CONDITIONAL: every
-    // series resistance in the tree spells `if (r > 0) I(a,b) <+
-    // white_noise(4kT/r)`, and a generator whose statement did not execute
-    // has to read back zero. A core live-out does exactly that (`h[k]` is
-    // seeded `S.con(0)` at entry and assigned only inside the branch);
-    // anything rendered outside the core evaluates unconditionally, and
-    // `4kT/0` is not zero, it is an infinity that reaches the host as a
-    // NaN the moment the collapsed branch gives it a zero adjoint gain.
-    // `planPrecompute` declines these targets for the same reason.
-    //
-    // The EXPONENT is exempt: a constant renders inline, because it is only
-    // ever read on a row whose power is non-zero — i.e. one that executed.
-    // §4.6.4.6's coefficient joins them on the exponent's terms: a constant
-    // factor renders inline, and one that depends on the bias
-    // (`I(a,b) <+ V(a,b)*white_noise(p)`) is a core live-out like the power.
+    // The power always goes through the core, even when it folds to a model
+    // constant, because generators are conditional: `if (r > 0) I(a,b) <+
+    // white_noise(4kT/r)` must read back zero when the statement did not run.
+    // A core live-out is seeded `S.con(0)` and assigned only inside the
+    // branch; rendered outside the core, `4kT/0` would be an infinity that
+    // reaches the host as NaN. The exponent and a constant §4.6.4.6
+    // coefficient render inline, since they are read only on a row whose
+    // power is nonzero. A bias-dependent coefficient
+    // (`I(a,b) <+ V(a,b)*white_noise(p)`) is a live-out like the power.
     for (from.noise.rows) |nr| {
         for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }, 0..) |v, k| {
             if (v == .f_zero) continue;
@@ -287,15 +258,10 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             });
         }
     }
-    // §4.6.3 the same, for an `ac_stim` magnitude or phase the SOLVE
-    // computes. A.8.2 makes both `analog_expression`, so `acStim` has to
-    // answer at a state vector exactly as `noisePsd` does, and the only
-    // way it reads one is out of the core sweep.
-    //
-    // ONLY the arguments that do not fold, on the terms Table 4-20's
-    // dynamic arguments are queued on above: a literal or a model
-    // parameter renders over `Model` and puts nothing here, so every
-    // device with a constant stimulus keeps the fields it had.
+    // §4.6.3 an `ac_stim` magnitude or phase the solve computes (A.8.2 makes
+    // both `analog_expression`), so `acStim` reads it out of the core sweep
+    // as `noisePsd` does. Only arguments that do not fold are queued: a
+    // literal or model parameter renders over `Model`.
     for (from.noise.ac_rows) |nr| {
         for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
             if (v == .f_zero) continue;
@@ -311,14 +277,10 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // §5.10.3.3: "If the start_time or period expressions change value
     // during the evaluation of the analog block, the next event will be
     // scheduled based on the LATEST value of the start_time and period."
-    // The start_time is already the operator's input, so it rides the core;
-    // the period was only ever read through `f64Expr`, which is a HOST-side
-    // spelling and answered a solve-computed period with E0515 — the clause
-    // says clause-5 event arguments are `analog_expression`s, and §4.5.14's
-    // constant-or-parameter rule is about the clause-4 operators. Queued
-    // here, after the noise PSDs and before the §9.4 display job, for the
-    // same insert-tolerance reason as every neighbour: a model that gains a
-    // dynamic period appends a core field and renumbers none.
+    // The start_time is the operator's input and already rides the core; a
+    // solve-computed period is queued here. Clause-5 event arguments are
+    // `analog_expression`s: §4.5.14's constant-or-parameter rule covers only
+    // the clause-4 operators.
     for (from.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .timer) continue;
         const args = from.names.opArgs(self.mir, i);
@@ -339,13 +301,10 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .mode = .strict,
         .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
     });
-    // §9.4 the display tasks, as ONE unit. Queued last, so no existing job —
-    // and therefore no existing declaration name — moves when a model gains
-    // or loses a `$strobe`.
-    //
-    // `.strict` unconditionally: proof.zig rates contributions only, a print
-    // is not on the residual path, so there is nothing here for `.optimized`
-    // to speed up and no verdict that would justify claiming it.
+    // §9.4 the display tasks, as one unit. Queued last, so no existing job
+    // (and so no declaration name) moves when a model gains or loses a
+    // `$strobe`. `.strict` unconditionally: a print is not on the residual
+    // path, and proof.zig rates contributions only.
     const root = self.an.rv(self.lowered.display_root);
     if (from.emit_display and root != .f_zero) {
         var buf: [naming.max_name_len]u8 = undefined;

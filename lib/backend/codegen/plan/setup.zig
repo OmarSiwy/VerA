@@ -1,57 +1,9 @@
-//! Solve invariance: which MIR values are the same at every Newton iterate and
-//! every time point, so `setup` computes them once per card, instance and
-//! temperature instead of `eval` recomputing them per iterate.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and returns a
-//! `Sinv`. The emitter half — which of these values the core actually reads
-//! (the setup ROOTS) and `pub fn setup` itself — is `codegen/setup.zig`, which
-//! needs the unit planner's slice and the writer.
-//!
-//! LRM clauses this file's code cites: §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
+//! Solve invariance: lowered MIR -> `Sinv`, the values that are the same at
+//! every Newton iterate and time point, so `setup` computes them once per
+//! card, instance and temperature. `pruneHeld` drops the §3.2 held slots a
+//! card cannot observe. The emitter half (setup roots, `pub fn setup`) is
+//! `codegen/setup.zig`. Clauses: §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
 //! §5.10.2, §9.10, §9.15, §9.19.
-//!
-//! WHY ONE CLASSIFIER. Three answered the question before this file: the
-//! temperature hoist's `pcClass` (re-spelled a value in a flat `precompute`),
-//! the core prefix's `hpPure` (cached a TEXT prefix of the core) and
-//! `cg_limit.scValue` (latched `$limit` arguments off a core call at x = 0).
-//! Their whitelists had drifted (`$port_connected` was in two of the three),
-//! the prefix stopped at the first probe-dependent statement — so bsim4va's
-//! prefix was 267 of its 4 851 statements while its invariant work ran to
-//! 3 556 — and each latched through a different scalar, one of which was not
-//! the host's (the 1-ulp mos3 drift). This is the one answer, a fixpoint over
-//! the MIR, and the host's own value scalar `V` computes it.
-//!
-//! THE RULES (`plan`), optimistic and monotone — every flag starts true and
-//! only ever falls, so the fixpoint terminates:
-//!   - a constant, parameter or `undef` is invariant; a §4.4 probe is not;
-//!   - a pure operation is invariant when its operands are and its block is
-//!     PLACEABLE — or, when it cannot fault, whatever its block
-//!     (`speculable`): `setup` then computes it at its `home`;
-//!   - a call is invariant only on the allowlist (`callInvariant`): the
-//!     environment reads that answer from the card, the instance or its
-//!     temperature, `$simparam` of every §9.15 Table 9-27 name but
-//!     `iteration`, and the pure math functions — all over invariant args;
-//!   - a phi is invariant when its block is placeable and every incoming edge
-//!     comes from a placeable block with an invariant value — or is the
-//!     §5.10.2 initial-step exception below;
-//!   - a block is placeable when every branch it is CONTROL-DEPENDENT on
-//!     (post-dominator frontier, per edge) tests an invariant condition from a
-//!     placeable block, and no loop whose branches are not all invariant can
-//!     reach it. Code after such a loop stays per-eval (v1).
-//!
-//! THE INITIAL-STEP RULE (research C.6, vbic). `@(initial_step)` and
-//! `analog initial` bodies are the model's temperature prep in many models,
-//! and every variable they assign is §5.10 held. Such a variable is
-//! INITIAL-ONLY when its end-of-block value IS the merge
-//! `phi(held read, assigned value)` at the event's join and the assigned
-//! value is invariant: the held read is the previous evaluation's copy of
-//! that same phi, so by induction every evaluation sees the assigned value,
-//! and `setup` computes it by taking the event's arm unconditionally. A write
-//! after the join (`k = k + 1`) breaks the identity: assuming the held read
-//! invariant there would justify itself, so the phi is per-eval. The one
-//! difference from evaluating it: an evaluation before the first initial step
-//! used to read the declared initializer. A host evaluates an initial step
-//! first; that is its obligation, stated on `setup`.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -61,6 +13,7 @@ const Analysis = @import("ir").Analysis;
 const Input = @import("input.zig").Input;
 const plan_args = @import("args.zig");
 
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
@@ -92,8 +45,8 @@ pub const Sinv = struct {
 pub const Cd = struct { a: u32, then: bool };
 
 /// §5.10.2 `initial_step` with no analysis list, or §5.2.1 `analog initial`:
-/// the condition `setup` treats as TRUE. A qualified `initial_step("tran")`
-/// is not one — in DC it keeps its initializer, so it is not a card function.
+/// the condition `setup` treats as true. A qualified `initial_step("tran")`
+/// is not one: in DC it keeps its initializer, so it is not a card function.
 fn initCond(in: Input, cond: Mir.Value) bool {
     const def = in.mir.valueDef(in.an.rv(cond));
     if (def != .inst_result or in.mir.instOp(def.inst_result) != .call) return false;
@@ -105,6 +58,8 @@ fn initCond(in: Input, cond: Mir.Value) bool {
     };
 }
 
+/// Returns the condition of the `branch` ending block `bi`, or null when the
+/// block ends otherwise.
 pub fn branchCond(in: Input, bi: u32) ?Mir.Value {
     const t = in.an.term[bi];
     if (t == .none or in.mir.instOp(t) != .branch) return null;
@@ -120,7 +75,7 @@ fn elseOf(in: Input, bi: u32) u32 {
 }
 
 /// Immediate post-dominators, with a virtual exit `nb` that every return
-/// block — and every block that cannot reach one — flows to. Cooper, Harvey
+/// block, and every block that cannot reach one, flows to. Cooper, Harvey
 /// and Kennedy's iteration over the reverse CFG, in its reverse postorder.
 pub fn postDominators(in: Input) Error![]u32 {
     const a = in.arena;
@@ -252,16 +207,15 @@ pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd:
 
 /// §9.10/§9.15/§9.19 and the pure math functions: the calls whose value is a
 /// function of the card, the instance and its temperature alone. An
-/// ALLOWLIST — a callee not here is per-eval.
+/// allowlist: a callee not here is per-eval.
 fn callInvariant(in: Input, d: anytype) bool {
     return switch (d.callee) {
         .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected" => true,
         // §9.15 Table 9-27: every literal name but `iteration`, which moves
         // with each Newton step. `tnom` is a Model field the host writes with
-        // the card; the homotopy knobs (gmin, gdev, sourceScaleFactor) are
-        // folded today and are invariant within a solve if published, with the
-        // host re-running `setup` after writing one — `setup_simparams` lists
-        // which.
+        // the card; a published homotopy knob (gmin, gdev, sourceScaleFactor)
+        // is invariant within a solve, and the host re-runs `setup` after
+        // writing one (`setup_simparams` lists which).
         .@"$simparam" => !Lower.simparamIsRuntime(plan_args.strArg(in, d.args, 0) orelse return false),
         // IEEE 1364 §17.11 math and the §9.11/§9.12.1 conversions: pure.
         .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil" => true,
@@ -307,7 +261,7 @@ const Scan = struct {
         return in.an.rv(held[@min(i, held.len - 1)].final) == phi;
     }
 
-    /// Does the edge `src → y` run only when the initial step does NOT?
+    /// Does the edge `src -> y` run only when the initial step does not?
     fn initElseEdge(s: *const Scan, src: u32, y: u32) bool {
         if (s.init_else[src]) return true;
         const c = branchCond(s.in, src) orelse return false;
@@ -318,7 +272,7 @@ const Scan = struct {
     /// the same at every evaluation: `setup` computes it anyway, at its
     /// `home`, and the core reads it only where it would have computed it.
     /// Sound only for an op that cannot fault when its guard is false: a real
-    /// outside its domain is NaN or ±inf. So no integer arithmetic (a zero
+    /// outside its domain is NaN or inf. So no integer arithmetic (a zero
     /// divisor traps), no `%`, and none of the four functions whose domain
     /// check reports when `display == .emit` (`zDomain`).
     fn speculable(s: *const Scan, inst: Mir.Inst, blk: u32) bool {
@@ -412,7 +366,29 @@ const Scan = struct {
     }
 };
 
-/// The fixpoint. See the header for the rules.
+/// Returns the solve-invariance fixpoint; every slice is owned by `in.arena`.
+/// Optimistic and monotone: every flag starts true and only falls.
+///   - A constant, parameter or `undef` is invariant; a §4.4 probe is not.
+///   - A pure op is invariant when its operands are and its block is
+///     placeable, or, when it cannot fault, whatever its block
+///     (`Scan.speculable`); `setup` then computes it at its `home`.
+///   - A call is invariant only on the allowlist (`callInvariant`), over
+///     invariant arguments.
+///   - A phi is invariant when its block is placeable and every incoming edge
+///     comes from a placeable block with an invariant value, or is the
+///     initial-step exception below.
+///   - A block is placeable when every branch it is control-dependent on
+///     (post-dominator frontier, per edge) tests an invariant condition from a
+///     placeable block, and no loop with a per-eval branch can reach it.
+///
+/// §5.10.2 initial-step exception: every variable `@(initial_step)` or
+/// `analog initial` assigns is §5.10 held. It is initial-only when its
+/// end-of-block value is the event join's `phi(held read, assigned value)` and
+/// the assigned value is invariant: by induction every evaluation sees the
+/// assigned value, so `setup` takes the event's arm unconditionally. A write
+/// after the join (`k = k + 1`) breaks the identity. This relies on the host
+/// evaluating an initial step before any other point, an obligation stated on
+/// `setup`.
 pub fn plan(in: Input) Error!Sinv {
     var r = try solve(in, true);
     const a = in.arena;
@@ -440,12 +416,12 @@ pub fn plan(in: Input) Error!Sinv {
     return r;
 }
 
-/// `placing == false` drops the one rule that is about PLACEMENT rather than
-/// invariance — nothing a per-eval loop can reach is placeable — so a block
-/// after such a loop that depends only on invariant branches counts as fixed,
-/// and so does what it computes. `setup` cannot compute those values (it stops
-/// at the loop), but they are still the same at every evaluation of a card,
-/// which is all `pruneHeld` asks.
+/// `placing == false` drops the one rule about placement rather than
+/// invariance (nothing a per-eval loop can reach is placeable). A block after
+/// such a loop that depends only on invariant branches then counts as fixed,
+/// and so does what it computes: `setup` cannot compute those values, but
+/// they are the same at every evaluation of a card, which is all `pruneHeld`
+/// asks.
 fn solve(in: Input, placing: bool) Error!Sinv {
     const a = in.arena;
     const nb = in.an.nb;
@@ -523,9 +499,9 @@ fn solve(in: Input, placing: bool) Error!Sinv {
     return .{ .val = s.val, .blk = s.plc, .loop_varying = s.varying };
 }
 
-/// A value `setup` may hand eval: invariant, computed (not a literal the
-/// renderer folds), one value per evaluation (outside every loop), and a type
-/// `Setup` has a field for.
+/// Is `v` a value `setup` may hand eval? Invariant, computed (not a literal
+/// the renderer folds), one value per evaluation (outside every loop), and of
+/// a type `Setup` has a field for.
 pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     const i = @intFromEnum(v);
     if (i < Mir.Value.first_dynamic or !sinv[i]) return false;
@@ -536,22 +512,23 @@ pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     return in.an.foldConst(v, false) == null;
 }
 
-/// §3.2 retention the card decides. A `.unless_invariant` held variable has no
-/// read that reaches a later write of the same evaluation (`lower_param.
-/// Exposed`), so its held value is observed only where it MERGES with a write:
-/// a phi, or a select, fed by the `$held_*` seed. When every such merge is
-/// solve-invariant — its block and every incoming edge depending only on
-/// invariant branches (`solve` without placement), a select's condition
-/// invariant — then for a fixed card the variable is either written
-/// before every read of every evaluation or never written, and a slot holding
-/// it can never differ from the declared initializer. So the slot is dropped:
-/// the seed becomes an alias of the initializer and leaves its block, and the
-/// remaining rows are renumbered.
+/// §3.2 drops the held slots the card makes unobservable, rewriting `mir` and
+/// `lowered.held_vars` in place.
 ///
-/// A MIR rewrite between lowering and if-conversion (root.zig stage 4.4),
-/// because the question needs `plan`'s invariance, which is backend, and the
-/// answer changes what lowering produced. The plan runs with every candidate
-/// still held, so a condition over one reads as varying: conservative.
+/// A `.unless_invariant` held variable has no read that reaches a later write
+/// of the same evaluation (`lower_param.Exposed`), so its held value is
+/// observed only where it merges with a write: a phi or a select fed by the
+/// `$held_*` seed. When every such merge is solve-invariant (its block and
+/// incoming edges depend only on invariant branches, a select's condition is
+/// invariant), a fixed card either writes the variable before every read or
+/// never writes it, so the slot always equals the declared initializer. The
+/// seed becomes an alias of the initializer and the remaining rows are
+/// renumbered.
+///
+/// Runs between lowering and if-conversion (lib/root.zig stage 4.4): it needs
+/// `plan`'s invariance, and a select must not yet hide the merges it reads.
+/// Every candidate is still held while the plan runs, so a condition over one
+/// reads as varying, which is conservative.
 pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!void {
     const held = &lowered.held_vars;
     for (held.items) |h| {

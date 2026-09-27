@@ -1,34 +1,29 @@
-//! §4.5.15 `$limit` — which call sites this device honours, decided before
-//! anything is written.
-//!
-//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the unknowns'
-//! names and returns a `Limits` — the honoured sites in source order and one
-//! `Decline` per site it does not honour, which `cg_limit.emit` reports as
-//! W0853. `cg_limit.zig` is the emitter that reads it (`limit`, `seed`); the
-//! questions both sides ask of the list (`ladderOf`, `limvdsClaimed`,
-//! `writable`) are methods here so the two can only ever agree.
-//!
-//! Cut verbatim from `cg_limit.zig` (`collect` and its helpers); only the
-//! receiver changed.
+//! §4.5.15 `$limit`: lowered calls and the unknowns' names -> `Limits`, the
+//! honoured sites in source order, one `Decline` per site not honoured
+//! (reported as W0853 by `cg_limit.emit`) and the §9.17.3 seed tree. The
+//! questions plan and emitter both ask (`ladderOf`, `limvdsClaimed`,
+//! `writable`) are methods here so the two always agree.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
 
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
 /// §4.5.15 the `$limit` call sites this device honours, in source order, and
-/// one `Decline` per site it does not. `buildJobs` queues the honoured sites'
-/// algorithm arguments into the core.
+/// one `Decline` per site it does not. `plan/jobs.zig` queues the honoured
+/// sites' algorithm arguments into the core.
 pub const Limits = struct {
     calls: []LimitCall = &.{},
     declined: []Decline = &.{},
-    /// `Lowered.num_ports` — what `writable` answers from.
+    /// `Lowered.num_ports`, what `writable` answers from.
     num_ports: usize = 0,
-    /// Any site carries a seed argument, or any site is a `pnjlimds` leg. Then `seed` is the branch tree `seed_steps` spells;
-    /// otherwise it is the per-junction vcrit bias it always was.
+    /// Any site carries a seed argument, or any site is a `pnjlimds` leg. Then
+    /// `seed` is the branch tree `seed_steps` spells; otherwise it is the
+    /// per-junction vcrit bias.
     seed_tree: bool = false,
     /// The tree, root first per component, each node after the one it hangs off.
     seed_steps: []SeedStep = &.{},
@@ -38,9 +33,8 @@ pub const Limits = struct {
     /// The ladder `calls[i]` (a `fetlimds` site, either leg) belongs to:
     /// exactly two `fetlimds` sites share its first-named node (the gate), one
     /// `limvds` site spans their second-named nodes (the channel), and both
-    /// channel nodes are the device's own to correct. Null otherwise. Derived on
-    /// demand — the plan and the emitter ask the same question of the same list, so
-    /// storing the answer could only let the two fall out of agreement.
+    /// channel nodes are the device's own to correct. Null otherwise. Derived
+    /// on demand, so the plan and the emitter cannot disagree about it.
     pub fn ladderOf(g: Limits, i: usize) ?Ladder {
         const me = g.calls[i];
         var partner: usize = undefined;
@@ -110,23 +104,23 @@ pub const Limits = struct {
     }
 };
 
-/// The three SPICE3 limiters the corpus names, plus one of our own. NOT an
+/// The three SPICE3 limiters the corpus names, plus VerA's own. Not an
 /// LRM taxonomy: §4.5.15 leaves the identifier implementation-defined; the
 /// first three are the spellings `devsup.c` established, which is what every
 /// `.va` in the corpus writes. An identifier that is not one of these is
 /// declined, which §4.5.15 permits ("the simulator may choose to ignore the
 /// limiting request").
 ///
-/// `fetlimds` is OURS, naming a construct devsup.c has no word for: ngspice's
-/// MOS loads (mos1load.c:351-373, same in mos2/3/6/9, vdmos, b3ld) do not
-/// fetlim both gate legs — they fetlim the junction that CONTROLS the channel
-/// in the present mode, `vgs` when the OLD vds >= 0 and `vgd` when it is
-/// negative, run limvds, and derive the other leg. A static both-legs ladder
+/// `fetlimds` is VerA's own, naming a construct devsup.c has no word for:
+/// ngspice's MOS loads (mos1load.c:351-373, same in mos2/3/6/9, vdmos, b3ld)
+/// do not fetlim both gate legs. They fetlim the junction that controls the
+/// channel in the present mode (`vgs` when the old vds >= 0, `vgd` when it is
+/// negative), run limvds, and derive the other leg. A static both-legs ladder
 /// clamps the non-controlling frame at a vds = 0 crossing, and Newton
-/// two-cycles against the mode-swapped Jacobian (ngspice/mosamp wedged at the
-/// seam). Spell BOTH gate legs `fetlimds` next to a `limvds` on the channel
-/// and the three emit as one mode ladder (`emitLadder`); jfet/hfet keep
-/// `fetlim`, because their ngspice loads really do clamp both legs.
+/// two-cycles against the mode-swapped Jacobian. Spell both gate legs
+/// `fetlimds` next to a `limvds` on the channel and the three emit as one
+/// mode ladder (`emitLadder`); jfet/hfet keep `fetlim`, because their ngspice
+/// loads really do clamp both legs.
 pub const Alg = enum {
     pnjlim,
     fetlim,
@@ -142,10 +136,10 @@ pub const Alg = enum {
     /// which §9.17.3 permits.
     pnjlimds,
     /// ngspice's per-model absolute step clamp (`B4SOIlimit`, hisim's
-    /// `limit_dx`): |vnew − vold| ≤ arg. Unlike `pnjlim` it carries NO
-    /// cold-start seed — B4SOI's MODEINITJCT starts every junction at
-    /// icVxS (0), and the vcrit seed is exactly what parked a floating
-    /// SOI body in the high-current basin.
+    /// `limit_dx`): |vnew - vold| <= arg. Unlike `pnjlim` it carries no
+    /// cold-start seed: B4SOI's MODEINITJCT starts every junction at icVxS
+    /// (0), and a vcrit seed parks a floating SOI body in the high-current
+    /// basin.
     steplim,
 
     /// Numeric arguments that follow the algorithm name.
@@ -187,43 +181,43 @@ pub const LimitCall = struct {
     lo: u32,
     /// The call's token, for a decline that is only decided after resolution.
     tok: u32 = 0,
-    /// The algorithm's numeric arguments as MIR values. `buildJobs` queues these
-    /// as core jobs, so by emission time each has an `lo_idx` field.
+    /// The algorithm's numeric arguments as MIR values. `plan/jobs.zig`
+    /// queues these as core jobs, so by emission time each has an `lo_idx`
+    /// field.
     argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
     /// Optional argument after `sign`: the value this site's branch starts at
     /// in `seed` (SPICE MODEINITJCT), in the frame of `sign`; `.undef` when
     /// absent. §9.17.3 leaves the algorithm's arguments to the implementation.
     seed: Mir.Value = .undef,
-    /// Optional trailing argument: the FRAME SIGN. All three devsup.c
+    /// Optional trailing argument: the frame sign. All three devsup.c
     /// limiters assume forward = positive; a PNP/PMOS model whose junction is
-    /// forward at NEGATIVE probe voltage passes its `type` parameter here and
-    /// the clamp runs on `sign·v` — exactly ngspice's habit of limiting
-    /// `type*vbe` in the load routine. `.f_zero` = unsigned (+1).
+    /// forward at negative probe voltage passes its `type` parameter here and
+    /// the clamp runs on `sign*v`, as ngspice limits `type*vbe` in the load
+    /// routine. `.f_zero` = unsigned (+1).
     ///
-    /// This exists because the alternative spellings do not survive lowering:
-    /// `$limit` under `if (type > 0)` is declined (no CFG in the clamp list),
-    /// and `$limit(type*V(a,b), …)` has no node pair to correct.
+    /// The alternative spellings do not survive lowering: `$limit` under
+    /// `if (type > 0)` is declined (no CFG in the clamp list), and
+    /// `$limit(type*V(a,b), ...)` has no node pair to correct.
     sign: Mir.Value = .f_zero,
 };
 
 // -------------------------------------------------------------------- plan
 
-/// Resolve every `$limit` call. Runs in `prepare` BEFORE `buildJobs`, which
-/// queues `argv` into the shared core.
+/// Resolves every `$limit` call into honoured sites, declines (W0853) and the
+/// seed tree; slices are owned by `g.arena`. Runs in `prepare` before
+/// `plan/jobs.zig`, which queues each honoured site's `argv` into the core.
 pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     var lim: Limits = .{ .num_ports = g.lowered.num_ports };
     var out: std.ArrayList(LimitCall) = .empty;
     var declined: std.ArrayList(Decline) = .empty;
     // A block that dominates the exit is on every path to it, so a call there
-    // runs unconditionally. `limit` has no CFG of its own — it is a flat list
-    // of clamps — so a call under an `if` is one this cannot honour: its guard
-    // is bias-dependent and would have to be re-evaluated at the UNLIMITED x.
+    // runs unconditionally. `limit` has no CFG of its own (it is a flat list
+    // of clamps), so a call under an `if` cannot be honoured: its guard is
+    // bias-dependent and would have to be re-evaluated at the unlimited x.
     //
-    // The exit is the block with NO successors, not `rpo[last]`: with a loop
-    // upstream, DFS may visit the loop's after-block before its body, and
-    // reverse postorder then ends on the BODY — dominance against that
-    // declined every `$limit` in BSIMSOI (its temp section runs a `for` over
-    // fingers and a TOXP `while` before the probe block).
+    // The exit is the block with no successors, not `rpo[last]`: with a loop
+    // upstream, DFS may visit the loop's after-block before its body, so
+    // reverse postorder can end on the body.
     const exit = blk: {
         for (g.an.rpo) |bi| {
             if (g.an.succs[bi].len == 0) break :blk bi;
@@ -271,13 +265,13 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 const v = g.an.rv(d.args[2 + k]);
                 // The clamp is arithmetic on volts. An integer argument would
                 // land in the core as an `i64` field, and reading `.v` off it
-                // would not compile — refuse it here, where the reason is
-                // sayable, rather than emit code that does not build.
+                // would not compile, so it is refused here where the reason
+                // can be stated.
                 if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
                 lc.argv[k] = v;
             }
             // One argument past the algorithm's arity is the frame sign.
-            // Integer is fine here — the emitted uses are comparisons
+            // Integer is fine here: the emitted uses are comparisons
             // (`< 0.0`), never arithmetic, and `parameter integer type` is
             // the standard polarity spelling (bjt.va).
             if (d.args.len > 2 + n) {
@@ -300,13 +294,13 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     }
     lim.calls = out.items;
 
-    // A `fetlimds` site is only honoured as a member of a COMPLETE mode
-    // ladder — dangling, it would clamp one leg with no frame authority,
-    // which is the static-order bug the algorithm exists to fix — and a
-    // `pnjlimds` site as a member of a complete bulk rung, for the same
-    // reason. The mask is computed over the unfiltered list first: validity
-    // is symmetric (both legs check both `lo`s, a >2-way share fails every
-    // member), so dropping the invalid sites never invalidates a surviving one.
+    // A `fetlimds` site is honoured only as a member of a complete mode
+    // ladder (dangling, it would clamp one leg with no frame authority, the
+    // static-order bug the algorithm exists to fix), and a `pnjlimds` site
+    // only as a member of a complete bulk rung. The mask is computed over the
+    // unfiltered list first: validity is symmetric (both legs check both
+    // `lo`s, a share of more than two fails every member), so dropping the
+    // invalid sites never invalidates a surviving one.
     var any_dangling = false;
     for (lim.calls, 0..) |_, i| {
         if (dangling(lim, i) != null) any_dangling = true;
@@ -485,10 +479,10 @@ fn dangling(lim: Limits, i: usize) ?[2][]const u8 {
 /// and the `limvds` site whose probe orients them, as `Ladder` does.
 pub const Rung = struct { bs: u32, bd: u32, ds: u32 };
 
-/// A resolved mode ladder: indices into `calls` of the vgs leg, the vgd
-/// leg, and the `limvds` site whose probe orients them — `limvds` reads
-/// V(di,si), so the leg landing on its `lo` is the source leg (vgs) and the
-/// one landing on its `hi` is the drain leg (vgd).
+/// A resolved mode ladder: indices into `calls` of the vgs leg, the vgd leg,
+/// and the `limvds` site whose probe orients them. `limvds` reads V(di,si),
+/// so the leg landing on its `lo` is the source leg (vgs) and the one landing
+/// on its `hi` is the drain leg (vgd).
 pub const Ladder = struct { gs: u32, gd: u32, ds: u32 };
 
 const Site = struct {
@@ -518,13 +512,13 @@ fn spell(g: Input, u_names: []const []const u8, args: []const Mir.Value) []const
     return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ uName(u_names, pair[0]), uName(u_names, pair[1]), alg }) catch "$limit(…)";
 }
 
+/// Returns the name of unknown `u`, or "0" for §1.3.1.1 ground.
 pub fn uName(u_names: []const []const u8, u: u32) []const u8 {
     return if (u == none_u32) "0" else u_names[u];
 }
 
-/// §4.4 `V(a,b)` lowers to `fsub` of two probes and `V(a)` to a bare probe
-/// (mir.zig:420-422). Anything else — a flow probe, an expression — has no
-/// node pair to correct.
+/// §4.4 `V(a,b)` lowers to `fsub` of two probes and `V(a)` to a bare probe.
+/// Anything else (a flow probe, an expression) has no node pair to correct.
 fn probePair(g: Input, args: []const Mir.Value) ?[2]u32 {
     if (args.len == 0) return null;
     const v = g.an.rv(args[0]);
@@ -556,8 +550,8 @@ fn algOf(g: Input, args: []const Mir.Value) ?Alg {
     const s = switch (g.mir.valueDef(g.an.rv(args[1]))) {
         .str_const => |s| s,
         // §9.17.3 also allows a user analog function here. That is a call, not
-        // a string, and it needs the whole body — handled in lowering
-        // (`Lower.lowerLimitUser`), so it never reaches the clamp list.
+        // a string, and it needs the whole body, so lowering handles it
+        // (`Lower.lowerLimitUser`) and it never reaches the clamp list.
         .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => return null,
     };
     return std.meta.stringToEnum(Alg, s);
