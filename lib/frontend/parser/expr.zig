@@ -846,4 +846,3 @@ pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
     }
     return self.file.intern(self.arena, decoded[0..n]);
 }
-

@@ -452,7 +452,6 @@ pub const SsaBuilder = struct {
         if (b >= self.block_state.len) return 0;
         return self.block_state.items(.preds_len)[b];
     }
-
 };
 
 // -------------------------------------------------------------------------

@@ -480,11 +480,14 @@ fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.Strin
     if (operand == .none or ex.tag(operand) != .ident) return null;
     const name = file.str(ex.strOf(operand));
     if (!digital.contains(name)) return null;
-    return .{ .name = name, .edge = switch (tag) {
-        .event_posedge => .posedge,
-        .event_negedge => .negedge,
-        else => .any, // else: the bare-name term
-    } };
+    return .{
+        .name = name,
+        .edge = switch (tag) {
+            .event_posedge => .posedge,
+            .event_negedge => .negedge,
+            else => .any, // else: the bare-name term
+        },
+    };
 }
 
 /// `e` when it names a net of `module` with no continuous discipline, else null.
