@@ -1,21 +1,9 @@
-//! What the drivers of a resolved net assert -> the value the net shows.
-//!
-//! In: each driver's value as it evaluates (`drive`, or `gate`, `udp`,
-//! `mos`, `bridge`, `pull` computing it first), for every net that is not
-//! one plain driver's copy. Out: the net's value, published through
-//! `State.store`, so its waiters wake exactly as `exec.resolve`'s store
-//! wakes them; and the delayed transitions in flight (`drive_base`,
-//! `net_base`, `decay_base` payloads, applied by `State.next`).
-//!
-//! The tables are `digital/net.zig`'s — `Signal.combine`/`combineWired`,
-//! `netPull`, `gateBit`, `udpEval`, `Delay` — so the two engines cannot
-//! disagree about one. The one fold written here is the all-strong one,
-//! where no strength decides anything: it runs word-parallel over the
-//! value and unknown planes, and is `Signal`'s fold by construction.
-//!
-//! Clauses: IEEE 1364-2005 §7.9 Tables 7-4..7-7, §7.10, §3.7, §3.8 trireg
-//! charge and decay, §6.1.3 inertial delay, A.2.2.3 `delay3` per §7.14,
-//! §7.8.5 gates, §7.6 MOS switches, §8 UDPs, §19.10 `unconnected_drive`.
+//! What the drivers of a resolved net assert -> the value the net shows,
+//! published through `State.store` so its waiters wake as `exec.resolve`'s
+//! store wakes them, plus the delayed transitions in flight. The tables are
+//! `digital/net.zig`'s; the one fold here, the all-strong one, is `Signal`'s.
+//! Clauses: IEEE 1364-2005 §7.9 Tables 7-4 to 7-7, §7.10, §3.7, §3.8, §6.1.3,
+//! §7.14 `delay3`, §7.8.5 gates, §7.6 MOS switches, §8 UDPs, §19.10.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -64,6 +52,7 @@ pub const Driver = struct {
     source: Source,
 };
 
+/// What computes a driver's value.
 pub const Source = union(enum) {
     expr,
     /// The output bit of a gate (one of a §7.1.5 array).
@@ -120,6 +109,7 @@ pub const Nets = struct {
     /// A driver value under construction.
     scratch: []u64,
 
+    /// The state at time 0, allocated from `gpa` for the whole run.
     pub fn init(gpa: std.mem.Allocator, nets: []const Net, drivers: []const Driver, udps: []const Udp) Error!Nets {
         var t: Nets = undefined;
         t.nets = nets;
@@ -457,7 +447,7 @@ fn chargeState(s: *State, k: u32, floating: bool) Error!void {
 /// `exec.schedule`, §6.1.3's inertial rule: whether a transition to `to`
 /// must be scheduled, having cancelled the one it displaces and recorded
 /// `to` in `tgt`. Not when the value settles back to what is published, or
-/// is what is already on its way — a pulse shorter than the delay vanishes.
+/// is what is already on its way: a pulse shorter than the delay vanishes.
 fn inertial(s: *State, flight: *?Handle, tgt: []u64, tgt_or_z: *bool, from_v: []const u64, from_x: []const u64, from_or_z: bool, to: []const u64, to_or_z: bool) Error!bool {
     const h = to.len / 2;
     const same = if (flight.* != null)

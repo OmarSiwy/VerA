@@ -1,16 +1,9 @@
-//! The processes of a native design -> how `rt.State` schedules each.
-//!
-//! In: every process `emit.native` found, as the pcs it reaches from its
-//! entry. Out: which slots anything can wait on (a store to any other slot
-//! wakes no one, so it is a plain store), and under the `static` schedule a
-//! role per process with the tables that run it: combinational nodes in
-//! topological order with the bits that dirty them (§5.2.1: a constant
-//! select reads only the bits it names), and the watchers of the processes
-//! that wait at one fixed event control. For `--state=auto`, the slots
-//! whose value at a time-step boundary nothing reads (`stepLocal`).
-//!
-//! Clauses: IEEE 1364-2005 §11.4.1 (active events in any order), §6.1
-//! continuous assignment, §9.7.5 `@*`, §9.7.2 edges.
+//! The processes of a native design -> how `rt.State` schedules each: the
+//! slots anything can wait on (a store to any other is a plain store), and
+//! under `static` a role per process with its tables: combinational nodes in
+//! topological order with the bits that dirty them, and the watchers of
+//! processes with one fixed event control. Also `stepLocal` for `--state=auto`.
+//! IEEE 1364-2005 §11.4.2 (active events in any order), §6.1, §9.7.2, §9.7.5, §5.2.1.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
@@ -30,7 +23,8 @@ pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
     general,
     /// Suspends only at its entry, an event control whose terms are
-    /// static: `rt.State.waiting[n]` while it waits there.
+    /// static; `rt.State.waiting[n]` holds its suspension stamp there,
+    /// 0 while it runs.
     triggered: u32,
     /// Combinational node n: run by a settle event in topological order,
     /// never queued after time 0.
@@ -56,8 +50,10 @@ pub const Plan = struct {
     /// (`rt.Design.comb`).
     comb_start: []const u32 = &.{},
     comb: []const Sense = &.{},
+    /// Per slot, the triggered processes it wakes (`rt.Design.watchers`).
     watch_start: []const u32 = &.{},
     watchers: []const Watcher = &.{},
+    /// The number of triggered processes.
     triggered: u32 = 0,
     fan_start: []const u32,
     fan: []const u32,
@@ -263,9 +259,13 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     };
     const watch = try per.table(Watcher, a, watch_lists);
 
+    const reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start);
+    for (cands.items) |c| if (node_of[c.proc] != null and r.code.items[procs[c.proc].entry] == .continuous) for (c.inputs) |s| {
+        reach[s].comb_first = reach[s].terms;
+    };
     return .{
         .watched = watched,
-        .reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start),
+        .reach = reach,
         .node_pc = node_pc,
         .comb_start = comb.start,
         .comb = comb.items,
@@ -280,7 +280,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
 /// Per slot, what its change can wake: the tables' rows, an event control
 /// a process files (every wait but a triggered process's or a node's entry;
 /// a subroutine a process calls never waits), the monitor, a dump.
-fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]const Reach {
+fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]Reach {
     const r = self.r;
     const reach = try self.arena.alloc(Reach, r.values.len);
     @memset(reach, .{});
@@ -331,7 +331,7 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
 /// by cone: a depth-first post-order over each node's writers, deepest
 /// first, from the last node back, so a node lands just after the nodes it
 /// reads, and mostly in their dirty word. Any topological order is one
-/// §11.4.1 permits for the settle event.
+/// §11.4.2 permits for the settle event.
 fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![]const u32 {
     var writers: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty;
     for (acyclic) |ci| for (cands[ci].outputs) |s| {

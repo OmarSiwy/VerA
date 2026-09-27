@@ -1,14 +1,9 @@
-//! AST -> bytecode for the digital engine.
-//!
-//! In: one process body, or one driver's expression, in the instance scope it
-//! was written in. Out: `Instruction` rows appended to `Run.code`, the natural
-//! type of every expression in `Run.types`, and the static slot lists that
-//! drivers and `@*` wait on — or E1100 before any process has run.
-//!
-//! Clauses: expression typing per IEEE1364-2005 §5.5.1 Table 5-22 and §5.1.14
-//! concatenation; A.6.5 statements, §8.5.3.3/§8.5.3.4 intra-assignment timing,
-//! §9.7.1 delays, §9.7.5 `@*`, §5.10.4 named events, §6.1 continuous
-//! assignment operands; §17.7 clock queries and §9.14 Table 9-11 `$clog2`.
+//! AST -> bytecode: one process body or driver expression, in its instance
+//! scope, -> `Instruction` rows in `Run.code`, each expression's type in
+//! `Run.types`, and the static slot lists drivers and `@*` wait on; or E1100
+//! before any process has run.
+//! Clauses: IEEE 1364-2005 §5.5.1 Table 5-22, §5.1.14, A.6.5, §9.7.1, §9.7.5,
+//! §5.10.4, §6.1, §8.5.3.3/§8.5.3.4, §17.7; VAMS §9.14 Table 9-11 `$clog2`.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -27,92 +22,90 @@ const tasks = display.tasks;
 // ---- the bytecode and its tables (A.6.5, §9.14 Table 9-11, §17.7) -----------
 
 /// An expression's type (§5.5.1): a width and a signedness, or IEEE 1364-2005
-/// §4.8's `real` — a double, held in a slot as its 64 bits.
+/// §4.8's `real`, a double held in a slot as its 64 bits.
 pub const Type = struct { width: u32, signed: bool, real: bool = false };
 pub const real_type: Type = .{ .width = 64, .signed = true, .real = true };
 
-// All fields in a row are consumed by one dispatch; expressions stay in the AST.
-// Every statement kind is its own instruction, decided here, so `execute` is
-// one switch over this union and never goes back to the statement.
+/// One bytecode row, consumed whole by one dispatch; expressions stay in the
+/// AST. Each statement kind is decided here, so `exec.execute` is one switch
+/// and never goes back to the statement.
 pub const Instruction = union(enum(u5)) {
-    // A.6.2 a blocking or nonblocking assignment with no intra-assignment
-    // timing control (those are `sample`/`deposit`).
+    /// A.6.2 a blocking or nonblocking assignment with no intra-assignment
+    /// timing control (those are `sample`/`deposit`).
     assign: struct { target: Ast.ExprId, value: Ast.ExprId, nonblocking: bool },
-    // §9.7.1 `#d stmt`: suspend for the delay, resume at the next pc.
+    /// §9.7.1 `#d stmt`: suspend for the delay, resume at the next pc.
     delay: struct { amount: Ast.ExprId, tok: u32 },
-    // One §17 system task, resolved against `display.tasks` at compile time.
+    /// One §17 system task, resolved against `display.tasks` at compile time.
     task: struct { task: display.Task, args: []const Ast.ExprId, tok: u32 },
-    // §6.1 one continuous assignment: evaluate, drive, resolve, then suspend
-    // on its own operands. Its resumption point is its own pc.
+    /// §6.1 continuous assignment `n`: evaluate, drive, resolve, then suspend
+    /// on its own operands, resuming at its own pc.
     continuous: u32,
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
     jump: u32,
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
     repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32 },
     repeat_next: struct { counter: u32, body: u32 },
-    // §5.10.1 suspend until one watched variable takes a matching edge.
+    /// §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
-    // A.6.5 `@*`. §9.7.5's implicit list is derived from the body and is
-    // STATIC, so it is resolved to slots once at compile time; a resumption is
-    // then the same `.any` waiter an explicit `@(a or b)` installs.
+    /// A.6.5 `@*`: §9.7.5's implicit list, resolved to slots at compile time.
+    /// A resumption is the same `.any` waiter `@(a or b)` installs.
     wait_slots: []const u32,
-    // A.6.5 `wait_statement`, which is LEVEL sensitive: the condition is tested
-    // on arrival and again on every resumption, and only a true reading falls
-    // through. `slots` is the same operand list `@*` uses, here only to decide
-    // when it is worth re-testing.
+    /// A.6.5 `wait_statement`, level sensitive: `cond` is tested on arrival
+    /// and on every resumption, and only a true reading falls through.
+    /// `slots` (its operands) says when to re-test.
     wait_level: struct { cond: Ast.ExprId, slots: []const u32 },
-    // §8.5.3.3 the two halves of A.6.2's intra-assignment timing control.
-    // `sample` evaluates the right-hand side with the values current when the
-    // statement is REACHED and parks it in `cell`, then applies the timing;
-    // `deposit` resolves the target and writes the parked value when the
-    // process resumes ("the values at the time the process resumes are used to
-    // determine the target(s)"). A nonblocking one emits no `deposit`: it
-    // schedules the write from `sample` and does not suspend.
+    /// §8.5.3.3 the first half of an intra-assignment timing control: the
+    /// right-hand side, evaluated when the statement is reached, is parked in
+    /// `cell`, then the timing applies. A nonblocking one schedules its write
+    /// here, does not suspend, and has no `deposit`.
     sample: struct { statement: Ast.StmtId, cell: u32 },
+    /// The second half: on resumption the target is resolved ("the values at
+    /// the time the process resumes are used to determine the target(s)") and
+    /// the parked value written.
     deposit: struct { statement: Ast.StmtId, cell: u32 },
-    // A.6.5 `-> named_event`. §5.10: events "have no time duration" and "do not
-    // hold any data", so this publishes NOTHING — it only resumes whoever is
-    // waiting on the slot right now. A trigger nobody is waiting for is gone.
+    /// A.6.5 `-> named_event`. §5.10 events "do not hold any data", so this
+    /// stores nothing: it resumes whoever waits on the slot now, and a
+    /// trigger nobody waits for is gone.
     trigger: u32,
-    // §9.9.2 an `always` body returning to its own start.
+    /// §9.9.2 an `always` body returning to its own start.
     restart: struct { target: u32, tok: u32 },
-    // A.6.5 `disable_statement ::= disable hierarchical_block_identifier ;`.
-    // A named block is a contiguous pc range and that range IS its activity, so
-    // terminating the block is dropping whatever resumption points into it.
-    // Resolved to a range after every process is compiled, because a `disable`
-    // may name a block written later in the file.
+    /// A.6.5 `disable` of a named block, whose activity is its pc range
+    /// [start, end): terminating it drops every resumption into that range.
+    /// Patched in after every process is compiled, since a `disable` may
+    /// name a block written later.
     disable_block: struct { start: u32, end: u32 },
-    // §6.2.1 a variable declaration assignment: one blocking write of a
-    // whole declared variable, which has a slot and no expression naming it.
+    /// §6.2.1 a variable declaration assignment: one blocking write of a
+    /// whole declared variable, which has a slot and no expression naming it.
     init_var: struct { slot: u32, value: Ast.ExprId },
-    // §10.2.2 a task enable run to completion in place: copy in, the body at
-    // `Sub.entry`, copy out. Every call of a function takes the same path.
+    /// §10.2.2 a task enable or function call run to completion in place:
+    /// copy in, the body at `Sub.entry`, copy out.
     call: struct { sub: u32, args: []const Ast.ExprId, tok: u32 },
-    // §10.2.2 an inlined enable's copy-out: `slot` (a formal) is assigned to
-    // the caller's lvalue `target`, resolved in the caller's scope.
+    /// §10.2.2 an inlined enable's copy-out: formal `slot` is assigned to
+    /// the caller's lvalue `target`, resolved in the caller's scope.
     copy_out: struct { target: Ast.ExprId, slot: u32 },
-    // §10.3 `disable` naming a task: every activation of it ends.
+    /// §10.3 `disable` naming a task: every activation of it ends.
     disable_task: u32,
-    // §10.2.3 enable a task that suspends and reaches itself: a new
-    // activation of its out-of-line body (`Sub.body`), and its end.
+    /// §10.2.3 enable of a task that suspends and reaches itself: a new
+    /// activation of its out-of-line body (`Sub.body`).
     call_timed: struct { sub: u32, args: []const Ast.ExprId },
+    /// The end of a `call_timed` activation of task `n`.
     task_return: u32,
-    // §17.5 start an asynchronous PLA's own process at this pc.
+    /// §17.5 start an asynchronous PLA's own process at this pc.
     pla_start: u32,
-    // §9.8.2 `fork`: start every arm as a process of its own, then wait for
-    // `join` cell `join` to count them all back; the parent resumes at `end`.
+    /// §9.8.2 `fork`: start every arm as a process of its own; join cell
+    /// `join` counts them back, and the parent resumes at `end`.
     fork: struct { arms: []const u32, join: u32, end: u32 },
-    // One `fork` arm finished; the last one resumes the parent at `end`.
+    /// One `fork` arm finished; the last one resumes the parent at `end`.
     join_arm: struct { join: u32, end: u32 },
-    // §9.3 install a procedural continuous assignment on `slot`: its
-    // out-of-line process [start, end) keeps the slot equal to its expression.
+    /// §9.3 install a procedural continuous assignment on `slot`: its
+    /// out-of-line process [start, end) keeps the slot equal to its expression.
     override_on: struct { slot: u32, force: bool, start: u32, end: u32 },
-    // That process's one step: write `value` into `slot` past the guard.
+    /// That process's one step: write `value` into `slot` past the guard.
     override_eval: struct { slot: u32, value: Ast.ExprId, force: bool },
-    // §9.3 `deassign` / `release`.
+    /// §9.3 `deassign` / `release`.
     override_off: struct { slot: u32, force: bool },
-    // §7.6 a controlled pass switch: read the control, re-resolve both
-    // sides, and wait on the control's operands.
+    /// §7.6 a controlled pass switch: read the control, re-resolve both
+    /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
     stop,
 };
@@ -121,7 +114,7 @@ pub const Instruction = union(enum(u5)) {
 /// that read the clock, and §4.2.1.4's `$signed`/`$unsigned` casts: every
 /// system function an integral expression may call. `infer` resolves each
 /// call once into `Run.sys_calls`; separate from `tasks` because these are
-/// EXPRESSIONS.
+/// expressions.
 pub const SysFn = enum {
     /// §17.7.1, 64 bits: "the time unit of the module that invoked it".
     time,
@@ -198,10 +191,9 @@ pub const SysFn = enum {
     dist_t,
     dist_erlang,
 
-    /// Is a call a constant expression when its arguments are? A clock query
-    /// never is, however constant its (absent) arguments — which a
-    /// replication count and a case label both depend on — and neither is a
-    /// question about the invocation.
+    /// Is a call a constant expression when its arguments are? A replication
+    /// count and a case label depend on this. A clock query, a file or queue
+    /// operation, a draw from a distribution and a driver query never are.
     fn constant(self: SysFn) bool {
         return switch (self) {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
@@ -330,7 +322,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             break :blk .{ .width = if (n.width == 0) 32 else n.width, .signed = n.signed };
         },
         // An unsized based constant is an integer-sized operand (Table
-        // 5-22) whose x/z fill is decided in context — see `exec.unsizedFill`.
+        // 5-22) whose x/z fill is decided in context (`exec.unsizedFill`).
         .logic_literal => blk: {
             const n = ex.logicValue(e);
             break :blk .{ .width = if (n.sized) n.width else 32, .signed = n.signed };
@@ -522,9 +514,8 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         if (args.len != 0) return self.exprFail(e, "$time and $stime take no arguments");
                         break :blk .{ .width = if (f == .time) 64 else 32, .signed = false };
                     },
-                    // §17.11's result is an `integer`, which §3.2 makes a
-                    // 32-bit SIGNED type — so `$clog2(x) - 1` at x = 0 is
-                    // -1 and not 4294967295.
+                    // §17.11's result is an `integer`, which §3.2 makes 32-bit
+                    // signed: `$clog2(x) - 1` at x = 0 is -1, not 4294967295.
                     .clog2 => {
                         if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
                         _ = try inferValue(self, args[0], depth + 1);
@@ -536,9 +527,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         if (operand.real) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                         break :blk .{ .width = operand.width, .signed = f == .make_signed };
                     },
-                    // §17.10: `(string)` and `(format, variable)`, returning
-                    // an integer. The variable is only ever written on a
-                    // match, so it is resolved and never read.
+                    // §17.6.5 `(q_id, status)`, an integer; `status` is written.
                     .q_full => {
                         if (args.len != 2 or args[0] == .none or args[1] == .none) return self.exprFail(e, "$q_full takes (q_id, status)");
                         _ = try inferValue(self, args[0], depth + 1);
@@ -577,6 +566,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                             else => real_type,
                         };
                     },
+                    // §17.10: `(string)` and `(format, variable)`, returning
+                    // an integer. The variable is written only on a match,
+                    // so it is checked as a target and never read.
                     .test_plusargs, .value_plusargs => {
                         const want: usize = if (f == .test_plusargs) 1 else 2;
                         if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
@@ -623,7 +615,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             }
         },
         // §10.4 a function call: the function's result variable is its type,
-        // so the call site's context never reaches inside it (d04_12).
+        // so the call site's context never reaches inside it.
         .call => blk: {
             const inst = self.instanceOf(self.scope);
             const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
@@ -704,9 +696,9 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         .empty => {},
         .block => |b| {
             // IEEE 1364-2005 §12.7: a named block's declarations are a scope
-            // of their own, searched before the one around it — so a local
-            // shadows a module variable of the same name. The block's NAME is
-            // still the enclosing scope's, which is where `disable` finds it.
+            // of their own, searched before the one around it, so a local
+            // shadows a module variable of the same name. The block's name
+            // stays in the enclosing scope, where `disable` finds it.
             // ponytail: `%m` inside such a block names the block but not the
             // named blocks around it.
             if (b.params.len != 0) return self.fail(tok, "block-local parameters are not implemented", .{});
@@ -734,7 +726,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             }
         },
         // A.6.5 `disable_statement`. The range is patched in once every
-        // process exists — see `Run.disables`.
+        // process exists (`Run.disables`).
         .disable => |s| {
             const at = try append(self, .{ .disable_block = .{ .start = 0, .end = 0 } });
             try self.disables.append(self.arena, .{ .at = at, .name = .{ .scope = self.scope, .str = s.name }, .tok = tok });
@@ -827,8 +819,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (s.timing_is_delay) try checkDelay(self, s.timing) else {
                 // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
                 // does not suspend, so the parked value would have to be
-                // held by the WAITER rather than by a per-site cell; give
-                // `Waiter` a payload when something needs it.
+                // held by the waiter, not a per-site cell; give `Waiter` a
+                // payload when something needs it.
                 if (s.nonblocking) return self.fail(tok, "an event control inside a nonblocking assignment is not implemented", .{});
                 try checkEvent(self, s.timing);
             }
@@ -836,9 +828,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             const cell: u32 = @intCast(self.holds.items.len);
             try self.holds.append(self.arena, try filled(self.arena, 1, false, .x));
             _ = try append(self, .{ .sample = .{ .statement = id, .cell = cell } });
-            // §8.5.3.4: a nonblocking one does not suspend the process — it
-            // schedules the update and falls through — so it has no
-            // resumption point and needs no `deposit`.
+            // §8.5.3.4: a nonblocking one schedules the update and falls
+            // through, so it has no resumption point and needs no `deposit`.
             if (!s.nonblocking) _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
         },
         // A.6.5 `event_trigger`. The slot is resolved here, not at run
@@ -859,9 +850,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 try compileStmt(self, s.body, depth + 1);
                 var watched: std.ArrayList(u32) = .empty;
                 try readSlots(self, s.body, &watched, depth);
-                // §9.7.5's list is what the statement READS. A statement
-                // that reads nothing would suspend forever, which is never
-                // what `@*` was written to mean.
+                // §9.7.5's list is what the statement reads; one that reads
+                // nothing would suspend forever.
                 if (watched.items.len == 0) return self.fail(tok, "§9.7.5: `@*` needs the statement to read at least one net or variable", .{});
                 self.code.items[at].wait_slots = watched.items;
                 return;
@@ -875,16 +865,15 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     try checkDelay(self, s.event);
                     _ = try append(self, .{ .delay = .{ .amount = s.event, .tok = tok } });
                 },
-                // A.6.5 `wait_statement`. The condition's operands ARE the
+                // A.6.5 `wait_statement`: the condition's operands are the
                 // wake-up list, but unlike `@` they only bring the process
                 // back to the same pc to re-test the level.
                 .level => {
                     try checkExpr(self, s.event);
                     var watched: std.ArrayList(u32) = .empty;
                     try sensitivity(self, s.event, &watched);
-                    // IEEE 1364-2005 9.7.6 tests the current level first.
-                    // An empty dependency list is legal: true continues;
-                    // false suspends without registering any future wakeup.
+                    // IEEE 1364-2005 §9.7.6 tests the level first. An empty
+                    // list is legal: true continues, false suspends forever.
                     _ = try append(self, .{ .wait_level = .{ .cond = s.event, .slots = watched.items } });
                 },
             }
@@ -901,11 +890,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 .monitor_enable => if (s.args.len != 0)
                     return self.fail(tok, "$monitoron and $monitoroff take no arguments", .{}),
                 .timeformat => {
-                    // §17.3.2 Syntax 17-10: no arguments at all (Table
-                    // 17-11's defaults), or all four. The three numbers are
-                    // integers read once when the task runs — so an
-                    // expression is legal, and a later change to it is not
-                    // tracked.
+                    // §17.3.2 Syntax 17-10: no arguments (Table 17-11's
+                    // defaults), or all four. The three numbers are read once
+                    // when the task runs, so an expression is legal and a
+                    // later change to it is not tracked.
                     const ex = &self.file.exprs;
                     if (s.args.len != 0 and s.args.len != 4) return self.fail(tok, "$timeformat takes no arguments or exactly four", .{});
                     if (s.args.len == 4) {
@@ -979,9 +967,9 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     try checkExpr(self, s.args[0]);
                     try display.display(self, s.args[1..], null, sh);
                 },
-                // §17.2.3: the variable, then `$fwrite`'s own arguments —
-                // for `$sformat`, a format first ("always interprets its
-                // second argument ... as a format string").
+                // §17.2.3: the variable, then `$fwrite`'s own arguments; for
+                // `$sformat` a format first ("always interprets its second
+                // argument ... as a format string").
                 .sshow => |sh| {
                     if (s.args.len == 0 or s.args[0] == .none) return self.fail(tok, "a §17.2.3 string output task's first argument is a variable", .{});
                     try checkTarget(self, s.args[0]);
@@ -1061,9 +1049,9 @@ fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u16) Error!void {
 
 // ---- tasks and functions (IEEE 1364-2005 §10) --------------------------------
 
-/// Compile every subroutine that can run synchronously — every function, and
-/// every task with no timing control (§10.2.1 allows one; §10.4.4 forbids it
-/// a function) — into a body of its own, entered by `.call`.
+/// Compiles every subroutine that runs synchronously into a body of its own,
+/// entered by `.call`: every function, and every task with no timing control
+/// (§10.2.1 allows one in a task; §10.4.4 forbids it in a function).
 pub fn compileSubs(self: *Run) Error!void {
     for (self.subs.items, 0..) |*sub, i| {
         if (try timed(self, @intCast(i))) continue;
@@ -1153,7 +1141,7 @@ fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, 
 }
 
 /// §10.2.2 a task enable. An untimed task is one `.call`; a timed one is
-/// inlined here — copy in, the body in the task's frame, copy out — so its
+/// inlined here (copy in, the body in the task's frame, copy out), so its
 /// suspensions are this process's own. A static task shares one frame
 /// between every such copy (§10.2.3); an automatic one gets a frame per call
 /// site, which is per activation because a site cannot be re-entered while
@@ -1196,21 +1184,19 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
 
 // ---- static sensitivity and target checks (§6.1, §9.7.5, §9.7.1) ------------
 
-/// §6.1 "a continuous assignment is evaluated whenever an operand changes".
-/// The operands are the slots its expression reads; they resolve at compile
-/// time, like an event term, so a resumption cannot fail mid-dispatch.
-///
-/// ponytail: an array element operand watches EVERY element of that array,
-/// because the element a dynamic index names is not known until it is read.
-/// A per-array wake list would replace that if a big memory ever feeds one.
+/// Appends to `out`, once each, the slots `e` reads: §6.1 "a continuous
+/// assignment is evaluated whenever an operand changes". They resolve at
+/// compile time, like an event term, so a resumption cannot fail mid-dispatch.
+// ponytail: an array element operand watches every element of its array;
+// a per-array wake list if a big memory ever feeds one.
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal => {},
         .ident, .hier_ident => try watch(self, try self.slot(e), out),
         .index => {
-            // An array element — every element, since the one an index names
-            // is not known until it is read — or a select of a vector.
+            // An array element watches every element, since the one an index
+            // names is known only when it is read; a vector select its vector.
             if (try self.indexedArray(e)) |arr| {
                 const base = try self.slot(self.chainBase(e).base);
                 for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
@@ -1230,13 +1216,9 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
 }
 
 /// §9.7.5's implicit event expression: every net and variable the statement
-/// READS. The identifier on the left of an assignment is written, not read,
-/// so it contributes nothing — but an index into it is read, which is why
-/// the target is walked for its subscript and not for its base.
-///
-/// Runs only after `compileStmt` accepted the same statement, so every form
-/// reachable here is one of the forms below and every expression in it is
-/// already type-checked.
+/// reads. An assignment target is written, not read, but its subscripts are
+/// read. Requires `compileStmt` to have accepted the statement, so every
+/// expression in it is type-checked.
 fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) Error!void {
     if (id == .none) return;
     if (depth == 256) return self.fail(self.file.stmtTok(id), "digital statements deeper than 256 AST levels are not implemented", .{});
@@ -1277,10 +1259,8 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
         .sys_task => |s| for (s.args) |a| {
             if (a != .none and ex.tag(a) != .str_literal) try sensitivity(self, a, out);
         },
-        // A trigger reads nothing, a `disable` reads nothing, an empty
-        // statement reads nothing, and a nested `@`/`#` inside `@*`
-        // suspends on its own terms — §9.7.5 takes the implicit list from
-        // the statement's reads either way.
+        // These read nothing. A nested `@` or `#` inside `@*` suspends on
+        // its own terms; §9.7.5 takes the list from the reads either way.
         .empty, .event_trigger, .disable => {},
         .event_control => |s| try readSlots(self, s.body, out, depth + 1),
         else => unreachable, // else: compileStmt admitted only the forms above
@@ -1313,11 +1293,10 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
 }
 
-/// §9.7.1 a delay is a "delay_value", and A.8.3 makes that
-/// `unsigned_number | real_number | ...` — so `#0.5` is as ordinary as
-/// `#1`. A real literal is left untyped here and rounded to the module's
-/// PRECISION at run time (`Scale.realDelay`) rather than truncated to its
-/// unit, which is the only thing that makes a sub-unit delay mean anything.
+/// §9.7.1 a delay is a "delay_value", which A.8.3 makes
+/// `unsigned_number | real_number | ...`, so `#0.5` is legal. A real delay
+/// is rounded to the module's precision at run time (`Scale.realDelay`), not
+/// truncated to its unit, so a sub-unit delay keeps its meaning.
 fn checkDelay(self: *Run, e: Ast.ExprId) Error!void {
     try checkExpr(self, e);
     if (typeOf(self, e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");

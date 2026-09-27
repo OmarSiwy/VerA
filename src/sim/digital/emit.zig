@@ -1,24 +1,9 @@
-//! An elaborated design -> the Zig root of its executable.
-//!
-//! In: a `Run` that `elaborate` returned, and the source it came from. Out:
-//! one Zig file whose `main` prints what `vera --run` of that source prints.
-//!
-//! Native: each process (§9.9 `initial`/`always`, §6.1 continuous
-//! assignment, §6.2.1 declaration assignment) becomes one function, a
-//! labeled switch over the bytecode pcs it can reach — one arm per
-//! instruction, `continue :sw` for a jump, `return` for a suspension — whose
-//! expressions are `emit_expr`'s. The runtime (`rt.State`) keeps the
-//! interpreter's queue, waiters and update rows, so the order of every event
-//! is `vera --run`'s. The switch over `Instruction` is exhaustive: whatever
-//! is not native yet is an arm that refuses by name.
-//!
-//! The functions sit in `Code(comptime two)` and touch the planes through
-//! `rt.Phase(two)`. Under `Logic.auto` a design no x or z carries meaning
-//! in names both phases (`rt.auto`); any other names `Code(false)` alone.
-//!
-//! Refused: the design embeds its source and runs the interpreter
-//! (`rt.interpret`); `Program.fallback` says why. The verdict is the
-//! emitter's own refusal, so the two cannot disagree about a design.
+//! An elaborated `Run` and its source -> the Zig root of its executable, whose
+//! `main` prints what `vera --run` prints. Each process (IEEE 1364-2005 §9.9,
+//! §6.1, §6.2.1) becomes one function, a labeled switch over the pcs it
+//! reaches with `emit_expr`'s expressions, once per `rt.Phase` (`Code(two)`).
+//! A construct that is not native refuses by name; the executable then embeds
+//! the source and runs the interpreter (`rt.interpret`, `Program.fallback`).
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -67,8 +52,8 @@ pub const Reason = struct { why: []const u8, tok: ?u32 };
 
 pub const Error = error{ Unsupported, OutOfMemory };
 
-/// The root module of `r`'s executable. `r` is read — and its time-0 queue
-/// drained — never run. Under `.two` a design where an x or z carries
+/// The root module of `r`'s executable. `r` is read and its time-0 queue
+/// drained, never run. Under `.two` a design where an x or z carries
 /// meaning is refused; under `.auto` it is 4-state throughout (`Program.four`).
 pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, logic: Logic) std.mem.Allocator.Error!Program {
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = logic == .two, .auto = logic == .auto };
@@ -251,13 +236,13 @@ fn fmtReach(wakes: plan.Reach) std.fmt.Alt(plan.Reach, reachText) {
 
 fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.writeAll(".{");
-    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
+    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump", "comb_first" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
     try out.writeAll(" }");
 }
 
-/// A right-hand side: an expression, or a value already stored — a formal
-/// being copied out (§10.2.2), a parked intra-assignment value (§9.7.7) —
-/// at word `off` with type `ty`.
+/// A right-hand side: an expression, or a value already stored at word `off`
+/// with type `ty` (a formal being copied out, §10.2.2, or a parked
+/// intra-assignment value, §9.7.7).
 pub const Rhs = union(enum) { expr: Ast.ExprId, stored: struct { off: u32, ty: Type } };
 
 /// `rhs` in the type `target` gives it (`exec.evalFor`, `exec.convertSlot`).
@@ -432,10 +417,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word,
-    // each word a function of its own so no one function grows with the
-    // design (the compiler's time does, faster than its size). A word gets
-    // the view's fields and rebuilds it: passed whole, the view is read
-    // through a pointer again after every store.
+    // each word a function of its own, since Zig's compile time grows faster
+    // than a function's size. A word gets the view's fields and rebuilds it:
+    // passed whole, the view is read through a pointer again after every store.
     if (p.node_pc.len != 0) {
         try self.print("fn settle(s: rt.View) rt.Error!void {{\n", .{});
         for (0..(p.node_pc.len + 63) / 64) |w| try self.print("    if (s.dirty[{d}] != 0) try @call(.never_inline, settle{d}, .{{ s.s, s.v, s.x, s.dirty }});\n", .{ w, w });
@@ -1065,12 +1049,13 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
 }
 
 /// The entry of a triggered process or node: it waits by being listed in
-/// `rt.Design.watchers` or `comb`, so arriving here only says so.
+/// `rt.Design.watchers` or `comb`, so arriving here only records its
+/// suspension stamp (`rt.State.stamp`).
 fn waitFixed(self: *Emitter) Error!bool {
     switch (self.role) {
         .general => return false,
-        .triggered => |t| try self.print("            s.waiting[{d}] = true;\n            return;\n", .{t}),
-        .comb => try self.print("            return;\n", .{}),
+        .triggered => |t| try self.print("            s.waiting[{d}] = s.stamp();\n            return;\n", .{t}),
+        .comb => try self.print("            s.nodes_at = s.stamp();\n            return;\n", .{}),
     }
     return true;
 }
