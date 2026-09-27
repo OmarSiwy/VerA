@@ -200,6 +200,88 @@ const overrides = @hasDecl(@import("root"), "vera_overrides");
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
 
+/// `get` of planes `v`, `x`.
+inline fn peek(v: [*]const u64, x: [*]const u64, off: u32) W {
+    return .{ .v = v[off], .x = if (two) 0 else x[off] };
+}
+
+/// `getw` of planes `v`, `x`.
+inline fn peekw(v: [*]const u64, x: [*]const u64, off: u32, comptime n: u32) logic.Wide(n) {
+    return .{ .v = v[off..][0..n].*, .x = if (two) @splat(0) else x[off..][0..n].* };
+}
+
+/// `set` of planes `v`, `x`.
+inline fn poke(v: [*]u64, x: [*]u64, off: u32, a: anytype, m: anytype) void {
+    if (@TypeOf(a) != W) {
+        for (v[off..][0..a.v.len], x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
+            ov.* = (ov.* & ~am) | (av & am);
+            ox.* = (ox.* & ~am) | (ax & am);
+        }
+        return;
+    }
+    const bits: u64 = m;
+    v[off] = (v[off] & ~bits) | (a.v & bits);
+    if (!two) x[off] = (x[off] & ~bits) | (a.x & bits);
+}
+
+/// A settle event's hold on a `State`: its planes and dirty words as
+/// pointers read once, which stay in registers across the event's stores;
+/// through `State` each is read again after every store. Neither moves
+/// while a design runs.
+pub const View = struct {
+    s: *State,
+    v: [*]u64,
+    x: [*]u64,
+    dirty: [*]u64,
+
+    pub inline fn get(self: View, off: u32) W {
+        return peek(self.v, self.x, off);
+    }
+
+    pub inline fn getw(self: View, off: u32, comptime n: u32) logic.Wide(n) {
+        return peekw(self.v, self.x, off, n);
+    }
+
+    pub inline fn set(self: View, off: u32, a: anytype, m: anytype) void {
+        poke(self.v, self.x, off, a, m);
+    }
+
+    /// Clear combinational node `n`'s dirty bit; whether it was set. The
+    /// settle event takes every node in topological order, so a node only
+    /// ever dirties one it has not reached yet.
+    pub inline fn take(self: View, n: u32) bool {
+        const bit = @as(u64, 1) << @intCast(n % 64);
+        const was = self.dirty[n / 64] & bit != 0;
+        self.dirty[n / 64] &= ~bit;
+        return was;
+    }
+
+    /// `put` of the whole of a combinational node's output while the
+    /// settle event runs it, whether or not an input changed: the value is
+    /// stored as is, and the readers in `senses` (`word` counted from `off`)
+    /// whose bits moved are marked dirty here, without a branch; `reach` is
+    /// woken as `put` wakes it. A node reached in topological order only
+    /// marks later ones.
+    pub inline fn putNode(self: View, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
+        if (self.s.held(slot)) return;
+        const s = logic.wide(a);
+        const n = s.v.len;
+        const before = logic.low(self.get(off));
+        var d: [n]u64 = undefined;
+        inline for (0..n) |j| {
+            const o = self.get(off + j);
+            d[j] = (s.v[j] ^ o.v) | (s.x[j] ^ o.x);
+            self.v[off + j] = s.v[j];
+            if (!two) self.x[off + j] = s.x[j];
+        }
+        inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
+        if (@as(u8, @bitCast(reach)) == 0) return;
+        var any: u64 = 0;
+        for (d) |x| any |= x;
+        if (any != 0) try self.s.wakeOf(reach, slot, before, logic.low(self.get(off)));
+    }
+};
+
 pub const State = struct {
     gpa: std.mem.Allocator,
     v: []u64,
@@ -393,16 +475,6 @@ pub const State = struct {
             return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
     }
 
-    /// Clear combinational node `n`'s dirty bit; whether it was set. The
-    /// settle event takes every node in topological order, so a node only
-    /// ever dirties one it has not reached yet.
-    pub inline fn take(self: *State, n: u32) bool {
-        const bit = @as(u64, 1) << @intCast(n % 64);
-        const was = self.dirty[n / 64] & bit != 0;
-        self.dirty[n / 64] &= ~bit;
-        return was;
-    }
-
     /// Mark dirty the nodes that read a bit of `slot` changed since the
     /// last call, then forget those changes.
     fn markReaders(self: *State, slot: u32) void {
@@ -463,29 +535,28 @@ pub const State = struct {
 
     /// The value of at most 64 bits at word `off`.
     pub inline fn get(self: *const State, off: u32) W {
-        return .{ .v = self.v[off], .x = if (two) 0 else self.x[off] };
+        return peek(self.v.ptr, self.x.ptr, off);
     }
 
     /// The `n`-word value at word `off`.
     pub inline fn getw(self: *const State, off: u32, comptime n: u32) logic.Wide(n) {
-        return .{ .v = self.v[off..][0..n].*, .x = if (two) @splat(0) else self.x[off..][0..n].* };
+        return peekw(self.v.ptr, self.x.ptr, off, n);
     }
 
     /// The bits `m` of the value at word `off` become `a`'s, for a slot no
     /// event control, driver or node can be waiting on.
     pub inline fn set(self: *State, off: u32, a: anytype, m: anytype) void {
-        if (@TypeOf(a) != W) return self.merge(off, &a.v, &a.x, &m);
-        const bits: u64 = m;
-        self.v[off] = (self.v[off] & ~bits) | (a.v & bits);
-        if (!two) self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
+        poke(self.v.ptr, self.x.ptr, off, a, m);
+    }
+
+    /// The settle event's hold on the planes and dirty words.
+    pub inline fn view(self: *State) View {
+        return .{ .s = self, .v = self.v.ptr, .x = self.x.ptr, .dirty = self.dirty.ptr };
     }
 
     /// The bits `m` of the words from `off` become `v`/`x`'s.
     fn merge(self: *State, off: u32, v: []const u64, x: []const u64, m: []const u64) void {
-        for (self.v[off..][0..v.len], self.x[off..][0..v.len], v, x, m) |*ov, *ox, av, ax, am| {
-            ov.* = (ov.* & ~am) | (av & am);
-            ox.* = (ox.* & ~am) | (ax & am);
-        }
+        poke(self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
     }
 
     /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
@@ -522,31 +593,6 @@ pub const State = struct {
         if (!two) self.x[at] = nx;
         if (reach.comb and self.sensed(slot)) self.diff[at] |= d;
         try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
-    }
-
-    /// `put` of the whole of a combinational node's output while the
-    /// settle event runs it, whether or not an input changed: the value is
-    /// stored as is, and the readers in `senses` (`word` counted from `off`)
-    /// whose bits moved are marked dirty here, without a branch; `reach` is
-    /// woken as `put` wakes it. A node reached in topological order only
-    /// marks later ones.
-    pub inline fn putNode(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
-        if (self.held(slot)) return;
-        const s = logic.wide(a);
-        const n = s.v.len;
-        const before = logic.low(self.get(off));
-        var d: [n]u64 = undefined;
-        inline for (0..n) |j| {
-            const o = self.get(off + j);
-            d[j] = (s.v[j] ^ o.v) | (s.x[j] ^ o.x);
-            self.v[off + j] = s.v[j];
-            if (!two) self.x[off + j] = s.x[j];
-        }
-        inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
-        if (@as(u8, @bitCast(reach)) == 0) return;
-        var any: u64 = 0;
-        for (d) |x| any |= x;
-        if (any != 0) try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
     }
 
     /// `put` of a real (§4.8, `exec.store`): it changes when its value

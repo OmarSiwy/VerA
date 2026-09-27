@@ -387,18 +387,18 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\    if (pc < rt.show_base) return procs[pc](s, pc);
         \\
     , .{});
-    if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s);\n", .{});
+    if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word.
     if (p.node_pc.len != 0) {
-        try self.print("fn settle(s: *S) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{});
+        try self.print("fn settle(s: rt.View) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{});
         var lo: usize = 0;
         while (lo < p.node_pc.len) : (lo += 64) {
             try self.print("    if (s.dirty[{d}] != 0) {{\n", .{lo / 64});
             for (p.node_pc[lo..@min(lo + 64, p.node_pc.len)], lo..) |pc, n| try settleNode(self, p, pc, @intCast(n), entry_of[pc].?);
             try self.print("        s.dirty[{d}] = 0;\n    }}\n", .{lo / 64});
         }
-        try self.print("    s.settle = .idle;\n}}\n\n", .{});
+        try self.print("    s.s.settle = .idle;\n}}\n\n", .{});
     }
 
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
@@ -453,7 +453,7 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
     const r = self.r;
     const i = switch (r.code.items[pc]) {
         .continuous => |i| i,
-        else => return self.print("        if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry, pc }),
+        else => return self.print("        if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc }),
     };
     const d = r.drivers[i];
     const slot = r.nets[d.net].slot;
@@ -461,7 +461,7 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
     r.pc = pc;
     switch (d.source) {
         .expr => |x| if (!pure(self, x.e) or r.reals.contains(slot))
-            return self.print("        if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry, pc }),
+            return self.print("        if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc }),
         .gate => {},
         .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
     }
