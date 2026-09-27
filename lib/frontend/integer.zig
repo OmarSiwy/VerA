@@ -1,9 +1,13 @@
-//! Verilog-AMS §2.6.1 integer literals. Two packed bit planes use the VPI
-//! encoding: (value, unknown) = 00/10/11/01 for 0/1/X/Z respectively.
+//! Four-state integer literals (LRM §2.6.1): literal text in, a `Literal` of
+//! two packed bit planes out, plus the IEEE 1364-2005 §5.1 operators over them.
+//! The planes use the VPI encoding: (value, unknown) = 00/10/11/01 for 0/1/X/Z.
+
 const std = @import("std");
 
+/// Why `parse` refused a literal's text.
 pub const Error = error{ MissingBase, MissingDigits, DigitOutOfRange, ZeroSize, Overflow };
 
+/// One four-state bit; the integer is `value | unknown << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 pub const Extension = enum(u1) { zero, sign };
 pub const Bitwise = enum(u2) { and_bits, or_bits, xor_bits, xnor_bits };
@@ -14,17 +18,21 @@ pub const Shift = enum(u2) { left, right, arithmetic_left, arithmetic_right };
 pub const Relational = enum(u2) { less, less_equal, greater, greater_equal };
 pub const Arithmetic = enum(u3) { add, subtract, multiply, divide, remainder };
 
-/// Both planes are allocated together and owned by the caller's allocator. Widths
-/// share the AST's u32 address space; unsized integers have a 64-bit floor.
+/// A four-state integer of any width. Both planes are one allocation, owned by
+/// the allocator the producing call was given; free `planes` to release it.
+/// Widths share the AST's u32 address space; an unsized literal is at least 64
+/// bits wide.
 pub const Literal = struct {
     width: u32,
     sized: bool,
     signed: bool,
     planes: []u64,
 
+    /// Returns the value plane, least significant word first.
     pub fn values(self: Literal) []u64 {
         return self.planes[0 .. self.planes.len / 2];
     }
+    /// Returns the unknown plane; a set bit is X or Z.
     pub fn unknowns(self: Literal) []u64 {
         return self.planes[self.planes.len / 2 ..];
     }
@@ -32,6 +40,8 @@ pub const Literal = struct {
         for (self.unknowns()) |word| if (word != 0) return true;
         return false;
     }
+    /// Returns the value as an i64, sign-extended when `signed`. Null when the
+    /// literal is wider than 64 bits or holds an X or Z bit.
     pub fn asInt(self: Literal) ?i64 {
         if (self.width > 64 or self.hasUnknown()) return null;
         var bits = self.values()[0];
@@ -39,7 +49,8 @@ pub const Literal = struct {
             bits |= ~mask(self.width);
         return @bitCast(bits);
     }
-    /// Read one packed bit; bit zero is the least significant bit.
+    /// Returns bit `index`, bit zero least significant. Asserts
+    /// `index < width`.
     pub fn bit(self: Literal, index: u32) Bit {
         std.debug.assert(index < self.width);
         const bit_offset: u6 = @truncate(index);
@@ -48,10 +59,11 @@ pub const Literal = struct {
             (@as(u2, @intCast((self.unknowns()[word_index] >> bit_offset) & 1)) << 1));
     }
 
-    /// IEEE 1364-2005 §§5.5.2–5.6: the evaluator supplies the propagated
-    /// extension mode. Signed extension replicates X and Z too. This preserves
-    /// the source signedness; converting the type is a separate evaluator step.
-    /// Every allocating operation returns independent planes owned by `allocator`.
+    /// Returns a copy at `width` bits (IEEE 1364-2005 §§5.5.2 to 5.6). The
+    /// evaluator supplies the propagated extension mode. Signed extension
+    /// replicates X and Z too. This preserves the source signedness; converting
+    /// the type is a separate evaluator step. Every allocating operation
+    /// returns independent planes owned by `allocator`.
     pub fn resize(self: Literal, allocator: std.mem.Allocator, width: u32, extension: Extension) (error{ZeroSize} || std.mem.Allocator.Error)!Literal {
         if (width == 0) return error.ZeroSize;
         const out = try allocate(allocator, width, self.signed);
@@ -63,8 +75,8 @@ pub const Literal = struct {
         return out;
     }
 
-    /// IEEE1364-2005 §5.1.14: join self-determined operands, leftmost at
-    /// the most significant end. The result is unsigned and owns its planes.
+    /// Joins self-determined operands, leftmost at the most significant end
+    /// (IEEE 1364-2005 §5.1.14). The result is unsigned and owns its planes.
     pub fn concatenate(allocator: std.mem.Allocator, parts: []const Literal) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         var width: u32 = 0;
         for (parts) |part| {
@@ -82,8 +94,9 @@ pub const Literal = struct {
         return out;
     }
 
-    /// Repeat an already evaluated operand. Zero replication is a source-level
-    /// exception inside a larger concat; it never creates a zero-width Literal.
+    /// Repeats an already evaluated operand `count` times, unsigned. Zero
+    /// replication is a source-level exception inside a larger concat; it never
+    /// creates a zero-width Literal.
     pub fn replicate(self: Literal, allocator: std.mem.Allocator, count: u32) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         if (self.width == 0 or count == 0) return error.ZeroSize;
         const width = std.math.mul(u32, self.width, count) catch return error.Overflow;
@@ -112,7 +125,7 @@ pub const Literal = struct {
         }
     }
 
-    /// IEEE 1364-2005 Table 5-16. X and Z both negate to X.
+    /// Returns `~self` (IEEE 1364-2005 Table 5-16). X and Z both negate to X.
     pub fn bitwiseNot(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         for (out.values(), out.unknowns(), 0..) |*v, *u, i| {
@@ -123,7 +136,8 @@ pub const Literal = struct {
         return out;
     }
 
-    /// IEEE 1364-2005 Tables 5-12–5-15, §§5.4–5.5. Self-determined result
+    /// Applies a bitwise operator (IEEE 1364-2005 Tables 5-12 to 5-15, §§5.4
+    /// and 5.5). Self-determined result
     /// sizing only: a surrounding expression must propagate its context first.
     pub fn bitwise(self: Literal, allocator: std.mem.Allocator, op: Bitwise, rhs: Literal) std.mem.Allocator.Error!Literal {
         const signed = self.signed and rhs.signed;
@@ -153,7 +167,8 @@ pub const Literal = struct {
         return out;
     }
 
-    /// IEEE 1364-2005 §§5.1.5, 5.4–5.5. Result width is max(operand widths),
+    /// Applies an arithmetic operator (IEEE 1364-2005 §§5.1.5, 5.4, 5.5).
+    /// Result width is max(operand widths),
     /// signed iff both operands are signed. That common type controls operand
     /// extension before arithmetic. The caller must propagate any outer width
     /// and type first; these helpers do not infer expression/assignment context.
@@ -169,7 +184,7 @@ pub const Literal = struct {
     /// u64 op followed by the width mask computes exactly, and operands
     /// extended to 64 bits under the common signedness are exactly their
     /// values, which is all divide and remainder read. Otherwise the standard
-    /// library's exact integers, at any width — also the oracle the word path
+    /// library's exact integers, at any width, which are also the oracle the word path
     /// is tested against.
     fn arithmeticIn(self: Literal, allocator: std.mem.Allocator, op: Arithmetic, rhs: Literal, one_word: bool) std.mem.Allocator.Error!Literal {
         const signed = self.signed and rhs.signed;
@@ -230,8 +245,9 @@ pub const Literal = struct {
         return out;
     }
 
-    /// Unary minus retains the operand width and signedness, including wrap at
-    /// the most negative value. Any X/Z bit makes the entire result X.
+    /// Returns `-self`. Unary minus retains the operand width and signedness,
+    /// including wrap at the most negative value. Any X/Z bit makes the entire
+    /// result X.
     pub fn negate(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         return self.negateIn(allocator, self.width <= 64);
     }
@@ -257,7 +273,8 @@ pub const Literal = struct {
         return out;
     }
 
-    /// IEEE 1364-2005 §5.1.5, Tables 5-6/5-8. The caller propagates the
+    /// Returns `self ** exponent` (IEEE 1364-2005 §5.1.5, Tables 5-6 and
+    /// 5-8). The caller propagates the
     /// result context to the base first; the exponent keeps its own size and
     /// signedness. Integer results wrap at the base width. Any declared X/Z
     /// bit yields all X, including an unknown base raised to zero.
@@ -337,7 +354,7 @@ pub const Literal = struct {
         self.clearPadding();
     }
 
-    /// Bridge the packed planes to the standard library's exact integer
+    /// Converts the packed planes to the standard library's exact integer
     /// arithmetic. Explicit byte order keeps the u64 planes host-independent;
     /// only the declared bits participate, including a partial final word.
     fn arithmeticValue(self: Literal, allocator: std.mem.Allocator, signed: bool) std.mem.Allocator.Error!std.math.big.int.Managed {
@@ -360,9 +377,10 @@ pub const Literal = struct {
         self.clearPadding();
     }
 
-    /// IEEE 1364-2005 §5.1.12. The caller propagates the expression's result
-    /// width/type to self first (§§5.4–5.5); rhs is self-determined, unsigned,
-    /// and cannot change the result width or signedness. Shifted X/Z survive.
+    /// Shifts `self` by `rhs` (IEEE 1364-2005 §5.1.12). The caller propagates
+    /// the expression's result width/type to self first (§§5.4–5.5); rhs is
+    /// self-determined, unsigned, and cannot change the result width or
+    /// signedness. Shifted X/Z survive.
     pub fn shift(self: Literal, allocator: std.mem.Allocator, op: Shift, rhs: Literal) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         if (rhs.hasUnknown()) {
@@ -402,9 +420,10 @@ pub const Literal = struct {
         return out;
     }
 
-    /// IEEE 1364-2005 §5.1.7: unlike equality's known-mismatch rule, any
-    /// X/Z operand makes the relation unknown. Both-signed operands extend
-    /// and compare as signed; otherwise both normalize as unsigned.
+    /// Compares two literals (IEEE 1364-2005 §5.1.7). Unlike equality's
+    /// known-mismatch rule, any X/Z operand makes the relation unknown.
+    /// Both-signed operands extend and compare as signed; otherwise both
+    /// normalize as unsigned.
     pub fn relational(self: Literal, op: Relational, rhs: Literal) Bit {
         if (self.hasUnknown() or rhs.hasUnknown()) return .x;
         const signed = self.signed and rhs.signed;
@@ -440,7 +459,8 @@ pub const Literal = struct {
         }) .one else .zero;
     }
 
-    /// IEEE 1364-2005 §5.1.9: any known one decides truth, even beside X/Z.
+    /// Returns the logical truth value (IEEE 1364-2005 §5.1.9): any known one
+    /// decides it, even beside X/Z.
     pub fn truth(self: Literal) Bit {
         return self.reduce(.or_bits);
     }
@@ -449,6 +469,7 @@ pub const Literal = struct {
         return invert(self.truth());
     }
 
+    /// Applies `&&` or `||` to the two truth values (IEEE 1364-2005 §5.1.9).
     pub fn logical(self: Literal, op: Logical, rhs: Literal) Bit {
         const a = self.truth();
         const b = rhs.truth();
@@ -458,7 +479,8 @@ pub const Literal = struct {
         };
     }
 
-    /// IEEE 1364-2005 §5.1.11. The partial final word contributes only live bits.
+    /// Applies a unary reduction (IEEE 1364-2005 §5.1.11). Only the declared
+    /// bits contribute.
     pub fn reduce(self: Literal, op: Reduction) Bit {
         var zeros: u64 = 0;
         var ones: u64 = 0;
@@ -483,8 +505,9 @@ pub const Literal = struct {
         };
     }
 
-    /// IEEE 1364-2005 §5.1.8. A known mismatch resolves == even when other
-    /// bits are unknown. Case equality compares both planes and never yields X.
+    /// Applies an equality operator (IEEE 1364-2005 §5.1.8). A known mismatch
+    /// resolves == even when other bits are unknown. Case equality compares
+    /// both planes and never yields X.
     pub fn equality(self: Literal, op: Equality, rhs: Literal) Bit {
         const width = @max(self.width, rhs.width);
         const extension: Extension = if (self.signed and rhs.signed) .sign else .zero;
@@ -513,7 +536,8 @@ pub const Literal = struct {
         };
     }
 
-    /// IEEE 1364-2005 §5.1.13, Table 5-21: under an ambiguous condition,
+    /// Returns `self ? yes : no` (IEEE 1364-2005 §5.1.13, Table 5-21). Under
+    /// an ambiguous condition,
     /// only matching known bits survive; even Z/Z merges to X in this edition.
     /// Table 5-22 makes the arms context-determined. §§5.5.1–5.5.2 propagate
     /// their common signedness and width BEFORE this operator: both-signed arms
@@ -588,8 +612,9 @@ fn mask(width: u32) u64 {
     return if (n == 0) std.math.maxInt(u64) else (@as(u64, 1) << n) - 1;
 }
 
-/// Sized values accumulate modulo their declared width, so even arbitrarily
-/// long digit strings truncate correctly instead of overflowing before masking.
+/// Parses one §2.6.1 number token (size, `'`, optional `s`, base, digits;
+/// white space allowed around the base) into a `Literal` allocated from
+/// `arena`. A sized value wider than its size is truncated from the left.
 pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Allocator.Error)!Literal {
     var digits = text;
     var radix: u8 = 10;
@@ -1654,7 +1679,6 @@ test "concatenation allocation failures release input and result storage" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testConcatAllocation, .{});
 }
 
-// Moved from lexer.zig with the `parseInt` wrapper it tested.
 test "parse decodes every base, as the lexer spells the token (§2.6.1)" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -1669,11 +1693,10 @@ test "parse decodes every base, as the lexer spells the token (§2.6.1)" {
     try std.testing.expectEqual(@as(i64, 0o7460), try val(a, "12'o7460"));
     try std.testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32'h12ab_f001"));
     try std.testing.expectEqual(@as(i64, 0xaf), try val(a, "8'HAf"));
-    // §2.6.1: the size is OPTIONAL — an unsized based constant is legal.
+    // §2.6.1: the size is optional; an unsized based constant is legal.
     try std.testing.expectEqual(@as(i64, 0x837ff), try val(a, "'h837ff"));
     try std.testing.expect(!(try parse(a, "'h837ff")).sized);
-    // §2.6.1: a number wider than its size is truncated from the LEFT. These
-    // two were silently wrong while the parser had its own decoder.
+    // §2.6.1: a number wider than its size is truncated from the left.
     try std.testing.expectEqual(@as(i64, 0xf), try val(a, "4'h1f"));
     try std.testing.expectEqual(@as(i64, 255), try val(a, "8'hFFFF"));
     // §2.6.1 `s`: truncate to the size first, then read as two's complement.
@@ -1689,12 +1712,12 @@ test "parse decodes every base, as the lexer spells the token (§2.6.1)" {
     try std.testing.expectError(error.MissingBase, parse(a, "4'"));
     try std.testing.expectError(error.DigitOutOfRange, parse(a, "4'b012"));
     // §2.6.1: "the unsigned number token shall immediately follow the base
-    // format, OPTIONALLY PRECEDED BY WHITE SPACE" — four of the clause's five
+    // format, optionally preceded by white space"; four of the clause's five
     // examples are written that way.
     try std.testing.expectEqual(@as(i64, 0xaf), try val(a, "8'h Af"));
     try std.testing.expectEqual(@as(i64, 3), try val(a, "5 'D 3"));
     try std.testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32 'h 12ab_f001"));
-    // §10.3 substitution can leave white space at both joins (lexer.zig
+    // §10.4 macro substitution can leave white space at both joins (lexer.zig
     // keeps `8 'h A5` one token for that reason).
     try std.testing.expectEqual(@as(i64, 0xa5), try val(a, "8 'h A5"));
     // Syntax 2-2 `size ::= non_zero_unsigned_number`: an explicit 0 is not the

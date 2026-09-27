@@ -1,62 +1,16 @@
-//! Annex E.2 — reading SPICE `.MODEL` and `.SUBCKT` STATEMENTS.
-//!
-//! E.1.1 is one implication: "IF a simulator which supports Verilog-AMS HDL is
-//! also able to read SPICE netlists of a particular flavor, THEN certain objects
-//! defined in that flavor of SPICE netlist can be referenced from within a
-//! Verilog-AMS HDL structural description." This file is what makes the
-//! antecedent TRUE for one subset of one flavor, so that the consequent — E.2's
-//! "the subcircuits and models contained within the SPICE netlist are treated as
-//! module definitions" — has objects to range over.
-//!
-//! WHAT IT IS NOT. It is not a general netlist simulator and does not become
-//! one. There is no `.TRAN`/`.DC`/`.OP`, no `.INCLUDE`/`.LIB`, no `.PARAM`
-//! expression evaluator and no dialect tokenizer. E.2's noun phrase is
-//! "subcircuits and models ... treated as module definitions", and a module
-//! definition is an INTERFACE plus a BODY — so the cards read here are the two
-//! that declare an interface, plus, INSIDE a `.SUBCKT`, the device cards that
-//! are its body (`emitBody`). Everything else on the line is SKIPPED silently
-//! rather than diagnosed, because a netlist VerA only mines for declarations is
-//! not a netlist VerA claims to simulate — refusing a `.TRAN` would be claiming
-//! jurisdiction this file does not have.
-//!
-//! WHY IT SYNTHESIZES TEXT instead of building declarations. Same argument as
-//! `Preprocessor.spice_primitives`, which this extends and which is worth reading
-//! first: E.2 says SPICE objects "shall be treated in the same manner in
-//! Verilog-AMS HDL as built-in primitives", the manner is instantiation, and a
-//! module that arrives as prepended SOURCE gets §6.3 overrides, §6.5.5 named
-//! connection, §6.2.2 elaboration, §6.7.1 hierarchical access and every
-//! diagnostic in those clauses from the code that already implements them. A
-//! side-table of names gets none of them and has to reimplement each.
-//!
-//! EVERYTHING IS LOWER-CASED AT INGEST. SPICE is case-insensitive (E.2.1 first
-//! sentence), so the netlist's own spelling carries no information and keeping it
-//! would only invite an exact match to succeed by luck. One canonical case at the
-//! door is what lets E.2.1's second sentence — "if no exact match is found, the
-//! mixed-case name shall match the same name defined within SPICE regardless of
-//! the case" — be a single ASCII-case-insensitive compare in
-//! `elaborate.findModule`, and it makes the rule apply to PORT spellings too:
-//! `.SUBCKT ECPOSC (OUT GND)` is reachable as `osc1.out` because the port is
-//! named `out` by the time the parser sees it.
-//!
-//! A NAME THAT IS A KEYWORD IS SPELLED §2.8.1. SPICE has no reserved words, so
-//! `.SUBCKT AMP (INPUT OUTPUT)` and `.MODEL WIRE NPN` are ordinary cards while
-//! `input`, `output` and `wire` are annex B keywords. Synthesizing them bare
-//! puts an E0208 on a line the user never wrote, which contradicts the premise
-//! above — so `spell` writes them as escaped identifiers, which §2.8.2 says are
-//! never keywords. It is a spelling and not a rename: §2.8.1 makes neither the
-//! backslash nor the terminating white space part of the identifier, so the
-//! name is unchanged for `elaborate.findModule` and for §6.7.1, and E.3
-//! connects the ports by ORDER, so the escape never has to be typed to make a
-//! connection.
+//! SPICE `.MODEL` and `.SUBCKT` cards in, Verilog-AMS module source text out
+//! (LRM annex E.2, E.3). Reads the two interface cards and, inside a
+//! `.SUBCKT`, the device cards that form its body; every other card is skipped
+//! without a diagnostic. The text is prepended to the source like
+//! `Preprocessor.spice_primitives`, so §6 instantiation, overrides and their
+//! diagnostics apply unchanged. Input is lower-cased at ingest (E.2.1).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const token = @import("token.zig");
 
-/// Prelude text plus how many module declarations it holds. The count is what
-/// `Ast.SourceFile.netlist_modules` records; it cannot be derived at comptime the
-/// way `Preprocessor.spice_module_count` is, because the text depends on the
-/// netlist the caller supplied.
+/// Synthesized prelude text plus the number of module declarations it holds,
+/// which `Ast.SourceFile.netlist_modules` records.
 pub const Synthesized = struct {
     text: []const u8 = "",
     modules: u32 = 0,
@@ -64,9 +18,8 @@ pub const Synthesized = struct {
 
 /// E.2.2.1: ".MODEL statements can be accessed in Verilog-AMS HDL ... The ports
 /// and parameters of the bjt are determined by the bjt primitive itself and not
-/// by the model statement." So a model card contributes a NAME and a primitive
-/// TYPE, and the interface comes from Table E.1's row for that type — which is
-/// why the port lists live here as text rather than being read off the card.
+/// by the model statement." So a model card contributes a name and a primitive
+/// type, and the interface comes from Table E.1's row for that type.
 ///
 /// The rows are the SPICE model-type letters, mapped to the Table E.1 primitive
 /// each names. Absent types (`sw`, `ltra`, `core`, ...) are skipped cards, not
@@ -74,9 +27,8 @@ pub const Synthesized = struct {
 /// the authors of the simulator".
 ///
 /// `ports` is pre-joined in Table E.1's order, which E.3 makes normative for
-/// connection by order. A test below pins each row against
-/// `Preprocessor.spice_primitives`, so this table cannot drift from the modules
-/// it names.
+/// connection by order. A test pins each row against
+/// `Preprocessor.spice_primitives`.
 const model_types = [_]struct { type_: []const u8, prim: []const u8, ports: []const u8 }{
     .{ .type_ = "npn", .prim = "bjt", .ports = "c, b, e, s" },
     .{ .type_ = "pnp", .prim = "bjt", .ports = "c, b, e, s" },
@@ -92,9 +44,9 @@ const model_types = [_]struct { type_: []const u8, prim: []const u8, ports: []co
     .{ .type_ = "l", .prim = "inductor", .ports = "p, n" },
 };
 
-/// Read `netlist` and return Verilog-AMS module text for every `.MODEL` and
-/// `.SUBCKT` card in it. Never fails on malformed input — a line this does not
-/// understand contributes nothing.
+/// Returns Verilog-AMS module text for every `.MODEL` and `.SUBCKT` card in
+/// `netlist`, allocated from `arena`. Never fails on malformed input: a line
+/// this does not understand contributes nothing.
 pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthesized {
     if (netlist.len == 0) return .{};
 
@@ -111,11 +63,9 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
         \\
     );
     var count: u32 = 0;
-    // Emitted names, so a netlist that repeats a card does not declare the same
-    // module twice — a shape whose meaning nothing here defines, and which would
-    // be a defect reported against a file the user did not write. First card
-    // wins; which one a real SPICE keeps is dialect-dependent, and E.1.2's first
-    // bullet leaves that to "the authors of the simulator".
+    // Emitted names, so a repeated card does not declare the same module twice.
+    // The first card wins; E.1.2 leaves the choice to "the authors of the
+    // simulator".
     var seen: std.ArrayList([]const u8) = .empty;
 
     // `+` continuations make a card longer than a line, so the cards are
@@ -141,8 +91,8 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     }
     if (logical.items.len != 0) try cards.append(arena, logical.items);
 
-    // INDEX-BASED, because a `.SUBCKT` header is not the whole card it reads:
-    // E.2 makes it a module DEFINITION, and a definition runs to its `.ENDS`.
+    // Index-based, because a `.SUBCKT` header is not the whole card it reads:
+    // E.2 makes it a module definition, which runs to its `.ENDS`.
     // The body is consumed with the header whether or not anything is emitted,
     // so a repeated `.SUBCKT`'s cards are not read a second time at top level.
     var i: usize = 0;
@@ -165,15 +115,13 @@ fn strip(raw: []const u8) []const u8 {
     return line;
 }
 
-/// The cards `rest[0]` OWNS, exclusive of the `.ENDS` that terminates them:
-/// empty for anything that is not a `.SUBCKT` header. E.2 makes a subcircuit a
-/// module definition and E.2.2.2 shows what the definition contains — eleven
-/// device cards it calls an oscillator — so these cards are the body, not
-/// top-level netlist.
-///
-/// ponytail: the FIRST `.ENDS` ends it, so a nested `.SUBCKT` would close the
-/// outer one early. The SPEC puts multi-level netlists out of scope; make this a
-/// depth counter when one comes in.
+// ponytail: the first `.ENDS` ends it, so a nested `.SUBCKT` would close the
+// outer one early. Make this a depth counter when multi-level netlists are in
+// scope.
+
+/// Returns the cards `rest[0]` owns, excluding the terminating `.ENDS`; empty
+/// unless `rest[0]` is a `.SUBCKT` header. E.2 makes a subcircuit a module
+/// definition and E.2.2.2 shows its device cards as its body.
 fn subcktBody(rest: []const []const u8) []const []const u8 {
     if (!std.mem.startsWith(u8, rest[0], ".subckt")) return &.{};
     for (rest[1..], 1..) |card, i| {
@@ -182,8 +130,8 @@ fn subcktBody(rest: []const []const u8) []const []const u8 {
     return rest[1..]; // an unterminated `.SUBCKT` still has a body
 }
 
-/// One complete card, plus the body `subcktBody` gave it. Returns true if it
-/// produced a module.
+/// Emits one complete card, plus the body `subcktBody` gave it. Returns true
+/// if it produced a module.
 fn emitCard(
     arena: Allocator,
     out: *std.ArrayList(u8),
@@ -201,8 +149,8 @@ fn emitCard(
     const name = it.next() orelse return false;
     if (!isSpiceName(name)) return false;
     for (seen.items) |s| if (std.mem.eql(u8, s, name)) return false;
-    // `seen` keeps the bare name — the escape is a spelling of it, not another
-    // name, so two cards named `wire` are still a repeat.
+    // `seen` keeps the bare name: the escape is a spelling of it, so two cards
+    // named `wire` are still a repeat.
     const decl = try spell(arena, name);
 
     if (is_model) {
@@ -210,11 +158,10 @@ fn emitCard(
         const row = for (model_types) |r| {
             if (std.mem.eql(u8, r.type_, type_)) break r;
         } else return false;
-        // E.2.2.1: the interface is the primitive's. The body INSTANTIATES the
-        // primitive, so whatever Table E.1's Behavior column gives that row is
-        // what the model gives too — an empty column (bjt, mosfet, diode, ...)
-        // simply gives nothing, which E.2 already says is implementation
-        // dependent.
+        // E.2.2.1: the interface is the primitive's. The body instantiates the
+        // primitive, so the model behaves as Table E.1's Behavior column gives
+        // that row; an empty column (bjt, mosfet, diode) gives nothing, which
+        // E.2 makes implementation dependent.
         const params = try modelParams(arena, row.prim, &it);
         try out.print(arena,
             \\module {s}({s});
@@ -226,16 +173,16 @@ fn emitCard(
             \\
         , .{ decl, row.ports, row.ports, row.ports, params.decls, row.prim, params.args, row.ports });
     } else {
-        // `.SUBCKT name p1 p2 ... [params: k=v]` — ports up to the first thing
-        // that is not a node name. NUMERIC nodes are the SPICE default (`1`,
-        // `2`, `0`), so a digit does not end the list — only a parameter does.
+        // `.SUBCKT name p1 p2 ... [params: k=v]`: ports up to the first thing
+        // that is not a node name. Numeric nodes are the SPICE default (`1`,
+        // `2`, `0`), so only a parameter ends the list.
         var ports: std.ArrayList([]const u8) = .empty;
         while (it.next()) |t| {
             if (!isSpiceName(t)) break; // `params:`, `k=v`
             try ports.append(arena, try spell(arena, t));
         }
         // A.1.2 makes the port list optional, so a portless `.SUBCKT` is a legal
-        // module — and an empty `electrical ;` would not be.
+        // module, and an empty `electrical ;` would not be.
         if (ports.items.len == 0) {
             try out.print(arena, "module {s};\n", .{decl});
         } else {
@@ -254,15 +201,14 @@ fn emitCard(
     return true;
 }
 
-/// E.2.2.3 is the annex translating E.2.2.2's subcircuit card by card, and it is
-/// the only place the LRM says what a DEVICE card means. It prints
-/// `R1 B1 GND 10K` as `resistor #(.r(10k)) R1 (b1, gnd);`, `VA VCC GND 5` as
+/// Device card letters and the Table E.1 primitive each becomes. E.2.2.3, the
+/// only place the LRM says what a device card means, prints `R1 B1 GND 10K` as
+/// `resistor #(.r(10k)) R1 (b1, gnd);`, `VA VCC GND 5` as
 /// `vsine #(.dc(5)) Vcc (vcc, gnd);` and `IEE E GND 1MA` as
-/// `isine #(.dc(1m)) Iee (e, gnd);` — so the card's leading LETTER picks the
-/// Table E.1 primitive and the card's one positional value lands on the
-/// parameter named here. `c` and `l` are the remaining two-terminal rows whose
-/// Behavior column Table E.1 actually fills in; the letters with an empty one
-/// (`Q`, `M`, `J`, `D`) have no equation to contribute and are not listed.
+/// `isine #(.dc(1m)) Iee (e, gnd);`: the leading letter picks the primitive and
+/// the one positional value lands on `param`. `c` and `l` are the other
+/// two-terminal rows whose Behavior column Table E.1 fills in; letters with an
+/// empty one (`Q`, `M`, `J`, `D`) have no equation and are not listed.
 const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8 }{
     .{ .letter = 'r', .prim = "resistor", .param = "r" },
     .{ .letter = 'c', .prim = "capacitor", .param = "c" },
@@ -274,7 +220,7 @@ const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8
 /// E.3.1: "the following primitives are not supported: ccvs, cccs, and mutual
 /// inductors; however, these primitives can be instantiated inside a SPICE
 /// subcircuit". The four SPICE controlled-source letters, as the one
-/// contribution each is, in SPICE's own sign convention — the controlled
+/// contribution each is, in SPICE's own sign convention: the controlled
 /// quantity flows (or rises) from the card's first node to its second, which
 /// is what `I(a, b)`/`V(a, b)` mean in §5.6:
 ///
@@ -285,10 +231,10 @@ const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8
 ///
 /// `I(vctl)` is the current through the controlling V card, which SPICE takes
 /// entering its first node. A V card that controls something is therefore
-/// written as a NAMED BRANCH of this module (`branch (p, n) vctl;
+/// written as a named branch of this module (`branch (p, n) vctl;
 /// V(vctl) <+ dc;`) rather than a `vsine` child, so the controlled source reads
-/// the flow of a branch its own module declares — §5.4.2's flow probe of the
-/// source branch, and no cross-instance access.
+/// the flow of a branch its own module declares (§5.4.2's flow probe of the
+/// source branch) with no cross-instance access.
 const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_current: bool }{
     .{ .letter = 'e', .lhs = "V", .rhs = "V", .by_current = false },
     .{ .letter = 'g', .lhs = "I", .rhs = "V", .by_current = false },
@@ -296,24 +242,20 @@ const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_
     .{ .letter = 'h', .lhs = "V", .rhs = "I", .by_current = true },
 };
 
-/// The instance lines a `.SUBCKT`'s device cards become — the equations that
-/// make E.2's "module definition" a circuit rather than two floating pins.
+// ponytail: two terminals and one positional value, which is every row of
+// `device_cards`; a three-terminal or `k=v` card needs its own arity column.
+// The `controlled` letters are the exception, and read their own shape.
+
+/// Emits the instance lines and analog contributions a `.SUBCKT`'s device
+/// cards become.
 ///
-/// A card this cannot read contributes nothing and is not diagnosed, on the same
-/// argument as the skipped `.TRAN` above: a letter with no `device_cards` row
-/// (`Q`, `M`, `X`), or a value that is a model name rather than a number
-/// (`R1 A B RMOD`, where `spiceNumber` returns null). Both are out of the H04
-/// SPEC's scope, and a body VerA reads part of is still more of a definition
-/// than the empty one this replaces.
+/// A card this cannot read contributes nothing and is not diagnosed: a letter
+/// with no `device_cards` row (`Q`, `M`, `X`), or a value that is a model name
+/// rather than a number (`R1 A B RMOD`).
 ///
-/// Nodes are run through `spell` for the same reason the port list is, and a
-/// node the port list does not name needs no declaration: it is an implicit net
-/// of the synthesized module, resolved by §7.5 from the primitive port it
-/// touches, exactly as `rDiv x1(in, mid, gnd);` resolves `mid` in the caller.
-///
-/// ponytail: two terminals and one positional value, which is every row of
-/// `device_cards`; a three-terminal or `k=v` card needs its own arity column.
-/// The `controlled` letters are the exception, and read their own shape.
+/// A node the port list does not name needs no declaration: it is an implicit
+/// net of the synthesized module, resolved by §7.5 from the primitive port it
+/// touches.
 fn emitBody(
     arena: Allocator,
     out: *std.ArrayList(u8),
@@ -377,9 +319,8 @@ fn emitBody(
     if (analog.items.len != 0) try out.print(arena, "   analog begin\n{s}   end\n", .{analog.items});
 }
 
-/// Does `body` hold a card named `name`? An F/H card naming a V card the
-/// subcircuit does not declare reads nothing, and is skipped like any other
-/// unreadable card.
+/// Reports whether `body` holds a card named `name`. An F/H card naming a V
+/// card the subcircuit does not declare is skipped like any unreadable card.
 fn declares(body: []const []const u8, name: []const u8) bool {
     for (body) |card| {
         var it = std.mem.tokenizeAny(u8, card, " \t(),");
@@ -393,33 +334,27 @@ fn declares(body: []const []const u8, name: []const u8) bool {
 const ModelParams = struct {
     /// One `   parameter ...;\n` line per parameter of the primitive.
     decls: []const u8,
-    /// `.r(r), .tc1(tc1), ...` — §6.3.3 by name, so Table E.1's order is not
-    /// load-bearing here.
+    /// `.r(r), .tc1(tc1), ...`: §6.3.3 by name, so Table E.1's order does not
+    /// matter here.
     args: []const u8,
 };
 
 /// E.2.2.1: "The ports and parameters of the bjt are determined by the bjt
 /// primitive itself and not by the model statement for the bjt." That fixes
-/// which parameters EXIST — the primitive's, all of them — and says nothing
-/// about discarding the VALUES the card assigns to them; E.1's "huge legacy of
-/// SPICE netlists" is the reason not to, since a card-derived resistor that
-/// ignored `R=2000` would be 1 ohm where the netlist said two thousand.
+/// which parameters exist (all of the primitive's) but does not discard the
+/// values the card assigns to them.
 ///
-/// So the model-derived module re-declares the primitive's own parameter list —
-/// LIFTED OUT OF THE PRELUDE that declares it rather than re-tabulated here, so
-/// the `from` ranges and the defaults cannot drift from the row they transcribe
-/// — with the default replaced by the card's value wherever the card names one,
-/// and forwards the lot by name. Re-declaring rather than forwarding the card's
-/// literals directly is what makes §6.7.1's `r1.r` resolve and §6.3.3's
-/// `rmod #(.r(2500))` override, which are the same sentence's other two
-/// consequences.
+/// So the model-derived module re-declares the primitive's parameter list,
+/// copied from the prelude so the `from` ranges and defaults cannot drift,
+/// with the default replaced by the card's value wherever the card names one,
+/// and forwards all of them by name. Re-declaring is what makes §6.7.1's
+/// `r1.r` resolve and §6.3.3's `rmod #(.r(2500))` override.
 ///
 /// A card parameter Table E.1 does not declare (`BF=80`, `RSH=50`) is dropped in
 /// silence: E.2 makes "all aspects of SPICE primitives implementation
 /// dependent", E.4.2 makes model-card support "implementation specific", and
 /// E.1.2's remedy for a name mismatch is a user-written wrapper module, not a
-/// diagnostic. Refusing the card would make VerA read FEWER of the netlists
-/// E.1 exists for.
+/// diagnostic.
 fn modelParams(
     arena: Allocator,
     prim: []const u8,
@@ -471,8 +406,8 @@ fn modelParams(
 }
 
 /// The body of `Preprocessor.spice_primitives`'s module for `prim`, between its
-/// header and its `endmodule`. Empty if there is no such row — `model_types`
-/// only names rows that exist, and a test below pins that.
+/// header and its `endmodule`. Empty if there is no such row; a test pins that
+/// every `model_types` row exists.
 fn primitiveBody(prim: []const u8) []const u8 {
     const prelude = @import("preprocessor.zig").spice_primitives;
     var buf: [64]u8 = undefined;
@@ -483,13 +418,11 @@ fn primitiveBody(prim: []const u8) []const u8 {
     return rest[0..end];
 }
 
-/// SPICE's own scaled notation, which Annex E prints throughout its netlists —
-/// `R1 B1 GND 10K`, `C1 VCC OUT 1P`, `TF=0.3NS`, `IEE E GND 1MA`. E.2.2.3
-/// translates the first of those as `resistor #(.r(10k)) R1 (b1, gnd);`, and
-/// §2.6.2 Table 2-1 makes `10k` ten thousand — so the two spellings are the
-/// annex's own statement that `10K` is 10000.
+/// Parses SPICE's scaled notation, which annex E prints throughout its
+/// netlists (`10K`, `1P`, `0.3NS`, `1MA`). E.2.2.3 translates `10K` as
+/// `10k`, which §2.6.2 Table 2-1 makes ten thousand.
 ///
-/// The scale letter is followed by UNIT letters that carry no value (`PF`, `UH`,
+/// The scale letter is followed by unit letters that carry no value (`PF`, `UH`,
 /// `NS`, `MA`), so anything after the matched suffix is ignored rather than
 /// rejected. Returns null when the token does not start with a number at all.
 fn spiceNumber(t: []const u8) ?f64 {
@@ -518,10 +451,10 @@ fn spiceNumber(t: []const u8) ?f64 {
 
 /// Berkeley SPICE's ten scale factors. `meg` and `mil` are tested before `m`
 /// because they share its first letter and mean 1e6 and 25.4e-6, not 1e-3 with
-/// unit noise — the one place SPICE and §2.6.2 Table 2-1 disagree outright (a
-/// Verilog `M` is mega, a SPICE `M` is milli), which is why a card's number is
-/// converted to plain decimal here rather than handed on with its suffix.
-/// `a` (atto) is NOT one of them: SPICE has no atto and `1A` is one ampere.
+/// unit noise. SPICE and §2.6.2 Table 2-1 disagree on `M` (milli in SPICE,
+/// mega in Verilog), which is why a card's number is converted to plain
+/// decimal here rather than handed on with its suffix. SPICE has no atto, so
+/// `1A` is one ampere.
 fn spiceScale(rest: []const u8) f64 {
     const scales = [_]struct { suffix: []const u8, mul: f64 }{
         .{ .suffix = "meg", .mul = 1e6 },
@@ -539,8 +472,8 @@ fn spiceScale(rest: []const u8) f64 {
     return 1.0;
 }
 
-/// Is `t` usable BARE as a Verilog-AMS identifier (§2.7) after lowering? `$` is
-/// not admitted even though §2.7 allows it in an identifier: `strip` has
+/// Reports whether `t` has the §2.7 shape of a simple identifier. `$` is not
+/// admitted even though §2.7 allows it in an identifier: `strip` has
 /// already treated it as a comment opener, so it cannot reach here.
 fn isIdent(t: []const u8) bool {
     if (t.len == 0) return false;
@@ -549,36 +482,23 @@ fn isIdent(t: []const u8) bool {
     return true;
 }
 
-/// Is `t` a SPICE name at all — a model/subcircuit name or a node? SPICE names
-/// routinely LEAD WITH DIGITS (`2N2222`, `1N4148`), and bare numbers are the
-/// default node spelling, so §2.7 shape is not the test: anything printable
-/// that is not a parameter (`k=v`, `params:`) qualifies, and `spell` below
-/// decides how it has to be written. Rejecting these silently dropped the card
-/// (a later E0904 then blamed the USER's instantiation line) or truncated a
-/// `.SUBCKT F A 1 B` port list to one port — a silently WRONG ordered binding.
+/// Reports whether `t` is a SPICE model, subcircuit or node name. SPICE names
+/// may lead with digits (`2N2222`) and bare numbers are the default node
+/// spelling, so anything printable that is not a parameter (`k=v`, `params:`)
+/// qualifies; `spell` decides how it is written.
 fn isSpiceName(t: []const u8) bool {
     if (t.len == 0) return false;
     for (t) |c| if (c < 33 or c > 126 or c == '=' or c == ':') return false;
     return true;
 }
 
-/// How `t` has to be WRITTEN to declare it here. `isIdent` above is §2.7 SHAPE
-/// only, and shape is not enough in either direction: a SPICE netlist has no
-/// reserved words, so a perfectly ordinary card can name a node `INPUT` or a
-/// model `WIRE` — and no §2.7 shape rule either, so a model is `2N2222` and a
-/// node is `1`. The keyword spellings become keywords the moment they are
-/// lowered into Verilog-AMS text, the digit-leading ones are not simple
-/// identifiers at all, and either way the diagnostic lands on a synthesized
-/// line with no author.
-///
-/// §2.8.1's escape is the LRM's own answer, and it is the whole fix: an escaped
-/// identifier "can include any printable ASCII character", §2.8.2 lists what is
-/// a keyword and an escaped identifier is not among them, and neither the
-/// leading `\` nor the terminating white space is part of the NAME — so
-/// `elaborate.findModule`, §6.5.4's connection by order and §6.7.1's dotted
-/// probe all still see `wire`, `input`, `2n2222` and `1`. The trailing space is
-/// the §2.8.1 terminator and is load-bearing: `,` and `)` are printable ASCII
-/// and would otherwise be scanned INTO the identifier.
+/// Returns `t` as it must be written to declare it: bare when it is a simple
+/// identifier and not a keyword, otherwise as a §2.8.1 escaped identifier
+/// (`\wire `, `\2n2222 `), since SPICE has no reserved words and no §2.7
+/// shape rule. An escaped identifier is never a keyword (§2.8.2), and neither
+/// the `\` nor the terminating white space is part of the name, so lookups
+/// still see `wire`. The trailing space is required: `,` and `)` are printable
+/// and would otherwise be scanned into the identifier.
 fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
     // ponytail: share the lexer's keyword lookup; extend the common table for new keywords.
     if (isIdent(t) and token.lookupKeyword(t) == null) return t;
@@ -590,8 +510,8 @@ fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
 // ---------------------------------------------------------------------------
 
 test "model_types names a real Table E.1 module with the ports it lists" {
-    // The one thing this file can get wrong silently: a row whose primitive or
-    // port order does not match the prelude it claims to transcribe.
+    // A row whose primitive or port order does not match the prelude would be
+    // wrong without any other test noticing.
     const prelude = @import("preprocessor.zig").spice_primitives;
     for (model_types) |r| {
         const header = try std.fmt.allocPrint(
@@ -621,7 +541,7 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
     );
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // E.2.2.1: ports AND parameters from the bjt primitive, in Table E.1's
-    // order, and the card's own names are not among them — Table E.1's bjt row
+    // order, and the card's own names are not among them: Table E.1's bjt row
     // declares `area` and nothing else, so `BF`, `IS`, `CJE` have no parameter
     // to land on and are dropped in silence (E.4.2: "support of SPICE model
     // cards is implementation specific").
@@ -629,7 +549,7 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
     try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real area = 1.0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "bjt #(.area(area)) prim(c, b, e, s);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
-    // E.2.2.2: ports from the card, lowered, parentheses dropped — and the two
+    // E.2.2.2: ports from the card, lowered, parentheses dropped, and the two
     // device cards between it and `.ENDS` as E.2.2.3 translates them. `vcc` is
     // an internal node and appears only in the body.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module ecposc(out, gnd);") != null);
@@ -657,13 +577,13 @@ test "a .SUBCKT's device cards are its body, and an unreadable one is skipped" {
     try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(1000)) r1(in, out);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(3000)) r2(out, gnd);") != null);
     // No Table E.1 equation for a bjt and no number on a model-referenced card,
-    // so neither becomes an instance — and neither stops the two that do.
+    // so neither becomes an instance, and neither stops the two that do.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "q1") == null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "r3") == null);
     // `R9` is after `.ENDS`: top-level netlist, not part of any definition.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "r9") == null);
 
-    // A repeated `.SUBCKT` is dropped WITH its body — the cards inside must not
+    // A repeated `.SUBCKT` is dropped with its body: the cards inside must not
     // fall out into the next module, or into a module of their own.
     const dup = try synthesize(arena,
         \\.SUBCKT PAD A B
@@ -688,7 +608,7 @@ test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
     );
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // §2.6.2 Table 2-1 by way of E.2.2.3's `resistor #(.r(10k))`: `10K` is 10000.
-    // §3.4.2's `from` range survives the substitution — it belongs to the
+    // §3.4.2's `from` range survives the substitution: it belongs to the
     // declaration, not to the default it replaces.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real r = 10000 from (0:inf);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "parameter real tc1 = 0.001;") != null);
@@ -705,8 +625,7 @@ test "SPICE's scaled notation, including the three suffixes §2.6.2 does not sha
     // The annex prints `10K`, `3PF`, `1UH`, `0.3NS`, `1MA`, `1E-18` in its own
     // netlists; a reader that cannot turn those into numbers cannot read
     // E.2.2.2. `MEG`/`MIL` are the SPICE-only ones, and `M` is milli here where
-    // §2.6.2 Table 2-1 makes it mega — which is why a card's number is
-    // converted rather than handed on with its suffix.
+    // §2.6.2 Table 2-1 makes it mega.
     try std.testing.expectEqual(@as(?f64, 10000), spiceNumber("10k"));
     try std.testing.expectEqual(@as(?f64, 3e-12), spiceNumber("3pf"));
     try std.testing.expectEqual(@as(?f64, 1e-6), spiceNumber("1uh"));
@@ -740,8 +659,7 @@ test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module amp(\\input , \\output );") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical \\input , \\output ;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\wire (c, b, e, s);") != null);
-    // A name that is not a keyword is not escaped — the escape is for the
-    // collision, not for every synthesized name.
+    // A name that is not a keyword is not escaped.
     const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n");
     try std.testing.expect(std.mem.indexOf(u8, plain.text, "module pad(in, out);") != null);
 }
@@ -757,11 +675,10 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
         \\.ENDS FLT
     );
     try std.testing.expectEqual(@as(u32, 2), s.modules);
-    // E.2 treats the model as a module definition; `2N2222` used to fail the
-    // §2.7 shape test and the card contributed NOTHING (the later E0904 then
-    // blamed the user's instantiation line).
+    // E.2 treats the model as a module definition even though `2N2222` fails
+    // §2.7's identifier shape.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\2n2222 (c, b, e, s);") != null);
-    // The numeric node is the SPICE default and is a PORT, not the end of the
+    // The numeric node is the SPICE default and is a port, not the end of the
     // list: three ports, in card order, or §6.5.4's ordered binding is wrong.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module flt(a, \\1 , b);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical a, \\1 , b;") != null);

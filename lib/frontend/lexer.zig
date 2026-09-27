@@ -1,82 +1,42 @@
-//! Class 1 — Lexing. LRM §2.1–2.8.
-//!
-//! Transformation: preprocessed text → token stream (SoA {tag,start}).
-//!
-//! DOD: emit into a `std.MultiArrayList(token.Stored)` (SoA columns). Store only
-//! tag + start offset; recompute token end on demand (`tokenEnd`).
-//!
-//! THE BYTE SCANS IN THIS FILE STAY SCALAR, and this is the number that makes
-//! that right rather than the "files are small (KBs)" it used to say. Every loop
-//! here advances over ONE TOKEN, not over the file. MEASURED (`zig build benchmark
-//! -Doptimize=ReleaseFast -- fixtures`, `pp` row): a compilation's preprocessed
-//! text averages 11,960 bytes over the 1164 fixtures, and 11,512 of those are
-//! the annex D/E prelude, whose tokens `tokenizeSeeded` copies in from
-//! `Preprocessor.preludeTokens` — so in a warm process this scanner sees ~450
-//! bytes per compilation, as tokens averaging ~4 bytes, with comments already
-//! removed by §10 (MEASURED, callgrind: 51 Ir on the `//` test in a whole run).
-//! A 32-lane load does not pay against a 4-byte identifier, and a `.va` big
-//! enough to change that would still be scanned four bytes at a time.
-//!
-//! Where a vector DID pay is `token.lookupKeyword`, and the difference is what
-//! N is: there it is the KEYWORD TABLE — 215 entries, up to 39 of them sharing a
-//! length — walked once per identifier, not the source text. Its comment carries
-//! the measurement. The vector width that matters to a Verilog-A *user* is still
-//! the DEVICE's evaluation loop, and that loop is the host's code, compiled from
-//! what codegen emits; nothing in this repo runs it.
-//!
-//! `next()` is a PURE function of (src, pos): it reads no lexer state beyond the
-//! cursor and mutates nothing else. That is what makes `tokenEnd` exact — it just
-//! re-runs the scanner from the token's start and reports where it stopped. It
-//! also means a token is scanned more than once: `parser.zig` reaches for
-//! `tokenText`/`tokenEnd` at 19 sites, each of which re-runs `next` over that
-//! token. So a per-identifier cost is paid more often than the token count
-//! suggests, which is why the keyword lookup was worth 5.8% of `lint`.
-//!
-//! Diagnostics: the lexer never fails (except OOM in `tokenize`). Malformed input
-//! becomes exactly one `.invalid` token whose extent `tokenEnd` recovers; the
-//! parser owns the message. §2.6.2/§2.7 value decoding lives here too
-//! (`parseReal`, `stringContents`) so the SI scale table (Table 2-1, where `M`
-//! is 1e6 and `m` is 1e-3) exists in exactly one place.
+//! Preprocessed text → token stream of `{tag, start}` rows, and literal value
+//! decoding (LRM §2.1-§2.8, Tables 2-1 and 2-2). `Lexer.next` depends only on
+//! (src, pos), so `tokenEnd` recovers a token's end by re-lexing. The lexer never
+//! fails except on OOM: malformed input becomes one `.invalid` token for the parser
+//! to report. Byte scans stay scalar because each covers one short token.
 
 const std = @import("std");
 const token = @import("token.zig");
 const diag = @import("diag");
 
+/// Token rows in SoA form: the `.tag` and `.start` columns.
 pub const TokenList = std.MultiArrayList(token.Stored);
 
+/// A cursor over preprocessed source. `pos` is the only state.
 pub const Lexer = struct {
     src: []const u8,
     pos: u32 = 0,
 
-    /// Already-lexed tokens for a PREFIX of `src`, handed to `tokenizeSeeded`
-    /// instead of being re-scanned. `len` is that prefix's byte length; the two
-    /// columns are its tokens, `.eof` excluded, and every `start` is an absolute
-    /// offset into `src` — which is what makes them replayable at all.
-    ///
-    /// The only producer is `Preprocessor.preludeTokens`: the annex D.2/D.1/E.1
-    /// prelude is a fixed byte prefix of every preprocessed text compiled with
-    /// `std_defs`, so its tokens are a fixed prefix of that text's tokens.
+    /// Already-lexed tokens for a prefix of `src`, replayed by `tokenizeSeeded`
+    /// instead of re-scanned. `len` is the prefix's byte length; the columns are
+    /// its tokens without `.eof`, and every `start` is an absolute offset into
+    /// `src`. The prefix must end between tokens.
+    /// Produced by `Preprocessor.preludeTokens` for the annex D/E prelude.
     pub const Seed = struct {
         tags: []const token.Tag,
         starts: []const u32,
         len: u32,
     };
 
-    /// Lex the whole buffer into a TokenList (arena-owned). Ends with `.eof`.
-    /// Caller owns the list: `list.deinit(arena)` (a no-op under an arena).
+    /// Lexes all of `src`; the list ends with `.eof`.
+    /// The caller owns the list and frees it with `list.deinit(arena)`.
     pub fn tokenize(arena: std.mem.Allocator, src: []const u8) !TokenList {
         return tokenizeSeeded(arena, src, null);
     }
 
-    /// `tokenize`, resuming after a prefix whose tokens are already known.
-    ///
-    /// SAFE BECAUSE `next()` is a pure function of (src, pos) — the file header
-    /// says so, and `tokenEnd` already depends on it — so there is no lexer
-    /// state at the seam to restore. The one thing that could still differ is a
-    /// token that STRADDLES `seed.len`, and none can: the prelude is a whole
-    /// preprocessed file ending in a newline, so the boundary is between tokens.
-    /// The equivalence test in preprocessor.zig checks that against the long way
-    /// round rather than trusting this paragraph.
+    /// Same as `tokenize`, but copies `seed`'s tokens and scans only the rest.
+    /// Asserts `src.len` fits in u32 and the seed lies within `src`. Correct
+    /// because `next` carries no state across tokens; the prelude equivalence
+    /// test in preprocessor.zig checks it against a full scan.
     pub fn tokenizeSeeded(arena: std.mem.Allocator, src: []const u8, seed: ?Seed) !TokenList {
         std.debug.assert(src.len <= std.math.maxInt(u32));
 
@@ -86,14 +46,14 @@ pub const Lexer = struct {
         if (seed) |s| {
             std.debug.assert(s.tags.len == s.starts.len);
             std.debug.assert(s.len <= src.len);
-            // ~4 source bytes per token, over the part still to be scanned.
+            // About 4 source bytes per token, over the part still to be scanned.
             try list.ensureTotalCapacity(arena, s.tags.len + (src.len - s.len) / 4 + 8);
             list.len = s.tags.len;
             @memcpy(list.items(.tag), s.tags);
             @memcpy(list.items(.start), s.starts);
             start = s.len;
         } else {
-            // ~4 source bytes per token including separators: one allocation in practice.
+            // About 4 source bytes per token including separators: one allocation in practice.
             try list.ensureTotalCapacity(arena, src.len / 4 + 8);
         }
 
@@ -105,13 +65,12 @@ pub const Lexer = struct {
         }
     }
 
-    /// Produce the next token. LRM §2.2.
+    /// Scans the token at `pos` and advances past it (LRM §2.2). Returns `.eof`
+    /// at the end, repeatedly.
     pub fn next(self: *Lexer) token.Stored {
-        // §2.3 white space is a token separator only. §2.4 comments never
-        // reach here: the preprocessor strips every one (pp/comments.zig), so
-        // a `/` followed by `/` or `*` in this text is two operators — which
-        // is what IEEE 1364 §19.3.1 makes of macro text pasted into one: text
-        // "shall not be split across ... Comments".
+        // §2.3 white space only separates. The preprocessor strips every §2.4
+        // comment (pp/comments.zig), so `//` or `/*` here is two operators, as
+        // IEEE 1364 §19.3.1 makes of macro text pasted into one.
         while (self.pos < self.src.len and isSpace(self.src[self.pos])) self.pos += 1;
 
         const start = self.pos;
@@ -130,15 +89,15 @@ pub const Lexer = struct {
         return .{ .tag = tag, .start = start };
     }
 
-    /// Recompute a token's end by re-lexing from its start. LRM §2.2.
-    /// This is why `Stored` needs no `len` field (DOD: recompute, don't store).
+    /// Returns the end offset of the token starting at `start`, by re-lexing it.
+    /// Cost is one token scan per call.
     pub fn tokenEnd(self: *const Lexer, start: u32) u32 {
         var relex: Lexer = .{ .src = self.src, .pos = start };
         _ = relex.next();
         return relex.pos;
     }
 
-    /// The exact source text of the token starting at `start`.
+    /// Returns the source text of the token starting at `start` (one token scan).
     pub fn tokenText(self: *const Lexer, start: u32) []const u8 {
         return self.src[start..self.tokenEnd(start)];
     }
@@ -152,19 +111,11 @@ pub const Lexer = struct {
 
         // §2.6.1 sized based constant: size ' [s|S] base digits.
         //
-        // White space may sit between the SIZE and the apostrophe. §2.6.1 forbids
-        // it in exactly one place — "the apostrophe character and the base format
-        // character shall not be separated by any white space" — and permits it in
-        // exactly one more ("the unsigned number token shall immediately follow
-        // the base format, optionally preceded by white space"), so the join
-        // between the first and second of the clause's "up to three tokens" is
-        // governed only by its last sentence: "it shall be legal to macro
-        // substitute these three tokens". A macro body cannot be pasted onto its
-        // call site, so `8 `BASE `DIGITS` arrives at the lexer as `8 'h A5` with
-        // white space at BOTH joins; refusing the first one makes the permission
-        // unusable. Footnote 1's "embedded spaces are illegal" is attached to the
-        // productions that spell a single token (`size`, `unsigned_number`, the
-        // `*_base`s), not to the concatenation of the three.
+        // White space may sit between the size and the apostrophe. §2.6.1 only
+        // forbids it between the apostrophe and the base character, and says "it
+        // shall be legal to macro substitute these three tokens": `8 `BASE `DIGITS`
+        // arrives as `8 'h A5`, with white space at both joins. Footnote 1's
+        // "embedded spaces are illegal" applies to each single-token production.
         {
             var i = self.pos;
             while (i < self.src.len and isSpace(self.src[i])) i += 1;
@@ -178,7 +129,7 @@ pub const Lexer = struct {
             }
         }
 
-        // §2.6.2: a decimal point needs at least one digit on EACH side, so
+        // §2.6.2: a decimal point needs at least one digit on each side, so
         // `9.` and `4.E3` are two tokens and `.12` never starts a number.
         var is_real = false;
         if (self.peek(0) == '.' and std.ascii.isDigit(self.peek(1))) {
@@ -187,7 +138,7 @@ pub const Lexer = struct {
             is_real = true;
         }
 
-        // §2.6.2: `exp [sign] unsigned_number` XOR a scale_factor — never both.
+        // §2.6.2: an exponent or a scale factor, never both.
         const e = self.peek(0);
         if (e == 'e' or e == 'E') {
             if (std.ascii.isDigit(self.peek(1))) {
@@ -215,15 +166,10 @@ pub const Lexer = struct {
     /// the apostrophe. Returns null (cursor untouched) if this is not a
     /// base_format.
     ///
-    /// White space is legal between the base format and the digits: §2.6.1 says
-    /// "the unsigned number token shall immediately follow the base format,
-    /// optionally preceded by white space", and five of the clause's own examples
-    /// are written that way (`'h 837FF`, `5 'D 3`, `-8 'd 6`, `32 'h 12ab_f001`).
-    /// The space between the SIZE and the apostrophe (`8 'h`) is `lexNumber`'s to
-    /// skip, and it does. The space INSIDE the apostrophe group (`8 ' h`) is the
-    /// one §2.6.1 names as illegal and stays illegal.
-    /// The whitespace ends up inside the token's text span, so `integer.parse`
-    /// skips it in exactly the same place.
+    /// White space is legal between the base format and the digits ("optionally
+    /// preceded by white space", §2.6.1, as in `'h 837FF`) but not inside the
+    /// apostrophe group (`8 ' h`). It stays inside the token span, and
+    /// `integer.parse` skips it at the same place.
     fn lexBasedTail(self: *Lexer) ?token.Tag {
         var i = self.pos + 1;
         if (i < self.src.len and (self.src[i] == 's' or self.src[i] == 'S')) i += 1; // signed designator
@@ -260,25 +206,17 @@ pub const Lexer = struct {
         }
     }
 
-    /// LRM §2.8 simple identifier / §2.8.2 keyword. Escaped identifiers never
-    /// reach here, so `keyword_map` is only ever consulted for real keywords.
+    /// LRM §2.8 simple identifier or §2.8.2 keyword. Escaped identifiers never
+    /// reach here, so they are never looked up as keywords.
     fn lexIdentOrKeyword(self: *Lexer) token.Tag {
         const start = self.pos;
         while (isIdentChar(self.peek(0))) self.pos += 1;
-        // `lookupKeyword`, not `keyword_map.get`: the vast majority of these are
-        // user names, and the map is a linear scan of every keyword of the same
-        // length. See its comment for the measurement.
         return token.lookupKeyword(self.src[start..self.pos]) orelse .identifier;
     }
 
-    /// LRM §10.6 `begin_keywords / `end_keywords. The preprocessor consumes
-    /// every other compiler directive; these two it passes through verbatim,
-    /// because the set of reserved keywords is a property of the design
-    /// elements that follow and §10.6 requires the directive to sit outside a
-    /// design element — neither fact is visible to a text-level preprocessor.
-    /// `resetall is applied by the preprocessor AND passed through, for the
-    /// same second reason: IEEE 1364 §19.6 forbids it inside a module.
-    /// Any other backtick is `.invalid`: nothing else may reach the lexer.
+    /// LRM §10.6 `begin_keywords / `end_keywords, and IEEE 1364 §19.6 `resetall:
+    /// the directives the preprocessor passes through because only the parser
+    /// can check where they sit. Any other backtick is `.invalid`.
     fn lexDirective(self: *Lexer) token.Tag {
         const start = self.pos;
         self.pos += 1; // '`'
@@ -292,7 +230,7 @@ pub const Lexer = struct {
         return .invalid;
     }
 
-    /// LRM §2.8.1: `\` then printable ASCII 33–126, terminated by white space.
+    /// LRM §2.8.1: `\` then printable ASCII 33 to 126, terminated by white space.
     /// Neither the backslash nor the terminator is part of the identifier, but
     /// both are inside the token span (the parser strips them).
     fn lexEscapedIdentifier(self: *Lexer) token.Tag {
@@ -345,10 +283,8 @@ pub const Lexer = struct {
         self.pos += 1;
         return switch (c) {
             '+' => .plus,
-            // §5.10.4/A.6.5 `event_trigger ::= -> hierarchical_event_identifier`.
-            // Not digital-only: §5.10 lists the named event as one of the three
-            // kinds of ANALOG event, and §5.10.4's own example triggers one from
-            // an analog event statement.
+            // §5.10.4/A.6.5 `event_trigger ::= -> hierarchical_event_identifier`,
+            // which §5.10 also allows in analog blocks.
             '-' => if (self.eat('>')) .arrow else .minus,
             '*' => if (self.eat('*')) .star_star // §4.2.4 power
             else if (self.eat(')')) .attr_close // §2.9
@@ -417,19 +353,18 @@ pub fn isIdentChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
 }
 
-/// §2.8.1: where the escaped identifier whose body starts at `i` (just past
-/// the `\`) ends. The body is printable ASCII 33–126; any other byte ends it.
+/// Returns where the §2.8.1 escaped identifier whose body starts at `i` (just
+/// past the `\`) ends. The body is printable ASCII 33 to 126; any other byte ends it.
 pub fn escapedEnd(s: []const u8, i: usize) usize {
     var k = i;
     while (k < s.len and s[k] >= 33 and s[k] <= 126) k += 1;
     return k;
 }
 
-/// §2.6.1 binary/octal/hex/decimal digit for `radix`, plus `_`, plus the
-/// four-state digits x/X/z/Z/? (lexed here, decoded by `integer.parse`).
-/// `pub` for radix 16, the widest alphabet: the parser asks "is this glued text
-/// spelled entirely in digits of SOME base" to tell §2.6.1 Example 1's `4af`
-/// (a based number missing its base format) from `1g` (a number, an identifier).
+/// Returns whether `c` is a §2.6.1 digit of `radix`, `_`, or a four-state digit
+/// (x/X/z/Z/?, decoded by `integer.parse`). The parser calls it with radix 16 to
+/// tell §2.6.1 Example 1's `4af` (a based number missing its base format) from
+/// `1g` (a number and an identifier).
 pub fn isBasedDigit(c: u8, radix: u8) bool {
     return switch (c) {
         '_', 'x', 'X', 'z', 'Z', '?' => true,
@@ -439,19 +374,12 @@ pub fn isBasedDigit(c: u8, radix: u8) bool {
     };
 }
 
-/// LRM §2.6.2 Table 2-1 — scaled notation, as the exponent it stands for.
-/// `M` is 1e6 and `m` is 1e-3; `K` and `k` are both 1e3. This table exists
-/// exactly once; nothing else in the engine may re-spell it.
-///
-/// It is an EXPONENT and not a multiplier, and that is the load-bearing part.
-/// `200u` becomes the text `200e-6`, which `parseFloat` rounds once, to
-/// 2.0000000000000000e-4. Multiplying instead — `200.0 * 1e-6` — rounds twice
-/// and lands on 1.9999999999999998e-4, a different double for the same
-/// spelling. `lib/backend/tb.zig` did exactly that for two years, so a `//!
-/// time 200u` line and a `200u` written in the model were not equal, and a
-/// fixture guarding an assertion with `$abstime < 200u` never reached its last
-/// timepoint: the check passed vacuously at every point, including the one it
-/// existed for. Public for that consumer; do not add a third spelling.
+/// Returns the exponent text a §2.6.2 Table 2-1 scale factor stands for, or null.
+/// `M` is 1e6 and `m` is 1e-3; `K` and `k` are both 1e3.
+/// Callers append it to the mantissa and parse once: `200u` → `200e-6` rounds
+/// once, while `200.0 * 1e-6` rounds twice and gives a different double. The
+/// testbench's `//! time` parser uses it so both read the same value; do not
+/// re-spell the table elsewhere.
 pub fn scaleExp(c: u8) ?[]const u8 {
     return switch (c) {
         'T' => "e12",
@@ -470,15 +398,10 @@ pub fn scaleExp(c: u8) ?[]const u8 {
 
 // ---- source locations (diagnostics) ---------------------------------------
 
-/// Byte range of token `tok` — the currency every diagnostic reports in.
-///
-/// This is the one place the engine converts a token index into a `diag.Span`,
-/// so a caret is exactly as wide as the token it names. `starts` is the
-/// lexer's `.start` column; the end is recomputed by re-lexing (see
-/// `Lexer.tokenEnd`), which is why `Stored` needs no length field.
-///
-/// An out-of-range index yields a zero-width span at end of file, which is the
-/// right answer for "expected X, found EOF".
+/// Returns the byte range of token `tok`, for a diagnostic caret. `starts` is
+/// the token list's `.start` column; the end costs one re-lex.
+/// An out-of-range index yields a zero-width span at end of file, for
+/// "expected X, found end of file".
 pub fn tokenSpan(src: []const u8, starts: []const u32, tok: u32) diag.Span {
     if (tok >= starts.len) {
         const end: u32 = @intCast(src.len);
@@ -489,9 +412,8 @@ pub fn tokenSpan(src: []const u8, starts: []const u32, tok: u32) diag.Span {
     return .{ .start = start, .end = lx.tokenEnd(start) };
 }
 
-/// Why a `.invalid` token that opened with `"` never closed — the one lexical
-/// mistake common enough in real models to deserve its own message instead of
-/// the parser's "found invalid token".
+/// Why a `.invalid` token that opened with `"` never closed, so the parser can
+/// give that common mistake its own message.
 pub const StringRunaway = enum {
     /// Not a string literal at all; the caller's own message stands.
     none,
@@ -501,20 +423,13 @@ pub const StringRunaway = enum {
     line_continuation,
 };
 
-/// Classify the `.invalid` token spanning `span`.
+/// Classifies the `.invalid` token spanning `span`.
 ///
-/// §2.7 is unambiguous: "A string literal is a sequence of characters enclosed
-/// by double quotes (") and contained on a single line." Table 2-2 then lists
-/// every escape a string may hold — `\n`, `\t`, `\\`, `\"`, `\ddd` — and
-/// `\<newline>` is not among them. Continuing a string across a line break is
-/// an IEEE 1800 SystemVerilog addition (§5.9); Verilog-AMS is derived from IEEE
-/// 1364-2005 (§1.1), whose §3.6 carries the same single-line rule. So the
-/// rejection is correct and stays — but foundry models (bsim4va `$strobe`)
-/// use the vendor extension anyway, so the message has to name the rule.
-///
-/// The trailing backslash cannot be found with `endsWith`: in `"a\\` it is the
-/// second half of an escape pair, not a continuation, so the body is walked
-/// with `lexString`'s own pairing rule.
+/// §2.7: a string literal is "contained on a single line", and Table 2-2 has no
+/// `\<newline>` escape. Continuing a string across a line is IEEE 1800 §5.9,
+/// which some foundry models use, so `.line_continuation` lets the message name
+/// the rule. The body is walked with `lexString`'s escape pairing, because in
+/// `"a\\` the final backslash is half of an escape, not a continuation.
 pub fn stringRunaway(src: []const u8, span: diag.Span) StringRunaway {
     if (span.start >= src.len or src[span.start] != '"') return .none;
     const text = src[span.start..span.end];
@@ -544,17 +459,16 @@ pub const ValueError = error{
 };
 
 /// A decoded §2.6.1 integer constant. `width` is the declared size in bits, or
-/// 0 for an unsized constant — LRM §4.2.13 forbids those in a concatenation
-/// ("unsized constant numbers shall not be allowed in concatenations"), and
-/// that rule is unanswerable without carrying the size out of the decoder.
+/// 0 for an unsized constant, which §4.2.13 forbids in a concatenation.
 pub const IntLiteral = struct {
     value: i64,
     width: u32,
     signed: bool,
 };
 
-/// Decode a `.real_literal`'s text. LRM §2.6.2. Strips `_` and rewrites a
+/// Decodes a `.real_literal`'s text (LRM §2.6.2). Strips `_` and rewrites a
 /// Table 2-1 scale factor into an exponent, so IEEE-754 rounding happens once.
+/// Fails with `LiteralTooLong` past the 512-byte decode buffer.
 pub fn parseReal(text: []const u8) ValueError!f64 {
     // A scale factor is always the final character and never coexists with an
     // exponent, so one look at the last byte decides.
@@ -580,13 +494,13 @@ pub fn parseReal(text: []const u8) ValueError!f64 {
     n += suffix.len;
 
     // The lexer only produces well-formed real literals; overflow yields inf,
-    // which §2.6.2 leaves to IEEE 754 (and invariant 5 forbids clamping).
+    // which §2.6.2 leaves to IEEE 754; clamping would change the value.
     return std.fmt.parseFloat(f64, buf[0..n]) catch error.Overflow;
 }
 
-/// Decode a `.string_literal`'s text (quotes included) into its bytes.
-/// LRM §2.7 Table 2-2: \n \t \\ \" and \ddd (1–3 octal digits).
-/// Caller owns the result; intern it and let the arena hold it.
+/// Decodes a `.string_literal`'s text (quotes included) into its bytes
+/// (LRM §2.7 Table 2-2: \n \t \\ \" and \ddd, 1 to 3 octal digits).
+/// Asserts `text` is quoted. The caller owns the result, allocated with `gpa`.
 pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
     std.debug.assert(text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"');
     const body = text[1 .. text.len - 1];
@@ -615,7 +529,7 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
                 out[n] = '\t';
                 i += 1;
             },
-            '0'...'7' => { // \ddd, 1–3 octal digits
+            '0'...'7' => { // \ddd, 1 to 3 octal digits
                 var v: u16 = 0;
                 var k: usize = 0;
                 while (k < 3 and i < body.len and body[i] >= '0' and body[i] <= '7') : (k += 1) {
@@ -667,10 +581,9 @@ test "operators are longest-match (§2.5)" {
 
 test "white space separates; comment characters are operators here (§2.3, §2.4)" {
     try expectTags("a\t\n\x0cb\r\n", &.{ .identifier, .identifier, .eof });
-    // §2.4 is the preprocessor's (pp/test.zig "§2.4 comments vanish"): every
-    // real comment is gone before this text exists. What is left that LOOKS
-    // like one was pasted together by macros, and IEEE 1364 §19.3.1 forbids
-    // macro text split across a comment — so it is `/` `/` and `/` `*`.
+    // The preprocessor removes every §2.4 comment (pp/test.zig "§2.4 comments
+    // vanish"). What looks like one here was pasted by macros, and IEEE 1364
+    // §19.3.1 forbids splitting macro text across a comment: `/` `/`, `/` `*`.
     try expectTags("x / / y", &.{ .identifier, .slash, .slash, .identifier, .eof });
     try expectTags("x //y", &.{ .identifier, .slash, .slash, .identifier, .eof });
     try expectTags("8 /* 2", &.{ .int_literal, .slash, .star, .int_literal, .eof });
@@ -702,18 +615,18 @@ test "numbers: bases, reals, scale factors (§2.6)" {
     try expectTags(".12", &.{ .dot, .int_literal, .eof });
     try expectTags("9.", &.{ .int_literal, .dot, .eof });
     try expectTags("4.E3", &.{ .int_literal, .dot, .identifier, .eof });
-    // §2.6.1 Example 1: `4af` is illegal hex — `a` is not eaten as a scale factor.
+    // §2.6.1 Example 1: `4af` is illegal hex; `a` is not eaten as a scale factor.
     try expectTags("4af", &.{ .int_literal, .identifier, .eof });
     // §2.6.1: the base format must be followed by digits (`8 'd -6` is illegal).
     try expectTags("8'd -6", &.{ .invalid, .minus, .int_literal, .eof });
     // A quote that is not a base_format leaves the number intact.
     try expectTags("2'{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
     // §2.6.1 "it shall be legal to macro substitute these three tokens": after
-    // §10.3 substitution the three arrive separated by white space, and the size
-    // still joins to the base format. Both spacings are ONE literal.
+    // substitution the three arrive separated by white space, and the size
+    // still joins to the base format. Both spacings are one literal.
     try expectTags("8 'h A5", &.{ .int_literal, .eof });
     try expectTags("32\n'h 12ab_f001", &.{ .int_literal, .eof });
-    // …and the white space before an assignment pattern is NOT joined: `'{` is
+    // White space before an assignment pattern is not joined: `'{` is
     // not a base_format, so the number ends at its digits (§4.2.14).
     try expectTags("2 '{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
 }
@@ -728,10 +641,10 @@ test "strings (§2.7)" {
 
 test "stringRunaway names the §2.7 mistake (E0138)" {
     const cases = [_]struct { src: []const u8, want: StringRunaway }{
-        // IEEE 1800 §5.9 continuation — what bsim4va's $strobe uses.
+        // IEEE 1800 §5.9 continuation, as in bsim4va's $strobe.
         .{ .src = "\"open\\\nrest\"", .want = .line_continuation },
         .{ .src = "\"open\nrest\"", .want = .unterminated },
-        // `\\` is an escaped backslash (Table 2-2), NOT a continuation.
+        // `\\` is an escaped backslash (Table 2-2), not a continuation.
         .{ .src = "\"open\\\\\nrest\"", .want = .unterminated },
         // A trailing `\` with no newline after it is just end of file.
         .{ .src = "\"open\\", .want = .unterminated },
@@ -784,28 +697,17 @@ test "scale factors: M is 1e6, m is 1e-3 (§2.6.2 Table 2-1)" {
 }
 
 test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.2 * 1e-9" {
-    // THE RULE IN FORCE, decided rather than inherited. §2.6.2 describes the
-    // scale factor arithmetically ("24.7K, which indicates 24.7 multiplied by
-    // 10 to the third power"), which reads as mantissa × scale — two IEEE-754
-    // roundings, one for the mantissa and one for the product. This engine
-    // rewrites the suffix into an exponent and hands the JOINED text to
-    // `parseFloat` instead, so the value is rounded once, from the decimal
-    // digits the user wrote. That is a strengthening §2.6.2 does not forbid:
-    // the exactly-representable cases (1.3k) are unchanged and the rest land
-    // on the nearest double to the literal rather than to a product.
-    //
-    // It matters because it is observable: 2376 of the 9990 two-significant-
-    // digit scaled literals differ between the two spellings by 1 ulp, and the
-    // difference reaches emitted device text — see the `transition(V(p,n), 0,
-    // 2.2n)` case in lib/backend/codegen.zig, which pins `0.0000000022`.
-    // Parser and lexer used to disagree here, each with its own decoder.
+    // §2.6.2 describes "24.7K" as "24.7 multiplied by 10 to the third power",
+    // which read literally rounds twice (mantissa, then product). VerA parses
+    // the joined text instead, so the value is the double nearest the literal;
+    // §2.6.2 does not forbid that, and exact cases (1.3k) are unchanged. The
+    // difference is 1 ulp for some literals and reaches emitted device text.
     try testing.expectEqual(@as(f64, 2.2e-9), try parseReal("2.2n"));
     // Both operands must be runtime `f64`s: Zig folds a comptime_float product
     // at arbitrary precision, which is exactly the double rounding under test.
     const mantissa: f64 = 2.2;
     const scale: f64 = 1e-9;
     try testing.expect((try parseReal("2.2n")) != mantissa * scale);
-    // Deleting the second decoder is the point: nothing may re-spell Table 2-1.
     try testing.expectEqual(@as(f64, 1.3e3), try parseReal("1.3k"));
 }
 
@@ -819,7 +721,7 @@ test "§2.6.1 white space splits the base format from the digits, and nothing el
     // format, so the `+` that follows is its own token and not swallowed.
     try testing.expectEqual(token.Tag.invalid, tags[1]);
     try testing.expectEqual(token.Tag.plus, tags[2]);
-    // §2.6.1 permits no space INSIDE the apostrophe group: `8 ' h 3` is four
+    // §2.6.1 permits no space inside the apostrophe group: `8 ' h 3` is four
     // tokens, not one number.
     try testing.expectEqual(token.Tag.int_literal, tags[3]);
     try testing.expect(tags[4] != .int_literal);

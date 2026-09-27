@@ -1,32 +1,9 @@
-//! Class 2 — AST. LRM annex A (formal grammar), ch3 declaration syntax.
-//!
-//! Transformation: token stream → AST. The AST is the shape the grammar
-//! produces; class 3–9 lowering consumes it.
-//!
-//! DOD (critical): the AST is SoA + u32 handles, NOT a pointer tree.
-//!   - Expressions live in parallel columns (a MultiArrayList): tag, main_tok,
-//!     lhs, rhs, extra, str. An ExprId is an index into those columns.
-//!   - Statements live in a flat pool; a StmtId indexes it.
-//!   - Never store a `*ExprNode`; store an `ExprId`.
-//!   - Variable-arity payloads (call args, concat elements, dotted name parts)
-//!     live in one shared `u32` pool, addressed by a single `u32` in the row.
-//!   - Identifiers/strings are interned once; nodes carry a `StrId`, never a
-//!     slice.
-//!
-//! Determinism: every store is append-only and insertion-ordered, so identical
-//! token input yields byte-identical ids in every column. Nothing here hashes
-//! pointers or iterates a hash map.
-//!
-//! Ownership: every list is unmanaged and takes the allocator per call. The
-//! intended allocator is the per-compilation arena, so `deinit` is normally
-//! unnecessary — it exists anyway (deinit-complete) so an AST can be built on a
-//! gpa in tests. `[]const u8` slices handed to `StringInterner.intern` are
-//! BORROWED: they must outlive the `SourceFile` (the preprocessed source buffer
-//! and the compilation arena both do).
-//!
-//! NOTE on `std.ArrayList` in 0.16: `ArrayList` *is* the unmanaged list
-//! (`std.ArrayListUnmanaged` is a deprecated alias for it). Hence
-//! `= .empty` + `append(gpa, x)`.
+//! The AST the parser builds from the token stream (LRM annex A, ch3 declarations).
+//! Expressions are SoA rows addressed by `ExprId`, statements a flat pool addressed
+//! by `StmtId`, names interned as `StrId`; variable-arity payloads share one `u32`
+//! pool. Every store is append-only, so the same tokens give the same ids. Lists are
+//! unmanaged and meant for the compilation arena; `deinit` exists so tests can use a
+//! gpa. Interned slices are borrowed and must outlive the `SourceFile`.
 
 const Integer = @import("integer.zig");
 const IntLiteral = @import("lexer.zig").IntLiteral;
@@ -36,8 +13,7 @@ const std = @import("std");
 // Handles
 // ---------------------------------------------------------------------------
 
-/// Handle into the expression columns. `enum(u32)` newtype — cannot be confused
-/// with a StmtId. LRM annex A (expression grammar).
+/// Handle into the expression columns (LRM annex A expression grammar).
 pub const ExprId = enum(u32) { none = std.math.maxInt(u32), _ };
 /// Handle into the statement pool. LRM §5 behavioral statements.
 pub const StmtId = enum(u32) { none = std.math.maxInt(u32), _ };
@@ -47,10 +23,9 @@ pub const StrId = enum(u32) { none = std.math.maxInt(u32), _ };
 /// Scalar data types. LRM §3.1, §3.2, §3.3, §3.4.1.
 /// `realtime` collapses to `.real` and `time` to `.integer` (A.2.1.1
 /// parameter_type); the distinction is meaningless in the analog kernel.
-/// `.unspecified` is `parameter p = <expr>;` with no type keyword — LRM §3.4.1
-/// derives the type from the default expression, which only lowering (which can
-/// fold) is able to do. Lowering MUST resolve `.unspecified`; codegen never
-/// sees it.
+/// `.unspecified` is `parameter p = <expr>;` with no type keyword: §3.4.1 derives
+/// the type from the default expression, which only lowering can fold. Lowering
+/// resolves it; codegen never sees it.
 pub const Type = enum(u8) { real, integer, string, unspecified };
 
 /// Port / function-argument direction. LRM §6.5.2.2 (ports), §4.7.2.3
@@ -63,7 +38,7 @@ pub const Direction = enum(u8) { unspecified, input, output, inout };
 pub const PotentialOrFlow = enum(u8) { potential, flow };
 
 // ---------------------------------------------------------------------------
-// Operators — LRM §4.2, A.8.6
+// Operators: LRM §4.2, A.8.6
 // ---------------------------------------------------------------------------
 
 /// A.8.6 unary_operator. Stored in the `extra` column of a `.unary` node.
@@ -112,22 +87,19 @@ pub const BinaryOp = enum(u8) {
 // Expressions
 // ---------------------------------------------------------------------------
 
-/// Expression node tag. LRM §4.2 (operators), §4.3/§4.5/§4.6 (calls), §4.4
-/// (access functions), §5.10 (event expressions — they are expressions in
-/// A.6.5 `analog_event_expression`).
-///
-/// Column usage per tag is documented on each arm; `main_tok` is always the
-/// token the node is reported at (needed by the class-6 finiteness proof, whose
-/// failures are compile errors and must name a source location).
 /// `.branch_access` `extra` value for A.8.9's hierarchical_unnamed_branch_reference
-/// (`V(drv.branch(x, y))`): the child's EXISTING unnamed branch (§5.6.8.2), as
+/// (`V(drv.branch(x, y))`): the child's existing unnamed branch (§5.6.8.2), as
 /// against `V(drv.x, drv.y)`, which creates a new one in the writer (§5.6.8.1).
 /// The parser rewrites both to the same terminal pair, so this is the only
 /// record of which one was written.
 pub const branch_ref_hier_unnamed: u32 = 1;
 
+/// Expression node tag: LRM §4.2 (operators), §4.3/§4.5/§4.6 (calls), §4.4
+/// (access functions), §5.10 (A.6.5 event expressions).
+/// Each arm documents its column usage; `main_tok` is always the token the
+/// node is reported at.
 pub const ExprTag = enum(u8) {
-    // ---- literals & names — §2.6, §2.7, §2.8, A.8.7 ----
+    // ---- literals and names: §2.6, §2.7, §2.8, A.8.7 ----
     /// `extra` = index into `ExprStore.ints`. LRM §2.6.1.
     int_literal,
     /// Exact four-state or wide constant; rejected by the analog integer boundary.
@@ -137,23 +109,23 @@ pub const ExprTag = enum(u8) {
     /// `str` = interned, escape-processed contents. LRM §2.7.
     str_literal,
     /// A.2.5 `value_range_expression ::= ... | inf | -inf`. Only legal inside a
-    /// `ValueRange`; the finiteness proof (class 6) reads these directly.
+    /// `ValueRange`; the finiteness proof reads these directly.
     pos_inf,
     neg_inf,
     /// `str` = name. LRM §2.8 (variables, nets, params, genvars, named events).
     ident,
     /// Dotted name: `extra` = StrId list offset (2+ parts). Covers
-    /// hierarchical_identifier (§6.8) AND nature_attribute_reference
-    /// (§3.6.1.3, e.g. `electrical.potential.abstol`) — lowering tells them
+    /// hierarchical_identifier (§6.8) and nature_attribute_reference
+    /// (§3.6.1.3, e.g. `electrical.potential.abstol`); lowering tells them
     /// apart by resolving the first part.
     hier_ident,
 
-    // ---- operators — §4.2 ----
+    // ---- operators: §4.2 ----
     /// `lhs` = operand, `extra` = @intFromEnum(UnaryOp).
     unary,
     /// `lhs`, `rhs` operands, `extra` = @intFromEnum(BinaryOp).
     binary,
-    /// §4.2.12 `?:` — `lhs` = cond, `rhs` = then, `extra` = @intFromEnum(else).
+    /// §4.2.12 `?:`: `lhs` = cond, `rhs` = then, `extra` = @intFromEnum(else).
     /// Read the third operand with `ExprStore.ternaryElse`.
     ternary,
 
@@ -176,7 +148,7 @@ pub const ExprTag = enum(u8) {
     /// noise_table, noise_table_log (A.8.2 analog_small_signal_function_call).
     noise_call,
 
-    // ---- access functions — §4.4 ----
+    // ---- access functions: §4.4 ----
     /// §4.4.1 branch probe: `V(a)`, `V(a,b)`, `I(br)`. `str` = access
     /// identifier (`V`/`I`/nature access name, §3.6.1.4), `lhs` = first
     /// net-or-branch reference, `rhs` = second net reference or `.none`.
@@ -187,33 +159,33 @@ pub const ExprTag = enum(u8) {
     /// port_probe_function_call). `str` = access identifier, `lhs` = port ref.
     port_access,
 
-    // ---- aggregates — §4.2.13, §3.4.4, A.8.1 ----
-    /// `{a, b, ...}` — `extra` = ExprId list offset.
+    // ---- aggregates: §4.2.13, §3.4.4, A.8.1 ----
+    /// `{a, b, ...}`: `extra` = ExprId list offset.
     concat,
-    /// `{n{...}}` — `lhs` = repeat count, `rhs` = the inner `.concat`.
+    /// `{n{...}}`: `lhs` = repeat count, `rhs` = the inner `.concat`.
     multi_concat,
     /// `'{a, b, ...}` assignment pattern (array param defaults §3.4.4, filter
-    /// coefficient args §4.5.4) — `extra` = ExprId list offset.
+    /// coefficient args §4.5.4): `extra` = ExprId list offset.
     assign_pattern,
     /// A.8.1's `'{ constant_expression { ... } }` whose count is not a literal
     /// (`'{N{0.5}}`): the parser cannot unroll it before parameters have
-    /// values, so the pattern's ONLY element is this node — `lhs` = count,
+    /// values, so the pattern's only element is this node: `lhs` = count,
     /// `rhs` = an `.assign_pattern` holding the group. `Lower.patternElems`
     /// unrolls it with the constant folder.
     pattern_repl,
-    /// §3.4.4 array / bit select `base[i]` — `lhs` = base, `rhs` = index.
+    /// §3.4.4 array / bit select `base[i]`: `lhs` = base, `rhs` = index.
     index,
-    /// `msb:lsb` part select and `analog_range_expression` (A.8.3) —
+    /// `msb:lsb` part select and `analog_range_expression` (A.8.3):
     /// `lhs` = msb, `rhs` = lsb.
     range,
 
-    // ---- event expressions — §5.10, A.6.5 ----
-    /// `e1 or e2` / `e1, e2` — `lhs`, `rhs`.
+    // ---- event expressions: §5.10, A.6.5 ----
+    /// `e1 or e2` / `e1, e2`: `lhs`, `rhs`.
     event_or,
-    /// `posedge e` / `negedge e` — `lhs` (digital edges, §5.10.1).
+    /// `posedge e` / `negedge e`: `lhs` (digital edges, §5.10.1).
     event_posedge,
     event_negedge,
-    /// §5.10.2 `initial_step` / `final_step` — `extra` = StrId list offset of
+    /// §5.10.2 `initial_step` / `final_step`: `extra` = StrId list offset of
     /// the analysis-name arguments (empty list = no argument list).
     event_initial_step,
     event_final_step,
@@ -221,30 +193,28 @@ pub const ExprTag = enum(u8) {
     /// analog_event_functions). `str` = name, `extra` = ExprId list offset
     /// (a `.none` element is an omitted `analog_expression_or_null` argument).
     event_function,
-    /// A.6.5 `driver_update expression` — `lhs` is the signal. §9.22.4: "causes
-    /// the statement to execute any time a driver of the signal clock is
-    /// updated." A DIGITAL event, and §9.22 paragraph 3 confines the driver
-    /// family to a connect module, so this node only ever appears under a
-    /// `DiscreteBlock` of a `connectmodule` and is never lowered.
+    /// A.6.5 `driver_update expression`: `lhs` is the signal (§9.22.4). A digital
+    /// event that §9.22 confines to a connect module, so it belongs under a
+    /// `connectmodule`'s `DiscreteBlock`; analog lowering refuses it (E0701).
     event_driver_update,
 };
 
-/// One expression row. The `ExprStore` keeps these as MultiArrayList columns,
-/// so this struct is the *row view*, never an allocated node.
+/// One expression row. `ExprStore` keeps these as MultiArrayList columns, so
+/// this struct is a row view, never an allocated node.
 pub const Node = struct {
     tag: ExprTag,
-    /// Token index this node is reported at (diagnostics; class 6 errors).
+    /// Token index this node is reported at.
     main_tok: u32 = 0,
     lhs: ExprId = .none,
     rhs: ExprId = .none,
-    /// Opcode / literal payload / list offset — see `ExprTag` per-arm docs.
+    /// Opcode, literal payload or list offset; see `ExprTag`'s arms.
     extra: u32 = 0,
     /// Interned name, `.none` when the tag carries no name.
     str: StrId = .none,
 };
 
-/// SoA expression store (one row per expression). LRM annex A.
-/// Columns are parallel (a MultiArrayList); ExprId indexes all of them.
+/// SoA expression store, one row per expression (LRM annex A). `ExprId`
+/// indexes every column.
 pub const ExprStore = struct {
     /// Columns: `.tag`, `.main_tok`, `.lhs`, `.rhs`, `.extra`, `.str`.
     nodes: std.MultiArrayList(Node) = .empty,
@@ -254,13 +224,16 @@ pub const ExprStore = struct {
     /// Side table for `.real_literal` values (`extra` indexes it). Kept out of
     /// the row so the common integer/ident rows stay narrow.
     reals: std.ArrayList(f64) = .empty,
-    /// Known literals fitting the analog i64 ABI retain source width/sign for
-    /// expression sizing. Wider and four-state literals have their own pool.
+    /// `.int_literal` values that fit i64, with their source width and sign for
+    /// expression sizing.
     ints: std.ArrayList(IntLiteral) = .empty,
+    /// `.logic_literal` values: wider or four-state constants. Owns each `planes`.
     logic: std.ArrayList(Integer.Literal) = .empty,
 
     pub const empty: ExprStore = .{};
 
+    /// Frees every column and each `logic` literal's `planes`; `gpa` must be
+    /// the allocator the store was built with.
     pub fn deinit(self: *ExprStore, gpa: std.mem.Allocator) void {
         self.nodes.deinit(gpa);
         self.pool.deinit(gpa);
@@ -271,7 +244,7 @@ pub const ExprStore = struct {
         self.* = .empty;
     }
 
-    /// Append one row (all columns in lockstep) and return its handle.
+    /// Appends one row (all columns in lockstep) and returns its handle.
     pub fn add(self: *ExprStore, gpa: std.mem.Allocator, node: Node) !ExprId {
         const id: u32 = @intCast(self.nodes.len);
         std.debug.assert(id != @intFromEnum(ExprId.none));
@@ -279,30 +252,36 @@ pub const ExprStore = struct {
         return @enumFromInt(id);
     }
 
-    /// Convenience for `.real_literal`: parks the value in `reals`.
+    /// Appends a `.real_literal` row whose value lives in `reals`.
     pub fn addReal(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, value: f64) !ExprId {
         const idx: u32 = @intCast(self.reals.items.len);
         try self.reals.append(gpa, value);
         return self.add(gpa, .{ .tag = .real_literal, .main_tok = main_tok, .extra = idx });
     }
 
-    /// Synthetic integer constants have the implementation integer width.
+    /// Appends a synthetic unsized, signed `.int_literal` (the implementation
+    /// integer width).
     pub fn addInt(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, value: i64) !ExprId {
         return self.addIntLiteral(gpa, main_tok, .{ .value = value, .width = 0, .signed = true });
     }
 
+    /// Appends an `.int_literal` row whose value lives in `ints`.
     pub fn addIntLiteral(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: IntLiteral) !ExprId {
         const idx: u32 = @intCast(self.ints.items.len);
         try self.ints.append(gpa, literal);
         return self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
     }
 
+    /// Appends a `.logic_literal` row. Takes ownership of `literal.planes`,
+    /// which must be allocated with `gpa`; `deinit` frees it.
     pub fn addLogic(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: Integer.Literal) !ExprId {
         const idx: u32 = @intCast(self.logic.items.len);
         try self.logic.append(gpa, literal);
         return self.add(gpa, .{ .tag = .logic_literal, .main_tok = main_tok, .extra = idx });
     }
 
+    /// Returns a `.logic_literal`'s value; asserts the tag. `planes` stays owned
+    /// by the store.
     pub fn logicValue(self: *const ExprStore, id: ExprId) Integer.Literal {
         std.debug.assert(self.tag(id) == .logic_literal);
         return self.logic.items[self.extraOf(id)];
@@ -331,37 +310,38 @@ pub const ExprStore = struct {
         return self.nodes.items(.str)[@intFromEnum(id)];
     }
 
-    /// §4.2 decoded opcode accessors (assert the tag matches).
+    /// Returns a `.unary` node's operator; asserts the tag.
     pub fn unOp(self: *const ExprStore, id: ExprId) UnaryOp {
         std.debug.assert(self.tag(id) == .unary);
         return @enumFromInt(@as(u8, @intCast(self.extraOf(id))));
     }
+    /// Returns a `.binary` node's operator; asserts the tag.
     pub fn binOp(self: *const ExprStore, id: ExprId) BinaryOp {
         std.debug.assert(self.tag(id) == .binary);
         return @enumFromInt(@as(u8, @intCast(self.extraOf(id))));
     }
-    /// §4.2.12 third operand of `?:`.
+    /// Returns the third operand of a §4.2.12 `?:`; asserts the tag.
     pub fn ternaryElse(self: *const ExprStore, id: ExprId) ExprId {
         std.debug.assert(self.tag(id) == .ternary);
         return @enumFromInt(self.extraOf(id));
     }
-    /// §2.6.1 decoded integer literal.
+    /// Returns a §2.6.1 `.int_literal`'s value; asserts the tag.
     pub fn intValue(self: *const ExprStore, id: ExprId) i64 {
         std.debug.assert(self.tag(id) == .int_literal);
         return self.intLiteral(id).value;
     }
+    /// Returns a `.int_literal` with its width and sign; asserts the tag.
     pub fn intLiteral(self: *const ExprStore, id: ExprId) IntLiteral {
         std.debug.assert(self.tag(id) == .int_literal);
         return self.ints.items[self.extraOf(id)];
     }
-    /// §2.6.2 decoded real literal.
+    /// Returns a §2.6.2 `.real_literal`'s value; asserts the tag.
     pub fn realValue(self: *const ExprStore, id: ExprId) f64 {
         std.debug.assert(self.tag(id) == .real_literal);
         return self.reals.items[self.extraOf(id)];
     }
 
-    /// Store a variable-arity list; returns the offset to put in a row's
-    /// `extra`. Deterministic: offsets are assigned in append order.
+    /// Stores a variable-arity list; returns the offset to put in a row's `extra`.
     fn addList(self: *ExprStore, gpa: std.mem.Allocator, items: []const u32) !u32 {
         const off: u32 = @intCast(self.pool.items.len);
         try self.pool.ensureUnusedCapacity(gpa, items.len + 1);
@@ -369,13 +349,17 @@ pub const ExprStore = struct {
         self.pool.appendSliceAssumeCapacity(items);
         return off;
     }
+    /// Stores an ExprId list; returns its pool offset.
     pub fn addExprList(self: *ExprStore, gpa: std.mem.Allocator, items: []const ExprId) !u32 {
         return self.addList(gpa, @ptrCast(items));
     }
+    /// Stores a StrId list; returns its pool offset.
     pub fn addStrList(self: *ExprStore, gpa: std.mem.Allocator, items: []const StrId) !u32 {
         return self.addList(gpa, @ptrCast(items));
     }
 
+    /// Returns the list stored at pool offset `off`. The slice is invalidated
+    /// by the next list append.
     pub fn list(self: *const ExprStore, off: u32) []const u32 {
         const n = self.pool.items[off];
         return self.pool.items[off + 1 ..][0..n];
@@ -393,11 +377,11 @@ pub const ExprStore = struct {
         return @ptrCast(self.list(self.extraOf(id)));
     }
 
-    /// Every child-expression edge of `id`, in source order: the one
-    /// exhaustive statement of the per-tag column usage `ExprTag` documents, so
-    /// a new tag is a compile error here instead of a silent `else` in every
-    /// walker. Elements may be `.none` (an omitted argument, a one-terminal
-    /// probe). A list tag returns its pool slice; `buf` holds the others.
+    /// Returns every child expression of `id`, in source order. This is the one
+    /// exhaustive statement of `ExprTag`'s column usage, so a new tag is a
+    /// compile error here. Elements may be `.none` (an omitted argument, a
+    /// one-terminal probe). A list tag returns its pool slice; otherwise the
+    /// result points into `buf`.
     pub fn children(self: *const ExprStore, id: ExprId, buf: *[3]ExprId) []const ExprId {
         switch (self.tag(id)) {
             .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf, .ident => return &.{},
@@ -421,22 +405,18 @@ pub const ExprStore = struct {
 };
 
 // ---------------------------------------------------------------------------
-// String interning — LRM §2.7, §2.8
+// String interning: LRM §2.7, §2.8
 // ---------------------------------------------------------------------------
 
-/// Identifier/string intern table. Insertion-ordered ⇒ StrIds are
-/// deterministic for a given token stream.
+/// Identifier and string intern table. Ids are assigned in insertion order, so
+/// they are deterministic for a given token stream.
 ///
-/// THE one interning mechanism in the engine: `mir.zig` embeds this same type
-/// (`Mir.strings`) and re-exports `StrId` as `Mir.StrId`, so "interned string"
-/// has exactly one shape from the lexer to codegen. A StrId is only meaningful
-/// against the table it came from (the AST's or the MIR's) — lowering carries
-/// a name across with `mir.internString(gpa, file.str(id))`.
+/// The MIR embeds the same type (`Mir.strings`, `Mir.StrId`). A StrId is only
+/// meaningful against the table it came from; lowering carries a name across
+/// with `mir.internString(gpa, file.str(id))`.
 ///
-/// Stored slices are BORROWED — either substrings of the preprocessed source or
-/// arena copies made by the parser (escaped identifiers §2.8.1, string literals
-/// §2.7 need un-escaping). Both outlive the `SourceFile`; nothing here frees a
-/// string. Cold data: only naming/codegen walks it, never a hot loop.
+/// Stored slices are borrowed (source substrings or parser arena copies) and
+/// never freed here; they must outlive the table.
 pub const StringInterner = struct {
     strings: std.ArrayList([]const u8) = .empty,
     map: std.StringHashMapUnmanaged(StrId) = .empty,
@@ -449,7 +429,8 @@ pub const StringInterner = struct {
         self.* = .empty;
     }
 
-    /// Intern `s` (borrowed; must outlive the AST). Idempotent.
+    /// Returns the id for `s`, adding it if new. `s` is borrowed and must
+    /// outlive the table.
     pub fn intern(self: *StringInterner, gpa: std.mem.Allocator, s: []const u8) !StrId {
         const gop = try self.map.getOrPut(gpa, s);
         if (gop.found_existing) return gop.value_ptr.*;
@@ -462,24 +443,25 @@ pub const StringInterner = struct {
         return id;
     }
 
+    /// Returns the string for `id`; asserts `id != .none`.
     pub fn get(self: *const StringInterner, id: StrId) []const u8 {
         std.debug.assert(id != .none);
         return self.strings.items[@intFromEnum(id)];
     }
 
-    /// Lookup without inserting — used to test a name against a known keyword
-    /// set without polluting the table.
+    /// Returns the id for `s` without inserting it.
     pub fn find(self: *const StringInterner, s: []const u8) ?StrId {
         return self.map.get(s);
     }
 
+    /// Returns whether `id` names `s`; false for `.none`.
     pub fn eql(self: *const StringInterner, id: StrId, s: []const u8) bool {
         return id != .none and std.mem.eql(u8, self.get(id), s);
     }
 };
 
 // ---------------------------------------------------------------------------
-// Declarations — LRM ch3, ch4 §4.7, ch6
+// Declarations: LRM ch3, ch4 §4.7, ch6
 // ---------------------------------------------------------------------------
 
 /// A declared dimension / range: `[msb:lsb]` (A.2.5 `range`, `dimension`).
@@ -493,9 +475,8 @@ pub const Dim = struct {
 /// LRM §3.4.2 value_range: `from [lo:hi]` / `exclude (lo:hi)` / `exclude val`.
 /// A.2.5 `value_range`. `lo`/`hi` may be `.pos_inf` / `.neg_inf` nodes.
 ///
-/// CRITICAL: these are the *only* bound evidence the class-6 finiteness proof
-/// has. They must survive parse → ParamDecl → Lower.ParamInfo → proof.zig.
-/// Dropping them silently turns provable models into unprovable ones.
+/// These are the only bound evidence the finiteness proof has; they travel
+/// ParamDecl → Lower.ParamInfo → proof.zig.
 pub const ValueRange = struct {
     kind: Kind,
     lo: ExprId,
@@ -503,7 +484,7 @@ pub const ValueRange = struct {
     hi: ExprId = .none,
     lo_inclusive: bool = true,
     hi_inclusive: bool = true,
-    /// A.2.5 `value_range_type '{ string {, string} }` — offset of a StrId list
+    /// A.2.5 `value_range_type '{ string {, string} }`: offset of a StrId list
     /// in `ExprStore.pool`, or `null` for the numeric forms. LRM §3.4.2 string
     /// parameter value ranges.
     strings: ?u32 = null,
@@ -513,7 +494,7 @@ pub const ValueRange = struct {
 
 /// Parameter declaration. LRM §3.4 (A.2.1.1 parameter_declaration /
 /// local_parameter_declaration, A.2.4 param_assignment). One `ParamDecl` per
-/// declared name — the parser expands `parameter real a = 1, b = 2;`.
+/// declared name: the parser expands `parameter real a = 1, b = 2;`.
 pub const ParamDecl = struct {
     name: StrId,
     ty: Type, // §3.4.1 (`.unspecified` ⇒ infer from `default`)
@@ -522,24 +503,22 @@ pub const ParamDecl = struct {
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
     /// A.2.1.1's `[ range ]`, the first arm's width bracket (`parameter [3:0]
-    /// nib = 4'h5;`). NOT `dims`: A.2.5's `range` is a vector width and
+    /// nib = 4'h5;`). Not `dims`: A.2.5's `range` is a vector width and
     /// `dimension` is an array bound, and lowering scalarizes the latter.
     /// `null` when the declaration writes no bracket, which is every
-    /// `parameter_type` form — the two A.2.1.1 arms are exclusive.
+    /// `parameter_type` form (the two A.2.1.1 arms are exclusive).
     packed_range: ?Dim = null,
     /// §6.3 this parameter's value came from an instance parameter value
     /// assignment (or a paramset), not from its own declaration. Set only by
-    /// `ir/elaborate.zig`, when it turns a flattened child's parameter into a
-    /// `localparam` carrying the override as its default.
+    /// elaboration (`ir/elaborate/clone.zig`) when it turns a flattened child's
+    /// parameter into a `localparam` carrying the override as its default.
     ///
-    /// It is the one thing that distinguishes the two halves of §3.4.2: a
-    /// declared default is judged only for well-formed BOUNDS (E0347), while
-    /// "the parameter value shall be within the range" is a rule about a value
-    /// somebody supplied — and until this pass existed, no value ever was.
+    /// It separates the two halves of §3.4.2: a declared default is judged only
+    /// for well-formed bounds (E0347), while "the parameter value shall be
+    /// within the range" applies to a supplied value.
     is_override: bool = false,
-    /// LRM §3.4.2 value ranges (from/exclude). CRITICAL: these are parsed here
-    /// but historically DROPPED before codegen. Class 6 (proof.zig) needs them —
-    /// carry them through to Lower.ParamInfo.
+    /// LRM §3.4.2 value ranges (from/exclude). The finiteness proof needs them,
+    /// so lowering carries them into `Lower.ParamInfo`.
     ranges: []const ValueRange = &.{},
     main_tok: u32 = 0,
 };
@@ -567,18 +546,16 @@ pub const VarDecl = struct {
     packed_range: ?Dim = null,
     is_signed: bool = true,
     /// §6.4.3 / §3.2.1 declared with a `(* desc = ... *)` attribute, which is
-    /// what makes a variable an OUTPUT variable. Recorded for paramset
+    /// what makes a variable an output variable. Recorded for paramset
     /// variables, where §6.4.3's hiding rule turns on it.
     desc: bool = false,
 };
 
-/// A.2.2.1 `net_type` — the wired-logic function a net's drivers resolve
-/// through (IEEE 1364-2005 §7.9, Verilog-AMS §3.7). A declaration that names
-/// no net type (`electrical a;`, `ground gnd;`) is `.wire`, which is also the
-/// §7.9 default resolution.
-/// A.2.2.1 `net_type` plus the two spellings A.2.1.3 gives arms of their own
-/// rather than listing in `net_type`: `trireg` (§3.8's charge storage) and
-/// `wreal` (§3.7's real net).
+/// The wired-logic function a net's drivers resolve through (IEEE 1364-2005
+/// §7.9, Verilog-AMS §3.7): A.2.2.1 `net_type` plus the two spellings A.2.1.3
+/// gives arms of their own, `trireg` (§3.8 charge storage) and `wreal` (§3.7).
+/// A declaration that names no net type (`electrical a;`) is `.wire`, the §7.9
+/// default resolution.
 pub const NetKind = enum(u8) {
     wire,
     tri,
@@ -593,34 +570,25 @@ pub const NetKind = enum(u8) {
     supply0,
     supply1,
     /// §3.7: "The wreal, or real net data type, represents a real-valued
-    /// physical connection between structural entities." NOT four-state —
-    /// "Unlike other digital nets which have an initial value of 'z', wreal
-    /// nets shall have an initial value of zero" — so every `else` arm of a
-    /// four-state resolution is the WRONG answer for one, not a harmless
-    /// default. `Parser.parseWrealDecl` refuses it under `--run` for exactly
-    /// that reason.
+    /// physical connection between structural entities." Not four-state
+    /// ("wreal nets shall have an initial value of zero"), so an `else` arm of
+    /// a four-state resolution is wrong for one. `Parser.parseWrealDecl`
+    /// refuses it under `--run` for that reason.
     wreal,
 };
 
-/// A.2.2.2 `strength0`/`strength1`/`charge_strength`, as ONE enum because
-/// §1.1's IEEE Std 1364 clause 7 orders all eight on a single scale and the
-/// resolution that reads them only ever compares levels:
-///
-///   supply(7) > strong(6) > pull(5) > large(4) > weak(3) > medium(2)
-///             > small(1) > highz(0)
-///
-/// The numeric values ARE that order, so `@intFromEnum` comparison is the
-/// clause's "stronger than". The 0-side/1-side split A.2.2.2 spells into two
-/// productions is a property of the KEYWORD, not of the level, so it lives in
-/// the parser (which has to reject `(strong0, pull0)`) and not here.
+/// A.2.2.2 `strength0`/`strength1`/`charge_strength` as one scale (IEEE 1364
+/// clause 7): supply > strong > pull > large > weak > medium > small > highz.
+/// The numeric values are that order, so `@intFromEnum` comparison is "stronger
+/// than". The 0-side/1-side split belongs to the keyword, so the parser checks
+/// it (rejecting `(strong0, pull0)`).
 pub const Strength = enum(u8) { highz = 0, small = 1, medium = 2, weak = 3, large = 4, pull = 5, strong = 6, supply = 7 };
 
-/// The three strength slots A.2.1.3 puts on ONE `net_declaration` — a
+/// The three strength slots A.2.1.3 puts on one `net_declaration` (a
 /// `charge_strength` on the `trireg` arms, a `drive_strength` pair on the
-/// `list_of_net_decl_assignments` arms — carried together so the parser can
-/// hand its caller whichever bracket the source actually wrote. The defaults
-/// are the clause's: `medium` (IEEE 1364-2005 §3.8, an unbracketed `trireg`)
-/// and `(strong1, strong0)` (§7.10, an unbracketed driver).
+/// `list_of_net_decl_assignments` arms), carried together so the parser can
+/// return whichever bracket the source wrote. Defaults: `medium` (IEEE
+/// 1364-2005 §3.8) and `(strong1, strong0)` (§7.10).
 pub const NetStrength = struct {
     charge: Strength = .medium,
     strength0: Strength = .strong,
@@ -632,18 +600,16 @@ pub const NetStrength = struct {
 /// taken as the minimum of them (IEEE 1364-2005 §7.14); three are given. On a
 /// `trireg` the third value is not a turn-off delay at all but A.2.1.3's charge
 /// decay time, which is why the third field is spelled for both readings.
-/// `.none` throughout is "no delay", which is what every construct meant
-/// before delays were parsed.
+/// `.none` throughout is "no delay".
 pub const Delay3 = struct {
     rise: ExprId = .none,
     fall: ExprId = .none,
     /// Turn-off (to z) on a driver, charge decay on a `trireg`.
     off: ExprId = .none,
 
-    /// The two-value form leaves `off` `.none`: §7.14 derives it as the smaller
-    /// of rise and fall, and that is a value, not a syntax node. A `trireg`
-    /// reads the same `.none` as "no charge decay", which is the reading that
-    /// keeps `trireg c;` holding forever.
+    /// Returns whether any delay was written. The two-value form leaves `off`
+    /// `.none`: §7.14 derives it as the smaller of rise and fall. A `trireg`
+    /// reads that `.none` as "no charge decay", so `trireg c;` holds forever.
     pub fn any(self: Delay3) bool {
         return self.rise != .none;
     }
@@ -659,20 +625,18 @@ pub const NetDecl = struct {
     /// §3.6.2 discipline identifier; `.none` when the net is untyped (§3.9
     /// discipline resolution then assigns it).
     discipline: StrId = .none,
-    /// §3.6.3 `ground` declaration — a global reference node.
+    /// §3.6.3 `ground` declaration: a global reference node.
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
-    /// A.2.1.3 `[ signed ]`. IEEE 1364-2005 §12.3.11: signedness is a
-    /// property of the DECLARATION, so each side of a port keeps its own.
+    /// A.2.1.3 `[ signed ]`. IEEE 1364-2005 §12.3.11: signedness belongs to the
+    /// declaration, so each side of a port keeps its own.
     is_signed: bool = false,
-    /// A.2.1.3 `charge_strength` — `trireg` only, and `medium` is IEEE
-    /// 1364-2005 §3.8's default for a `trireg` that names none.
+    /// A.2.1.3 `charge_strength`, `trireg` only; `medium` is IEEE 1364-2005
+    /// §3.8's default.
     charge: Strength = .medium,
-    /// A.2.1.3 `[ drive_strength ]`, the bracket four of the twelve
-    /// `net_declaration` alternatives carry (the `list_of_net_decl_assignments`
-    /// ones). IEEE 1364-2005 §7.10's default is `(strong1, strong0)`, so a
-    /// declaration that writes no bracket is these two values.
+    /// A.2.1.3 `[ drive_strength ]` on the `list_of_net_decl_assignments` arms.
+    /// IEEE 1364-2005 §7.10's default is `(strong1, strong0)`.
     strength0: Strength = .strong,
     strength1: Strength = .strong,
     /// A.2.1.3 `[ delay3 ]`. On a `trireg` the third value is the charge decay
@@ -680,10 +644,9 @@ pub const NetDecl = struct {
     /// transition.
     delay: Delay3 = .{},
     /// A.2.4 net_decl_assignment; `.none` when the declaration has no `=`.
-    /// §3.6.3.2 makes this a NODESET value — "the initializer shall be a
-    /// constant_expression and will be used as a nodeset value for the
-    /// potential of the net by the analog solver" — an initial guess, not an
-    /// assignment and not a clamp. Folded by `Lower.lowerModule`.
+    /// §3.6.3.2 makes this a nodeset value for the net's potential: an initial
+    /// guess for the solver, not an assignment or a clamp. Folded by
+    /// `Lower.lowerModule`.
     init: ExprId = .none,
     main_tok: u32 = 0,
 };
@@ -696,9 +659,9 @@ pub const BranchDecl = struct {
     hi: ExprId,
     /// Second terminal; `.none` = implicit global ground (§3.12, §1.3.1.1).
     lo: ExprId = .none,
-    /// §3.12 `branch (<p>)` — a port branch, not a node pair.
+    /// §3.12 `branch (<p>)`: a port branch, not a node pair.
     is_port_branch: bool = false,
-    /// A.2.3 `branch_identifier [ range ]` — array of branches; `null` = scalar.
+    /// A.2.3 `branch_identifier [ range ]`: array of branches; `null` = scalar.
     range: ?Dim = null,
     main_tok: u32 = 0,
 };
@@ -709,34 +672,25 @@ pub const Port = struct {
     direction: Direction = .unspecified, // §6.5.2.2
     /// §6.5.2.1 discipline identifier; `.none` ⇒ resolved by §3.9.
     discipline: StrId = .none,
-    /// §6.5.2 vector port range `[msb:lsb]` from the port DIRECTION
+    /// §6.5.2 vector port range `[msb:lsb]` from the port direction
     /// declaration (`inout [0:3] p;`); `null` for a scalar port.
     range: ?Dim = null,
-    /// §6.5.2.2 the range from the port TYPE declaration (`electrical [0:3]
-    /// p;`). A separate field, not merged into `range`, because the clause's
-    /// entire content is that the two "evaluate to the same value" — a rule
-    /// with nothing left to compare once the second range has overwritten the
-    /// first. Folded and compared in lowering (E0350), which is the only place
-    /// a constant expression like `[0:4-1]` can be reduced.
+    /// §6.5.2.2 the range from the port type declaration (`electrical [0:3]
+    /// p;`). Kept apart from `range` because §6.5.2.2 requires the two to
+    /// "evaluate to the same value"; lowering folds and compares them (E0350).
     type_range: ?Dim = null,
-    /// A.2.1.2 `net_type` from the port TYPE declaration, `.wire` when none was
-    /// written (A.2.1.3's own default, and §3.5's for an undeclared port).
-    ///
-    /// A net declaration that names a header port is FOLDED into the port
-    /// (`parseNetNames`), which is what keeps §6.5.2.2's two declarations one
-    /// net. Before this field the fold kept the discipline and the range and
-    /// dropped the type, so `tri0 t;` on a port and `tri0 t;` on an internal
-    /// net minted different nets from identical text: §7.9's resolution reads
-    /// the net TYPE, so the port's read `z` where the internal one read `0`.
+    /// A.2.1.2 `net_type` from the port type declaration, `.wire` when none was
+    /// written (A.2.1.3's default, and §3.5's for an undeclared port). A net
+    /// declaration naming a header port is folded into the port
+    /// (`parseNetNames`), and §7.9 resolution reads this type.
     kind: NetKind = .wire,
-    /// A.1.3 `port ::= . port_identifier ( [ port_expression ] )` — the port's
-    /// EXTERNAL name, the one an instantiation connects to; `.none` when the
+    /// A.1.3 `port ::= . port_identifier ( [ port_expression ] )`: the port's
+    /// external name, the one an instantiation connects to; `.none` when the
     /// port is named by the net it carries. Several consecutive ports share one
     /// external name when the port expression is a concatenation (§6.5.1).
-    /// Only an instantiation can observe it, so nothing reads it yet.
     external_name: StrId = .none,
     /// A.2.1.2 `[ signed ]` on the direction or the net declaration of this
-    /// port — §12.3.3: "If either ... is declared as signed, then the other
+    /// port. §12.3.3: "If either ... is declared as signed, then the other
     /// shall also be considered signed."
     is_signed: bool = false,
     main_tok: u32 = 0,
@@ -748,22 +702,19 @@ pub const Port = struct {
 pub const FuncArg = struct {
     name: StrId,
     ty: Type,
-    direction: Direction, // §4.7.2.3 — `.input` unless declared otherwise
-    /// §4.7.2.3/§4.7.2.4 an ARRAY formal, `output [0:1] out;`. A.2.6 spells the
-    /// range on the direction declaration (`input_declaration ::= input [ range ]
-    /// list_of_identifiers`), and §4.7.1's Example 3 writes it on the matching
-    /// block item declaration too (`real a[0:1], b[0:1];`) — either fills this,
-    /// and `parseFuncDecl` merges them.
+    direction: Direction, // §4.7.2.3; `.input` unless declared otherwise
+    /// §4.7.2.3/§4.7.2.4 an array formal, `output [0:1] out;`. A.2.6 puts the
+    /// range on the direction declaration and §4.7.1's Example 3 on the block
+    /// item declaration (`real a[0:1];`); `parseFuncDecl` merges either.
     dims: []const Dim = &.{},
     /// The identifier token, so §4.7.1's "all formal arguments shall have an
     /// associated block item declaration" (E0225) can point at the formal that
-    /// never got one. The verdict is only reachable once the whole item list
-    /// has been read, by which time the parser's cursor is on `endfunction`.
+    /// never got one, after the parser has moved on to `endfunction`.
     main_tok: u32 = 0,
 };
 
 /// IEEE 1364-2005 §10.2 task or §10.4 function (A.2.6 `function_declaration`,
-/// A.2.7 `task_declaration`) as a DIGITAL parse records it — the 1364
+/// A.2.7 `task_declaration`) as a digital parse records it: the 1364
 /// spellings VAMS §4.7 admits beside the analog function: packed port ranges,
 /// `reg`/`integer`/`time` formals, `automatic`, and tasks at all. An analog
 /// parse records its tasks here too (the mixed-signal kernel runs them) and
@@ -804,80 +755,66 @@ pub const FuncDecl = struct {
     main_tok: u32 = 0,
     /// §4.7's opening paragraph: "Each function can be an analog user-defined
     /// function or a digital function (as defined in IEEE Std 1364 Verilog)."
-    /// False for the bare `function` spelling. The DECLARATION is legal either
-    /// way — §7.3.7 forbids the CALL across contexts, not the declaration, and
-    /// a module may perfectly well hold a digital function it only calls from
-    /// a digital process.
+    /// False for the bare `function` spelling. The declaration is legal either
+    /// way; §7.3.7 forbids only the call across contexts.
     is_analog: bool = true,
 };
 
 /// One `analog` construct. LRM §5.2 (A.6.2 analog_construct).
 pub const AnalogBlock = struct {
-    /// §5.2.1 `analog initial` — evaluated once, at initialization only.
+    /// §5.2.1 `analog initial`: evaluated once, at initialization only.
     is_initial: bool = false,
     body: StmtId,
     main_tok: u32 = 0,
-    /// Which MODULE INSTANCE wrote this block, after elaboration concatenated
-    /// every instance's blocks into the top's (`elaborate.zig`). 0 is the top
-    /// itself; each inlined instance gets its own.
+    /// Which module instance wrote this block, after elaboration concatenated
+    /// every instance's blocks into the top's. 0 is the top itself; each inlined
+    /// instance gets its own.
     ///
-    /// §5.4.1 gives branch identity per module instance, and flattening throws
-    /// that away: two instances across the same two nets both spell the pair's
-    /// one unnamed branch. Contributions of the same kind then aggregate, which
-    /// is the right answer for devices in parallel — but §5.6.1.3's
-    /// "contributing a flow to a branch which already has a value retained for
-    /// the potential results in the potential being discarded" is stated of ONE
-    /// branch, and applying it across instances deletes a source because
-    /// something else is wired across it. This scopes that clause back to the
-    /// instance that wrote both halves; see `Lower.discardOpposite`.
+    /// §5.4.1 gives branch identity per instance, which flattening loses: two
+    /// instances across the same nets share one unnamed branch. Same-kind
+    /// contributions still aggregate, but §5.6.1.3's flow-discards-potential rule
+    /// is about one branch, so `Lower.discardOpposite` scopes it by this unit.
     unit: u32 = 0,
 };
 
 /// One `initial` or `always` construct (A.6.2 initial_construct /
-/// always_construct) — §7.2.2's DISCRETE context.
-///
-/// The analog device pipeline accepts only constant initial assignments and
-/// diagnoses other scheduling requirements. The opt-in digital source executor
-/// executes supported initial bodies through the event scheduler; its validation
-/// rejects unimplemented process forms before execution.
+/// always_construct), §7.2.2's discrete context.
+/// The analog device pipeline accepts only constant initial assignments; the
+/// digital executor runs the rest through its event scheduler.
 pub const DiscreteBlock = struct {
-    /// `always` rather than `initial`. §7.2.2 puts both blocks in the same
-    /// context, so the §7.2.2/§4.5.15/§4.7.3/§5.2.1 scans do not read this at all
-    /// beyond the diagnostic wording. `Lower.collectInitialState` does: only the
-    /// `initial` form has a constant reading to collect.
+    /// `always` rather than `initial`. §7.2.2 puts both in the same context, so
+    /// the context checks read this only for diagnostic wording;
+    /// `Lower.collectInitialState` collects from `initial` only.
     is_always: bool = false,
     body: StmtId,
     main_tok: u32 = 0,
 };
 
-/// A.6.1 `net_assignment ::= net_lvalue = expression` — one driver of one net
+/// A.6.1 `net_assignment ::= net_lvalue = expression`: one driver of one net
 /// (IEEE 1364-2005 §6.1). `assign a = b, c = d;` is two of these.
 pub const ContAssign = struct {
     target: ExprId,
     value: ExprId,
-    /// A.6.1 `[ drive_strength ]`. IEEE 1364-2005 §7.9 makes the default
-    /// `(strong1, strong0)`, so an assignment that names no strength resolves
-    /// exactly as it did before strengths existed.
+    /// A.6.1 `[ drive_strength ]`; IEEE 1364-2005 §7.9's default is
+    /// `(strong1, strong0)`.
     strength0: Strength = .strong,
     strength1: Strength = .strong,
-    /// A.6.1 `[ delay3 ]` — the driver's own delay, §6.1.3 inertial.
+    /// A.6.1 `[ delay3 ]`: the driver's own delay, §6.1.3 inertial.
     delay: Delay3 = .{},
     main_tok: u32 = 0,
 };
 
 /// A.3.4's gate types that compute a logic value. §7.8.5's tables define all
 /// twelve; `n_input`, `n_output` and `enable` gates differ only in what their
-/// terminal list means, which `GateInst` records in its SHAPE.
+/// terminal list means, which `GateInst` records in its shape.
 pub const GateKind = enum { g_and, g_nand, g_or, g_nor, g_xor, g_xnor, g_buf, g_not, g_bufif0, g_bufif1, g_notif0, g_notif1 };
 
-/// A.3.1 one `gate_instance`. `out` is the output terminal (§7.8.5.1's `out`,
-/// or one of `out1..outN` for a `buf`/`not` with several — each of those
-/// becomes its own `GateInst` over the same input, since each is a separate
-/// driver). `ins` is the rest in source order: the inputs of an n-input gate,
-/// `(data, enable)` for an enable gate, the single input of `buf`/`not`.
-///
-/// A gate IS a driver of `out` (§7.1), which is why it carries the same
-/// `drive_strength` and `delay` a `ContAssign` does.
+/// A.3.1 one `gate_instance`. `out` is the output terminal (§7.8.5.1's `out`;
+/// a `buf`/`not` with several outputs becomes one `GateInst` per output, since
+/// each is a separate driver). `ins` is the rest in source order: the inputs of
+/// an n-input gate, `(data, enable)` for an enable gate, the single input of
+/// `buf`/`not`. A gate drives `out` (§7.1), so it carries a `ContAssign`'s
+/// strength and delay.
 pub const GateInst = struct {
     kind: GateKind,
     out: ExprId,
@@ -918,7 +855,7 @@ pub const SpecPath = struct {
 };
 
 /// A.7.5.1 one `system_timing_check`: the command, and each argument slot in
-/// order — `.none` for a slot A.7.5.1 lets be empty — with the event control
+/// order (`.none` for a slot A.7.5.1 lets be empty) with the event control
 /// written on it.
 pub const TimingCheck = struct {
     name: StrId,
@@ -927,7 +864,7 @@ pub const TimingCheck = struct {
     main_tok: u32,
 };
 
-/// A.3.1 one `pull_gate_instance` — IEEE 1364-2005 §7.8's pullup/pulldown
+/// A.3.1 one `pull_gate_instance`, IEEE 1364-2005 §7.8's pullup/pulldown
 /// source. It drives one constant, so it is not a `GateInst`: it has no
 /// inputs and §7.8 gives it no delay. `strength` is the one side that counts
 /// ("a strength0 specification on a pullup source ... shall be ignored").
@@ -944,9 +881,9 @@ pub const PullInst = struct {
 /// prefix is the resistive variant (§7.12's strength reduction).
 pub const SwitchKind = enum(u8) { cmos, rcmos, nmos, pmos, rnmos, rpmos, tran, rtran, tranif0, tranif1, rtranif0, rtranif1 };
 
-/// A.3.1 one switch instance: its terminals in source order — output, input,
+/// A.3.1 one switch instance: its terminals in source order (output, input,
 /// control(s) for a MOS/CMOS switch; the two inout terminals, then the
-/// enable, for a pass switch. Only a digital parse records one.
+/// enable, for a pass switch). Only a digital parse records one.
 pub const SwitchInst = struct {
     kind: SwitchKind,
     terms: []const ExprId,
@@ -957,12 +894,10 @@ pub const SwitchInst = struct {
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
-/// Both spellings are this one row. `name == .none` is the ORDERED form, where
-/// the row's position in the list picks the port; a name is the `.p(expr)` form,
-/// where it does. `expr == .none` is §6.2.2's UNCONNECTED port, and it is
-/// reachable from both — a blank in an ordered list (`u(a, , b)`, the expression
-/// is optional in A.4.1) and `.p()` with nothing in the parentheses. §9.19
-/// `$port_connected` is exactly this field being `.none` or not.
+/// `name == .none` is the ordered form, where the row's position picks the
+/// port; otherwise the `.p(expr)` form. `expr == .none` is §6.2.2's unconnected
+/// port, from either a blank in an ordered list (`u(a, , b)`) or an empty
+/// `.p()`; §9.19 `$port_connected` reads it.
 pub const PortConn = struct {
     name: StrId = .none,
     expr: ExprId = .none,
@@ -981,12 +916,11 @@ pub const ParamOverride = struct {
 /// One `defparam` assignment. LRM §6.3.1 (A.1.4 parameter_override, A.2.4
 /// defparam_assignment `hierarchical_parameter_identifier = constant_expression`).
 ///
-/// `path` is the WHOLE dotted left-hand side interned as one string, joined by
-/// `Elaborate.sep` — which is the same '.' the source wrote, so the key of a
-/// defparam and the flat name elaboration gives the parameter it names are the
-/// same string and applying one is a map lookup. `value` is a constant
-/// expression over parameters "declared in the same module as the defparam
-/// statement" (§6.3.1), so it is cloned in the DECLARING module's namespace.
+/// `path` is the whole dotted left-hand side interned as one string, joined by
+/// `Elaborate.sep` ('.'), so it equals the flat name elaboration gives the
+/// target parameter. `value` is over parameters "declared in the same module as
+/// the defparam statement" (§6.3.1), so it is cloned in the declaring module's
+/// namespace.
 pub const Defparam = struct {
     path: StrId,
     value: ExprId,
@@ -996,24 +930,20 @@ pub const Defparam = struct {
 /// A module instance. LRM §6.2.2 (A.4.1 module_instantiation).
 ///
 /// One `Instance` per `module_instance`, so `child #(2.0) a(x), b(y);` is two
-/// rows sharing one `params` slice — which is the clause's "one or more module
-/// instances can be specified in a single module instantiation statement", and
-/// the reason the overrides are copied into both rather than owned by a
-/// statement node nothing else would read.
+/// rows sharing one `params` slice.
 pub const Instance = struct {
-    /// §6.2.2 module_or_paramset_identifier — resolved at elaboration, because
+    /// §6.2.2 module_or_paramset_identifier, resolved at elaboration because
     /// the definition may be declared after the use (A.1.2 puts no order on the
     /// descriptions of a source_text).
     module: StrId,
     name: StrId,
-    /// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`
-    /// — an ARRAY of instances; `null` for a single one. Folded at elaboration,
-    /// where the constant expression can be reduced.
+    /// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`:
+    /// an array of instances; `null` for a single one. Folded at elaboration.
     range: ?Dim = null,
     params: []const ParamOverride = &.{}, // §6.3
     ports: []const PortConn = &.{}, // §6.2.2
     /// A.5.4 `udp_instantiation ::= udp_identifier [ drive_strength ]
-    /// [ delay2 ] udp_instance …` — a UDP instance's own brackets, which only
+    /// [ delay2 ] udp_instance …`: a UDP instance's own brackets, which only
     /// a digital parse records (an analog one warns W0252 and keeps nothing).
     delay: Delay3 = .{},
     strength0: Strength = .strong,
@@ -1026,8 +956,7 @@ pub const Instance = struct {
 /// them by kind, and a declaration is not a statement.
 pub const ModuleDecl = struct {
     name: StrId,
-    /// §6.5 in header order — this order defines the terminal order the host
-    /// device ABI sees, so it is load-bearing. Keep it.
+    /// §6.5, in header order. This is the terminal order the host device ABI sees.
     ports: []const Port,
     /// §6.2.1 module_parameter_port_list `#(...)` followed by body parameter
     /// declarations, in source order (later defaults may reference earlier
@@ -1037,13 +966,10 @@ pub const ModuleDecl = struct {
     vars: []const VarDecl = &.{}, // §3.2/§3.3
     nets: []const NetDecl = &.{}, // §3.6.3
     branches: []const BranchDecl = &.{}, // §3.12
-    /// §6.2.2 child instances, in source order. Consumed by `ir/elaborate.zig`,
-    /// which flattens them away — nothing after elaboration sees this field.
+    /// §6.2.2 child instances, in source order. Elaboration flattens them away.
     instances: []const Instance = &.{},
-    /// §6.3.1 `defparam`s written in this module, in source order. Also consumed
-    /// by `ir/elaborate.zig` and also invisible after it: a defparam is an
-    /// override applied to an instance, and after the flatten the instance is
-    /// gone and its parameter carries the value.
+    /// §6.3.1 `defparam`s written in this module, in source order. Elaboration
+    /// applies them to the flattened parameters.
     defparams: []const Defparam = &.{},
     genvars: []const StrId = &.{}, // §3.5 (unrolling evidence, §6.6.1)
     /// §5.10.4 named events (A.2.1.3 event_declaration). Names only: an event
@@ -1053,16 +979,16 @@ pub const ModuleDecl = struct {
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
-    /// A.6.2 `initial`/`always` constructs in source order — §7.2.2's discrete
+    /// A.6.2 `initial`/`always` constructs in source order, §7.2.2's discrete
     /// context.
     discrete: []const DiscreteBlock = &.{},
     /// A.6.1 continuous assignments in source order. One entry per
-    /// net_assignment, because each is a separate DRIVER of its net
+    /// net_assignment, because each is a separate driver of its net
     /// (IEEE 1364-2005 §6.1).
     assigns: []const ContAssign = &.{},
     /// A.3.1 gate instantiations in source order. Separate from `assigns`
     /// because §7.8.5's value tables are not the expression operators: a gate
-    /// input is a logic VALUE, so z on one reads as x.
+    /// input is a logic value, so z on one reads as x.
     gates: []const GateInst = &.{},
     /// A.3.1 pullup/pulldown sources (§7.8), in source order.
     pulls: []const PullInst = &.{},
@@ -1077,38 +1003,22 @@ pub const ModuleDecl = struct {
     /// (W0251).
     paths: []const SpecPath = &.{},
     timing_checks: []const TimingCheck = &.{},
-    /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
-    /// attached to the item each decorated, because both rules the LRM states
-    /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
-    /// domains — are properties of the attribute ALONE, and nothing downstream
-    /// reads an attribute's value.
-    ///
-    /// `NatureAttr` is the shape because A.9.1 `attr_spec ::= attr_name [ =
-    /// constant_expression ]` and A.1.6 `nature_attribute ::= identifier =
-    /// nature_attribute_expression` are the same (name, value, token) triple —
-    /// `skipAttributes` said so before this field existed.
+    /// §2.9 every `attr_spec` in this module, flattened and not attached to
+    /// the item it decorated: the §2.9 and §2.9.2 rules concern the attribute
+    /// alone, and nothing downstream reads its value. A.9.1 `attr_spec` has the
+    /// same (name, value, token) shape as a `NatureAttr`.
     attrs: []const NatureAttr = &.{},
-    /// A.1.2 the `module_keyword` was `connectmodule` — §7.6's connect module.
-    /// `module` and `macromodule` are indistinguishable (§6.2 licenses that);
-    /// this third spelling is not, for exactly two reasons:
-    ///
-    ///  - §7.6 makes a connect module the thing the INSERTION PHASE puts on a
-    ///    mixed net, not a design root. VerA does no insertion, so a connect
-    ///    module is never instantiated, and `elaborate.pickTop` must not pick
-    ///    one as the device merely because nothing instantiates it.
-    ///  - §7.2.2 gives its body the discrete context legally: it is the one
-    ///    design element that exists to bridge a discrete signal, so an
-    ///    `always` inside one is not the E0205 "unsupported module item" that
-    ///    the same keyword is in an ordinary module.
+    /// A.1.2 the `module_keyword` was `connectmodule` (§7.6). Unlike `module`
+    /// and `macromodule`, which §6.2 makes interchangeable, it matters twice:
+    /// §7.6 makes a connect module something insertion places on a mixed net,
+    /// never a design root, so `elaborate.pickTop` skips it; and §7.2.2 allows
+    /// the discrete context in its body, so `always` there is not E0205.
     is_connect: bool = false,
     main_tok: u32 = 0,
 };
 
-/// Nature attribute: `name = expr;`. LRM §3.6.1 (A.1.6 nature_attribute).
-/// The LRM-defined names are `abstol` (§3.6.1.2, REQUIRED for a base nature),
-/// `access` (§3.6.1.4), `units` (§3.6.1.3), `idt_nature` (§3.6.1.5),
 /// One `(* vera_lte [= constant_expression] *)`, or the same for
-/// `vera_interp` or `vera_nodiff` — see `SourceFile.lte_attrs`.
+/// `vera_interp` or `vera_nodiff`; see `SourceFile.lte_attrs`.
 /// Exactly one of `stmt`/`expr` is set. `value == .none` is §2.9's "If a value
 /// is not specifically assigned to the attribute, then its value shall be 1".
 pub const LteAttr = struct {
@@ -1120,6 +1030,9 @@ pub const LteAttr = struct {
     main_tok: u32,
 };
 
+/// Nature attribute: `name = expr;`. LRM §3.6.1 (A.1.6 nature_attribute).
+/// The LRM-defined names are `abstol` (§3.6.1.2, required for a base nature),
+/// `access` (§3.6.1.4), `units` (§3.6.1.3), `idt_nature` (§3.6.1.5) and
 /// `ddt_nature` (§3.6.1.6), plus user attributes (`huge`, `blowup`, …).
 /// `value` may be an `.ident` (A.8.3 nature_attribute_expression allows a
 /// nature or access identifier, not just a constant).
@@ -1133,10 +1046,10 @@ pub const NatureAttr = struct {
 pub const NatureDecl = struct {
     name: StrId,
     /// §3.6.1.1 derived nature: `nature x : parent`. `.none` = base nature
-    /// (which then MUST declare `abstol` and `access`, §3.6.1).
+    /// (which then must declare `abstol` and `access`, §3.6.1).
     parent: StrId = .none,
     /// A.1.6 `parent_nature ::= ... | discipline_identifier . potential_or_flow`
-    /// — set when the parent was written as `electrical.potential`.
+    /// Set when the parent was written as `electrical.potential`.
     parent_access: ?PotentialOrFlow = null,
     attrs: []const NatureAttr = &.{},
     main_tok: u32 = 0,
@@ -1145,24 +1058,20 @@ pub const NatureDecl = struct {
 /// Discipline declaration. LRM §3.6.2 (A.1.7 discipline_declaration).
 pub const DisciplineDecl = struct {
     name: StrId,
-    /// §3.6.2.1 `potential <nature>;` — `.none` for a flow-only discipline.
+    /// §3.6.2.1 `potential <nature>;`; `.none` for a flow-only discipline.
     potential: StrId = .none,
-    /// §3.6.2.1 `flow <nature>;` — `.none` for a signal-flow discipline.
+    /// §3.6.2.1 `flow <nature>;`; `.none` for a signal-flow discipline.
     flow: StrId = .none,
     /// §3.6.2.2 `domain continuous|discrete`.
     domain: Domain = .unspecified,
     /// §3.6.2.3 `potential.abstol = 1e-6;` style overrides.
     overrides: []const Override = &.{},
+    // ponytail: no read syntax reaches these. §5.5.3's `net.potential_or_flow.attr`
+    // lands on the bound nature, and the LRM gives a discipline attribute no
+    // access spelling; a host reading the AST is the only consumer.
     /// §3.6.2.7 "Like natures, a discipline can specify user-defined
     /// attributes." A.1.7's discipline_item grammar omits the production; the
-    /// prose is read as governing and the annex as a non-exhaustive erratum
-    /// (see `Parser.parseDiscipline`). Stored exactly as a nature stores its
-    /// user attributes — a `NatureAttr` list the declaration retains.
-    /// ponytail: no read syntax reaches these yet. §5.5.3's Syntax 5-4 goes
-    /// `net.potential_or_flow.attr`, which lands on the BOUND NATURE's table,
-    /// and the LRM gives a discipline-level attribute no access spelling of
-    /// its own — the consumer today is a host reading the AST (the same
-    /// consumer a nature's `huge`/`blowup` have).
+    /// prose governs (see `Parser.parseDiscipline`).
     attrs: []const NatureAttr = &.{},
     main_tok: u32 = 0,
 
@@ -1188,6 +1097,7 @@ pub const ParamsetDecl = struct {
     main_tok: u32 = 0,
 };
 
+/// One A.1.9 paramset_statement `.name = expr;`.
 pub const ParamsetOverride = struct {
     /// Which flavour of `.identifier` was on the left (A.1.9).
     kind: Kind,
@@ -1198,7 +1108,7 @@ pub const ParamsetOverride = struct {
     pub const Kind = enum(u8) { module_param, output_var, system_param };
 };
 
-/// Connect specification block. LRM §7.7 (A.1.8 connectrules_declaration) —
+/// Connect specification block. LRM §7.7 (A.1.8 connectrules_declaration),
 /// an A.1.2 description, so it is a sibling of the module/discipline lists on
 /// `SourceFile`, not of any module item. The two item forms share the
 /// `connect` keyword and split on what follows the first identifier
@@ -1207,9 +1117,8 @@ pub const ConnectRulesDecl = struct {
     name: StrId,
     /// §7.7.1 connect module auto-insertion statements, in source order.
     insertions: []const ConnectInsertion = &.{},
-    /// §7.7.2 discipline resolution statements, in source order — the order is
-    /// load-bearing: §7.7.2.1 breaks a multi-match tie by taking "the first
-    /// match".
+    /// §7.7.2 discipline resolution statements, in source order; §7.7.2.1
+    /// breaks a multi-match tie by taking "the first match".
     resolutions: []const ConnectResolution = &.{},
     main_tok: u32 = 0,
 };
@@ -1224,13 +1133,13 @@ pub const ConnectRulesDecl = struct {
 /// inserted instance (§7.7.3), and `overrides` re-types a port's discipline
 /// and direction before matching (§7.7.1).
 pub const ConnectInsertion = struct {
-    /// §7.7.1 connectmodule_identifier — resolved at elaboration, like
+    /// §7.7.1 connectmodule_identifier, resolved at elaboration like
     /// `Instance.module`, because A.1.2 puts no order on descriptions.
     module: StrId,
     /// §7.7.4 `merged` | `split`; `.unspecified` when the source wrote none
     /// (§7.8.3 makes `merged` the default, applied by the consumer, not here).
     mode: Mode = .unspecified,
-    /// §7.7.3 `#(.tt(3.5n), ...)` — the same A.4.1 parameter_value_assignment
+    /// §7.7.3 `#(.tt(3.5n), ...)`: the same A.4.1 parameter_value_assignment
     /// an instance carries, parsed by the same code.
     params: []const ParamOverride = &.{},
     /// §7.7.1 discipline (and optionally direction) overrides, or null when
@@ -1239,7 +1148,7 @@ pub const ConnectInsertion = struct {
     main_tok: u32 = 0,
 
     pub const Mode = enum(u8) { unspecified, merged, split };
-    /// A.1.8 connect_port_overrides — two disciplines, each optionally
+    /// A.1.8 connect_port_overrides: two disciplines, each optionally
     /// directed. The grammar fixes the legal direction pairings
     /// (input/output, output/input, inout/inout, or neither); the parser
     /// enforces that, so a stored pair is always one of the four productions.
@@ -1254,7 +1163,7 @@ pub const ConnectInsertion = struct {
 /// `connect d1 { , dN } resolveto discipline_or_exclude ;` LRM §7.7.2 (A.1.8
 /// connect_resolution): when resolution (annex F.2 step 4.b, third bullet)
 /// finds more than one candidate discipline for an undeclared net and the
-/// candidate set matches `disciplines`, the net is of discipline `resolved` —
+/// candidate set matches `disciplines`, the net is of discipline `resolved`,
 /// which "need not be one of the disciplines specified in the discipline
 /// list" (§7.7.2.1). With `exclude` instead, the listed disciplines "are
 /// deemed to be incompatible and an error is indicated if they are found on
@@ -1270,26 +1179,25 @@ pub const ConnectResolution = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Statements — LRM ch5, A.6
+// Statements: LRM ch5, A.6
 // ---------------------------------------------------------------------------
 
 /// Which of A.6.5's three procedural timing controls a prefixed statement
 /// carries. All three suspend the process and then run the same body, so they
-/// share `Stmt.event_control`; only what they wait FOR differs.
+/// share `Stmt.event_control`; only what they wait for differs.
 pub const Timing = enum {
-    /// `@(event)` — an edge, a named event, or `@*` (§5.10, §9.7.5).
+    /// `@(event)`: an edge, a named event, or `@*` (§5.10, §9.7.5).
     event,
-    /// `#delay` — `delay_control`, so the statement's `event` is the delay.
+    /// `#delay` (`delay_control`); the statement's `event` is the delay.
     delay,
-    /// `wait (expression)` — LEVEL sensitive: if the expression is already true
+    /// `wait (expression)`, level sensitive: if the expression is already true
     /// the body runs without suspending at all, and a resumption re-tests it
     /// instead of firing on whichever change woke the process.
     level,
 };
 
-/// Statement node. LRM §5. Kept as a tagged union in a flat pool (closed set →
-/// enum+union, not vtable). Statements are walked once by lowering, never in a
-/// hot loop, so the union's width (driven by `.block`) is not a cache concern.
+/// Statement node (LRM §5), a tagged union in a flat pool. Statements are
+/// walked once by lowering, so the union's width is not a cache concern.
 pub const Stmt = union(enum) {
     /// A.6.4 `analog_statement_or_null ::= ... | ;`
     empty,
@@ -1300,10 +1208,10 @@ pub const Stmt = union(enum) {
     /// assignment (§3.2.2) is representable.
     ///
     /// `timing` is A.6.2's optional `delay_or_event_control` between the `=`
-    /// and the expression — the INTRA-assignment form, which §8.5.3.3 gives a
+    /// and the expression: the intra-assignment form, which §8.5.3.3 gives a
     /// different meaning from the statement prefix `#5 b = a;`: the right-hand
     /// side is sampled when the statement is reached and only the write waits.
-    /// `timing_is_delay` picks `delay_control` over `event_control`, exactly as
+    /// `timing_is_delay` picks `delay_control` over `event_control`, as
     /// `event_control.is_delay` does for the prefix form.
     assign: struct {
         target: ExprId,
@@ -1316,13 +1224,12 @@ pub const Stmt = union(enum) {
         /// `deassign`/`release` (whose `value` is `.none`).
         continuous: ProcContinuous = .none,
     },
-    /// §5.6 contribution `V(a,b) <+ expr;` — `lhs` is a `.branch_access` or
+    /// §5.6 contribution `V(a,b) <+ expr;`. `lhs` is a `.branch_access` or
     /// `.port_access` node (A.8.5 branch_lvalue).
     contribute: struct { lhs: ExprId, rhs: ExprId },
     /// §5.6.7 indirect contribution `V(x) : I(y) == expr;`
-    /// (A.6.10 indirect_contribution_statement). Modelled here even though
-    /// lowering may reject it — dropping it at parse time would make the error
-    /// message a syntax error instead of an unsupported-feature error.
+    /// (A.6.10 indirect_contribution_statement). Parsed even where lowering
+    /// rejects it, so the error names the feature instead of the syntax.
     indirect: struct { lhs: ExprId, probe: ExprId, eqn: ExprId },
     /// §5.8 conditional. `else_s` is `.none` when absent; `else if` chains
     /// nest in `else_s`.
@@ -1331,12 +1238,9 @@ pub const Stmt = union(enum) {
         then_s: StmtId,
         else_s: StmtId,
         /// Syntax 6-8 `if_generate_construct` rather than A.6.6's
-        /// `analog_conditional_statement`. The two are one node because the
-        /// SEMANTICS are one — §6.6.2 selects an alternative, §5.8 executes one
-        /// — and lowering already collapses a constant condition either way.
-        /// What only the generate form carries is §6.6's "all expressions in
-        /// generate schemes shall be constant expressions, deterministic at
-        /// elaboration time", which is E0428.
+        /// `analog_conditional_statement`. One node, because lowering collapses
+        /// a constant condition either way; only the generate form carries
+        /// §6.6's constant-expression rule (E0428).
         is_generate: bool = false,
     },
     /// §5.8.3 case (A.6.7), and Syntax 6-8 `case_generate_construct` when
@@ -1348,7 +1252,7 @@ pub const Stmt = union(enum) {
         is_generate: bool = false,
     },
     /// §5.9.2 `for (init; cond; step) body`. Also carries the genvar
-    /// loop-generate form (A.4.2) — lowering decides whether to unroll by
+    /// loop-generate form (A.4.2); lowering decides whether to unroll by
     /// looking the loop variable up in `ModuleDecl.genvars` (§6.6.1).
     for_stmt: struct { init: StmtId, cond: ExprId, step: StmtId, body: StmtId },
     /// §5.9.1 `while (cond) body`.
@@ -1359,10 +1263,8 @@ pub const Stmt = union(enum) {
     /// one of the `event_*` expression tags, or an `.ident` naming an event.
     ///
     /// `.none` is A.6.5's `@*` / `@ (*)`: the implicit event expression, whose
-    /// terms are every net and variable `body` READS. It carries no expression
-    /// because the list is derived from the body, not written by the source.
-    /// A.6.5 offers it to `event_control` only — `analog_event_control` has no
-    /// such alternative, so an analog block rejects it.
+    /// terms are every net and variable `body` reads. A.6.5 offers it to
+    /// `event_control` only, so an analog block rejects it.
     event_control: struct { event: ExprId, body: StmtId, kind: Timing = .event },
     /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
     /// `hierarchical_event_identifier`, so only its last (and, in a flat
@@ -1372,10 +1274,10 @@ pub const Stmt = union(enum) {
     disable: struct { name: StrId },
     /// §5.12 / ch9 analog system task: `$strobe`, `$finish`, `$error`,
     /// `$bound_step` (§9.17.1), `$discontinuity` (§9.17.2), `$limit`
-    /// (§9.17.3)… `args` may contain `.none` for an omitted argument
+    /// (§9.17.3), and so on. `args` may contain `.none` for an omitted argument
     /// (A.6.9 permits empty argument slots).
     sys_task: struct { name: StrId, args: []const ExprId },
-    /// A.6.5 jump_statement — `return` (§4.7.1 analog functions), `break`,
+    /// A.6.5 jump_statement: `return` (§4.7.1 analog functions), `break`,
     /// `continue`. `value` is `.none` except for `return expr`.
     jump: struct { kind: JumpKind, value: ExprId = .none },
 
@@ -1385,7 +1287,7 @@ pub const Stmt = union(enum) {
 /// IEEE 1364-2005 §9.3 A.6.2 `procedural_continuous_assignments`.
 pub const ProcContinuous = enum(u8) { none, assign, deassign, force, release };
 
-/// §5.8.3 A.6.7 — `case`, `casex`, `casez`. Only `.normal` is meaningful for
+/// §5.8.3 A.6.7 `case`, `casex`, `casez`. Only `.normal` is meaningful for
 /// real-valued analog scrutinees; `casex`/`casez` are kept so the parser can
 /// accept them and lowering can diagnose them precisely.
 pub const CaseKind = enum(u8) { normal, casex, casez };
@@ -1398,10 +1300,8 @@ pub const CaseArm = struct {
 
 /// §5.3.2 sequential block body plus its local declarations
 /// (A.6.3 analog_seq_block, A.2.8 analog_block_item_declaration).
-/// Local declarations are only legal on a *named* block (§5.3.2).
-///
-/// Named `SeqBlock`, not `Block`: `Mir.Block` is a CFG basic block, a different
-/// concept, and lower.zig imports both namespaces.
+/// Local declarations are only legal on a named block (§5.3.2).
+/// Not `Block`, which is the MIR's CFG basic block.
 pub const SeqBlock = struct {
     name: StrId = .none,
     /// A.6.3 `par_block ::= fork … join` (IEEE 1364-2005 §9.8.2): every
@@ -1411,12 +1311,11 @@ pub const SeqBlock = struct {
     params: []const ParamDecl = &.{},
     vars: []const VarDecl = &.{},
     body: []const StmtId = &.{},
-    /// A generate block's module instances (§6.6: the block "brings ...
-    /// module instances within the block into existence"). The digital engine
-    /// decides a digital parse's scheme; elaboration gates an analog
-    /// if-generate's (`Flatten.genInstances`).
+    /// A generate block's module instances (§6.6). The digital engine decides a
+    /// digital parse's scheme; elaboration gates an analog if-generate's
+    /// (`Flatten.genInstances`).
     instances: []const Instance = &.{},
-    /// §6.6.3 a GENERATE block's name for external interfaces: its declared
+    /// §6.6.3 a generate block's name for external interfaces: its declared
     /// name, or `genblk<n>` for an unnamed one ("n" the number of its generate
     /// construct in the enclosing scope, zero-padded past any clash). `.none`
     /// for every block that is not a generate block, and for the block §6.6.2's
@@ -1427,20 +1326,16 @@ pub const SeqBlock = struct {
 };
 
 // ---------------------------------------------------------------------------
-// User-defined primitives — LRM §8.5.3, annex A.5
+// User-defined primitives: LRM §8.5.3, annex A.5
 // ---------------------------------------------------------------------------
 
-/// One A.5.3 `combinational_entry` or `sequential_entry`, as the CHARACTERS of
-/// its columns.
-///
-/// Characters and not tokens, because that is what A.5.3's alphabets are:
-/// `level_symbol ::= 0 | 1 | x | X | ? | b | B`, and an `edge_indicator ::= (
-/// level_symbol level_symbol )` is one input field spelled with four of them
-/// that the lexer hands over as three tokens. `parseUdpEntry` concatenates a
-/// column's token text for exactly that reason, and this carries the result.
+/// One A.5.3 `combinational_entry` or `sequential_entry`, as the characters of
+/// its columns. A.5.3's alphabets are characters: an `edge_indicator ::= (
+/// level_symbol level_symbol )` is one input field that lexes as three tokens,
+/// so `parseUdpEntry` concatenates each column's token text.
 pub const UdpRow = struct {
     /// `level_input_list` or `seq_input_list`, validated against A.5.3's
-    /// alphabets — `( )` included, so an edge entry keeps its grouping.
+    /// alphabets, `( )` included so an edge entry keeps its grouping.
     inputs: []const u8,
     /// `current_state ::= level_symbol`; 0 for a combinational entry, which
     /// has no such column.
@@ -1449,18 +1344,15 @@ pub const UdpRow = struct {
     output: u8,
 };
 
-/// LRM §8.5.3 / A.5.1 `udp_declaration`. The declaration as validated by
-/// `parseUdpDecl`; §8.5.3's evaluation of it belongs to whatever executes the
-/// discrete cycle.
-// ponytail: `inputs` is not split into one field per input port. A.5.3 gives
-// the table one field per input in header order, and a splitter needs the
-// `( … )` grouping above; the evaluator is where that split has a consumer,
-// and it is also where the "one field per input port" count can be checked
-// against a diagnostic instead of dropped.
+// ponytail: `UdpRow.inputs` is not split into one field per input port; the
+// evaluator is where that split has a consumer, and where the per-port field
+// count can be checked with a diagnostic.
+/// LRM §8.5.3 / A.5.1 `udp_declaration` as validated by `parseUdpDecl`.
+/// Evaluating it belongs to whatever executes the discrete cycle.
 pub const UdpDecl = struct {
     name: StrId,
     /// A.5.2 `udp_port_list ::= output_port_identifier , input_port_identifier
-    /// { , input_port_identifier }` — so `ports[0]` is the output and
+    /// { , input_port_identifier }`, so `ports[0]` is the output and
     /// `ports[1..]` are the inputs, in the order A.5.3's input list is written
     /// in. Both A.5.1 header arms produce the same order.
     ports: []const StrId = &.{},
@@ -1468,7 +1360,7 @@ pub const UdpDecl = struct {
     /// itself: a `sequential_entry` is the two-colon one, and `parseUdpTable`
     /// already requires every entry to agree.
     ///
-    /// NOT taken from the `reg` on the output declaration. A.5.2 admits one
+    /// Not taken from the `reg` on the output declaration. A.5.2 admits one
     /// there and A.5.3 decides the body; a UDP that writes `reg` over a
     /// combinational table is malformed, and nothing checks that yet.
     is_sequential: bool = false,
@@ -1480,10 +1372,11 @@ pub const UdpDecl = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Source file — LRM §1 source_text, A.1.2
+// Source file: LRM §1 source_text, A.1.2
 // ---------------------------------------------------------------------------
 
-/// Root of one parsed file. Arena-owned. LRM §1 source_text / annex A.
+/// Root of one parsed file (LRM §1 source_text, annex A). Arena-owned; the
+/// decl slices are never freed by `deinit`.
 pub const SourceFile = struct {
     /// §2.8 interned identifiers and §2.7 strings.
     strings: StringInterner = .empty,
@@ -1491,8 +1384,8 @@ pub const SourceFile = struct {
     exprs: ExprStore = .empty,
     /// §5 statement pool; a StmtId indexes it.
     stmts: std.ArrayList(Stmt) = .empty,
-    /// Token index per statement, parallel to `stmts` (diagnostics — kept in a
-    /// separate column so `Stmt` stays a pure union).
+    /// Token index per statement, parallel to `stmts`, kept apart so `Stmt`
+    /// stays a pure union.
     stmt_toks: std.ArrayList(u32) = .empty,
 
     // Top-level declarations, in source order (A.1.2 description).
@@ -1507,52 +1400,35 @@ pub const SourceFile = struct {
     /// modules when a configuration selects them.
     config_cells: []const StrId = &.{},
 
-    /// Annex E — how many LEADING entries of `modules` are shipped Table E.1
-    /// SPICE primitives rather than the user's own declarations.
-    ///
-    /// The primitives are prepended as source (`Preprocessor.spice_primitives`),
-    /// so they parse into ordinary `ModuleDecl`s and every clause about a module
-    /// applies to them unchanged — which is the point of shipping them that way.
-    /// Two questions still have to tell them apart, and both are answered by this
-    /// count plus the fact that the prelude comes first:
-    ///
-    ///   - E.3.3: "a module or paramset defined in the Verilog-AMS will always be
-    ///     selected in favor of a SPICE primitive ... using exactly the same
-    ///     name". A lookup searches `userModules()` before the prefix.
-    ///   - §6.2.2's top is a module the user wrote. Nineteen uninstantiated
-    ///     primitives are otherwise nineteen roots of the instance graph.
-    ///
-    /// Zero when the prelude is off (`--no-std-defs`), which is also why the
-    /// parser does not set it: it is a property of the compilation, not of the
-    /// text.
+    /// How many leading entries of `modules` are the annex E prelude (Table E.1
+    /// SPICE primitives, prepended as source by `Preprocessor.spice_primitives`)
+    /// rather than the user's declarations. E.3.3 prefers a user module of the
+    /// same name, so lookups search `userModules()` first; and §6.2.2's top must
+    /// be a module the user wrote. Zero with `--no-std-defs`; set by the caller,
+    /// not the parser, because it is a property of the compilation.
     builtin_modules: u32 = 0,
 
-    /// Annex E.2 — how many of the LAST `builtin_modules` entries were
-    /// synthesized from SPICE `.MODEL`/`.SUBCKT` cards (`spice_cards.synthesize`)
-    /// rather than transcribed from Table E.1.
-    ///
-    /// Two rules have to tell the two apart. E.2.1's second sentence — "if no
-    /// exact match is found, the mixed-case name shall match the same name
-    /// defined within SPICE regardless of the case" — is about names defined in
-    /// the NETLIST, so the case-insensitive fallback in `elaborate.findModule`
-    /// must not reach Table E.1's rows, which are ordinary case-sensitive
-    /// Verilog-AMS declarations (§2.7). And E.3.2's access-function substitution
-    /// is for "analog primitives", which a netlist-derived wrapper is not.
+    /// How many of the last `builtin_modules` entries were synthesized from
+    /// SPICE `.MODEL`/`.SUBCKT` cards (`spice_cards.synthesize`) rather than
+    /// transcribed from Table E.1. E.2.1's case-insensitive match applies only
+    /// to netlist names, so `elaborate.findModule` must not reach Table E.1's
+    /// rows; and E.3.2's access-function substitution is for "analog
+    /// primitives", which a netlist wrapper is not.
     netlist_modules: u32 = 0,
 
-    /// VerA's vendor attributes, `vera_lte`, `vera_interp` and `vera_nodiff` (§2.9
-    /// `attribute_instance`), where one decorates an analog statement (A.6.4)
-    /// or suffixes an operator call's name (§2.9's "Verilog-AMS function name"
-    /// — A.8.2 draws the slot only for `analog_function_call`, and VerA extends
-    /// it to the built-in operators). Every other attribute is collected into
-    /// `ModuleDecl.attrs` and read by nothing. `vera_lte` decides which
+    /// VerA's vendor attributes, `vera_lte`, `vera_interp` and `vera_nodiff`
+    /// (§2.9 `attribute_instance`), where one decorates an analog statement
+    /// (A.6.4) or suffixes an operator call's name (A.8.2 gives that slot only
+    /// to `analog_function_call`; VerA extends it). Every other attribute goes
+    /// to `ModuleDecl.attrs` and is read by nothing. `vera_lte` decides which
     /// §5.6.1.2 charge sites join the host's truncation-error check
-    /// (`contract.QSites`); `vera_interp` which `absdelay` sites interpolate
+    /// (`contract.QStamp`); `vera_interp` which `absdelay` sites interpolate
     /// quadratically; `vera_nodiff` which assignments store no derivative.
     /// Few enough that a list beats a map.
     lte_attrs: std.ArrayList(LteAttr) = .empty,
 
-    /// The `kind` attribute on statement `id`, if any. Last wins (§2.9).
+    /// Returns the `kind` attribute on statement `id`, if any; the last one
+    /// wins (§2.9). Linear in `lte_attrs`.
     pub fn stmtLte(self: *const SourceFile, id: StmtId, kind: @FieldType(LteAttr, "kind")) ?LteAttr {
         var out: ?LteAttr = null;
         for (self.lte_attrs.items) |a| if (a.stmt == id and a.kind == kind) {
@@ -1561,7 +1437,7 @@ pub const SourceFile = struct {
         return out;
     }
 
-    /// The `kind` attribute suffixed to call `id`'s name, if any.
+    /// Returns the `kind` attribute suffixed to call `id`'s name, if any.
     pub fn exprLte(self: *const SourceFile, id: ExprId, kind: @FieldType(LteAttr, "kind")) ?LteAttr {
         var out: ?LteAttr = null;
         for (self.lte_attrs.items) |a| if (a.expr == id and a.kind == kind) {
@@ -1570,19 +1446,18 @@ pub const SourceFile = struct {
         return out;
     }
 
-    /// `modules` minus the Annex E prelude — the declarations that came from the
-    /// source the user named. See `builtin_modules`.
+    /// Returns `modules` minus the annex E prelude. See `builtin_modules`.
     pub fn userModules(self: *const SourceFile) []const ModuleDecl {
         return self.modules[@min(self.builtin_modules, self.modules.len)..];
     }
 
-    /// The Table E.1 rows: the prelude minus its netlist-derived tail.
+    /// Returns the Table E.1 rows: the prelude minus its netlist-derived tail.
     pub fn tablePrimitives(self: *const SourceFile) []const ModuleDecl {
         const end = @min(self.builtin_modules, self.modules.len);
         return self.modules[0 .. end - @min(self.netlist_modules, end)];
     }
 
-    /// The modules a SPICE netlist contributed. See `netlist_modules`.
+    /// Returns the modules a SPICE netlist contributed. See `netlist_modules`.
     pub fn netlistModules(self: *const SourceFile) []const ModuleDecl {
         const end = @min(self.builtin_modules, self.modules.len);
         return self.modules[end - @min(self.netlist_modules, end) .. end];
@@ -1590,9 +1465,8 @@ pub const SourceFile = struct {
 
     pub const empty: SourceFile = .{};
 
-    /// Frees the append-only stores. A no-op in practice (arena), present so an
-    /// AST built on a gpa is leak-free; the `[]const` decl slices are NOT freed
-    /// here — they belong to the arena/caller.
+    /// Frees the append-only stores so an AST built on a gpa is leak-free. The
+    /// decl slices are not freed; they belong to the arena or caller.
     pub fn deinit(self: *SourceFile, gpa: std.mem.Allocator) void {
         self.strings.deinit(gpa);
         self.exprs.deinit(gpa);
@@ -1601,23 +1475,14 @@ pub const SourceFile = struct {
         self.* = .empty;
     }
 
-    /// Start from a file that is a PREFIX of this one — see `parser.Seed`.
+    /// Starts this file from `src`, a parse of a prefix of its source (see
+    /// `parser.Seed`). Asserts `self` is empty.
     ///
-    /// The four stores are COPIED, because every stage below the parser appends
-    /// to them (`elaborate.Flatten` clones expressions and interns flat names).
-    /// A copy keeps every id valid: `ExprId`, `StmtId`, `StrId` and the
-    /// `exprs.pool` offsets are all "index into an append-only column", so a
-    /// prefix copy means the prefix's ids denote the same rows they denoted in
-    /// `src` and everything appended after them gets fresh ones.
-    ///
-    /// The four DECL slices are BORROWED, not copied. That is sound because
-    /// nothing below the parser writes one: every reader takes `*const`
-    /// (MEASURED: `*Ast.ModuleDecl` and friends appear nowhere outside
-    /// `parser.zig`'s own `findPort`), and `Flatten` builds new decls with new
-    /// allocations rather than editing the ones it inlines — its `cloneExpr`
-    /// docstring states that invariant ("Every row is appended, never mutated").
-    ///
-    /// `self` must be `.empty`: this seeds a parse, it does not merge two files.
+    /// The strings, expressions and statements are copied with `gpa`, because
+    /// later stages append to them; ids stay valid since every column is
+    /// append-only. The module, discipline, nature, paramset and connectrules
+    /// slices are borrowed: no later stage writes a decl, so `src` must outlive
+    /// `self`.
     pub fn seedFrom(self: *SourceFile, gpa: std.mem.Allocator, src: *const SourceFile) !void {
         std.debug.assert(self.strings.strings.items.len == 0);
         std.debug.assert(self.exprs.nodes.len == 0);
@@ -1643,7 +1508,7 @@ pub const SourceFile = struct {
         self.connectrules = src.connectrules;
     }
 
-    /// Append a statement; both columns stay in lockstep.
+    /// Appends a statement and its token; both columns stay in lockstep.
     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
         const id: u32 = @intCast(self.stmts.items.len);
         std.debug.assert(id != @intFromEnum(StmtId.none));
@@ -1654,11 +1519,12 @@ pub const SourceFile = struct {
         return @enumFromInt(id);
     }
 
-    /// By value: the pool may grow during parsing, so no pointer escapes.
+    /// Returns statement `id` by value, since the pool may grow during parsing.
     pub fn stmt(self: *const SourceFile, id: StmtId) Stmt {
         return self.stmts.items[@intFromEnum(id)];
     }
 
+    /// Returns the token statement `id` is reported at.
     pub fn stmtTok(self: *const SourceFile, id: StmtId) u32 {
         return self.stmt_toks.items[@intFromEnum(id)];
     }
@@ -1673,12 +1539,11 @@ pub const SourceFile = struct {
         branch,
     };
 
-    /// Every edge of statement `id` — `v.expr(e, edge)` for each of its own
-    /// expressions, `v.stmt(s)` for each child statement — in source order,
+    /// Visits every edge of statement `id`: `v.expr(e, edge)` for each of its own
+    /// expressions and `v.stmt(s)` for each child statement, in source order,
     /// except that an assignment's intra-assignment timing comes after its
     /// value. `.none` operands and children are passed through. `v` is
-    /// duck-typed at comptime; this is the one exhaustive statement of a
-    /// statement's edges, the `children` of `Stmt`.
+    /// duck-typed; this is the statement counterpart of `ExprStore.children`.
     pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
         switch (self.stmt(id)) {
             .empty, .event_trigger, .disable => {},
@@ -1732,14 +1597,12 @@ pub const SourceFile = struct {
         }
     }
 
-    /// Every lvalue statement `id` writes through its OWN expressions, appended
-    /// to `out` in source order. Child statements are not entered: every caller
-    /// already walks them, with scope rules (named blocks, event bodies) of its
-    /// own. `funcs` is the enclosing module's §4.7.1 function list, which is
-    /// where an actual's direction is decided.
+    /// Appends to `out`, in source order, every lvalue statement `id` writes
+    /// through its own expressions. Child statements are not entered; callers
+    /// walk them with their own scope rules. `funcs` is the enclosing module's
+    /// §4.7.1 function list, which decides an actual's direction.
     ///
-    /// ONE list, because there are five ways to write a variable and every
-    /// consumer that knew only the first was wrong about the other four:
+    /// The ways a statement writes a variable:
     ///   - §5.7 the assignment target;
     ///   - §4.7.2.3/§4.7.2.4 an actual bound to an `output` or `inout` formal
     ///     ("the last value assigned to the output argument is then assigned to
@@ -1751,7 +1614,7 @@ pub const SourceFile = struct {
     ///     `$ferror`, and the string `$swrite`/`$sformat` write into.
     /// An array actual written as an A.8.1 assignment pattern (§4.7.2.3 "an
     /// array assignment pattern of analog variables") yields its elements.
-    /// The appended ids are the lvalues as written — `x[i]` stays `x[i]`; see
+    /// The appended ids are the lvalues as written (`x[i]` stays `x[i]`); see
     /// `lvalueBase` for the declaration it names.
     pub fn stmtWrites(self: *const SourceFile, funcs: []const FuncDecl, id: StmtId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
         if (id == .none) return;
@@ -1833,7 +1696,7 @@ pub const SourceFile = struct {
         return &.{};
     }
 
-    /// The declared name an lvalue writes: `x`, `x[i]`, `x[i][j]` and a part
+    /// Returns the declared name an lvalue writes: `x`, `x[i]`, `x[i][j]` and a part
     /// select `x[3:0]` (an `.index` whose index is a `.range`) all write the
     /// declaration `x`. `.none` when the lvalue is not rooted in a plain
     /// identifier.
@@ -1844,22 +1707,20 @@ pub const SourceFile = struct {
         return t;
     }
 
-    /// §2.8 resolve an interned name.
+    /// Returns the interned name `id`; asserts `id != .none`.
     pub fn str(self: *const SourceFile, id: StrId) []const u8 {
         return self.strings.get(id);
     }
 
+    /// Interns `s`, which is borrowed and must outlive the file.
     pub fn intern(self: *SourceFile, gpa: std.mem.Allocator, s: []const u8) !StrId {
         return self.strings.intern(gpa, s);
     }
 
-    /// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`,
-    /// or null. "A derived nature ... can override the attributes of the base
-    /// nature", so the FIRST hit walking up the chain wins.
-    ///
-    /// Here rather than in a stage because two stages ask: lowering, for
-    /// `abstol`/`access`/`units` and for §5.5.3's arbitrary attribute reference,
-    /// and elaboration, for Annex E's nature-neutral access functions.
+    /// Returns the value expression a (possibly derived) nature gives `attr`, or
+    /// null (§3.6.1.1). A derived nature overrides its base, so the first hit
+    /// walking up the parent chain wins; the walk stops after 16 hops.
+    /// Lowering and elaboration both call it.
     pub fn natureAttrExpr(self: *const SourceFile, name: StrId, attr: []const u8) ?ExprId {
         var want = name;
         var hops: u32 = 0;
@@ -1873,7 +1734,7 @@ pub const SourceFile = struct {
             if (nat.parent == .none) return null;
             // A.1.6 `parent_nature ::= nature_identifier | discipline_identifier
             // . potential_or_flow`. In the second form the parent names a
-            // DISCIPLINE, so the walk continues at whichever nature that
+            // discipline, so the walk continues at whichever nature that
             // discipline binds to the named half (§3.6.2.6).
             if (nat.parent_access) |half| {
                 const d = for (self.disciplines) |*x| {
@@ -1892,27 +1753,19 @@ pub const SourceFile = struct {
         return null;
     }
 
-    /// Convenience: append an expression row.
     fn addExpr(self: *SourceFile, gpa: std.mem.Allocator, node: Node) !ExprId {
         return self.exprs.add(gpa, node);
     }
 };
 
-// ponytail: deliberately not modelled — every one of these is outside the
-// Verilog-A subset of annex C, and adding a tag for it would be a tag nothing
-// ever produces or consumes:
-//   · `+:` / `-:` indexed part-selects (A.8.3 range_expression) — `.range`
+// ponytail: not modelled, because nothing would produce or consume the tag:
+//   · `+:` / `-:` indexed part-selects (A.8.3 range_expression); `.range`
 //     covers `msb:lsb`, which is all the analog subset uses.
-//   · `min:typ:max` (A.8.3 mintypmax_expression) — the parser keeps the typ
-//     value; add a `.mintypmax` tag if a fixture ever needs the triple.
-//   · digital-only statements (fork/join, blocking vs nonblocking,
-//     wait, task/UDP/specify/config declarations) —
-//     rejected in the lexer/parser, never AST.
+//   · `min:typ:max` (A.8.3 mintypmax_expression); the parser keeps the typ
+//     value. Add a `.mintypmax` tag if a fixture needs the triple.
 
 // ---------------------------------------------------------------------------
-// Self-check: the store round-trips handles, lists and the §3.4.2 ranges that
-// the finiteness proof depends on. Runs under `std.testing.allocator`, so a
-// leaked byte fails.
+// Tests
 // ---------------------------------------------------------------------------
 
 test "ExprStore round-trips rows, lists and literals" {
@@ -1940,7 +1793,7 @@ test "ExprStore round-trips rows, lists and literals" {
     try std.testing.expectEqual(BinaryOp.add, f.exprs.binOp(sum));
     try std.testing.expectEqual(one, f.exprs.lhs(sum));
 
-    // `V(a)` — §4.4.1 branch access with a call-style arg list elsewhere.
+    // `V(a)`: §4.4.1 branch access.
     const node_a = try f.addExpr(gpa, .{ .tag = .ident, .main_tok = 3, .str = a });
     const probe = try f.addExpr(gpa, .{ .tag = .branch_access, .main_tok = 4, .lhs = node_a, .str = v });
     try std.testing.expectEqual(ExprId.none, f.exprs.rhs(probe));

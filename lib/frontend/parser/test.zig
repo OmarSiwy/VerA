@@ -2,9 +2,7 @@
 //!
 //! Source in, `Ast` and diagnostics out, asserted per Annex A production.
 //!
-//! LRM clauses this file's code cites: §1, §2.6.1, §2.7, §3.2.1, §3.3, §3.4.2, §4.2.2, §4.2.13, §4.2.14, §4.5.11, §6.6, §6.6.2.
-//!
-//! Cut verbatim from `parser.zig`.
+//! LRM clauses cited: §1, §2.6.1, §2.7, §3.2.1, §3.3, §3.4.2, §4.2.2, §4.2.13, §4.2.14, §4.5.11, §6.6, §6.6.2.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -14,14 +12,7 @@ const Ast = @import("../ast.zig");
 const diag = @import("diag");
 const Parser = parser.Parser;
 
-// ---------------------------------------------------------------------------
-// Self-check. The REAL lexer drives the real parser, so the check exercises the
-// grammar against the token stream the engine actually produces. A throwaway
-// second lexer lived here and its own comment admitted it was weaker — no §2.6.1
-// based numbers, no §2.7 strings, no §10.6 directives — so every test that
-// needed one of those had to opt into a second entry point.
-// ---------------------------------------------------------------------------
-
+/// A parsed file and the bag holding its diagnostics.
 pub const TestResult = struct {
     file: Ast.SourceFile,
     bag: *diag.Bag,
@@ -39,6 +30,8 @@ pub const TestResult = struct {
     }
 };
 
+/// Returns a diagnostic bag for `src` as the single file `test.va`,
+/// allocated in `arena`.
 pub fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
     const bag = try arena.create(diag.Bag);
     bag.* = diag.Bag.init(arena);
@@ -46,6 +39,8 @@ pub fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
     return bag;
 }
 
+/// Lexes and parses `src` as an analog source. A `ParseError` still returns
+/// the partial file, so a test can inspect both it and the diagnostics.
 pub fn parseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
     var list = try lexer.Lexer.tokenize(arena, src);
     const bag = try newBag(arena, src);
@@ -129,9 +124,9 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // LRM §10.6 worked example: `sin` is a port name under 1364-2005. Note the
-    // module body still uses `analog` — a VAMS-only annex B keyword — because
-    // §10.6 changes reserving, not tokens.
+    // LRM §10.6 worked example: `sin` is a port name under 1364-2005. The
+    // body still uses `analog`, a VAMS-only keyword, because §10.6 changes
+    // what is reserved, not how it lexes.
     const ok =
         \\`begin_keywords "1364-2005"
         \\module m2(sin, n);
@@ -172,9 +167,8 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
     try std.testing.expectEqual(diag.Code.E0135, d.code(0));
     try std.testing.expectEqualStrings("`1800-2017`", d.msg(0));
 
-    // Unbalanced. An open `begin_keywords at end of file is NOT an error:
-    // §10.6 scopes the directive "even across source code file boundaries",
-    // so the set simply carries on into whatever is compiled next.
+    // Unbalanced. An open `begin_keywords at end of file is not an error:
+    // §10.6 scopes the directive "even across source code file boundaries".
     const e = try parseForTest(arena, "`begin_keywords \"VAMS-2.3\"\nmodule m; endmodule\n");
     try std.testing.expectEqual(@as(usize, 0), e.count());
     // The other way round has no such reading.
@@ -250,8 +244,7 @@ test "§2.6.1 based literals decode to the right VALUE, not just to a token" {
         .block => |blk| blk.body,
         else => return error.WrongTag,
     };
-    // These are the regression pins: the parser's old private decoder ignored
-    // the size (65535) and skipped the `s` designator (15).
+    // The size truncates 8'hFFFF to 255, and the `s` designator makes 4'shf -1.
     const want = [_]i32{ 255, -1, 0x837ff, 0x35 };
     for (stmts, want) |s, expect| {
         const rhs = switch (res.file.stmt(s)) {
@@ -284,7 +277,7 @@ test "§4.2.13 a sized-constant concatenation joins BITS" {
         else => return error.WrongTag,
     };
     // 0xA5; §4.2.13's own example `{1'b1, 3'b101}` == 4'b1101; and a signed
-    // operand contributes its BITS (4'shf is -1, i.e. 1111), not its value.
+    // operand contributes its bits (4'shf is -1, i.e. 1111), not its value.
     const want = [_]i32{ 165, 0b1101, 0xf1 };
     for (stmts, want) |s, expect| {
         const rhs = switch (res.file.stmt(s)) {
@@ -342,14 +335,13 @@ test "§4.2.13 replication unrolls into the operand list" {
     }
 
     // §3.3 Table 3-3: "multiplier ... can be nonconstant" for a string result,
-    // so a non-literal count is NOT a parse error — it keeps its node and
-    // lowering repeats the string.
+    // so a non-literal count is not a parse error; lowering repeats the string.
     const nonconst = try parseForTest(arena, "module m; integer i; string s; analog s = {i{\"Hi\"}}; endmodule");
     try std.testing.expectEqual(@as(usize, 0), nonconst.count());
 
     // A.8.1's assignment-pattern replication, §4.2.14's own `'{5{0.0}}`, is a
-    // different brace and a different meaning: five ELEMENTS, not five copies
-    // of a bit pattern.
+    // different brace with a different meaning: five elements, not five
+    // copies of a bit pattern.
     const pat = try parseForTest(arena, "module m; parameter real d[0:4] = '{5{0.0}}; endmodule");
     try std.testing.expectEqual(@as(usize, 0), pat.count());
     try std.testing.expectEqual(@as(usize, 5), pat.file.exprs.args(pat.file.modules[0].params[0].default).len);
@@ -418,10 +410,7 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
     const arena = arena_state.allocator();
 
     // Every optional slot of connect_insertion in one block, plus both
-    // resolution targets. The AST shape is asserted here because no fixture
-    // can see it: mode/params/overrides have no consumer until an insertion
-    // phase exists (Ast.ConnectInsertion says so), so the parse into the
-    // right slot is the whole of what there is to pin.
+    // resolution targets, asserted on the AST directly.
     const src =
         \\connectrules cr;
         \\  connect a2d;
@@ -457,9 +446,8 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
     try std.testing.expect(!cr.resolutions[1].exclude);
     try std.testing.expectEqualStrings("a", res.file.str(cr.resolutions[1].resolved));
 
-    // A.1.8's connect_port_overrides admits exactly four direction pairings;
-    // `input _, input _` is not one, and `expect` names what the grammar
-    // wanted (E0207).
+    // A.1.8's connect_port_overrides admits four direction pairings;
+    // `input _, input _` is not one (E0207).
     const bad = try parseForTest(arena,
         \\connectrules crx;
         \\  connect a2d input elec, input dig;
@@ -483,15 +471,15 @@ test "§3.7 wreal: a net type in a `.v` and a `.va` alike" {
         \\endmodule
     ;
 
-    // Annex C.4 bullet 2 / C.8 remove `wreal` from the Verilog-A SUBSET only;
-    // VerA compiles Verilog-AMS, where §3.7/§6.5.3 make it a net and port type.
+    // Annex C.4 / C.8 remove `wreal` from the Verilog-A subset only; in
+    // Verilog-AMS §3.7/§6.5.3 make it a net and port type.
     const va = try parseForTest(arena, src);
     try std.testing.expectEqual(@as(usize, 0), va.count());
     try std.testing.expectEqual(Ast.NetKind.wreal, va.file.modules[0].ports[0].kind);
 
-    // Under `--run` the same text is A.2.1.2 `[ net_type | wreal ]` and
-    // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, cleanly: the
-    // digital engine runs a real-valued net.
+    // A digital parse reads the same text through A.2.1.2
+    // `[ net_type | wreal ]` and A.2.1.3's two `wreal` arms, both to
+    // `NetKind.wreal`.
     var list = try lexer.Lexer.tokenize(arena, src);
     const bag = try newBag(arena, src);
     var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
@@ -542,9 +530,7 @@ test "A.5.1 a udp_declaration survives the parse, both header arms" {
 
     // Both A.5.1 arms, and the sequential body's three moving parts: the
     // `udp_initial_statement`, an `edge_indicator` spelled across several
-    // tokens, and a `next_state` of `-`. No fixture can see any of this —
-    // there is no evaluator — so the parse into the right slot is the whole
-    // of what there is to pin.
+    // tokens, and a `next_state` of `-`.
     const src =
         \\primitive comb (q, a, b);
         \\  output q; input a, b;
@@ -585,9 +571,9 @@ test "A.5.1 a udp_declaration survives the parse, both header arms" {
     try std.testing.expectEqualStrings("clk", res.file.str(dff.ports[1]));
     try std.testing.expect(dff.is_sequential);
     try std.testing.expect(dff.init != .none);
-    // `(01) 0` is ONE edge field and one level field — six characters and
-    // several tokens. The grouping is kept because splitting the list into one
-    // field per input port is the evaluator's, and needs the port count.
+    // `(01) 0` is one edge field and one level field, several tokens. The
+    // characters are kept as one string: splitting it per input port is the
+    // evaluator's job and needs the port count.
     try std.testing.expectEqualStrings("(01)0", dff.rows[0].inputs);
     try std.testing.expectEqual(@as(u8, '?'), dff.rows[0].state);
     try std.testing.expectEqual(@as(u8, '1'), dff.rows[1].output);
@@ -599,15 +585,13 @@ test "A.2.5: `from` needs a bracket, and saying so is a diagnostic not an assert
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The bare-expression range belongs to `exclude` alone. This used to be
-    // `std.debug.assert(kind == .exclude)` — a panic on a checked build and
-    // `unreachable` under ReleaseFast, reached from a source file.
+    // The bare-expression range belongs to `exclude` alone.
     const bad = try parseForTest(arena, "module m; parameter real g = 1 from 5; endmodule");
     try std.testing.expectEqual(@as(usize, 1), bad.count());
     try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
     try std.testing.expectEqualStrings("expected `(` or `[` — only `exclude` takes a bare value", bad.bag.at(0).point);
 
-    // The sibling that IS in the grammar still parses.
+    // The sibling that is in the grammar parses.
     const ok = try parseForTest(arena, "module m; parameter real g = 1 exclude 5; endmodule");
     try std.testing.expectEqual(@as(usize, 0), ok.count());
 }
@@ -636,10 +620,9 @@ test "Table 4-3 precedence: ?: is the ONLY right-associative operator (§4.2.2)"
     try std.testing.expectEqual(Ast.ExprTag.ternary, e.tag(e.ternaryElse(rhs)));
     // §4.2.2: "All operators associate left to right with the exception of
     // the conditional operator which associates right to left." So the cond is
-    // `(1 + (2 * ((3 ** 2) ** 3))) > 4` — `**` groups on the LEFT like every
-    // other binary operator, and the nested pow hangs off `lhs`, not `rhs`.
-    // Reading `**` as right-associative (the IEEE 1800 rule, not this one) made
-    // `2**3**2` evaluate to 512 where §4.2.2 requires 64.
+    // `(1 + (2 * ((3 ** 2) ** 3))) > 4`: `**` groups on the left, and the
+    // nested pow hangs off `lhs`. (IEEE 1800's right-associative `**` would
+    // make `2**3**2` 512; §4.2.2 gives 64.)
     const cond = e.lhs(rhs);
     try std.testing.expectEqual(Ast.BinaryOp.gt, e.binOp(cond));
     const add = e.lhs(cond);
@@ -657,7 +640,7 @@ test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of an
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     // `always`, `assign`, `#`, `wait`, `<=` and intra-assignment timing in an
-    // ANALOG module's discrete processes: all module items / statements.
+    // analog module's discrete processes: all module items or statements.
     const ok = try parseForTest(arena,
         \\module m(p);
         \\  inout p; electrical p;
@@ -672,7 +655,7 @@ test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of an
     const m = ok.file.modules[0];
     try std.testing.expectEqual(@as(usize, 1), m.assigns.len);
     try std.testing.expectEqual(@as(usize, 2), m.discrete.len);
-    // The same forms in an ANALOG block are still not analog statements (A.6.4).
+    // The same forms in an analog block are not analog statements (A.6.4).
     const nba = try parseForTest(arena, "module m(p); inout p; electrical p; integer s; analog begin s <= 1; I(p) <+ V(p); end endmodule");
     try std.testing.expectEqual(diag.Code.E0214, nba.code(0));
     const delay = try parseForTest(arena, "module m(p); inout p; electrical p; analog begin #1 I(p) <+ V(p); end endmodule");
@@ -697,7 +680,7 @@ test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statem
     const loop = ok.file.stmt(body).while_stmt;
     try std.testing.expectEqual(Ast.ExprTag.int_literal, ok.file.exprs.tag(loop.cond));
     try std.testing.expectEqual(@as(i64, 1), ok.file.exprs.intLiteral(loop.cond).value);
-    // The analog forever is the one G.2.1 retired: still "expected an expression".
+    // G.2.1 retired the analog forever: "expected an expression".
     const ana = try parseForTest(arena, "module m(p); inout p; electrical p; analog forever I(p) <+ V(p); endmodule");
     try std.testing.expectEqual(diag.Code.E0209, ana.code(0));
     // `statement`, not `statement_or_null`: a null body is E0296.
@@ -729,9 +712,8 @@ test "errors are collected with locations and parsing continues" {
         \\endmodule
     ;
     const res = try parseForTest(arena, src);
-    // `child u(p);` is a §6.2.2 module_instantiation and parses now; only
-    // `driver_update` (a reserved word) is not a module item: A.1.4 derives
-    // nothing from it, so it is the syntax error E0240, not E0205.
+    // `child u(p);` is a §6.2.2 module_instantiation; `driver_update` (a
+    // reserved word) begins no A.1.4 module item, so it is E0240, not E0205.
     try std.testing.expectEqual(@as(usize, 1), res.count());
     try std.testing.expectEqual(diag.Code.E0240, res.code(0));
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);
@@ -753,23 +735,15 @@ test "annex C rejections keep their pinned wording" {
         // to specify the value of an attribute with a constant expression that
         // contains an attribute instance." The outer instance sits in a slot
         // Syntax 2-7 has, and A.8.3 gives the `+` its own attribute slot, so the
-        // inner one is refused by this rule and not by the grammar — delete it and
-        // the same file parses.
+        // inner one is refused by this rule, not by the grammar.
         .{
             .src = "module m(p); inout p; electrical p; (* o = (1 + (* i *) 2) *) parameter real x = 1.0; analog I(p) <+ x; endmodule",
             .code = .E0357,
         },
-        // A.1.3 module_parameter_port_list. The header `#(parameter real a = 1)`
-        // USED to be this row, pinning that it was unimplemented; it parses now.
-        // What A.1.3 still refuses is the SystemVerilog shorthand that drops the
-        // `parameter` keyword after the first declaration — Verilog-AMS spells
-        // the production `# ( parameter_declaration { , parameter_declaration } )`
-        // with no such elision, so a bare type ends the list at the `(`.
+        // A.1.3 `# ( parameter_declaration { , parameter_declaration } )`
+        // has no SystemVerilog elision of the `parameter` keyword, so a bare
+        // type ends the list at the `(`.
         .{ .src = "module m #(real a = 1) (p); endmodule", .code = .E0207, .point = "expected `)`" },
-        // A.2.4 net_decl_assignment used to have three rows here — vector nets,
-        // the scalar nodeset spelling, and the clause's BUS form with its null
-        // element. All three parse now; `electrical [0:4] p = '{2.3,4.5,,6.0}`
-        // reaches lowering with a `.none` in the pattern where the hole was.
     };
     for (cases) |c| {
         const res = try parseForTest(arena, c.src);
@@ -788,13 +762,11 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
     const arena = arena_state.allocator();
 
     const head = "module m(p); inout p; electrical p; ";
-    // `.code = null` = the parser must accept it. Those rows are the point of the
-    // test: every rule here is a rule about POSITION, so the permitted position
-    // has to be pinned beside the refused one or the gate is untestable.
+    // `.code = null`: the parser must accept it. Every rule here is about
+    // position, so the permitted position is pinned beside the refused one.
     const cases = [_]struct { src: []const u8, code: ?diag.Code }{
         // §6.6 "Generate regions do not nest, and they may only occur directly
-        // within a module" — both halves of the sentence, then the legal single
-        // region.
+        // within a module": both halves, then the legal single region.
         .{ .src = head ++ "generate generate if (1) ; endgenerate endgenerate endmodule", .code = .E0228 },
         .{ .src = head ++ "generate if (1) begin generate if (1) ; endgenerate end endgenerate endmodule", .code = .E0228 },
         .{ .src = head ++ "generate if (1) ; endgenerate endmodule", .code = null },
@@ -813,7 +785,7 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "generate if (1) begin : g end endgenerate real g; endmodule", .code = .E0230 },
         .{ .src = head ++ "genvar i; real g; generate for (i=0;i<2;i=i+1) begin : g end endgenerate endmodule", .code = .E0230 },
         // §6.6.2 "... as blocks in any other generate construct in the same
-        // scope, EVEN IF NOT SELECTED FOR INSTANTIATION" — hence `if (0)`.
+        // scope, even if not selected for instantiation", hence `if (0)`.
         .{ .src = head ++ "generate if (1) begin : b end if (0) begin : b end endgenerate endmodule", .code = .E0230 },
         // ...against the permission in the preceding bullet: "more than one block
         // within a single conditional generate construct" may share a name, and
@@ -822,19 +794,19 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "generate if (1) begin : b end else if (1) begin : b end else begin : b end endgenerate endmodule", .code = null },
         // Syntax 6-8 case_generate_construct: a label list, a `default`, and the
         // arms sharing one name (one construct). Outside a generate it is A.6.7's
-        // statement keyword with no module-item production at all — E0205.
+        // statement keyword with no module-item production: E0205.
         .{ .src = head ++ "generate case (1) 1, 2: begin : b end default: begin : b end endcase endgenerate endmodule", .code = null },
         .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = .E0205 },
         // §6.6: a generate block brings its module instances (and defparams,
         // and discrete blocks) into existence only when the scheme selects or
-        // repeats it. VerA has no generate scope for them: E0235, not a hoist —
+        // repeats it. VerA has no generate scope for them, so they are E0235,
         // except a module instance, which the block keeps for elaboration to
         // gate by the scheme (`Flatten.genInstances`).
         .{ .src = head ++ "generate if (0) begin r u(p); end endgenerate endmodule", .code = null },
         .{ .src = head ++ "generate if (0) begin defparam u.x = 1.0; end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin initial begin end end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = .E0235 },
-        // A generate REGION has no scheme; its items are ordinary module items.
+        // A generate region has no scheme; its items are ordinary module items.
         .{ .src = head ++ "generate r u(p); endgenerate endmodule", .code = null },
         // IEEE 1364 §19.6: `resetall is illegal within a module, legal between.
         .{ .src = "`resetall\n" ++ head ++ "`resetall\nendmodule", .code = .E0236 },
@@ -861,7 +833,7 @@ test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
         // "shall have at least one formal argument declared"
         .{ .body = "f = 1.0; endfunction", .code = .E0224 },
         // "all formal arguments shall have an associated block item
-        // declaration specifying the data type of the argument" — the
+        // declaration specifying the data type of the argument"; the
         // direction alone is not one.
         .{ .body = "input x; f = x; endfunction", .code = .E0225 },
         // "shall not use named blocks"
@@ -875,9 +847,9 @@ test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
         try std.testing.expectEqual(c.code, res.code(0));
     }
 
-    // And the legal spellings still are: the type on the direction, the type in
-    // a separate block item declaration, an UNNAMED block, and a `return` with
-    // an expression. None of these may report anything.
+    // The legal spellings: the type on the direction, the type in a separate
+    // block item declaration, an unnamed block, and a `return` with an
+    // expression. None may report anything.
     for ([_][]const u8{
         "input real x; f = x; endfunction",
         "input x; real x; f = x; endfunction",
@@ -895,11 +867,9 @@ test "casex/casez and reduction xor PARSE, so lowering owns the annex C rule" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // Both used to die here — casex on E0209 "expected an expression" and `^b`
-    // on E0215 "expected an operand". Those are recovery artifacts: they name
-    // no rule, they fire for any token that cannot start an expression, and
-    // they made §4.2.10's E0320 unreachable. The grammar is now accepted and
-    // the check happens where the meaning is known (casex/casez lower, §7.3.2).
+    // A parse error here would name no rule and make §4.2.10's E0320
+    // unreachable; the check belongs where the meaning is known (casex/casez
+    // lower, §7.3.2).
     for ([_][]const u8{
         "module m; integer s; analog casex (s) 0: s = 1; endcase endmodule",
         "module m; integer s; analog casez (s) 0: s = 1; endcase endmodule",
@@ -986,9 +956,8 @@ test "a missing terminator suggests inserting it after the PREVIOUS token" {
     try std.testing.expectEqualStrings("V(p, n)", src[fix.span.start - 7 .. fix.span.start]);
 
     // A terminator is the only shape that earns an insertion: E0208 wants a
-    // NAME, and no fix can invent one. The port branch `branch (<p>) b` used to
-    // be this example and parses now (§3.12.1); a NUMBER where the
-    // list_of_branch_identifiers goes is the same production still wanting a name.
+    // name, and no fix can invent one. Here a number stands where
+    // list_of_branch_identifiers wants a name.
     const named = try parseForTest(arena, "module m(p); inout p; electrical p; branch (p) 7; endmodule");
     try std.testing.expectEqual(diag.Code.E0208, named.code(0));
     try std.testing.expectEqual(@as(u32, 0), named.bag.at(0).n_notes);

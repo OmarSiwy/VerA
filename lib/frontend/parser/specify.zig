@@ -1,12 +1,9 @@
 //! Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1).
 //!
-//! In: tokens from `specify` to `endspecify`. Out: the parsed block, so a clause-level rule
-//! (W0253), not a token error, answers it.
+//! In: tokens from `specify` to `endspecify`, and module-level `specparam`.
+//! Out: `ModuleDecl.paths` and `.timing_checks`, and specparams as local parameters.
 //!
-//! LRM clauses this file's code cites: §1.1, §2.8, §3.4.1, §3.4.5, §8, §11.6.15, §14.2.6.
-//!
-//! Cut verbatim from `parser.zig`. Functions take `self: *Parser` and are called
-//! directly, `parse_specify.f(self, ...)`; `parser.zig` aliases only what other modules call.
+//! LRM clauses cited: §1.1, §2.8, §3.4.1, §3.4.5, §8, §11.6.15, §14.2.6.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -19,26 +16,17 @@ const Ast = @import("../ast.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
-// A.7 specify blocks — LRM §1.1 (1364 is part of the language), §8
+// A.7 specify blocks: LRM §1.1 (1364 is part of the language), §8
 // -----------------------------------------------------------------------
 
-/// A.7.1 `specify_block ::= specify { specify_item } endspecify`.
+/// Parses one A.7.1 `specify_block ::= specify { specify_item } endspecify`
+/// into `b.paths` and `b.timing_checks`, then warns W0251.
 ///
-/// READ IN FULL AND MODELLED BY NOTHING (W0251) — W0250's shape, and the
-/// reasoning is that entry's. The block is legal source under §1.1, and
-/// annex C.16 does not exempt it (`specify` is not one of the spellings
-/// that clause lists as unused by Verilog-A), so refusing it was refusing
-/// text the standard requires a full-AMS compiler to take. Its content is
-/// entirely §8 scheduling — A.7.2 path delays, A.7.5 system timing checks —
-/// and a compiled analog device has no event queue to schedule a path delay
-/// on, so there is nothing to record and nothing that could read it.
-///
-/// PARSED, not skipped to `endspecify`. A token skip would accept any text
-/// at all between the keywords, which is a strictly weaker claim than the
-/// annex makes and would let a typo in a path declaration ship silently.
-// The paths and timing checks ARE recorded (`ModuleDecl.paths`,
-// `.timing_checks`): §11.6.15's VPI objects read them. No simulation applies
-// them, which is what W0251 still says.
+/// The block is legal source under §1.1, and annex C.16 does not exempt it.
+/// Its content is §8 scheduling (A.7.2 path delays, A.7.5 timing checks):
+/// §11.6.15's VPI objects read what is recorded, but no simulation applies
+/// it, which is what W0251 says. The block is parsed rather than skipped so
+/// a typo in a path declaration is still an error.
 pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
     self.pos += 1; // `specify`
@@ -57,7 +45,7 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     );
 }
 
-/// A.7.1 `specify_item`, all five arms:
+/// Parses one A.7.1 `specify_item`, any of the five arms:
 ///
 ///     specify_item ::=
 ///             specparam_declaration
@@ -69,10 +57,9 @@ fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     switch (self.peek()) {
         .kw_reserved => {
             const w = self.tokenText(self.pos);
-            // A.2.1.1's declaration, here as a specify_item. The list is
-            // DISCARDED rather than appended to the module's parameters:
-            // a specparam declared inside the block is scoped to it, and
-            // the block is not elaborated.
+            // A.2.1.1's declaration as a specify_item. The list is
+            // discarded: a specparam declared inside the block is scoped to
+            // it, and the block is not elaborated.
             if (std.mem.eql(u8, w, "specparam")) return parseSpecparamDecl(self, null);
             // A.7.1 `pulsestyle_declaration` / `showcancelled_declaration`,
             // four keywords over one `list_of_path_outputs ;`.
@@ -114,10 +101,10 @@ fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     }
 }
 
-/// A.7.3 `specify_input_terminal_descriptor ::= input_identifier
-/// [ [ constant_range_expression ] ]` and its output twin, which differ
-/// only in which port directions the identifier may name — a rule about
-/// the NAME, judged where the ports are known, not here.
+/// Parses A.7.3 `specify_input_terminal_descriptor ::= input_identifier
+/// [ [ constant_range_expression ] ]` or its output twin. They differ only
+/// in which port directions the name may have, which is judged where the
+/// ports are known, not here.
 fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     const name = try self.expectIdent();
@@ -125,9 +112,9 @@ fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
     return if (self.peek() == .lbracket) parse_expr.parseSelect(self, e) else e;
 }
 
-/// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
-/// comma-separated run of A.7.3 descriptors under two names. Returns how
-/// many it read, for the parallel path's one-to-one rule.
+/// Parses A.7.2 `list_of_path_inputs` or `list_of_path_outputs`, the same
+/// comma-separated run of A.7.3 descriptors under two names. Returns an
+/// arena slice of at least one descriptor.
 fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
     var out: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
@@ -136,7 +123,7 @@ fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
     }
 }
 
-/// A.7.2 `path_declaration`, all three arms and both descriptions:
+/// Parses one A.7.2 `path_declaration` into `b.paths`, any arm:
 ///
 ///     parallel_path_description ::=
 ///             ( specify_input_terminal_descriptor [ polarity_operator ]
@@ -148,11 +135,10 @@ fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
 ///               ( specify_output_terminal_descriptor [ polarity_operator ]
 ///                 : data_source_expression ) )
 ///
-/// One routine for all of them, because the four descriptions differ only
-/// in which optional pieces are present and the grammar disambiguates each
-/// one by a token the cursor is already on: `=>` versus `*>` chooses
-/// parallel from full, and a `(` after the arrow chooses edge-sensitive
-/// from simple. The caller has consumed any `if (…)` or `ifnone` prefix.
+/// The descriptions differ only in which optional pieces are present:
+/// `=>` versus `*>` chooses parallel from full, and a `(` after the arrow
+/// chooses edge-sensitive from simple. The caller has consumed any
+/// `if (…)` or `ifnone` prefix, passed as `cond` and `ifnone`.
 fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, ifnone: bool) Error!void {
     const main_tok = self.pos;
     _ = try self.expect(.lparen);
@@ -170,7 +156,7 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
         "found {s}: a path description connects its terminals with `=>` or `*>`",
         .{self.found(self.pos)},
     );
-    // A.7.2: both `=>` arms put ONE `specify_input_terminal_descriptor`
+    // A.7.2: both `=>` arms put one `specify_input_terminal_descriptor`
     // before the arrow and one output descriptor after it; lists are the
     // full path's (`*>`).
     const dst_tok = self.pos;
@@ -195,9 +181,8 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     _ = try self.expect(.rparen);
     _ = try self.expect(.assign_eq);
     // A.7.4 `path_delay_value ::= list_of_path_delay_expressions
-    // | ( list_of_path_delay_expressions )`. The parenthesis is read HERE
-    // and not by `parseExpr`, because `( tplh , tphl )` is a list of two
-    // and a parenthesized expression is one.
+    // | ( list_of_path_delay_expressions )`. The parenthesis is read here,
+    // not by `parseExpr`, because `( tplh , tphl )` is a list of two.
     const bracketed = self.eat(.lparen);
     const delay_tok = self.pos;
     var delays: std.ArrayList(Ast.ExprId) = .empty;
@@ -239,15 +224,10 @@ fn eatPolarity(self: *Parser) Ast.SpecPolarity {
     return .none;
 }
 
-/// A.7.5.1's twelve `system_timing_check` commands, as the argument counts
-/// their productions give them. The whole content of the clause that a
-/// parser can check is the NAME and the ARITY: every command is
-/// `$name ( arg { , arg } ) ;`, and the arms differ only in how many
-/// arguments are mandatory and how many optional brackets follow.
-///
-/// The pairs are `{ mandatory, mandatory + optional }`, counted straight
-/// off A.7.5.1 — e.g. `$setup ( data_event , reference_event ,
-/// timing_check_limit [ , [ notifier ] ] ) ;` is 3 and 4.
+/// A.7.5.1's twelve `system_timing_check` commands and their argument
+/// counts `{ mandatory, mandatory + optional }`, counted off A.7.5.1: e.g.
+/// `$setup ( data_event , reference_event , timing_check_limit
+/// [ , [ notifier ] ] ) ;` is 3 and 4.
 pub const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
     .{ "$setup", .{ 3, 4 } },
     .{ "$hold", .{ 3, 4 } },
@@ -266,9 +246,9 @@ pub const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
 /// The two commands whose first argument is a `controlled_reference_event`.
 const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"}, .{"$width"} });
 
-/// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
-/// of exactly twelve commands — A.7.1 admits no other system task there —
-/// so a name the table does not hold is an error rather than a call.
+/// Parses one A.7.5.1 `system_timing_check` into `b.timing_checks`. A.7.1
+/// admits no other system task in a specify block, so a name not in
+/// `timing_checks` is E0207, as is a wrong argument count.
 fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     const tok = self.pos;
     var args: std.ArrayList(Ast.ExprId) = .empty;
@@ -283,9 +263,9 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     _ = try self.expect(.lparen);
     var n: u8 = 0;
     if (self.peek() != .rparen) while (true) {
-        // A.7.5.1 writes the optional arguments `[ , [ notifier ] ]` — the
-        // comma outside the inner bracket, so the slot may be present and
-        // EMPTY. That is why an argument is counted before it is read.
+        // A.7.5.1 writes the optional arguments `[ , [ notifier ] ]`, the
+        // comma outside the inner bracket, so a slot may be present and
+        // empty. That is why an argument is counted before it is read.
         n +|= 1;
         const arg = self.pos;
         var slot: Ast.ExprId = .none;
@@ -296,14 +276,14 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         // A.7.5.1: `$period` and `$width` open with a
         // `controlled_reference_event`, and A.7.5.3's
         // `controlled_timing_check_event` makes its event control
-        // MANDATORY, unlike `timing_check_event`'s bracketed one.
+        // mandatory, unlike `timing_check_event`'s bracketed one.
         if (n == 1 and !controlled and controlled_first.has(self.tokenText(tok))) return self.failAt(
             arg,
             .E0207,
             "`{s}` timing check requires an event control (posedge, negedge or edge) on its reference event (A.7.5.3 controlled_timing_check_event)",
             .{self.tokenText(tok)},
         );
-        // A.7.5.2 `notifier ::= variable_identifier` — the reg a violation
+        // A.7.5.2 `notifier ::= variable_identifier`, the reg a violation
         // toggles. A.7.5.1 puts it first among the optional arguments of
         // every command, except `$width`, whose optional `threshold` comes
         // before it.
@@ -329,19 +309,18 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     });
 }
 
-/// One argument of A.7.5.1's commands. The clause's argument productions
-/// (A.7.5.2) are `expression` under a dozen names — `timing_check_limit`,
-/// `threshold`, `notifier`, the two offsets — except for the two event
-/// slots, which A.7.5.3 gives a prefix and a suffix:
+/// Parses one argument of an A.7.5.1 command into `slot` and `ev`, and
+/// returns whether it had an event control. A.7.5.2's argument productions
+/// are all `expression` except the two event slots, which A.7.5.3 gives a
+/// prefix and a suffix:
 ///
 ///     timing_check_event ::= [ timing_check_event_control ]
 ///             specify_terminal_descriptor [ &&& timing_check_condition ]
 ///     timing_check_event_control ::= posedge | negedge | edge_control_specifier
 ///
-/// One routine takes the union and returns whether an event control was
-/// read; `parseTimingCheck` enforces the MANDATORY one of a
-/// `controlled_reference_event` (`$period`, `$width`). The union means
-/// every optional piece of A.7.5.3 is read rather than skipped.
+/// Every argument accepts that union; `parseTimingCheck` enforces the
+/// mandatory control of a `controlled_reference_event` (`$period`,
+/// `$width`).
 fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
     ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
     var controlled = ev.* != .none;
@@ -350,10 +329,9 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
         ev.* = .edge;
         // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
         // { , edge_descriptor } ]`. The descriptors are two-character
-        // symbols (`01`, `z1`, `0x`) that reach here as numbers or
-        // identifiers depending on which characters they hold, so the
-        // bracket is read as a balanced run rather than as a list of
-        // values nothing would consume.
+        // symbols (`01`, `z1`, `0x`) that lex as numbers or identifiers
+        // depending on their characters, so the bracket is skipped as a
+        // balanced run.
         // ponytail: an unchecked descriptor set. A table of the ten
         // spellings A.7.5.3 admits is the upgrade; no fixture asks.
         self.pos += 1;
@@ -369,29 +347,25 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
     return controlled;
 }
 
-/// A.2.1.1 `specparam_declaration ::= specparam [ range ]
-/// list_of_specparam_assignments ;`, and A.2.4:
+/// Parses one A.2.1.1 `specparam_declaration ::= specparam [ range ]
+/// list_of_specparam_assignments ;` with A.2.4's assignments:
 ///
 ///     specparam_assignment ::=
 ///             specparam_identifier = constant_mintypmax_expression
 ///             | pulse_control_specparam
 ///
 /// `out` is the module's parameter list for the Syntax 6-1 module-item
-/// form and `null` for an A.7.1 `specify_item`, whose specparams are scoped
-/// to a block this compiler does not elaborate.
+/// form, where each specparam becomes a §3.4.5 `localparam` (a constant
+/// with a mandatory default that no `parameter_value_assignment` can name).
+/// `out` is null for an A.7.1 `specify_item`, whose specparams are scoped to
+/// a block this compiler does not elaborate.
 ///
-/// A LOCALPARAM is what the module-item form becomes: a specparam is a
-/// constant with a mandatory default and no `parameter_value_assignment`
-/// can name it, which is exactly `localparam`'s shape in §3.4.5.
-// ponytail: that is an approximation with a known edge. 1364's specparams
-// are the values an SDF back-annotation overrides, and a `localparam`
-// cannot be overridden by anything. VerA reads no SDF, so the two are
-// indistinguishable here; the day it does, this needs its own storage.
-//
-// `pulse_control_specparam` — A.2.4's `PATHPULSE$ = ( … )` arm — is not
-// read. Its identifier holds a `$`, which §2.8 does not admit in an
-// identifier at all, so it is not a token this lexer can produce.
+/// A.2.4's `pulse_control_specparam` (`PATHPULSE$ = ( … )`) is not read: §2.8
+/// admits no `$` in an identifier, so the lexer cannot produce its name.
 pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
+    // ponytail: 1364's specparams are what SDF back-annotation overrides,
+    // and a `localparam` cannot be overridden. VerA reads no SDF; reading
+    // it needs separate storage.
     self.pos += 1; // `specparam`
     const packed_range: ?Ast.Dim = try parse_decl.optDim(self);
     while (true) {
@@ -401,7 +375,7 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
         const default = try parse_expr.parseExpr(self);
         if (out) |o| try o.append(self.arena, .{
             .name = name,
-            .ty = .unspecified, // §3.4.1 — derived from the default, as for `parameter`
+            .ty = .unspecified, // §3.4.1: derived from the default, as for `parameter`
             .default = default,
             .is_local = true,
             .packed_range = packed_range,

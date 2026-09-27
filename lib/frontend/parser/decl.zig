@@ -1,13 +1,9 @@
-//! Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6),
-//! A.2.1.3/A.2.2 port, net and branch declarations (§3.6.3, §6.5.2).
-//!
-//! In: declaration tokens. Out: `Ast.ParamDecl`, `Ast.FuncDecl`, `Ast.NatureDecl`,
-//! `Ast.DisciplineDecl`, and port, net and branch rows of `parse_module.Body`.
-//!
-//! LRM clauses this file's code cites: §1.1, §3.2, §3.2.2, §3.3, §3.4, §3.4.1, §3.4.2, §3.4.4, §3.4.5, §3.4.7, §3.6, §3.6.1, §3.6.1.2, §3.6.1.3, §3.6.1.4, §3.6.1.5, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3, §3.6.2.7, §3.6.3, §3.6.3.2, §3.10, §3.12, §3.12.1, §4.2, §4.7.1, §4.7.2.3, §5.2.1, §6.1.4, §6.2, §6.2.2, §6.5.2, §6.5.2.2, §6.7, §6.8, §7.4.4, §7.9, §7.14, §9.18, §10.2, §10.2.1, §10.4.
-//!
-//! Cut verbatim from `parser.zig`. Functions take `self: *Parser` and are called
-//! directly, `parse_decl.f(self, ...)`; `parser.zig` aliases only what other modules call.
+//! Declarations: annex A.2.1.1 parameters (§3.4), A.2.6 analog functions
+//! (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port,
+//! net and branch declarations (§3.6.3, §6.5.2) -> `Ast.ParamDecl`,
+//! `Ast.FuncDecl`, `Ast.NatureDecl`, `Ast.DisciplineDecl`, and port, net and
+//! branch rows of `parse_module.Body`. IEEE 1364-2005 §6.1.4, §7.14, §10.2
+//! and §10.4 for the digital forms.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -21,7 +17,7 @@ const constfold = @import("../constfold.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
-// A.2.1.1 parameter declarations — LRM §3.4
+// A.2.1.1 parameter declarations: LRM §3.4
 // -----------------------------------------------------------------------
 
 /// A.2.1.1 `aliasparam_declaration`, from the keyword through the `;`. Shared
@@ -30,21 +26,19 @@ pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
     self.pos += 1; // 'aliasparam'
     const alias = try self.expectIdent();
     _ = try self.expect(.assign_eq);
-    // §3.4.7 prints `aliasparam m = $mfactor;` beside `aliasparam
-    // trise = dtemp;`. Syntax 3-2 puts a parameter_identifier on the
-    // right, so a §9.18 hierarchical system parameter is a form the
-    // clause states in prose only — one token tag here, not a second
-    // production. WHICH system parameters have storage to alias is
-    // `Lower.aliasSystemParam`'s question, not the grammar's.
+    // §3.4.7 prints `aliasparam m = $mfactor;`, though Syntax 3-2 puts a
+    // parameter_identifier on the right, so a §9.18 system parameter is
+    // admitted here too. Which ones have storage to alias is
+    // `Lower.aliasSystemParam`'s question.
     const target = try self.expectIdentOrSys();
     _ = try self.expect(.semicolon);
     return .{ .alias = alias, .target = target };
 }
 
-/// Parameter declaration incl. ranges. LRM §3.4, §3.4.1, §3.4.2, §3.4.5.
-///
-/// `parameter real a = 1, b = 2;` is one
-/// declaration but N `ParamDecl`s, so the list is an out-parameter.
+/// Parses a `parameter`/`localparam` declaration, value ranges included
+/// (§3.4, §3.4.1, §3.4.2, §3.4.5), up to but not including the `;`.
+/// `parameter real a = 1, b = 2;` is one declaration but two `ParamDecl`s,
+/// so each is appended to `out`.
 pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
     const is_local = self.peek() == .kw_localparam;
     self.pos += 1;
@@ -53,31 +47,15 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
     // by lowering.
     const ty = varType(self.peek()) orelse .unspecified;
     if (ty != .unspecified) self.pos += 1;
-    // A.2.1.1's FIRST arm, the `[ range ]` slot between `[ signed ]` and the
-    // assignment list:
+    // A.2.1.1's first arm, `parameter [ signed ] [ range ] list_of_param_assignments`.
+    // The range is a width, not a §3.4.4 array dimension, so it goes in
+    // `packed_range` as a `reg`'s does. The arms are exclusive, so a range is
+    // read only when no `parameter_type` was written. The bracket does not
+    // set the type: §3.4.1 derives an unspecified type from the final value.
     //
-    //     parameter_declaration ::=
-    //         parameter [ signed ] [ range ] list_of_param_assignments
-    //         | parameter parameter_type list_of_param_assignments
-    //
-    // A.2.5's `range ::= [ msb_constant_expression :
-    // lsb_constant_expression ]` — a WIDTH, which is why it cannot go in
-    // `dims` (§3.4.4 array parameters, which lowering scalarizes) and gets
-    // the same `packed_range` slot `VarDecl` gives a `reg`'s. The two arms
-    // are exclusive in the production, so a range is only read when no
-    // `parameter_type` was written.
-    //
-    // The TYPE is not forced by the bracket: §3.4.1 — "If the type of a
-    // parameter is not specified, it is derived from the type of the final
-    // value assigned to the parameter, after any value overrides have been
-    // applied" — so `.unspecified` stays and lowering infers `integer`
-    // from `4'h5` exactly as it would without the bracket.
-    //
-    // ponytail: the width is CARRIED, not enforced. `parameter [3:0] p =
-    // 8'hff;` reads 255 here and 15 in a tool that truncates to the
-    // declared width. Enforcing it is a fold of two constant expressions
-    // and a mask in `ir/lower.zig`, where the parameter's default is
-    // already folded; nothing in the suite asks for it yet.
+    // ponytail: the width is carried, not enforced. `parameter [3:0] p =
+    // 8'hff;` reads 255 here and 15 in a tool that truncates. Enforcing it is
+    // a fold and a mask in lowering, where the default is already folded.
     const packed_range: ?Ast.Dim =
         if (ty == .unspecified and self.peek() == .lbracket) try parseDim(self) else null;
 
@@ -102,14 +80,11 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
             .ranges = ranges.items,
             .main_tok = tok,
         });
-        // A.1.3 `parameter_declaration { , parameter_declaration }` and
-        // A.2.1.1 `list_of_param_assignments` are separated by the SAME
-        // comma, so a `parameter` keyword after one starts a new
-        // declaration and this list is over. Only a
-        // module_parameter_port_list can actually reach that — a body
-        // declaration ends at `;` — and there stopping turns the illegal
-        // `parameter real a = 1, parameter real b = 2;` from E0208 into
-        // E0207, the same verdict on the same token.
+        // A.1.3's `parameter_declaration { , parameter_declaration }` and
+        // A.2.1.1's `list_of_param_assignments` share the comma, so a
+        // `parameter` keyword after one ends this list. Only a
+        // module_parameter_port_list reaches this; in a body it makes the
+        // illegal `parameter real a = 1, parameter real b = 2;` E0207 at `;`.
         if (self.peek() != .comma) break;
         if (self.tags[self.pos + 1] == .kw_parameter or
             self.tags[self.pos + 1] == .kw_localparam) break;
@@ -117,13 +92,13 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
     }
 }
 
-/// LRM §3.4.2 / A.2.5 value_range. CRITICAL: this is the only bound
-/// evidence class 6 (proof.zig) gets — it must reach `ParamDecl.ranges`.
+/// LRM §3.4.2 / A.2.5 value_range. The ranges are the only parameter bound
+/// evidence `proof.zig` gets, so each must reach `ParamDecl.ranges`.
 fn parseRange(self: *Parser) Error!Ast.ValueRange {
     const kind: Ast.ValueRange.Kind = if (self.peek() == .kw_from) .from else .exclude;
     self.pos += 1;
 
-    // `from '{"a", "b"}` — string-set range (§3.4.2).
+    // `from '{"a", "b"}`: a string-set range (§3.4.2).
     if (self.peek() == .apostrophe_lbrace) {
         self.pos += 1;
         var names: std.ArrayList(Ast.StrId) = .empty;
@@ -137,10 +112,8 @@ fn parseRange(self: *Parser) Error!Ast.ValueRange {
         return .{ .kind = kind, .lo = .none, .strings = off };
     }
 
-    // `exclude constant_expression` — A.2.5 gives the bare form to
-    // `exclude` ONLY; `from` is always bracketed. `from 5` is user source,
-    // not a parser invariant, so it is a diagnostic: as an assert it was
-    // `unreachable` in ReleaseFast, i.e. UB at the trust boundary.
+    // `exclude constant_expression`: A.2.5 gives the bare form to `exclude`
+    // only. `from 5` is user input, so it is a diagnostic, not an assert.
     if (self.peek() != .lparen and self.peek() != .lbracket) {
         if (kind == .from) {
             var d = self.failWith(self.pos, .E0207);
@@ -155,7 +128,7 @@ fn parseRange(self: *Parser) Error!Ast.ValueRange {
     const lo_inclusive = self.peek() == .lbracket;
     self.pos += 1;
     const lo = try parseValueRangeExpr(self);
-    // `exclude ( expr )` — a parenthesized single value, not a range.
+    // `exclude ( expr )`: a parenthesized single value, not a range.
     if (self.peek() != .colon) {
         _ = try self.expect(.rparen);
         return .{ .kind = kind, .lo = lo };
@@ -193,8 +166,7 @@ fn parseValueRangeExpr(self: *Parser) Error!Ast.ExprId {
 
 /// A.2.1.3 / A.2.7 variable type keyword -> `Ast.Type`, null for any other
 /// token. `time` folds to integer and `realtime` to real (§3.4.1). An analog
-/// function's RETURN type is narrower (`integer | real | string`, A.2.6), so
-/// `parseFuncDecl` does not use this.
+/// function's return type is narrower (A.2.6), so `parseFuncDecl` has its own.
 fn varType(tag: token.Tag) ?Ast.Type {
     return switch (tag) {
         .kw_integer, .kw_time => .integer,
@@ -204,8 +176,9 @@ fn varType(tag: token.Tag) ?Ast.Type {
     };
 }
 
-/// A.2.1.3 integer/real/string declaration (§3.2, §3.3). One VarDecl per
-/// name; `variable_type ::= id { dimension } [ = expr ]` (A.2.2.1).
+/// Parses an A.2.1.3 integer/real/string/time declaration (§3.2, §3.3), cursor
+/// on the type keyword, up to but not including the `;`. Appends one `VarDecl`
+/// per name to `out`. Asserts the cursor is on a variable type keyword.
 pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
     const storage: @FieldType(Ast.VarDecl, "storage") = if (self.peek() == .kw_time) .time else .variable;
     const ty = varType(self.peek()).?;
@@ -317,9 +290,6 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     });
 }
 
-/// A.2.7's formal and block-item types: `[ reg ] [ signed ] [ range ]`,
-/// `integer`, `time`, `real` or `realtime`. A bare direction is a 1-bit
-/// unsigned `reg` (IEEE 1364-2005 §10.2.1).
 fn tfFormal(self: *Parser, dir: Ast.Direction, ty: Ast.VarDecl) Error!Ast.TfPort {
     var v = ty;
     v.main_tok = self.pos;
@@ -327,6 +297,9 @@ fn tfFormal(self: *Parser, dir: Ast.Direction, ty: Ast.VarDecl) Error!Ast.TfPort
     return .{ .direction = dir, .v = v };
 }
 
+/// A.2.7's formal and block-item types: `[ reg ] [ signed ] [ range ]`,
+/// `integer`, `time`, `real` or `realtime`. A bare direction is a 1-bit
+/// unsigned `reg` (IEEE 1364-2005 §10.2.1).
 fn tfPortType(self: *Parser) Error!Ast.VarDecl {
     var v = tfType(self);
     if (v.storage == .reg and self.peek() == .lbracket) v.packed_range = try parseDim(self);
@@ -355,7 +328,7 @@ fn tfType(self: *Parser) Ast.VarDecl {
     }
 }
 
-/// The width of `[msb:lsb]` when both bounds are integer LITERALS.
+/// The width of `[msb:lsb]` when both bounds are integer literals, else null.
 ///
 /// ponytail: literals only. Folding `[W-1:0]` needs the constant evaluator,
 /// which lives in lowering.
@@ -365,16 +338,10 @@ pub fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
     return @abs(ex.intValue(d.msb) - ex.intValue(d.lsb)) + 1;
 }
 
-/// A.2.2.1 `variable_type ::= identifier { dimension } …` and A.2.1.1's
-/// `parameter_identifier { dimension }` — the braces are the LRM's, so the
-/// list is a LOOP. §3.2 prints both shapes it admits:
-///
-///     integer flag_array[0:8][0:3];         // a multidimensional array
-///     real vtable[0:16][0:7][0:64];         // three dimensions
-///
-/// One dimension used to be the whole of it, which made the second `[` an
-/// E0207 "expected `;`" — a syntax verdict on a declaration A.2.2.1 spells
-/// out. Lowering scalarizes whatever arrives here (see `dimsBounds`).
+/// Parses zero or more A.2.5 dimensions after a declared name: A.2.2.1
+/// `variable_type ::= identifier { dimension }` and A.2.1.1's
+/// `parameter_identifier { dimension }`, as in §3.2's
+/// `real vtable[0:16][0:7][0:64];`. Lowering scalarizes them (`dimsBounds`).
 pub fn parseDims(self: *Parser) Error![]const Ast.Dim {
     if (self.peek() != .lbracket) return &.{};
     var dims: std.ArrayList(Ast.Dim) = .empty;
@@ -399,9 +366,11 @@ fn parseDim(self: *Parser) Error!Ast.Dim {
 }
 
 // -----------------------------------------------------------------------
-// A.2.6 analog_function_declaration — LRM §4.7.1 · A.6.2 analog_construct
+// A.2.6 analog_function_declaration (LRM §4.7.1), A.6.2 analog_construct
 // -----------------------------------------------------------------------
 
+/// Parses an A.6.2 `analog [initial]` construct into `b.analog`, or an
+/// `analog function` declaration into `b.functions`. Cursor on `analog`.
 pub fn parseAnalog(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
     self.pos += 1; // 'analog'
@@ -416,9 +385,11 @@ pub fn parseAnalog(self: *Parser, b: *parse_module.Body) Error!void {
     });
 }
 
-/// LRM §4.7.1: `analog function [type] name ; items stmt endfunction`.
-/// Argument types come either from the declaration itself (`input real x;`)
-/// or from a matching variable declaration (`input x; real x;`, A.2.6).
+/// LRM §4.7.1: `analog function [type] name ; items stmt endfunction`, cursor
+/// on `function`. Argument types come from the direction declaration
+/// (`input real x;`) or from a matching variable declaration (`input x; real
+/// x;`, A.2.6). Reports E0224 for no formals and E0225 for an untyped one,
+/// then carries on.
 pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_analog: bool) Error!void {
     self.pos += 1; // 'function'
     const ret_ty: Ast.Type = switch (self.peek()) {
@@ -433,17 +404,10 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     const name = try self.expectIdent();
 
     var args: std.ArrayList(Ast.FuncArg) = .empty;
-    // A.2.6's ANSI spelling, `function_identifier ( tf_port_list ) ;`,
-    // alongside the non-ANSI one where the ports are `function_item_
-    // declaration`s in the body. §4.7.1's own examples are all non-ANSI,
-    // which is why only that arm existed; 1364's `function real f(input
-    // real x);` is the same declaration with the list moved, and a digital
-    // function is written that way far more often than not.
-    //
-    // The two are not mixable — a paren list means the body declares no
-    // more ports — but nothing here enforces that, because the body loop
-    // below reads a stray `input` as one more argument and the LRM gives
-    // no diagnostic for the combination.
+    // A.2.6's ANSI spelling, `function_identifier ( tf_port_list ) ;`, beside
+    // the non-ANSI one where the ports are declared in the body. The two are
+    // not meant to be mixed, but nothing enforces it: the body loop reads a
+    // stray `input` as one more argument, and the LRM names no diagnostic.
     if (self.eat(.lparen)) {
         while (self.peek() != .rparen and self.peek() != .eof) {
             const dir = switch (self.peek()) {
@@ -468,8 +432,8 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     // §4.7.1's two body restrictions are checked at the syntax that
     // violates them (`begin :` and `return ;`), not by a walk afterwards,
     // so the diagnostic lands on the offending token. Analog functions do
-    // not nest — A.2.6 has no analog_function_declaration inside a function
-    // body — so a plain save/restore is the whole scope discipline.
+    // not nest (A.2.6 has no analog_function_declaration inside a function
+    // body), so a plain save/restore is the whole scope discipline.
     const saved_in_fn = self.in_analog_fn;
     self.in_analog_fn = is_analog;
     defer self.in_analog_fn = saved_in_fn;
@@ -492,11 +456,9 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                 const first = vars.items.len;
                 try parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
-                // A variable that re-declares an argument only types it —
-                // and, per §4.7.1 Example 3 (`inout [0:1]a; real a[0:1];`),
-                // may be where the SHAPE is written instead of on the
-                // direction. Whichever carries it wins; they agree in every
-                // example the LRM prints.
+                // A variable that re-declares an argument only types it, and
+                // per §4.7.1 Example 3 (`inout [0:1]a; real a[0:1];`) may carry
+                // the shape instead of the direction. Whichever has it wins.
                 var i = vars.items.len;
                 while (i > first) {
                     i -= 1;
@@ -528,12 +490,9 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     }
     // §4.7.1 bullet list: "all formal arguments shall have an associated
     // block item declaration specifying the data type of the argument".
-    // A formal still `.unspecified` here got neither `input real x;` nor a
-    // matching `real x;` above, so there is nothing left to type it —
-    // defaulting it to `.real` (which this used to do) is exactly the
-    // papering-over the bullet exists to forbid. The type is set anyway,
-    // after the diagnostic, so the rest of the pipeline stays well-typed
-    // while the compile is already doomed.
+    // A formal still `.unspecified` got neither, so it is E0225. It is typed
+    // `.real` after the diagnostic only to keep the rest of the parse
+    // well-typed; the compile has already failed.
     for (args.items) |*a| if (a.ty == .unspecified) {
         var d = self.failWith(a.main_tok, .E0225);
         d.msg("formal `{s}` of `{s}` has no data type declaration", .{
@@ -562,13 +521,9 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     });
 }
 
-// -----------------------------------------------------------------------
-// A.1.6 nature_declaration / A.1.7 discipline_declaration — LRM §3.6
-// -----------------------------------------------------------------------
-
 /// A function formal after its direction: `input real x` (A.2.7
 /// task_port_type) or bare `input x`, then A.2.6 `input [ range ]
-/// list_of_ports` — one range, before the names, shared by all of them
+/// list_of_ports`: one range, before the names, shared by all of them
 /// (§4.7.2.3 `output [0:1] out;`, §4.7.1 Example 3 `inout [0:1]a;`).
 /// `list` reads `, name` onward, as a body declaration does; a port-list
 /// entry names one formal.
@@ -589,8 +544,14 @@ fn analogFormals(self: *Parser, args: *std.ArrayList(Ast.FuncArg), dir: Ast.Dire
     }
 }
 
-/// LRM §3.6.1 (A.1.6). Base natures must declare `abstol` and `access`;
-/// that check is lowering's, not the grammar's.
+// -----------------------------------------------------------------------
+// A.1.6 nature_declaration / A.1.7 discipline_declaration: LRM §3.6
+// -----------------------------------------------------------------------
+
+/// Parses a §3.6.1 nature declaration (A.1.6), cursor on `nature`. Each
+/// `access = X;` attribute adds `X` to `access_names`, so later `X(...)` parse
+/// as branch probes. Whether a base nature declares `abstol` and `access` is
+/// lowering's check.
 pub fn parseNature(self: *Parser) Error!Ast.NatureDecl {
     const main_tok = self.pos;
     self.pos += 1; // 'nature'
@@ -653,7 +614,7 @@ pub fn parseNatureAttr(self: *Parser) Error!Ast.NatureAttr {
     return .{ .name = name, .value = value, .main_tok = tok };
 }
 
-/// LRM §3.6.2 (A.1.7).
+/// Parses a §3.6.2 discipline declaration (A.1.7), cursor on `discipline`.
 pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
     const main_tok = self.pos;
     self.pos += 1; // 'discipline'
@@ -692,15 +653,10 @@ pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
                 self.pos += 1;
                 _ = try self.expect(.semicolon);
             },
-            // §3.6.2.7 "Like natures, a discipline can specify user-defined
-            // attributes." A.1.7's discipline_item omits the production —
-            // the grammar and the prose contradict — and VerA reads the
-            // explicit prose as governing and the annex as a non-exhaustive
-            // erratum: real designs and tools attach attributes to
-            // disciplines, and the sentence exists for them. Same shape as
-            // a nature's user attribute (A.1.6 nature_attribute), gated on
-            // the `=` so a stray identifier still gets E0213's "expected a
-            // discipline item" rather than a mid-production "expected '='".
+            // §3.6.2.7: "Like natures, a discipline can specify user-defined
+            // attributes." A.1.7's discipline_item omits the production; VerA
+            // follows the prose. Gated on the `=` so a stray identifier still
+            // gets E0213 rather than a mid-production "expected '='".
             .identifier, .escaped_identifier => {
                 if (self.peekAt(1) != .assign_eq)
                     return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)});
@@ -716,20 +672,21 @@ pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
 }
 
 // -----------------------------------------------------------------------
-// A.2.1.3/A.2.2 port, net and branch declarations — LRM §3.6.3, §6.5.2
+// A.2.1.3/A.2.2 port, net and branch declarations: LRM §3.6.3, §6.5.2
 // -----------------------------------------------------------------------
 
-/// §6.5.2 body port declaration: it re-declares a header port's direction
-/// and discipline, it does not introduce a new terminal.
+/// Parses a §6.5.2 body port declaration, cursor on the direction keyword. It
+/// sets the direction and discipline of existing header ports; it does not
+/// introduce a terminal. Reports E0206 for a name that is not a header port
+/// and E0218 for a port that already has a direction.
 pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     const dir = parse_module.portDirection(self.peek()).?;
     self.pos += 1;
-    // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
-    // It is §7.9's resolution input — see `Ast.Port.kind`.
+    // A.2.1.2's `[ net_type | wreal ]`, §7.9's resolution input (`Ast.Port.kind`).
     var kind: Ast.NetKind = .wire;
     var signed = false;
     const disc = try parse_module.optPortType(self, &kind, &signed);
-    // A.2.1.2's two VARIABLE arms, which only `output` has:
+    // A.2.1.2's two variable arms, which only `output` has:
     //
     //     output_declaration ::=
     //         output [ discipline_identifier ] [ net_type | wreal ] [ signed ]
@@ -739,14 +696,10 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     //       | output output_variable_type list_of_variable_port_identifiers
     //     output_variable_type ::= integer | time
     //
-    // `optDiscipline` above has already eaten the `[ net_type ]` of the
-    // first arm and the `[ signed ]` all three share, so the only thing
-    // left to tell the arms apart is this keyword. The port is then a
-    // VARIABLE and not a net — §6.5.2 calls it a port type declaration —
-    // which is why the name list gets a `VarDecl` below as well as the
-    // direction, and why the `[ = constant_expression ]` of
-    // `list_of_variable_port_identifiers` (A.2.3) is read here and nowhere
-    // else in this function.
+    // `optPortType` has already read the first arm's `[ net_type ]`, so this
+    // keyword is what tells the arms apart. A variable port gets a `VarDecl`
+    // as well as the direction, and only it may carry A.2.3's
+    // `[ = constant_expression ]`.
     const var_storage: ?@FieldType(Ast.VarDecl, "storage") = switch (self.peek()) {
         .kw_integer => .variable, // A.2.2.1 output_variable_type
         .kw_time => .time, // …its other alternative
@@ -763,18 +716,15 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         self.pos += 1;
         signed = self.eat(.kw_signed);
     }
-    // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
-    // "port direction declaration", the half of the clause that carries
-    // the direction. Its range is compared against the port TYPE
-    // declaration's in lowering, so it lands in its own field.
+    // §6.5.2.2's "port direction declaration" range. Lowering compares it
+    // with the port type declaration's, so it lands in its own field.
     const range: ?Ast.Dim = try optDim(self);
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
         if (var_storage) |storage| {
             // A.2.3 `list_of_variable_port_identifiers ::= port_identifier
-            // [ = constant_expression ] { , … }` — the initializer slot the
-            // net arms do not have.
+            // [ = constant_expression ] { , ... }`.
             const init_expr: Ast.ExprId = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else .none;
             try b.vars.append(self.arena, .{
                 .name = name,
@@ -793,11 +743,9 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         if (findPort(b, name)) |p| {
             if (signed) p.is_signed = true;
             // §6.2 "Ports declared in the list of port declarations shall
-            // not be redeclared within the body of the module." A direction
-            // is what a `list_of_port_declarations` header carries and a
-            // bare `list_of_ports` header cannot (Syntax 6-1), so a port
-            // that already has one was declared already — in the ANSI
-            // header, or by an earlier body declaration (§6.8's duplicate).
+            // not be redeclared within the body of the module." Only an ANSI
+            // header or an earlier body declaration (§6.8) gives a direction,
+            // so a port that has one is already declared.
             if (p.direction != .unspecified) {
                 try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
             } else {
@@ -814,50 +762,25 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     _ = try self.expect(.semicolon);
 }
 
+/// Returns the header port named `name`, or null. The pointer is invalidated
+/// by the next append to `b.ports`.
 pub fn findPort(b: *parse_module.Body, name: Ast.StrId) ?*Ast.Port {
     for (b.ports.items) |*p| if (p.name == name) return p;
     return null;
 }
 
-/// A.2.1.3 `list_of_net_identifiers ;` (§3.6.3). A net that names a header
-/// port binds the discipline to that port instead of declaring a new net,
-/// so lowering sees one object per terminal.
+/// Parses a §6.7 hierarchical name in a declaration position and interns it as
+/// one string with `.` between the parts. `Elaborate.sep` is the same period,
+/// so the string a `defparam` path or an Annex F.2.1 out-of-context
+/// declaration writes is the flat name elaboration gives the entity. Each part
+/// went through `internTok`, so none carries a period of its own.
 ///
-/// §3.6.3 Syntax 3-6 puts the vector range between the discipline and the
-/// names — `electrical [3:0] p, q;` — so it is parsed here, once, and
-/// sticks to every name in the list.
-///
-/// A `net_decl_assignment` (`electrical n = 5.0;`) parses here too — see the
-/// §3.6.3.2 note at the `assign_eq` arm below for what happens to the value.
-/// §6.7 a hierarchical name in a DECLARATION position, interned as ONE
-/// string with the source's own `.` between the parts.
-///
-/// That join is the whole mechanism, and it is deliberate: `Elaborate.sep`
-/// is the same period, so the string a `defparam` path or an Annex F.2.1
-/// out-of-context declaration writes IS the flat name elaboration gives the
-/// entity it names. Neither needs a path walk, and neither needs a second
-/// representation. A name with no dot in it interns exactly as it did
-/// before, so the ordinary declaration paths are untouched.
-///
-/// The parts are `expectIdent`s, so each has been through `internTok` and no
-/// longer carries a period of its own — which is what lets the join below be
-/// the whole mechanism rather than an approximation of one.
-///
-/// `allow_index`: A.9.3 `hierarchical_identifier ::= { identifier [ [
-/// constant_expression ] ] . } identifier` — a per-segment index naming ONE
-/// element of a §6.2.2 instance array, legal on every segment but the last
-/// (the production puts it inside the braces, before the `.`). The index is
-/// folded HERE and spelled into the stored text as `[{d}]`, because
-/// elaboration mints instance-array elements under exactly that spelling
-/// (`Flatten.walkInstances`) and the shared representation's whole point is
-/// that a defparam key IS the flat name. A value the fold cannot reach is
-/// E0231 — interned text has no digits for an unevaluated expression.
-///
-/// The net-declaration caller passes `false`: not because F.2.1's
-/// out-of-context form forbids an index, but because in that position a `[`
-/// after the name is how A.2.1.3's `ams_net_identifier` spells a vector
-/// range, and consuming it as an index would trade one diagnostic for a
-/// wronger one.
+/// `allow_index` admits A.9.3's per-segment `[ constant_expression ]`, which
+/// selects one element of a §6.2.2 instance array on any segment but the
+/// last. The index is folded here and spelled `[{d}]`, the spelling
+/// elaboration gives array elements (`Flatten.walkInstances`); an index that
+/// does not fold is E0231. Net declarations pass `false`, because there a `[`
+/// after the name is A.2.1.3's vector range.
 pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
     const first = try self.expectIdent();
     if (self.peek() != .dot and !(allow_index and self.peek() == .lbracket)) return first;
@@ -872,8 +795,8 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
             const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
             var buf: [24]u8 = undefined;
             try joined.appendSlice(self.arena, std.fmt.bufPrint(&buf, "[{d}]", .{k}) catch unreachable);
-            // A.9.3 an indexed segment is always followed by `.` — the
-            // final identifier of a path carries no index.
+            // A.9.3: an indexed segment is always followed by `.`; the final
+            // identifier of a path carries no index.
             _ = try self.expect(.dot);
         } else if (!self.eat(.dot)) break;
         const part = try self.expectIdent();
@@ -883,12 +806,10 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
     return self.file.intern(self.arena, joined.items);
 }
 
-/// Fold A.9.3's `[ constant_expression ]` through the one constant kernel:
-/// literals and every operator over them, with §4.2's integer typing — the
-/// same fold `Elaborate.constInt` applies to the instance-array RANGE these
-/// indices select from. Not parameter reads: the parameter table is
-/// elaboration's, and a value not in hand here cannot be spelled into
-/// interned text. A real-valued index is not one.
+/// Folds A.9.3's `[ constant_expression ]` over literals only, with §4.2's
+/// integer typing: the same kernel elaboration applies to the instance-array
+/// range. Parameters are elaboration's, so a read of one does not fold, and
+/// neither does a real-valued index.
 fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(&self.file, e, constfold.literal_env) orelse return null;
     return if (c == .int) c.int else null;
@@ -915,14 +836,11 @@ pub fn netKind(tag: token.Tag) ?Ast.NetKind {
     };
 }
 
-/// A.2.2.2, one keyword: its IEEE 1364-2005 clause 7 level and which of the
-/// production's two sides it may occupy. `strength0 ::= supply0 | strong0 |
-/// pull0 | weak0` and its `highz0` partner are the 0 side; the `1` spellings
-/// are the 1 side. `small`/`medium`/`large` are a `charge_strength`, a
-/// DIFFERENT production that appears only in A.2.1.3's `trireg`
-/// alternatives, so they are listed here to be recognised and refused — a
-/// parser that accepted any parenthesised strength after any net type would
-/// make `wire (small) w;` legal, and A.2.2.1 has no such derivation.
+/// One A.2.2.2 strength keyword: its IEEE 1364-2005 clause 7 level and the
+/// side it may occupy. `side` is 0 for `strength0` and `highz0`, 1 for their
+/// `1` spellings, and 2 for a `charge_strength` (`small`/`medium`/`large`),
+/// which only A.2.1.3's `trireg` alternatives take. The charge words are
+/// listed so they can be recognised and refused elsewhere.
 pub const StrengthWord = struct { level: Ast.Strength, side: u8 };
 const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
     .{ "supply0", StrengthWord{ .level = .supply, .side = 0 } },
@@ -941,9 +859,9 @@ const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
     .{ "large", StrengthWord{ .level = .large, .side = 2 } },
 });
 
-/// The eight drive strengths lex as `.kw_reserved` except `supply0`/
-/// `supply1`, which are also A.2.2.1 net types and so carry their own tags.
-/// Both paths end at the spelling, which is what A.2.2.2 is written in.
+/// Returns the strength keyword at token `i`, or null. Every strength spelling
+/// lexes as `.kw_reserved` except `supply0`/`supply1`, which are also A.2.2.1
+/// net types with their own tags, so both are looked up by spelling.
 pub fn strengthWord(self: *const Parser, i: u32) ?StrengthWord {
     return switch (self.tags[i]) {
         .kw_reserved, .kw_supply0, .kw_supply1 => strength_words.get(self.tokenText(i)),
@@ -951,9 +869,9 @@ pub fn strengthWord(self: *const Parser, i: u32) ?StrengthWord {
     };
 }
 
-/// A.2.2.2 `drive_strength`, whose six alternatives all say the same thing:
-/// one 0-side spec and one 1-side spec, in either order. The caller has seen
-/// the `(` and decided it cannot begin anything else.
+/// Parses an A.2.2.2 `drive_strength` into `s0`/`s1`: one 0-side and one
+/// 1-side strength, in either order, not both `highz`. Precondition: the
+/// cursor is on a `(` the caller has decided opens a strength.
 pub fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) Error!void {
     _ = try self.expect(.lparen);
     const first_tok = self.pos;
@@ -963,9 +881,7 @@ pub fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) E
     const b = strengthWord(self, self.pos) orelse return self.failAt(self.pos, .E0207, "found {s}, which is not a drive strength", .{self.found(self.pos)});
     self.pos += 1;
     _ = try self.expect(.rparen);
-    // `(strong0, pull0)` is derivable from no alternative of A.2.2.2, and
-    // is exactly what an implementation that lexed two strength keywords
-    // and took a maximum would wave through.
+    // `(strong0, pull0)` derives from no alternative of A.2.2.2.
     if (a.side == b.side or a.side == 2 or b.side == 2)
         return self.failAt(first_tok, .E0207, "a drive strength pairs one 0-side with one 1-side strength", .{});
     s0.* = if (a.side == 0) a.level else b.level;
@@ -977,12 +893,9 @@ pub fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) E
         return self.failAt(first_tok, .E0207, "§6.1.4: both drive strengths cannot be high impedance", .{});
 }
 
-/// A.2.1.3 gives `trireg` alternatives of its own, and they are the only
-/// ones carrying `charge_strength ::= ( small ) | ( medium ) | ( large )`.
-/// A `drive_strength` on a net DECLARATION is a separate alternative that
-/// nothing in this tree writes, so a parenthesis after any other net type
-/// is refused here rather than read as the other production — which is the
-/// cheap wrong parser that would make `wire (small) w;` legal.
+/// Parses A.2.1.3's `charge_strength ::= ( small ) | ( medium ) | ( large )`,
+/// which only `trireg` takes. Reports E0207 for a charge strength on any other
+/// net type, so `wire (small) w;` is refused. Cursor on the `(`.
 pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength {
     _ = try self.expect(.lparen);
     const tok = self.pos;
@@ -994,11 +907,12 @@ pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength 
     return w.level;
 }
 
-/// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value
-/// [ , delay_value ] ] )`. The cursor is on the `#`.
+/// A.2.2.3 `delay3 ::= # delay_value | # ( mintypmax_expression [ ,
+/// mintypmax_expression [ , mintypmax_expression ] ] )`. Cursor on the `#`.
+/// Each value is parsed as a plain expression; the `min:typ:max` form is not.
 ///
 /// One value is all three transitions (IEEE 1364-2005 §7.14). Two leave
-/// `off` unset, because the clause derives it as the SMALLER of the two and
+/// `off` unset, because the clause derives it as the smaller of the two and
 /// that is arithmetic on the evaluated values, not a syntax node.
 pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
     _ = try self.expect(.hash);
@@ -1014,94 +928,70 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
         out.fall = try parseDelayValue(self);
         out.off = if (self.eat(.comma)) try parseDelayValue(self) else .none;
     }
-    // A.2.2.3's innermost bracket pair closes after the THIRD value, so
-    // from there the only terminal the production admits is `)`. A fourth
-    // value is a missing parenthesis, and E0210 is the diagnostic that says
-    // so — not E0207's generic "unexpected token", which would send the
-    // reader looking for the end of the previous statement.
+    // After the third value the production admits only `)`. E0210 names the
+    // missing parenthesis; E0207 would send the reader to the previous
+    // statement.
     if (self.peek() != .rparen) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
     self.pos += 1;
     return out;
 }
 
-/// A.2.2.3 `delay_value`. `mintypmax_expression` is not admitted: A.2.2.3
-/// spells it `mintypmax_expression` only inside `delay_control`, and the
-/// `:`-separated form has no selector in this compiler to choose from.
+/// One delay value, parsed as an expression. A `min:typ:max` value is not
+/// admitted here, though A.2.2.3's parenthesized arm allows one.
 fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }
 
+/// Parses an A.2.1.3 `list_of_net_identifiers ;` (§3.6.3) after the discipline
+/// or net type: an optional range and `delay3`, then the names. A name that is
+/// a header port binds the discipline to that port instead of declaring a new
+/// net, so lowering sees one object per terminal. The range and delay apply to
+/// every name. A §3.6.3.2 `= expression` nodeset is read unless `is_ground`.
 pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength, signed: bool) Error!void {
     const range: ?Ast.Dim = try optDim(self);
     // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
-    // belongs to the NET, not to the declaration's optional assignment:
-    // `wire #3 y = ~a;` delays y's own transition.
-    //
-    // NOT gated on `digital`. The bracket used to be an E0207 ("a net delay
-    // has no meaning outside a digital design element") outside a `.v`
-    // source, which is a verdict on the SEMANTICS written as a refusal of
-    // the SYNTAX: §1.1 makes "the complete IEEE Std 1364 Verilog
-    // specification" part of Verilog-AMS HDL, and A.2.1.3 grants the
-    // bracket to every one of its twelve alternatives. A delay VerA has no
-    // discrete kernel to honour is a delay it drops, the way it drops the
-    // strength brackets above — silently dropping a timing annotation is
-    // what every analog-only tool does with one, and it is not the same
-    // claim as "this text is not derivable from the annex".
+    // belongs to the net, not to the optional assignment: `wire #3 y = ~a;`
+    // delays y's own transition. Not gated on `digital`: §1.1 includes all of
+    // IEEE 1364, and A.2.1.3 grants the bracket to every alternative. Analog
+    // lowering does not read it.
     const delay: Ast.Delay3 = if (self.peek() == .hash) try parseDelay3(self) else .{};
     while (true) {
         const tok = self.pos;
-        // Annex F.2.1 step 3 / §3.10 order 1: an OUT-OF-CONTEXT declaration,
-        // which the LRM prints as `electrical top.middle.bottom.sig;` and
-        // which "overrides any discipline which may be declared for sig in
-        // the module where sig was declared". The dotted name is interned
-        // whole; `findPort` below cannot match it, so it lands as a net
+        // Annex F.2.1 step 3 / §3.10 order 1: an out-of-context declaration,
+        // `electrical top.middle.bottom.sig;`, "overrides any discipline which
+        // may be declared for sig in the module where sig was declared". The
+        // dotted name never matches `findPort`, so it lands as a net
         // declaration under its path and elaboration reads it as one.
         const name = try parseDottedName(self, false);
-        // §3.6.3.2 / Syntax 3-6 `net_decl_assignment ::= ams_net_identifier =
-        // expression` — a NODESET value: "the initializer shall be a
+        // §3.6.3.2 `net_decl_assignment`: "the initializer shall be a
         // constant_expression and will be used as a nodeset value for the
-        // potential of the net BY THE ANALOG SOLVER". Not an assignment and
-        // not a clamp, so it changes no answer the device computes; it is an
-        // initial guess handed to the host's solver. `ground` has no such
-        // form (Syntax 3-7 gives it `list_of_net_identifiers`), so the `=`
-        // there is still E0207.
-        //
-        // Carried on `NetDecl.init` and folded by lowering, which is where
-        // both of the clause's rules can be judged: "shall be a
-        // constant_expression" is E0365 (lowering owns the folder) and
-        // "nets of non-continuous disciplines are not [allowed one]" is
-        // E0366 (lowering owns the discipline table, and §10.2's default
-        // has not been applied yet at this point in the parse).
+        // potential of the net by the analog solver". It is an initial guess
+        // for the host's solver, not an assignment. `ground` has no such form
+        // (Syntax 3-7), so its `=` stays E0207. Lowering judges both rules:
+        // non-constant is E0365, a non-continuous discipline is E0366.
         const nodeset: Ast.ExprId = if (!is_ground and self.eat(.assign_eq))
             try parse_expr.parseExpr(self)
         else
             .none;
-        // Only the FIRST declaration binds. A port that already carries a
-        // discipline gets a net entry instead, so lowering sees BOTH
-        // declarations and can apply §7.4.4 (E0902) — overwriting here is
-        // what used to make the second one invisible. The entry adds no
-        // node: internNode finds the port's existing slot by name.
+        // Only the first declaration binds. A port that already has a
+        // discipline gets a net entry instead, so lowering sees both and can
+        // apply §7.4.4 (E0902). The entry adds no node: `internNode` finds the
+        // port's slot by name.
         const port = if (is_ground) null else findPort(b, name);
         if (port != null and signed) port.?.is_signed = true;
         if (port != null and port.?.discipline == .none) {
             port.?.discipline = disc;
-            // §6.5.2.2: this IS the port type declaration. Recorded beside
-            // the direction declaration's range rather than over it — see
-            // Ast.Port.type_range.
+            // §6.5.2.2: this is the port type declaration. Recorded beside the
+            // direction declaration's range, not over it (`Ast.Port.type_range`).
             port.?.type_range = range;
-            // …and the net TYPE with it. A.2.1.3 gives every one of its
-            // twelve alternatives a `net_type`, and §7.9's resolution is a
-            // function of it, so dropping it here made `tri0 p;` on a port
-            // resolve as a plain `wire`. `.wire` is what a discipline-only
-            // declaration passes in, which is also A.2.1.3's default, so the
-            // assignment is a no-op for every net that never named a type.
+            // The net type too: §7.9 resolves by it, so `tri0 p;` on a port
+            // must not stay a `wire`. A discipline-only declaration passes
+            // `.wire`, A.2.1.3's default.
             port.?.kind = kind;
-            // `electrical p = 5.0;` on a header port lands here, and the
-            // discipline is all this branch can carry: a Port has no
-            // initializer slot. The nodeset gets a net entry of its own
-            // with NO discipline — `.none` is what keeps it out of §7.4.4
-            // (E0902), and `internNode` with an empty discipline finds the
-            // port's slot without overwriting what this branch just bound.
+            // A Port has no initializer slot, so `electrical p = 5.0;` on a
+            // header port gets a net entry with no discipline for the
+            // nodeset. The empty discipline keeps it out of §7.4.4 (E0902),
+            // and `internNode` finds the port's slot without overwriting it.
             if (nodeset != .none) try b.nets.append(self.arena, .{
                 .name = name,
                 .range = range,
@@ -1129,21 +1019,15 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
     _ = try self.expect(.semicolon);
 }
 
-/// LRM §3.12 / A.2.1.3, both arms of `branch_declaration`:
+/// Parses both arms of a §3.12 / A.2.1.3 `branch_declaration`, cursor on
+/// `branch`:
 ///
 ///     branch ( a [, b] )  list_of_branch_identifiers ;
 ///     branch ( < p > )    list_of_branch_identifiers ;   // Syntax 3-9
 ///
-/// The second is the §3.12.1 PORT BRANCH, "a branch between the upper and
-/// lower connections of the port" — the same quantity `I(<p>)` reads, given
-/// a name. It is told from the first by one token, and the `<` is also what
-/// A.8.9's port_probe_function_call uses, so `parseAccess` spells it the
-/// same way.
-///
-/// A.2.3 puts an optional `[ range ]` on each branch_identifier: a branch
-/// ARRAY, several branches over one terminal pair. The range rides on the
-/// declaration and lowering expands it, because that is where a constant
-/// expression can be folded.
+/// The second is a §3.12.1 port branch, the quantity `I(<p>)` reads, given a
+/// name. A.2.3's optional `[ range ]` per name declares a branch array over
+/// one terminal pair; lowering expands it, where the bounds can be folded.
 pub fn parseBranchDecl(self: *Parser, b: *parse_module.Body) Error!void {
     self.pos += 1; // 'branch'
     _ = try self.expect(.lparen);
