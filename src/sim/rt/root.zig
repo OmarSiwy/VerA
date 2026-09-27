@@ -308,6 +308,15 @@ pub fn Phase(comptime k: bool) type {
             return s.putWordAs(k, reach, slot, off, 0, a, m);
         }
 
+        /// `put` and `set` out of line, for code that runs once.
+        pub noinline fn putCold(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+            return put(s, reach, slot, off, a, m);
+        }
+
+        pub noinline fn setCold(s: *State, off: u32, a: anytype, m: anytype) Error!void {
+            return set(s, off, a, m);
+        }
+
         pub inline fn putWord(s: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
             if (k) try known(a, m);
             return s.putWordAs(k, reach, slot, off, j, a, m);
