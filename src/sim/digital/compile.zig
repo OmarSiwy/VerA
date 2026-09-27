@@ -202,7 +202,7 @@ pub const SysFn = enum {
     /// never is, however constant its (absent) arguments — which a
     /// replication count and a case label both depend on — and neither is a
     /// question about the invocation.
-    pub fn constant(self: SysFn) bool {
+    fn constant(self: SysFn) bool {
         return switch (self) {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
@@ -218,6 +218,16 @@ pub const SysFn = enum {
             .pow, .atan2, .hypot => 2,
             .ln, .log10, .exp, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
             else => null, // else: not a math function
+        };
+    }
+
+    /// Does a call change state besides giving its value: an argument it
+    /// writes back, `$random`'s seed, a file's position or table?
+    pub fn effects(self: SysFn) bool {
+        return switch (self) {
+            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fseek, .rewind => true,
+            .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => true,
+            else => false, // else: a function of its arguments, the clock or the design alone
         };
     }
 

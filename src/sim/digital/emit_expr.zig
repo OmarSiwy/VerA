@@ -478,15 +478,22 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     }
 }
 
-/// Does `e` call a function, or a system function that may have an effect?
+/// Does `e` call a function, or a system function with an effect?
 fn calls(self: *Emitter, e: Ast.ExprId) bool {
     const ex = &self.r.file.exprs;
     if (ex.tag(e) == .call) return true;
-    // A system function that is not constant may write (`$random`'s seed,
-    // a file position) or reads the clock, which is harmless to count.
-    if (ex.tag(e) == .sys_call) if (self.r.sys_calls[@intFromEnum(e)]) |f| if (!f.constant()) return true;
+    if (effects(self, e)) return true;
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (c != .none and calls(self, c)) return true;
+    return false;
+}
+
+/// Does `e` call a system function with an effect (`SysFn.effects`)?
+pub fn effects(self: *Emitter, e: Ast.ExprId) bool {
+    const ex = &self.r.file.exprs;
+    if (ex.tag(e) == .sys_call) if (self.r.sys_calls[@intFromEnum(e)]) |f| if (f.effects()) return true;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and effects(self, c)) return true;
     return false;
 }
 
