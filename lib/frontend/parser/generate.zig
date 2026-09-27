@@ -173,11 +173,16 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         // An item, or `recoverStatement`'s one token at least.
         var before: u32 = undefined;
         while (self.peek() != .kw_end and self.peek() != .eof) : (std.debug.assert(self.pos > before)) {
+            const attr_at = self.pos;
             try self.skipAttributes();
             // An attribute instance can be the last thing in the file (#48):
             // `expect(.kw_end)` below reports the unclosed block, and
             // `parseModuleItem` must not fail on `.eof` without consuming.
-            if (self.peek() == .kw_end or self.peek() == .eof) break;
+            // Before `end` or end of file it prefixes nothing (#49).
+            if (self.peek() == .kw_end or self.peek() == .eof) {
+                try self.attributesEnd(attr_at);
+                break;
+            }
             before = self.pos;
             parse_module.parseModuleItem(self, &gb) catch |e| {
                 if (e == error.OutOfMemory) return e;

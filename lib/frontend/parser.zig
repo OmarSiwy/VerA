@@ -489,6 +489,15 @@ pub const Parser = struct {
         });
     }
 
+    /// For a list loop that ran `skipAttributes` from token `from` and now
+    /// stops at its closer (`end`, `endmodule`, end of file, ...). §2.9 makes
+    /// an attribute instance "a prefix attached to" what follows it, so one
+    /// read here prefixes nothing: E0207 at the instance (#49). Every item
+    /// list reports it this way, the file's top level included.
+    pub fn attributesEnd(self: *Parser, from: u32) error{OutOfMemory}!void {
+        if (self.pos != from) try self.report(from, .E0207, "found {s}: an attribute instance prefixes nothing", .{self.found(self.pos)});
+    }
+
     /// The one writer of `file.attributes`' rows, keeping `attr_at` beside it.
     /// Asserts a declaration owner is not past the cursor, which is what lets
     /// `bindingsFrom` skip every row appended before the cursor reached it.

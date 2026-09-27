@@ -107,7 +107,10 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
             continue;
         }
         switch (self.peek()) {
-            .eof, .kw_endfunction => break,
+            .eof, .kw_endfunction => {
+                try self.attributesEnd(item_at);
+                break;
+            },
             .kw_input, .kw_output, .kw_inout => {
                 const dir = parse_net.portDirection(self.peek()).?;
                 if (!is_analog) try inputOnly(self, dir);

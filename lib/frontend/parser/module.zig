@@ -331,9 +331,10 @@ fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
     // An item, or `recoverStatement`'s one token at least.
     var before: u32 = undefined;
     while (true) : (std.debug.assert(self.pos > before)) {
+        const attr_at = self.pos;
         try self.skipAttributes();
         const t = self.peek();
-        if (t == end or t == .eof or t == .kw_endmodule) return;
+        if (t == end or t == .eof or t == .kw_endmodule) return self.attributesEnd(attr_at);
         before = self.pos;
         parseModuleItem(self, b) catch |e| {
             if (e == error.OutOfMemory) return e;

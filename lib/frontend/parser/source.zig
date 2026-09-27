@@ -63,7 +63,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
         switch (self.peek()) {
             // §3.8: an attribute instance is "a prefix attached to" what follows it.
             .eof => {
-                if (before != attr_at) try self.report(attr_at, .E0207, "found end of file: an attribute instance prefixes nothing", .{});
+                try self.attributesEnd(attr_at);
                 break;
             },
             // §10.6: legal only here, "outside of a design element".

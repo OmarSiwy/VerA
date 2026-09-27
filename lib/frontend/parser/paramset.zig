@@ -58,7 +58,10 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
         try self.skipAttributes();
         try parse_source.outsideDesignElement(self, "paramset");
         switch (self.peek()) {
-            .eof, .kw_endparamset => break,
+            .eof, .kw_endparamset => {
+                try self.attributesEnd(item_at);
+                break;
+            },
             .kw_parameter, .kw_localparam => {
                 try parse_decl.parseParamDecl(self, &params);
                 _ = try self.expect(.semicolon);

@@ -9,7 +9,8 @@
 // terminator gets, and nothing else is wrong with the source. Before #48 the
 // parser tried to read a module item at end of file, failed without moving, and
 // its recovery stepped past the end of the token stream (a crash, not a
-// diagnostic).
+// diagnostic). Since #49 the instance itself, which prefixes nothing, is a
+// third E0207.
 //
 // Legal neighbour: generate_block_attribute_then_end.va, the same block with its
 // attribute prefixing an analog construct and the block closed.
