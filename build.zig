@@ -9,9 +9,23 @@
 
 const std = @import("std");
 
+/// What a row may import (ARCHITECTURE.md §1). tests/fitness.zig reads it
+/// through `repo_options`; no module sees it.
+const Role = enum {
+    /// Ships as source, so its closure holds no `compiler` row (fitness R1).
+    runtime,
+    /// Imports only `std`; any tier may import it.
+    leaf,
+    compiler,
+    backend,
+    /// An embedder of the compiler.
+    tool,
+};
+
 const ModuleSpec = struct {
     name: []const u8,
     path: []const u8,
+    role: Role,
     imports: []const []const u8 = &.{},
     /// A C file compiled into the module, against the headers in its directory.
     c: ?[]const u8 = null,
@@ -20,28 +34,28 @@ const ModuleSpec = struct {
 /// The module graph in dependency order: a module may import only ones
 /// declared above it, and `defineModules` panics otherwise.
 const module_specs = [_]ModuleSpec{
-    .{ .name = "contract", .path = "tools/contract.zig" },
+    .{ .name = "contract", .path = "tools/contract.zig", .role = .runtime },
 
     // lib/ — the compiler. `vera` is its facade and what an embedder takes.
-    .{ .name = "diag", .path = "lib/diag.zig" },
+    .{ .name = "diag", .path = "lib/diag.zig", .role = .compiler },
     // Opening an `--emit-so` artifact: the one OS-bound file (its header).
-    .{ .name = "dynlib", .path = "lib/dynlib.zig" },
+    .{ .name = "dynlib", .path = "lib/dynlib.zig", .role = .leaf },
     // `contract`: the compile-time folds and the prover's bounds use the
     // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
     // the device would compute (§9.14: `$exp` and `exp` are one function).
-    .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{ "diag", "contract" } },
-    .{ .name = "kernels", .path = "lib/backend/kernels.zig", .imports = &.{"contract"} },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "diag", "frontend", "kernels", "contract" } },
-    .{ .name = "backend", .path = "lib/backend/root.zig", .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
-    .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
+    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "diag", "contract" } },
+    .{ .name = "kernels", .path = "lib/backend/kernels.zig", .role = .runtime, .imports = &.{"contract"} },
+    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "kernels", "contract" } },
+    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the
     // §9.4.3 real conversion and §17.2 file I/O match the analog devices
     // (`contract.FileIo`, LRM §9.5.1.2).
-    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "contract", "diag", "frontend", "kernels" } },
+    .{ .name = "sim", .path = "src/sim/root.zig", .role = .runtime, .imports = &.{ "contract", "diag", "frontend", "kernels" } },
     // `c`: the variadic routines, which Zig cannot define on every target.
-    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
+    .{ .name = "vpi", .path = "src/vpi/root.zig", .role = .tool, .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -138,6 +152,19 @@ pub fn build(b: *std.Build) void {
     // new file with an OS call does not change the test binary.
     const repo = b.addOptions();
     repo.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
+    // The rows, for tests/fitness.zig: parallel columns of name, role tag and
+    // space-separated imports.
+    var row_names: [module_specs.len][]const u8 = undefined;
+    var row_roles: [module_specs.len][]const u8 = undefined;
+    var row_imports: [module_specs.len][]const u8 = undefined;
+    for (module_specs, &row_names, &row_roles, &row_imports) |spec, *n, *r, *i| {
+        n.* = spec.name;
+        r.* = @tagName(spec.role);
+        i.* = std.mem.join(b.allocator, " ", spec.imports) catch @panic("OOM");
+    }
+    repo.addOption([]const []const u8, "module_names", &row_names);
+    repo.addOption([]const []const u8, "module_roles", &row_roles);
+    repo.addOption([]const []const u8, "module_imports", &row_imports);
     all_mod.addOptions("repo_options", repo);
     const all_run: *std.Build.Step.Run = @fieldParentPtr("step", testRun(b, "test_all", all_mod, runner));
     all_run.has_side_effects = true;
