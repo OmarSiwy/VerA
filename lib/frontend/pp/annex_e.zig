@@ -1,77 +1,39 @@
-//! Annex E Table E.1: the SPICE primitives, as ordinary Verilog-A modules.
-//!
-//! Data only. One module per Table E.1 primitive, so a SPICE-named instance elaborates like
-//! any other module.
-//!
-//! LRM clauses this file's code cites: §3.4.4, §4.5.5, §4.6.1, §4.6.3, §6.2.2, §6.3, §6.4, §6.5.5, §6.7.1, §7, §9.10.
+//! Annex E Table E.1 SPICE primitives as embedded Verilog-AMS modules, and
+//! annex D.3 driver_access.vams. Data only: one module per primitive, so a
+//! SPICE-named instance elaborates like any other module.
+//! LRM annex D.3, annex E; §4.6.1, §4.6.3, §6.2.2, §6.3, §6.5.5, §6.7.1.
 
 const std = @import("std");
 
 // ---------------------------------------------------------------------------
-// Annex E — the Table E.1 SPICE primitives, as ordinary modules
+// Annex E Table E.1 SPICE primitives
 // ---------------------------------------------------------------------------
 
-/// Annex E Table E.1 — the "basic set of SPICE primitives" E.2 requires a
-/// SPICE-compatible tool to provide, written as ordinary Verilog-AMS module
-/// declarations and prepended like the annex D files.
+/// Annex E Table E.1, the "basic set of SPICE primitives" E.2 requires, as
+/// Verilog-AMS modules prepended like the annex D files. E.2 says built-in
+/// SPICE primitives "shall be treated in the same manner in Verilog-AMS HDL as
+/// built-in primitives", so as modules they get §6.3 overrides, §6.5.5 named
+/// connection and §6.7.1 hierarchical access from the existing code.
 ///
-/// WHY A PRELUDE OF MODULES, and not a table of names in the parser or codegen.
-/// E.2 is explicit that "SPICE primitives built into the simulator shall be
-/// treated in the same manner in Verilog-AMS HDL as built-in primitives" — the
-/// same MANNER, which is instantiation. A primitive that is a real module gets
-/// §6.3 parameter overrides, §6.5.5 named connection, §6.2.2 elaboration, §6.7.1
-/// hierarchical access and every diagnostic in those clauses for free, from the
-/// code that already implements them; a hard-coded name gets none of it and has
-/// to reimplement each one. It is also readable: a user can see what `resistor`
-/// does, which is the only defence against E.1.2's fourth axis of
-/// incompatibility ("the mathematical description of the built-in primitives can
-/// differ").
+/// Normative, and transcribed: each primitive's name, port names in order and
+/// parameter names in order (E.3), with electrical inout ports. Everything
+/// else is "implementation dependent" (E.2): every parameter default, every
+/// range, and the six rows with an empty Behavior column (tline, diode, bjt,
+/// mosfet, jfet, mesfet), which declare the interface only.
 ///
-/// WHAT IS NORMATIVE HERE AND WHAT IS NOT. Table E.1 fixes three things and
-/// nothing else: the primitive NAME, the port names IN ORDER, and the parameter
-/// names IN ORDER (E.3: "for connection by order instead of by name, the ports
-/// and parameters shall be given in the order listed"), plus "the default
-/// discipline of the ports for these primitives shall be electrical and their
-/// descriptions shall be inout". So the headers below are transcription and must
-/// not drift. Everything else is implementation-dependent BY THE ANNEX'S OWN
-/// WORDS — E.2: "while the Verilog-AMS HDL built-in primitives are standardized,
-/// the SPICE primitives are not. All aspects of SPICE primitives are
-/// implementation dependent" — which covers every parameter DEFAULT (Table E.1
-/// lists none), every value range, and the five rows whose Behavior column is
-/// EMPTY (tline, diode, bjt, mosfet, jfet, mesfet: interface only, no equations,
-/// and a comment at each site saying so).
+/// Behavior equations are contributed as flows where the table allows, e.g.
+/// the resistor's `V = I*r*(...)` as `I <+ V/(r*(...))`, so a §6.7.1 flow
+/// probe of the branch reads the current. Each independent source's leading
+/// `dc` is its value under `analysis("static") && !analysis("tran")`, §4.6.1's
+/// ".OP or .DC analysis" (E.2.2.3 translates `VA VCC GND 5` to
+/// `vsine #(.dc(5))`).
 ///
-/// THE BEHAVIOR COLUMN IS CONTRIBUTED AS A FLOW WHEREVER THE TABLE'S EQUATION
-/// ALLOWS IT. Table E.1 writes the resistor as `V = I*r*(...)`, which as a
-/// potential contribution makes the branch a source and its current an unknown
-/// the equation system carries; written as the algebraically identical
-/// `I <+ V/(r*(...))` the current is the contributed value, which is what a
-/// §6.7.1 flow probe of the primitive's branch reads back. Same equation, and
-/// the observable the annex describes is observable.
-///
-/// `dc`, `mag` and `phase` lead the parameter list of every independent source
-/// row and appear in NONE of their Behavior expressions: they are the §4.6.1
-/// analysis-dependent values (DC operating point, AC magnitude and phase) rather
-/// than terms of the transient waveform. E.3 makes those names REQUIRED, and a
-/// required parameter no equation reads is a parameter that does nothing — so
-/// the Behavior column is guarded by `analysis("static") && !analysis("tran")`
-/// on every source row, which is §4.6.1's ".OP or .DC analysis" and not a
-/// transient's own initial operating point, and `dc` is what the source holds
-/// there. E.2.2.3 is the annex using it: `VA VCC GND 5`, a plain 5 V supply, is
-/// translated `vsine #(.dc(5)) Vcc (vcc, gnd);` with every waveform parameter
-/// left at its default.
-///
-/// ponytail: `mag` and `phase` are still declared and unused. §4.6.3's
-/// `ac_stim(analysis_name, mag, phase)` is the shape they want, and the reason
-/// they do not have it is that a source contributing an AC stimulus on top of
-/// its large-signal value needs the complex side §4.6.3's own ceiling in
+/// ponytail: `mag` and `phase` are declared and unused. They want §4.6.3's
+/// `ac_stim`, which needs the complex small-signal side
 /// `codegen.analysisMatch` does not have yet.
 ///
-/// E.3.1's ccvs, cccs and mutual inductor are ABSENT on purpose: they take a
-/// controlling INSTANCE name as a parameter, "Verilog-AMS HDL does not support
-/// the concept of passing an instance name as a parameter", and so E.3.1 says in
-/// terms that they "are not supported". A missing module is the right answer and
-/// E0904 is its diagnostic.
+/// E.3.1's ccvs, cccs and mutual inductor are absent: they take an instance
+/// name as a parameter, which E.3.1 says is "not supported" (E0904).
 pub const spice_primitives =
     \\// Annex E Table E.1 — names, ports and parameters transcribed; see
     \\// `Preprocessor.spice_primitives` for what of this is normative.
@@ -481,17 +443,11 @@ pub const spice_primitives =
     \\
 ;
 
-/// How many module declarations `spice_primitives` holds, COUNTED FROM THE TEXT
-/// so the number cannot drift from the prelude it describes.
-///
-/// This is how a consumer tells a shipped primitive from a user's module without
-/// a byte offset threaded through four stages: the prelude is prepended verbatim
-/// whenever `Options.std_defs` is set, its modules therefore occupy exactly the
-/// first `spice_module_count` entries of `Ast.SourceFile.modules` (the parser
-/// appends in source order), and `Ast.SourceFile.builtin_modules` is set to this.
-/// E.3.3's "a module defined in the Verilog-AMS will always be selected in
-/// favor of a SPICE primitive using exactly the same name" is then a search
-/// order, and §6.2.2's top can never be a primitive.
+/// The number of module declarations in `spice_primitives`, counted from the
+/// text. With `Options.std_defs` these are the first `spice_module_count`
+/// entries of `Ast.SourceFile.modules`, which is how a consumer tells a
+/// primitive from a user module: E.3.3 prefers the user's module of the same
+/// name, and §6.2.2's top is never a primitive.
 pub const spice_module_count = blk: {
     @setEvalBranchQuota(200_000);
     // ponytail: count the fixed, non-overlapping header spelling with stdlib;
@@ -499,9 +455,9 @@ pub const spice_module_count = blk: {
     break :blk @as(u32, @intCast(std.mem.count(u8, spice_primitives, "\nmodule ")));
 };
 
-/// annex D.3 — driver_access.vams, verbatim. Twelve masks naming the bit each
-/// §7 driver flag occupies. Self-guarded, and NOT preloaded: nothing in the
-/// analog subset reads a driver, so a design has to `include it.
+/// Annex D.3 driver_access.vams, verbatim: twelve masks for the flags §9.23.4
+/// `$driver_type` returns. Self-guarded and not preloaded, so a design has to
+/// `include it.
 pub const driver_access_vams =
     \\// Copyright(c) 2009-2014 Accellera Systems Initiative Inc.
     \\// Verbatim copies of the material in annex D may be used and distributed

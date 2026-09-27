@@ -1,9 +1,7 @@
-//! §10.4 `define, `undef and macro expansion.
-//!
-//! In: a `define body, or a macro use with its actual arguments. Out: the macro table entry,
-//! or the expanded text (argument pre-expansion, recursion refused).
-//!
-//! LRM clauses this file's code cites: §1, §2.7, §2.8.1.
+//! Text macros: a `define or `undef line in, a macro table entry out; a macro
+//! use in, its expansion scanned into the output (arguments pre-expanded,
+//! recursion refused).
+//! LRM §2.7, §2.8.1, §10.4, §10.7; IEEE 1364 §19.3.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
@@ -25,18 +23,18 @@ const escapedEnd = Preprocessor.escapedEnd;
 // §10.4 `define / `undef
 // ---------------------------------------------------------------------------
 
-/// `rest` is everything after the word "define" on one logical line; `at` is
-/// the '`' and `off` the offset `rest` starts at.
+/// Parses a §10.4 `define and adds or replaces its macro. `rest` is everything
+/// after the word on one logical line, starting at offset `off`; `at` is the
+/// '`'.
 pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     // Syntax 10-3 writes two different nonterminals into adjacent lines:
     //   formal_argument_identifier ::= simple_identifier
     //   text_macro_identifier      ::= identifier
-    // and A.9.3 makes `identifier` simple OR escaped. So the NAME may be
-    // escaped and the formals may not — `escapedIdent` is used here and
-    // `ident` stays in the formal loop below. §2.8: "The first character of
-    // an identifier shall not be a digit or $" — `ident` admits the `$` of a
-    // system name, so a simple name is refused here.
+    // and A.9.3 makes `identifier` simple or escaped. So the name may be
+    // escaped and the formals may not. §2.8: "The first character of an
+    // identifier shall not be a digit or $", and `ident` admits the `$` of a
+    // system name, so that is refused here.
     const name = r.escapedIdent() orelse (if (r.peek() == '$') null else r.ident()) orelse
         return pp.fail(pp.spanAt(at, off), .E0109, "", .{});
     // IEEE 1364 §19.3.1: "All compiler directives shall be considered
@@ -81,8 +79,7 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 
     // §10.4: "To avoid conflicts with predefined Verilog-AMS macros (10.5), the
     // `define compiler directive's macro text shall not begin with __VAMS_."
-    // The target is the TEXT (Syntax 10-3's second operand), not the name — a
-    // body is what can expand into a §10.5 predefined macro and shadow it.
+    // The target is the text (Syntax 10-3's second operand), not the name.
     if (std.mem.startsWith(u8, m.body, "__VAMS_"))
         return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0139, "`{s}` begins with __VAMS_", .{m.body});
 
@@ -100,11 +97,12 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     try pp.macros.put(pp.arena, name, m);
 }
 
+/// Parses a §10.4 `undef and removes the macro; a §10.5 predefined macro is
+/// left alone. Arguments as for `handleDefine`.
 pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
-    // Syntax 10-3: `undef's operand is a text_macro_identifier ::= identifier,
-    // simple OR escaped (A.9.3) — a name `` `define \M-X `` could create is a
-    // name `` `undef \M-X `` must be able to withdraw.
+    // Syntax 10-3: the operand is an identifier, simple or escaped (A.9.3),
+    // so `` `undef \M-X `` withdraws what `` `define \M-X `` created.
     const name = r.escapedIdent() orelse r.ident() orelse
         return pp.fail(pp.spanAt(at, off), .E0113, "", .{});
     // §10.4: "`undef shall have no effect on predefined Verilog-AMS macros".
@@ -145,33 +143,28 @@ fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
 // §10.4 macro expansion
 // ---------------------------------------------------------------------------
 
-/// `at` points at '`', `after_name` past the macro name. Returns resume offset.
+/// Expands the macro use whose '`' is at `at`, with `after_name` just past the
+/// name, into `pp.out`. Handles §10.7 `__LINE__` and `__FILE__`. Returns the
+/// offset to resume scanning from.
 pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const u8) Error!usize {
     if (!pp.emitting()) return after_name;
     // The whole use, backtick included: `FOO.
     const sp = pp.spanAt(at, after_name);
 
     const m = pp.macros.get(name) orelse {
-        // §10.7. Not in `macros` because neither has a fixed body: both are
-        // computed from where the use SITS, so they are expanded here, at the
-        // one point that still knows the file and the offset. A user `define
-        // of either name is found by the lookup above and wins, which costs
-        // nothing to allow and is the only reading §10.4 leaves open.
+        // §10.7. Not in `macros` because both depend on where the use sits.
+        // `handleDefine` refuses a user `define of either name (E0143).
         if (std.mem.eql(u8, name, "__LINE__")) {
-            // "in the form of a simple decimal number" — an integer token, not
-            // a string, so it is usable as `ln = `__LINE__;`.
+            // "in the form of a simple decimal number": an integer token.
             var buf: [16]u8 = undefined;
             try pp.out.appendSlice(pp.arena, std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
             return after_name;
         }
         if (std.mem.eql(u8, name, "__FILE__")) {
-            // "in the form of a string literal" — §2.7, so the quotes are part
-            // of the expansion and a '"' or '\' in the path has to be escaped
-            // or the literal ends early (Windows paths are full of the latter).
+            // "in the form of a string literal" (§2.7): quoted, with '"' and
+            // '\' in the path escaped.
             try pp.out.appendSlice(pp.arena, "\"");
-            // §10.7 `__FILE__`: "the name of the current input file". The clause makes
-            // the spelling "implementation dependent" and says a `line directive may
-            // replace it, so the override wins when there is one.
+            // A `line directive's file name replaces the real one (§10.7).
             for (pp.file_override orelse pp.opts.bag.fileName(pp.cur_file_id)) |c| {
                 if (c == '"' or c == '\\') try pp.out.appendSlice(pp.arena, "\\");
                 try pp.out.append(pp.arena, c);
@@ -182,8 +175,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         var b = pp.failWith(sp, .E0115);
         b.msg("`{s}", .{name});
         if (diag.didYouMeanMap(name, pp.macros)) |near| {
-            // `sp` spans the whole use INCLUDING the backtick, so the rewrite
-            // has to put one back — `suggestHere` would eat it.
+            // `sp` includes the backtick, so the replacement restores it.
             const repl = try std.fmt.allocPrint(pp.arena, "`{s}", .{near});
             b.suggest(.{ .span = sp, .replacement = repl }, "did you mean `{s}`?", .{near});
         }
@@ -220,24 +212,18 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     pp.expand_depth += 1;
     defer pp.expand_depth -= 1;
 
-    // §10.4 defers text-macro semantics to IEEE Std 1364, whose rule is that a
-    // macro's TEXT may not refer to the macro itself, directly or indirectly —
-    // a property of the DEFINITION. A nested invocation in an ACTUAL argument
-    // (`` `MAX(`MAX(a,b),c) ``) is not that: the C-preprocessor model, which
-    // 1364's macro system transcribes, expands each argument FULLY before it is
-    // substituted into the body. Splicing the RAW argument text and rescanning
-    // it while `name` sits on `pp.expanding` turned every such use into a false
-    // E0118. Pre-expansion happens here, BEFORE the name is pushed, so the
-    // argument's own uses see the caller's stack — while a self-reference in
-    // the BODY is still rescanned with the name on the stack and still E0118s.
+    // IEEE 1364 forbids a macro's text from referring to the macro itself, a
+    // property of the definition. A nested use in an actual argument
+    // (`` `MAX(`MAX(a,b),c) ``) is not that: arguments are fully expanded
+    // before substitution, as in the C preprocessor. So arguments expand here,
+    // before `name` is pushed, while a self-reference in the body is rescanned
+    // with the name on the stack and is still E0118.
     const body = if (m.is_func) blk: {
         var actuals = args;
         for (args, 0..) |a, first| {
             if (std.mem.indexOfScalar(u8, a, '`') == null) continue;
-            // At least one argument invokes a macro: expand them all into a
-            // copy. Backtick-free arguments (the overwhelming case) take the
-            // branch above and are substituted verbatim, byte-identically to
-            // what the splice-and-rescan model produced.
+            // Some argument invokes a macro: expand from here on into a copy.
+            // Backtick-free arguments are substituted verbatim.
             const copy = try pp.arena.dupe([]const u8, args);
             for (copy[first..]) |*slot| slot.* = try expandArg(pp, slot.*, at);
             actuals = copy;
@@ -249,10 +235,8 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     try pp.expanding.append(pp.arena, name);
     defer _ = pp.expanding.pop();
 
-    // Provenance: the bytes about to be emitted came from a macro body, not
-    // from the file. Only the OUTERMOST expansion is recorded — a nested one
-    // resolves to the same invocation site anyway, so the extra segments would
-    // buy nothing.
+    // Provenance: only the outermost expansion gets segments, since a nested
+    // one resolves to the same invocation site.
     const outermost = pp.expand_site == null;
     if (outermost) {
         const o: u32 = @intCast(pp.out.items.len);
@@ -286,13 +270,10 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     return end;
 }
 
-/// Fully macro-expand one collected actual argument (§10.4 via IEEE 1364 —
-/// arguments are expanded BEFORE substitution, see the comment in `expand`).
-/// Runs `scan` with the output redirected into a fresh arena list; `at` is the
-/// invocation's '`', which becomes `expand_site` so that diagnostics raised
-/// inside the argument, `__LINE__`, and the no-segment rule all behave exactly
-/// as they do for a body rescan. Backtick-free text expands to itself and is
-/// returned unscanned.
+/// Returns one actual argument fully macro-expanded, arena-owned. Scans into a
+/// fresh output list with `expand_site` set to `at`, the invocation's '`', so
+/// diagnostics and `__LINE__` behave as in a body rescan. Backtick-free text
+/// is returned as is.
 fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
@@ -307,16 +288,12 @@ fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     return pp.out.items;
 }
 
+/// A macro use's trimmed actual arguments and the offset just past its `)`.
 pub const MacroArgs = struct { args: []const []const u8, end: usize };
 
-/// Splits a top-level comma list starting at the '(' at `lparen`. Nested
-/// (), [], {}, string literals and escaped identifiers are opaque.
-///
-/// The nesting is a STACK of opener kinds, not one shared counter: with a
-/// counter every one of `)]}` could close the argument list, so `` `ID(2.0] ``
-/// compiled clean and crossed nestings like `[(],)` mis-sliced the arguments.
-/// A closer that does not match its opener is E0120 — the `(` it leaves behind
-/// really is unterminated, and saying so at the mismatch is the honest place.
+/// Splits the top-level comma list opening at `lparen`. Nested (), [], {},
+/// string literals and escaped identifiers are opaque. A closer that does not
+/// match its opener, or a missing `)`, is E0120.
 pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []const u8) Error!MacroArgs {
     var args: std.ArrayList([]const u8) = .empty;
     var opens: std.ArrayList(u8) = .empty;
@@ -356,9 +333,9 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
     return pp.fail(pp.spanAt(at, at + 1 + name.len), .E0120, "`{s}`", .{name});
 }
 
-/// Replace whole-identifier occurrences of the formals in `body`. String
-/// literals are left alone, and the identifier right after a '`' is a macro
-/// name, never a formal.
+/// Returns `body` with each whole-identifier formal replaced by its actual,
+/// arena-owned. Strings, escaped identifiers, numbers and the name after a
+/// '`' are never substituted into.
 pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: []const []const u8) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, body.len);
@@ -385,10 +362,8 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             continue;
         }
         if (c == '\\') {
-            // §2.8.1 escaped identifier: opaque up to the next white space,
-            // exactly as `scan` and `stripComments` treat it. A formal spelled
-            // INSIDE one is part of that identifier, not a use of the formal —
-            // `` `define M(x) real \sig-x ; `` declares `\sig-x`, not `\sig-1`.
+            // §2.8.1 escaped identifier, opaque to the next white space: in
+            // `` `define M(x) real \sig-x ; `` the `x` is not the formal.
             const start = i;
             i = escapedEnd(body, i + 1);
             try out.appendSlice(pp.arena, body[start..i]);
@@ -402,7 +377,7 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             try out.appendSlice(pp.arena, if (idx) |k| args[k] else word);
             // IEEE 1364 §19.3.1 substitutes each actual "literally", and an
             // escaped identifier's terminating white space (§2.8.1) is part of
-            // it — `macroArgs` trimmed that space off with the rest. Put one
+            // it, and `macroArgs` trimmed that space off with the rest. Put one
             // back, or `(ARG)` turns `\a.b ` into the identifier `\a.b)`.
             if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.arena, ' ');
             continue;

@@ -1,16 +1,14 @@
-//! Annex D standard definitions: disciplines.vams and constants.vams, transcribed verbatim.
-//!
-//! Data only. The text `include "disciplines.vams"` and `include "constants.vams"` resolve to,
-//! transcribed from docs/annex-d-stddefs.html.
-//!
-//! LRM clauses this file's code cites: §1.
+//! Annex D.2 constants.vams and D.1 disciplines.vams as embedded text, the
+//! bytes `include resolves those names to. Data only, transcribed from
+//! docs/annex-d-stddefs.html.
+//! LRM annex D.1, D.2.
 
 // ---------------------------------------------------------------------------
-// Annex D standard definitions (transcribed verbatim from docs/annex-d-stddefs.html)
+// Annex D standard definitions
 // ---------------------------------------------------------------------------
 
-/// annex D.2 — constants.vams. Mathematical and physical constants (§10.5).
-/// Self-guarded, so `include "constants.vams" after the prelude is a no-op.
+/// Annex D.2 constants.vams: mathematical and physical constants. Self-guarded,
+/// so `include "constants.vams" after the prelude is a no-op.
 pub const constants_vams =
     \\// Copyright(c) 2009-2023 Accellera Systems Initiative Inc.
     \\// Verbatim copies of constants.vams may be used and distributed without
@@ -107,9 +105,8 @@ pub const constants_vams =
     \\`endif
 ;
 
-/// annex D.1 — disciplines.vams. Natures and disciplines, so class 3 resolves
-/// real disciplines instead of assuming `electrical`. Self-guarded.
-/// Default abstols are overridable by `define-ing <NATURE>_ABSTOL first.
+/// Annex D.1 disciplines.vams: natures and disciplines. Self-guarded. A
+/// `define of <NATURE>_ABSTOL before it overrides that nature's abstol.
 pub const disciplines_vams =
     \\// Copyright(c) 2009-2023 Accellera Systems Initiative Inc.
     \\// Verbatim copies of disciplines.vams may be used and distributed without
