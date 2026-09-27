@@ -36,7 +36,7 @@
 // GROUND TRUTH TODAY: green, both halves. Recorded because the row claimed
 // dependent ranges and arrays without a fixture that overrides the BOUND or the
 // SIZE — ch06's dependent-parameter fixtures move values, not shapes. The
-// residual defect this file does NOT reach is noted in SPEC.md: the same two
+// residual defect this file does NOT reach is noted in tests/fixtures/ch06_hierarchy/h01_SPEC.md at 8b1514d4: the same two
 // rules applied to a HOST override (`//! param`) instead of an instance line are
 // not checked at all.
 //

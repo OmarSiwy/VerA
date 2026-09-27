@@ -46,7 +46,7 @@
 // the two inputs, so `";2"` is column 2 + 2 = 4 = f2 = 2.5. Nothing in this
 // file's wants changed; the rule 06 states did.
 //
-// THIS FILE PASSES AT HEAD, 5 of 5 (see SPEC.md). It is kept because its wants
+// THIS FILE PASSES AT HEAD, 5 of 5 (see tests/fixtures/ch09_system_tasks/a05_SPEC.md at 8b1514d4). It is kept because its wants
 // are not vacuous — a tool that ignored the selector answers 2.0 twice — but it
 // applies no pressure on the §9.21 gap and must not be counted as if it did.
 //

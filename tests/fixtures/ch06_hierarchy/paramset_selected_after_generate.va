@@ -27,7 +27,7 @@
 // scheme is evaluated, such as a localparam declared inside the generate block:
 // `begin : g1 localparam real ww = 10.0; ch6_psg_sel #(.w(ww)) u1(p, n); end`
 // is refused today with E0914 (selection cannot see `ww`, so both members stay
-// applicable). That is an open defect under §6.9.2, recorded in COVERAGE.md.
+// applicable). That is an open defect under §6.9.2, recorded in docs/ROADMAP.md (Open items).
 //
 // (The four instances have distinct names because VerA flattens an instance in
 // a generate block under its own name rather than under `g1.`/`g2.`; two

@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.6.4/11.6.5 port and node objects: a port has a direction, and each port
 // reaches one node. §6.5.2.2 is the clause that declares that direction (an
 // earlier revision cited §3.5, which is Genvars), and the direction does not

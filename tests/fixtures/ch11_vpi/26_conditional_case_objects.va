@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.6.23 if-else and case. §4.2.5 makes a relational operator yield the
 // INTEGER 0 when false, so a negative branch potential drives both the else arm
 // and the case default. At V(p)=0.25, V(n)=1.5 the potential is -1.25 V:

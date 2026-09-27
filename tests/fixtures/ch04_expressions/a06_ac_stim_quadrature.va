@@ -57,7 +57,7 @@
 // So the (mag, phase) claim is the two `//! acstim` lines and nothing else. It
 // becomes assertable as a `CHECK` only when the `ac_gens` export (row, col,
 // mag, phase) exists beside `noise_gens` and `tb.zig` learns the directive —
-// SPEC.md's "Infrastructure these need" is where that is specified.
+// tests/fixtures/ch04_expressions/a06_SPEC.md at 8b1514d4's "Infrastructure these need" is where that is specified.
 //
 // WHAT THE REMAINING `CHECK`s DO ASSERT, and why they are not more literal
 // arithmetic. They are §4.5.6's, not §4.6.3's. §4.6.3 says `ac_stim` "models a

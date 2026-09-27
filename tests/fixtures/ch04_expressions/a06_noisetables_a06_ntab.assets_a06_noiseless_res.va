@@ -11,7 +11,7 @@
 // would put a temperature-dependent term into every expected value in this row
 // and bury the thing under test. This device is a pure conductance: every
 // electron of noise in the A06 decks comes from the tabulated source, so the
-// arithmetic in SPEC.md is exact and has no kB, no T and no tolerance slack.
+// arithmetic in tests/fixtures/ch04_expressions/a06_noisetables_SPEC.md at 8b1514d4 is exact and has no kB, no T and no tolerance slack.
 //
 // WHAT THIS FILE ASSERTS ON ITS OWN. Two things, and neither needs the deck.
 //
@@ -31,7 +31,7 @@
 // with R at its declared default. A conductance of exactly 1e-3 and no more is
 // the whole of this device: a 4kT/R term, a temperature coefficient or a
 // stray tabulated contribution would all move it, and any of them would put a
-// number into SPEC.md's arithmetic that the A06 oracles do not carry. Band
+// number into tests/fixtures/ch04_expressions/a06_noisetables_SPEC.md at 8b1514d4's arithmetic that the A06 oracles do not carry. Band
 // 1e-18 S against 1e-3 S — fifteen orders of headroom, so nothing but a real
 // extra term can fail it.
 //

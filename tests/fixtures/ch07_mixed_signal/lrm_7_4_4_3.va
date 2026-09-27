@@ -16,7 +16,7 @@
 // MIX-LOCAL-001 invalid-access fixtures, where rejection is required instead.
 // This correction changes the oracle, not the LRM. A failure after correcting
 // the local access names exposes implementation debt rather than invalidating
-// the locally declared discipline. See docs/conformance-mixed-signal.md.
+// the locally declared discipline. See docs/conformance-mixed-signal.md at 8b1514d4.
 //
 // The resolveto override half of §7.4.4.3 is untested here. Resolution precedes
 // bridge insertion; absence of insertion does not make that half inapplicable.

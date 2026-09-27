@@ -12,7 +12,7 @@
 // 36 is this file's sibling for §10.2: `resetall` withdraws the default
 // discipline there, and its header carries the argument for why `resetall` is
 // read narrowly in this suite (it does NOT undefine text macros — see the note
-// in the chapter COVERAGE about the deleted 20).
+// in tests/fixtures/ch10_directives/COVERAGE.md at 8b1514d4 about the deleted 20).
 //
 // DISCRIMINATING: delete the `` `resetall `` and this is 52, E0367 and all.
 //

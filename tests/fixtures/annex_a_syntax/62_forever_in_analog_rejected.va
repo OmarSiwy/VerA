@@ -20,7 +20,7 @@
 // The refusal is CORRECT and the diagnostic is not: VerA reports E0209 "expected
 // an expression: found `forever`", which is the parser's generic complaint and
 // not a considered statement that a digital loop has no analog form (the same
-// E0209 that COVERAGE.md's rejection section calls out for `force`, `fork`,
+// E0209 that tests/fixtures/annex_a_syntax/COVERAGE.md at 8b1514d4's rejection section calls out for `force`, `fork`,
 // `wait` and `#5`). The fixture pins the code that fires today; a better
 // diagnostic should name the rule.
 //

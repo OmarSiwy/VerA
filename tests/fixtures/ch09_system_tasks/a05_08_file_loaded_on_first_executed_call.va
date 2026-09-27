@@ -58,7 +58,7 @@
 //
 //      What this fixture cannot have is a positive runtime witness, because by
 //      construction the sites it is about produce no value. That is disclosed
-//      in SPEC.md rather than papered over. The array-snapshot witness that
+//      in tests/fixtures/ch09_system_tasks/a05_SPEC.md at 8b1514d4 rather than papered over. The array-snapshot witness that
 //      would have been the obvious candidate belongs to a DIFFERENT rule and
 //      already has a home: tests/fixtures/ch09_system_tasks/
 //      187_table_snapshot_function.va pins "Any change after this point is

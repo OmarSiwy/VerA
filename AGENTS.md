@@ -24,7 +24,7 @@ pipeline, `exit "${PIPESTATUS[0]}"`.
 
 **3. Diff FAIL *name lists*, not counts.**
 A count can stay still while the membership changes. Two agents were only able
-to claim "no regressions" honestly because they compared names (`PLAN.md §6`).
+to claim "no regressions" honestly because they compared names.
 Before and after any change:
 
 ```sh
@@ -45,18 +45,18 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `docs/ROADMAP.md` | v0.0.1 → v1.0.0 release ladder | which release your work belongs to, and its gate |
+| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, and the open items | what is left, and which row your work closes |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
-| `docs/PLAN.md` | the work plan, newest measurements | what is left and what parallelises |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4–5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
-| `tests/fixtures/MANIFEST.md` | per-row defect register, 1036 lines | the diagnosis for a specific failing row |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
-| `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM — 20 chapter and annex files | the normative text. Cite by clause number |
-| `docs/CLAUSE-AUDIT.md` | the clause audit (restored to the tree) | the definition of `verified` / `partial` / `missing`, and measure B |
+| `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
+| `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
+| `docs/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
+| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items are in `docs/ROADMAP.md` §5 |
 
-`TODO.md §1` and `§3.1`'s measurements are superseded by `PLAN.md §0`, which is
-itself superseded by the latest `CHANGELOG.md` entry. When two disagree, the
-newest wins and **you say so** rather than picking silently.
+Measurements in older documents are superseded by the latest `CHANGELOG.md`
+entry, or by running the commands in §2. When two disagree, the newest wins and
+**you say so** rather than picking silently.
 
 ---
 
@@ -79,7 +79,13 @@ Three consequences you will get wrong if you skip them:
   work. A clause with only a `//! reject` fixture is one-way.
 - **Compiler acceptance is not runtime evidence.** An obligation needs a
   positive behavioural test, an invalid-input test, and a recorded result.
-  "It compiles" is the weakest of the three and closes nothing.
+  "It compiles" is the weakest of the three and closes nothing. Neither does a
+  kernel unit test alone, a compiled `.c` file, or a SPICE deck paired with a
+  JSON file: none of them runs the compiler's output in a host.
+- **A refusal needs a legal neighbour.** Isolate the invalid construct, pin its
+  named diagnostic, and show a legal variant compiles, so the fixture tells a
+  real restriction from a blanket refusal. A rule with no invalid form needs no
+  invented rejection; say why in the header.
 - **XFAIL markers are implemented, never deleted.** The harness FAILs on XPASS
   specifically so a marker cannot outlive its limitation.
 
@@ -93,12 +99,12 @@ release, and there is no releasing without a measurement.
 ```sh
 # 1. Land your work. Gates green, name lists diffed.
 zig build test                       # must pass. This is the gate.
-zig build benchmark -- --strict      # exit 1 until v1.0.0 — read the names
+zig build benchmark -- --strict      # exit 1 until v1.0.0: read the names
 
 # 2. Write the entry. This RUNS the suites; it does not ask you for numbers.
 tools/conformance.sh --changelog v0.1.0
 
-# 3. Fill in D by hand — the one row the script marks `hand-entered`.
+# 3. Fill in D by hand: the one row the script marks `hand-entered`.
 #    Name the document and the date you read. Do not guess.
 
 # 4. Commit, tag, push the tag. CI does the rest.
@@ -111,7 +117,7 @@ runner. **If the tree measures something different from what you committed, the
 release fails.** That is the feature. Re-measure, amend, re-tag.
 
 Semver, applied literally: a **minor** (`0.N.0`) changes something a consumer
-observes — source VerA newly accepts or refuses, device text it emits, or a row
+observes: source VerA newly accepts or refuses, device text it emits, or a row
 in `build.zig`'s `module_specs`. A **patch** (`0.N.M`) closes rows without
 changing any of those. Every `ARCHITECTURE.md §6` refactor phase is therefore a
 patch, because it is byte-identical by construction.
@@ -119,7 +125,7 @@ patch, because it is byte-identical by construction.
 `.github/workflows/bench.yaml` runs on every push and PR. It **reports** the
 torture suite, clause coverage, digital transcripts and the footprint/speed
 sweep into the job summary, and uploads the FAIL name list as an artifact. It
-gates on `zig build test` alone — the conformance number is a progress meter
+gates on `zig build test` alone. The conformance number is a progress meter
 until v1.0.0, not a pass/fail.
 
 ---
@@ -136,7 +142,7 @@ a cycle**. Dependency order is enforced by the build, not by review.
 
 **How a big file is split** (lower/, codegen/, parser/, pp/, proof/, diag/,
 elaborate/, tb/, sim/digital/): a sub-file holds free functions that keep
-`self: *T` and are called directly, `lower_expr.lowerExpr(self, e)` — the
+`self: *T` and are called directly, `lower_expr.lowerExpr(self, e)`, the
 pattern of Zig's own `src/Sema/*.zig`. The root file aliases ONLY what other
 modules call; that alias list IS the module's API. Every file opens with a
 `//!` header: its transformation (in → out) and the LRM clauses its code cites.
@@ -146,7 +152,7 @@ modules call; that alias list IS the module's API. Every file opens with a
 cannot reach lowering's symbol tables. Calls carry a `Mir.Callee` enum
 (`lib/ir/callee.zig`); per-opcode facts are columns of `lib/ir/opcode.zig` and
 `lib/backend/codegen/opcode_zig.zig`. Add a variant and the compiler names every
-site that needs a decision — never add a string compare or a silent default.
+site that needs a decision. Never add a string compare or a silent default.
 
 **Exhaustiveness is enforced, not reviewed.** `tests/exhaustive.zig` (part of
 `zig build test`) parses lib/ and src/ and fails on any `else =>` over a
@@ -164,7 +170,7 @@ diff -r .zig-cache/vera-golden/{before,after} && echo IDENTICAL
 ```
 
 One phase = one branch = one PR. Never two phases in flight in `lib/`. No
-behaviour changes, no bug fixes, no "while I'm here" inside a phase — those are
+behaviour changes, no bug fixes, no "while I'm here" inside a phase. Those are
 separate commits before or after. **A phase that cannot keep goldens
 byte-identical stops and gets re-scoped.**
 
@@ -174,9 +180,15 @@ tests behind is how coverage silently drops.
 **Fix at the root.** `asInt` had ten callers; guarding the crash site would have
 left nine able to abort.
 
+**Parse in full, then refuse by clause.** When VerA cannot execute a construct
+yet, parse all of it and refuse it with a named diagnostic that cites the
+clause. Never open a gate without an executor: "compiled, and the block silently
+did nothing" is a wrong answer with no diagnostic, which is worse than a
+refusal.
+
 ---
 
-## 5. SIMD — read this before you optimise anything
+## 5. SIMD: read this before you optimise anything
 
 **The compiler is not a SIMD target and you are not to make it one.**
 Every backend walk is a chain: a dominator-tree walk, a data-dependent output
@@ -195,8 +207,8 @@ of times inside a host Newton loop; that is the hot loop this project exists to
 make fast. The device's SIMD is the scalar family's DERIVATIVE lanes: every
 value is `S.Of(mask)`, carrying exactly the lanes of the unknowns it depends
 on, and `tools/contract.zig`'s `RefFamily` runs them as
-`@Vector(popcount(mask), L)`. The lane decisions — `pinLanes`, `lane_pinned`,
-`batch_ok`, `jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/`
+`@Vector(popcount(mask), L)`. The lane decisions (`pinLanes`, `lane_pinned`,
+`batch_ok`, `jac_f32`, `cur_strict`) live in `lib/backend/codegen/float/`
 (`mode.zig`, `lanes.zig`), whose header says what makes a lane dirty and what
 `batch_ok` promises: a family whose value type `V` is a vector of operating
 points evaluates a `batch_ok` device exactly per point, which the
@@ -220,14 +232,14 @@ chunking measured 2.8x slower at runtime. See the commit that removed it.)
 
 ## 6. Fixtures
 
-Run one by hand — `--check` needs **both** flags, and the fixture's own
+Run one by hand. `--check` needs **both** flags, and the fixture's own
 directory must be on the include path:
 
 ```sh
 ./zig-out/bin/vera --check --contract tools/contract.zig \
     -I tests/fixtures -I <the fixture's dir> <file.va>
 
-# the self-checking testbench — prints the ok=0/ok=1 lines:
+# the self-checking testbench, which prints the ok=0/ok=1 lines:
 P=$(./zig-out/bin/vera --emit-exe --contract tools/contract.zig \
       -I tests/fixtures -I <fixture dir> <file.va> 2>/dev/null)
 "$P"
@@ -248,7 +260,13 @@ carries the machine-readable tags:
 //!                     match a WARNING. Unnamed warnings pass (W0650 is off
 //!                     unless named). `//! nowarn`: this source warns nothing.
 //! xfail <reason>   <- "the fixture is right and VerA is not". FAILs on XPASS.
+//! checks 6         <- exactly this many ok= verdicts. Derive N from the
+//!                     assertions and points, never from a buggy transcript.
+//!                     Not allowed with `//! reject`.
 ```
+
+A verdict is the whole token `ok=1`; `ok=10` fails. Without `//! checks` the
+runner only needs a nonempty, all-passing transcript.
 
 Device-table directives assert what a device PUBLISHES to a host, as
 `got=/want= ok=` lines: `//! noise`, `//! acstim`, and `//! qsite` (one line
@@ -314,7 +332,7 @@ more exist. Worked examples in `TODO.md §2.4`:
 
 - `$vt` pinned to VerA's own CODATA2018 constant while §9.15 supplies no number.
 - `absdelta(V, 0.5)` against a wave stepping exactly 0.5, where §5.10.3.4 fires
-  on "**more than** delta" — the fixture tested for a bug.
+  on "**more than** delta". The fixture tested for a bug.
 - Seven fixtures assuming a digital-context `integer` starts at 0. §3.2 says
   **x**; only analog-context assignment defaults to zero.
 - "The second NBA cancels the first." IEEE 1364 §9.2.2 performs **both**.
@@ -327,39 +345,48 @@ moved to.
 
 ## 7. Things that look done and are not
 
-- The mixed-signal path is PARTIAL, and less so than it was. ch07 steps 5–9
-  landed (x/z inputs, A2D crossings with inserted points, named events across
-  the boundary, `absdelta`), a flattened child's discrete processes reach the
-  runner, §7.8 connect modules run both halves, and §9.22 driver access lives
-  in `src/sim/digital/driver.zig`. What is not: an A2D write does not re-solve
-  the finished analog point (the next point sees it); drivers are scalar
-  (a vector reads bit 0); `driver_update` on a connect module's OWN driver is
-  a one-line switch (`cm_driver_updates`) waiting on `docs/ROADMAP.md §7`
-  item 1, which is why `m04_12` FAILs.
-- `lib/backend/tb/runner_text.zig`'s solver is still a source **template**
-  emitted into each generated testbench, so `src/sim/` cannot call it; the
-  mixed runner reaches it through an adapter, not a call. It steps fixed-step
-  Euler: there is NO truncation-error control, so an LTE rule cannot be
-  exercised by a fixture beyond checking what the device publishes.
-- The PURE analog testbench is still a **fixed grid** over the declared
-  `//! time` points. Only the mixed runner inserts solver-chosen points
-  (crossings, timers via the optional `pendingBreakpoint` hook). A fixture
-  whose rationale needs an inserted point must run on the mixed path or put
-  the event on a declared point.
-- VPI: all 34 `.c` fixtures compile against `src/vpi/vpi_user.h`, and
-  `vpi_put_value` force/release runs (17 of them run in-process). User
-  `$systf` calls, interactive sim control and the analog routines still only
-  COMPILE — nothing in-process can answer them.
-- Setup split (`codegen/plan/setup.zig`) computes solve-invariant values once.
-  Array operations are classified per evaluation, so an array filled once in
-  `analog initial` is still recomputed every eval. A per-timepoint "step"
-  tier was measured and NOT built: compact models gain 0–16 values each.
+Checked against the code on 2026-09-27.
+
+- **The mixed-signal path runs, with known limits.** ch07 steps 5-9 landed
+  (x/z inputs, A2D crossings with inserted points, named events across the
+  boundary, `absdelta`), a flattened child's discrete processes reach the
+  runner, §7.8 connect modules run both halves, and §9.22 driver access lives in
+  `src/sim/digital/driver.zig`. Not done: an A2D write does not re-solve the
+  finished analog point; the next point sees it (`src/sim/mixed.zig`,
+  `settleA2d`). A driver's state is one bit, so a vector `signal_name` is
+  refused rather than read. `driver_update` does not fire for a connect
+  module's own driver: `cm_driver_updates = false` is the user's 2026-09-24
+  reading of §9.22.6, and `m04_12` asserts it.
+- **The testbench solver is text, not a library.**
+  `lib/backend/tb/runner_text.zig` is Zig source emitted into each generated
+  testbench, so `src/sim/` cannot call it; the mixed runner drives it through a
+  comptime interface. It steps fixed-step backward Euler with no
+  truncation-error control and no step rejection, so a fixture can check an
+  LTE rule only through what the device publishes.
+- **The pure analog testbench is a fixed grid** over the declared `//! time`
+  points. It prints the device's next breakpoint but inserts no point. Only the
+  mixed runner inserts solver-chosen points (crossings, and timers through the
+  optional `pendingBreakpoint` hook). A fixture whose reasoning needs an
+  inserted point runs on the mixed path or puts the event on a declared point.
+- **VPI.** Every `.c` fixture compiles against `src/vpi/vpi_user.h`
+  (`zig build test-vpi-fixtures`). The ones in `build.zig`'s `vpi_runs` also run
+  in-process under `zig build test`, analog routines included. The rest only
+  compile, for reasons listed above `vpi_runs`: a user `$systf` call from
+  digital code, an analog system task whose calltf writes an output argument,
+  and an `ac` analysis.
+- **Setup split** (`codegen/plan/setup.zig`) computes solve-invariant values
+  once. Array operations are classified per evaluation, so an array filled
+  once in `analog initial` is still recomputed every eval. A per-timepoint
+  "step" tier was measured and not built: compact models gain 0-16 values each.
+- **Known gaps are markers, in both trees.** `grep -rl '^//! xfail'
+  tests/fixtures` lists them; `.v` fixtures under `tests/fixtures/ieee1364` carry
+  them too. Gaps no fixture pins yet are in `docs/ROADMAP.md` §5.
 
 ---
 
 ## 8. If you are running as one of several parallel agents
 
-Learned expensively, and none of it is style preference (`PLAN.md §6`):
+Learned expensively, and none of it is style preference:
 
 - **Own worktree per agent.** Two in-tree agents plus a main session shared one
   checkout; one ran `git reset --hard` and destroyed uncommitted work.
@@ -368,11 +395,12 @@ Learned expensively, and none of it is style preference (`PLAN.md §6`):
   deletions and nothing noticed for a session.
 - **`cd` to the repo root before anything that writes.** A drifting shell cwd
   landed inside an agent worktree and made four merges appear to vanish.
-- **Budget ~12 GB of `.zig-cache` per concurrent agent.** Six parallel agents
-  filled the filesystem and killed a run mid-flight.
+- **Budget ~12 GB of `.zig-cache` per concurrent agent**, and delete a
+  finished agent's cache before the next wave. Six parallel agents filled the
+  filesystem and killed a run mid-flight.
 - **Size goldens compose.** When two agents each move generated-device byte
   counts in `tests/bench.zig`, the conflict is **regenerated**, not resolved to
-  one side — both deltas are real.
+  one side. Both deltas are real.
 
 ---
 
@@ -384,7 +412,7 @@ Learned expensively, and none of it is style preference (`PLAN.md §6`):
       a build-runner log); nothing new entered either.
 - [ ] `zig build test-devices` still passes every digital case, and
       `zig build test-vpi-fixtures` still compiles every `.c` fixture.
-- [ ] `zig build` AND the suite runner compile, not only `zig build test` —
+- [ ] `zig build` AND the suite runner compile, not only `zig build test`:
       `test` does not analyse every path of the CLI or the harness.
 - [ ] No new `else =>` over a boundary enum without a `// else:` reason.
 - [ ] Refactor phase? Goldens are byte-identical.

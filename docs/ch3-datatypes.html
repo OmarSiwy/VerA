@@ -816,7 +816,7 @@ ddiscrete [10:1] connector1;</code></pre>
 
 <h4 id="s3-6-3-2">3.6.3.2 Net Discipline Initial (Nodeset) Values</h4>
 
-<p class="note"><strong>Audit note (editorial):</strong> The source explicitly permits null bus initializer elements. The general assignment-pattern productions in A.8.1 do not spell out null elements; <code>constant_assignment_pattern_or_null</code> makes an entire pattern optional, not an element inside it. Preserve the nodeset-specific requirement when reconciling the grammar. Nodeset-use evidence and non-clamping evidence are separate; see the <a href="conformance-nodesets.md">nodeset ledger</a>.</p>
+<p class="note"><strong>Audit note (editorial):</strong> The source explicitly permits null bus initializer elements. The general assignment-pattern productions in A.8.1 do not spell out null elements; <code>constant_assignment_pattern_or_null</code> makes an entire pattern optional, not an element inside it. Preserve the nodeset-specific requirement when reconciling the grammar. Nodeset-use evidence and non-clamping evidence are separate; see the nodeset ledger, <code>docs/conformance-nodesets.md</code> at git revision 8b1514d4.</p>
 
 <p>Nets with continuous disciplines are allowed to have initializers on their net discipline declarations; however, nets of non-continuous disciplines are not.</p>
 

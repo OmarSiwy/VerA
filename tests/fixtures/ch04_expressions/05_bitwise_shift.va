@@ -10,8 +10,8 @@
 // is the `<<<` half; 60 and 61 are the legal `<<` and `>>`.
 //
 // The FILE NAME is stale — this is a `>>>` reject, not a bitwise-or-shift value
-// test. It is left alone because COVERAGE.md cites it by name and is not
-// editable from here; the two lines above are what the file actually pins.
+// test. It keeps the name older notes cite (tests/fixtures/ch04_expressions/COVERAGE.md at
+// 8b1514d4); the two lines above are what the file actually pins.
 //
 //! lrm 4.2.11
 //! reject E0324

@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
 // Chapter 11 API/object-model obligations remain open in
-// docs/conformance-ch11-review-draft.md; only language clauses are credited.
+// docs/ROADMAP.md (Open items); only language clauses are credited.
 // §11.6.10 variables: an integer variable and a real variable are distinct
 // objects, and §4.2.1.3 says an operator with one real operand converts the
 // other, so `count * V(p,n)` is real arithmetic on 2 and the branch potential.

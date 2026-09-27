@@ -13,7 +13,7 @@
 // source is the one under test — a compiler that rejected this for a second reason
 // would not be pinning the rule.
 //
-// COVERAGE.md credits §6.5.2.1 to typed_ports.va, which declares a discipline on
+// tests/fixtures/ch06_hierarchy/COVERAGE.md at 8b1514d4 credits §6.5.2.1 to typed_ports.va, which declares a discipline on
 // every port and therefore cannot reach this rule at all: it tests that a declared
 // type WORKS, not that an undeclared one is refused. This is the other half.
 //

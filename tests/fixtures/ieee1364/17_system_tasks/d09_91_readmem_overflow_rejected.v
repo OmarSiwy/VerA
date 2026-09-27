@@ -4,7 +4,7 @@
 // Five sequential words11,22,33,44,55 fill four locations with11,22,33,44.
 // Loading stops at the highest location; the fifth word has no destination.
 // The former rejection rule wrongly required an error. That claim is withdrawn
-// to IEEE-FILE-MEM-002 in docs/conformance-ieee-fileio-review.md.
+// to IEEE-FILE-MEM-002 in docs/conformance-ieee-fileio-review.md at 8b1514d4.
 // The positive runner requires successful continuation, exact loaded data,
 // and a warning diagnostic header matching both the code and specific phrase.
 // These warning expectations are the new bounded implementation contract;

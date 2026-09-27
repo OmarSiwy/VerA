@@ -40,7 +40,7 @@ nav a:hover { text-decoration: underline; }
 <nav><a href="index.html">Index</a> <a href="ch7-mixed-signal.html">&larr; Prev</a> <a href="ch9-system.html">Next &rarr;</a> </nav>
 <h1>8. Scheduling semantics</h1>
 
-<div class="note"><strong>Source and editorial status:</strong> Based on <a href="VAMS-LRM-2023.pdf#page=213">VAMS-LRM-2023.pdf, physical pages 213&ndash;230</a> (printed pages 200&ndash;217). Figures 8-1 through 8-7 are direct PDF reproductions, visually checked against their source pages. Prose, equations, scheduling-order conflicts and test evidence are tracked separately in the <a href="conformance-scheduling.md">scheduling audit</a>; this note is not a blanket fidelity or implementation certification.</div>
+<div class="note"><strong>Source and editorial status:</strong> Based on <a href="VAMS-LRM-2023.pdf#page=213">VAMS-LRM-2023.pdf, physical pages 213&ndash;230</a> (printed pages 200&ndash;217). Figures 8-1 through 8-7 are direct PDF reproductions, visually checked against their source pages. Prose, equations, scheduling-order conflicts and test evidence were reviewed separately in <code>docs/conformance-scheduling.md</code> at git revision 8b1514d4; this note is not a blanket fidelity or implementation certification.</div>
 
 <h2 id="s8-1">8.1 Overview</h2>
 
@@ -288,7 +288,7 @@ endmodule</code></pre>
 <figcaption><strong>Figure 8-6.</strong> Glitch timing example (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=224">physical PDF page 224 (printed page 211)</a>.</figcaption>
 </figure>
 
-<div class="note"><strong>Editorial oracle warning:</strong> The example's cancellation of a queued assignment must not be generalized to ordinary nonblocking assignments. IEEE 1364-2005, 9.2.2, preserves queued assignments, including ordered updates to the same variable. The interaction between this AMS example's driver look-ahead, transition filtering and assignment semantics remains an open source discrepancy in the <a href="conformance-scheduling.md#source-discrepancies-and-oracle-policy">scheduling audit</a>.</div>
+<div class="note"><strong>Editorial oracle warning:</strong> The example's cancellation of a queued assignment must not be generalized to ordinary nonblocking assignments. IEEE 1364-2005, 9.2.2, preserves queued assignments, including ordered updates to the same variable. The interaction between this AMS example's driver look-ahead, transition filtering and assignment semantics remains an open source discrepancy (<code>docs/ROADMAP.md</code>, Open items).</div>
 
 <p>If the canceling event arrived after the ramp on <code>B</code> had started but before the assignment to the digital <code>B</code>, it is possible to see the glitch propagate back into the analog domain without an event appearing on <code>B</code>.</p>
 
@@ -393,7 +393,7 @@ endmodule</code></pre>
 
 <h3 id="s8-5-2">8.5.2 The Verilog-AMS digital engine reference model</h3>
 
-<div class="note"><strong>Editorial source discrepancy:</strong> The published pseudocode below selects inactive events before explicit D2A events, whereas the region descriptions in 8.5.1 require explicit D2A events first. It also lacks a closing brace before the first <code>else if</code>. Both are present in the PDF; the transcription preserves them. See the <a href="conformance-scheduling.md#source-discrepancies-and-oracle-policy">audit's interpretation policy</a> before deriving an executable oracle.</div>
+<div class="note"><strong>Editorial source discrepancy:</strong> The published pseudocode below selects inactive events before explicit D2A events, whereas the region descriptions in 8.5.1 require explicit D2A events first. It also lacks a closing brace before the first <code>else if</code>. Both are present in the PDF; the transcription preserves them. VerA follows 8.5.1 (<code>src/sim/scheduler.zig</code>). Settle which text governs before deriving an executable oracle.</div>
 
 <p>In all the examples that follow, T refers to the current simulation time of the digital engine, and all events are held in the event queue, ordered by simulation time.</p>
 
