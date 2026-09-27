@@ -1279,7 +1279,7 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 //
 //   add sub neg      IEEE; a lane present in one operand is copied (negated for sub)
 //   mul              a·b; lanes mulAdd(b.d, a.v, a.d·b.v), a one-sided operand one product
-//   div              a.v·(1/b.v); lanes mulAdd(b.d, −q, a.d)·(1/b.v), an `Of(0)` divisor a.d·(1/b.v)
+//   div              IEEE q = a/b; lanes mulAdd(b.d, −q, a.d)·(1/b.v), an `Of(0)` divisor a.d·(1/b.v)
 //   scale addC       a·c, a+c; lanes a.d·c, a.d
 //   exp log expm1    d·e, d·(1/v), d·exp(v)
 //   log1p sqrt       d·(1/(1+v)), d·(0.5/s) (0 unless s > 0)
@@ -1441,7 +1441,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
         }
         pub fn div(a: T, b: T) T {
             const inv = 1.0 / b.v;
-            const q = a.v * inv;
+            const q = a.v / b.v;
             return .{ .v = q, .d = laneFma(Lanes, lv(b), k(-q), lv(a)) * k(inv) };
         }
         pub fn scale(a: T, c: f64) T {
@@ -1598,7 +1598,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                     const B = @TypeOf(b);
                     const r = m | B.mask;
                     const inv = 1.0 / b.v;
-                    const q = a.v * inv;
+                    const q = a.v / b.v;
                     if (B.mask == 0) return .{ .v = q, .d = a.spread(r) * kj(B, inv) };
                     return .{ .v = q, .d = laneFma(@Vector(@popCount(r), L), b.spread(r), kj(B, -q), a.spread(r)) * kj(B, inv) };
                 }
