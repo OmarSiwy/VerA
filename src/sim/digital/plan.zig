@@ -122,6 +122,10 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             compile.sensitivity(r, arg, &mon) catch return self.refuse("a monitor argument the engine resolves only at run time");
     };
     for (mon.items) |s| watched[s] = true;
+    // §18: which slots a `$dumpvars` selects is known only at run time, and
+    // a dumped change must reach `rt`'s hook, which `set` bypasses.
+    // ponytail: every slot of a dumping design; the catalog's alone if it matters.
+    if (emit.dumps(r)) @memset(watched, true);
     if (schedule == .fifo) return .{ .watched = watched, .fan_start = r.fan_start, .fan = r.fan };
 
     // Candidates for a node, with the slots they read and write.

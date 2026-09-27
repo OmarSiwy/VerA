@@ -27,6 +27,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 pub const Scale = @import("../time.zig").Scale;
 pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
+pub const vcd = @import("../digital/vcd.zig");
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
@@ -100,6 +101,8 @@ pub const Design = struct {
     subs: u32 = 0,
     /// Some `assign` or `force` (§9.3) can hold a slot.
     overrides: bool = false,
+    /// What a `$dumpvars` (§18) can select; null when the design has none.
+    vcd: ?*const vcd.Catalog = null,
 };
 
 /// Node `node` reads the bits `mask` of plane word `word`.
@@ -147,6 +150,8 @@ const nba_payload: u32 = 1 << 31;
 const settle_payload: u32 = nba_payload | 1;
 /// The payload of the one §17.1.3 monitor event of a timestep.
 const monitor_payload: u32 = nba_payload | 2;
+/// The payload of the one §18 dump event of a timestep.
+const vcd_payload: u32 = nba_payload | 3;
 /// `show_base + k`: the display of `$strobe` or `$monitor` site k, which
 /// `next` returns for the design to print. Every payload below is a pc.
 pub const show_base: u32 = 1 << 30;
@@ -222,6 +227,11 @@ pub const State = struct {
     /// While one does, only its own process (`overriding`) writes the slot.
     layers: []Layers,
     overriding: bool = false,
+    /// §18 the dump, the design's catalog, and per slot (empty without a
+    /// catalog) whether a change is dumped.
+    dump: vcd.Vcd = .{},
+    catalog: ?*const vcd.Catalog,
+    dumped: []bool,
     /// `capture`'s buffer, and `scan`'s characters.
     cap: std.Io.Writer.Allocating,
     scratch: std.heap.ArenaAllocator,
@@ -260,6 +270,8 @@ pub const State = struct {
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
             .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
+            .catalog = d.vcd,
+            .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
             .scratch = .init(gpa),
             .stdout = undefined,
             .out = undefined,
@@ -279,6 +291,7 @@ pub const State = struct {
         @memset(self.active, 0);
         @memset(self.monitored, false);
         @memset(self.layers, .{});
+        @memset(self.dumped, false);
         for (d.order) |pc| try self.run(pc, null);
     }
 
@@ -294,6 +307,10 @@ pub const State = struct {
                 try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
                 self.gpa.free(row.words);
                 try self.free_late.append(self.gpa, k);
+                continue;
+            }
+            if (event.payload == vcd_payload) {
+                try self.dumpTick();
                 continue;
             }
             if (event.payload == monitor_payload) {
@@ -657,6 +674,7 @@ pub const State = struct {
     /// A change of a slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         if (self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
+        if (self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
         if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);
@@ -831,6 +849,60 @@ pub const State = struct {
         }
     }
 
+    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`.
+    pub fn dumpFile(self: *State, name: anytype, comptime w: u32) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w)) catch |e| return self.dumpFail(e);
+    }
+
+    /// §18.1.2 one `$dumpvars` (`vcd.Vcd.select`); its dump starts at the
+    /// end of the step.
+    pub fn dumpVars(self: *State, levels: ?i64, targets: []const vcd.Target) Error!void {
+        self.dump.select(self.gpa, self.sched.now, 0, std.math.lossyCast(u32, levels orelse 0), targets) catch |e| return self.dumpFail(e);
+        try self.requestDump();
+    }
+
+    /// `$dumpoff`, `$dumpon`, `$dumpall`, `$dumpflush` (`vcd.Vcd.control`).
+    pub fn dumpControl(self: *State, op: vcd.Op) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.control(arena.allocator(), self.io, self.catalog.?, self, self.sched.now, op) catch |e| return self.dumpFail(e);
+    }
+
+    fn dumpTick(self: *State) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.tick(self.gpa, arena.allocator(), self.io, self.catalog.?, self, self.sched.now) catch |e| return self.dumpFail(e);
+    }
+
+    /// One dump event per step however many dumped values moved.
+    fn requestDump(self: *State) Error!void {
+        if (self.dump.pending) return;
+        self.dump.pending = true;
+        _ = self.sched.schedule(.monitor, vcd_payload) catch |e| return self.schedFail(e);
+    }
+
+    fn dumpFail(self: *State, e: vcd.Failure) Error {
+        return switch (e) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.DumpvarsTime => self.fail(vcd.message(error.DumpvarsTime), .{}),
+            inline else => |f| self.fail(comptime vcd.message(f), .{self.dump.name}),
+        };
+    }
+
+    /// `vcd.Vcd`'s value source: catalog variable `v`'s planes.
+    pub fn dumpPlanes(self: *const State, v: vcd.Var, out: []u64) void {
+        const n = out.len / 2;
+        @memcpy(out[0..n], self.v[v.off..][0..n]);
+        if (two) @memset(out[n..], 0) else @memcpy(out[n..], self.x[v.off..][0..n]);
+    }
+
+    /// `vcd.Vcd`'s hook: a change of `slot` asks for a dump event.
+    pub fn dumpSlot(self: *State, slot: u32) void {
+        self.dumped[slot] = true;
+    }
+
     /// §17.9 `system.dist`, with the interpreter's W1151 warning where the
     /// listing prints one.
     pub fn dist(self: *State, f: system.Dist, seed: i32, a: i32, b: i32) ?system.Draw {
@@ -906,6 +978,8 @@ pub const State = struct {
     /// §17.4.1 `$finish`: end the run after this process step.
     pub fn finish(self: *State, verbose: bool, file: []const u8, byte: u32) Error!void {
         if (verbose) try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.sched.now, file, byte });
+        // §18: what this step changed is still part of the dump.
+        if (self.dump.pending) try self.dumpTick();
         self.sched.finish();
     }
 

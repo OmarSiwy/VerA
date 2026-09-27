@@ -427,6 +427,8 @@ pub const Run = struct {
     part_selects: std.AutoHashMapUnmanaged(SpecExpr, VecRange) = .empty,
     /// §18 the value change dump.
     vcd: @import("vcd.zig").Vcd = .{},
+    /// `vcd.catalog` of this run, built at the first dump.
+    vcd_catalog: ?@import("vcd.zig").Catalog = null,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
