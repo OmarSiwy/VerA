@@ -591,6 +591,7 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
     if (cands.items.len == 0) return &.{};
     const nw = (cands.items.len + 63) / 64;
     // Per pc, the candidates written on every path into it this activation.
+    // ponytail: pcs x candidates bits; per-process sets if that outgrows memory.
     const in = try a.alloc(u64, n * nw);
     @memset(in, std.math.maxInt(u64));
     const seen = try a.alloc(bool, n);
