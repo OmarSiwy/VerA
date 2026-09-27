@@ -2354,10 +2354,10 @@ test "a delayed continuous assignment is inertial and swallows a short pulse" {
         \\end
         \\endmodule
     ,
-    // The 1 at t=11 would have landed at 14; the 0 at t=12 cancels it and is
-    // itself the value already published, so nothing happens at all. The rise
-    // at t=16 lands at 19 and the fall at t=19 lands at 26: the two delays are
-    // chosen by the value transitioned to, not by the direction of the source.
+        // The 1 at t=11 would have landed at 14; the 0 at t=12 cancels it and is
+        // itself the value already published, so nothing happens at all. The rise
+        // at t=16 lands at 19 and the fall at t=19 lands at 26: the two delays are
+        // chosen by the value transitioned to, not by the direction of the source.
         \\t10 0
         \\pulse_gone 0
         \\t18 0
@@ -2388,10 +2388,10 @@ test "a trireg holds its charge for the decay time and then gives up" {
         \\end
         \\endmodule
     ,
-    // Released at t=5, so the decay is at t=25, sampled at 24 and 26 and never
-    // at it: a sample in the decay's own timestep would pin an intra-timestep
-    // order. The countdown restarts from the second release at t=28; one
-    // measured from the first release would have fired by t=46.
+        // Released at t=5, so the decay is at t=25, sampled at 24 and 26 and never
+        // at it: a sample in the decay's own timestep would pin an intra-timestep
+        // order. The countdown restarts from the second release at t=28; one
+        // measured from the first release would have fired by t=46.
         \\t24 1 1
         \\t26 x 1
         \\restarted 0 0

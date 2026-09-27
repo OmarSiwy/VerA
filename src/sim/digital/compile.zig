@@ -507,111 +507,111 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             self.sys_calls[@intFromEnum(e)] = f;
             const args = ex.args(e);
             switch (f) {
-                    // §17.7.1 gives `$time` the 64-bit `time` type and
-                    // `$stime` its low 32 bits. Both unsigned: simulation
-                    // time has no negative half.
-                    .time, .stime => {
-                        if (args.len != 0) return self.exprFail(e, "$time and $stime take no arguments");
-                        break :blk .{ .width = if (f == .time) 64 else 32, .signed = false };
-                    },
-                    // §17.11's result is an `integer`, which §3.2 makes 32-bit
-                    // signed: `$clog2(x) - 1` at x = 0 is -1, not 4294967295.
-                    .clog2 => {
-                        if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
-                        _ = try inferValue(self, args[0], depth + 1);
-                        break :blk .{ .width = 32, .signed = true };
-                    },
-                    .make_signed, .make_unsigned => {
-                        if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
-                        const operand = try inferValue(self, args[0], depth + 1);
-                        if (operand.real) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
-                        break :blk .{ .width = operand.width, .signed = f == .make_signed };
-                    },
-                    // §17.6.5 `(q_id, status)`, an integer; `status` is written.
-                    .q_full => {
-                        if (args.len != 2 or args[0] == .none or args[1] == .none) return self.exprFail(e, "$q_full takes (q_id, status)");
-                        _ = try inferValue(self, args[0], depth + 1);
+                // §17.7.1 gives `$time` the 64-bit `time` type and
+                // `$stime` its low 32 bits. Both unsigned: simulation
+                // time has no negative half.
+                .time, .stime => {
+                    if (args.len != 0) return self.exprFail(e, "$time and $stime take no arguments");
+                    break :blk .{ .width = if (f == .time) 64 else 32, .signed = false };
+                },
+                // §17.11's result is an `integer`, which §3.2 makes 32-bit
+                // signed: `$clog2(x) - 1` at x = 0 is -1, not 4294967295.
+                .clog2 => {
+                    if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
+                    _ = try inferValue(self, args[0], depth + 1);
+                    break :blk .{ .width = 32, .signed = true };
+                },
+                .make_signed, .make_unsigned => {
+                    if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
+                    const operand = try inferValue(self, args[0], depth + 1);
+                    if (operand.real) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
+                    break :blk .{ .width = operand.width, .signed = f == .make_signed };
+                },
+                // §17.6.5 `(q_id, status)`, an integer; `status` is written.
+                .q_full => {
+                    if (args.len != 2 or args[0] == .none or args[1] == .none) return self.exprFail(e, "$q_full takes (q_id, status)");
+                    _ = try inferValue(self, args[0], depth + 1);
+                    try checkTarget(self, args[1]);
+                    break :blk .{ .width = 32, .signed = true };
+                },
+                // §17.2: every file function returns an integer; the
+                // descriptor of `$fopen` is 32 bits with the MSB set.
+                .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => {
+                    const lo: usize, const hi: usize = switch (f) {
+                        .fopen => .{ 1, 2 },
+                        .ungetc => .{ 2, 2 },
+                        .fseek => .{ 3, 3 },
+                        .sscanf => .{ 2, std.math.maxInt(usize) },
+                        else => .{ 1, 1 },
+                    };
+                    if (args.len < lo or args.len > hi) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
+                    for (args, 0..) |arg, i| {
+                        if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
+                        if (f == .sscanf and i >= 2) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
+                    }
+                    break :blk .{ .width = 32, .signed = f != .fopen };
+                },
+                .realtime => {
+                    if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
+                    break :blk real_type;
+                },
+                .rtoi, .itor, .realtobits, .bitstoreal => {
+                    if (args.len != 1 or args[0] == .none) return self.exprFail(e, "a §17.8 conversion takes exactly one argument");
+                    const operand = try inferValue(self, args[0], depth + 1);
+                    const wants_real = f == .rtoi or f == .realtobits;
+                    if (operand.real != wants_real) return self.exprFail(e, "$rtoi and $realtobits convert a real; $itor and $bitstoreal an integral value");
+                    break :blk switch (f) {
+                        .rtoi => .{ .width = 32, .signed = true },
+                        .realtobits => .{ .width = 64, .signed = false },
+                        else => real_type,
+                    };
+                },
+                // §17.10: `(string)` and `(format, variable)`, returning
+                // an integer. The variable is written only on a match,
+                // so it is checked as a target and never read.
+                .test_plusargs, .value_plusargs => {
+                    const want: usize = if (f == .test_plusargs) 1 else 2;
+                    if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
+                    _ = try inferValue(self, args[0], depth + 1);
+                    if (f == .value_plusargs) {
+                        if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
                         try checkTarget(self, args[1]);
-                        break :blk .{ .width = 32, .signed = true };
-                    },
-                    // §17.2: every file function returns an integer; the
-                    // descriptor of `$fopen` is 32 bits with the MSB set.
-                    .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => {
-                        const lo: usize, const hi: usize = switch (f) {
-                            .fopen => .{ 1, 2 },
-                            .ungetc => .{ 2, 2 },
-                            .fseek => .{ 3, 3 },
-                            .sscanf => .{ 2, std.math.maxInt(usize) },
-                            else => .{ 1, 1 },
-                        };
-                        if (args.len < lo or args.len > hi) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
-                        for (args, 0..) |arg, i| {
-                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
-                            if (f == .sscanf and i >= 2) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
-                        }
-                        break :blk .{ .width = 32, .signed = f != .fopen };
-                    },
-                    .realtime => {
-                        if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
-                        break :blk real_type;
-                    },
-                    .rtoi, .itor, .realtobits, .bitstoreal => {
-                        if (args.len != 1 or args[0] == .none) return self.exprFail(e, "a §17.8 conversion takes exactly one argument");
-                        const operand = try inferValue(self, args[0], depth + 1);
-                        const wants_real = f == .rtoi or f == .realtobits;
-                        if (operand.real != wants_real) return self.exprFail(e, "$rtoi and $realtobits convert a real; $itor and $bitstoreal an integral value");
-                        break :blk switch (f) {
-                            .rtoi => .{ .width = 32, .signed = true },
-                            .realtobits => .{ .width = 64, .signed = false },
-                            else => real_type,
-                        };
-                    },
-                    // §17.10: `(string)` and `(format, variable)`, returning
-                    // an integer. The variable is written only on a match,
-                    // so it is checked as a target and never read.
-                    .test_plusargs, .value_plusargs => {
-                        const want: usize = if (f == .test_plusargs) 1 else 2;
-                        if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
-                        _ = try inferValue(self, args[0], depth + 1);
-                        if (f == .value_plusargs) {
-                            if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
-                            try checkTarget(self, args[1]);
-                        }
-                        break :blk .{ .width = 32, .signed = true };
-                    },
-                    .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => break :blk try driver.infer(self, e, driver.of(f).?),
-                    // §17.9: `$random [ ( seed ) ]` and `$dist_*( seed, ... )`,
-                    // every argument an integer and the result a signed
-                    // 32-bit integer (§17.9.1).
-                    .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => {
-                        const want: usize = switch (f) {
-                            .random => @min(args.len, 1),
-                            .dist_uniform, .dist_normal, .dist_erlang => 3,
-                            else => 2, // else: the one-parameter distributions
-                        };
-                        if (args.len != want) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
-                        for (args, 0..) |arg, i| {
-                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
-                            const t = try inferValue(self, arg, depth + 1);
-                            if (i == 0) {
-                                // §17.9.1: "The seed argument shall be either a
-                                // reg, an integer, or a time variable."
-                                if (ex.tag(arg) != .ident or t.real) return self.exprFail(arg, "§17.9.1: the seed argument shall be a reg, integer or time variable");
-                                try checkTarget(self, arg);
-                            } else if (t.real) return self.exprFail(arg, "§17.9.2: the arguments of a $dist_ function are integer values");
-                        }
-                        break :blk .{ .width = 32, .signed = true };
-                    },
-                    // §17.11.2: every argument is read as a real and the
-                    // result is real.
-                    else => {
-                        if (args.len != f.mathArity().?) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
-                        for (args) |arg| {
-                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
-                            _ = try inferValue(self, arg, depth + 1);
-                        }
-                        break :blk real_type;
-                    }, // else: Table 17-17's math functions, mathArity's rows
+                    }
+                    break :blk .{ .width = 32, .signed = true };
+                },
+                .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => break :blk try driver.infer(self, e, driver.of(f).?),
+                // §17.9: `$random [ ( seed ) ]` and `$dist_*( seed, ... )`,
+                // every argument an integer and the result a signed
+                // 32-bit integer (§17.9.1).
+                .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => {
+                    const want: usize = switch (f) {
+                        .random => @min(args.len, 1),
+                        .dist_uniform, .dist_normal, .dist_erlang => 3,
+                        else => 2, // else: the one-parameter distributions
+                    };
+                    if (args.len != want) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
+                    for (args, 0..) |arg, i| {
+                        if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
+                        const t = try inferValue(self, arg, depth + 1);
+                        if (i == 0) {
+                            // §17.9.1: "The seed argument shall be either a
+                            // reg, an integer, or a time variable."
+                            if (ex.tag(arg) != .ident or t.real) return self.exprFail(arg, "§17.9.1: the seed argument shall be a reg, integer or time variable");
+                            try checkTarget(self, arg);
+                        } else if (t.real) return self.exprFail(arg, "§17.9.2: the arguments of a $dist_ function are integer values");
+                    }
+                    break :blk .{ .width = 32, .signed = true };
+                },
+                // §17.11.2: every argument is read as a real and the
+                // result is real.
+                else => {
+                    if (args.len != f.mathArity().?) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
+                    for (args) |arg| {
+                        if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
+                        _ = try inferValue(self, arg, depth + 1);
+                    }
+                    break :blk real_type;
+                }, // else: Table 17-17's math functions, mathArity's rows
             }
         },
         // §10.4 a function call: the function's result variable is its type,

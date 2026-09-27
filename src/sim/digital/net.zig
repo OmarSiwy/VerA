@@ -789,9 +789,9 @@ test "a drive strength decides which of two disagreeing drivers the net shows" {
         \\end
         \\endmodule
     ,
-    // `t` is a tri0: its own pull(5) loses to strong(6) on both polarities and
-    // to the strong x on neither side, so the ambiguous line is x there too,
-    // and the weak driver of `w` never moves it.
+        // `t` is a tri0: its own pull(5) loses to strong(6) on both polarities and
+        // to the strong x on neither side, so the ambiguous line is x there too,
+        // and the weak driver of `w` never moves it.
         \\6v3 1 1
         \\3v6 0 0
         \\ambiguous x x
@@ -817,8 +817,8 @@ test "a highz half suppresses that polarity outright, wired logic included" {
         \\end
         \\endmodule
     ,
-    // The `highz0` driver holding 0 asserts nothing at all, so it is invisible
-    // to the plain wire and is the wand table's identity rather than a 0 vote.
+        // The `highz0` driver holding 0 asserts nothing at all, so it is invisible
+        // to the plain wire and is the wand table's identity rather than a 0 vote.
         \\open_drain 1 1
         \\weak_zero 0 0
         \\nothing_left z z
@@ -842,9 +842,9 @@ test "a supply net outranks every strength an assign can write but its own" {
         \\end
         \\endmodule
     ,
-    // A supply-strength driver does not lose to the net, it ties with it, and a
-    // tie on two nonzero sides is x. That is the line a resolver which simply
-    // ignores a supply net's drivers gets wrong.
+        // A supply-strength driver does not lose to the net, it ties with it, and a
+        // tie on two nonzero sides is x. That is the line a resolver which simply
+        // ignores a supply net's drivers gets wrong.
         \\zero 1 x
         \\one 1 1
         \\

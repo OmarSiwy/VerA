@@ -193,10 +193,10 @@ pub fn groupText(buf: []u8, v: Int.Literal, radix: Radix) []const u8 {
         // uppercase; the case is the only sign that the digit's known bits
         // were thrown away.
         buf[out] = if (xs == present) 'x' //
-        else if (zs == present) 'z' //
-        else if (xs != 0) 'X' //
-        else if (zs != 0) 'Z' //
-        else "0123456789abcdef"[val];
+            else if (zs == present) 'z' //
+            else if (xs != 0) 'X' //
+            else if (zs != 0) 'Z' //
+            else "0123456789abcdef"[val];
         out += 1;
     }
     return buf[0..out];
@@ -216,9 +216,9 @@ pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
             else => {},
         };
         buf[0] = if (xs == v.width) 'x' //
-        else if (zs == v.width) 'z' //
-        else if (xs != 0) 'X' //
-        else 'Z';
+            else if (zs == v.width) 'z' //
+            else if (xs != 0) 'X' //
+            else 'Z';
         return buf[0..1];
     }
     if (v.width > 64) return error.TooWide;

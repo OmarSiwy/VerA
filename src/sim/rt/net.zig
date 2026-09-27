@@ -513,11 +513,30 @@ test "the all-strong plane fold is Signal's fold" {
             }
             const net: Net = .{ .kind = kind, .slot = 0, .off = 0, .width = 1, .drivers = &.{ 0, 1, 2 }, .strong = true };
             const t: Nets = .{
-                .nets = &.{net}, .drivers = &.{}, .udps = &.{}, .at = @constCast(&at), .cur = &cur, .tgt = &.{},
-                .or_z = @constCast(&[_]bool{ false, false, false }), .tgt_or_z = &.{},
-                .s0 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }), .s1 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }),
-                .flight = &.{}, .started = &.{}, .nat = &.{}, .res = &.{}, .ntgt = &.{}, .nflight = &.{}, .capacitive = &.{}, .decay_ev = &.{},
-                .sig0 = @constCast(&[_]Signal{.{}}), .pat = &.{}, .prev = &.{}, .state = &.{}, .ones = &.{}, .scratch = &.{},
+                .nets = &.{net},
+                .drivers = &.{},
+                .udps = &.{},
+                .at = @constCast(&at),
+                .cur = &cur,
+                .tgt = &.{},
+                .or_z = @constCast(&[_]bool{ false, false, false }),
+                .tgt_or_z = &.{},
+                .s0 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }),
+                .s1 = @constCast(&[_]Ast.Strength{ .strong, .strong, .strong }),
+                .flight = &.{},
+                .started = &.{},
+                .nat = &.{},
+                .res = &.{},
+                .ntgt = &.{},
+                .nflight = &.{},
+                .capacitive = &.{},
+                .decay_ev = &.{},
+                .sig0 = @constCast(&[_]Signal{.{}}),
+                .pat = &.{},
+                .prev = &.{},
+                .state = &.{},
+                .ones = &.{},
+                .scratch = &.{},
             };
             const cv = [_]u64{@intFromEnum(charge) & 1};
             const cx = [_]u64{@intFromEnum(charge) >> 1};
