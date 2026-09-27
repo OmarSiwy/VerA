@@ -91,6 +91,10 @@ pub const Design = struct {
     watch_start: []const u32 = &.{},
     watchers: []const Watcher = &.{},
     triggered: u32 = 0,
+    /// `Run.joins.len`: one counter per §9.8.2 `fork`.
+    joins: u32 = 0,
+    /// `Run.subs.len`: the tasks and functions (§10).
+    subs: u32 = 0,
 };
 
 /// Node `node` reads the bits `mask` of plane word `word`.
@@ -128,12 +132,21 @@ const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
 /// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`.
 const Nba = struct { slot: u32, off: u32, n: u32, at: u32 };
+/// An `Nba` in flight past this timestep, owning its `v`, `x`, `m` words.
+const Late = struct { slot: u32, off: u32, n: u32, words: []u64 };
 /// The scheduler payload of the one NBA-region event that applies every
 /// row in `rows`, in order: the interpreter's one event per row, which the
 /// scheduler promotes together, with nothing between them.
 const nba_payload: u32 = 1 << 31;
-/// The payload of a settle event; every other payload is a pc.
+/// The payload of a settle event.
 const settle_payload: u32 = nba_payload | 1;
+/// The payload of the one §17.1.3 monitor event of a timestep.
+const monitor_payload: u32 = nba_payload | 2;
+/// `show_base + k`: the display of `$strobe` or `$monitor` site k, which
+/// `next` returns for the design to print. Every payload below is a pc.
+pub const show_base: u32 = 1 << 30;
+/// `late_base + k`: delayed nonblocking update `late[k]` (§9.2.2 `<= #d`).
+const late_base: u32 = 3 << 30;
 
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
@@ -172,6 +185,25 @@ pub const State = struct {
     /// Per triggered process: it is waiting at its event control.
     waiting: []bool,
     repeats: []u64,
+    /// §9.8.2: per `fork`, the arms still running.
+    joins: []u32,
+    /// §9.2.2 `<= #d` updates in flight, by `late_base` payload; a free row
+    /// has no words.
+    late: std.ArrayList(Late) = .empty,
+    free_late: std.ArrayList(u32) = .empty,
+    /// §10: per subroutine, its synchronous activations running; the one a
+    /// `disable` is unwinding; how deep they nest; the automatic frames
+    /// they set aside, both planes, innermost last.
+    active: []u32,
+    unwind: ?u32 = null,
+    depth: u32 = 0,
+    saved: std.ArrayList(u64) = .empty,
+    /// §17.1.3: the standing monitor's site and the slots it watches.
+    monitored: []bool,
+    mon_slots: []const u32 = &.{},
+    mon_site: ?u32 = null,
+    mon_on: bool = true,
+    mon_pending: bool = false,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
@@ -201,6 +233,9 @@ pub const State = struct {
             .watchers = d.watchers,
             .waiting = try gpa.alloc(bool, d.triggered),
             .repeats = try gpa.alloc(u64, d.repeats),
+            .joins = try gpa.alloc(u32, d.joins),
+            .active = try gpa.alloc(u32, d.subs),
+            .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
             .stdout = undefined,
             .out = undefined,
@@ -216,15 +251,31 @@ pub const State = struct {
         @memset(self.dirty, 0);
         @memset(self.waiting, false);
         @memset(self.repeats, 0);
+        @memset(self.joins, 0);
+        @memset(self.active, 0);
+        @memset(self.monitored, false);
         for (d.order) |pc| try self.run(pc, null);
     }
 
     /// The next process to dispatch, at the pc it resumes at, or
-    /// `settle_pc`; null once the queue is empty or `$finish` ran.
-    /// Nonblocking updates are applied here.
+    /// `settle_pc`, or `show_base + k`; null once the queue is empty or
+    /// `$finish` ran. Nonblocking updates are applied here.
     pub fn next(self: *State) Error!?u32 {
         while (self.sched.next()) |event| {
             try self.count(event.time);
+            if (event.payload >= late_base) {
+                const k = event.payload - late_base;
+                const row = self.late.items[k];
+                try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
+                self.gpa.free(row.words);
+                try self.free_late.append(self.gpa, k);
+                continue;
+            }
+            if (event.payload == monitor_payload) {
+                self.mon_pending = false;
+                if (self.mon_on) if (self.mon_site) |k| return show_base + k;
+                continue;
+            }
             if (event.payload == settle_payload) {
                 for (self.changed.items) |slot| {
                     self.pending[slot] = false;
@@ -416,6 +467,91 @@ pub const State = struct {
         if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
 
+    /// §9.2.2 `<= #d`: `nba` of the update `after` ticks later. At 0 it
+    /// joins this step's rows, the order its own event would take.
+    pub fn nbaAfter(self: *State, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        if (after == 0) return self.nba(slot, off, a, m);
+        const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
+        const words = try self.gpa.alloc(u64, 3 * n);
+        if (@TypeOf(a) == W) @memcpy(words, &[3]u64{ a.v, a.x, m }) else @memcpy(words, &(a.v ++ a.x ++ m));
+        const k = self.free_late.pop() orelse blk: {
+            try self.late.append(self.gpa, undefined);
+            break :blk @as(u32, @intCast(self.late.items.len - 1));
+        };
+        self.late.items[k] = .{ .slot = slot, .off = off, .n = n, .words = words };
+        _ = self.sched.scheduleAfter(after, .nba, late_base + k) catch |e|
+            return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e});
+    }
+
+    /// §10.3 `disable` of the named block or task copy at pcs `[lo, hi)`:
+    /// every suspension and queued resumption inside it is dropped, and if
+    /// there was one, its process continues at `end` (`exec.disableRange`).
+    pub fn disable(self: *State, lo: u32, hi: u32, end: u32) Error!void {
+        var hit = false;
+        for (self.susps.items, 0..) |sp, id| if (sp.alive and sp.pc >= lo and sp.pc < hi) {
+            self.retire(@intCast(id));
+            hit = true;
+        };
+        if (self.sched.cancelRange(lo, hi) catch |e| return self.schedFail(e)) hit = true;
+        if (hit) try self.run(end, null);
+    }
+
+    /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
+    /// automatic one (§10.2.3) sets its frame, `fill.len` words from `lo`,
+    /// aside and makes it x (`fill`, the x of each word); `leave` puts it back.
+    pub fn enter(self: *State, sub: u32, lo: u32, fill: []const u64) Error!void {
+        if (self.depth == 1024) return self.fail("task and function calls nested deeper than 1024 are not implemented", .{});
+        self.depth += 1;
+        self.active[sub] += 1;
+        if (fill.len == 0) return;
+        try self.saved.appendSlice(self.gpa, self.v[lo..][0..fill.len]);
+        try self.saved.appendSlice(self.gpa, self.x[lo..][0..fill.len]);
+        @memcpy(self.v[lo..][0..fill.len], fill);
+        if (!two) @memcpy(self.x[lo..][0..fill.len], fill);
+    }
+
+    /// The activation `enter` began has returned and copied out; a
+    /// `disable` of `sub` ends with its outermost activation.
+    pub fn leave(self: *State, sub: u32, lo: u32, n: u32) void {
+        self.depth -= 1;
+        self.active[sub] -= 1;
+        if (n != 0) {
+            const at = self.saved.items.len - 2 * n;
+            @memcpy(self.v[lo..][0..n], self.saved.items[at..][0..n]);
+            @memcpy(self.x[lo..][0..n], self.saved.items[at + n ..][0..n]);
+            self.saved.shrinkRetainingCapacity(at);
+        }
+        if (self.unwind == sub and self.active[sub] == 0) self.unwind = null;
+    }
+
+    /// §17.1.2 `$strobe` site `site`: its line at the end of this timestep.
+    pub fn strobe(self: *State, site: u32) Error!void {
+        _ = self.sched.schedule(.monitor, show_base + site) catch |e| return self.schedFail(e);
+    }
+
+    /// §17.1.3 `$monitor` site `site`, watching `slots`, replaces the
+    /// standing monitor; its first line is at the end of this timestep.
+    pub fn monitor(self: *State, site: u32, slots: []const u32) Error!void {
+        for (self.mon_slots) |at| self.monitored[at] = false;
+        for (slots) |at| self.monitored[at] = true;
+        self.mon_slots = slots;
+        self.mon_site = site;
+        try self.requestMonitor();
+    }
+
+    /// `$monitoron` / `$monitoroff`: the site whose line `$monitoron`
+    /// prints now, whether or not anything changed.
+    pub fn monitorEnable(self: *State, on: bool) ?u32 {
+        self.mon_on = on;
+        return if (on) self.mon_site else null;
+    }
+
+    fn requestMonitor(self: *State) Error!void {
+        if (self.mon_site == null or !self.mon_on or self.mon_pending) return;
+        self.mon_pending = true;
+        _ = self.sched.schedule(.monitor, monitor_payload) catch |e| return self.schedFail(e);
+    }
+
     /// Queue the process at `pc`: now (active), or `ticks` later (inactive).
     pub fn run(self: *State, pc: u32, after: ?u64) Error!void {
         _ = (if (after) |t|
@@ -431,7 +567,9 @@ pub const State = struct {
     /// `exec.wake`: the continuous drivers reading `slot` first, then the
     /// event controls in the order they suspended. Under the static
     /// schedule the nodes and triggered processes reading it come between.
+    /// A change of a slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
+        if (self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
         if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);

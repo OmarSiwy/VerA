@@ -122,7 +122,18 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 // Both truths are read: with no side effect in either operand
                 // the short circuit is not observable, and `logical` of a
                 // deciding left side is what the short circuit returns.
-                .logical_and, .logical_or => {
+                .logical_and, .logical_or => if (calls(self, ex.rhs(e))) {
+                    // A call has effects: the right side runs only when
+                    // the left does not decide (`exec.evalContext`).
+                    const lb = self.label();
+                    try self.print("L.ctx(sc{d}: {{ const l{d} = ", .{ lb, lb });
+                    try truth(self, ex.lhs(e));
+                    try self.print("; if (l{d} == .{s}) break :sc{d} l{d}; break :sc{d} L.logical(.{s}, l{d}, ", .{
+                        lb, if (op == .logical_and) "zero" else "one", lb, lb, lb, if (op == .logical_and) "@\"and\"" else "@\"or\"", lb,
+                    });
+                    try truth(self, ex.rhs(e));
+                    try self.print("); }}, {d}, {})", .{ w, sg });
+                } else {
                     try self.print("L.ctx(L.logical(.{s}, ", .{if (op == .logical_and) "@\"and\"" else "@\"or\""});
                     try truth(self, ex.lhs(e));
                     try self.print(", ", .{});
@@ -171,7 +182,21 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         },
         // §5.1.13: both arms are read; `cond` keeps the one the truth picks,
         // or merges them under an x or z condition.
-        .ternary => {
+        .ternary => if (calls(self, ex.rhs(e)) or calls(self, ex.ternaryElse(e))) {
+            // A call has effects: a known condition runs one arm.
+            const lb = self.label();
+            try self.print("t{d}: {{ const c{d} = ", .{ lb, lb });
+            try truth(self, ex.lhs(e));
+            try self.print("; break :t{d} if (c{d} == .one) ", .{ lb, lb });
+            try value(self, ex.rhs(e), ty);
+            try self.print(" else if (c{d} == .zero) ", .{lb});
+            try value(self, ex.ternaryElse(e), ty);
+            try self.print(" else L.cond(c{d}, ", .{lb});
+            try value(self, ex.rhs(e), ty);
+            try self.print(", ", .{});
+            try value(self, ex.ternaryElse(e), ty);
+            try self.print("); }}", .{});
+        } else {
             try self.print("L.cond(", .{});
             try truth(self, ex.lhs(e));
             try self.print(", ", .{});
@@ -230,9 +255,26 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             const t = try selfDetermined(self, ex.rhs(e));
             try self.print(", {d}, {d}), {d}, {d}, {})", .{ t.width, count, n.width, w, sg });
         },
-        .call => return self.refuse("a function call"),
+        // §10.4 a function call: one synchronous activation (`exec.callSync`).
+        .call => {
+            const idx = r.sub_base.get(r.instanceOf(r.scope)).? + r.call_subs.get(e).?;
+            const f = r.subs.items[idx].frame;
+            const lb = self.label();
+            try self.print("L.rs(c{d}: {{\n", .{lb});
+            try emit.call(self, idx, ex.args(e), lb);
+            try self.print("            break :c{d} r{d};\n            }}, {d}, {d}, {})", .{ lb, lb, r.values[f.result].width, w, sg });
+        },
         else => return self.refuse("this expression form"), // else: every other form infer admits is a constant (folded above) or real (refused by `fits`)
     }
+}
+
+/// Does `e` call a function?
+fn calls(self: *Emitter, e: Ast.ExprId) bool {
+    const ex = &self.r.file.exprs;
+    if (ex.tag(e) == .call) return true;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and calls(self, c)) return true;
+    return false;
 }
 
 /// A folded constant; `known` makes its x and z bits 0 (`--two-state`).
