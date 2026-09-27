@@ -99,7 +99,7 @@ pub const Directive = enum {
     endcelldefine,
     unconnected_drive, // IEEE 1364 §19.10: read by §6.2.2 port binding
     nounconnected_drive,
-    ignored, // parsed, consumed to end of line, no effect
+    pragma, // IEEE 1364 §19.10: no effect, except §28's `protect` (E0146)
 };
 
 /// §10.2 Syntax 10-1:
@@ -261,10 +261,10 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "unconnected_drive", .unconnected_drive },
     .{ "nounconnected_drive", .nounconnected_drive },
 
-    // §10.1 lists `pragma and IEEE 1364 §19.8 leaves its content to the tool.
-    // VerA defines no pragma, and §19.8 says an unrecognized one "shall" be
-    // ignored.
-    .{ "pragma", .ignored },
+    // §10.1 lists `pragma and IEEE 1364 §19.10 leaves its content to the tool.
+    // VerA defines no pragma, and §19.10 says an unrecognized one "shall have
+    // no effect".
+    .{ "pragma", .pragma },
 });
 
 /// LRM §10.5. Defined for every compilation; `undef on these has no effect.
@@ -762,7 +762,13 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         .celldefine => try pp.mark(&pp.cells, true),
         .endcelldefine => try pp.mark(&pp.cells, false),
         .nounconnected_drive => try pp.mark(&pp.drives, .float),
-        .ignored => {},
+        // `protect` is not unrecognized: IEEE 1364 §28 reserves it, and §28.2
+        // obliges decryption that VerA does not do.
+        .pragma => {
+            var r: Rest = .{ .s = text[j..end] };
+            if (std.mem.eql(u8, r.ident() orelse "", "protect"))
+                return pp.fail(pp.spanAt(at, j), .E0146, "", .{});
+        },
         // §10.6: passed through instead of being blanked out, so the lexer and
         // parser see it. The slice carries its own newlines, so the
         // line-number contract in the file header holds unchanged.
