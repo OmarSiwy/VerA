@@ -514,12 +514,12 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try tb_runner.renderRunner(arena, "062_sweep", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        inst.is_analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        inst.is_analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
     // §5.2.1 the `analog initial` flag is NOT `is_initial_step`: a dc sweep is one
     // analysis with three SUB-TASKS, so the block re-executes at all three points
     // while the global event fires at one.
-    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "inst.is_analog_initial = true;"));
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "sim_state.analog_initial = true;"));
 
     // With `//! time` each sweep block is its own transient run, so each gets
     // its own first and last timepoint.
@@ -527,7 +527,7 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "sim_state.initial_step = true;"));
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "sim_state.final_step = true;"));
     // Two blocks, so two sub-tasks: one analog-initial pass each, at dt = 0.
-    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_analog_initial = true;"));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "sim_state.analog_initial = true;"));
 
     // The single-point default is the Table 5-1 DCOP column: both events fire.
     const op = try tb_runner.renderRunner(arena, "064_op", .{});

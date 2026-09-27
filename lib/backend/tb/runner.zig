@@ -273,7 +273,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // the difference is only visible under `//! psweep` — where the
             // clause's "if a parameter ... is changed during a sub-task ... the
             // analog initial block shall be re-executed" is exactly the case.
-            try print(&out, arena, "        inst.is_analog_initial = {};\n", .{k == 0});
+            try print(&out, arena, "        sim_state.analog_initial = {};\n", .{k == 0});
             // §5.6 the model is evaluated AT A SOLUTION: solve first, then let
             // the model print. Every `//!` value is still exactly itself — it
             // came in as a constraint row — and everything else is now the
@@ -536,7 +536,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        sim_state.dt = dt;
         \\        sim_state.initial_step = first;
         \\        sim_state.final_step = last;
-        \\        a.inst.is_analog_initial = first;
+        \\        sim_state.analog_initial = first;
         \\        a.solved = solve(a.x, a.forced, a.model, a.inst);
         \\        a.t = t;
         \\    }
@@ -788,7 +788,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    sim_state.dt = dt;
         \\    sim_state.initial_step = first;
         \\    sim_state.final_step = last;
-        \\    g_inst.is_analog_initial = first;
+        \\    sim_state.analog_initial = first;
         \\    g_solved = solve(&g_x, &g_forced, &g_model, &g_inst);
         \\    return g_solved;
         \\}

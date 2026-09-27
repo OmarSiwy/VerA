@@ -301,7 +301,7 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
 /// emits together.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter) or self.lowered.uses.contains(.reject_iteration)) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and opHasState(u.op)) return true;
     }
@@ -834,18 +834,6 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\pub const Instance = struct {{
         \\    temperature: f64 = 300.15,
         \\    mfactor: f64 = 1.0,
-        \\    /// §5.2.1 is this evaluation an `analog initial` pass? The host
-        \\    /// sets it on the first evaluation of every SUB-TASK — each point
-        \\    /// of a parameter sweep — which is what that clause's "shall be
-        \\    /// re-executed" asks for, and clears it in between.
-        \\    ///
-        \\    /// Defaults to TRUE, unlike §5.10.2's step events, because §5.2.1
-        \\    /// forbids access functions and analog operators inside the block:
-        \\    /// its body is a function of parameters and $temperature alone, so
-        \\    /// a host that does not know this field re-computes the same values
-        \\    /// a few times over instead of skipping the seed entirely and
-        \\    /// reading every one of them as its declaration default.
-        \\    is_analog_initial: bool = true,
         \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
         \\    /// NEXT timestep, in seconds. `inf` = unconstrained. Written by
         \\    /// `updateState`; the host reads it after every accepted step and
@@ -876,10 +864,6 @@ pub fn emitInstance(self: *Gen) Error!void {
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
-    );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "    newton_iteration: u32 = 1,\n",
-        .{},
     );
     // §9.13.1's "internal seed", one slot per seedless call site. The
     // DEFAULT is the seed "the simulator picks" — a fixed value, not a clock
@@ -1113,7 +1097,7 @@ pub fn pathLatches(self: *const Gen) bool {
 /// advance on. They contribute nothing to `query` — the base moving is
 /// the integrator's business, not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
+    return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0;
 }
 
 /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -1131,7 +1115,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
-    , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter)) "state" else "_"});
+    , .{if (self.lowered.limit_slots.items.len != 0) "state" else "_"});
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
@@ -1154,10 +1138,6 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "        state.newton_iteration = inst.newton_iteration;\n",
-        .{},
-    );
     for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
     for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
@@ -1172,10 +1152,6 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     try self.w("    }} else {{\n", .{});
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
-        .{},
-    );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "        inst.newton_iteration = state.newton_iteration;\n",
         .{},
     );
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });

@@ -78,7 +78,6 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w("    newton_iteration: u32 = 1,\n", .{});
     try self.w(
         \\}};
         \\
@@ -160,7 +159,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     , .{});
     try self.w("pub fn acceptQ(comptime S: type, ", .{});
     const at_x = self.out.items.len;
-    try self.w("x: *const [n_u]f64, ", .{});
+    try self.w("x: *const [n_u]S.V, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, inst: *Instance, {s}: *State, sim: contract.SimState) contract.Sites(Self, S) {{\n", .{
         if (acc.reads_t_prev) "state" else "_",
@@ -454,14 +453,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
 /// Called after evaluating a Newton iterate, with that iterate's x.
 /// All return values are computed before any history slot is changed.
 fn emitAdvanceIteration(self: *Gen) Error!void {
-    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.newton_iter) and !self.lowered.uses.contains(.reject_iteration)) return;
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "pub fn beginSolve(inst: *Instance) void {{\n    inst.newton_iteration = 1;\n}}\n\n",
-        .{},
-    );
+    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.reject_iteration)) return;
     var uses_core = false;
     for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
-    const uses_inst = uses_core or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
+    const uses_inst = uses_core or self.lowered.limit_slots.items.len != 0;
     const core_name = if (uses_core) "S" else "_";
     try self.w("pub fn advanceIteration(comptime {s}: type, {s}: *const Model, {s}: *Instance, {s}: [n_u]f64, {s}: contract.SimState) void {{\n", .{
         core_name, if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_", if (uses_core) "sim" else "_",
@@ -476,7 +471,6 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
         else
             try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
     }
-    if (self.lowered.uses.contains(.newton_iter)) try self.w("    inst.newton_iteration +|= 1;\n", .{});
     try self.w("}}\n\n", .{});
     if (self.lowered.uses.contains(.reject_iteration)) {
         try self.w("pub fn checkConvergence(comptime S: type, model: *const Model, inst: *const Instance, x: [n_u]f64, sim: contract.SimState) bool {{\n", .{});

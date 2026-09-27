@@ -110,8 +110,8 @@ const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".fields.len;
 
-/// A value-only family: nothing here asks for a Jacobian.
-const S = contract.LegacyValue;
+/// The reference family with no lanes: nothing here asks for a Jacobian.
+const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
 
 /// The residual row an operator's contribution lands in, divided back out by
 /// the 1e-3 scale the .va applies, so the assertions read in the operator's own
