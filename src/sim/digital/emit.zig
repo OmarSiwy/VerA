@@ -371,14 +371,13 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\    if (pc < rt.show_base) return procs[pc](s, pc);
         \\
     , .{});
-    if (p.node_pc.len != 0) {
-        try self.print("    if (pc == rt.settle_pc) {{\n        while (s.nextDirty()) |n| try procs[node_pc[n]](s, node_pc[n]);\n        return;\n    }}\n", .{});
-    }
+    if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s);\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
+    // The settle event: each dirty node in topological order, a direct call.
     if (p.node_pc.len != 0) {
-        try self.print("const node_pc = [_]u32{{", .{});
-        for (p.node_pc) |pc| try self.print(" {d},", .{pc});
-        try self.print(" }};\n\n", .{});
+        try self.print("fn settle(s: *S) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{});
+        for (p.node_pc, 0..) |pc, n| try self.print("    if (s.take({d})) try proc{d}(s, {d});\n", .{ n, entry_of[pc].?, pc });
+        try self.print("    s.settle = .idle;\n}}\n\n", .{});
     }
 
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
