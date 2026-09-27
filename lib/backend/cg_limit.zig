@@ -145,20 +145,7 @@ pub fn emitCore(g: *Gen) Error!void {
         }
     }
     g.lim_idx = idx;
-    const saved = .{ g.core.lo_vals, g.plan.lo_idx, g.plan.lo_vals };
-    defer {
-        g.core.lo_vals = saved[0];
-        g.plan.lo_idx = saved[1];
-        g.plan.lo_vals = saved[2];
-    }
-    g.core.lo_vals = vals.items;
-    g.plan.lo_idx = idx;
-    g.plan.lo_vals = vals.items;
-    // `limit` runs on the value scalar alone, so, as in `setup`, its reals
-    // are no `lane_masks` data.
-    const n_masks = g.fam_masks.items.len;
-    defer g.fam_masks.shrinkRetainingCapacity(n_masks);
-    try gen_unit.emitCoreDecl(g, try coreName(g),
+    try gen_unit.emitSlice(g, try coreName(g), vals.items, idx,
         \\/// §4.5.15 the `$limit` arguments the core computes, and only what they
         \\/// read: `limit` evaluates them at `old` once per instance per iterate.
         \\
