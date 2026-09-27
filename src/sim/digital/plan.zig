@@ -108,6 +108,8 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| watched[t.slot] = true;
             },
+            // A held slot is never `set`: the store must meet `rt`'s guard.
+            .override_eval => |x| watched[x.slot] = true,
             else => {}, // else: only these four wait on a slot's value
         }
     };

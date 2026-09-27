@@ -386,6 +386,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
+    for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
@@ -502,7 +503,9 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
             .pla_start => |loop| try work.appendSlice(self.arena, &.{ next, loop }),
             .fork => |f| try work.appendSlice(self.arena, if (f.arms.len == 0) &.{f.end} else f.arms),
             .join_arm => |j| try work.append(self.arena, j.end),
-            .override_on, .override_eval, .override_off => return self.refuse("a §9.3 procedural continuous assignment"),
+            // §9.3 the held slot's own process, started by its `.override_on`.
+            .override_on => |o| try work.appendSlice(self.arena, &.{ next, o.start }),
+            .override_eval, .override_off => try work.append(self.arena, next),
             .switch_ctrl => return self.refuse("a §7.6 pass switch"),
         }
     }
@@ -723,6 +726,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .wait_slots => |slots| {
             if (try waitFixed(self)) return;
+            // An `assign` or `force` of a constant waits on nothing.
+            if (slots.len == 0) return self.print("            _ = try s.park({d});\n            return;\n", .{next});
             try self.print("            const id = try s.park({d});\n", .{next});
             for (slots) |at| try self.print("            try s.watch(id, {d}, .any);\n", .{at});
             try self.print("            return;\n", .{});
@@ -809,7 +814,27 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
         // §17.5 an asynchronous array's own process starts now.
         .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
-        .call_timed, .task_return, .override_on, .override_eval, .override_off, .switch_ctrl => unreachable, // `reach` refused each of these by name
+        .override_on => |o| try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
+        // An `assign` under a `force` keeps tracking but does not write.
+        .override_eval => |o| {
+            try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
+            try self.store(o.slot, .blocking);
+            try expr.assigned(self, o.value, try slotType(self, o.slot));
+            try self.print(", {f});\n            }}\n            continue :sw {d};\n", .{ full(try self.slotWidth(o.slot)), next });
+        },
+        // §9.3.2: a released net is its driver's again, at once.
+        .override_off => |o| {
+            if (r.net_of.get(o.slot)) |net| {
+                const drivers = r.nets[net].drivers;
+                if (drivers.len != 1) return self.refuse("releasing a net without exactly one driver");
+                const at = for (r.code.items, 0..) |ins, i| {
+                    if (ins == .continuous and ins.continuous == drivers[0]) break i;
+                } else return self.refuse("releasing a net whose driver is not a process");
+                try self.print("            if (try s.release({d}, true)) try procs[{d}](s, {d});\n", .{ o.slot, at, at });
+            } else try self.print("            _ = try s.release({d}, {});\n", .{ o.slot, o.force });
+            try self.print("            continue :sw {d};\n", .{next});
+        },
+        .call_timed, .task_return, .switch_ctrl => unreachable, // `reach` refused each of these by name
     }
 }
 
