@@ -22,7 +22,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var threaded: std.Io.Threaded = .init(gpa.allocator(), .{ .environ = init.environ });
     defer threaded.deinit();
 
-    var args = init.args.iterate();
+    var args = try init.args.iterateAllocator(gpa.allocator());
+    defer args.deinit();
 
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
