@@ -36,8 +36,13 @@ pub const State = struct {
     /// Deduped probe Value per `nodes` row; `.undef` = not probed yet.
     probe_cache: std.ArrayList(Mir.Value) = .empty,
     /// `op_state` rows minted so far, the `<k>` of `opStateNode`'s spelling.
-    op_states: u16 = 0,
+    op_states: u32 = 0,
+    /// E1015 was reported: `nodes` is full.
+    full: bool = false,
 };
+
+/// The most rows `nodes` holds: a row is a u16 and `ground` is the last value.
+const max_nodes = ground;
 
 /// Reports whether `dname` is a §1.3.4 signal-flow discipline: exactly one of its
 /// two natures is bound. A discipline binding both is conservative (§3.6.2.1); one
@@ -227,8 +232,13 @@ pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u16 {
 /// `flow_unknowns` for a branch, `port_probes` for a port), and two distinct
 /// unknowns may ask for one name.
 fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
+    if (self.out.nodes.len == max_nodes) {
+        const m = self.out.module.?;
+        if (!self.node_state.full) try self.err(m.main_tok, .E1015, "`{s}` needs more than {d} nets and unknowns", .{ self.file.str(m.name), max_nodes });
+        self.node_state.full = true;
+        return 0; // stands in for the row, so lowering reports the rest
+    }
     const idx: u16 = @intCast(self.out.nodes.len);
-    assert(idx != ground);
     const spelling = try uniqueSpelling(self, name);
     try self.node_state.spellings.put(self.arena, spelling, {});
     try self.out.nodes.append(self.arena, .{ .name = spelling, .kind = kind, .disc = discipline, .dir = .unspecified });
@@ -385,7 +395,13 @@ pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
         try self.err(tok, .E0352, "the lsb of the range is not a constant expression", .{});
         return null;
     };
-    return .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
+    const r: VecRange = .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
+    const n = @abs(@as(i128, r.msb) - r.lsb) + 1;
+    if (n > max_nodes) {
+        try self.err(tok, .E1015, "the range [{d}:{d}] has {d} elements", .{ r.msb, r.lsb, n });
+        return null;
+    }
+    return r;
 }
 
 /// Returns a port's range from whichever of its two declarations carries one. When

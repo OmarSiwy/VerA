@@ -72,7 +72,7 @@ fn checkArraySize(self: *Flatten, p: Ast.ParamDecl, overridden: bool) Error!void
 /// The first `{ got, want }` element-count disagreement between assignment
 /// pattern `e` and `dims`, outermost dimension first; null when they agree
 /// or when either side does not fold (lowering owns those diagnostics).
-fn patternMismatch(self: *Flatten, e: Ast.ExprId, dims: []const Ast.Dim) ?struct { i64, i64 } {
+fn patternMismatch(self: *Flatten, e: Ast.ExprId, dims: []const Ast.Dim) ?struct { i128, i128 } {
     if (dims.len == 0) return null;
     const ex = &self.ctx.file.exprs;
     if (e == .none or (ex.tag(e) != .assign_pattern and ex.tag(e) != .concat)) return null;
@@ -85,8 +85,8 @@ fn patternMismatch(self: *Flatten, e: Ast.ExprId, dims: []const Ast.Dim) ?struct
         reps = elab_names.constIntFlat(self, ex.lhs(elems[0])) orelse return null;
         elems = ex.args(ex.rhs(elems[0]));
     }
-    const got = reps * @as(i64, @intCast(elems.len));
-    const want = @as(i64, @intCast(@abs(msb - lsb))) + 1;
+    const got = @as(i128, reps) * elems.len;
+    const want: i128 = @intCast(@abs(@as(i128, msb) - lsb) + 1);
     if (got != want) return .{ got, want };
     for (elems) |el| if (patternMismatch(self, el, dims[1..])) |m| return m;
     return null;

@@ -1,0 +1,42 @@
+// §9.5.4.1: "$fgets reads characters from the file specified by fd into the
+// string str until a newline character is read and transferred to str, or an
+// EOF condition is encountered." No length bound. VerA reads a line through a
+// 4096-byte buffer per descriptor (docs/IMPLEMENTATION.md), so a longer line
+// cannot be returned whole. The limit has to fail loudly: the run ends with
+// E1011 and exit status 1, never a line split across two calls as if it were
+// two lines.
+//
+// THE SHAPE is a01_08_transcendental_domain_runtime_error.va's: the exit
+// status is part of the oracle.
+//
+// HAND DERIVATION. The file holds "ab\n" and then one line of 2500 + 2500
+// characters and a newline, 5001 bytes.
+//   t = 0:  $fgets reads "ab\n": 3 characters, newline included. ok=1.
+//   t = 1n: $fgets meets a 5001-byte line. The run ends with E1011 and status
+//           1 before t = 1n prints. A tool that split the line would return
+//           4096 there and print ok=0.
+//
+//! lrm 9.5.4.1
+//! exit 1
+//! analysis tran
+//! time 0, 1n
+//! print none
+`include "check.vh"
+module fgets_line_over_4096_is_fatal(p, n);
+  inout p, n; electrical p, n;
+  integer fd, c;
+  string line;
+  analog begin
+    @(initial_step) begin
+      fd = $fopen("fgets_line_over_4096.dat", "w");
+      $fwrite(fd, "ab\n");
+      $fwrite(fd, "%2500d", 1);
+      $fwrite(fd, "%2500d\n", 2);
+      $fclose(fd);
+      fd = $fopen("fgets_line_over_4096.dat", "r");
+    end
+    c = $fgets(line, fd);
+    `CHECKI("printed at the first point only: the second line is longer than 4096 bytes", c, 3);
+    I(p, n) <+ V(p, n);
+  end
+endmodule
