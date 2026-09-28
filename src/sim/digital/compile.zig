@@ -1116,7 +1116,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     try display.display(self, s.args[1..], null, sh);
                 },
                 // §17.3.1 Syntax 17-9.
-                .printtimescale => if (s.args.len != 0) return self.fail(tok, "$printtimescale of a named module is not implemented", .{}),
+                .printtimescale => {
+                    if (s.args.len > 1) return self.fail(tok, "$printtimescale takes at most one module instance", .{});
+                    if (s.args.len == 1) _ = try display.timescaleScope(self, s.args[0]);
+                },
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);

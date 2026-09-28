@@ -1691,7 +1691,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
                     .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .sshow => |sh| try @import("system.zig").sformat(self, scratch, s.args, sh),
-                    .printtimescale => try display.printTimescale(self),
+                    .printtimescale => try display.printTimescale(self, s.args),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
