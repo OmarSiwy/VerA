@@ -2821,20 +2821,14 @@ fn infoOf(c: Code) Info {
             ,
         },
 
-        .E0364 => .{
-            .title = "mixed signedness around a shift is not implemented",
-            .lrm = "4.2.11",
-            .explain =
-            \\A comparison with an operand unsigned is unsigned at the wider
-            \\operand's width (LRM 4.2.9), and the shift under it must run at
-            \\that width. VerA shifts at 32 bits (3.2), so a comparison against
-            \\a sized literal wider than 32 bits, such as (a >> n) > 40'h1 with
-            \\integer a = -1, would zero-extend the operand after the shift
-            \\instead of before it. VerA rejects this mixed case until
-            \\expression widths are carried. This is an implementation
-            \\limitation, not an illegal Verilog-AMS expression.
-            ,
-        },
+        .E0364 => retiredInfo(
+            \\"mixed signedness around a shift is not implemented". Retired: a
+            \\comparison extends each operand from its own width, as 4.2.9 says
+            \\("the smaller operand shall be zero-extended to the size of the
+            \\larger operand"), so (a >> n) > 40'h1 is the 32-bit shift's value,
+            \\zero-extended, and there is nothing left to refuse. The number is
+            \\not reused.
+        ),
         .E0368 => .{
             .title = "real value with no integer conversion",
             .lrm = "4.2.1.1",

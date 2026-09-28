@@ -33,9 +33,8 @@ pub fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     return constfold.fold(self.file, e, Env{ .self = self, .params = params });
 }
 
-/// What `constfold.fold` asks of lowering: identifiers through `consts`, the
-/// §4.2.9 mixed-signedness shift comparison it must not fold, and `>>>`'s
-/// operand signedness.
+/// What `constfold.fold` asks of lowering: identifiers through `consts`, and
+/// the operand signedness and name widths of `>>>` and §4.2.9's comparisons.
 const Env = struct {
     self: *const Lower,
     params: bool,
@@ -96,13 +95,49 @@ const Env = struct {
         }
         return null;
     }
-    /// Reports whether `e` must not fold (see `mixedShiftComparison`).
-    pub fn refuse(env: Env, e: Ast.ExprId) bool {
-        return mixedShiftComparison(env.self, e);
-    }
     /// Returns `e`'s source signedness, or null when nothing states it.
     pub fn signed(env: Env, e: Ast.ExprId) ?bool {
         return integerSourceSigned(env.self, e, 0);
+    }
+    /// Returns name `e`'s bit length, or null when nothing states it.
+    pub fn width(env: Env, e: Ast.ExprId) ?u32 {
+        return nameWidth(env.self, e, 0);
+    }
+};
+
+/// The bit length of integer name `e`: §3.2's 32 bits for an `integer`
+/// variable or typed parameter, an untyped local parameter's default's
+/// (IEEE 1364-2005 §12.2, "the type and range of the final value assigned"),
+/// and null for one the host may override, or anything not an integer.
+fn nameWidth(self: *const Lower, e: Ast.ExprId, depth: u32) ?u32 {
+    if (depth > 32) return null;
+    const ex = &self.file.exprs;
+    const name = self.file.str(ex.strOf(e));
+    if (self.vars.get(name)) |v| return if (v.ty == .integer) 32 else null;
+    if (self.arrays.get(name)) |a| return if (a.ty == .integer) 32 else null;
+    const deeper = WidthEnv{ .self = self, .depth = depth + 1 };
+    for (self.func_params) |p| {
+        if (!self.file.strings.eql(p.name, name)) continue;
+        return if (p.ty == .integer) 32 else if (p.ty == .unspecified) constfold.operandWidth(self.file, p.default, deeper) else null;
+    }
+    const pi = self.param_index.get(name) orelse return null;
+    const p = self.out.params.items[pi];
+    if (p.ty != .integer) return null;
+    if (p.integer32) return 32;
+    if (!p.is_local) return null;
+    const module = self.out.module orelse return null;
+    for (module.params) |decl| {
+        if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return constfold.operandWidth(self.file, decl.default, deeper);
+    }
+    return null;
+}
+
+/// `nameWidth` one level down, as `constfold.operandWidth`'s `env`.
+const WidthEnv = struct {
+    self: *const Lower,
+    depth: u32,
+    pub fn width(env: WidthEnv, e: Ast.ExprId) ?u32 {
+        return nameWidth(env.self, e, env.depth);
     }
 };
 
@@ -116,6 +151,7 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .int_literal => ex.intLiteral(e).signed,
+        .logic_literal => ex.logicValue(e).signed,
         .ident => blk: {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.get(name)) |v| break :blk if (v.ty == .integer) true else null;
@@ -171,38 +207,10 @@ fn operandsSigned(self: *const Lower, a: Ast.ExprId, b: Ast.ExprId, depth: u32) 
     return sa and sb;
 }
 
-/// `constfold.unsignedMask` for comparison `e`, from the source signedness of
-/// its operands: the mask `cmp`'s signed opcodes need to compare as unsigned.
-pub fn unsignedCompareMask(self: *const Lower, e: Ast.ExprId) ?i64 {
+/// `constfold.unsignedCompare` for comparison `e`: how `cmp`'s signed opcodes
+/// order its operands as §4.2.9's unsigned comparison, or null when both are
+/// signed.
+pub fn unsignedCompare(self: *const Lower, e: Ast.ExprId) ?constfold.UnsignedCompare {
     const ex = &self.file.exprs;
-    return constfold.unsignedMask(ex, ex.lhs(e), ex.rhs(e), integerSourceSigned(self, ex.lhs(e), 0), integerSourceSigned(self, ex.rhs(e), 0));
-}
-
-fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
-    if (e == .none or depth > 32) return false;
-    const ex = &self.file.exprs;
-    return switch (ex.tag(e)) {
-        .binary => ex.binOp(e) == .shl or ex.binOp(e) == .shr,
-        .unary => isShiftOperand(self, ex.lhs(e), depth + 1),
-        else => false, // else: neither a shift nor a sign/complement over one
-    };
-}
-
-/// Reports whether comparison `e` has a logical-shift operand, operands of known,
-/// differing signedness, and a width over §3.2's 32 bits. `>>` and `<<` run at
-/// 32 bits, so the wider unsigned context `unsignedMask` imposes after them
-/// would not be the one §4.2.9 imposes before. Lowering refuses it (E0364) and
-/// constant folding leaves it alone.
-pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
-    const ex = &self.file.exprs;
-    switch (ex.binOp(e)) {
-        .eq, .neq, .lt, .le, .gt, .ge => {},
-        else => return false, // else: not a relational or equality comparison
-    }
-    const a = ex.lhs(e);
-    const b = ex.rhs(e);
-    if (!isShiftOperand(self, a, 0) and !isShiftOperand(self, b, 0)) return false;
-    const sa = integerSourceSigned(self, a, 0) orelse return false;
-    const sb = integerSourceSigned(self, b, 0) orelse return false;
-    return sa != sb and @max(constfold.operandWidth(ex, a), constfold.operandWidth(ex, b)) > 32;
+    return constfold.unsignedCompare(self.file, ex.lhs(e), ex.rhs(e), Env{ .self = self, .params = false });
 }

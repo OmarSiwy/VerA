@@ -41,9 +41,9 @@
 // — VerA emitted the signed i64 comparison unconditionally, so -1 stayed -1 and
 // lost to both 1 and 0xFFFFFFFF, and the four shapes here are outside E0364's
 // one known refusal so they compiled and answered wrongly rather than diagnose.
-// `Lower.unsignedCompareMask` masks both operands to the wider width first,
-// which leaves both non-negative and turns the signed opcodes into §4.2.9's
-// unsigned comparison.
+// Lowering zero-extends each operand from its own width
+// (`constfold.UnsignedCompare`), which leaves both non-negative and turns the
+// signed opcodes into §4.2.9's unsigned comparison.
 //
 //! lrm 4.2.9
 //! lrm 4.2.5

@@ -352,8 +352,8 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
 ///
 /// `env` answers what the structure cannot, as three methods:
 ///   leaf(e) ?Const     any tag this walk does not fold itself (an identifier)
-///   refuse(e) bool     a `.binary` the caller will not fold at all
-///   signed(e) ?bool    `>>>`'s left operand signedness
+///   signed(e) ?bool    an operand's signedness (`>>>`, §4.2.9 comparisons)
+///   width(e) ?u32      a name's bit length (§4.2.9 comparisons)
 /// `literal_env` answers none of them: a fold over literals only.
 pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
     if (e == .none) return null;
@@ -373,14 +373,13 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
             };
         },
         .binary => {
-            if (env.refuse(e)) return null;
             var a = fold(file, ex.lhs(e), env) orelse return null;
             var b = fold(file, ex.rhs(e), env) orelse return null;
             const op = ex.binOp(e);
             const compare = op == .eq or op == .neq or op == .case_eq or op == .case_neq or op == .lt or op == .le or op == .gt or op == .ge;
-            if (compare and a == .int and b == .int) if (unsignedMask(ex, ex.lhs(e), ex.rhs(e), env.signed(ex.lhs(e)), env.signed(ex.rhs(e)))) |m| {
-                a.int &= m;
-                b.int &= m;
+            if (compare and a == .int and b == .int) if (unsignedCompare(file, ex.lhs(e), ex.rhs(e), env)) |u| {
+                a.int = u.extend(.lhs, a.int);
+                b.int = u.extend(.rhs, b.int);
             };
             return binary(op, a, b, if (op == .ashr) env.signed(ex.lhs(e)) else null);
         },
@@ -401,32 +400,79 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
     }
 }
 
-/// Returns the zero-extension mask for a comparison of `l` and `r`, whose
-/// source signedness is `sl` and `sr`, or null when neither is known unsigned
-/// and the signed compare stands. "When one or both operands are unsigned, the
-/// expression shall be interpreted as a comparison between unsigned values"
-/// (LRM §4.2.9). Masking both sides to the wider width makes them non-negative,
-/// so a signed i64 compare orders them as unsigned: `a < 32'd1` with `a` at -1
-/// is 4294967295 < 1. Unsized operands are 32 bits (§3.2).
-///
-/// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
-/// widening the carrier. The integer carrier is i64 and the top bit is its
-/// sign, so a 64-bit unsigned comparison has nowhere to be performed; the
-/// upgrade path is a u64 compare opcode pair.
-pub fn unsignedMask(ex: *const Ast.ExprStore, l: Ast.ExprId, r: Ast.ExprId, sl: ?bool, sr: ?bool) ?i64 {
-    if ((sl orelse true) and (sr orelse true)) return null;
-    const w = @max(operandWidth(ex, l), operandWidth(ex, r));
-    if (w >= 64) return null;
-    return (@as(i64, 1) << @intCast(w)) - 1;
+/// §4.2.9 on the i64 carrier: "When one or both operands are unsigned, the
+/// expression shall be interpreted as a comparison between unsigned values. If
+/// the operands are of unequal bit lengths, the smaller operand shall be
+/// zero-extended to the size of the larger operand." Each operand is extended
+/// from its OWN width: `a` at -1 against `40'hFF_FFFF_FFFF` is
+/// 40'h00_FFFF_FFFF. Both signed, the carrier already holds the sign-extended
+/// values and the signed compare stands.
+pub const UnsignedCompare = struct {
+    /// Each operand's own-width mask; null at 64 bits or wider, or an unknown
+    /// width, where the carrier's value is taken as it stands.
+    mask: [2]?i64,
+    /// An operand is 64 bits or wider: order the pair as u64 by flipping bit 63
+    /// of both before the signed compare.
+    flip: bool,
+
+    pub const Side = enum { lhs, rhs };
+
+    /// Returns operand `side`'s value as the i64 the signed compare orders as
+    /// §4.2.9's unsigned comparison.
+    pub fn extend(u: UnsignedCompare, side: Side, v: i64) i64 {
+        const z = if (u.mask[@intFromEnum(side)]) |m| v & m else v;
+        return if (u.flip) z ^ std.math.minInt(i64) else z;
+    }
+};
+
+/// The §4.2.9 extension of comparison `l` vs `r` under `env` (`fold`'s), or
+/// null when neither operand is known unsigned.
+pub fn unsignedCompare(file: *const Ast.SourceFile, l: Ast.ExprId, r: Ast.ExprId, env: anytype) ?UnsignedCompare {
+    if ((env.signed(l) orelse true) and (env.signed(r) orelse true)) return null;
+    const w = [2]?u32{ operandWidth(file, l, env), operandWidth(file, r, env) };
+    var u: UnsignedCompare = .{ .mask = undefined, .flip = false };
+    for (w, &u.mask) |wi, *m| {
+        const n = wi orelse {
+            m.* = null;
+            continue;
+        };
+        u.flip = u.flip or n >= 64;
+        m.* = if (n >= 64) null else (@as(i64, 1) << @intCast(n)) - 1;
+    }
+    return u;
 }
 
-/// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
-pub fn operandWidth(ex: *const Ast.ExprStore, e: Ast.ExprId) u32 {
-    if (e != .none and ex.tag(e) == .int_literal) {
-        const w = ex.intLiteral(e).width;
-        if (w != 0) return w;
-    }
-    return 32;
+/// The bit length §4.2.9 extends an operand from: a §2.6.1 literal's size and
+/// a name's (`env.width`) as written; any other integer expression is §3.2's
+/// 32 bits, since the analog operators compute at that width, or the carrier's
+/// wider value where a sign, a complement, a bitwise operator or `?:` passes a
+/// wide operand through. Null when unknown.
+pub fn operandWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?u32 {
+    const ex = &file.exprs;
+    return switch (ex.tag(e)) {
+        // §2.6.1: an unsized number is "at least 32" bits; one no 32 bits
+        // hold keeps the carrier's.
+        .int_literal => if (ex.intLiteral(e).width != 0) ex.intLiteral(e).width else if (std.math.cast(u32, ex.intValue(e)) != null or std.math.cast(i32, ex.intValue(e)) != null) 32 else 64,
+        .logic_literal => ex.logicValue(e).width,
+        .ident => env.width(e),
+        // `unary`'s `wrapFrom`: a sign or complement keeps a wide literal's width.
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus, .bit_not => atLeast32(operandWidth(file, ex.lhs(e), env) orelse return null),
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => 32,
+        },
+        .binary => switch (ex.binOp(e)) {
+            .bit_and, .bit_or, .bit_xor, .bit_xnor => atLeast32(@max(operandWidth(file, ex.lhs(e), env) orelse return null, operandWidth(file, ex.rhs(e), env) orelse return null)),
+            .add, .sub, .mul, .div, .mod, .pow, .shl, .shr, .ashl, .ashr, .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => 32,
+        },
+        .ternary => atLeast32(@max(operandWidth(file, ex.rhs(e), env) orelse return null, operandWidth(file, ex.ternaryElse(e), env) orelse return null)),
+        // §9.11 `$realtobits` returns the double's 64-bit pattern.
+        .sys_call => if (std.mem.eql(u8, file.str(ex.strOf(e)), "$realtobits")) 64 else 32,
+        else => 32, // else: every other integer-valued form is §3.2's 32-bit integer
+    };
+}
+
+fn atLeast32(w: u32) u32 {
+    return @max(w, 32);
 }
 
 /// The `env` that knows nothing: `fold(file, e, literal_env)` folds literals
@@ -436,10 +482,10 @@ pub const LiteralEnv = struct {
     pub fn leaf(_: LiteralEnv, _: Ast.ExprId) ?Const {
         return null;
     }
-    pub fn refuse(_: LiteralEnv, _: Ast.ExprId) bool {
-        return false;
-    }
     pub fn signed(_: LiteralEnv, _: Ast.ExprId) ?bool {
+        return null;
+    }
+    pub fn width(_: LiteralEnv, _: Ast.ExprId) ?u32 {
         return null;
     }
 };
