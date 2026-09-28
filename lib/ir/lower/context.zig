@@ -65,7 +65,9 @@ pub const DiscreteCtx = struct {
 /// what it reads changes — and an `initial` block that suspends (a delay, an
 /// event or level control, a nonblocking or intra-assignment-timed write) is
 /// one too. Anything else is `collectInitialState`'s constant shape, which
-/// needs no kernel and keeps its fast path.
+/// needs no kernel and keeps its fast path. So does a block written in a
+/// generate block (`DiscreteBlock.generated`): whether it exists at all is
+/// the kernel's scheme to decide (§6.6).
 ///
 /// Takes the file rather than the `Lower`: it is a question about the AST.
 fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
@@ -75,7 +77,7 @@ fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     for (module.nets) |n| if (n.kind == .wreal) return true;
     // §8.5.3.5 a switch on a discrete net is processed in the discrete cycle.
     for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(file, module, t) != null) return true;
-    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body)) return true;
+    for (module.discrete) |blk| if (blk.is_always or blk.generated or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body)) return true;
     return false;
 }
 

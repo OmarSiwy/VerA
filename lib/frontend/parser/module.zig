@@ -433,6 +433,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
     var disc: Ast.StrId = .none;
     var range: ?Ast.Dim = null;
     var signed = false;
+    var var_storage: ?@FieldType(Ast.VarDecl, "storage") = null;
     while (true) {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
@@ -440,6 +441,11 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             self.pos += 1;
             var kind: Ast.NetKind = .wire;
             disc = try optPortType(self, &kind, &signed);
+            // IEEE 1364-2005 §12.3.4: "The same syntax for input, inout, and
+            // output declarations is used in the module header", so
+            // A.2.1.2's variable arms (`output reg q`) are legal here too.
+            var_storage = try parse_decl.optVarStorage(self, dir);
+            if (var_storage != null) signed = self.eat(.kw_signed);
             // A.1.3 `inout [ range ] port_identifier {, port_identifier}`:
             // the range belongs to the declaration (§6.5.2
             // "electrical [3:0] a, b" declares two 4-bit ports).
@@ -463,6 +469,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
+            if (var_storage) |storage| try parse_decl.varPort(self, b, storage, name, range, signed, tok);
             try b.ports.append(self.arena, .{
                 .name = name,
                 .direction = dir,

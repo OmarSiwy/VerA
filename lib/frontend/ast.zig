@@ -629,6 +629,9 @@ pub const NetDecl = struct {
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
+    /// A.2.3 `net_identifier { dimension }`: a net array (IEEE 1364-2005
+    /// §4.9.1), one net per element. Only a digital parse keeps one.
+    dims: []const Dim = &.{},
     /// A.2.1.3 `[ signed ]`. IEEE 1364-2005 §12.3.11: signedness belongs to the
     /// declaration, so each side of a port keeps its own.
     is_signed: bool = false,
@@ -786,6 +789,10 @@ pub const DiscreteBlock = struct {
     /// the context checks read this only for diagnostic wording;
     /// `Lower.collectInitialState` collects from `initial` only.
     is_always: bool = false,
+    /// Hoisted out of a generate block by an analog parse: it exists only as
+    /// the scheme selects (§6.6), which the digital engine decides, so it runs
+    /// there and has no constant reading.
+    generated: bool = false,
     body: StmtId,
     main_tok: u32 = 0,
 };
@@ -1298,6 +1305,18 @@ pub const CaseArm = struct {
     body: StmtId,
 };
 
+/// §6.6 the items of a generate block that the scheme brings into existence
+/// with it: its named events, processes and drivers, as `ModuleDecl` holds
+/// a module's. The digital engine elaborates them in the block's scope.
+pub const GenItems = struct {
+    events: []const StrId = &.{},
+    discrete: []const DiscreteBlock = &.{},
+    assigns: []const ContAssign = &.{},
+    gates: []const GateInst = &.{},
+    pulls: []const PullInst = &.{},
+    switches: []const SwitchInst = &.{},
+};
+
 /// §5.3.2 sequential block body plus its local declarations
 /// (A.6.3 analog_seq_block, A.2.8 analog_block_item_declaration).
 /// Local declarations are only legal on a named block (§5.3.2).
@@ -1315,6 +1334,9 @@ pub const SeqBlock = struct {
     /// digital parse's scheme; elaboration gates an analog if-generate's
     /// (`Flatten.genInstances`).
     instances: []const Instance = &.{},
+    /// A digital parse's generate block's other items (§6.6). An analog parse
+    /// hoists them to the module instead (`parseGenerateBlock`).
+    gen: *const GenItems = &.{},
     /// §6.6.3 a generate block's name for external interfaces: its declared
     /// name, or `genblk<n>` for an unnamed one ("n" the number of its generate
     /// construct in the enclosing scope, zero-padded past any clash). `.none`

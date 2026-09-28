@@ -797,15 +797,16 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         // statement keyword with no module-item production: E0205.
         .{ .src = head ++ "generate case (1) 1, 2: begin : b end default: begin : b end endcase endgenerate endmodule", .code = null },
         .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = .E0205 },
-        // §6.6: a generate block brings its module instances (and defparams,
-        // and discrete blocks) into existence only when the scheme selects or
-        // repeats it. VerA has no generate scope for them, so they are E0235,
-        // except a module instance, which the block keeps for elaboration to
-        // gate by the scheme (`Flatten.genInstances`).
+        // §6.6: a generate block brings its module instances, defparams,
+        // discrete blocks and events into existence only when the scheme
+        // selects or repeats it. The block keeps its instances for elaboration
+        // to gate (`Flatten.genInstances`), and an analog parse hoists its
+        // discrete blocks and events for the kernel's digital parse to gate.
+        // A defparam has no such home: E0235.
         .{ .src = head ++ "generate if (0) begin r u(p); end endgenerate endmodule", .code = null },
         .{ .src = head ++ "generate if (0) begin defparam u.x = 1.0; end endgenerate endmodule", .code = .E0235 },
-        .{ .src = head ++ "generate if (0) begin initial begin end end endgenerate endmodule", .code = .E0235 },
-        .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = .E0235 },
+        .{ .src = head ++ "generate if (0) begin initial begin end end endgenerate endmodule", .code = null },
+        .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = null },
         // A generate region has no scheme; its items are ordinary module items.
         .{ .src = head ++ "generate r u(p); endgenerate endmodule", .code = null },
         // IEEE 1364 §19.6: `resetall is illegal within a module, legal between.
