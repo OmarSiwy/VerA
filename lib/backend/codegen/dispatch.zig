@@ -221,11 +221,12 @@ fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
     try self.w(
         \\ }};
         \\
-        \\/// Each `ac_dyn_slots` entry's complex term at `omega` (`contract.acDynSlots`).
-        \\pub fn acDyn(comptime F: type, model: *const Model, inst: InstancePtr, x: *const [n_u]f64, sim: contract.SimState, omega: f64, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {{
-        \\    const S = zAc;
+        \\/// Each `ac_dyn_slots` entry's complex term at `omega`, one per lane of `F`
+        \\/// (`contract.acDynSlots`).
+        \\pub fn acDyn(comptime F: type, model: *const Model, inst: InstancePtr, x: *const [n_u]f64, sim: contract.SimState, omega: F, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {{
+        \\    const S = zAc(F);
         \\    var xs = zProbe(S, x);
-        \\    inline for (0..n_u) |u| xs[u].w = omega;
+        \\    inline for (0..n_u) |u| xs[u].w = &omega;
         \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
         \\    const g = zResidual(S, xs, m);
         \\
@@ -243,16 +244,16 @@ fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
     , .{});
     // A = G + jωC: the charge's complex lanes enter rotated by jω.
     if (any_q) try self.w(
-        \\        const re = g[r].r.d[n_u + u] - omega * c[r].r.d[2 * n_u + u];
-        \\        const im = g[r].r.d[2 * n_u + u] + omega * c[r].r.d[n_u + u];
+        \\        const re = g[r].acRe(u) - omega * c[r].acIm(u);
+        \\        const im = g[r].acIm(u) + omega * c[r].acRe(u);
         \\
     , .{}) else try self.w(
-        \\        const re = g[r].r.d[n_u + u];
-        \\        const im = g[r].r.d[2 * n_u + u];
+        \\        const re = g[r].acRe(u);
+        \\        const im = g[r].acIm(u);
         \\
     , .{});
     try self.w(
-        \\        out[k] = .{{ .re = @floatCast(re), .im = @floatCast(im) }};
+        \\        out[k] = .{{ .re = re, .im = im }};
         \\    }}
         \\}}
         \\
