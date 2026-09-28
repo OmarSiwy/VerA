@@ -628,6 +628,11 @@ fn mask(width: u32) u64 {
     return if (n == 0) std.math.maxInt(u64) else (@as(u64, 1) << n) - 1;
 }
 
+/// The widest size a number literal may give (E1019). 1364-2005 §4.3.1 asks
+/// a tool for vectors of 65536 bits; this is 256 times that, and the planes
+/// a literal allocates stay at 4 MiB.
+pub const max_width: u32 = 1 << 24;
+
 /// Parses one §2.6.1 number token (size, `'`, optional `s`, base, digits;
 /// white space allowed around the base) into a `Literal` allocated from
 /// `arena`. A sized value wider than its size is truncated from the left.
@@ -662,6 +667,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
             width = std.math.add(u32, width, c - '0') catch return error.Overflow;
         }
         if (sized and width == 0) return error.ZeroSize;
+        if (width > max_width) return error.Overflow;
         if (sized and size_text[0] == '0') return error.DigitOutOfRange;
     }
     if (digits.len == 0) return error.MissingDigits;
@@ -803,6 +809,7 @@ test "wide literals cross limbs without silently reducing their declared size" {
     try std.testing.expectError(error.DigitOutOfRange, parse(arena, "08'hff"));
     try std.testing.expectError(error.DigitOutOfRange, parse(arena, "0_8'hff"));
     try std.testing.expectError(error.Overflow, parse(arena, "4294967296'h1"));
+    try std.testing.expectError(error.Overflow, parse(arena, "16777217'h1"));
 }
 
 // Scalar truth tables are the oracle for packed words, in 0/1/X/Z order.

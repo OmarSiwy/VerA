@@ -342,6 +342,12 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return .{ .v = try self.call("$str$repeat", &.{ n, str }), .ty = .string };
     }
     if (repl) {
+        // The run-time `$str$repeat` of the same text ends the run past
+        // E1011's 4096 bytes, so the folded one stops there too.
+        if (@as(u128, @intCast(copies)) * out.items.len > 4096) {
+            try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E1011, "the replication makes {d} copies of {d} bytes", .{ copies, out.items.len });
+            return poison;
+        }
         const one = try self.arena.dupe(u8, out.items);
         out.clearRetainingCapacity();
         for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);

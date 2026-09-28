@@ -107,6 +107,14 @@ static int run(p_cb_data cb_data)
   /* --- 12.28 ------------------------------------------------------------- */
   CHECK(vpi_printf("p02 printf %d %s\n", 7, "ok") == 16,
         "vpi_printf must return the 16 characters of `p02 printf 7 ok\\n`");
+  /* 12.28 gives vpi_printf C's printf, which bounds no precision: 0.5 at
+   * %.100f is "0.5" and 99 zeros, 102 characters. Channel 3, the log, takes
+   * the text and discards it (see src/vpi/print.zig), so the count is all
+   * that shows. */
+  CHECK(vpi_mcd_printf(0x4u, "%.100f", 0.5) == 102,
+        "a %%.100f conversion must print 102 characters, not a clamped count");
+  CHECK(vpi_mcd_printf(0x4u, "%.60e", 1.0) == 66,
+        "a %%.60e conversion must print 66 characters: 1. 60 zeros e+00");
 
   /* --- 12.24: the reserved channels ------------------------------------- */
   CHECK(vpi_mcd_close(0x7u) == 0x7u,
