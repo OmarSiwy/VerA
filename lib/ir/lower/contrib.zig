@@ -1223,12 +1223,10 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                     try self.err(self.file.exprs.mainTok(e), .E0502, "", .{});
                     return null;
                 }
-                // args[1] (abstol/nature, §4.5.3) only affects tolerance, so
-                // it is not lowered — but it still has to be LEGAL, on the same
-                // grounds as the E0502 agreement above: this spine bypasses
-                // `lowerFilter`, where §5.5.3's ban on a non-constant attribute
-                // reference is otherwise reached through `lowerExpr`.
-                if (args.len > 1) _ = try lower_analog_op.lowerAbstolArg(self, args[1]);
+                // args[1] (abstol/nature, §4.5.3) only affects tolerance, but
+                // it still has to be LEGAL, on the same grounds as the E0502
+                // agreement above: this spine bypasses `lowerFilter`.
+                if (args.len > 1) _ = try lower_analog_op.lowerAbstolArg(self, "ddt", args[1]) orelse return null;
                 return .{ .b = try self.toReal(try lower_expr.lowerExpr(self, args[0])) };
             }
         },
