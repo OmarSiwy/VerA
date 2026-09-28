@@ -160,7 +160,7 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     if (try writeIfChanged(io, gpa, dir, "shim.zig", shim)) writes += 1;
 
     if (device.names.len == 0) {
-        // `Output.single`: no split.
+        // No `names`: the un-split form, one `device.zig` and no `u/`.
         if (try writeIfChanged(io, gpa, dir, "device.zig", device.text)) writes += 1;
         return writes;
     }
@@ -680,7 +680,7 @@ test "resident child builds, versions and rebuilds a device" {
         \\pub fn eval(x: f64) callconv(.c) f64 { return x * contract.k; }
         \\
     ;
-    var r1 = try child.rebuild(gpa, .single(dev_v1), 1);
+    var r1 = try child.rebuild(gpa, .{ .text = dev_v1 }, 1);
     defer r1.deinit(gpa);
     switch (r1) {
         .failed => |b| {
@@ -701,7 +701,7 @@ test "resident child builds, versions and rebuilds a device" {
         \\pub fn eval(x: f64) callconv(.c) f64 { return x * contract.k + 1.0; }
         \\
     ;
-    var r2 = try child.rebuild(gpa, .single(dev_v2), 2);
+    var r2 = try child.rebuild(gpa, .{ .text = dev_v2 }, 2);
     defer r2.deinit(gpa);
     switch (r2) {
         .failed => |b| {
@@ -715,11 +715,11 @@ test "resident child builds, versions and rebuilds a device" {
     }
 
     // A broken unit is reported as diagnostics, and the child survives it.
-    var r3 = try child.rebuild(gpa, .single("pub fn eval() void { @compileError(\"boom\"); }\n"), 3);
+    var r3 = try child.rebuild(gpa, .{ .text = "pub fn eval() void { @compileError(\"boom\"); }\n" }, 3);
     defer r3.deinit(gpa);
     try std.testing.expect(r3 == .failed);
 
-    var r4 = try child.rebuild(gpa, .single(dev_v2), 4);
+    var r4 = try child.rebuild(gpa, .{ .text = dev_v2 }, 4);
     defer r4.deinit(gpa);
     try std.testing.expect(r4 == .ok);
 
