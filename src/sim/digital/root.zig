@@ -223,6 +223,9 @@ pub const Run = struct {
     /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
     drives: []const Front.Preprocessor.DriveRegion = &.{},
+    /// IEEE 1364 §19.2's `default_nettype regions, in text-stream order: the
+    /// type of a §4.5 implicit net.
+    nettypes: []const Front.Preprocessor.NetTypeRegion = &.{},
     /// Variables, array elements and nets share one slot space, so one `store`
     /// wakes event waiters for all three.
     values: []Int.Literal,
@@ -1119,9 +1122,34 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
         }
     }
+    try implicitNets(r, e, scope, m);
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
+/// module or primitive instance, or on the left of a continuous assignment,
+/// is an implicit scalar net of the `default_nettype in force there (§19.2).
+fn implicitNets(r: *Run, e: *Elab, scope: u32, m: *const Ast.ModuleDecl) Error!void {
+    for (m.instances) |inst| for (inst.ports) |c| try implicitNet(r, e, scope, c.expr);
+    for (m.gates) |g| {
+        try implicitNet(r, e, scope, g.out);
+        for (g.ins) |x| try implicitNet(r, e, scope, x);
+    }
+    for (m.switches) |sw| for (sw.terms) |x| try implicitNet(r, e, scope, x);
+    for (m.pulls) |p| try implicitNet(r, e, scope, p.out);
+    for (m.assigns) |a| try implicitNet(r, e, scope, a.target);
+}
+
+fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
+    const ex = &r.file.exprs;
+    if (x == .none or ex.tag(x) != .ident or r.names.contains(.{ .scope = scope, .str = ex.strOf(x) })) return;
+    const tok = ex.mainTok(x);
+    const t = Front.Preprocessor.NetTypeRegion.inForce(r.nettypes, r.starts[@min(tok, r.starts.len - 1)], .default);
+    // `default_nettype none: the name stays undeclared.
+    const kind = std.meta.stringToEnum(Ast.NetKind, @tagName(t)) orelse return;
+    _ = try mintNet(r, e, kind, 1, false, ex.strOf(x), tok);
 }
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
@@ -1933,7 +1961,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
@@ -2378,6 +2406,24 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
         \\leaf u[1:0](r);
         \\endmodule
     , "across an instance array");
+}
+
+// IEEE 1364-2005 §4.5 with §19.2: an implicit net takes the `default_nettype
+// in force, so an undriven `tri0` one reads 0; under `none` there is none.
+test "§4.5 an implicit net is of the default net type; `default_nettype none makes none" {
+    try expectRun(
+        \\`default_nettype tri0
+        \\module top;
+        \\assign k = 1'bz;
+        \\initial #1 $display("%b", k);
+        \\endmodule
+    , "0\n");
+    try expectRejected(
+        \\`default_nettype none
+        \\module top;
+        \\assign k = 1'b1;
+        \\endmodule
+    , "undeclared");
 }
 
 // IEEE 1364 §19.10. The directive drives at pull strength, so the level it
