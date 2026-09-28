@@ -218,22 +218,22 @@
 10.4.3	-	Calling a function
 10.4.4	-	Function rules
 10.4.5	-	Use of constant functions
-11	-	Scheduling semantics
-11.1	-	Execution of a model
-11.2	-	Event simulation
-11.3	-	The stratified event queue
-11.4	-	Verilog simulation reference model
-11.4.1	-	Determinism
-11.4.2	-	Nondeterminism
-11.5	-	Race conditions
-11.6	-	Scheduling implication of assignments
-11.6.1	-	Continuous assignment
-11.6.2	-	Procedural continuous assignment
-11.6.3	-	Blocking assignment
-11.6.4	-	Nonblocking assignment
-11.6.5	-	Switch (transistor) processing
+11	non-normative	Scheduling semantics	The chapter heading; it states no rule of its own. Its rules are §11.1 to §11.6.7.
+11.1	non-normative	Execution of a model	"This clause gives an overview of the interactions between these elements, especially with respect to the scheduling and execution of events." An introduction; states no rule.
+11.2	no-prohibition	Event simulation	"These resulting definitions provide the standard Verilog reference model for simulation, which all compliant simulators shall implement." ... "Every change in value of a net or variable ..., as well as the named event, is considered an update event." Definitions of the model; nothing is illegal. Positive: 11_scheduling/b_11_2_update_events.v (a named event, a net change and a variable change wake their waiters; a write of the same value does not).
+11.3	no-prohibition	The stratified event queue	The five regions and their order: inactive after active, nonblocking assign updates after both, monitor events last; #0 makes the process an inactive event. An ordering, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v (two #0 resumptions before a pending NBA, $strobe after it), scheduling.v, 09_behavioral_modeling/d06_intra_assign_delay.v.
+11.4	no-prohibition	Verilog simulation reference model	The reference algorithm (inactive, then nonblocking assign update, then monitor events are activated when no active event is left). An algorithm, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v.
+11.4.1	no-prohibition	Determinism	"Statements within a begin-end block shall be executed in the order in which they appear" and "Nonblocking assignments shall be performed in the order the statements were executed". Guarantees; nothing is illegal. Positive: 11_scheduling/scheduling.v, 09_behavioral_modeling/audit_nba_same_time_updates.v (two NBAs to one variable in one time step, both performed, in order).
+11.4.2	unspecified	Nondeterminism	"active events can be taken off the queue and processed in any order" and "At any time while evaluating a behavioral statement, the simulator may suspend execution" (statements without time control "do not have to be executed as one event"); the order is "nondeterministic and not under control of the user", so no test may assert one outcome (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v asserts only membership in the permitted set; the audit_sched_*_order.v fixtures pin VerA's own order and say the LRM also accepts others.
+11.5	unspecified	Race conditions	"The simulator is correct in displaying either a 1 or a 0." The clause's example race has two permitted outcomes, so no test may assert one (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v is the example, asserting only that the value is one of the two.
+11.6	non-normative	Scheduling implication of assignments	"Assignments are translated into processes and events as detailed in 11.6.1 through 11.6.7." An introduction; the rules are §11.6.1 to §11.6.7.
+11.6.1	no-prohibition	Continuous assignment	"A continuous assignment process is also evaluated at time 0 to ensure that constant values are propagated." Event semantics; nothing is illegal (a continuous assignment to a variable is §6.1.2's ban). Positive: 11_scheduling/audit_sched_constant_ports.v, 06_assignments/d06_cont_assign_reeval.v.
+11.6.2	no-prohibition	Procedural continuous assignment	An assign or force "corresponds to a process that is sensitive to the source elements in the expression" and "A deassign or a release statement deactivates any corresponding assign or force statement(s)." Event semantics; nothing is illegal (the target restrictions are §9.3.1's and §9.3.2's). Positive: 11_scheduling/b_11_6_2_procedural_continuous_tracks_sources.v.
+11.6.3	no-prohibition	Blocking assignment	"The values at the time the process resumes are used to determine the target(s)." Event semantics; nothing is illegal. Positive: 11_scheduling/audit_sched_blocking_target_return.v, 09_behavioral_modeling/d04_05_intra_assignment_delay_blocking.v.
+11.6.4	no-prohibition	Nonblocking assignment	"The values in effect when the update is placed on the event queue are used to compute both the right-hand value and the left-hand target." Event semantics; nothing is illegal. Positive: 09_behavioral_modeling/audit_nba_index_snapshot.v, d04_07_intra_assignment_delay_nonblocking.v.
+11.6.5	no-prohibition	Switch (transistor) processing	"Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on the net" and the x-gate rule (a node with one level in every conducting/nonconducting combination takes it, any other x). Nothing is illegal. Positive: 11_scheduling/b_11_6_5_switch_x_gate.v, 07_gate_switch_level/d08_bidirectional.v.
 11.6.6	-	Port connections
-11.6.7	-	Functions and tasks
+11.6.7	no-prohibition	Functions and tasks	"Task/function argument passing is by value, and it copies in on invocation and copies out on return." Nothing is illegal. Positive: 11_scheduling/audit_sched_task_copy_timing.v.
 12	-	Hierarchical structures
 12.1	-	Modules
 12.1.1	-	Top-level modules
