@@ -285,6 +285,44 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(testRun(b, std.fs.path.stem(h.host), host, runner));
     }
+
+    // `.v` contract devices (`rt.Device`) under a mock analog host, each
+    // imported by its design's name; the designs a device refuses, and W1155.
+    const vdev_host = b.createModule(.{
+        .root_source_file = b.path("tests/vdev_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract }},
+    });
+    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d" }) |name| {
+        const gen = b.addRunArtifact(exe);
+        gen.addArg("--emit-zig");
+        gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
+        gen.addArg("-o");
+        const device = gen.addOutputFileArg(b.fmt("{s}.zig", .{name}));
+        vdev_host.addImport(name, b.createModule(.{
+            .root_source_file = device,
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "contract", .module = contract }, .{ .name = "sim", .module = byName(mods, "sim") } },
+        }));
+    }
+    test_step.dependOn(testRun(b, "vdev_host", vdev_host, runner));
+    for ([_]struct { args: []const []const u8, file: []const u8, exit: u8, says: []const u8 }{
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_tran.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_tran`: a §7.6 pass switch" },
+        .{ .args = &.{ "--emit-zig", "--state=auto" }, .file = "tests/vdev/v_inv.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: a contract device is 4-state: --state=auto" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_sv.sv", .exit = 2, .says = "error[E1104]: a SystemVerilog source is not supported" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_seconds.v", .exit = 0, .says = "warning[W1155]: device digital tick is 1 s" },
+    }) |r| {
+        const run = b.addRunArtifact(exe);
+        run.addArgs(r.args);
+        run.addFileArg(b.path(r.file));
+        run.expectExitCode(r.exit);
+        run.addCheck(.{ .expect_stderr_match = r.says });
+        test_step.dependOn(&run.step);
+    }
 }
 
 /// A host driver and the `.va` its `device` import is emitted from: device

@@ -477,7 +477,9 @@ pub const gm = struct {
 };
 
 /// What `updateState` returns: `.ok`, or a request that the host reject the
-/// step and retry with its end at `request_reject_at` (an absolute time).
+/// step and retry with its end at `request_reject_at` (an absolute time). In
+/// a static solve (any `kind` but `.tran`) the request means "iterate again at
+/// this point": the device's state moved, and the solve must see it.
 pub const UpdateResult = union(enum) {
     ok,
     request_reject_at: f64,
@@ -506,7 +508,10 @@ pub fn stateClass(comptime D: type) StateClass {
 ///   commit: the step is accepted; accepted := working.
 ///   revert: the step is rejected; working := accepted, for every field
 ///     `updateState` advances and `State.t_prev`. Exact when at most one
-///     `updateState` ran since the last commit or revert.
+///     `updateState` ran since the last commit or revert. Static-solve
+///     iteration state (the levels a static solve iterates on) may survive
+///     it; a device that keeps any rebuilds from the accepted state in every
+///     `updateState`, so a host must not restore it either.
 pub const StateCtlOp = enum(u8) { query, commit, revert };
 
 /// §4.6.1 `analysis()`, Table 4-21: the analysis a `SimState` describes.
@@ -1942,7 +1947,8 @@ pub fn validate(comptime D: type) void {
     // Breakpoint scheduling (piecewise sources).
     if (@hasDecl(D, "nextBreakpoint"))
         expectFn(D, "nextBreakpoint", fn (*const D.Model, f64) ?f64);
-    // §5.10.3.3 the live timer schedule, re-armed start times included.
+    // The live per-instance schedule: §5.10.3.3 timers (re-armed start
+    // times included), digital events, and the corners of D2A ramps.
     if (@hasDecl(D, "pendingBreakpoint"))
         expectFn(D, "pendingBreakpoint", fn (*const D.Instance, f64) ?f64);
     // §4.5.7 `absdelay` delays, from which the host echoes breakpoints.
