@@ -1046,11 +1046,7 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
             if (!std.mem.endsWith(u8, entry.name, ".c")) continue;
             try names.append(gpa, try arena_state.allocator().dupe(u8, entry.name));
         }
-        std.mem.sort([]const u8, names.items, {}, struct {
-            fn lt(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.lessThan(u8, a, b);
-            }
-        }.lt);
+        std.mem.sort([]const u8, names.items, {}, harness.strLess);
 
         for (names.items) |name| {
             if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
@@ -1176,11 +1172,7 @@ fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
             try decks.append(gpa, try arena_state.allocator().dupe(u8, entry.path));
         }
     }
-    std.mem.sort([]const u8, decks.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, decks.items, {}, harness.strLess);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1373,11 +1365,7 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8, vcd: bool) ![]
             try list.append(gpa, try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub, stem }));
         }
     }
-    std.mem.sort([]const u8, list.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, list.items, {}, harness.strLess);
     return list.toOwnedSlice(gpa);
 }
 
