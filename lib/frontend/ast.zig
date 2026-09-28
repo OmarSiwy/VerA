@@ -1331,6 +1331,8 @@ pub const GenItems = struct {
     gates: []const GateInst = &.{},
     pulls: []const PullInst = &.{},
     switches: []const SwitchInst = &.{},
+    /// IEEE 1364-2005 §12.2.1 defparams, relative to the block instance.
+    defparams: []const Defparam = &.{},
 };
 
 /// §5.3.2 sequential block body plus its local declarations
