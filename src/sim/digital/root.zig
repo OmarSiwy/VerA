@@ -2097,7 +2097,7 @@ pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, s
     const at: diag.Span = .{ .start = r.starts[top.main_tok], .end = r.starts[top.main_tok] };
     switch (try emit.device(arena, &r, opts.file_name, schedule)) {
         .zig => |text| {
-            if (r.finest == 0) try bag.add(.lower, .W1155, at, "module `{s}`'s device ticks in whole seconds: its finest `timescale precision is 1 s, or it has none", .{r.file.str(top.name)});
+            if (r.finest == 0) try bag.add(.lower, .W1155, at, "module `{s}`: no `timescale sets a finer precision", .{r.file.str(top.name)});
             return .{ .name = r.file.str(top.name), .zig = text };
         },
         .refused => |why| {
