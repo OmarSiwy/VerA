@@ -20,7 +20,6 @@
 //   record or value follows the last $comment section after
 //   $enddefinitions                                    -> comment_last=1
 //! inherited IEEE 1364-2005 18.3.4
-//! xfail extended VCD is not implemented: $dumpports is refused (E1100 "digital system task `$dumpports` is not implemented")
 `timescale 1ns/1ns
 module b_18_3_4_dev(a, y);
   input a;
