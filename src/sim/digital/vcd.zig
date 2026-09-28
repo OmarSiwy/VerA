@@ -67,6 +67,9 @@ pub fn message(e: Failure) []const u8 {
 /// The dump's state and writer.
 pub const Vcd = struct {
     name: []const u8 = "dump.vcd",
+    /// The `$dumpfile` call as written (`callText`), for §18.2.3.8's
+    /// `$version`; null when none ran.
+    call: ?[]const u8 = null,
     /// §18.1.2 the `$dumpvars` selection: scopes with their level count
     /// (0 = every level below) and single variables, by slot.
     scopes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
@@ -88,10 +91,11 @@ pub const Vcd = struct {
     last_time: ?u64 = null,
 
     /// §18.1.1 `$dumpfile`: the name, unless dumping has begun or it is
-    /// null (an x or z bit).
-    pub fn setFile(self: *Vcd, gpa: std.mem.Allocator, name: ?[]const u8) Failure!void {
+    /// null (an x or z bit); `call` is the call as written.
+    pub fn setFile(self: *Vcd, gpa: std.mem.Allocator, name: ?[]const u8, call: []const u8) Failure!void {
         if (self.started) return;
         self.name = try gpa.dupe(u8, name orelse return);
+        self.call = try gpa.dupe(u8, call);
     }
 
     /// §18.1.2 one `$dumpvars` at time `now`: `levels` applies to the scopes
@@ -164,9 +168,13 @@ pub const Vcd = struct {
         const md = yd.calculateMonthDay();
         const ds = t.getDaySeconds();
         try w.writer.print("$date\n\t{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n$end\n", .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() });
-        // ponytail: §18.2.3.8 wants the unevaluated `$dumpfile` argument; this
-        // prints the name it evaluated to, which is the same text for a literal.
-        try w.writer.print("$version\n\tVerA\n\t$dumpfile(\"{s}\")\n$end\n", .{self.name});
+        // §18.2.3.8: "If a variable or an expression was used to specify the
+        // filename within $dumpfile, the unevaluated variable or expression
+        // literal shall appear in the $version string."
+        if (self.call) |c|
+            try w.writer.print("$version\n\tVerA\n\t{s}\n$end\n", .{c})
+        else
+            try w.writer.print("$version\n\tVerA\n\t$dumpfile(\"{s}\")\n$end\n", .{self.name});
         // Ticks are the precision (`Time.Scale`'s global), so the file's unit
         // is the precision: `time_number` 1, 10 or 100 of an SI unit.
         const e = cat.finest;
@@ -254,6 +262,25 @@ pub const Vcd = struct {
         try self.put(io, w.written());
     }
 };
+
+/// The source text of the task call whose name starts `text` at `start`,
+/// through its closing parenthesis: `$dumpfile(fname)`.
+pub fn callText(text: []const u8, start: u32) []const u8 {
+    var depth: u32 = 0;
+    var i: usize = start;
+    var quoted = false;
+    while (i < text.len) : (i += 1) switch (text[i]) {
+        '"' => quoted = !quoted,
+        '\\' => i += @intFromBool(quoted),
+        '(' => depth += @intFromBool(!quoted),
+        ')' => if (!quoted) {
+            depth -= 1;
+            if (depth == 0) return text[start .. i + 1];
+        },
+        else => {},
+    };
+    return text[start..];
+}
 
 fn words(w: u32) u32 {
     return (w + 63) / 64;
@@ -475,7 +502,7 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
     switch (op) {
         .file => if (args.len == 1 and !v.started) {
             const name = try @import("system.zig").text(a, try exec.eval(r, a, args[0], 0));
-            v.setFile(r.arena, name) catch |e| return failed(r, e);
+            v.setFile(r.arena, name, callText(r.text, r.starts[tok])) catch |e| return failed(r, e);
         },
         .vars => {
             var targets: std.ArrayList(Target) = .empty;

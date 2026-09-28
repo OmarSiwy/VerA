@@ -177,6 +177,8 @@ pub const analog_payload: u32 = std.math.maxInt(u32);
 pub const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
+    /// The preprocessed text `starts` indexes.
+    text: []const u8 = "",
     starts: []const u32,
     bag: *diag.Bag,
     out: *std.Io.Writer,
@@ -2040,7 +2042,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
