@@ -11,7 +11,10 @@
 #   kind  `-`: an ordinary clause, counted by its fixtures' cites.
 #         otherwise the CLAUSE-AUDIT §5 kinds the AMS CLAUSES.tsv files use
 #         (non-normative, no-prohibition, optional, implementation-defined,
-#         resource-limit, unspecified), with the evidence column required.
+#         resource-limit, unspecified), or this file's own not-supported
+#         (CLAUSE-AUDIT §5.7: out of ROADMAP.md §1 B's scope, and the evidence
+#         names the diagnostic that refuses or warns), with the evidence
+#         column required.
 1	non-normative	Overview	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 1.1	non-normative	Scope	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 1.2	non-normative	Conventions used in this standard	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
@@ -321,53 +324,53 @@
 14.2.7.3	-	Negative polarity
 14.3	-	Assigning delays to module paths
 14.3.1	-	Specifying transition delays on module paths
-14.3.2	-	Specifying x transition delays
-14.3.3	-	Delay selection
-14.4	-	Mixing module path delays and distributed delays
-14.5	-	Driving wired logic
-14.6	-	Detailed control of pulse filtering behavior
-14.6.1	-	Specify block control of pulse limit values
-14.6.2	-	Global control of pulse limit values
-14.6.3	-	SDF annotation of pulse limit values
-14.6.4	-	Detailed pulse control capabilities
-14.6.4.1	-	On-event versus on-detect pulse filtering
-14.6.4.2	-	Negative pulse detection
+14.3.2	not-supported	Specifying x transition delays	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.3.3	not-supported	Delay selection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.4	not-supported	Mixing module path delays and distributed delays	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.5	not-supported	Driving wired logic	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6	not-supported	Detailed control of pulse filtering behavior	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.1	not-supported	Specify block control of pulse limit values	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.2	not-supported	Global control of pulse limit values	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.3	not-supported	SDF annotation of pulse limit values	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+14.6.4	not-supported	Detailed pulse control capabilities	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.4.1	not-supported	On-event versus on-detect pulse filtering	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
+14.6.4.2	not-supported	Negative pulse detection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 15	-	Timing checks
 15.1	-	Overview
-15.2	-	Timing checks using a stability window
-15.2.1	-	$setup
-15.2.2	-	$hold
-15.2.3	-	$setuphold
-15.2.4	-	$removal
-15.2.5	-	$recovery
-15.2.6	-	$recrem
-15.3	-	Timing checks for clock and control signals
-15.3.1	-	$skew
-15.3.2	-	$timeskew
-15.3.3	-	$fullskew
-15.3.4	-	$width
-15.3.5	-	$period
-15.3.6	-	$nochange
+15.2	not-supported	Timing checks using a stability window	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.1	not-supported	$setup	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.2	not-supported	$hold	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.3	not-supported	$setuphold	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.4	not-supported	$removal	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.5	not-supported	$recovery	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.2.6	not-supported	$recrem	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3	not-supported	Timing checks for clock and control signals	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.1	not-supported	$skew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.2	not-supported	$timeskew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.3	not-supported	$fullskew	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.4	not-supported	$width	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.5	not-supported	$period	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.3.6	not-supported	$nochange	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
 15.4	-	Edge-control specifiers
-15.5	-	Notifiers: user-defined responses to timing violations
-15.5.1	-	Requirements for accurate simulation
-15.5.2	-	Conditions in negative timing checks
-15.5.3	-	Notifiers in negative timing checks
-15.5.4	-	Option behavior
-15.6	-	Enabling timing checks with conditioned events
-15.7	-	Vector signals in timing checks
-15.8	-	Negative timing checks
-16	-	Backannotation using the standard delay format (SDF)
-16.1	-	The SDF annotator
-16.2	-	Mapping of SDF constructs to Verilog
-16.2.1	-	Mapping of SDF delay constructs to Verilog declarations
-16.2.2	-	Mapping of SDF timing check constructs to Verilog
-16.2.3	-	SDF annotation of specparams
-16.2.4	-	SDF annotation of interconnect delays
-16.3	-	Multiple annotations
-16.4	-	Multiple SDF files
-16.5	-	Pulse limit annotation
-16.6	-	SDF to Verilog delay value mapping
+15.5	not-supported	Notifiers: user-defined responses to timing violations	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.1	not-supported	Requirements for accurate simulation	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.2	not-supported	Conditions in negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.3	not-supported	Notifiers in negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.5.4	not-supported	Option behavior	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.6	not-supported	Enabling timing checks with conditioned events	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.7	not-supported	Vector signals in timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+15.8	not-supported	Negative timing checks	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
+16	not-supported	Backannotation using the standard delay format (SDF)	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.1	not-supported	The SDF annotator	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.2	not-supported	Mapping of SDF constructs to Verilog	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.2.1	not-supported	Mapping of SDF delay constructs to Verilog declarations	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.2.2	not-supported	Mapping of SDF timing check constructs to Verilog	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.2.3	not-supported	SDF annotation of specparams	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.2.4	not-supported	SDF annotation of interconnect delays	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.3	not-supported	Multiple annotations	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.4	not-supported	Multiple SDF files	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.5	not-supported	Pulse limit annotation	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
+16.6	not-supported	SDF to Verilog delay value mapping	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 17	-	System tasks and functions
 17.1	-	Display system tasks
 17.1.1	-	The display and write tasks
@@ -394,7 +397,7 @@
 17.2.7	-	I/O error status
 17.2.8	-	Detecting EOF
 17.2.9	-	Loading memory data from a file
-17.2.10	-	Loading timing data from an SDF file
+17.2.10	not-supported	Loading timing data from an SDF file	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 17.3	-	Timescale system tasks
 17.3.1	-	$printtimescale
 17.3.2	-	$timeformat
@@ -613,109 +616,109 @@
 27.35	-	vpi_remove_cb()
 27.36	-	vpi_scan()
 27.37	-	vpi_vprintf()
-28	-	Protected envelopes
-28.1	-	General
-28.2	-	Processing protected envelopes
-28.2.1	-	Encryption
-28.2.2	-	Decryption
-28.3	-	Protect pragma directives
-28.4	-	Protect pragma keywords
-28.4.1	-	begin
-28.4.1.1	-	Syntax
-28.4.1.2	-	Description
-28.4.2	-	end
-28.4.2.1	-	Syntax
-28.4.2.2	-	Description
-28.4.3	-	begin_protected
-28.4.3.1	-	Syntax
-28.4.3.2	-	Description
-28.4.4	-	end_protected
-28.4.4.1	-	Syntax
-28.4.4.2	-	Description
-28.4.5	-	author
-28.4.5.1	-	Syntax
-28.4.5.2	-	Description
-28.4.6	-	author_info
-28.4.6.1	-	Syntax
-28.4.6.2	-	Description
-28.4.7	-	encrypt_agent
-28.4.7.1	-	Syntax
-28.4.7.2	-	Description
-28.4.8	-	encrypt_agent_info
-28.4.8.1	-	Syntax
-28.4.8.2	-	Description
-28.4.9	-	encoding
-28.4.9.1	-	Syntax
-28.4.9.2	-	Description
-28.4.10	-	data_keyowner
-28.4.10.1	-	Syntax
-28.4.10.2	-	Description
-28.4.11	-	data_method
-28.4.11.1	-	Syntax
-28.4.11.2	-	Description
-28.4.12	-	data_keyname
-28.4.12.1	-	Syntax
-28.4.12.2	-	Description
-28.4.13	-	data_public_key
-28.4.13.1	-	Syntax
-28.4.13.2	-	Description
-28.4.14	-	data_decrypt_key
-28.4.14.1	-	Syntax
-28.4.14.2	-	Description
-28.4.15	-	data_block
-28.4.15.1	-	Syntax
-28.4.15.2	-	Description
-28.4.16	-	digest_keyowner
-28.4.16.1	-	Syntax
-28.4.16.2	-	Description
-28.4.17	-	digest_key_method
-28.4.17.1	-	Syntax
-28.4.17.2	-	Description
-28.4.18	-	digest_keyname
-28.4.18.1	-	Syntax
-28.4.18.2	-	Description
-28.4.19	-	digest_public_key
-28.4.19.1	-	Syntax
-28.4.19.2	-	Description
-28.4.20	-	digest_decrypt_key
-28.4.20.1	-	Syntax
-28.4.20.2	-	Description
-28.4.21	-	digest_method
-28.4.21.1	-	Syntax
-28.4.21.2	-	Description
-28.4.22	-	digest_block
-28.4.22.1	-	Syntax
-28.4.22.2	-	Description
-28.4.23	-	key_keyowner
-28.4.23.1	-	Syntax
-28.4.23.2	-	Description
-28.4.24	-	key_method
-28.4.24.1	-	Syntax
-28.4.24.2	-	Description
-28.4.25	-	key_keyname
-28.4.25.1	-	Syntax
-28.4.25.2	-	Description
-28.4.26	-	key_public_key
-28.4.26.1	-	Syntax
-28.4.26.2	-	Description
-28.4.27	-	key_block
-28.4.27.1	-	Syntax
-28.4.27.2	-	Description
-28.4.28	-	decrypt_license
-28.4.28.1	-	Syntax
-28.4.28.2	-	Description
-28.4.29	-	runtime_license
-28.4.29.1	-	Syntax
-28.4.29.2	-	Description
-28.4.30	-	comment
-28.4.30.1	-	Syntax
-28.4.30.2	-	Description
-28.4.31	-	reset
-28.4.31.1	-	Syntax
-28.4.31.2	-	Description
-28.4.32	-	viewport
-28.4.32.1	-	Syntax
-28.4.32.2	-	Description
+28	not-supported	Protected envelopes	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.1	not-supported	General	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.2	not-supported	Processing protected envelopes	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.2.1	not-supported	Encryption	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.2.2	not-supported	Decryption	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.3	not-supported	Protect pragma directives	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4	not-supported	Protect pragma keywords	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.1	not-supported	begin	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.1.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.1.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.2	not-supported	end	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.2.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.2.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.3	not-supported	begin_protected	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.3.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.3.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.4	not-supported	end_protected	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.4.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.4.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.5	not-supported	author	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.5.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.5.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.6	not-supported	author_info	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.6.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.6.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.7	not-supported	encrypt_agent	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.7.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.7.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.8	not-supported	encrypt_agent_info	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.8.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.8.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.9	not-supported	encoding	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.9.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.9.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.10	not-supported	data_keyowner	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.10.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.10.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.11	not-supported	data_method	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.11.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.11.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.12	not-supported	data_keyname	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.12.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.12.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.13	not-supported	data_public_key	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.13.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.13.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.14	not-supported	data_decrypt_key	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.14.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.14.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.15	not-supported	data_block	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.15.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.15.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.16	not-supported	digest_keyowner	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.16.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.16.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.17	not-supported	digest_key_method	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.17.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.17.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.18	not-supported	digest_keyname	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.18.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.18.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.19	not-supported	digest_public_key	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.19.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.19.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.20	not-supported	digest_decrypt_key	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.20.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.20.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.21	not-supported	digest_method	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.21.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.21.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.22	not-supported	digest_block	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.22.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.22.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.23	not-supported	key_keyowner	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.23.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.23.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.24	not-supported	key_method	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.24.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.24.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.25	not-supported	key_keyname	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.25.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.25.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.26	not-supported	key_public_key	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.26.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.26.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.27	not-supported	key_block	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.27.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.27.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.28	not-supported	decrypt_license	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.28.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.28.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.29	not-supported	runtime_license	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.29.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.29.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.30	not-supported	comment	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.30.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.30.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.31	not-supported	reset	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.31.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.31.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.32	not-supported	viewport	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.32.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
+28.4.32.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
 A	-	Formal syntax definition
 A.1	-	Source text
 A.1.1	-	Library source text

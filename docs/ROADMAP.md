@@ -32,10 +32,13 @@ derivation in its header. Never loosen the compiler to fit it.
 rest are classified.** `zig build test-1364 -- --coverage` lists no uncited or
 one-way clause that is not classified. In scope: chapters 3 to 13, 14 and 15
 as far as VerA models them (specify paths and timing checks are parsed and
-visible to VPI), 17 to 19, 26 and 27 (VPI) and Annex A. Out of scope, each
-classified `not_supported` in `tests/fixtures/ieee1364/CLAUSES.tsv` and refused
-with a named diagnostic: 16 (SDF back-annotation), 20 to 25 (PLI 1.0 `tf_` and
-`acc_` routines) and 28 (protected envelopes). The §§17-18 obligations in
+visible to VPI), 17 to 20, 26 and 27 (VPI) and Annex A. Out of scope, each
+classified `not-supported` in `tests/fixtures/ieee1364/CLAUSES.tsv`
+(`CLAUSE-AUDIT.md` §5.7) and refused with a named diagnostic: 16 and §17.2.10
+(SDF back-annotation, E1102) and 28 (protected envelopes, E0146). The PLI 1.0
+`tf_` and `acc_` routines, 21 to 25, have no text in 1364-2005 (§1.6 removed
+it), so they stay `non-normative`, and no source construct reaches them to
+refuse. 20, the PLI overview, is VPI's as much as PLI 1.0's and is in scope. The §§17-18 obligations in
 `CLAUSE-AUDIT.md` §7.1 are all closed. A closed obligation has a positive
 behavioural test, an invalid-input test and a recorded result. "It compiles"
 closes nothing.
