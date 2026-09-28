@@ -32,6 +32,7 @@
  */
 
 //! inherited IEEE 1364-2005 26.6.20
+//! inherited IEEE 1364-2005 26.5.1
 
 #include "b_check.h"
 
