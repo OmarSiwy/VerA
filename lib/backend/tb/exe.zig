@@ -126,31 +126,17 @@ pub fn buildExe(
         try argv.append(arena, try src.m(arena, root, "kernels", "lib/backend/kernels.zig"));
     }
 
-    var child = try std.process.spawn(io, .{
-        .argv = argv.items,
-        .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .pipe,
-    });
-
-    var buf: [1 << 16]u8 = undefined;
-    var reader = child.stderr.?.readerStreaming(io, &buf);
-    var text: std.ArrayList(u8) = .empty;
-    errdefer text.deinit(gpa);
-    var aw: Io.Writer.Allocating = .fromArrayList(gpa, &text);
-    _ = reader.interface.streamRemaining(&aw.writer) catch {};
-    text = aw.toArrayList();
-
-    const term = try child.wait(io);
-    const failed = switch (term) {
+    const r = try std.process.run(gpa, io, .{ .argv = argv.items });
+    gpa.free(r.stdout);
+    const failed = switch (r.term) {
         .exited => |c| c != 0,
         else => true,
     };
     if (failed) {
         gpa.free(bin);
-        return .{ .failed = try text.toOwnedSlice(gpa) };
+        return .{ .failed = r.stderr };
     }
-    text.deinit(gpa);
+    gpa.free(r.stderr);
     return .{ .ok = bin };
 }
 
