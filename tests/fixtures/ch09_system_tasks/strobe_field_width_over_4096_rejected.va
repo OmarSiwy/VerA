@@ -4,7 +4,6 @@
 // (docs/IMPLEMENTATION.md), so a width above 4096 is refused at the call with
 // E1011 rather than clamped to a narrower field than the one written.
 //
-//! lrm 9.4.3
 //! reject E1011
 module strobe_field_width_over_4096_rejected(p, n);
   inout p, n; electrical p, n;
