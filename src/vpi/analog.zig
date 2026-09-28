@@ -259,10 +259,6 @@ fn refreshRows(l: Lib) void {
 // §12.10 values
 // ---------------------------------------------------------------------------
 
-fn unknown(x: [*]const f64, row: i32) f64 {
-    return if (row < 0) 0 else x[@intCast(row)];
-}
-
 fn unknownU16(x: [*]const f64, row: u16) f64 {
     return if (row == @import("ir").Lower.ground) 0 else x[row];
 }
