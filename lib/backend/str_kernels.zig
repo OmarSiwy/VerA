@@ -724,7 +724,7 @@ fn zMonitorLatch(comptime site: usize) type {
 
 /// §3.3 string storage excludes NUL bytes. Compact the completed formatter
 /// output in its existing call-site scratch; padding counted the original bytes.
-/// ponytail: scalar compaction is bounded by the existing 512-byte formatter;
+/// ponytail: scalar compaction is bounded by the 4096-byte formatter row;
 /// consider mask-based compaction if that ceiling is removed and measured hot.
 pub fn zStringStore(bytes: []u8) []const u8 {
     var used: usize = 0;
@@ -748,16 +748,12 @@ pub fn zStringStore(bytes: []u8) []const u8 {
 // ponytail: 4096 bytes per site, file-scope. Two threads evaluating the SAME
 // call site on different instances would interleave; per-instance scratch is
 // the upgrade the day a host runs a device's units concurrently. An overrun
-// formats to the empty string rather than truncating, because §9.5.3 gives no
-// truncation rule to follow.
+// ends the run (`zSOver`, E1011): §9.5.3 gives no truncation rule, so neither
+// a cut nor an empty string is an answer the clause allows.
 //
-// The row was 512 and that was a LIMIT no clause states: §9.4.3 makes the C
-// minimum field width part of the real conversions, so `$fdisplay(fd,
-// "%600.2f", …)` is a 601-byte record a conforming tool writes — and the old
-// row dropped it entirely (the overrun rule above) rather than truncating it,
-// leaving a zero-length file. 4096 is `cg_display.Spec.max_field` and
-// `file_kernels.ZFSlot.line`, so what this can compose is what a §9.5.2 write
-// can emit and a §9.5.4.1 `$fgets` can read back in one call.
+// 4096 is `cg_display.Spec.max_field` and `file_kernels.ZFSlot.line`, so what
+// this can compose is what a §9.5.2 write can emit and a §9.5.4.1 `$fgets` can
+// read back in one call.
 pub fn zSBuf(comptime site: usize) []u8 {
     const Buf = struct {
         const n = site;
@@ -766,20 +762,26 @@ pub fn zSBuf(comptime site: usize) []u8 {
     return &Buf.b;
 }
 
+/// E1011: formatted text outgrew its call site's `zSBuf` row. Fatal, like
+/// `$fatal`, because the run cannot continue with the value it was asked for.
+pub fn zSOver() noreturn {
+    zstd.debug.print("error[E1011]: formatted text exceeds the 4096-byte buffer of one call; see `vera --explain E1011`\n", .{});
+    zstd.process.exit(1);
+}
+
 /// §3.3 Table 3-3 "Concatenation of Str1,…,Strn" when a piece is a string
 /// known only at run time, into its call site's `zSBuf`. A piece may be this
 /// same site's previous result (`s = {s, "x"}`), so the bytes are built in a
-/// local first and copied once; the overrun rule is `$sformat`'s: the empty
-/// string, never a truncation (see `zSBuf`).
+/// local first and copied once; an overrun is `$sformat`'s E1011 (`zSOver`).
 pub fn zStrCat(buf: []u8, parts: []const []const u8) []const u8 {
     var tmp: [4096]u8 = undefined;
     var n: usize = 0;
     for (parts) |p| {
-        if (p.len > tmp.len - n) return "";
+        if (p.len > tmp.len - n) zSOver();
         @memcpy(tmp[n..][0..p.len], p);
         n += p.len;
     }
-    if (n > buf.len) return "";
+    if (n > buf.len) zSOver();
     @memcpy(buf[0..n], tmp[0..n]);
     return buf[0..n];
 }
@@ -791,7 +793,7 @@ pub fn zStrCat(buf: []u8, parts: []const []const u8) []const u8 {
 pub fn zStrRepeat(buf: []u8, count: i64, s: []const u8) []const u8 {
     if (count <= 0 or s.len == 0) return "";
     var tmp: [4096]u8 = undefined;
-    if (count > tmp.len / s.len or s.len * @as(usize, @intCast(count)) > buf.len) return "";
+    if (count > tmp.len / s.len or s.len * @as(usize, @intCast(count)) > buf.len) zSOver();
     const k: usize = @intCast(count);
     for (0..k) |j| @memcpy(tmp[j * s.len ..][0..s.len], s);
     @memcpy(buf[0 .. k * s.len], tmp[0 .. k * s.len]);

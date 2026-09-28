@@ -1,0 +1,23 @@
+// LRM 2.7, Table 2-2, the row for \ddd: "Implementations may issue an error
+// if the character represented is greater than \377." VerA's choice
+// (docs/IMPLEMENTATION.md) is to accept it and keep the low 8 bits, with no
+// diagnostic. This pins that choice; a tool that rejects the escape conforms
+// too, so this fixture tests VerA, not the clause.
+// 67_octal_escape_boundaries.va holds the mandatory cases and makes no claim
+// here.
+//
+// HAND DERIVATION. \477 is 4*64 + 7*8 + 7 = 319 = 0x13F. The low 8 bits are
+// 0x3F = 63. A one-character string literal in an integer expression is that
+// byte's unsigned value (see 67_octal_escape_boundaries.va), so "\477" is 63.
+//
+//! lrm 2.7
+//! nowarn
+`include "check.vh"
+module octal_escape_above_377_keeps_low_byte(p, n);
+    inout p, n;
+    electrical p, n;
+    analog begin
+        `CHECKI("an escape above \\377 keeps its low byte", "\477", 63);
+        I(p, n) <+ V(p, n);
+    end
+endmodule
