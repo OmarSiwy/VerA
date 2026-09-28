@@ -700,6 +700,11 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
         .stdout = "xfail 27.4: vpi_flush is not provided\nxfail 27.23: vpi_mcd_flush is not provided\nxfail 27.37: vpi_vprintf is not provided\nxfail 27.27: vpi_mcd_vprintf is not provided\nxfail 27.18: vpi_handle_by_multi_index is not provided\nxfail 27.31: vpi_put_userdata/vpi_get_userdata are not provided\nxfail 27.29: vpi_put_data/vpi_get_data are not provided\nxfail 27.3: vpi_control is not provided\np02: b_27_unprovided checks=17\n",
     },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 178 of Annex G's 441 constant names are not defined\nxfail G: 10 of Annex G's routines are not provided\np02: b_G_vpi_user checks=265\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
