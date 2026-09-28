@@ -101,8 +101,13 @@ pub const Edge = enum(u2) {
 pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
 
 /// One term of a suspension's event expression, filed under the slot it
-/// watches (`Run.terms`). Live while `gen` is its suspension's.
-pub const Term = struct { susp: u32, gen: u32, edge: Edge };
+/// watches (`Run.terms`). Live while `gen` is its suspension's. A term on
+/// one `bit` of the slot keeps the value it `last` saw of it, since the
+/// store that wakes it reports only the least significant bit's.
+pub const Term = struct { susp: u32, gen: u32, edge: Edge, bit: u32 = whole_slot, last: Int.Bit = .x };
+
+/// `Term.bit` of a term on the whole slot.
+pub const whole_slot = std.math.maxInt(u32);
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -885,8 +890,13 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
     for (list.items) |t| {
         const s = &self.susps.items[t.susp];
         if (s.gen != t.gen) continue;
-        if (!t.edge.matches(before, after)) {
-            list.items[keep] = t;
+        var term = t;
+        const hit = if (t.bit == whole_slot) t.edge.matches(before, after) else hit: {
+            term.last = self.values[target].bit(t.bit);
+            break :hit t.last != term.last and t.edge.matches(t.last, term.last);
+        };
+        if (!hit) {
+            list.items[keep] = term;
             keep += 1;
             continue;
         }
@@ -918,8 +928,8 @@ fn park(self: *Run, pc: u32) Error!u32 {
     return id;
 }
 
-/// File one term of suspension `id` under `slot`.
-fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
+/// File one term of suspension `id` under `slot`, on its `bit` or `whole_slot`.
+fn watch(self: *Run, id: u32, slot: u32, edge: Edge, bit: u32) Error!void {
     const list = termsOf(self, slot) orelse blk: {
         const g = try self.far_terms.getOrPut(self.arena, slot);
         g.value_ptr.* = .empty;
@@ -937,7 +947,8 @@ fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
         list.shrinkRetainingCapacity(keep);
         if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.arena, list.capacity * 2);
     }
-    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+    const last: Int.Bit = if (bit == whole_slot) .x else self.values[slot].bit(bit);
+    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge, .bit = bit, .last = last });
 }
 
 /// The process at suspension `id` is no longer waiting: every term it filed
@@ -1353,14 +1364,14 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         .event_negedge => .negedge,
         .event_function => {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
-            return watch(self, id, slot, .any);
+            return watch(self, id, slot, .any, whole_slot);
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
-        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
-        else => .any, // else: a plain name, the one other term checkEvent admits
+        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any, whole_slot),
+        else => .any, // else: a plain name or bit-select, the other terms checkEvent admits
     };
-    const watched = if (edge == .any) e else ex.lhs(e);
-    try watch(self, id, try self.slot(watched), edge);
+    const src = try self.eventBit(if (edge == .any) e else ex.lhs(e));
+    try watch(self, id, src.slot, edge, src.bit);
 }
 
 /// Queues `item` in the `.monitor` region of the current time, §17.1.2 and
@@ -1758,7 +1769,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
                 const id = try park(self, pc + 1);
-                for (slots) |s| try watch(self, id, s, .any);
+                for (slots) |s| try watch(self, id, s, .any, whole_slot);
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
@@ -1770,7 +1781,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     continue;
                 }
                 const id = try park(self, pc);
-                for (s.slots) |at| try watch(self, id, at, .any);
+                for (s.slots) |at| try watch(self, id, at, .any, whole_slot);
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the

@@ -17,7 +17,8 @@ pub const Reach = @import("../rt/root.zig").Reach;
 pub const Schedule = enum { fifo, static };
 
 pub const Edge = enum { any, posedge, negedge };
-pub const Term = struct { slot: u32, edge: Edge };
+/// `sel`: the term reads one bit of the slot, bit `bit` of value word `word`.
+pub const Term = struct { slot: u32, edge: Edge, sel: ?struct { word: u32, bit: u6 } = null };
 
 pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
@@ -72,11 +73,14 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
         .event_negedge => .negedge,
         .event_function => return self.refuse("a VAMS analog event in a digital event control"),
         .event_driver_update => return self.refuse("VAMS §9.22.5 driver_update"),
-        else => .any, // else: a plain name, the one other term checkEvent admits
+        else => .any, // else: a plain name or bit-select, the other terms checkEvent admits
     };
-    const watched = if (edge == .any) e else ex.lhs(e);
-    const at = r.slot(watched) catch return self.refuse("an event term the engine resolves only at run time");
-    try out.append(self.arena, .{ .slot = at, .edge = edge });
+    const src = r.eventBit(if (edge == .any) e else ex.lhs(e)) catch return self.refuse("an event term the engine resolves only at run time");
+    try out.append(self.arena, .{
+        .slot = src.slot,
+        .edge = edge,
+        .sel = if (src.bit == exec.whole_slot) null else .{ .word = self.off[src.slot] + src.bit / 64, .bit = @intCast(src.bit % 64) },
+    });
 }
 
 /// The plan of `procs`; under `static` each one's `role` is set too.
@@ -399,6 +403,13 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
 
 /// Does `p` suspend only at its entry, returning there after every pass?
 fn fixedWait(self: *Emitter, p: Proc) Error!bool {
+    // A term on one bit keeps its last value, which only `State.watch` holds.
+    if (self.r.code.items[p.entry] == .wait_event) {
+        self.r.scope = self.r.code_scope.items[p.entry];
+        var ts: std.ArrayList(Term) = .empty;
+        try terms(self, self.r.code.items[p.entry].wait_event, &ts);
+        for (ts.items) |t| if (t.sel != null) return false;
+    }
     for (p.pcs) |pc| {
         if (pc == p.entry) continue;
         switch (self.r.code.items[pc]) {

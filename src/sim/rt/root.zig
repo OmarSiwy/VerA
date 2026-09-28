@@ -213,7 +213,10 @@ pub const Reach = packed struct(u8) {
 /// `exec.Susp` without the task activation, which no native process has.
 /// `seq` is its `State.stamp`.
 const Susp = struct { pc: u32, gen: u32, alive: bool, seq: u64 = 0 };
-const Term = struct { susp: u32, gen: u32, edge: Edge };
+/// `exec.Term`: a term on one bit keeps its `word` (its value's word
+/// offset), its `bit` in that word, and the value it `last` saw.
+const Term = struct { susp: u32, gen: u32, edge: Edge, word: u32 = whole_slot, bit: u6 = 0, last: Bit = .x };
+const whole_slot = std.math.maxInt(u32);
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
 /// holds then. `v`, `x` and `m` are `n` words each: the row's own `one`
@@ -1026,8 +1029,13 @@ pub const State = struct {
         for (list.items) |t| {
             const s = &self.susps.items[t.susp];
             if (s.gen != t.gen) continue;
-            if (!t.edge.matches(before, after)) {
-                list.items[keep] = t;
+            var term = t;
+            const hit = if (t.word == whole_slot) t.edge.matches(before, after) else hit: {
+                term.last = self.bitAt(t.word, t.bit);
+                break :hit t.last != term.last and t.edge.matches(t.last, term.last);
+            };
+            if (!hit) {
+                list.items[keep] = term;
                 keep += 1;
                 continue;
             }
@@ -1075,6 +1083,20 @@ pub const State = struct {
 
     /// `exec.watch`: file one term of suspension `id` under `slot`.
     pub fn watch(self: *State, id: u32, slot: u32, edge: Edge) Error!void {
+        return self.fileTerm(slot, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+    }
+
+    /// `watch` of bit `bit` of word `word` of `slot`'s value alone.
+    pub fn watchBit(self: *State, id: u32, slot: u32, edge: Edge, word: u32, bit: u6) Error!void {
+        return self.fileTerm(slot, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge, .word = word, .bit = bit, .last = self.bitAt(word, bit) });
+    }
+
+    fn bitAt(self: *const State, word: u32, bit: u6) Bit {
+        const w = self.get(word);
+        return logic.low(.{ .v = w.v >> bit, .x = w.x >> bit });
+    }
+
+    fn fileTerm(self: *State, slot: u32, term: Term) Error!void {
         const list = &self.terms[slot];
         if (list.items.len == list.capacity and list.capacity != 0) {
             var keep: usize = 0;
@@ -1085,7 +1107,7 @@ pub const State = struct {
             list.shrinkRetainingCapacity(keep);
             if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.gpa, list.capacity * 2);
         }
-        try list.append(self.gpa, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+        try list.append(self.gpa, term);
     }
 
     fn retire(self: *State, id: u32) void {

@@ -955,9 +955,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .wait_event => |e| {
             if (try waitFixed(self)) return;
             try self.print("            const id = try s.park({d});\n", .{next});
-            var ts: std.ArrayList(plan.Term) = .empty;
-            try plan.terms(self, e, &ts);
-            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
+            try watchTerms(self, e);
             try self.print("            return;\n", .{});
         },
         .wait_slots => |slots| {
@@ -1005,9 +1003,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 return self.print(");\n            return;\n", .{});
             }
             try self.print("            const id = try s.park({d});\n", .{next});
-            var ts: std.ArrayList(plan.Term) = .empty;
-            try plan.terms(self, st.timing, &ts);
-            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
+            try watchTerms(self, st.timing);
             try self.print("            return;\n", .{});
         },
         // The target is resolved when the process resumes (§9.7.7).
@@ -1328,6 +1324,16 @@ fn fmtDelay(d: @import("net.zig").Delay) std.fmt.Alt(@import("net.zig").Delay, d
 
 fn delayText(d: @import("net.zig").Delay, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.print(".{{ .rise = {d}, .fall = {d}, .off = {d}, .present = {} }}", .{ d.rise, d.fall, d.off, d.present });
+}
+
+/// Files suspension `id`'s terms of the event expression `e` (`exec.suspendOn`).
+fn watchTerms(self: *Emitter, e: Ast.ExprId) Error!void {
+    var ts: std.ArrayList(plan.Term) = .empty;
+    try plan.terms(self, e, &ts);
+    for (ts.items) |t| if (t.sel) |x|
+        try self.print("            try s.watchBit(id, {d}, .{t}, {d}, {d});\n", .{ t.slot, t.edge, x.word, x.bit })
+    else
+        try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
 }
 
 /// `.continuous` (`exec`'s arm): driver `i`'s value. A plain driver stores

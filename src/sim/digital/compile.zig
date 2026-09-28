@@ -1510,9 +1510,16 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         },
         // §4.8.1: real variables are prohibited in "Edge descriptors
         // (posedge, negedge) applied to real variables".
-        .event_posedge, .event_negedge => if (self.reals.contains(try self.scalarSlot(ex.lhs(e))))
+        .event_posedge, .event_negedge => if (self.reals.contains((try self.eventBit(ex.lhs(e))).slot))
             return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable"),
         .ident => _ = try self.scalarSlot(e),
+        // A part-select's change is more than one bit's, which a term on
+        // one bit does not see.
+        .index => if (try self.indexedArray(e) != null or ex.tag(ex.rhs(e)) == .range or ex.tag(ex.rhs(e)) == .indexed_range)
+            return self.exprFail(e, "only variable and posedge/negedge event terms are implemented")
+        else {
+            _ = try self.eventBit(e);
+        },
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
         .event_function => try self.registerMonitor(e),
@@ -1580,7 +1587,9 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; wire [1:0] a, b; tran(a,b); initial $display(\"before\"); endmodule", "a scalar net or a bit-select of a vector net");
     try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
-    try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
+    try expectRejected("module m; reg c; initial @(c + 1) c = 1; endmodule", "event terms are implemented");
+    try expectRejected("module m; reg c; initial @(posedge c[0]) c = 1; endmodule", "a scalar has no bits to select");
+    try expectRejected("module m; reg [3:0] c; initial @(c[3:2]) c = 1; endmodule", "event terms are implemented");
     // §5.10 "events do not hold any data", so neither direction of the
     // event/variable confusion compiles.
     try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");
