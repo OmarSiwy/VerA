@@ -57,11 +57,12 @@
 //!     assertion below is that the hook exists.
 //!
 //!  2. Even given the hook, `Gen.emitStateCtl`'s `.revert` arm restores only
-//!     the held FSM variables, the cross/above histories, `limiter_previous`
-//!     and `newton_iteration`. `<n>__prev` (slew, last_crossing),
-//!     `<n>__from`/`<n>__t0` (transition), `<n>__u`/`<n>__y` (laplace/zi),
-//!     `<n>__t`/`<n>__v`/`<n>__head` (absdelay) and `<n>__off` (idt's assert
-//!     latch) are not in it, and neither is `State.t_prev`.
+//!     the held FSM variables, the cross/above histories, `limiter_previous`,
+//!     `newton_iteration` and `<n>__off` (idt's assert latch,
+//!     a04_idt_hold_revert_host.zig). `<n>__prev` (slew, last_crossing),
+//!     `<n>__from`/`<n>__t0` (transition), `<n>__u`/`<n>__y` (laplace/zi) and
+//!     `<n>__t`/`<n>__v`/`<n>__head` (absdelay) are not in it, and neither is
+//!     `State.t_prev`.
 //!
 //!     The second omission is the sharp one. `updateState` ends with
 //!     `state.t_prev = sim.t`, and a kernel that measures dt against it after

@@ -895,6 +895,11 @@ pub fn emitInstance(self: *Gen) Error!void {
             }
         }
     }
+    // §4.5.4 the `idt` assert offset's `stateCtl` accepted copy.
+    for (self.names.units, 0..) |u, i| {
+        if (u.role == .analog_op and u.op == .idt_hold)
+            try self.w("    {s}__off__acc: f64 = 0.0, // stateCtl accepted copy\n", .{self.names.unit_names[i]});
+    }
     // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
     // the held block above. `su_ok` exists only where it is asserted.
     if (self.su.vals.len != 0) try self.w(
@@ -955,18 +960,20 @@ pub fn pathLatches(self: *const Gen) bool {
 }
 
 /// Returns whether the module needs `stateCtl`: an FSM, a §4.5.15 `$limit`
-/// slot or any §5.6.1.2 path latch. The host's `.commit` calls (operating-point exit, accepted
-/// transient step) are the boundary the latches advance on; latches add
-/// nothing to `query`, since the base moving is not a step-reject condition.
+/// slot, any §5.6.1.2 path latch or a §4.5.4 `idt` assert offset. The host's
+/// `.commit` calls (operating-point exit, accepted transient step) are the
+/// boundary the latches advance on; latches and offsets add nothing to
+/// `query`, since the base moving is not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0;
+    return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0 or usesOp(self, .idt_hold);
 }
 
 /// Emits the `stateCtl` hook. `query` compares the held (discrete) state
 /// only; cross histories are committed or reverted alongside, so a rejected
 /// attempt leaves no half-advanced edge test that would suppress the refire.
 /// Path latches commit `pb = wb`, `pq += wq` and zero `wq`; revert needs
-/// nothing. Tag order mirrors contract.StateCtlOp, which the host converts
+/// nothing. An `idt` assert offset, which `updateState` writes in place, is
+/// committed to and reverted from its `__off__acc` twin. Tag order mirrors contract.StateCtlOp, which the host converts
 /// by ordinal.
 pub fn emitStateCtl(self: *Gen) Error!void {
     // ponytail: topology is fixed during emission; scan once for all three actions.
@@ -1002,11 +1009,12 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
     for (self.names.units, 0..) |u, i| {
-        if (!fsm) break;
         if (u.role != .analog_op) continue;
+        const n = self.names.unit_names[i];
         switch (u.op) {
-            .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .cross, .above => if (fsm) try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ n, n }),
+            .idt_hold => try self.w("        inst.{s}__off__acc = inst.{s}__off;\n", .{ n, n }),
+            .none, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w("    }} else {{\n", .{});
@@ -1016,11 +1024,12 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     );
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
     for (self.names.units, 0..) |u, i| {
-        if (!fsm) break;
         if (u.role != .analog_op) continue;
+        const n = self.names.unit_names[i];
         switch (u.op) {
-            .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
-            .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
+            .cross, .above => if (fsm) try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ n, n }),
+            .idt_hold => try self.w("        inst.{s}__off = inst.{s}__off__acc;\n", .{ n, n }),
+            .none, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
     try self.w(
