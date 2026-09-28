@@ -740,6 +740,56 @@ pub const AcPhasor = struct {
     phase: f64 = 0,
 };
 
+/// Returns the device's `ac_dyn_slots`, or empty. Slot `row * n_u + col` is a
+/// local Jacobian entry whose small-signal value depends on frequency: a
+/// partial that flows through §4.5.7 `absdelay` (e^(−jω·td)), §4.5.11
+/// `laplace_*` (H(jω)) or §4.5.12 `zi_*` (H(e^(jωT))). Under kind `.ac` or
+/// `.noise`, `eval`, `q` and `evalQ` omit every such partial (the values
+/// stay), and `acDyn(F, &model, inst, &x, sim, ω, &out)` writes the omitted
+/// part of slot `ac_dyn_slots[k]` into `out[k]`, so the host's small-signal
+/// matrix is
+///
+///     A(ω)[slot] = G[slot] + jω·C[slot] + out[k]
+///
+/// with G and C from the same `x` and `sim` passed to `acDyn`; `out[k]`
+/// already carries the jω of a charge an operator feeds. `F` is `f64` or
+/// `@Vector(W, f64)`: `omega` holds W frequencies and each `out[k]` part their
+/// W terms, lane for lane, with no branch across lanes. At ω = 0 `out[k].re`
+/// is exactly the partial the operator's DC form gives (absdelay 1, a
+/// `laplace_*` H(0), a `zi_*` H(1), times the chain rule around it) and
+/// `out[k].im` is 0. Pure, so a host may call it per frequency, in any
+/// order. A superset: a listed slot may read 0.
+/// `validate` checks the list is sorted and unique, inside `jac_pattern |
+/// q_pattern`, and every column in `derivReads`.
+pub fn acDynSlots(comptime D: type) []const u32 {
+    return if (@hasDecl(D, "ac_dyn_slots")) D.ac_dyn_slots[0..] else &.{};
+}
+
+/// `validate`'s `ac_dyn_slots`/`acDyn` rules, returned so each is testable.
+fn acDynError(comptime D: type) ?[]const u8 {
+    const name = @typeName(D);
+    if (@hasDecl(D, "ac_dyn_slots") != @hasDecl(D, "acDyn")) return name ++ ": ac_dyn_slots and acDyn come together";
+    if (!@hasDecl(D, "ac_dyn_slots")) return null;
+    const info = @typeInfo(@TypeOf(D.ac_dyn_slots));
+    if (info != .array or info.array.child != u32) return name ++ ".ac_dyn_slots must be [k]u32";
+    const f = @typeInfo(@TypeOf(D.acDyn));
+    if (f != .@"fn" or f.@"fn".params.len != 7 or f.@"fn".params[0].type != type)
+        return name ++ ".acDyn: expected fn (comptime F: type, *const Model, InstancePtr, *const [n_u]f64, SimState, F, *[ac_dyn_slots.len]std.math.Complex(F)) void";
+    const n = nU(D);
+    for (D.ac_dyn_slots, 0..) |s, i| {
+        if (s >= n * n) return name ++ ".ac_dyn_slots: a slot at or past n_u * n_u";
+        if (i != 0 and s <= D.ac_dyn_slots[i - 1]) return name ++ ".ac_dyn_slots must be sorted with no duplicates";
+        if (n > 64) continue;
+        const r = s / n;
+        const c = s % n;
+        const jp: u64 = if (@hasDecl(D, "jac_pattern")) D.jac_pattern[r] else ~@as(u64, 0);
+        const qp: u64 = if (@hasDecl(D, "q_pattern")) D.q_pattern[r] else if (@hasDecl(D, "q")) ~@as(u64, 0) else 0;
+        if (((jp | qp) >> @intCast(c)) & 1 == 0) return name ++ ".ac_dyn_slots: a slot outside jac_pattern | q_pattern";
+        if ((derivReads(D) >> @intCast(c)) & 1 == 0) return name ++ ".ac_dyn_slots: a slot whose column is outside deriv_reads";
+    }
+    return null;
+}
+
 /// What `limit` returns: the limited unknowns, and `converged`, false when a
 /// clamp was large enough that the host must run another Newton iteration
 /// (pnjlim's clamp is; a small fetlim/limvds one is not).
@@ -1602,6 +1652,8 @@ pub fn InstancePtr(comptime D: type) type {
 ///                                a §9.7 `$finish`/`$stop`/`$fatal` exits the process
 ///   noisePsd / acStim            at any state vector, positional on
 ///                                `noise_gens` / `ac_gens`
+///   acDyn(F, ..., omega, &out)   per small-signal frequency (or lane of them), positional on
+///                                `ac_dyn_slots` (`acDynSlots`)
 ///   nextBreakpoint / pendingBreakpoint / delays
 ///                                transient breakpoint scheduling
 ///
@@ -1850,6 +1902,7 @@ pub fn validate(comptime D: type) void {
     requireWith(D, "acStim", "ac_gens");
     if (@hasDecl(D, "acStim"))
         expectGeneric(D, "acStim", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [ac_gens.len]AcPhasor");
+    if (acDynError(D)) |m| @compileError(m);
 
     // §2.8.3/§12.32 unresolved `$name`s: the device must have the
     // `Instance.systf` slot the host binds; `validateHost` checks the host.
@@ -1913,6 +1966,9 @@ pub fn validate(comptime D: type) void {
 ///     card's knots from it, not the defaults in `noise_tables`;
 ///   `shape_check` when D has `checkShape`: the host calls it after `derive`
 ///     and refuses a card it names;
+///   `calls_ac_dyn` when D declares `ac_dyn_slots`: true when the host adds
+///     `acDyn` to every small-signal matrix it builds (`acDynSlots`), false
+///     when it runs no small-signal analysis;
 ///   `systf: fn (*const Model) ?*const SystfHost` when D declares
 ///     `systf_calls`: §12.32 fixes no default value for an unbound `$name`.
 pub fn validateHost(comptime H: type, comptime D: type) void {
@@ -1959,6 +2015,14 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
                 "that moves one must be refused. Declare shape_check = true once the host " ++
                 "calls it after `derive`.");
     }
+    // Under `.ac`/`.noise` `eval` omits these slots' partials, so a host that
+    // does not add `acDyn` back solves a matrix missing them.
+    if (@hasDecl(D, "ac_dyn_slots") and !@hasDecl(H, "calls_ac_dyn"))
+        @compileError(@typeName(H) ++ " must declare `calls_ac_dyn`: " ++ @typeName(D) ++
+            " has small-signal slots that depend on frequency (4.5.7 absdelay, 4.5.11 laplace, " ++
+            "4.5.12 zi), which `eval` leaves out under .ac and .noise. Declare calls_ac_dyn = true " ++
+            "once every small-signal matrix adds `acDyn`'s terms, or false if the host runs no " ++
+            "small-signal analysis.");
     if (!@hasDecl(D, "systf_calls") or D.systf_calls.len == 0) return;
     const d = @typeName(D);
     const h = @typeName(H);
@@ -2029,6 +2093,8 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "noise_tables", {} },
     .{ "ac_gens", {} },
     .{ "acStim", {} },
+    .{ "ac_dyn_slots", {} },
+    .{ "acDyn", {} },
     .{ "systf_calls", {} },
     .{ "mc_param", {} },
     .{ "derive", {} },
@@ -2540,6 +2606,12 @@ const MockAll = struct {
     pub fn acStim(comptime _: type, _: [n_u]f64, _: *const Model, _: *const Instance, _: SimState) [ac_gens.len]AcPhasor {
         return .{.{ .mag = 1, .phase = 0 }};
     }
+    // §4.5.7 a 1 ns delay on the (p, n) partial.
+    pub const ac_dyn_slots = [_]u32{1};
+    pub fn acDyn(comptime F: type, _: *const Model, _: *const Instance, _: *const [n_u]f64, _: SimState, omega: F, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {
+        const td: F = if (@typeInfo(F) == .vector) @splat(1e-9) else 1e-9;
+        out[0] = .init(@cos(omega * td), -@sin(omega * td));
+    }
     pub fn derive(comptime _: type, _: *Model) void {}
     pub fn checkShape(m: *const Model) ?[]const u8 {
         return if (m.g != 1e-3) "g" else null;
@@ -2717,6 +2789,33 @@ test "q sites: rows are the signed sums of the stamps, and the table's rules ref
     }) != null));
 }
 
+test "ac_dyn_slots: each rule refuses its own mistake" {
+    try testing.expect(comptime (acDynError(MockAll) == null));
+    const Of = struct {
+        fn dev(comptime slots: []const u32, comptime dr: u64) type {
+            return struct {
+                pub const U = enum(u8) { p, n };
+                pub const jac_pattern = [2]u64{ 0b10, 0b00 };
+                pub const deriv_reads: u64 = dr;
+                pub const ac_dyn_slots = slots[0..slots.len].*;
+                pub fn acDyn(comptime F: type, _: *const void, _: *const void, _: *const [2]f64, _: SimState, _: F, _: *[slots.len]std.math.Complex(F)) void {}
+            };
+        }
+    };
+    // Slot 1 is (p, n): inside the pattern, its column a lane.
+    try testing.expect(comptime (acDynError(Of.dev(&.{1}, 0b10)) == null));
+    // Past n_u², unsorted, outside the pattern, a column with no lane.
+    try testing.expect(comptime (acDynError(Of.dev(&.{4}, 0b10)) != null));
+    try testing.expect(comptime (acDynError(Of.dev(&.{ 1, 1 }, 0b10)) != null));
+    try testing.expect(comptime (acDynError(Of.dev(&.{0}, 0b11)) != null));
+    try testing.expect(comptime (acDynError(Of.dev(&.{1}, 0b01)) != null));
+    // The two decls come together.
+    try testing.expect(comptime (acDynError(struct {
+        pub const U = enum(u8) { p, n };
+        pub const ac_dyn_slots = [_]u32{1};
+    }) != null));
+}
+
 test "deriv_reads: the four rules each refuse their own mistake" {
     // (a) the mask is one u64.
     try testing.expect(comptime (derivReadsError(MockVsrc, 3) == null));
@@ -2819,6 +2918,8 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
         pub const shape_check = true;
         // ...and a `setup`, so the host fills `Instance.su` before `eval`.
         pub const calls_setup = true;
+        // ...and a frequency-dependent slot, so the host adds `acDyn`.
+        pub const calls_ac_dyn = true;
         var app: SystfHost = .{ .ctx = undefined, .call = zero };
         fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
             @memset(partials, 0);
