@@ -24,9 +24,15 @@ pub const Options = struct {
     /// appends nothing. Read only with `std_defs`, because a model card's
     /// interface comes from a Table E.1 primitive.
     spice_netlist: []const u8 = "",
+    /// Files that follow the compilation unit in the same text stream, in
+    /// order, as files given together on a command line are (IEEE 1364-2005
+    /// §13.4.1). A directive's effect carries across the boundary.
+    more: []const File = &.{},
     /// Receives diagnostics, the file table and the source map.
     bag: *diag.Bag,
 };
+
+pub const File = struct { name: []const u8, text: []const u8 };
 
 /// `PreprocessFailed` means the diagnostic is already in `Options.bag`.
 pub const Error = Allocator.Error || error{PreprocessFailed};
@@ -39,6 +45,8 @@ pub const Output = struct {
     /// case-insensitive fallback applies to this tail of the prelude only.
     netlist_modules: u32 = 0,
     directives: Directives = .{},
+    /// Where each of `Options.more` begins in `text`.
+    more_starts: []const u32 = &.{},
 };
 
 /// Every directive whose state outlives its own line, as `Region` event lists
@@ -321,6 +329,14 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
     }
 
     try pp.runFile(source, opts.file_name, root);
+    const more_starts = try arena.alloc(u32, opts.more.len);
+    for (opts.more, more_starts) |f, *at| {
+        // A file need not end in a newline, and its last word must not join
+        // the next file's first.
+        try pp.out.append(arena, '\n');
+        at.* = @intCast(pp.out.items.len);
+        try pp.runFile(f.text, f.name, null);
+    }
 
     if (pp.conds.items.len != 0) {
         const top = pp.conds.items[pp.conds.items.len - 1];
@@ -349,6 +365,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         .text = try pp.out.toOwnedSlice(arena),
         .netlist_modules = netlist_modules,
         .directives = directives,
+        .more_starts = more_starts,
     };
 }
 

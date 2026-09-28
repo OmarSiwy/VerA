@@ -65,7 +65,6 @@
 // transcript does not show it; it is the last section of the file this
 // fixture writes.
 //! inherited IEEE 1364-2005 18.3.2 18.3.3 18.3.5 18.3.6 18.3.6.1 18.3.7
-//! xfail extended VCD is not implemented: $dumpports is refused (E1100 "digital system task `$dumpports` is not implemented")
 `timescale 1ns/1ns
 module b_18_3_2_dev(a, y);
   input a;

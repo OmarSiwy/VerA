@@ -290,17 +290,17 @@
 13.3.1.6	-	The use clause
 13.3.2	-	Hierarchical configurations
 13.4	non-normative	Using libraries and configs	"This subclause describes potential use models for referencing configs on the command line. It is included for clarification purposes."
-13.4.1	non-normative	Precompiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; the precompiling strategy is a tool's choice. VerA is single-pass: one source file, from which every instance must bind (§13.1, cited both ways).
+13.4.1	non-normative	Precompiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; the precompiling strategy is a tool's choice. VerA is single-pass: the source files on its command line (`vera --run a.v b.v`), from which every instance must bind (§13.1, cited both ways).
 13.4.2	non-normative	Elaboration-time compiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; whether a single-pass tool compiles cells as it binds them is not observable in a design.
 13.4.3	non-normative	Precompiling using a separate compilation tool	A use model under §13.4, which "is included for clarification purposes"; "The exact format and location for holding these compiled forms shall be vendor- or tool-specific." VerA has no separate compilation tool.
 13.4.4	-	Command line considerations
 13.5	non-normative	Configuration examples	The source files and lib.map the §13.5.x examples assume, and the library structure they yield. States no rule of its own.
-13.5.1	-	Default configuration from library map file
-13.5.2	non-normative	Using default clause	Worked examples (cfg1, cfg2) of §13.3.1.2 default and §13.3.1.5 liblist over the §13.5 libraries; the rules are cited both ways there. The multi-library search itself needs a map (§13.5.1).
-13.5.3	non-normative	Using cell clause	Worked example (cfg3) of §13.3.1.4 cell with §13.3.1.6 use; the rule is pinned by 13_configuration/b_13_3_1_4_cell_use_binds_named_cell.v (xfail: config rules bind nothing, W0253).
-13.5.4	non-normative	Using instance clause	Worked example (cfg4) of §13.3.1.3 instance with §13.3.1.5 liblist inheritance; the rules are cited both ways there. The multi-library search needs a map (§13.5.1).
-13.5.5	non-normative	Using hierarchical config	Worked example (cfg5, cfg6) of §13.3.2 hierarchical configs; the rule is pinned by 13_configuration/b_13_3_2_hierarchical_config.v and b_13_3_2_rule_inside_other_config_rejected.v (both xfail).
-13.6	no-prohibition	Displaying library binding information	"The format specifier %l or %L shall print out the library.cell binding information for the module instance containing the display". Nothing is illegal. Positive: 13_configuration/audit_config_binding_display.v, b_13_1_every_instance_bound.v (%l and %L at three hierarchy levels). Not pinned: the vpiLibrary, vpiCell and vpiConfig properties the clause requires are absent from src/vpi/vpi_user.h.
+13.5.1	no-prohibition	Default configuration from library map file	"With no configuration, the libraries are searched according to the library declaration order in the library map file." A search order has no invalid form; a cell no library holds is §13.1's unbound instance, cited both ways. Positive: 13_configuration/b_13_5_1_default_search_order.v (the clause's own aLib.adder and rtlLib.foo).
+13.5.2	non-normative	Using default clause	Worked examples (cfg1, cfg2) of §13.3.1.2 default and §13.3.1.5 liblist over the §13.5 libraries, reproduced as 13_configuration/b_13_5_2_cfg1_default_liblist.v and b_13_5_2_cfg2_gate_first.v; the rules are cited both ways there.
+13.5.3	non-normative	Using cell clause	Worked example (cfg3) of §13.3.1.4 cell with §13.3.1.6 use, reproduced as 13_configuration/b_13_5_3_cfg3_cell_use.v; the rules are cited both ways there.
+13.5.4	non-normative	Using instance clause	Worked example (cfg4) of §13.3.1.3 instance with §13.3.1.5 liblist inheritance, reproduced as 13_configuration/b_13_5_4_cfg4_instance_liblist.v; the rules are cited both ways there.
+13.5.5	non-normative	Using hierarchical config	Worked example (cfg5, cfg6) of §13.3.2 hierarchical configs, reproduced as 13_configuration/b_13_5_5_cfg6_hierarchical.v; the rule is cited both ways there (b_13_3_2_rule_inside_other_config_rejected.v).
+13.6	no-prohibition	Displaying library binding information	"The format specifier %l or %L shall print out the library.cell binding information for the module instance containing the display". Nothing is illegal. Positive: 13_configuration/audit_config_binding_display.v, b_13_1_every_instance_bound.v (%l and %L at three hierarchy levels). The vpiLibrary, vpiCell and vpiConfig properties the clause requires are in src/vpi/vpi_user.h and answered for a digital module (a unit test in src/vpi/root.zig).
 13.7	non-normative	Library mapping examples	"In the absence of a configuration, it is possible to perform basic control of the library searching order when binding a design." An introduction to §13.7.1 to §13.7.3; states no rule of its own (the command-line rule is §13.7.1).
 13.7.1	-	Using the command line to control library searching
 13.7.2	non-normative	File path specification examples	"For example:" Worked examples of file_path_spec wildcard resolution; the rules are §13.2.1's file_path_spec details. States no rule of its own.
@@ -376,7 +376,7 @@
 17.1.1	-	The display and write tasks
 17.1.1.1	no-prohibition	Escape sequences for special characters	Table 17-1 defines what each escape sequence displays; "If fewer than three characters are used, the following character shall not be an octal digit" is part of the definition (a following octal digit would be read as part of \ddd), and "Implementations may issue an error if the character represented is greater than \377" is optional. Nothing a tool must refuse. Positive: 17_system_tasks/b_17_1_1_1_escape_sequences.v (the clause example and \ddd of one to three digits).
 17.1.1.2	-	Format specifications
-17.1.1.3	no-prohibition	Size of displayed data	"For expression arguments, the values written to the output file (or terminal) are sized automatically." ... "The automatic sizing of displayed data can be overridden by inserting a zero". Sizing rules; nothing is illegal. Positive: 17_system_tasks/audit_display_decimal_states.v, audit_display_write_runs.v; b_17_1_1_3_zero_width_format.v (xfail: %0h, %0b, %0o keep leading zeros).
+17.1.1.3	no-prohibition	Size of displayed data	"For expression arguments, the values written to the output file (or terminal) are sized automatically." ... "The automatic sizing of displayed data can be overridden by inserting a zero". Sizing rules; nothing is illegal. Positive: 17_system_tasks/audit_display_decimal_states.v, audit_display_write_runs.v; b_17_1_1_3_zero_width_format.v.
 17.1.1.4	no-prohibition	Unknown and high-impedance values	The x/z digit rules for %d, %h, %o and %b ("If all bits in a group are at the unknown value, a lowercase x is displayed for that digit" ...). Display rules; nothing is illegal. Positive: 17_system_tasks/b_17_1_1_4_unknown_digits.v (the clause three examples and the z rules), audit_display_decimal_states.v.
 17.1.1.5	-	Strength format
 17.1.1.6	no-prohibition	Hierarchical name format	"The %m format specifier does not accept an argument. Instead, it causes the display task to print the hierarchical name of the module, task, function, or named block that invokes the system task". %m consumes no argument (a following expression is an ordinary argument), so nothing is illegal. Positive: 17_system_tasks/audit_display_named_scope.v.
@@ -389,12 +389,12 @@
 17.2.3	-	Formatting data to a string
 17.2.4	no-prohibition	Reading data from a file	"Files opened using file descriptors can be read from only if they were opened with either the r or r+ type values." The restriction binds the file, not the source: whether a descriptor was opened for reading is known only at run time, and §17.2.4.1 fixes the outcome of such a read ("If an error occurs reading from the file, then c is set to EOF (-1)"). No source construct is illegal. Table 17-7 also calls w+ and a+ "update", which this sentence contradicts; the fixtures read only through r and r+. Positive: 17_system_tasks/b_17_2_4_read_needs_read_type.v (a "w" descriptor reads -1; "r+" and "r" read the byte).
 17.2.4.1	no-prohibition	Reading a character at a time	$fgetc reads a byte or returns EOF (-1) on error; $ungetc pushes a character back, returning 0 or EOF. Results defined for every input, errors reported by return value; nothing is illegal. Positive: 17_system_tasks/audit_file_read_position.v, b_17_2_4_read_needs_read_type.v.
-17.2.4.2	no-prohibition	Reading a line at a time	"reads characters from the file specified by fd into the reg str until str is filled, or a newline character is read and transferred to str, or an EOF condition is encountered" ... "If an error occurs reading from the file, then code is set to zero." Results defined for every input; nothing is illegal. Positive: 17_system_tasks/b_17_2_4_2_fgets.v (xfail: $fgets is not implemented in the digital context).
+17.2.4.2	no-prohibition	Reading a line at a time	"reads characters from the file specified by fd into the reg str until str is filled, or a newline character is read and transferred to str, or an EOF condition is encountered" ... "If an error occurs reading from the file, then code is set to zero." Results defined for every input; nothing is illegal. Positive: 17_system_tasks/b_17_2_4_2_fgets.v.
 17.2.4.3	-	Reading formatted data
-17.2.4.4	no-prohibition	Reading binary data	$fread loads a reg or memory byte by byte, big endian, from start for at most count words; "If an error occurs reading from the file, then code is set to zero." Nothing is illegal. Positive: 17_system_tasks/b_17_2_4_4_fread.v (xfail: $fread is not implemented in the digital context).
-17.2.5	no-prohibition	File positioning	$ftell, $fseek (operations 0, 1, 2), $rewind, the gap rule and append positioning; "If an error occurs repositioning the file, then code is set to -1." Errors are return values; nothing is illegal. Positive: 17_system_tasks/b_17_2_5_seek_gap_and_origin.v, audit_file_read_position.v; b_17_2_5_append_writes_at_end.v (xfail: an "a" file is overwritten after $fseek).
-17.2.6	no-prohibition	Flushing output	"writes any buffered output to the file(s) specified by mcd, to the file specified by fd, or if $fflush is invoked with no arguments, to all open files." Nothing is illegal. Positive: 17_system_tasks/b_17_2_6_fflush.v (xfail: $fflush is not implemented in the digital context).
-17.2.7	no-prohibition	I/O error status	"If the most recent operation did not result in an error, then the value returned shall be zero, and the reg str shall be cleared." The nonzero code of an error is not fixed ("an error code is returned"; CLAUSE-AUDIT §5.5), so only zero/nonzero is asserted. Nothing is illegal. Positive: 17_system_tasks/b_17_2_7_ferror.v (xfail: $ferror is not implemented in the digital context).
+17.2.4.4	no-prohibition	Reading binary data	$fread loads a reg or memory byte by byte, big endian, from start for at most count words; "If an error occurs reading from the file, then code is set to zero." Nothing is illegal. Positive: 17_system_tasks/b_17_2_4_4_fread.v.
+17.2.5	no-prohibition	File positioning	$ftell, $fseek (operations 0, 1, 2), $rewind, the gap rule and append positioning; "If an error occurs repositioning the file, then code is set to -1." Errors are return values; nothing is illegal. Positive: 17_system_tasks/b_17_2_5_seek_gap_and_origin.v, audit_file_read_position.v; b_17_2_5_append_writes_at_end.v.
+17.2.6	no-prohibition	Flushing output	"writes any buffered output to the file(s) specified by mcd, to the file specified by fd, or if $fflush is invoked with no arguments, to all open files." Nothing is illegal. Positive: 17_system_tasks/b_17_2_6_fflush.v.
+17.2.7	no-prohibition	I/O error status	"If the most recent operation did not result in an error, then the value returned shall be zero, and the reg str shall be cleared." The nonzero code of an error is not fixed ("an error code is returned"; CLAUSE-AUDIT §5.5), so only zero/nonzero is asserted. Nothing is illegal. Positive: 17_system_tasks/b_17_2_7_ferror.v.
 17.2.8	no-prohibition	Detecting EOF	"returns a nonzero value when EOF has previously been detected reading the input file fd. It returns zero otherwise." Nothing is illegal. Positive: 17_system_tasks/audit_file_read_position.v.
 17.2.9	-	Loading memory data from a file
 17.2.10	not-supported	Loading timing data from an SDF file	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
@@ -403,7 +403,7 @@
 17.3.2	-	$timeformat
 17.4	no-prohibition	Simulation control system tasks	"There are two simulation control system tasks: a) $finish b) $stop" A list introducing §17.4.1 (cited both ways) and §17.4.2 (implementation-defined); nothing is forbidden here. Positive: 17_system_tasks/b_17_4_1_finish_exits.v.
 17.4.1	-	$finish
-17.4.2	implementation-defined	$stop	"The $stop system task causes simulation to be suspended. This task takes an optional expression argument (0, 1, or 2) that determines what type of diagnostic message is printed. The amount of diagnostic messages output increases with the value" What a suspended simulation does next (an interactive prompt, reading input, how a batch run ends) and the text of each diagnostic level are the tool's, so no transcript is portable. VerA's analog choice is CLAUSE-AUDIT §5.3's print-and-exit-0 row; the digital runner refuses $stop (E1100 "not implemented"), a gap. Syntax 17-12's one-argument limit: 17_system_tasks/b_17_4_2_stop_two_arguments_rejected.v (xfail: refused as not implemented).
+17.4.2	implementation-defined	$stop	"The $stop system task causes simulation to be suspended. This task takes an optional expression argument (0, 1, or 2) that determines what type of diagnostic message is printed. The amount of diagnostic messages output increases with the value" What a suspended simulation does next (an interactive prompt, reading input, how a batch run ends) and the text of each diagnostic level are the tool's, so no transcript is portable. VerA's analog choice is CLAUSE-AUDIT §5.3's print-and-exit-0 row; the digital runner refuses $stop (E1100 "not implemented"), a gap. Syntax 17-12's one-argument limit: 17_system_tasks/b_17_4_2_stop_two_arguments_rejected.v.
 17.5	-	Programmable logic array (PLA) modeling system tasks
 17.5.1	no-prohibition	Array types	"The synchronous forms control the time at which the logic array shall be evaluated and the outputs shall be updated. For the asynchronous forms, the evaluations are automatically performed whenever an input term changes value or any word in the personality memory is changed." Evaluation rules for the two array types; no form is illegal (the output-term and ascending-order bans are §17.5 and §17.5.3, cited both ways). Positive: 17_system_tasks/audit_pla_async_personality.v.
 17.5.2	no-prohibition	Array logic types	"The logic arrays are modeled with and, or, nand, and nor logic planes. This applies to all array types and formats." Names the four planes; nothing is forbidden. Positive: 17_system_tasks/b_17_5_2_logic_planes.v (all four planes, array and plane formats).
@@ -441,37 +441,37 @@
 18.1.6	-	Reading dump file during simulation ($dumpflush)
 18.2	no-prohibition	Format of four-state VCD file	"The dump file is structured in a free format. White space is used to separate commands and to make the file easily readable by a text editor." Binds the writer; no source construct can break it (the harness compares dumps as white-space separated tokens). Positive: 18_vcd/d09_11_vcd_dumpvars.v, d09_12_vcd_dumpoff_on.v.
 18.2.1	-	Syntax of four-state VCD file
-18.2.2	no-prohibition	Formats of variable values	"Dumps of value changes to scalar variables shall not have any white space between the value and the identifier code. Dumps of value changes to vectors shall not have any white space between the base letter and the value digits, but they shall have one white space between the value digits and the identifier code." and Tables 18-1/18-2 shortening; events dump as scalars. Rules on the writer; nothing a design writes is illegal. Positive: 18_vcd/b_18_2_2_table_18_2_shortening.v (every Table 18-2 row), d09_13_vcd_dumpvars_levels.v; b_18_2_2_event_marker.v (xfail: events are not dumped).
+18.2.2	no-prohibition	Formats of variable values	"Dumps of value changes to scalar variables shall not have any white space between the value and the identifier code. Dumps of value changes to vectors shall not have any white space between the base letter and the value digits, but they shall have one white space between the value digits and the identifier code." and Tables 18-1/18-2 shortening; events dump as scalars. Rules on the writer; nothing a design writes is illegal. Positive: 18_vcd/b_18_2_2_table_18_2_shortening.v (every Table 18-2 row), d09_13_vcd_dumpvars_levels.v; b_18_2_2_event_marker.v.
 18.2.3	no-prohibition	Description of keyword commands	"The general information in the VCD file is presented as a series of sections surrounded by keywords. Keyword commands provide a means of inserting information in the VCD file. Keyword commands can be inserted either by the dumper or manually." Table 18-3 lists them; each is its own subclause. Nothing is forbidden. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
 18.2.3.1	no-prohibition	$comment	"The $comment section provides a means of inserting a comment in the VCD file." Syntax 18-9. Permissive; the one comment a writer must insert is the §18.1.5 limit notice. Positive: 18_vcd/b_18_1_5_dumplimit_stops_with_comment.v (the $comment closing a limited dump).
 18.2.3.2	no-prohibition	$date	"The $date section indicates the date on which the VCD file was generated." Syntax 18-10. The date_text is the writer's and cannot be asserted; its presence can. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v (a non-empty $date section before $enddefinitions, read back).
 18.2.3.3	no-prohibition	$enddefinitions	"The $enddefinitions section marks the end of the header information and definitions." Syntax 18-11. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
-18.2.3.4	no-prohibition	$scope	"The $scope section defines the scope of the variables being dumped." Syntax 18-12 scope_type begin | fork | function | module | task. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (nested module scopes); b_18_2_3_4_task_function_scopes.v (xfail: task and function scopes are not dumped).
+18.2.3.4	no-prohibition	$scope	"The $scope section defines the scope of the variables being dumped." Syntax 18-12 scope_type begin | fork | function | module | task. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (nested module scopes); b_18_2_3_4_task_function_scopes.v.
 18.2.3.5	no-prohibition	$timescale	"The $timescale keyword specifies what timescale was used for the simulation." Syntax 18-13 time_number 1 | 10 | 100. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (`timescale 100ps/100ps -> $timescale 100ps).
 18.2.3.6	no-prohibition	$upscope	"The $upscope section indicates a change of scope to the next higher level in the design hierarchy." Syntax 18-14. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (two levels closed).
-18.2.3.7	no-prohibition	$var	"The $var section prints the names and identifier codes of the variables being dumped." Syntax 18-15, "Size specifies how many bits are in the variable", the msb/lsb reference, "a net of net type uwire shall have a variable type of wire". Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (every net type, uwire as wire, reg, ascending range, integer, time); b_18_2_2_event_marker.v (xfail: no event $var).
-18.2.3.8	no-prohibition	$version	"The $version section indicates which version of the VCD writer was used to produce the VCD file and the $dumpfile system task used to create the file. If a variable or an expression was used to specify the filename within $dumpfile, the unevaluated variable or expression literal shall appear in the $version string." Binds the writer. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v; b_18_2_3_8_version_names_dumpfile_variable.v (xfail: the evaluated name is written).
+18.2.3.7	no-prohibition	$var	"The $var section prints the names and identifier codes of the variables being dumped." Syntax 18-15, "Size specifies how many bits are in the variable", the msb/lsb reference, "a net of net type uwire shall have a variable type of wire". Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (every net type, uwire as wire, reg, ascending range, integer, time); b_18_2_2_event_marker.v.
+18.2.3.8	no-prohibition	$version	"The $version section indicates which version of the VCD writer was used to produce the VCD file and the $dumpfile system task used to create the file. If a variable or an expression was used to specify the filename within $dumpfile, the unevaluated variable or expression literal shall appear in the $version string." Binds the writer. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v; b_18_2_3_8_version_names_dumpfile_variable.v.
 18.2.3.9	no-prohibition	$dumpall	"The $dumpall keyword specifies current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
 18.2.3.10	no-prohibition	$dumpoff	"The $dumpoff keyword indicates all variables dumped with X values." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
 18.2.3.11	no-prohibition	$dumpon	"The $dumpon keyword indicates resumption of dumping and lists current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
 18.2.3.12	no-prohibition	$dumpvars	"The section beginning with $dumpvars keyword lists initial values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
 18.2.4	no-prohibition	Four-state VCD file format example	"The following example illustrates the format of the four-state VCD file." An example of §18.2.1 to §18.2.3; nothing is forbidden. Positive: 18_vcd/b_18_2_4_example_value_changes.v (the example's every value-change section, $dumpvars at #500 to #2010).
-18.3	no-prohibition	Creating extended VCD file	"The four-state VCD file rules and syntax apply to the extended VCD file unless otherwise stated in this subclause." A description of the flow; the tasks and their refusals are §18.3.1 to §18.3.5, each cited both ways. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
+18.3	no-prohibition	Creating extended VCD file	"The four-state VCD file rules and syntax apply to the extended VCD file unless otherwise stated in this subclause." A description of the flow; the tasks and their refusals are §18.3.1 to §18.3.5, each cited both ways. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v.
 18.3.1	-	Specifying dump file name and ports to be dumped ($dumpports)
 18.3.2	-	Stopping and resuming the dump ($dumpportsoff/$dumpportson)
 18.3.3	-	Generating a checkpoint ($dumpportsall)
 18.3.4	-	Limiting size of dump file ($dumpportslimit)
 18.3.5	-	Reading dump file during simulation ($dumpportsflush)
-18.3.6	no-prohibition	Description of keyword commands	"The general information in the extended VCD file is presented as a series of sections surrounded by keywords. ... Extended VCD provides one additional keyword command to that of the four-state VCD." Binds the writer. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v (the $dumpports, $dumpportsoff, $dumpportson and $dumpportsall sections) (xfail: $dumpports is not implemented, E1100).
-18.3.6.1	no-prohibition	$vcdclose	"The $vcdclose keyword indicates the final simulation time at the time the extended VCD file is closed." Syntax 18-26. A section the writer adds at close, after the last point a design can read its own dump; no source construct names it. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v derives the file's closing `$vcdclose #17 $end` in its header; its transcript cannot show it (xfail: $dumpports is not implemented, E1100).
-18.3.7	no-prohibition	General rules for extended VCD system tasks	"If a file_pathname is specified that does not match a file_pathname specified in a $dumpports call, the control task shall be ignored." and the bare-name and () forms of the tasks with only optional arguments "shall" run their defaults. Ignoring and defaulting, not refusal. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v ($dumpportsoff of an unknown file, $dumpportsoff; $dumpportson(); $dumpportsflush;) (xfail: $dumpports is not implemented, E1100).
-18.4	no-prohibition	Format of extended VCD file	"The format of the extended VCD file is similar to that of the four-state VCD file, as it is also structured in a free format." Binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
-18.4.1	no-prohibition	Syntax of extended VCD file	Syntax 18-27 and "A four-state VCD construct name that matches an extended VCD construct shall be considered equivalent, except if preceded by an *." The file grammar; it binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v ($var port sections, <n codes) (xfail: $dumpports is not implemented, E1100).
-18.4.2	no-prohibition	Extended VCD node information	"var_type The keyword port. No other keyword is allowed." size 1 or the port's index, codes "<" from zero "in the order found in the module declaration". Rules on the writer's node information; no source construct can break them. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (the clause's own test_device example) (xfail: $dumpports is not implemented, E1100).
-18.4.3	no-prohibition	Value changes	Syntax 18-29 pport_value 0_strength_component 1_strength_component identifier_code; "There is no space between the p and the port_value." Binds the writer. Positive: 18_vcd/b_18_4_3_port_value_changes.v (xfail: $dumpports is not implemented, E1100).
-18.4.3.1	no-prohibition	State characters	The state characters for input (D U N Z d u), output (L H X T l h) and unknown-direction (0 1 ? F A a B b C c f) values. A table the writer follows. Positive: 18_vcd/b_18_4_3_port_value_changes.v (D U N H X l f and 1) (xfail: $dumpports is not implemented, E1100).
-18.4.3.2	no-prohibition	Drivers	"Drivers are considered only in terms of primitives, continuous assignments, and procedural continuous assignments." and the three conflict rules (same value and strength range: 0/1 and the stronger strength; strong input over weak output: d/u; weak input under strong output: l/h). How the writer resolves a port; nothing is illegal. Positive: 18_vcd/b_18_4_3_port_value_changes.v (p1 0 6 and pl 6 0) (xfail: $dumpports is not implemented, E1100).
-18.4.4	no-prohibition	Extended VCD file format example	"The following example illustrates the format of the extended VCD file." An example of §18.4.1 to §18.4.3. Positive: 18_vcd/b_18_4_3_port_value_changes.v (the example's pD 6 0, pU 0 6, pN 6 6, pX 6 6, pH 0 6 and pf 0 0 lines) (xfail: $dumpports is not implemented, E1100).
+18.3.6	no-prohibition	Description of keyword commands	"The general information in the extended VCD file is presented as a series of sections surrounded by keywords. ... Extended VCD provides one additional keyword command to that of the four-state VCD." Binds the writer. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v (the $dumpports, $dumpportsoff, $dumpportson and $dumpportsall sections).
+18.3.6.1	no-prohibition	$vcdclose	"The $vcdclose keyword indicates the final simulation time at the time the extended VCD file is closed." Syntax 18-26. A section the writer adds at close, after the last point a design can read its own dump; no source construct names it. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v derives the file's closing `$vcdclose #17 $end` in its header; its transcript cannot show it.
+18.3.7	no-prohibition	General rules for extended VCD system tasks	"If a file_pathname is specified that does not match a file_pathname specified in a $dumpports call, the control task shall be ignored." and the bare-name and () forms of the tasks with only optional arguments "shall" run their defaults. Ignoring and defaulting, not refusal. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v ($dumpportsoff of an unknown file, $dumpportsoff; $dumpportson(); $dumpportsflush;).
+18.4	no-prohibition	Format of extended VCD file	"The format of the extended VCD file is similar to that of the four-state VCD file, as it is also structured in a free format." Binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v.
+18.4.1	no-prohibition	Syntax of extended VCD file	Syntax 18-27 and "A four-state VCD construct name that matches an extended VCD construct shall be considered equivalent, except if preceded by an *." The file grammar; it binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v ($var port sections, <n codes).
+18.4.2	no-prohibition	Extended VCD node information	"var_type The keyword port. No other keyword is allowed." size 1 or the port's index, codes "<" from zero "in the order found in the module declaration". Rules on the writer's node information; no source construct can break them. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (the clause's own test_device example).
+18.4.3	no-prohibition	Value changes	Syntax 18-29 pport_value 0_strength_component 1_strength_component identifier_code; "There is no space between the p and the port_value." Binds the writer. Positive: 18_vcd/b_18_4_3_port_value_changes.v.
+18.4.3.1	no-prohibition	State characters	The state characters for input (D U N Z d u), output (L H X T l h) and unknown-direction (0 1 ? F A a B b C c f) values. A table the writer follows. Positive: 18_vcd/b_18_4_3_port_value_changes.v (D U N H X l f and 1).
+18.4.3.2	no-prohibition	Drivers	"Drivers are considered only in terms of primitives, continuous assignments, and procedural continuous assignments." and the three conflict rules (same value and strength range: 0/1 and the stronger strength; strong input over weak output: d/u; weak input under strong output: l/h). How the writer resolves a port; nothing is illegal. Positive: 18_vcd/b_18_4_3_port_value_changes.v (p1 0 6 and pl 6 0).
+18.4.4	no-prohibition	Extended VCD file format example	"The following example illustrates the format of the extended VCD file." An example of §18.4.1 to §18.4.3. Positive: 18_vcd/b_18_4_3_port_value_changes.v (the example's pD 6 0, pU 0 6, pN 6 6, pX 6 6, pH 0 6 and pf 0 0 lines).
 19	-	Compiler directives
 19.1	no-prohibition	`celldefine and `endcelldefine	"It is advisable to pair each `celldefine with an `endcelldefine, but it is not required." ... "These directives may appear anywhere in the source description". The cell tag is read only by PLI routines; nothing is illegal. Positive: 19_compiler_directives/b_19_1_celldefine.v (a pair, a pair inside a module definition, an unpaired `celldefine; the design computes as without them).
 19.2	-	`default_nettype
@@ -487,44 +487,44 @@
 19.10	-	`pragma
 19.10.1	no-prohibition	Standard pragmas	"The reset and resetall pragmas shall restore the default values and state of pragma_keywords associated with the affected pragmas." A rule on pragma state, nothing illegal; VerA recognizes no stateful pragma_name, so reset and resetall leave the design as it is. Positive: 19_compiler_directives/b_19_10_1_standard_pragmas.v.
 19.11	-	`begin_keywords, `end_keywords
-20	-	Programming language interface (PLI) overview
-20.1	-	PLI purpose and history
-20.2	-	User-defined system task/function names
+20	non-normative	Programming language interface (PLI) overview	A heading with no body text: 20.1 follows it at once. The rules are 20.2 to 20.8.
+20.1	non-normative	PLI purpose and history	"IEEE Std 1364-2005 has deprecated the task/function (TF) and access (ACC) routines" and "There are three primary generations of the Verilog PLI". The purpose and history of the PLI and a list of possible applications; states no rule.
+20.2	unspecified	User-defined system task/function names	"The name shall adhere to the following rules: — The first character of the name shall be the dollar sign ($). — The remaining characters shall be letters, digits, the underscore character (_), or the dollar sign ($)." The rules bind the application that registers a name; neither 20.2 nor 27.34 (Returns: "Handle to the callback object.") names a result for a registration that breaks them, so no refusal can be asserted. "Uppercase and lowercase letters shall be considered to be unique" is positive: ieee_pli/b_26_1_systf.c ($b_Name$9 and $b_name$9 register as two objects).
 20.3	-	User-defined system task/function types
 20.4	-	Overriding built-in system task/function names
-20.5	-	User-supplied PLI applications
-20.6	-	PLI mechanism
-20.7	-	User-defined system task/function arguments
-20.8	-	PLI include files
+20.5	non-normative	User-supplied PLI applications	"User-supplied PLI applications are C language functions that utilize the library of PLI C functions" and "These PLI applications are not independent C programs." Describes what an application is; the rules for calling one are 26.1 to 26.1.4.
+20.6	non-normative	PLI mechanism	"The PLI mechanism provides a means to have PLI applications called for various reasons when the associated system task/function $ name is encountered in the Verilog HDL source description." An overview by example; the rules are 26.1 and 27.33 to 27.34.3.
+20.7	no-prohibition	User-defined system task/function arguments	"When the PLI applications associated with a user-defined system task/function are called, the task/function arguments are not passed to the PLI application. Instead, a number of PLI routines are provided that allow the PLI applications to read and write to the task/function arguments." How arguments are reached; nothing is illegal. Positive: ieee_pli/b_26_1_systf.c.
+20.8	no-prohibition	PLI include files	"The file is vpi_user.h (listed in Annex G). PLI applications that use the VPI routines shall include the file vpi_user.h." The rule binds the application; a tool has nothing to refuse. Positive: ieee_pli/b_G_vpi_user.c (Annex G's names and values against src/vpi/vpi_user.h, which every .c fixture includes).
 21	non-normative	PLI TF and ACC interface mechanism (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
 22	non-normative	Using ACC routines (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
 23	non-normative	ACC routine definitions (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
 24	non-normative	Using TF routines (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
 25	non-normative	TF routine definitions (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
-26	-	Using Verilog procedural interface (VPI) routines
-26.1	-	VPI system tasks and functions
+26	non-normative	Using Verilog procedural interface (VPI) routines	"Clause 26 and Clause 27 specify the VPI for the Verilog HDL. This clause describes how the VPI routines are used, and Clause 27 defines each of the routines in alphabetical order." A preamble; the rules are 26.1 to 26.6.44.
+26.1	unspecified	VPI system tasks and functions	"The registration of system tasks must occur prior to elaboration or the resolution of references." and "the user-defined system task/function name shall begin with a dollar sign ($)". Both bind the application; 27.34 names no failure value for a late or misnamed registration, so no refusal is asserted. Positive: ieee_pli/b_26_1_systf.c (six registrations from vlog_startup_routines).
 26.1.1	-	sizetf VPI application routine
-26.1.2	-	compiletf VPI application routine
-26.1.3	-	calltf VPI application routine
-26.1.4	-	Arguments to sizetf, compiletf, and calltf application routines
-26.2	-	VPI mechanism
-26.2.1	-	VPI callbacks
+26.1.2	no-prohibition	compiletf VPI application routine	"The compiletf routine shall be called one time for each instance of a system task/function in the source description. Providing a compiletf routine is optional". When a compiletf runs; nothing is illegal. Positive: ieee_pli/b_26_1_systf.c.
+26.1.3	no-prohibition	calltf VPI application routine	"A calltf VPI application routine shall be called each time the associated user-defined system task/function is executed within the Verilog HDL source code." When a calltf runs; nothing is illegal. Positive: ieee_pli/b_26_1_systf.c (xfail: the $unsigned calltf does not run, the built-in executes instead).
+26.1.4	no-prohibition	Arguments to sizetf, compiletf, and calltf application routines	"The sizetf, compiletf, and calltf routines all take one argument. When the software product calls these routines, it will pass to them the value supplied in the s_vpi_systf_data structure's user_data field when the user-defined system task/function was registered." What the routines receive; nothing is illegal. Positive: ieee_pli/b_26_1_systf.c (the one cookie reaches every routine).
+26.2	non-normative	VPI mechanism	"VPI provides routines that allow application developers to access information contained in a Verilog design and that allow facilities to interact dynamically with a software product." An overview of the two areas; the rules are 26.2.1 to 26.2.5.
+26.2.1	no-prohibition	VPI callbacks	"VPI callbacks shall be registered by the application with the functions vpi_register_cb() and vpi_register_systf()." The four reason categories and the two registering routines; what a reason forbids is 27.33's, cited both ways. Positive: ieee_pli/b_27_33_callbacks.c.
 26.2.2	-	VPI access to Verilog HDL objects and simulation objects
-26.2.3	-	Error handling
-26.2.4	-	Function availability
+26.2.3	no-prohibition	Error handling	"The vpi_chk_error() routine shall return a nonzero value if an error occurred in the previously called VPI routine." The mechanism a refusal is read through; no input is invalid. Positive: ieee_pli/b_27_objects.c; every inherited-reject check of ieee_pli/b_*.c reads it.
+26.2.4	unspecified	Function availability	"Only two routines can be called at this time: — vpi_register_systf() — vpi_register_cb()" and, while sizetf routines run, "no additional access is permitted." The clause says what an application may rely on in those phases; unlike 26.6.20's "It shall be illegal", it calls no other call an error and names no failure value, so none is asserted (ROADMAP 5.6 records the open reading). Positive: ieee_pli/b_26_1_systf.c (startup calls only the two routines, for cbEndOfCompile and cbEndOfSimulation, two of the six reasons).
 26.2.5	-	Traversing expressions
 26.3	-	VPI object classifications
 26.3.1	-	Accessing object relationships and properties
 26.3.2	-	Object type properties
 26.3.3	-	Object file and line properties
 26.3.4	-	Delays and values
-26.3.5	-	Object protection properties
-26.4	-	List of VPI routines by functional category
-26.5	-	Key to data model diagrams
-26.5.1	-	Diagram key for objects and classes
+26.3.5	not-supported	Object protection properties	"Unless otherwise specified, access to relationships and properties of a protected object shall be an error." A protected object "represents code contained in a decryption envelope" (clause 28), and VerA refuses any `pragma protect` (E0146), so no protected object exists to refuse access to. The FALSE half cannot be written portably: Annex G defines no vpiIsProtected (ROADMAP 5.6); its vpiProtected is 26.6.1's module property, asserted there by ieee_pli/b_26_6_structure.c.
+26.4	non-normative	List of VPI routines by functional category	"Table 26-1 through Table 26-9 list the VPI routines by major category. Clause 27 defines each of the VPI routines, listed in alphabetical order." An index of Clause 27.
+26.5	non-normative	Key to data model diagrams	"This subclause contains the keys to the symbols used in the data model diagrams." A preamble; the access rules the keys carry are 26.5.2 and 26.5.3, cited both ways.
+26.5.1	no-prohibition	Diagram key for objects and classes	"Bold italic letters in a dotted enclosure indicate a class definition, where the class groups other objects and classes. Properties of the class are defined in this location." The notation that gives a class's properties to each member; nothing is illegal. Positive: ieee_pli/b_26_6_20_frames.c (vpiAutomatic, a property of the frame diagram's class, read on its reg member; xfail).
 26.5.2	-	Diagram key for accessing properties
 26.5.3	-	Diagram key for traversing relationships
-26.6	-	Object data model diagrams
+26.6	non-normative	Object data model diagrams	"Subclauses 26.6.1 through 26.6.43 contain the data model diagrams that define the accessible objects and groups of objects, along with their relationships and properties." A preamble; the diagrams are 26.6.1 to 26.6.44.
 26.6.1	-	Module
 26.6.2	-	Instance arrays
 26.6.3	-	Scope
@@ -540,12 +540,12 @@
 26.6.13	-	Primitive, prim term
 26.6.14	-	UDP
 26.6.15	-	Module path, path term
-26.6.16	-	Intermodule path
+26.6.16	unspecified	Intermodule path	"To get to an intermodule path, vpi_handle_multi(vpiInterModPath, port1, port2) can be used." Neither 26.6.16 nor 27.20 says which port pairs have an intermodule path, so no pair can be required to yield one. Rejection: ieee_pli/b_26_6_structure.c (a module and a net are not ports).
 26.6.17	-	Timing check
 26.6.18	-	Task, function declaration
 26.6.19	-	Task/function call
 26.6.20	-	Frames
-26.6.21	-	Delay terminals
+26.6.21	unspecified	Delay terminals	The delay device and delay term diagram, with "a) The value of the input delay term shall change before the delay associated with the delay device." No clause says which Verilog HDL construct is a delay device, so no design can be written that is required to have one.
 26.6.22	-	Net drivers and loads
 26.6.23	-	Reg drivers and loads
 26.6.24	-	Continuous assignment
@@ -570,14 +570,14 @@
 26.6.43	-	Iterator
 26.6.44	-	Generates
 27	-	VPI routine definitions
-27.1	-	vpi_chk_error()
+27.1	no-prohibition	vpi_chk_error()	"If the previous call to a VPI routine did not result in an error, then vpi_chk_error() shall return 0 (false)." "If the error information is not needed, a NULL can be passed to the routine." Every argument is valid. Positive: ieee_pli/b_27_objects.c; every inherited-reject check of ieee_pli/b_*.c reads its nonzero return.
 27.2	-	vpi_compare_objects()
 27.3	-	vpi_control()
-27.4	-	vpi_flush()
+27.4	no-prohibition	vpi_flush()	"The routine vpi_flush() shall flush the output buffers for the simulator's output channel and current log file." It takes no argument; nothing can be refused. Positive: ieee_pli/b_27_unprovided.c (xfail: vpi_flush is not provided).
 27.5	-	vpi_free_object()
 27.6	-	vpi_get()
 27.7	-	vpi_get_cb_info()
-27.8	-	vpi_get_data()
+27.8	optional	vpi_get_data()	"This routine can only be called from an application routine that has been called for reason cbStartOfRestart or cbEndOfRestart." Those reasons occur only in a product with save and restart, which is Annex C.8's $save and $restart (informative; CLAUSE-AUDIT 5.2). The refusal outside such a callback ("On a failure, the return value shall be 0") is in ieee_pli/b_27_unprovided.c and runs once the routine exists (xfail: vpi_put_data/vpi_get_data are not provided).
 27.9	-	vpi_get_delays()
 27.10	-	vpi_get_str()
 27.11	-	vpi_get_systf_info()
@@ -589,7 +589,7 @@
 27.17	-	vpi_handle_by_index()
 27.18	-	vpi_handle_by_multi_index()
 27.19	-	vpi_handle_by_name()
-27.20	-	vpi_handle_multi()
+27.20	unspecified	vpi_handle_multi()	"The VPI routine vpi_handle_multi() can be used to return a handle to an object of type vpiInterModPath associated with a list of output port and input port reference objects. The ports shall be of the same size and can be at different levels of the hierarchy." Neither 27.20 nor 26.6.16 says which port pairs have an intermodule path, so no pair can be required to yield one, and a mismatched pair's refusal cannot be told from a matched pair's NULL. Rejection: ieee_pli/b_27_objects.c (9999 is no many-to-one type).
 27.21	-	vpi_iterate()
 27.22	-	vpi_mcd_close()
 27.23	-	vpi_mcd_flush()
@@ -597,25 +597,25 @@
 27.25	-	vpi_mcd_open()
 27.26	-	vpi_mcd_printf()
 27.27	-	vpi_mcd_vprintf()
-27.28	-	vpi_printf()
-27.29	-	vpi_put_data()
+27.28	no-prohibition	vpi_printf()	"The format string shall use the same format as the C printf() routine. The routine shall return the number of characters printed or return EOF if an error occurred." No input is named invalid. Positive: ieee_pli/b_27_mcd.c.
+27.29	optional	vpi_put_data()	"This routine can only be called from an application routine that has been called for the reason cbStartOfSave or cbEndOfSave." Those reasons occur only in a product with save and restart, which is Annex C.8's $save and $restart (informative; CLAUSE-AUDIT 5.2). The refusal outside such a callback ("A zero shall be returned if an error is detected") is in ieee_pli/b_27_unprovided.c and runs once the routine exists (xfail: vpi_put_data/vpi_get_data are not provided).
 27.30	-	vpi_put_delays()
 27.31	-	vpi_put_userdata()
 27.32	-	vpi_put_value()
 27.33	-	vpi_register_cb()
 27.33.1	-	Simulation event callbacks
 27.33.1.1	-	Callbacks on individual statements
-27.33.1.2	-	Behavior by statement type
-27.33.1.3	-	Registering callbacks on module-wide basis
+27.33.1.2	no-prohibition	Behavior by statement type	"Every possible object within the stmt class qualifies for having a cbStmt callback placed on it." Table 27-6 says when each fires; nothing is excluded. Positive: ieee_pli/b_27_33_callbacks.c (xfail: cbStmt on a statement is refused).
+27.33.1.3	no-prohibition	Registering callbacks on module-wide basis	"When using vpi_register_cb() on a module object, the call will return a handle to a single callback object that can be passed to vpi_remove_cb() to remove the callback on every statement in the module instance." Its one exclusion, "Statements that reside in protected portions of the code shall not have callbacks placed on them.", needs clause 28 protected code, which VerA refuses (E0146). Positive: ieee_pli/b_27_33_callbacks.c (xfail: cbStmt on a module is refused).
 27.33.2	-	Simulation time callbacks
 27.33.3	-	Simulator action or feature callbacks
-27.34	-	vpi_register_systf()
-27.34.1	-	System task/function callbacks
-27.34.2	-	Initializing VPI system task/function callbacks
-27.34.3	-	Registering multiple system tasks and functions
+27.34	unspecified	vpi_register_systf()	The s_vpi_systf_data field comment "first character must be '$'"; Returns: "Handle to the callback object." No failure value is named for a registration that breaks the field rules (27.34.1), so no refusal is asserted. Positive: ieee_pli/b_26_1_systf.c.
+27.34.1	unspecified	System task/function callbacks	"The type field value shall be an integer constant of vpiSysTask or vpiSysFunc." "The name shall begin with a dollar sign ($) and shall be followed by one or more ASCII characters that are legal in Verilog HDL simple identifiers." The rules bind the application; 27.34 names no result for a registration that breaks them. Positive: ieee_pli/b_26_1_systf.c (xfail: the sizetf of a vpiSizedSignedFunc is never called).
+27.34.2	no-prohibition	Initializing VPI system task/function callbacks	"A means of initializing system task/function callbacks and performing any other desired task just after the simulator is invoked shall be provided by placing routines in a NULL-terminated static array, vlog_startup_routines." A product obligation; nothing is illegal. Positive: every vpi_runs application, e.g. ieee_pli/b_26_1_systf.c.
+27.34.3	no-prohibition	Registering multiple system tasks and functions	"Multiple system tasks and functions can be registered at least two different ways". Permissive. Positive: ieee_pli/b_26_1_systf.c (a zero-terminated static array registered in a loop).
 27.35	-	vpi_remove_cb()
 27.36	-	vpi_scan()
-27.37	-	vpi_vprintf()
+27.37	no-prohibition	vpi_vprintf()	"This routine performs the same function as vpi_printf(), except that varargs have already been started." As 27.28, no input is named invalid. Positive: ieee_pli/b_27_unprovided.c (xfail: vpi_vprintf is not provided).
 28	not-supported	Protected envelopes	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
 28.1	not-supported	General	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
 28.2	not-supported	Processing protected envelopes	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
@@ -720,18 +720,18 @@
 28.4.32.1	not-supported	Syntax	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
 28.4.32.2	not-supported	Description	Out of scope (ROADMAP.md §1 B): protected envelopes. VerA neither encrypts nor decrypts; every `pragma protect directive is refused (E0146).
 A	-	Formal syntax definition
-A.1	-	Source text
+A.1	non-normative	Source text	A heading with no body text: A.1.1 follows it at once. The productions are A.1.1 to A.1.5.
 A.1.1	-	Library source text
 A.1.2	-	Verilog source text
 A.1.3	-	Module parameters and ports
 A.1.4	-	Module items
 A.1.5	-	Configuration source text
-A.2	-	Declarations
-A.2.1	-	Declaration types
+A.2	non-normative	Declarations	A heading with no body text: A.2.1 follows it at once. The productions are A.2.1 to A.2.8.
+A.2.1	non-normative	Declaration types	A heading with no body text: A.2.1.1 follows it at once. The productions are A.2.1.1 to A.2.1.3.
 A.2.1.1	-	Module parameter declarations
 A.2.1.2	-	Port declarations
 A.2.1.3	-	Type declarations
-A.2.2	-	Declaration data types
+A.2.2	non-normative	Declaration data types	A heading with no body text: A.2.2.1 follows it at once. The productions are A.2.2.1 to A.2.2.3.
 A.2.2.1	-	Net and variable types
 A.2.2.2	-	Strengths
 A.2.2.3	-	Delays
@@ -741,20 +741,20 @@ A.2.5	-	Declaration ranges
 A.2.6	-	Function declarations
 A.2.7	-	Task declarations
 A.2.8	-	Block item declarations
-A.3	-	Primitive instances
+A.3	non-normative	Primitive instances	A heading with no body text: A.3.1 follows it at once. The productions are A.3.1 to A.3.4.
 A.3.1	-	Primitive instantiation and instances
 A.3.2	-	Primitive strengths
 A.3.3	-	Primitive terminals
 A.3.4	-	Primitive gate and switch types
-A.4	-	Module instantiation and generate construct
+A.4	non-normative	Module instantiation and generate construct	A heading with no body text: A.4.1 follows it at once. The productions are A.4.1 and A.4.2.
 A.4.1	-	Module instantiation
 A.4.2	-	Generate construct
-A.5	-	UDP declaration and instantiation
+A.5	non-normative	UDP declaration and instantiation	A heading with no body text: A.5.1 follows it at once. The productions are A.5.1 to A.5.4.
 A.5.1	-	UDP declaration
 A.5.2	-	UDP ports
 A.5.3	-	UDP body
 A.5.4	-	UDP instantiation
-A.6	-	Behavioral statements
+A.6	non-normative	Behavioral statements	A heading with no body text: A.6.1 follows it at once. The productions are A.6.1 to A.6.9.
 A.6.1	-	Continuous assignment statements
 A.6.2	-	Procedural blocks and assignments
 A.6.3	-	Parallel and sequential blocks
@@ -764,16 +764,16 @@ A.6.6	-	Conditional statements
 A.6.7	-	Case statements
 A.6.8	-	Looping statements
 A.6.9	-	Task enable statements
-A.7	-	Specify section
+A.7	non-normative	Specify section	A heading with no body text: A.7.1 follows it at once. The productions are A.7.1 to A.7.5.3.
 A.7.1	-	Specify block declaration
 A.7.2	-	Specify path declarations
 A.7.3	-	Specify block terminals
 A.7.4	-	Specify path delays
-A.7.5	-	System timing checks
+A.7.5	non-normative	System timing checks	A heading with no body text: A.7.5.1 follows it at once. The productions are A.7.5.1 to A.7.5.3.
 A.7.5.1	-	System timing check commands
 A.7.5.2	-	System timing check command arguments
 A.7.5.3	-	System timing check event definitions
-A.8	-	Expressions
+A.8	non-normative	Expressions	A heading with no body text: A.8.1 follows it at once. The productions are A.8.1 to A.8.8.
 A.8.1	-	Concatenations
 A.8.2	-	Function calls
 A.8.3	-	Expressions
@@ -782,7 +782,7 @@ A.8.5	-	Expression left-side values
 A.8.6	-	Operators
 A.8.7	-	Numbers
 A.8.8	-	Strings
-A.9	-	General
+A.9	non-normative	General	A heading with no body text: A.9.1 follows it at once. The productions are A.9.1 to A.9.4.
 A.9.1	-	Attributes
 A.9.2	-	Comments
 A.9.3	-	Identifiers
@@ -811,7 +811,7 @@ D.5	non-normative	`delay_mode_unit	Informative annex per the TOC heading (Annex 
 D.6	non-normative	`delay_mode_zero	Informative annex per the TOC heading (Annex D (informative)).
 E	non-normative	acc_user.h (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
 F	non-normative	veriuser.h (deprecated)	Body is only "This clause/annex has been deprecated (see 1.6)."
-G	-	vpi_user.h
+G	no-prohibition	vpi_user.h	The listing of vpi_user.h: constant values and routine declarations, nothing a tool refuses. Positive: ieee_pli/b_G_vpi_user.c (xfail: 175 of its 441 constant names and 10 of its routines are missing).
 H	non-normative	Encryption/decryption flow	Informative annex per the TOC heading (Annex H (informative)).
 H.1	non-normative	Tool vendor secret key encryption system	Informative annex per the TOC heading (Annex H (informative)).
 H.1.1	non-normative	Encryption input	Informative annex per the TOC heading (Annex H (informative)).

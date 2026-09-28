@@ -53,6 +53,9 @@ const ZFSlot = struct {
     err: i64 = 0,
     can_read: bool = false,
     can_write: bool = false,
+    /// Table 9-24 "a"/"a+": every write goes to the end of the file, wherever
+    /// a `$fseek` left the position.
+    append: bool = false,
     /// The most recent §9.5.4.1/§9.5.4.2 line. `$fgets` returns a COUNT and
     /// writes a string, and `$fscanf` returns a count and writes its items —
     /// neither is expressible as one value, so lowering splits each source call
@@ -202,6 +205,7 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
         .f = f,
         .can_read = mode == 'r' or plus,
         .can_write = mode != 'r' or plus,
+        .append = mode == 'a',
     };
     // "at end of file" is a POSITION, and the position is ours to keep. A "w"
     // open's end is 0, or §9.5.1.1's earlier-analysis content (`zfWriteBase`).
@@ -291,6 +295,7 @@ fn zfPut1(k: usize, text: []const u8) i64 {
         zf_last_err = 9;
         return 0;
     }
+    if (s.append) s.pos = s.f.length(zfIo()) catch s.pos;
     s.f.writePositionalAll(zfIo(), text, s.pos) catch |e| {
         s.err = zfErrno(e);
         zf_last_err = s.err;

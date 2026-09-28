@@ -716,8 +716,10 @@ fn cFixtureRuns(path: []const u8) bool {
 ///   //! lrm-reject 12.34   a refusal (error return, vpi_chk_error) is asserted
 ///
 /// Neither counts unless the fixture runs (`runs`): a compile-only fixture's
-/// cites become `.compiled`, listed and never counted. Any other `//!` key is
-/// a malformed tag, reported rather than skipped.
+/// cites become `.compiled`, listed and never counted. `inherited` and
+/// `inherited-reject` cite IEEE 1364-2005 and are `tests/ieee1364.zig`'s, so
+/// they are skipped here. Any other `//!` key is a malformed tag, reported
+/// rather than skipped.
 fn cCites(
     arena: std.mem.Allocator,
     out: *std.ArrayList(Cite),
@@ -731,6 +733,7 @@ fn cCites(
         if (!std.mem.startsWith(u8, line, "//!")) continue;
         var words = std.mem.tokenizeAny(u8, line["//!".len..], " \t");
         const key = words.next() orelse return error.BadCTag;
+        if (std.mem.eql(u8, key, "inherited") or std.mem.eql(u8, key, "inherited-reject")) continue;
         const reject = if (std.mem.eql(u8, key, "lrm"))
             false
         else if (std.mem.eql(u8, key, "lrm-reject"))
@@ -751,7 +754,8 @@ test "a .c fixture's polarity is per line, and only a running one counts" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\nint x;\n";
+    const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\n" ++
+        "//! inherited IEEE 1364-2005 27.14\n//! inherited-reject IEEE 1364-2005 27.14\nint x;\n";
     var cites: std.ArrayList(Cite) = .empty;
     try cCites(arena, &cites, "a.c", src, true);
     try std.testing.expectEqual(@as(usize, 2), cites.items.len);
@@ -1056,15 +1060,33 @@ pub fn digitalNegative(source: []const u8) bool {
     return false;
 }
 
-/// `// digital-runner: --std=SPEC`: the one `vera` flag a digital case passes.
-pub fn digitalStd(source: []const u8) ?[]const u8 {
+/// The `vera` arguments a digital case passes after its own path, one
+/// `// digital-runner:` line each: `--std=SPEC`; `--libmap FILE` and
+/// `files FILE...` (more sources, after the fixture), both relative to the
+/// fixture's directory `dir`; and `-L LIB`.
+pub fn digitalArgs(arena: std.mem.Allocator, source: []const u8, dir: []const u8) ![]const []const u8 {
     const key = "// digital-runner: ";
+    var out: std.ArrayList([]const u8) = .empty;
+    var files: std.ArrayList([]const u8) = .empty;
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
-        if (std.mem.startsWith(u8, line, key ++ "--std=")) return line[key.len..];
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        const rest = line[key.len..];
+        var words = std.mem.tokenizeAny(u8, rest, " \t");
+        const first = words.next() orelse continue;
+        if (std.mem.startsWith(u8, first, "--std=")) {
+            try out.append(arena, first);
+        } else if (std.mem.eql(u8, first, "--libmap")) {
+            try out.appendSlice(arena, &.{ first, try std.fs.path.join(arena, &.{ dir, words.next() orelse return error.BadDirective }) });
+        } else if (std.mem.eql(u8, first, "-L")) {
+            try out.appendSlice(arena, &.{ first, words.next() orelse return error.BadDirective });
+        } else if (std.mem.eql(u8, first, "files")) {
+            while (words.next()) |f| try files.append(arena, try std.fs.path.join(arena, &.{ dir, f }));
+        }
     }
-    return null;
+    try out.appendSlice(arena, files.items);
+    return out.items;
 }
 
 /// Whether a `.v` is a digital transcript case: it has a golden or opts into
@@ -1296,8 +1318,13 @@ test "digital negative routing is explicit and diagnostics are specific" {
     try std.testing.expect(digitalCaseSelected(true, "module positive; endmodule"));
     try std.testing.expect(!digitalCaseSelected(false, "//! reject E1100\n"));
     try std.testing.expect(!digitalCaseSelected(false, "module support; endmodule"));
-    try std.testing.expectEqualStrings("--std=1364-2005", digitalStd("// digital-runner: reject\n// digital-runner: --std=1364-2005\n").?);
-    try std.testing.expect(digitalStd("// digital-runner: reject\n") == null);
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const args = try digitalArgs(arena.allocator(), "// digital-runner: reject\n// digital-runner: files a.v b.vg\n// digital-runner: --std=1364-2005\n// digital-runner: --libmap m/lib.map\n// digital-runner: -L gateLib\n", "d");
+    const want = [_][]const u8{ "--std=1364-2005", "--libmap", "d/m/lib.map", "-L", "gateLib", "d/a.v", "d/b.vg" };
+    try std.testing.expectEqual(want.len, args.len);
+    for (want, args) |w, a| try std.testing.expectEqualStrings(w, a);
+    try std.testing.expectEqual(0, (try digitalArgs(arena.allocator(), "// digital-runner: reject\n", "d")).len);
 }
 
 test "digital opt-in is excluded from analog fixture collection" {

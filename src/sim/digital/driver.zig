@@ -86,7 +86,7 @@ pub fn segregate(r: *Run, e: *root.Elab) Error!void {
             if (entry.value_ptr.* != slot or isConnect(r, entry.key_ptr.scope)) continue;
             const info = r.scope_info.items[entry.key_ptr.scope];
             if (info.lexical) continue;
-            const m = moduleOf(r, info.module) orelse continue;
+            const m = &r.file.modules[info.def];
             for (m.ports) |p| if (p.name == entry.key_ptr.str and p.direction == .input) {
                 entry.value_ptr.* = rx_slot;
             };
@@ -106,16 +106,10 @@ fn scopeAt(r: *const Run, path: []const u8) ?u32 {
     return scope;
 }
 
-fn moduleOf(r: *const Run, name: Ast.StrId) ?*const Ast.ModuleDecl {
-    for (r.file.modules) |*m| if (m.name == name) return m;
-    return null;
-}
-
 /// §9.22 ¶3: is `scope` inside a connect module, whose drivers "the driver
 /// access functions … only access drivers found in ordinary modules" skip?
 fn isConnect(r: *const Run, scope: u32) bool {
-    const m = moduleOf(r, r.scope_info.items[r.instanceOf(scope)].module) orelse return false;
-    return m.is_connect;
+    return r.file.modules[r.scope_info.items[r.instanceOf(scope)].def].is_connect;
 }
 
 /// §9.22.1 the `i`'th ordinary driver of `net`, "arbitrarily numbered from 0
@@ -315,7 +309,7 @@ fn receivers(r: *const Run, slot: u32) u32 {
         if (entry.value_ptr.* != slot or isConnect(r, entry.key_ptr.scope)) continue;
         const info = r.scope_info.items[entry.key_ptr.scope];
         if (info.lexical) continue;
-        const m = moduleOf(r, info.module) orelse continue;
+        const m = &r.file.modules[info.def];
         for (m.ports) |p| {
             if (p.name == entry.key_ptr.str and p.direction == .input) n += 1;
         }

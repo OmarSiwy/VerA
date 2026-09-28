@@ -15,7 +15,6 @@
 // caller's own 1 ms / 1 us and b_dat's 10 fs / 1 fs are not what is asked:
 //   Time scale of (b_17_3_1_printtimescale_named_module.b.c1) is 1ns / 1ns
 //! inherited IEEE 1364-2005 17.3.1
-//! xfail $printtimescale with an argument is refused (E1100 "$printtimescale of a named module is not implemented")
 `timescale 1 ms / 1 us
 module b_17_3_1_printtimescale_named_module;
   b_17_3_1_printtimescale_named_module_b b ();
