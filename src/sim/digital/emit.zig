@@ -1050,6 +1050,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .override_on => |o| try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
         .override_eval => |o| {
+            if (o.slice != null) return self.refuse("a concatenation assigned or forced (§9.3)");
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
             try self.store(o.slot, .blocking);
             try expr.assigned(self, o.value, try slotType(self, o.slot));
@@ -1110,6 +1111,7 @@ fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
 fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
+    if (ex.tag(target) == .concat) return self.refuse("a concatenation lvalue (§9.2)");
     if (ex.tag(target) != .index) {
         const at = try self.slot(target);
         try self.print("            ", .{});

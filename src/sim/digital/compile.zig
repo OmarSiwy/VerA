@@ -101,7 +101,9 @@ pub const Instruction = union(enum(u5)) {
     /// out-of-line process [start, end) keeps the slot equal to its expression.
     override_on: struct { slot: u32, force: bool, start: u32, end: u32 },
     /// That process's one step: write `value` into `slot` past the guard.
-    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool },
+    /// An operand of a §9.3 concatenation target takes bits [lo, lo + its
+    /// width) of the value evaluated `of` bits wide.
+    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool, slice: ?Slice = null },
     /// §9.3 `deassign` / `release`.
     override_off: struct { slot: u32, force: bool },
     /// §7.6 a controlled pass switch: read the control, re-resolve both
@@ -1186,9 +1188,31 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
 fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, tok: u32) Error!void {
     if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain a procedural continuous assignment", .{});
     const ex = &self.file.exprs;
-    // ponytail: a whole variable or net; A.8.5 also admits a concatenation
-    // of them (and, for `force`, net selects), which no fixture writes.
+    // §9.3 "a concatenation of variables" (and for `force`, of nets): one
+    // override per operand, each keeping its own bits of the value.
+    if (ex.tag(target) == .concat) {
+        const ops = ex.args(target);
+        var of: u32 = 0;
+        for (ops) |x| {
+            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) return self.exprFail(x, "a procedural continuous assignment names whole variables or nets");
+            of += self.values[try self.scalarSlot(x)].width;
+        }
+        var lo = of;
+        for (ops) |x| {
+            lo -= self.values[try self.scalarSlot(x)].width;
+            try override(self, x, value, kind, .{ .lo = lo, .of = of });
+        }
+        return;
+    }
+    // ponytail: a whole variable or net; `force` of a net select is refused.
     if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return self.exprFail(target, "a procedural continuous assignment names one whole variable or net");
+    return override(self, target, value, kind, null);
+}
+
+pub const Slice = struct { lo: u32, of: u32 };
+
+/// §9.3 one override of whole variable or net `target`.
+fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
     const at = try self.scalarSlot(target);
     try notAutomatic(self, target, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
@@ -1202,7 +1226,7 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     try sensitivity(self, value, &watched);
     const skip = try append(self, .{ .jump = 0 });
     const start = position(self);
-    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force } });
+    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice } });
     _ = try append(self, .{ .wait_slots = watched.items });
     _ = try append(self, .{ .jump = start });
     const end = position(self);
@@ -1462,6 +1486,14 @@ fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
 /// a procedural one; neither accepts the other's form.
 fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     const ex = &self.file.exprs;
+    // §9.2 "a concatenation or nested concatenation of any of the above".
+    if (ex.tag(e) == .concat) {
+        for (ex.args(e)) |x| {
+            try checkTarget(self, x);
+            if ((try exec.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
+        }
+        return;
+    }
     if (try self.indexedArray(e) != null) {
         var x = e;
         while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
