@@ -615,6 +615,197 @@ pub const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limi
 pub const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
     @embedFile("../filter_kernels.zig");
 
+/// The small-signal side of the operators whose response depends on frequency
+/// (`ir.op.acDynamic`): §4.5.7 `absdelay`, §4.5.11 `laplace_*`, §4.5.12
+/// `zi_*`. At a small-signal point `eval` keeps their value and drops their
+/// lanes (`zSs`), and `acDyn` supplies those slots: it evaluates the core with
+/// `zAc` (`ac_fam_txt`), whose operators multiply the lanes by H(jω) here.
+/// `K` is a kernel scalar, `zL(zAc, m)`. Carried with any of the three.
+pub const ac_txt =
+    \\// ---- §4.5.7/§4.5.11/§4.5.12 small-signal response ----
+    \\
+    \\/// An operator's output as `eval` sees it: under `.ac`/`.noise` the value
+    \\/// alone, since `acDyn` supplies the operator's slots whole.
+    \\fn zSs(comptime K: type, kind: contract.AnalysisKind, y: K) K {
+    \\    return if (kind == .ac or kind == .noise) K.con(y.val()) else y;
+    \\}
+    \\/// §4.5.7 "Output(ω) = Input(ω) · e^(−jωtd)".
+    \\fn zAcDelay(comptime K: type, vin: K, td: f64) K {
+    \\    const p = vin.v.w * td;
+    \\    return .{ .v = vin.v.acMul(vin.val(), .init(@cos(p), -@sin(p))) };
+    \\}
+    \\/// §4.5.11 the cascade at s = jω; the value is the DC branch's u·H(0).
+    \\fn zAcLaplace(comptime K: type, comptime NS: usize, comptime D: usize, uin: K, sec: [NS][2][D + 1]f64) K {
+    \\    const s: std.math.Complex(f64) = .init(0.0, uin.v.w);
+    \\    var h: std.math.Complex(f64) = .init(1.0, 0.0);
+    \\    var g: f64 = 1.0;
+    \\    for (sec) |sc| {
+    \\        h = h.mul(zPolyC(D, sc[0], s).div(zPolyC(D, sc[1], s)));
+    \\        g *= sc[0][0] / sc[1][0];
+    \\    }
+    \\    return .{ .v = uin.v.acMul(uin.val() * g, h) };
+    \\}
+    \\/// §4.5.12 the cascade on the unit circle, z = e^(jωT); the value is the
+    \\/// DC branch's u·H(1).
+    \\fn zAcZi(comptime K: type, comptime NS: usize, comptime D: usize, uin: K, sec: [NS][2][D + 1]f64, period: f64) K {
+    \\    const p = uin.v.w * period;
+    \\    const zinv: std.math.Complex(f64) = .init(@cos(p), -@sin(p));
+    \\    const one: std.math.Complex(f64) = .init(1.0, 0.0);
+    \\    var h = one;
+    \\    var g: f64 = 1.0;
+    \\    for (sec) |sc| {
+    \\        h = h.mul(zPolyC(D, sc[0], zinv).div(zPolyC(D, sc[1], zinv)));
+    \\        g *= zPolyC(D, sc[0], one).re / zPolyC(D, sc[1], one).re;
+    \\    }
+    \\    return .{ .v = uin.v.acMul(uin.val() * g, h) };
+    \\}
+    \\/// Σ p[k]·c^k, ascending coefficients.
+    \\fn zPolyC(comptime D: usize, p: [D + 1]f64, c: std.math.Complex(f64)) std.math.Complex(f64) {
+    \\    var acc: std.math.Complex(f64) = .init(p[D], 0.0);
+    \\    var k: usize = D;
+    \\    while (k > 0) {
+    \\        k -= 1;
+    \\        acc = acc.mul(c).add(.init(p[k], 0.0));
+    \\    }
+    \\    return acc;
+    \\}
+    \\
+    \\
+;
+
+/// `zAc`, the family `acDyn` evaluates the core with. device.zig only: no unit
+/// names it, and it reads `n_u`.
+pub const ac_fam_txt =
+    \\/// The reference family's dense lanes as three blocks of `n_u`, [direct |
+    \\/// re | im], plus `w`, the ω `acDyn` probed with. A probe seeds the direct
+    \\/// block and every operation but `acMul` treats the blocks alike, so after
+    \\/// the core the complex blocks hold exactly the Jacobian that flowed
+    \\/// through a frequency-dependent operator, times that operator's H(jω).
+    \\// ponytail: `RefFamily` lanes are u8, so this serves up to 85 unknowns.
+    \\const zAc = struct {
+    \\    pub const V = f64;
+    \\    const lanes = blk: {
+    \\        var l: [3 * n_u]u8 = undefined;
+    \\        for (&l, 0..) |*e, i| e.* = i;
+    \\        break :blk l;
+    \\    };
+    \\    const R = contract.RefFamily(f64, &lanes, .{ .dense = true });
+    \\    const L = R.Of(0);
+    \\    pub fn Of(comptime _: u64) type {
+    \\        return T;
+    \\    }
+    \\    pub fn con(c: f64) T {
+    \\        return .{ .r = R.con(c) };
+    \\    }
+    \\    pub fn probe(comptime u: usize, v: f64) T {
+    \\        return .{ .r = R.probe(u, v) };
+    \\    }
+    \\    pub fn sel(c: T, a: T, b: T) T {
+    \\        return if (c.r.v != 0.0) a else b;
+    \\    }
+    \\    pub const T = struct {
+    \\        r: L,
+    \\        /// ω on a value with lanes; a constant has none to rotate.
+    \\        w: f64 = 0.0,
+    \\        fn j(a: T, b: T, r: L) T {
+    \\            return .{ .r = r, .w = if (a.w != 0.0) a.w else b.w };
+    \\        }
+    \\        fn k(a: T, r: L) T {
+    \\            return .{ .r = r, .w = a.w };
+    \\        }
+    \\        pub fn to(a: T, comptime _: u64) T {
+    \\            return a;
+    \\        }
+    \\        pub fn val(a: T) f64 {
+    \\            return a.r.v;
+    \\        }
+    \\        pub fn ddxAt(a: T, comptime u: usize) f64 {
+    \\            return a.r.ddxAt(u);
+    \\        }
+    \\        pub fn add(a: T, b: T) T {
+    \\            return j(a, b, a.r.add(b.r));
+    \\        }
+    \\        pub fn sub(a: T, b: T) T {
+    \\            return j(a, b, a.r.sub(b.r));
+    \\        }
+    \\        pub fn mul(a: T, b: T) T {
+    \\            return j(a, b, a.r.mul(b.r));
+    \\        }
+    \\        pub fn div(a: T, b: T) T {
+    \\            return j(a, b, a.r.div(b.r));
+    \\        }
+    \\        pub fn neg(a: T) T {
+    \\            return k(a, a.r.neg());
+    \\        }
+    \\        pub fn scale(a: T, c: f64) T {
+    \\            return k(a, a.r.scale(c));
+    \\        }
+    \\        pub fn addC(a: T, c: f64) T {
+    \\            return k(a, a.r.addC(c));
+    \\        }
+    \\        pub fn exp(a: T) T {
+    \\            return k(a, a.r.exp());
+    \\        }
+    \\        pub fn log(a: T) T {
+    \\            return k(a, a.r.log());
+    \\        }
+    \\        pub fn expm1(a: T) T {
+    \\            return k(a, a.r.expm1());
+    \\        }
+    \\        pub fn log1p(a: T) T {
+    \\            return k(a, a.r.log1p());
+    \\        }
+    \\        pub fn sqrt(a: T) T {
+    \\            return k(a, a.r.sqrt());
+    \\        }
+    \\        pub fn sin(a: T) T {
+    \\            return k(a, a.r.sin());
+    \\        }
+    \\        pub fn cos(a: T) T {
+    \\            return k(a, a.r.cos());
+    \\        }
+    \\        pub fn tanh(a: T) T {
+    \\            return k(a, a.r.tanh());
+    \\        }
+    \\        pub fn sinh(a: T) T {
+    \\            return k(a, a.r.sinh());
+    \\        }
+    \\        pub fn cosh(a: T) T {
+    \\            return k(a, a.r.cosh());
+    \\        }
+    \\        pub fn atan(a: T) T {
+    \\            return k(a, a.r.atan());
+    \\        }
+    \\        pub fn pow(a: T, c: f64) T {
+    \\            return k(a, a.r.pow(c));
+    \\        }
+    \\        pub fn lt(a: T, b: T) T {
+    \\            return .{ .r = a.r.lt(b.r) };
+    \\        }
+    \\        pub fn le(a: T, b: T) T {
+    \\            return .{ .r = a.r.le(b.r) };
+    \\        }
+    \\        pub fn eq(a: T, b: T) T {
+    \\            return .{ .r = a.r.eq(b.r) };
+    \\        }
+    \\        /// An operator output `y` whose small-signal response is `h`: the
+    \\        /// input's direct and complex blocks, summed, times `h`.
+    \\        pub fn acMul(a: T, y: f64, h: std.math.Complex(f64)) T {
+    \\            var o = R.con(y);
+    \\            for (0..n_u) |u| {
+    \\                const re = a.r.d[u] + a.r.d[n_u + u];
+    \\                const im = a.r.d[2 * n_u + u];
+    \\                o.d[n_u + u] = h.re * re - h.im * im;
+    \\                o.d[2 * n_u + u] = h.re * im + h.im * re;
+    \\            }
+    \\            return .{ .r = o, .w = a.w };
+    \\        }
+    \\    };
+    \\};
+    \\
+    \\
+;
+
 /// §3.2.2 memory-backed arrays (`Lowered.mem_arrays`): one storage per array,
 /// indexed at run time. Only devices with one carry these.
 pub const arr_txt =
@@ -891,6 +1082,8 @@ pub const prelude_hist_quad_txt = aliasesOf(hist_quad_txt);
 pub const prelude_arr_txt = aliasesOf(arr_txt);
 /// Aliases of `filt_txt`.
 pub const prelude_filt_txt = aliasesOf(filt_txt);
+/// Aliases of `ac_txt`.
+pub const prelude_ac_txt = aliasesOf(ac_txt);
 
 /// Aliases of `display_txt` (§9.4.3 `%<width>d`), for a printing artifact or
 /// any device that formats into a string: §9.5.3 runs the same formatter,

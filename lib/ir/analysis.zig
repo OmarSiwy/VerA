@@ -11,6 +11,7 @@ const Lower = @import("lower.zig");
 const Lowered = Lower.Lowered;
 const Ast = @import("frontend").Ast;
 const Const = @import("frontend").constfold.Const;
+const op_kind = @import("op.zig");
 
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
 pub const Analysis = @This();
@@ -106,6 +107,10 @@ deps_folded: bool = false,
 /// the value can vary with (`xDep`). The same slice as `deps` when the module
 /// has no `dstop`.
 xdeps: []u64 = &.{},
+/// Per Value: the unknowns whose derivative reaches it through an operator
+/// whose small-signal response depends on frequency (`op.acDynamic`). A
+/// subset of `deps`, and empty when the module calls no such operator.
+acdyn: []u64 = &.{},
 /// §3.2.2 per Value: the `Lowered.mem_arrays` row an array version belongs to
 /// (an `anew`, a `store`, or a phi over them), `none_u32` for every scalar.
 /// Its `vty` is the element type. Every version of one array is one storage.
@@ -615,6 +620,28 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@intFromEnum(prod)]);
 }
 
+test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    const lowered: Lowered = .{ .file = &file };
+    _ = try mir.addBlock(a);
+    const va = try mir.addBlockParam(a, 0);
+    const vb = try mir.addBlockParam(a, 1);
+    const td = try mir.addFloatConst(a, 1e-9);
+    const dly = try mir.emitCall(a, .entry, try mir.internString(a, "absdelay"), &.{ va, td });
+    const sum = try mir.emit(a, .entry, .fadd, &.{ dly, vb });
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    // x[0] reaches `sum` only through the delay, x[1] only directly.
+    try std.testing.expectEqual(@as(u64, 0b11), an.unknownDeps(sum));
+    try std.testing.expectEqual(@as(u64, 0b01), an.acDynDeps(sum));
+    try std.testing.expectEqual(@as(u64, 0), an.acDynDeps(va));
+}
+
 /// Returns the emitted type of `v`. Requires `build`, not `buildStructure`.
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
     return self.vty[@intFromEnum(v)];
@@ -638,18 +665,28 @@ fn buildDeps(self: *Analysis) Error!void {
         const d = self.mir.valueDef(@enumFromInt(v0));
         if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
     }
-    self.deps = try self.fixDeps(true);
+    self.deps = try self.fixDeps(.deriv);
     // Only a `dstop` tells the two tables apart.
     self.xdeps = self.deps;
     for (0..self.mir.insts.len) |i| {
         if (self.mir.instOp(@enumFromInt(@as(u32, @intCast(i)))) != .dstop) continue;
-        self.xdeps = try self.fixDeps(false);
+        self.xdeps = try self.fixDeps(.value);
+        break;
+    }
+    // After `deps`, which an operator's `acdyn` reads.
+    for (0..self.mir.insts.len) |i| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
+        if (self.mir.instOp(inst) != .call or !op_kind.acDynamic(Mir.callee.opKind(self.mir.instData(inst).call.callee))) continue;
+        self.acdyn = try self.fixDeps(.ac_dyn);
         break;
     }
 }
 
-/// The lattice's fixpoint; `stop` says whether a `dstop` clears its bits.
-fn fixDeps(self: *const Analysis, stop: bool) Error![]u64 {
+/// Which column `fixDeps` fills: `deps`, `xdeps` or `acdyn`.
+const DepCol = enum { deriv, value, ac_dyn };
+
+/// The lattice's fixpoint for column `which`.
+fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
     const col = try self.arena.alloc(u64, self.nv);
     @memset(col, 0);
     var changed = true;
@@ -657,7 +694,7 @@ fn fixDeps(self: *const Analysis, stop: bool) Error![]u64 {
         changed = false;
         var v: u32 = 0;
         while (v < self.nv) : (v += 1) {
-            const now = self.defDeps(@enumFromInt(v), col, stop);
+            const now = self.defDeps(@enumFromInt(v), col, which);
             if (now == col[v]) continue;
             col[v] = now;
             changed = true;
@@ -668,12 +705,14 @@ fn fixDeps(self: *const Analysis, stop: bool) Error![]u64 {
 
 /// One step of the lattice: `val`'s bits given the current answer for its
 /// operands in `col`. Every rule is "union of the operands whose derivative
-/// the contract propagates".
-fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) u64 {
+/// the contract propagates". In `acdyn` a probe starts with no bits and a
+/// frequency-dependent operator takes its input's whole `deps`, since every
+/// derivative through it is scaled by its H(jω).
+fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCol) u64 {
     switch (self.mir.valueDef(self.rv(val))) {
         // §4.4 access function: the probe is x[u], so its derivative is the
         // one unit vector.
-        .block_param => |u| return @as(u64, 1) << @intCast(u & 63),
+        .block_param => |u| return if (which == .ac_dyn) 0 else @as(u64, 1) << @intCast(u & 63),
         .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
         .inst_result => |inst| {
             switch (self.mir.instData(inst)) {
@@ -687,11 +726,13 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, stop: bool) 
                 // Without this rule every `$temperature`-dependent parameter
                 // would carry a derivative.
                 .call => |c| {
+                    if (which == .ac_dyn and op_kind.acDynamic(Mir.callee.opKind(c.callee)))
+                        return if (c.args.len == 0) 0 else self.depsIn(self.deps, c.args[0]);
                     var acc: u64 = 0;
                     for (c.args) |arg| acc |= self.depsIn(col, arg);
                     return acc;
                 },
-                .unary => |u| return if (stop and u.op == .dstop) 0 else self.depsIn(col, u.operand),
+                .unary => |u| return if (which != .value and u.op == .dstop) 0 else self.depsIn(col, u.operand),
                 .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
                 // §4.2.12: the condition does not matter. It selects between
                 // arms rather than entering the value, so a conditional over
@@ -746,6 +787,14 @@ fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) u64 {
 pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
     if (self.deps_folded) return std.math.maxInt(u64);
     return self.depsOf(v);
+}
+
+/// Returns the unknowns whose derivative reaches `v` through a
+/// frequency-dependent operator (`acdyn`), folded as `unknownDeps` is.
+pub fn acDynDeps(self: *const Analysis, v: Mir.Value) u64 {
+    if (self.acdyn.len == 0) return 0;
+    if (self.deps_folded) return if (self.depsIn(self.acdyn, v) == 0) 0 else std.math.maxInt(u64);
+    return self.depsIn(self.acdyn, v);
 }
 
 /// Returns whether `block` is inside some loop's natural body.
