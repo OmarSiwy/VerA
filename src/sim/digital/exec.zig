@@ -235,6 +235,13 @@ pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.L
     try write(self, a, p, converted);
 }
 
+/// `assign` of a real, which an integral target takes rounded (§4.8.2).
+pub fn assignReal(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, r: f64) Error!void {
+    const p = (try place(self, a, target)) orelse return;
+    const tt = try targetType(self, target);
+    try write(self, a, p, try convertValue(a, try realLiteral(a, r), true, tt));
+}
+
 /// `assign` of an integer.
 pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) Error!void {
     const lit = try filled(a, 64, true, .zero);
@@ -640,18 +647,22 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
                 v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
                 return normalize(a, v, ty);
             },
-            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf, .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
+            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf, .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
                     .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => @as(u32, @bitCast(try @import("system.zig").random(self, a, f.dist().?, ex.args(e), ex.mainTok(e)))),
-                    .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
+                    .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
                         .fopen => .fopen,
                         .fgetc => .fgetc,
                         .ungetc => .ungetc,
+                        .fgets => .fgets,
+                        .fscanf => .fscanf,
+                        .fread => .fread,
                         .ftell => .ftell,
                         .fseek => .fseek,
                         .rewind => .rewind,
                         .feof => .feof,
+                        .ferror => .ferror,
                         else => .sscanf,
                     }, ex.args(e), ex.mainTok(e))),
                     .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
@@ -1692,9 +1703,11 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
+                    .fflush => {},
                     .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .sshow => |sh| try @import("system.zig").sformat(self, scratch, s.args, sh),
-                    .printtimescale => try display.printTimescale(self),
+                    .sformat => try @import("system.zig").sformat(self, scratch, s.args, null),
+                    .printtimescale => try display.printTimescale(self, s.args),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
@@ -1789,6 +1802,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // execution of the triggering process continues meanwhile.
             .trigger => |at| {
                 if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
+                if (self.watch[at].contains(.vcd)) {
+                    self.vcd.fire(&self.vcd_catalog.?, at);
+                    try requestVcd(self);
+                }
                 try wake(self, at, .x, .x);
                 pc += 1;
                 continue;

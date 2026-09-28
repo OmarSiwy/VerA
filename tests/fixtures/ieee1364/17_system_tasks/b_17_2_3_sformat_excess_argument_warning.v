@@ -12,7 +12,6 @@
 // s holds afterwards is not fixed by the clause, so it is not printed.
 //! inherited IEEE 1364-2005 17.2.3
 // digital-runner: warning $sformat
-//! xfail VerA refuses a $sformat format string held in a variable (E1100 "not implemented"); with a literal format it runs $sformat(s, "%0d", 1, 2) with no warning (it formats the excess argument in decimal and appends it)
 module b_17_2_3_sformat_excess_argument_warning;
   reg [8*8:1] s;
   reg [8*3:1] fmt;

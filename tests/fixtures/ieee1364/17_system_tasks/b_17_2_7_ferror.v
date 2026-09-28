@@ -16,7 +16,6 @@
 //     not fixed by the clause (CLAUSE-AUDIT §5.5), so only its being nonzero
 //     is printed -> "1".
 //! inherited IEEE 1364-2005 17.2.7
-//! xfail $ferror is not implemented in the digital context: "this digital expression form is not implemented" (E1100)
 module b_17_2_7_ferror;
   integer fd, errno;
   reg [639:0] str;

@@ -141,15 +141,20 @@ pub const SysFn = enum {
     driver_next_state,
     driver_next_strength,
     driver_type,
-    /// §17.2 the file functions: open, the character reads, positioning,
-    /// end-of-file, and §17.2.4.3's `$sscanf`.
+    /// §17.2 the file functions: open, the character, line, formatted and
+    /// binary reads, positioning, end-of-file, errors, and §17.2.4.3's
+    /// `$sscanf`.
     fopen,
     fgetc,
     ungetc,
+    fgets,
+    fscanf,
+    fread,
     ftell,
     fseek,
     rewind,
     feof,
+    ferror,
     sscanf,
     /// §17.7.3, the clock as a real in the module's unit.
     realtime,
@@ -196,7 +201,7 @@ pub const SysFn = enum {
     /// operation, a draw from a distribution and a driver query never are.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
+            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
             else => true, // else: a pure function of its arguments
@@ -217,7 +222,7 @@ pub const SysFn = enum {
     /// writes back, `$random`'s seed, a file's position or table?
     pub fn effects(self: SysFn) bool {
         return switch (self) {
-            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fseek, .rewind => true,
+            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ferror, .fseek, .rewind => true,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => true,
             else => false, // else: a function of its arguments, the clock or the design alone
         };
@@ -259,6 +264,10 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$fopen", .fopen },
     .{ "$fgetc", .fgetc },
     .{ "$ungetc", .ungetc },
+    .{ "$fgets", .fgets },
+    .{ "$fscanf", .fscanf },
+    .{ "$fread", .fread },
+    .{ "$ferror", .ferror },
     .{ "$ftell", .ftell },
     .{ "$fseek", .fseek },
     .{ "$rewind", .rewind },
@@ -626,7 +635,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 // signed: `$clog2(x) - 1` at x = 0 is -1, not 4294967295.
                 .clog2 => {
                     if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
-                    _ = try inferValue(self, args[0], depth + 1);
+                    // "The argument can be an integer or an arbitrary sized
+                    // vector value" (§17.11.1).
+                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.11.1: $clog2 takes an integer or vector argument, not a real");
                     break :blk .{ .width = 32, .signed = true };
                 },
                 .make_signed, .make_unsigned => {
@@ -644,19 +655,37 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 },
                 // §17.2: every file function returns an integer; the
                 // descriptor of `$fopen` is 32 bits with the MSB set.
-                .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => {
+                .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => {
                     const lo: usize, const hi: usize = switch (f) {
                         .fopen => .{ 1, 2 },
-                        .ungetc => .{ 2, 2 },
+                        .ungetc, .fgets, .ferror => .{ 2, 2 },
                         .fseek => .{ 3, 3 },
-                        .sscanf => .{ 2, std.math.maxInt(usize) },
+                        .fread => .{ 2, 4 },
+                        .sscanf, .fscanf => .{ 2, std.math.maxInt(usize) },
                         else => .{ 1, 1 },
                     };
                     if (args.len < lo or args.len > hi) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
                     for (args, 0..) |arg, i| {
+                        // §17.2.4.4 `$fread(mem, fd, , count)` omits start.
+                        if (arg == .none and f == .fread and i == 2) continue;
                         if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
-                        if (f == .sscanf and i >= 2) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
+                        // §17.2.4.4 "the reg myreg or the memory mem".
+                        if (f == .fread and i == 0 and ex.tag(arg) == .ident) if (self.arrays.get(try self.slot(arg))) |arr| {
+                            if (arr.rest.len != 0) return self.exprFail(arg, "§17.2.4.4: $fread loads a one-dimensional memory");
+                            continue;
+                        };
+                        const written = switch (f) {
+                            .sscanf, .fscanf => i >= 2,
+                            .fgets, .fread => i == 0,
+                            .ferror => i == 1,
+                            else => false, // else: every other file function only reads its arguments
+                        };
+                        if (written) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
                     }
+                    // §17.2.1: "The type is a character string ... of one of
+                    // the forms in Table 17-7".
+                    if (f == .fopen and args.len == 2 and ex.tag(args[1]) == .str_literal and !system.fileType(self.file.str(ex.strOf(args[1]))))
+                        return self.exprFail(args[1], "§17.2.1: an $fopen type is one of Table 17-7's r, w, a, r+, w+, a+ (with b)");
                     break :blk .{ .width = 32, .signed = f != .fopen };
                 },
                 .realtime => {
@@ -680,7 +709,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 .test_plusargs, .value_plusargs => {
                     const want: usize = if (f == .test_plusargs) 1 else 2;
                     if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
-                    _ = try inferValue(self, args[0], depth + 1);
+                    // §17.10.1: "either a string or a nonreal variable".
+                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.10: the plusarg string is a string or a nonreal variable");
+                    if (f == .value_plusargs and ex.tag(args[0]) == .str_literal) try plusargFormat(self, args[0]);
                     if (f == .value_plusargs) {
                         if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
                         try checkTarget(self, args[1]);
@@ -782,6 +813,20 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .many => {},
     }
     return ty;
+}
+
+/// §17.10.2: a literal user_string's conversions are "the only valid ones",
+/// `%d %o %h %b %e %f %g %s` in either case, with a leading 0 allowed.
+fn plusargFormat(self: *Run, e: Ast.ExprId) Error!void {
+    const text = self.file.str(self.file.exprs.strOf(e));
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, i, '%')) |at| {
+        i = at + 1;
+        while (i < text.len and text[i] == '0') i += 1;
+        if (i == text.len or std.mem.indexOfScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
+            return self.fail(self.file.exprs.mainTok(e), "§17.10.2: a $value$plusargs format is one of %d %o %h %b %e %f %g %s, not `%{s}`", .{text[@min(i, text.len)..@min(i + 1, text.len)]});
+        i += 1;
+    }
 }
 
 // ---- statements -> bytecode (A.6.5, §8.5.3.3, §9.7.5) -----------------------
@@ -988,6 +1033,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             const name = self.file.str(s.name);
             if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
             if (std.mem.eql(u8, name, "$sdf_annotate")) return self.failWith(.E1102, tok, "", .{});
+            // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
+            // below either way.
+            if (std.mem.eql(u8, name, "$stop") and s.args.len > 1) return self.fail(tok, "$stop accepts zero or one argument", .{});
+            if (@import("vcd.zig").ports_tasks.get(name)) |op| return @import("vcd.zig").checkPorts(self, op, s.args, tok);
             const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
             switch (task) {
                 // All three format the same surface, so all three are
@@ -1009,6 +1058,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         }
                         if (s.args[2] == .none or ex.tag(s.args[2]) != .str_literal)
                             return self.exprFail(s.args[2], "$timeformat's suffix must be a string literal");
+                        // "The units number argument shall be an integer in
+                        // the range from 0 to -15" (Table 17-10).
+                        if (constantExpression(self, s.args[0])) if ((try self.constant(s.args[0], tok)).asInt()) |u|
+                            if (u > 0 or u < -15) return self.exprFail(s.args[0], "§17.3.2: $timeformat's units number shall be in the range from 0 to -15");
                     }
                 },
                 .readmem => {
@@ -1047,6 +1100,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     const ex = &self.file.exprs;
                     const arr = if (ex.tag(s.args[0]) != .ident) null else self.arrays.get(try self.slot(s.args[0]));
                     if (arr == null or arr.?.rest.len != 0) return self.exprFail(s.args[0], "a §17.5 personality is a one-dimensional memory");
+                    // §17.5.3: "PLA input terms, output terms, and memory
+                    // shall be specified in ascending order".
+                    // ponytail: the bit range only; `Array` keeps no word-range direction.
+                    const rows = self.vecRange(try self.slot(s.args[0]));
+                    if (rows.msb > rows.lsb) return self.exprFail(s.args[0], "§17.5.3: a PLA personality's bit range is ascending, as in reg [1:n]");
                     try checkExpr(self, s.args[1]);
                     try checkTarget(self, s.args[2]);
                     if (p.async_) {
@@ -1076,18 +1134,27 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 // §17.2.3: the variable, then `$fwrite`'s own arguments; for
                 // `$sformat` a format first ("always interprets its second
                 // argument ... as a format string").
-                .sshow => |sh| {
+                .sshow, .sformat => {
                     if (s.args.len == 0 or s.args[0] == .none) return self.fail(tok, "a §17.2.3 string output task's first argument is a variable", .{});
                     try checkTarget(self, s.args[0]);
-                    if (std.mem.eql(u8, name, "$sformat") and (s.args.len < 2 or s.args[1] == .none or self.file.exprs.tag(s.args[1]) != .str_literal))
-                        return self.fail(tok, "$sformat with a format that is not a string literal is not implemented", .{});
-                    try display.display(self, s.args[1..], null, sh);
+                    if (task == .sshow) try display.display(self, s.args[1..], null, task.sshow) else {
+                        if (s.args.len < 2 or s.args[1] == .none) return self.fail(tok, "$sformat's second argument is its format", .{});
+                        try display.sformat(self, s.args[1..], null);
+                    }
                 },
                 // §17.3.1 Syntax 17-9.
-                .printtimescale => if (s.args.len != 0) return self.fail(tok, "$printtimescale of a named module is not implemented", .{}),
+                .printtimescale => {
+                    if (s.args.len > 1) return self.fail(tok, "$printtimescale takes at most one module instance", .{});
+                    if (s.args.len == 1) _ = try display.timescaleScope(self, s.args[0]);
+                },
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);
+                },
+                // §17.2.6 `$fflush ( mcd )`, `( fd )` or `( )`.
+                .fflush => {
+                    if (s.args.len > 1) return self.fail(tok, "$fflush takes at most one descriptor", .{});
+                    for (s.args) |a| if (a != .none) try checkExpr(self, a);
                 },
                 // §17.4.1: the argument is an expression selecting how much
                 // is printed (0, 1 or 2), read when the task runs.
@@ -1501,9 +1568,9 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; wire [3:0] w; initial w[0]=1; endmodule", "no procedural assignment to a net");
-    // Past Table 9-22 and §17.1.1's %c %s %m %l %t, a conversion such as the
-    // strength `%v` is refused, and the refusal names the table.
-    try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
+    // Past Table 9-22 and §17.1.1's %c %s %m %l %t %v, a conversion such as
+    // the unformatted `%u` is refused, and the refusal names the table.
+    try expectRejected("module m; initial $display(\"%u\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
     // IEEE 1364-2005 §5.1.1 Table 5-3: a real takes no bitwise, modulus or
     // case operator.
