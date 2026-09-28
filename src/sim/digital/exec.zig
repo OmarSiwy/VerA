@@ -1028,8 +1028,11 @@ fn plainCopy(self: *const Run, n: @import("net.zig").Net) bool {
 /// them. A signal crossing a switch loses supply strength (§7.11) and one
 /// Table 7-8 step per resistive switch on the strongest path (§7.12). Across
 /// a switch of unknown conduction a driver may or may not arrive, so what it
-/// asserts there is widened to include high impedance (§7.10.2).
-/// ponytail: no trireg charge, wired logic or net delay inside a joined
+/// asserts there is widened to include high impedance (§7.10.2). With no
+/// driver asserting anything, the group's triregs are §4.6.3.1's capacitive
+/// network: each asserts the charge it holds at its charge strength, so the
+/// larger charge wins and equal ones of different values make x.
+/// ponytail: no charge decay, wired logic or net delay inside a joined
 /// group; the group is found afresh on every resolution, which is fine for
 /// the handful of switches a digital fixture wires up.
 fn resolveJoined(self: *Run, start: u32) Error!void {
@@ -1047,9 +1050,12 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
                 const n = self.nets[z.net];
                 var own = netPull(n.kind);
                 for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], z.bit));
-                own = @import("net.zig").reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
-                acc = acc.combine(if (p.sure or own.none()) own else .{ .lo = @min(own.lo, 0), .hi = @max(own.hi, 0) });
+                acc = acc.combine(arrive(own, z, y, p));
             }
+            if (acc.none()) for (group, paths) |z, p| {
+                const n = self.nets[z.net];
+                if (n.kind == .trireg) acc = acc.combine(arrive(.of(self.values[n.slot].bit(z.bit), n.charge, n.charge), z, y, p));
+            };
             const n = self.nets[y.net];
             n.signal[y.bit] = acc;
             setBit(n.resolved, y.bit, acc.collapse());
@@ -1057,6 +1063,14 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
         }
     }
     for (touched.items) |t| try store(self, self.nets[t].slot, self.nets[t].resolved.planes);
+}
+
+/// What `own`, asserted at group member `z`, asserts at `y` over path `p`:
+/// reduced by the switches it crosses, and widened to include high impedance
+/// when no path surely conducts.
+fn arrive(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
+    const sig = @import("net.zig").reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
+    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
 }
 
 /// One bit of one net, as a pass switch terminal sees it.
