@@ -1605,7 +1605,7 @@ test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
 }
 
 test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the executable" {
-    // `Analysis.callTy` types the descriptor-returning §9.5 calls `.int`, so
+    // `callee.ty` types the descriptor-returning §9.5 calls `.int`, so
     // in a device their slot is `i64` and `emitFileCallDropped` must write an
     // integer zero, not `S.con(0.0)`; otherwise the host's build fails on
     // generated Zig. `fd` feeds the residual on purpose: an unread descriptor

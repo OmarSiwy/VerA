@@ -847,12 +847,6 @@ pub fn tyOfParam(t: Ast.Type) VTy {
     };
 }
 
-/// A call's value type by name, from `callee.zig`'s `ty` column. For readers
-/// holding only a name; a MIR reader has `call.callee`.
-fn callTy(name: []const u8) VTy {
-    return Mir.callee.ty(Mir.Callee.fromName(name));
-}
-
 // ---------------------------------------------------------------------------
 // Constant folding: a property of the MIR, so it lives with the facts. Both
 // the emitter (parameter defaults, §4.5 operator control arguments) and the

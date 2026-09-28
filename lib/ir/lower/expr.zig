@@ -25,16 +25,7 @@ const Oom = Lower.Oom;
 const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
 const Accum = Lower.Accum;
-const err = Lower.err;
-const errWith = Lower.errWith;
 const poison = Lower.poison;
-const emit = Lower.emit;
-const call = Lower.call;
-const gotoBlock = Lower.gotoBlock;
-const branchTo = Lower.branchTo;
-const strNum = Lower.strNum;
-const toReal = Lower.toReal;
-const toBool = Lower.toBool;
 const unify = Lower.unify;
 const astTy = Lower.astTy;
 
@@ -220,7 +211,7 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const el = (try arrayElemValue(self, name, at)) orelse return poison;
         try vals.append(self.arena, if (ty == .real) try self.toReal(el) else el.v);
     }
-    // The callee name IS the result type — `analysis.callTy` and `sysFuncTy`
+    // The callee name IS the result type — `callee.ty` and `sysFuncTy`
     // agree by construction, the `$sscanf$int` rule.
     const callee: []const u8 = switch (ty) {
         .real => "$idx",
