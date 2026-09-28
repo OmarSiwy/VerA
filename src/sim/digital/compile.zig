@@ -1058,6 +1058,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     const ex = &self.file.exprs;
                     const arr = if (ex.tag(s.args[0]) != .ident) null else self.arrays.get(try self.slot(s.args[0]));
                     if (arr == null or arr.?.rest.len != 0) return self.exprFail(s.args[0], "a §17.5 personality is a one-dimensional memory");
+                    // §17.5.3: "PLA input terms, output terms, and memory
+                    // shall be specified in ascending order".
+                    // ponytail: the bit range only; `Array` keeps no word-range direction.
+                    const rows = self.vecRange(try self.slot(s.args[0]));
+                    if (rows.msb > rows.lsb) return self.exprFail(s.args[0], "§17.5.3: a PLA personality's bit range is ascending, as in reg [1:n]");
                     try checkExpr(self, s.args[1]);
                     try checkTarget(self, s.args[2]);
                     if (p.async_) {

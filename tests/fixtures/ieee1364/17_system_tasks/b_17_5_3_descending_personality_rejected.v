@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 17.5.3
 //! reject E1100
 //! reject ascending
-//! xfail VerA accepts a PLA personality memory declared with a descending range
 `timescale 1 ns / 1 ns
 module b_17_5_3_descending_personality_rejected;
   reg [2:1] mem [1:1];
