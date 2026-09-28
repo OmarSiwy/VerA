@@ -229,10 +229,9 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
 /// Assigns an integral `value` to the lvalue `target` under the assignment
 /// rules, as a system task does with an output argument.
 pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal) Error!void {
-    const p = (try place(self, a, target)) orelse return;
     const tt = try targetType(self, target);
     const converted = if (tt.real) try realLiteral(a, realOfInt(value)) else try normalize(a, value, .{ .width = tt.width, .signed = value.signed });
-    try write(self, a, p, converted);
+    try put(self, a, target, converted, false, null);
 }
 
 /// `assign` of an integer.
@@ -240,6 +239,34 @@ pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) E
     const lit = try filled(a, 64, true, .zero);
     lit.values()[0] = @bitCast(v);
     try assign(self, a, target, lit);
+}
+
+/// Writes `value` (already converted for `targetType(target)`) where `target`
+/// lands: now, or as a nonblocking update `delay` later (null: this step).
+/// A concatenation is its operands, the rightmost taking the least
+/// significant bits (IEEE 1364-2005 §6 Table 6-1). An operand that names no
+/// storage (`place`) is skipped.
+pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal, nonblocking: bool, delay: ?u64) Error!void {
+    const ex = &self.file.exprs;
+    if (ex.tag(target) == .concat) {
+        const args = ex.args(target);
+        var lo: u32 = 0;
+        var k = args.len;
+        while (k != 0) {
+            k -= 1;
+            const w = (try targetType(self, args[k])).width;
+            const part = try filled(a, w, false, .zero);
+            for (0..w) |i| setBit(part, @intCast(i), value.bit(lo + @as(u32, @intCast(i))));
+            try put(self, a, args[k], part, nonblocking, delay);
+            lo += w;
+        }
+        return;
+    }
+    const p = (try place(self, a, target)) orelse return;
+    if (nonblocking)
+        _ = try enqueue(self, .{ .write = .{ .target = p.slot, .value = value, .sel = p.sel } }, delay, true)
+    else
+        try write(self, a, p, value);
 }
 
 /// Writes `value` (already converted by `evalFor`) where `p` lands. A selection
@@ -457,7 +484,7 @@ pub fn truthOf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Bit {
 /// else the variable's type, real included.
 pub fn targetType(self: *Run, e: Ast.ExprId) Error!Type {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
+    if (ex.tag(e) == .concat or ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
     const at = try self.baseSlot(e);
     return self.slotType(at);
 }
@@ -1549,8 +1576,7 @@ fn returnTimed(self: *Run, a: std.mem.Allocator, idx: u32) Error!u32 {
     try makeResident(self, self.ctx);
     self.scope = self.code_scope.items[act.ret_pc - 1];
     for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input) {
-        const target = (try place(self, a, arg)) orelse continue;
-        try write(self, a, target, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)));
+        try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
     };
     return act.ret_pc;
 }
@@ -1599,8 +1625,7 @@ fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
 /// §10.2.2 copy-out: formal `slot` assigned to the caller's lvalue `target`,
 /// under the assignment rules (§5.5.3) and in the caller's scope.
 fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
-    const p = (try place(self, a, target)) orelse return;
-    try write(self, a, p, try convertSlot(self, a, slot, try targetType(self, target)));
+    try put(self, a, target, try convertSlot(self, a, slot, try targetType(self, target)), false, null);
 }
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
@@ -1631,7 +1656,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try place(self, scratch, s.target)) |target| {
+                if (self.file.exprs.tag(s.target) == .concat) {
+                    try put(self, scratch, s.target, try evalFor(self, scratch, s.value, try targetType(self, s.target)), s.nonblocking, null);
+                } else if (try place(self, scratch, s.target)) |target| {
                     const value = try evalFor(self, scratch, s.value, try targetType(self, s.target));
                     if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target.slot, .value = value, .sel = target.sel } }, null, true) else try write(self, scratch, target, value);
                 }
@@ -1753,13 +1780,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
-                    if (try place(self, scratch, a.target)) |target|
-                        _ = try enqueue(
-                            self,
-                            .{ .write = .{ .target = target.slot, .value = self.holds.items[s.cell], .sel = target.sel } },
-                            if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null,
-                            true,
-                        );
+                    try put(self, scratch, a.target, self.holds.items[s.cell], true, if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null);
                     pc += 1;
                     continue;
                 }
@@ -1776,8 +1797,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try place(self, scratch, a.target)) |target|
-                    try write(self, scratch, target, self.holds.items[s.cell]);
+                try put(self, scratch, a.target, self.holds.items[s.cell], false, null);
                 pc += 1;
                 continue;
             },
