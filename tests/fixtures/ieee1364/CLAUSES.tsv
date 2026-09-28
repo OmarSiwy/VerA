@@ -86,39 +86,39 @@
 4.10.3	-	Specify parameters
 4.11	-	Name spaces
 5	-	Expressions
-5.1	-	Operators
+5.1	no-prohibition	Operators	"The symbols for the Verilog HDL operators are similar to those in the C programming language. Table 5-1 lists these operators." A list, no "shall"; the real-operand restrictions are §5.1.1 (cited both ways). Positive: 05_expressions/b_5_1_every_operator.v (every Table 5-1 row).
 5.1.1	-	Operators with real operands
-5.1.2	-	Operator precedence
-5.1.3	-	Using integer numbers in expressions
-5.1.4	-	Expression evaluation order
-5.1.5	-	Arithmetic operators
-5.1.6	-	Arithmetic expressions with regs and integers
-5.1.7	-	Relational operators
-5.1.8	-	Equality operators
-5.1.9	-	Logical operators
-5.1.10	-	Bitwise operators
-5.1.11	-	Reduction operators
-5.1.12	-	Shift operators
-5.1.13	-	Conditional operator
+5.1.2	no-prohibition	Operator precedence	Table 5-4 and "All operators shall associate left to right with the exception of the conditional operator, which shall associate right to left." Parsing rules that give every well-formed expression one reading; nothing is forbidden. Positive: 05_expressions/b_5_1_2_precedence.v (15 groupings where the wrong reading differs, and one parenthesised).
+5.1.3	no-prohibition	Using integer numbers in expressions	"An integer with no base specifier shall be interpreted as a signed value in twos-complement form. An integer with an unsigned base specifier shall be interpreted as an unsigned value." Interpretation rules; no form is illegal. Positive: 05_expressions/b_5_1_3_integer_number_signedness.v (the clause's four IntA results).
+5.1.4	unspecified	Expression evaluation order	"However, if the final result of an expression can be determined early, the entire expression need not be evaluated." Whether a short-circuited operand is evaluated is left open, so no test may assert one outcome (CLAUSE-AUDIT §5.5); the first sentence defers to §5.1.2 (05_expressions/b_5_1_2_precedence.v).
+5.1.5	no-prohibition	Arithmetic operators	Division truncation, x on a zero divisor, modulus sign, the power rules of Tables 5-6/5-8; the only open cases are "unspecified" (a zero base with a nonpositive exponent, or a negative base with a non-integral exponent, when an operand is real). Nothing is illegal (the real-operand ban on % is §5.1.1). Positive: 05_expressions/b_5_1_5_division_modulus_power.v, audit_expr_arithmetic_unknowns.v.
+5.1.6	no-prohibition	Arithmetic expressions with regs and integers	"A value assigned to a reg variable or a net shall be treated as an unsigned value unless ... declared to be signed. ... Conversions between signed and unsigned values shall keep the same bit representation" Interpretation rules (Table 5-9); nothing is illegal. Positive: 05_expressions/b_5_1_6_reg_integer_interpretation.v (the clause's example and every Table 5-9 row but real).
+5.1.7	no-prohibition	Relational operators	Results, extension, real conversion and precedence of relational operators; relational operators are legal on every operand type (Table 5-2). Positive: 05_expressions/b_5_1_7_relational_extension.v, audit_expr_arithmetic_unknowns.v.
+5.1.8	no-prohibition	Equality operators	Precedence, zero/sign extension, x results of == and != and exact matching of === and !==; the ban on === with real operands is §5.1.1 Table 5-3 (05_expressions/b_5_1_1_real_case_equality_rejected.v). Positive: 05_expressions/b_5_1_8_equality_extension_and_unknowns.v.
+5.1.9	no-prohibition	Logical operators	Results (1, 0 or x), precedence and negation of the logical operators; logical operators are legal on every operand type, reals included (Table 5-2). Positive: 05_expressions/b_5_1_9_logical_connectives.v, audit_expr_logical_unknowns.v.
+5.1.10	no-prohibition	Bitwise operators	"the operator shall combine a bit in one operand with its corresponding bit in the other operand" (Tables 5-12 to 5-16) and "the shorter operand is zero-filled in the most significant bit positions." Nothing is illegal (bitwise operators on reals are §5.1.1's ban). Positive: 05_expressions/b_5_1_10_bitwise_tables.v (every cell of Tables 5-12 to 5-16).
+5.1.11	no-prohibition	Reduction operators	The stepwise definition of reduction and/or/xor and their inversions; nothing is illegal (reduction of a real is §5.1.1's ban). Positive: 05_expressions/b_5_1_11_reduction_steps.v (Table 5-20 and x/z steps), expressions.v.
+5.1.12	no-prohibition	Shift operators	Fill rules, x/z right operand, unsigned right operand, result signedness; nothing is illegal (shifting a real is §5.1.1's ban). Positive: 05_expressions/b_5_1_12_shift_fill_and_sign.v (the clause's two examples and every stated rule).
+5.1.13	no-prohibition	Conditional operator	Condition by == 0, Table 5-21 merging, the real-operand 0, zero-fill of the shorter operand, right associativity (§5.1.2); nothing is illegal. Positive: 05_expressions/b_5_1_13_conditional_ambiguous.v (includes the clause's busa example), b_5_1_2_precedence.v, expressions.v.
 5.1.14	-	Concatenations
-5.2	-	Operands
+5.2	no-prohibition	Operands	Lists the operand forms: whole name ("all of the bits ... shall be used"), bit-select, part-select, array element and its selects, concatenation, function call. The illegal selects are §5.2.1's and §5.2.2's, each cited both ways. Positive: 05_expressions/b_5_2_operand_forms.v; b_5_2_2_element_selects.v (xfail: selects of an array element).
 5.2.1	-	Vector bit-select and part-select addressing
 5.2.2	-	Array and memory addressing
-5.2.3	-	Strings
-5.2.3.1	-	String operations
-5.2.3.2	-	String value padding and potential problems
-5.2.3.3	-	Null string handling
-5.3	-	Minimum, typical, and maximum delay expressions
-5.4	-	Expression bit lengths
-5.4.1	-	Rules for expression bit lengths
-5.4.2	-	Example of expression bit-length problem
-5.4.3	-	Example of self-determined expressions
-5.5	-	Signed expressions
-5.5.1	-	Rules for expression types
-5.5.2	-	Steps for evaluating an expression
-5.5.3	-	Steps for evaluating an assignment
-5.5.4	-	Handling X and Z in signed expressions
-5.6	-	Assignments and truncation
+5.2.3	no-prohibition	Strings	"String operands shall be treated as constant numbers consisting of a sequence of 8-bit ASCII codes ... Any Verilog HDL operator can manipulate string operands." Permissive; nothing is illegal. Positive: 05_expressions/b_5_2_3_string_test.v (the clause's string_test), audit_expr_string_numeric_padding.v.
+5.2.3.1	no-prohibition	String operations	"Copy is provided by simple assignment. Concatenation is provided by the concatenation operator. Comparison is provided by the equality operators." The 8*n width is a "should". Positive: 05_expressions/b_5_2_3_1_copy_concatenate_compare.v.
+5.2.3.2	no-prohibition	String value padding and potential problems	"When strings are assigned to variables, the values stored shall be padded on the left with zeros. ... The comparison and concatenation operators shall not distinguish between zeros resulting from padding and the original string characters (\0, ASCII NUL)." Positive: 05_expressions/b_5_2_3_2_padding_breaks_compare.v (the clause's s1/s2 example).
+5.2.3.3	no-prohibition	Null string handling	"The null string ("") shall be considered equivalent to the ASCII NUL ("\0"), which has a value zero (0), which is different from a string "0"." Positive: 05_expressions/b_5_2_3_3_null_string.v, audit_expr_string_numeric_padding.v.
+5.3	no-prohibition	Minimum, typical, and maximum delay expressions	"Values expressed in min:typ:max format can be used in expressions. The min:typ:max format can be used wherever expressions can appear." Permissive; which of the three a tool selects is not fixed by the clause, so the positive fixture accepts any member. Positive: 05_expressions/audit_expr_mintypmax_context.v.
+5.4	no-prohibition	Expression bit lengths	"In the case of the addition operator, the bit length of the largest operand, including the left-hand side of an assignment, shall be used." A sizing rule; nothing is illegal. Positive: 05_expressions/b_5_4_sum_width_from_lhs.v (the clause's sumA/sumB example).
+5.4.1	no-prohibition	Rules for expression bit lengths	Table 5-22's bit lengths for every expression form; nothing is illegal. Positive: 05_expressions/b_5_4_1_table_5_22_widths.v (every row but the implementation-sized unsized constant), expressions.v, audit_expr_unsized_unknown_extension.v.
+5.4.2	no-prohibition	Example of expression bit-length problem	"During the evaluation of an expression, interim results shall take the size of the largest operand (in case of an assignment, this also includes the left-hand side)." Positive: 05_expressions/b_5_4_2_bitlength_example.v (both of the clause's examples, "answer = 01000"), expressions.v.
+5.4.3	no-prohibition	Example of self-determined expressions	An example of the §5.4.1 rules: a*b, {a**b} and a**b under self- and context-determined sizing. Positive: 05_expressions/b_5_4_3_self_determined_example.v (the clause's three values).
+5.5	no-prohibition	Signed expressions	"two system functions shall be used to handle type casting on expressions: $signed() and $unsigned(). These functions shall evaluate the input expression and return a value with the same size and value of the input expression and the type defined by the function". Nothing is illegal. Positive: 05_expressions/b_5_5_signed_unsigned_functions.v (the clause's regA/regB/regS example), audit_expr_signed_boundaries.v, audit_expr_cast_width.v.
+5.5.1	no-prohibition	Rules for expression types	The type rules (decimal signed, based unsigned unless s, selects/concatenations/comparisons unsigned, any unsigned operand makes the result unsigned, any real makes it real). Nothing is illegal. Positive: 05_expressions/b_5_5_1_expression_type_rules.v, audit_expr_signed_boundaries.v, audit_expr_unknown_extension.v.
+5.5.2	no-prohibition	Steps for evaluating an expression	Propagation of type and size to context-determined operands, the real and relational exceptions, and sign extension of primaries only under a signed type. Nothing is illegal. Positive: 05_expressions/b_5_5_2_real_and_relational_operands.v, expressions.v.
+5.5.3	no-prohibition	Steps for evaluating an assignment	"If needed, extend the size of the right-hand side, performing sign extension if, and only if, the type of the right-hand side is signed." Positive: 05_expressions/b_5_5_3_assignment_extension.v, audit_expr_cast_width.v.
+5.5.4	no-prohibition	Handling X and Z in signed expressions	x/z fill of a resized signed value and "any nonlogical operation involving the value shall result in the entire resultant value being an X". Nothing is illegal. Positive: 05_expressions/b_5_5_4_signed_unknown_bits.v, audit_expr_unknown_extension.v.
+5.6	no-prohibition	Assignments and truncation	"the MSBs of the right-hand expression will always be discarded to match the size of the left-hand side. Implementations are not required to warn or report any errors related to assignment size mismatch or truncation." Truncation is legal by definition. Positive: 05_expressions/b_5_6_truncation_examples.v (the clause's three examples), audit_expr_truncation_direction.v.
 6	-	Assignments
 6.1	-	Continuous assignments
 6.1.1	-	The net declaration assignment
