@@ -793,7 +793,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try self.w(
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
                         "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
-                        "    {s}__head: u32 = 0,\n",
+                        "    {s}__head: u64 = 0,\n",
                     .{ n, hist_len, n, hist_len, n },
                 );
                 // The ring itself is not copied: `stateCtl` keeps the one
@@ -1001,7 +1001,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     for (self.hist.items) |h| try self.w("        state.{s} = inst.{s};\n", .{ h, h });
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        state.{0s}__t__acc = inst.{0s}__t[inst.{0s}__head % {1d}];\n        state.{0s}__v__acc = inst.{0s}__v[inst.{0s}__head % {1d}];\n",
+            "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n",
             .{ self.names.unit_names[i], hist_len },
         );
     }
@@ -1015,7 +1015,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     // After `__head` is back: the slot the rejected push overwrote.
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        inst.{0s}__t[inst.{0s}__head % {1d}] = state.{0s}__t__acc;\n        inst.{0s}__v[inst.{0s}__head % {1d}] = state.{0s}__v__acc;\n",
+            "        inst.{0s}__t[@intCast(inst.{0s}__head % {1d})] = state.{0s}__t__acc;\n        inst.{0s}__v[@intCast(inst.{0s}__head % {1d})] = state.{0s}__v__acc;\n",
             .{ self.names.unit_names[i], hist_len },
         );
     }
