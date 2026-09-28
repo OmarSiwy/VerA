@@ -1434,8 +1434,7 @@ pub const State = struct {
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
     /// padded on the left to `width`.
     pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u32) Error!void {
-        // The longest %f of an f64 is 309 integer digits and ".000000".
-        var buf: [512]u8 = undefined;
+        var buf: [display.real_buf]u8 = undefined;
         const out = zCReal(&buf, r, conv, 0, 0, precision);
         if (width) |w| if (out.len < w) try self.out.splatByteAll(' ', w - out.len);
         try self.out.writeAll(out);

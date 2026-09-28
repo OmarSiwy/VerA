@@ -1680,7 +1680,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try flush(self, &text);
                     try self.print("            try s.real(", .{});
                     try expr.real(self, args[arg]);
-                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], @min(precision, 60), width });
+                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], precision, width });
                 },
                 else => return self.refuse("a display conversion the engine refuses"),
             }
