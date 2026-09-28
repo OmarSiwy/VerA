@@ -63,6 +63,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     _ = try self.expect(.semicolon);
     try parseModuleItems(self, &b, .kw_endmodule);
     _ = try self.expect(.kw_endmodule);
+    try parse_specify.checkPaths(self, &b);
     // IEEE 1364-2005 §4.10.1, inherited by §1.1: "If any param_assignments
     // appear in a module_parameter_port_list, then any param_assignments that
     // appear in the module become local parameters and shall not be

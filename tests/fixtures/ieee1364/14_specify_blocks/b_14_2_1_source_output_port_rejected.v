@@ -9,7 +9,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.1
 //! reject module path source
-//! xfail VerA does not check a module path's terminals: a source that is an output port is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_2_1_source_output_port_rejected(a, q, y);
   input a;

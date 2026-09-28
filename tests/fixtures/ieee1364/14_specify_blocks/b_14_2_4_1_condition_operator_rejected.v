@@ -14,7 +14,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.1
 //! reject condition
-//! xfail VerA does not check a state-dependent path's condition: an operator outside Table 14-1 (+) is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_2_4_1_condition_operator_rejected(a, b, y);
   input a, b;

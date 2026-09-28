@@ -8,7 +8,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.3
 //! reject destination
-//! xfail VerA does not check an edge-sensitive path's destination: a parallel (=>) path to a whole vector is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_2_3_parallel_edge_vector_destination_rejected(clk, data, q);
   input clk, data;
