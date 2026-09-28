@@ -20,7 +20,6 @@
 //     range: 8'hFF = -1.
 //   -> "S=-1 SR=-1"
 //! inherited IEEE 1364-2005 12.2
-//! xfail an untyped parameter overridden with a real stays integral (r2 is 3.000000), and a signed parameter overridden with an unsigned value reads unsigned (S=15 SR=255)
 `timescale 1ns/1ns
 module foo(a,b);
   input a, b;

@@ -1,0 +1,23 @@
+// §9.5.3 $sformat takes the §9.4.1 argument list, which names no bound. VerA
+// compiles one call into one Zig format call, and Zig takes at most 32
+// arguments there, so 32 conversions is the widest call VerA accepts (E1010 is
+// the 33rd; sformat_33_conversions_rejected.va). This pins that the widest
+// accepted call still formats every value.
+//
+// HAND DERIVATION. The arguments are 0, 1, ..., 9, 0, 1, ... (i mod 10 for i =
+// 0..31), each through %d, so the string is those 32 digits in order:
+// "01234567890123456789012345678901". The check compares the string itself (§4.2.5 string equality).
+//
+//! lrm 9.5.3
+//! bias V(p) = 0
+`include "check.vh"
+module sformat_32_conversions(p, n);
+  inout p, n; electrical p, n;
+  string s;
+  analog begin
+    $sformat(s, "%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d",
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1);
+    `CHECKI("32 conversions in one $sformat", s == "01234567890123456789012345678901", 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 10.4.2
 //! reject E1100
 //! reject duplicate
-//! xfail accepted: a reg with the same name as a function in the module scope compiles and runs
 module b_10_4_2_module_object_named_as_function_rejected;
   reg x;
   reg f;

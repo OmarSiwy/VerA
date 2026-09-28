@@ -50,16 +50,6 @@ const hist_quad_txt = gen_kernel_text.hist_quad_txt;
 const arr_txt = gen_kernel_text.arr_txt;
 const helpers_head_txt = gen_kernel_text.helpers_head_txt;
 const prelude_head_txt = gen_kernel_text.prelude_head_txt;
-const prelude_math_txt = gen_kernel_text.prelude_math_txt;
-const prelude_timer_txt = gen_kernel_text.prelude_timer_txt;
-const prelude_hist_txt = gen_kernel_text.prelude_hist_txt;
-const prelude_arr_txt = gen_kernel_text.prelude_arr_txt;
-const prelude_filt_txt = gen_kernel_text.prelude_filt_txt;
-const prelude_display_txt = gen_kernel_text.prelude_display_txt;
-const prelude_table_txt = gen_kernel_text.prelude_table_txt;
-const prelude_rng_txt = gen_kernel_text.prelude_rng_txt;
-const prelude_file_txt = gen_kernel_text.prelude_file_txt;
-const prelude_str_txt = gen_kernel_text.prelude_str_txt;
 const display_txt = gen_kernel_text.display_txt;
 
 // =======================================================================
@@ -192,19 +182,21 @@ pub fn emitFile(self: *Gen) Error!void {
 fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
-    try p.appendSlice(self.arena, prelude_math_txt);
-    try p.appendSlice(self.arena, gen_kernel_text.prelude_family_txt);
-    if (f.timer) try p.appendSlice(self.arena, prelude_timer_txt);
-    if (f.hist) try p.appendSlice(self.arena, prelude_hist_txt);
-    if (f.hist_quad) try p.appendSlice(self.arena, gen_kernel_text.prelude_hist_quad_txt);
-    if (f.arrs) try p.appendSlice(self.arena, prelude_arr_txt);
-    if (f.filt) try p.appendSlice(self.arena, prelude_filt_txt);
-    if (f.ac) try p.appendSlice(self.arena, gen_kernel_text.prelude_ac_txt);
-    if (self.display == .emit or f.strs) try p.appendSlice(self.arena, prelude_display_txt);
-    if (f.strs) try p.appendSlice(self.arena, prelude_str_txt);
-    if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
-    if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
-    if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
+    const alias = gen_kernel_text.appendAliases;
+    try alias(&p, self.arena, math_txt);
+    try alias(&p, self.arena, ops_txt);
+    try alias(&p, self.arena, gen_kernel_text.family_txt);
+    if (f.timer) try alias(&p, self.arena, timer_txt);
+    if (f.hist) try alias(&p, self.arena, hist_txt);
+    if (f.hist_quad) try alias(&p, self.arena, hist_quad_txt);
+    if (f.arrs) try alias(&p, self.arena, arr_txt);
+    if (f.filt) try alias(&p, self.arena, filt_txt);
+    if (f.ac) try alias(&p, self.arena, gen_kernel_text.ac_txt);
+    if (self.display == .emit or f.strs) try alias(&p, self.arena, display_txt);
+    if (f.strs) try alias(&p, self.arena, str_txt);
+    if (f.files) try alias(&p, self.arena, file_txt);
+    if (f.tbl) try alias(&p, self.arena, table_txt);
+    if (f.rng) try alias(&p, self.arena, rng_txt);
     // The shared core is a unit file beside the units that call it, and
     // device.zig's alias for it is private. Spelled `core`, not the structural
     // key, so the core's own file (same prologue) does not redeclare its name;

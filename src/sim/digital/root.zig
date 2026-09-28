@@ -238,8 +238,17 @@ pub const Run = struct {
     /// progress: every activation returns at once until the outermost one.
     unwind: ?u32 = null,
     sync_depth: u16 = 0,
+    /// The frame address of the outermost synchronous activation, which
+    /// `callSync` measures the stack from.
+    sync_stack: usize = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
+    /// §9.7.2 each event term that is an expression, by the scope it is
+    /// compiled in: the hidden slot `compile.exprTerm` keeps equal to it.
+    term_slots: std.AutoHashMapUnmanaged(struct { scope: u32, e: Ast.ExprId }, u32) = .empty,
+    /// The storage of automatic tasks and functions, which §10.2.3 keeps
+    /// out of constructs that might outlive an activation.
+    auto_slots: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// The saved storage of the automatic activations in progress.
     saved_planes: std.ArrayList(u64) = .empty,
     /// §10.2.3 the activations of recursive timed tasks: the one the
@@ -256,6 +265,9 @@ pub const Run = struct {
     /// and a downward hierarchical reference walks these before it reaches a
     /// slot at all.
     instances: std.AutoHashMapUnmanaged(Name, u32) = .empty,
+    /// §12.5 the scope of each named block that declares something, keyed by
+    /// the scope it runs in and its statement (`blockScope`).
+    block_scopes: std.AutoHashMapUnmanaged(struct { scope: u32, stmt: Ast.StmtId }, u32) = .empty,
     /// IEEE 1364 §19.10's regions, in text-stream order. Read once per
     /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
@@ -278,8 +290,9 @@ pub const Run = struct {
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
     /// The slots that are §5.10.4 named events. They occupy a slot only so that
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
-    /// there, because §5.10's events "do not hold any data".
-    events: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// there, because §5.10's events "do not hold any data". Each to its
+    /// declaration's token, or 0 where no use can precede it (a named block's).
+    events: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Natural types (§5.5.1), indexed by AST ExprId. An ExprId is shared by
     /// every instance of its module, and IEEE 1364-2005 §12.2 gives each
     /// instance its own parameter values, so the truth is `spec_types`, keyed
@@ -679,14 +692,20 @@ pub const Run = struct {
     /// turn (steps b and c), where an enclosing instance of the module so
     /// named also answers (Syntax 12-7 `module_identifier.item_name`). The
     /// root is an instance of its module. Null when nothing up to the root
-    /// has that name.
-    /// ponytail: instance scopes only; a generate block name (§12.6's other
-    /// `scope_name`) is not a scope here.
+    /// has that name. A named block, task, function or generate block is a
+    /// scope too (§12.5), found by its name inside the scope around it and,
+    /// from within, by its own.
     pub fn upward(self: *const Run, name: Ast.StrId) ?u32 {
-        var s = self.instanceOf(self.scope);
+        var s = self.scope;
         while (true) {
             if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
-            if (self.file.modules[self.scope_info.items[s].def].name == name) return s;
+            const info = self.scope_info.items[s];
+            if (info.lexical) {
+                if (info.name == name and info.index == null) return s;
+                s = info.parent;
+                continue;
+            }
+            if (self.file.modules[info.def].name == name) return s;
             // §12.5: a top-level module's name starts a hierarchical name
             // anywhere in the design.
             if (isRoot(self, s)) {
@@ -735,15 +754,26 @@ pub const Run = struct {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
-            var scope = self.upward(parts[0]) orelse return self.exprFail(e, "undeclared instance in a hierarchical reference");
-            for (parts[1 .. parts.len - 1]) |part|
-                scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
-                    return self.exprFail(e, "undeclared instance in a hierarchical reference");
+            var scope: u32 = 0;
+            for (parts[0 .. parts.len - 1], 0..) |part, k| {
+                const next = if (k == 0) self.upward(part) else self.instances.get(.{ .scope = scope, .str = part });
+                scope = next orelse return if (std.mem.indexOfScalar(u8, self.file.str(part), '[') != null)
+                    self.fail(self.file.exprs.mainTok(e), "§12.5: `{s}`: an instance select out of range, or of no array", .{self.file.str(part)})
+                else if (self.sub_by_name.get(.{ .scope = if (k == 0) self.instanceOf(self.scope) else scope, .str = part })) |idx| if (self.subs.items[idx].decl.automatic)
+                    self.fail(self.file.exprs.mainTok(e), "§10.2.1: `{s}` is automatic: its items cannot be accessed by hierarchical references", .{self.file.str(part)})
+                else
+                    self.exprFail(e, "undeclared instance in a hierarchical reference") else self.exprFail(e, "undeclared instance in a hierarchical reference");
+            }
             return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
                 self.exprFail(e, "undeclared digital variable");
         }
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.lookup(self.scope, ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
+    }
+    /// The slot event term `e` watches: a name's own, or the hidden one a
+    /// §9.7.2 expression term keeps (`term_slots`).
+    pub fn termSlot(self: *Run, e: Ast.ExprId) Error!u32 {
+        return self.term_slots.get(.{ .scope = self.scope, .e = e }) orelse self.slot(e);
     }
     /// The type a slot's value has, for an assignment to it.
     pub fn slotType(self: *const Run, at: u32) compile.Type {
@@ -843,8 +873,9 @@ pub const Run = struct {
     fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
         const hi = try self.declaredBound(range.msb, tok);
         const lo = try self.declaredBound(range.lsb, tok);
-        if (@abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
-        return @intCast(@abs(hi - lo) + 1);
+        const span = @abs(@as(i128, hi) - lo);
+        if (span >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
+        return @intCast(span + 1);
     }
     fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
         const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
@@ -927,10 +958,15 @@ const PortBind = union(enum) {
     collapse: u32,
     /// An input port fed by a parent expression that is not one whole net.
     receive: struct { expr: Ast.ExprId, scope: u32, tok: u32, slice: ?Slice = null },
-    /// An output port whose parent side is a concatenation: the operand nets,
-    /// leftmost first (§6.5.7.1 joins them highest-order first).
-    send: struct { operands: []const u32, tok: u32 },
+    /// An output port whose parent side is not one whole net: the operands
+    /// of its §12.3.9.2 structural net expression, leftmost first (§6.5.7.1
+    /// joins them highest-order first).
+    send: struct { operands: []const Sink, tok: u32 },
 };
+
+/// One operand of a structural net expression: `width` bits of net `net`
+/// from bit position `lo` up.
+const Sink = struct { net: u32, lo: u32, width: u32 };
 
 /// Everything §6.2.2 elaboration accumulates before any expression is compiled:
 /// a name lookup in pass two must not run against a slot space a later
@@ -1036,33 +1072,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         entry.value_ptr.* = @intCast(r.subs.items.len);
         try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
     }
-    var positional: usize = 0;
-    for (m.params) |p| {
-        const pos = positional;
-        if (!p.is_local) positional += 1;
-        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer)) {
-            if (r.mixed) continue;
-            return r.fail(p.main_tok, "only integral scalar parameters are implemented by digital execution", .{});
-        }
-        const value = (try paramValue(r, p, scope, over, pos)) orelse continue;
-        // §12.2: a range or a type converts the value like an assignment;
-        // otherwise the parameter takes the type of its value.
-        const ty: compile.Type = if (p.packed_range) |range|
-            .{ .width = try r.declaredWidth(range, p.main_tok), .signed = false }
-        else if (p.ty == .integer)
-            .{ .width = 32, .signed = true }
-        else
-            .{ .width = value.width, .signed = value.signed };
-        const converted = try exec.convert(arena, value, ty);
-        const at: u32 = @intCast(e.values.items.len);
-        try r.bind(p.name, at, p.main_tok);
-        const slot_value = try filled(arena, ty.width, ty.signed, .zero);
-        @memcpy(slot_value.planes, converted.planes);
-        try e.values.append(arena, slot_value);
-        try r.params.put(arena, at, {});
-        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
-    }
-    try declareEvents(r, e, m.events, m.main_tok);
+    try declareParams(r, scope, m.params, over);
+    try declareEvents(r, m.events, m.event_toks, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
         // VAMS §7.3.6.4: an analog variable a digital expression reads is
@@ -1081,17 +1092,31 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // a digital process naming one is an undeclared name.
         if (r.mixed and (v.init != .none or v.storage == .time or (v.ty != .integer and !written.contains(v.name)))) continue;
         if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
-        _ = try mintVar(r, v);
+        // IEEE 1364-2005 §12.3.3: "If either the port or the net/reg is
+        // declared as signed, then the other shall also be considered signed."
+        var d = v;
+        for (m.ports) |p| if (p.name == v.name and p.is_signed) {
+            d.is_signed = true;
+        };
+        _ = try mintVar(r, d);
     }
     // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
     // instance holding its formals, its locals and a function's result: the
     // storage a static subroutine shares between activations (§10.2.3).
     // Framed after the parameters its widths may read, unless a §10.4.5
     // constant function call framed it first (`earlyFrame`).
-    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| if (!sub.framed) {
-        sub.frame = try frame(r, sub.decl, scope);
-        sub.framed = true;
-    };
+    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| {
+        if (!sub.framed) {
+            sub.frame = try frame(r, sub.decl, scope);
+            sub.framed = true;
+        }
+        // §12.5: a task or function is a scope a hierarchical name reaches;
+        // §10.2.1: "Automatic task items cannot be accessed by hierarchical
+        // references" (`slot` names why).
+        if (!sub.decl.automatic) try r.instances.put(r.arena, .{ .scope = scope, .str = sub.decl.name }, sub.frame.scope);
+        try blockScopes(r, sub.frame.scope, sub.decl.body);
+    }
+    for (m.discrete) |d| try blockScopes(r, scope, d.body);
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous, the analog solver's.
         if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
@@ -1133,6 +1158,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // body `wire w;` on the same name was folded into by the parser.
     for (m.ports, 0..) |p, i| {
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
+        if (p.external_name != .none and !p.concat_rest) for (m.ports[0..i]) |q| if (q.external_name == p.external_name)
+            return r.fail(p.main_tok, "§12.3.2: a port defined twice in the list of ports: `{s}`", .{r.file.str(p.external_name)});
+        if (p.direction == .unspecified) return r.fail(p.main_tok, "§12.3.3: port `{s}` has no direction declaration", .{r.file.str(p.name)});
+        // §12.3.3: "the range specification between the two declarations of
+        // a port shall be identical".
+        if (p.range) |a| if (p.type_range) |b| if (try r.declaredBound(a.msb, p.main_tok) != try r.declaredBound(b.msb, p.main_tok) or
+            try r.declaredBound(a.lsb, p.main_tok) != try r.declaredBound(b.lsb, p.main_tok))
+            return r.fail(p.main_tok, "§12.3.3: the net declaration's range differs from its port declaration's: `{s}`", .{r.file.str(p.name)});
         const bind = if (i < binds.len) binds[i] else PortBind.open;
         const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         // IEEE 1364-2005 §12.3.3: an output port "declared as a variable"
@@ -1161,6 +1194,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
             if (!merging and outer.resolved.width != width)
                 return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+            if (warnCell(p.kind, outer.kind)) {
+                const at = r.starts[@min(p.main_tok, r.starts.len - 1)];
+                try r.bag.add(.lower, .W1160, .{ .start = at, .end = at }, "§12.3.10: a `{s}` port joined to a `{s}` net is a Table 12-1 warn cell of the net type table", .{ @tagName(p.kind), @tagName(outer.kind) });
+            }
             try r.bind(p.name, outer.slot, p.main_tok);
             if (p.is_signed != e.values.items[outer.slot].signed)
                 try r.port_signed.put(arena, .{ .scope = scope, .str = p.name }, p.is_signed);
@@ -1201,13 +1238,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 var k = c.operands.len;
                 while (k != 0) {
                     k -= 1;
-                    const dst = &e.nets.items[c.operands[k]];
-                    const w = dst.resolved.width;
+                    const op = c.operands[k];
+                    const w = op.width;
                     if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
                     try e.wires.append(arena, .{
-                        .net = c.operands[k],
+                        .net = op.net,
                         .scope = scope,
-                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w } },
+                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = op.lo, .width = w } },
                         .tok = c.tok,
                     });
                     lo += w;
@@ -1216,10 +1253,86 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
         }
     }
+    // §10.4.2: "It is illegal to declare another object with the same name
+    // as the function in the scope where the function is declared."
+    for (r.subs.items[r.sub_base.get(scope).?..]) |sub| if (r.names.contains(.{ .scope = scope, .str = sub.decl.name }))
+        return r.fail(sub.decl.main_tok, "§10.4.2: duplicate declaration of `{s}`, a task or function name in this scope", .{r.file.str(sub.decl.name)});
     try implicitNets(r, e, scope, m);
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// IEEE 1364-2005 §12.2 the parameters `params` of `scope` (an instance, or a
+/// §12.5 named block, which `over` never reaches), in declaration order so a
+/// default may name an earlier one.
+fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []const Ast.ParamOverride) Error!void {
+    const arena = r.arena;
+    const g = r.growing.?;
+    var positional: usize = 0;
+    for (params) |p| {
+        const pos = positional;
+        if (!p.is_local) positional += 1;
+        if (p.dims.len != 0 or p.ty == .string or (r.mixed and p.ty == .real)) {
+            if (r.mixed) continue;
+            return r.fail(p.main_tok, "only scalar integral and real parameters are implemented by digital execution", .{});
+        }
+        const pv = (try paramValue(r, p, scope, over, pos)) orelse continue;
+        // §12.2: a range or a type (`signed` is one) converts the value like
+        // an assignment; otherwise the parameter takes the type of its value.
+        const ty: compile.Type = if (p.packed_range) |range|
+            .{ .width = try r.declaredWidth(range, p.main_tok), .signed = p.is_signed }
+        else if (p.ty == .integer)
+            .{ .width = 32, .signed = true }
+        else if (p.ty == .real or (pv.real and !p.is_signed))
+            compile.real_type
+        else
+            .{ .width = if (pv.real) 64 else pv.v.width, .signed = p.is_signed or pv.v.signed };
+        const converted = try exec.convertValue(arena, pv.v, pv.real, ty);
+        const at: u32 = @intCast(g.items.len);
+        try r.bind(p.name, at, p.main_tok);
+        const slot_value = try filled(arena, ty.width, ty.signed, .zero);
+        @memcpy(slot_value.planes, converted.planes);
+        try g.append(arena, slot_value);
+        try r.params.put(arena, at, {});
+        if (ty.real) try r.reals.put(arena, at, {});
+        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
+    }
+    r.values = g.items;
+}
+
+/// IEEE 1364-2005 §12.3.10 Table 12-1: is the pair of an internal (port)
+/// and external (connected) net type a "warn" cell?
+fn warnCell(internal: Ast.NetKind, external: Ast.NetKind) bool {
+    const Col = enum { wire, wand, wor, trireg, tri0, tri1, uwire, supply0, supply1, wreal };
+    const col = struct {
+        fn of(k: Ast.NetKind) Col {
+            return switch (k) {
+                .wire, .tri => .wire,
+                .wand, .triand => .wand,
+                .wor, .trior => .wor,
+                .trireg => .trireg,
+                .tri0 => .tri0,
+                .tri1 => .tri1,
+                .uwire => .uwire,
+                .supply0 => .supply0,
+                .supply1 => .supply1,
+                .wreal => .wreal,
+            };
+        }
+    }.of;
+    const warns: []const Col = switch (col(internal)) {
+        .wire, .wreal => &.{},
+        .wand => &.{ .wor, .trireg, .tri0, .tri1, .uwire },
+        .wor => &.{ .wand, .trireg, .tri0, .tri1, .uwire },
+        .trireg => &.{ .wand, .wor, .uwire },
+        .tri0 => &.{ .wand, .wor, .tri1, .uwire },
+        .tri1 => &.{ .wand, .wor, .tri0, .uwire },
+        .uwire => &.{ .wand, .wor, .trireg, .tri0, .tri1 },
+        .supply0 => &.{.supply1},
+        .supply1 => &.{.supply0},
+    };
+    return std.mem.indexOfScalar(Col, warns, col(external)) != null;
 }
 
 /// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
@@ -1248,14 +1361,81 @@ fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
 /// point on the waiter list; the stored value is never read or written.
-fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!void {
-    for (names) |name| {
-        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
-        const at: u32 = @intCast(e.values.items.len);
+fn declareEvents(r: *Run, names: []const Ast.StrId, toks: []const u32, tok: u32) Error!void {
+    const g = r.growing.?;
+    for (names, 0..) |name, i| {
+        if (g.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
+        const at: u32 = @intCast(g.items.len);
         try r.bind(name, at, tok);
-        try e.values.append(r.arena, try filled(r.arena, 1, false, .x));
-        try r.events.put(r.arena, at, {});
+        try g.append(r.arena, try filled(r.arena, 1, false, .x));
+        try r.events.put(r.arena, at, if (i < toks.len) toks[i] else 0);
     }
+    r.values = g.items;
+}
+
+/// Does statement `s` hold a named block with declarations of its own?
+fn declares(file: *const Ast.SourceFile, s: Ast.StmtId) bool {
+    const W = struct {
+        f: *const Ast.SourceFile,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) error{Found}!void {}
+        pub fn stmt(w: @This(), c: Ast.StmtId) error{Found}!void {
+            if (c == .none) return;
+            switch (w.f.stmt(c)) {
+                .block => |b| if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) return error.Found,
+                else => {}, // else: only a block declares
+            }
+            try w.f.stmtEdges(c, w);
+        }
+    };
+    (W{ .f = file }).stmt(s) catch return true;
+    return false;
+}
+
+/// IEEE 1364-2005 §12.5 "each ... named begin-end or fork-join block shall
+/// define a new branch of the hierarchy": the named blocks of statement `s`,
+/// run in `scope`, that declare something or enclose one that does, each a
+/// scope with its declarations, made in pass one so a hierarchical name
+/// compiled first (`b.mod_1.x` from a sibling block) finds them. `compile`
+/// enters the scope `block_scopes` records.
+fn blockScopes(r: *Run, scope: u32, s: Ast.StmtId) Error!void {
+    if (s == .none) return;
+    const W = struct {
+        r: *Run,
+        scope: u32,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
+        pub fn stmt(w: @This(), c: Ast.StmtId) Error!void {
+            try blockScopes(w.r, w.scope, c);
+        }
+    };
+    var inner = scope;
+    switch (r.file.stmt(s)) {
+        .block => |b| if (b.name != .none and !r.block_scopes.contains(.{ .scope = scope, .stmt = s }) and declares(r.file, s)) {
+            inner = try blockScope(r, scope, s);
+        },
+        else => {}, // else: only a block is a scope
+    }
+    try r.file.stmtEdges(s, W{ .r = r, .scope = inner });
+}
+
+/// Block `s`'s scope under `scope`, its parameters, events and variables
+/// declared there. Pass two calls it for an automatic activation's copy.
+pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
+    const b = r.file.stmt(s).block;
+    const tok = r.file.stmtTok(s);
+    const at = try newScope(r, tok);
+    try r.scope_info.append(r.arena, .{ .parent = scope, .name = b.name, .def = r.scope_info.items[scope].def, .lexical = true });
+    try r.block_scopes.put(r.arena, .{ .scope = scope, .stmt = s }, at);
+    if (b.name != .none) try r.instances.put(r.arena, .{ .scope = scope, .str = b.name }, at);
+    const saved = r.scope;
+    defer r.scope = saved;
+    r.scope = at;
+    try declareParams(r, at, b.params, &.{});
+    try declareEvents(r, b.events, &.{}, tok);
+    for (b.vars) |v| {
+        if (v.init != .none) return r.fail(v.main_tok, "an initialized block-local variable is not implemented", .{});
+        _ = try mintVar(r, v);
+    }
+    return at;
 }
 
 /// The driver rows of `items`' continuous assignments, gates, switches and
@@ -1264,9 +1444,32 @@ fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!vo
 fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
-        const target = try netSlot(r, a.target, a.main_tok);
-        const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        // §6.1.1 a net, a net array element, a constant select of a vector
+        // net, or a concatenation of them. Anything short of one whole net
+        // is driven through a hidden net as wide as the target, bridged into
+        // each operand's bits as a §12.3.9.2 output port's value is.
+        var leaves: std.ArrayList(Ast.ExprId) = .empty;
+        try concatLeaves(r, a.target, &leaves);
+        const args = leaves.items;
+        const operands = try r.arena.alloc(Sink, args.len);
+        var width: u32 = 0;
+        for (args, operands) |arg, *out| {
+            out.* = try sink(r, e, arg, a.main_tok, .assign);
+            width += out.width;
+        }
+        r.scope = scope;
+        const whole = operands.len == 1 and operands[0].lo == 0 and operands[0].width == e.nets.items[operands[0].net].resolved.width;
+        const net = if (whole) operands[0].net else try mintNet(r, e, .wire, width, false, .none, a.main_tok);
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+        if (whole) continue;
+        var lo: u32 = 0;
+        var k = operands.len;
+        while (k != 0) {
+            k -= 1;
+            const op = operands[k];
+            try e.wires.append(r.arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[net].slot, .src_lo = lo, .dst_lo = op.lo, .width = op.width } }, .tok = a.main_tok });
+            lo += op.width;
+        }
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
@@ -1467,9 +1670,9 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
 /// (§12.1.1: an instance in an unselected arm still makes its module no
 /// top-level one).
 /// A block's events, drivers and processes are declared in the scope it is
-/// elaborated in (`Ast.GenItems`).
-/// ponytail: an if or case generate's block is not a scope of its own, so its
-/// names are the enclosing scope's, as its hoisted nets are. A part-select bound written with a genvar is folded once, with
+/// elaborated in (`Ast.GenItems`), which is the block's own (`armScope`).
+/// ponytail: the parser hoists a generate block's nets to the module, so they
+/// are the enclosing instance's names. A part-select bound written with a genvar is folded once, with
 /// the first iteration's value; a bit-select is read per iteration.
 fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
     if (s == .none) return;
@@ -1479,7 +1682,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         .if_stmt => |i| {
             r.scope = scope;
             const cond = (try r.constant(i.cond, tok)).truth();
-            try generate(r, e, m, scope, if (cond == .one) i.then_s else i.else_s, depth);
+            const arm = if (cond == .one) i.then_s else i.else_s;
+            try generate(r, e, m, try armScope(r, scope, arm, tok), arm, depth);
         },
         // §12.4.2: "the case_generate_item selected is the one whose
         // expression matches the case expression", the default otherwise.
@@ -1497,7 +1701,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                     if ((try exec.convert(r.arena, value, ty)).equality(.case_equal, try exec.convert(r.arena, l, ty)) == .one) chosen = arm.body;
                 }
             }
-            try generate(r, e, m, scope, chosen orelse fallback, depth);
+            const arm = chosen orelse fallback;
+            try generate(r, e, m, try armScope(r, scope, arm, tok), arm, depth);
         },
         // §12.4.1: the genvar steps through its values in the module's scope,
         // and each iteration's block is a scope of its own, `name[value]`, in
@@ -1532,6 +1737,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 try seen.append(r.arena, value);
                 const iter = try newScope(r, tok);
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value, .implicit = implicit });
+                try selectable(r, scope, name, value, iter);
                 r.scope = iter;
                 try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
                 try generate(r, e, m, iter, f.body, depth);
@@ -1541,9 +1747,11 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
-            try declareEvents(r, e, b.gen.events, tok);
+            for (b.gen.defparams) |d| try r.defparams.put(r.arena, .{ .scope = scope, .str = d.path }, d);
+            try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
+            for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
             // A mixed design's generate block also holds its analog blocks,
             // which are the analog compile's.
@@ -1551,6 +1759,35 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
     }
+}
+
+/// IEEE 1364-2005 §12.4.2/§12.4.3 the scope a conditional generate's chosen
+/// block `s` is elaborated in: a new one under `scope`, named as the block or
+/// `genblk<n>`, unless `s` is no block or a directly nested construct (the
+/// parser leaves those unnamed), which is not a scope.
+fn armScope(r: *Run, scope: u32, s: Ast.StmtId, tok: u32) Error!u32 {
+    if (s == .none) return scope;
+    const name = switch (r.file.stmt(s)) {
+        .block => |b| b.gen_name,
+        else => return scope, // else: an empty arm declares nothing
+    };
+    if (name == .none) return scope;
+    const at = try newScope(r, tok);
+    try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = r.scope_info.items[scope].def, .lexical = true });
+    // §12.4.3: "an unnamed generate block has no name that can be used in a
+    // hierarchical name".
+    if (r.file.stmt(s).block.name != .none) try r.instances.put(r.arena, .{ .scope = scope, .str = name }, at);
+    return at;
+}
+
+/// §12.5 element `k` of the instance array or loop generate `name` in
+/// `scope`, reachable as `name[k]` (the spelling the parser gives an
+/// instance select) when the source writes one.
+fn selectable(r: *Run, scope: u32, name: Ast.StrId, k: i64, at: u32) Error!void {
+    if (name == .none) return;
+    var buf: [256]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{s}[{d}]", .{ r.file.str(name), k }) catch return;
+    if (r.file.strings.find(text)) |str| try r.instances.put(r.arena, .{ .scope = scope, .str = str }, at);
 }
 
 /// A genvar's storage in the current scope: a 32-bit signed constant
@@ -1593,8 +1830,8 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 /// block reads), and its declared default. Each is a constant expression in
 /// the scope that wrote it. null: in a mixed design, a value this engine does
 /// not fold (a real, or one naming the analog block's), so the parameter is
-/// the analog block's alone.
-fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?Int.Literal {
+/// the analog block's alone. `real`: `v` holds a real's 64 bits.
+fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?struct { v: Int.Literal, real: bool = false } {
     const Src = struct { e: Ast.ExprId, scope: u32 };
     const src: Src = blk: {
         // A defparam's path is relative to the instance that declares it, so
@@ -1603,8 +1840,10 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         var at = scope;
         var path: []const u8 = r.file.str(p.name);
         while (true) {
-            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d|
+            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d| {
+                if (p.is_local) return r.fail(d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
                 break :blk .{ .e = d.value, .scope = at };
+            };
             if (isRoot(r, at)) {
                 // §12.2.1: a defparam in one top-level module may name a
                 // parameter under another by its full hierarchical name.
@@ -1641,9 +1880,10 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         // an integer one takes the value rounded, as the device's does.
         const w = try filled(r.arena, 64, true, .zero);
         w.values()[0] = @bitCast(std.math.lossyCast(i64, @round(c.value)));
-        return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
+        return .{ .v = try exec.normalize(r.arena, w, .{ .width = 32, .signed = true }) };
     };
-    return value;
+    if (compile.typeOf(r, src.e).real) return .{ .v = try exec.realLiteral(r.arena, try exec.evalReal(r, r.arena, src.e)), .real = true };
+    return .{ .v = value };
 }
 
 /// The first name in `e` that does not resolve in the current scope.
@@ -1670,8 +1910,7 @@ fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
     r.scope = scope;
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
-    if (findUdp(r.file, inst.module) != null)
-        return r.fail(inst.main_tok, "§12.1.2: arrays of UDP instances are not implemented by digital execution", .{});
+    if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
     const msb = try r.declaredBound(range.msb, inst.main_tok);
     const lsb = try r.declaredBound(range.lsb, inst.main_tok);
     var k = @min(msb, lsb);
@@ -1695,6 +1934,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
         const bound = try binding.child(r, scope, inst);
         const child = try connectable(r, &r.file.modules[bound.def], inst.main_tok);
+        try checkLists(r, child, inst);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
         for (inst.ports, 0..) |conn, i| {
@@ -1709,7 +1949,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
                 if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
                 var total: u32 = 0;
                 var last = first;
-                while (last < child.ports.len and child.ports[last].external_name == conn.name) : (last += 1)
+                while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
                     total += try portWidth(r, child.ports[last]);
                 var lo = total;
                 for (child.ports[first..last], first..) |p, k| {
@@ -1729,7 +1969,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
             if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
-            binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
+            binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
         try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .def = bound.def, .index = index });
@@ -1737,9 +1977,38 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         // §12.4's path is walked by name, so the instance's own identifier has
         // to outlive the recursion that consumes it. An array element's path
         // carries its index, which that walk does not read: not registered.
-        if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
+        if (inst.name != .none) if (index) |k| try selectable(r, scope, inst.name, k, child_scope) else try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
         try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
         r.scope = scope;
+    }
+}
+
+/// IEEE 1364-2005 §12.2.2 and §12.3.6: an instance's parameter value
+/// assignments, and its port connections, are each all ordered or all named;
+/// a named one names a parameter (not a local one) or a port once; and no
+/// more ordered values are given than the module has parameters.
+fn checkLists(r: *Run, child: *const Ast.ModuleDecl, inst: *const Ast.Instance) Error!void {
+    for (inst.params, 0..) |o, i| {
+        if ((o.name == .none) != (inst.params[0].name == .none))
+            return r.fail(o.main_tok, "§12.2.2: a parameter value assignment mixes ordered and named parameter assignments", .{});
+        if (o.name == .none) continue;
+        const name = r.file.str(o.name);
+        for (inst.params[0..i]) |q| if (q.name == o.name) return r.fail(o.main_tok, "§12.2.2.2: parameter `{s}` is assigned twice", .{name});
+        const p = for (child.params) |p| {
+            if (p.name == o.name) break p;
+        } else return r.fail(o.main_tok, "§12.2.2.2: the module has no such parameter: `{s}`", .{name});
+        if (p.is_local) return r.fail(o.main_tok, "§12.2: `{s}` is a local parameter, which a parameter value assignment cannot override", .{name});
+    }
+    if (inst.params.len != 0 and inst.params[0].name == .none) {
+        var n: usize = 0;
+        for (child.params) |p| n += @intFromBool(!p.is_local);
+        if (inst.params.len > n) return r.fail(inst.params[n].main_tok, "§12.2.2.1: more parameter values than the module has parameters", .{});
+    }
+    for (inst.ports, 0..) |c, i| {
+        if ((c.name == .none) != (inst.ports[0].name == .none))
+            return r.fail(c.main_tok, "§12.3.6: an instance mixes ordered and named port connections", .{});
+        if (c.name == .none) continue;
+        for (inst.ports[0..i]) |q| if (q.name == c.name) return r.fail(c.main_tok, "§12.3.6: port `{s}` is connected twice", .{r.file.str(c.name)});
     }
 }
 
@@ -1803,7 +2072,6 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
     if (v.ty == .string) return r.fail(v.main_tok, "string variables are not implemented", .{});
     const real = v.ty == .real;
-    if (v.dims.len > 16) return r.fail(v.main_tok, "arrays of more than 16 dimensions are not implemented", .{});
     // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
     // §4.8: a real is a double, held as its 64 bits.
     const width: u32 = if (real) 64 else if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
@@ -1838,6 +2106,8 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
 /// with `dims`, and its element count; 1, and no row, for no dimensions.
 fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len == 0) return 1;
+    // `address` and `netSlot` gather one index per dimension on the stack.
+    if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
     var left: i64 = 0;
@@ -1850,7 +2120,7 @@ fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
             right = lo;
         }
         s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
-        const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+        const size = std.math.cast(u32, @as(i128, s.high) - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
         count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
     }
     try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .left = left, .right = right, .rest = spans[1..] });
@@ -1927,6 +2197,12 @@ pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u
 /// an automatic task's per-call-site one in pass two.
 pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const g = r.growing.?;
+    // §10.4.4 c) and d): at least one input, and no output or inout.
+    if (t.is_function) {
+        for (t.ports) |p| if (p.direction != .input)
+            return r.fail(p.v.main_tok, "§10.4.4: a function argument is an input, not an output or inout", .{});
+        if (t.ports.len == 0) return r.fail(t.main_tok, "§10.4.1: a function shall have at least one input declared", .{});
+    }
     const scope = try newScope(r, t.main_tok);
     try r.scope_info.append(r.arena, .{ .parent = inst, .name = t.name, .def = r.scope_info.items[inst].def, .lexical = true });
     const saved = r.scope;
@@ -1940,6 +2216,7 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
         _ = try mintVar(r, v);
     }
+    if (t.automatic) for (first..g.items.len) |at| try r.auto_slots.put(r.arena, @intCast(at), {});
     return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
 }
 
@@ -1995,39 +2272,86 @@ fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
     return null;
 }
 
-/// IEEE 1364-2005 §8 one UDP instance: one more driver of its output net, as
-/// a gate is (§8.1: "UDPs are instantiated exactly the same way as gate
-/// primitives"), whose value is its table's. §8.5: a sequential UDP's state
-/// starts at its `initial` value, or x, and that value is on the output at
-/// time 0 whatever the instance delay.
+/// IEEE 1364-2005 §8 one UDP instance, or §8.6's array of them: one more
+/// driver of its output net per instance, as a gate is (§8.1: "UDPs are
+/// instantiated exactly the same way as gate primitives"), whose value is its
+/// table's. An array's instances split a vector terminal one bit each, the
+/// leftmost index the most significant (§7.1.6). §8.5: a sequential UDP's
+/// state starts at its `initial` value, or x, and that value is on the output
+/// at time 0 whatever the instance delay.
 fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
     const net_mod = @import("net.zig");
-    if (inst.ports.len != u.ports.len) return r.fail(inst.main_tok, "§8: a UDP instance connects its output and every input, in order", .{});
+    const tok = inst.main_tok;
+    try checkUdp(r, u);
+    if (inst.ports.len != u.ports.len) return r.fail(tok, "§8: a UDP instance connects its output and every input, in order", .{});
     for (inst.ports) |c| if (c.name != .none or c.expr == .none)
         return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
-    const net = r.net_of.get(try r.scalarSlot(inst.ports[0].expr)) orelse return r.fail(inst.main_tok, "a UDP's output terminal must be a net", .{});
-    if (e.nets.items[net].resolved.width != 1) return r.fail(inst.main_tok, "only scalar UDP terminals are implemented", .{});
+    // `inv #(2, 3) g(q, a)` parses as a parameter value assignment; on a
+    // UDP it is A.5.4's `delay2`.
+    var delay = inst.delay;
+    if (inst.params.len != 0) {
+        if (inst.params.len > 2) return r.fail(tok, "§8.6: a UDP instance takes at most two delays", .{});
+        for (inst.params) |o| if (o.name != .none) return r.fail(o.main_tok, "§8.6: a UDP instance's `#( )` is a delay, not a parameter value assignment", .{});
+        delay = .{ .rise = inst.params[0].value, .fall = inst.params[inst.params.len - 1].value, .off = if (inst.params.len == 1) inst.params[0].value else .none };
+    }
+    const out = try sink(r, e, inst.ports[0].expr, tok, .port);
+    const lanes: u32 = if (inst.range) |rg| try r.declaredWidth(rg, tok) else 1;
+    if (out.width != 1 and out.width != lanes) return r.fail(tok, "§8.6: a UDP's output terminal is one bit, or one per instance of an array", .{});
+    const wide = e.nets.items[out.net].resolved.width != 1;
     const rows = (try net_mod.udpRows(r.arena, u)) orelse return r.fail(u.main_tok, "a UDP table entry needs one field per input", .{});
     const ins = try r.arena.alloc(Ast.ExprId, u.ports.len - 1);
     for (inst.ports[1..], ins) |c, *in| in.* = c.expr;
-    const prev = try r.arena.alloc(Int.Bit, ins.len);
-    @memset(prev, .x);
     const ex = &r.file.exprs;
     const state: Int.Bit = if (u.init == .none) .x else switch (ex.tag(u.init)) {
         .int_literal => if (ex.intValue(u.init) == 0) .zero else .one,
         .logic_literal => ex.logicValue(u.init).bit(0),
         else => return r.exprFail(u.init, "a UDP initial value is 0, 1 or x"), // else: A.5.3 init_val is a literal
     };
-    const udp = try r.arena.create(Udp);
-    udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
-    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
+    for (0..lanes) |j| {
+        const lane: u32 = @intCast(lanes - 1 - j);
+        const prev = try r.arena.alloc(Int.Bit, ins.len);
+        @memset(prev, .x);
+        const udp = try r.arena.create(Udp);
+        udp.* = .{
+            .rows = rows,
+            .sequential = u.is_sequential,
+            .ins = ins,
+            .prev = prev,
+            .state = state,
+            .lane = if (inst.range == null) null else lane,
+            .out_bit = if (!wide) null else out.lo + if (out.width == 1) 0 else lane,
+        };
+        try e.wires.append(r.arena, .{ .net = out.net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = delay, .tok = tok });
+    }
+}
+
+/// The IEEE 1364-2005 §8.1 rules on a UDP declaration itself.
+fn checkUdp(r: *Run, u: *const Ast.UdpDecl) Error!void {
+    const tok = u.main_tok;
+    if (u.outputs != 1) return r.fail(tok, "§8.1.1: a UDP has exactly one output port", .{});
+    if (u.output != u.ports[0]) return r.fail(tok, "§8.1.1: the output port shall be the first port of a UDP", .{});
+    if (u.is_sequential and !u.has_reg) return r.fail(tok, "§8.1.2: a sequential UDP's output needs a reg declaration", .{});
+    if (!u.is_sequential and u.has_reg) return r.fail(tok, "§8.1.2: a combinational UDP cannot contain a reg declaration", .{});
+    if (u.init == .none) return;
+    if (u.init_target != u.ports[0]) return r.fail(tok, "§8.1.3: a UDP initial statement assigns the output", .{});
+    const ex = &r.file.exprs;
+    const width: u32 = switch (ex.tag(u.init)) {
+        .int_literal => ex.intLiteral(u.init).width,
+        .logic_literal => ex.logicValue(u.init).width,
+        else => 1, // else: `declareUdp` refuses anything but a literal
+    };
+    if (width > 1) return r.exprFail(u.init, "§8.1.3: a UDP initial value is a single-bit literal");
 }
 
 /// A port by the name a named connection may use: its own, when the header
 /// gave it no external name.
+/// A concatenation with no external name has none (§12.3.6: it connects by
+/// position only).
 fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
-    for (m.ports, 0..) |p, k| if (p.name == name and p.external_name == .none) return k;
-    for (m.ports, 0..) |p, k| if (p.external_name == name and (k + 1 == m.ports.len or m.ports[k + 1].external_name != name) and (k == 0 or m.ports[k - 1].external_name != name)) return k;
+    for (m.ports, 0..) |p, k| {
+        if (p.concat_rest or (k + 1 < m.ports.len and m.ports[k + 1].concat_rest)) continue;
+        if (if (p.external_name == .none) p.name == name else p.external_name == name) return k;
+    }
     return null;
 }
 
@@ -2040,9 +2364,12 @@ fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
-fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
+fn bindPort(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
     if (conn.expr == .none) return .open;
     const ex = &r.file.exprs;
+    // §12.3.7: "The real data type shall not be directly connected to a port."
+    if (ex.tag(conn.expr) == .ident) if (r.lookup(scope, ex.strOf(conn.expr))) |at| if (r.reals.contains(at) and !r.net_of.contains(at))
+        return r.exprFail(conn.expr, "§12.3.7: a real cannot be connected to a port");
     // One whole net on the outside is a collapse, the only arm under which
     // the child's drive strengths reach the parent's resolution unchanged
     // (IEEE 1364 clause 12: a port is a connection). `declare` size-checks
@@ -2060,11 +2387,8 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         // ponytail: so a child's drive strength does not reach the element.
         .output => blk: {
             const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
-            const operands = try r.arena.alloc(u32, args.len);
-            for (args, operands) |arg, *out| {
-                if (ex.tag(arg) != .ident and try r.indexedArray(arg) == null) return r.exprFail(arg, "an output port connects to a net, a net array element or a concatenation of them");
-                out.* = r.net_of.get(try netSlot(r, arg, conn.main_tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
-            }
+            const operands = try r.arena.alloc(Sink, args.len);
+            for (args, operands) |arg, *out| out.* = try sink(r, e, arg, conn.main_tok, .port);
             break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
         },
         // A collapse already covers the useful `inout`; anything else would
@@ -2072,6 +2396,45 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         .inout => r.fail(conn.main_tok, "an inout port connection must name one whole net", .{}),
         .unspecified => r.fail(port.main_tok, "§6.5.2.2: this port has no direction declaration", .{}),
     };
+}
+
+/// The operands of `e`, a nested concatenation flattened in order, or `e`
+/// itself.
+fn concatLeaves(r: *Run, e: Ast.ExprId, out: *std.ArrayList(Ast.ExprId)) Error!void {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) != .concat) return out.append(r.arena, e);
+    for (ex.args(e)) |x| try concatLeaves(r, x, out);
+}
+
+/// IEEE 1364-2005 §12.3.9.2 one operand of a structural net expression: a
+/// net, a net array element, or a constant bit-select or part-select of a
+/// vector net. `who` is what drives it: an output port, or a continuous
+/// assignment (§6.1.1 admits the same left-hand sides).
+fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: enum { port, assign }) Error!Sink {
+    const ex = &r.file.exprs;
+    r.values = e.values.items;
+    const name = switch (who) {
+        .port => "an output port",
+        .assign => "a continuous assignment",
+    };
+    if (ex.tag(arg) == .ident or try r.indexedArray(arg) != null) {
+        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, name ++ " can only drive a net");
+        return .{ .net = net, .lo = 0, .width = e.nets.items[net].resolved.width };
+    }
+    const refused = (if (who == .port) "§12.3.9.2: " else "§6.1.1: ") ++ name ++ " connects to a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
+    if (ex.tag(arg) != .index or ex.tag(ex.lhs(arg)) != .ident) return r.exprFail(arg, refused);
+    const rg = ex.rhs(arg);
+    const index = switch (ex.tag(rg)) {
+        .range => Ast.ExprId.none,
+        .indexed_range => ex.lhs(rg),
+        else => rg, // else: a bit-select's index
+    };
+    try compile.checkExpr(r, arg);
+    if (index != .none and !compile.constantExpression(r, index)) return r.exprFail(arg, refused);
+    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, "an output port can only drive a net");
+    const sel = (try exec.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
+    if (sel.first < 0 or sel.first + sel.count > e.nets.items[net].resolved.width) return r.exprFail(arg, "§12.3.9.2: the select is outside its net");
+    return .{ .net = net, .lo = @intCast(sel.first), .width = sel.count };
 }
 
 // ---- the driver (§6.2.2, §6.1, §7.9, §17.3) ---------------------------------
@@ -2104,8 +2467,8 @@ pub const DeviceZig = struct {
 /// under `schedule`. A design that cannot be one is E1103 in `bag` and
 /// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
 pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
-    var sink: std.Io.Writer.Discarding = .init(&.{});
-    var r = try elaborate(arena, source, opts, bag, &sink.writer);
+    var discard: std.Io.Writer.Discarding = .init(&.{});
+    var r = try elaborate(arena, source, opts, bag, &discard.writer);
     const top = r.file.modules[r.scope_info.items[0].def];
     const at: diag.Span = .{ .start = r.starts[top.main_tok], .end = r.starts[top.main_tok] };
     switch (try emit.device(arena, &r, opts.file_name, schedule)) {
@@ -2292,7 +2655,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             },
             .udp => |u| for (u.ins) |in| {
                 try compile.checkExpr(&r, in);
-                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar UDP terminals are implemented");
+                if (compile.typeOf(&r, in).width != 1 and u.lane == null) return r.exprFail(in, "a UDP's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
             },
             .expr => |x| {
@@ -2307,15 +2670,15 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .scope = a.scope,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
-            .current = try filled(arena, r.nets[a.net].resolved.width, false, switch (a.source) {
-                .udp => |u| if (u.sequential) u.state else .z,
-                .expr, .bridge, .gate, .mos, .pull => .z,
-            }),
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
             .tok = a.tok,
         };
+        // A UDP's output bit starts at its state: §8.5's initial value for a
+        // sequential one, x for a combinational one until its first value.
+        if (a.source == .udp) setBit(r.drivers[i].current, a.source.udp.out_bit orelse 0, a.source.udp.state);
         try grouped[a.net].append(arena, @intCast(i));
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
     }
@@ -2407,6 +2770,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         }
         const idx = r.sub_by_name.get(.{ .scope = r.instanceOf(d.name.scope), .str = d.name.str }) orelse
             return r.fail(d.tok, "undeclared named block or task", .{});
+        if (r.subs.items[idx].decl.is_function) return r.fail(d.tok, "§10.3: `disable` cannot name a function, only a named block within one", .{});
         r.code.items[d.at] = .{ .disable_task = idx };
     }
     // Pass two may have minted storage (an automatic task inlined at a call
@@ -2941,7 +3305,7 @@ test "the net and array declaration boundaries are explicit" {
     // §6.1/§6.2.2: neither form of assignment accepts the other's target.
     try expectRejected("module m; wire w; initial w = 1; endmodule", "no procedural assignment to a net");
     try expectRejected("module m; reg r; initial $display(\"before\"); assign r = 1; endmodule", "can only drive a net");
-    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
+    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "a scalar has no bits to select");
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
     // §6.5.3 a wreal has at most one driver, and §3.7 closes the list of net

@@ -12,6 +12,7 @@ const parse_stmt = @import("stmt.zig");
 const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
+const parse_decl = @import("decl.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
@@ -27,11 +28,16 @@ pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
 /// Precedence climbing over LRM Table 4-3 (§4.2.2).
 fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
     var lhs = try parseUnary(self);
+    // Each operator folded into `lhs` makes its tree one level deeper, and
+    // every later walk recurses down that spine: it counts against E0241.
+    const base = self.depth;
+    defer self.depth = base;
     while (true) {
         const t = self.peek();
         // §4.2.12 conditional: lowest precedence, right associative.
         if (t == .question and min_prec <= prec_ternary) {
             const tok = self.pos;
+            try self.enter();
             self.pos += 1;
             try self.skipAttributes();
             const then_e = try parseExpr(self);
@@ -52,6 +58,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         const prec = binopPrec(op);
         if (prec < min_prec) return lhs;
         const tok = self.pos;
+        try self.enter();
         self.pos += 1;
         try self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
         // §4.2.2: "All operators associate left to right with the exception
@@ -242,9 +249,12 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // `nature_attribute_reference ::= net_identifier .
             // potential_or_flow . nature_attribute_identifier`. Both land in
             // `.hier_ident`; lowering tells them apart by resolving the parts.
+            // IEEE 1364-2005 §12.5 an instance select, `g[0].l.x`: the part
+            // is spelled `g[0]`, the name the digital engine registers.
+            const head = if (parse_decl.instanceSelectAhead(self)) try parse_decl.parseInstanceSelect(self, name) else name;
             if (self.peek() == .dot) {
                 var parts: std.ArrayList(Ast.StrId) = .empty;
-                try parts.append(self.arena, name);
+                try parts.append(self.arena, head);
                 while (self.eat(.dot)) {
                     // Syntax 5-4's middle and last parts are annex B keywords
                     // (`potential`/`flow` and the §3.6.1.2 attribute names),
@@ -264,7 +274,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                         },
                         else => try self.expectIdent(), // else: not a nature attribute keyword; `expectIdent` takes it or refuses it
                     };
-                    try parts.append(self.arena, part);
+                    try parts.append(self.arena, if (parse_decl.instanceSelectAhead(self)) try parse_decl.parseInstanceSelect(self, part) else part);
                 }
                 // §6.7.1: "Analog user defined functions can be accessed
                 // hierarchically." A dotted name with an argument list becomes

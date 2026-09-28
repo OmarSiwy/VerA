@@ -9,7 +9,6 @@
 //! reject E1100
 //! reject disable
 //! reject function
-//! xfail accepted: `disable` naming a function compiles and runs
 module b_10_3_disable_function_rejected;
   reg x;
   function f;

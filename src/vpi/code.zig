@@ -45,6 +45,7 @@ pub const vpiPartSelect: c_int = 42;
 pub const vpiRegBit: c_int = 49;
 pub const vpiRelease: c_int = 50;
 pub const vpiRepeat: c_int = 51;
+pub const vpiRepeatControl: c_int = 52;
 pub const vpiSysFuncCall: c_int = 56;
 pub const vpiSysTaskCall: c_int = 57;
 pub const vpiTask: c_int = 59;
@@ -223,6 +224,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiRegBit => "vpiRegBit",
         vpiRelease => "vpiRelease",
         vpiRepeat => "vpiRepeat",
+        vpiRepeatControl => "vpiRepeatControl",
         vpiSysFuncCall => "vpiSysFuncCall",
         vpiSysTaskCall => "vpiSysTaskCall",
         vpiTask => "vpiTask",
@@ -633,6 +635,7 @@ pub const Builder = struct {
                     // be NULL."
                     var dc = none;
                     var ec = none;
+                    var rc = none;
                     if (a.timing != .none) {
                         const e = try b.expr(a.timing);
                         if (a.timing_is_delay) {
@@ -640,12 +643,19 @@ pub const Builder = struct {
                         } else {
                             ec = try b.code(vpiEventControl, &.{ .{ .tag = vpiCondition, .to = e }, .{ .tag = vpiStmt, .to = none } }, &.{}, &.{});
                         }
+                        // §26.6.31 a repeat control: its count and its event
+                        // control, and no statement.
+                        if (a.timing_repeat != .none) {
+                            rc = try b.code(vpiRepeatControl, &.{ .{ .tag = vpiExpr, .to = try b.expr(a.timing_repeat) }, .{ .tag = vpiEventControl, .to = ec } }, &.{}, &.{});
+                            ec = none;
+                        }
                     }
                     break :blk b.code(vpiAssignment, &.{
                         .{ .tag = vpiLhs, .to = lhs },
                         .{ .tag = vpiRhs, .to = rhs },
                         .{ .tag = vpiDelayControl, .to = dc },
                         .{ .tag = vpiEventControl, .to = ec },
+                        .{ .tag = vpiRepeatControl, .to = rc },
                     }, &.{}, &.{.{ .prop = vpiBlocking, .value = @intFromBool(!a.nonblocking) }});
                 },
                 // §11.6.24: force and assign stmt draw vpiLhs and vpiRhs;

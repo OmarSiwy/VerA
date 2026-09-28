@@ -9,7 +9,6 @@
 // Two inverters drive the two bits of q; q = ~{a1, a0}.
 //   a1 = 0, a0 = 1 -> q = 10;  a1 = 1 -> q = 00
 //! inherited IEEE 1364-2005 8.6
-//! xfail a UDP output terminal that is a bit-select of a vector net is refused: "only whole-variable lvalues are implemented"
 `timescale 1ns/1ns
 primitive inv(q, a);
   output q;

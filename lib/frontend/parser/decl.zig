@@ -42,7 +42,7 @@ pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
 pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
     const is_local = self.peek() == .kw_localparam;
     self.pos += 1;
-    _ = self.eat(.kw_signed);
+    const signed = self.eat(.kw_signed);
     // §3.4.1: no type keyword is `.unspecified`, inferred from the default
     // by lowering.
     const ty = varType(self.peek()) orelse .unspecified;
@@ -75,6 +75,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
             .ty = ty,
             .default = default,
             .is_local = is_local,
+            .is_signed = signed,
             .dims = dims,
             .packed_range = packed_range,
             .ranges = ranges.items,
@@ -174,6 +175,48 @@ fn varType(tag: token.Tag) ?Ast.Type {
         .kw_string => .string,
         else => null, // else: not one of the five variable-type keywords
     };
+}
+
+/// Parses an A.2.1.3 `reg_declaration`, cursor on `reg`, through its `;`,
+/// appending one `VarDecl` per name to `out`. An analog parse keeps Table
+/// 7-1's integer mapping and its 31-bit width gate; a digital parse keeps
+/// packed width and signedness.
+pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const tok = self.pos;
+    self.pos += 1;
+    const signed = self.digital and self.eat(.kw_signed);
+    const range: ?Ast.Dim = try optDim(self);
+    if (!self.digital) if (range) |d| if (literalWidth(self, d)) |w| {
+        if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
+    };
+    while (true) {
+        const name_tok = self.pos;
+        const name = try self.expectIdent();
+        // A.2.1.3 reg_declaration ends in A.2.3's
+        // list_of_variable_identifiers, whose A.2.2.1 `variable_type`
+        // takes dimensions and an initializer:
+        //
+        //     variable_type ::=
+        //         variable_identifier { dimension } [ = constant_assignment_pattern ]
+        //         | variable_identifier = constant_expression
+        //
+        // `integer`/`time` reach the same production through
+        // `parseVarDecl`, so neither is gated on `digital` here.
+        const dims = try parseDims(self);
+        const value = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else Ast.ExprId.none;
+        try out.append(self.arena, .{
+            .name = name,
+            .ty = .integer,
+            .main_tok = name_tok,
+            .storage = .reg,
+            .packed_range = range,
+            .is_signed = signed,
+            .dims = dims,
+            .init = value,
+        });
+        if (!self.eat(.comma)) break;
+    }
+    _ = try self.expect(.semicolon);
 }
 
 /// Parses an A.2.1.3 integer/real/string/time declaration (§3.2, §3.3), cursor
@@ -816,6 +859,36 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
     return self.file.intern(self.arena, joined.items);
 }
 
+/// A digital parse's `[ … ] .` at the cursor: IEEE 1364-2005 §12.5's instance
+/// select inside a hierarchical name, not a bit-select.
+pub fn instanceSelectAhead(self: *const Parser) bool {
+    if (!self.digital or self.peek() != .lbracket) return false;
+    var depth: u32 = 0;
+    var i = self.pos;
+    while (i < self.tags.len) : (i += 1) switch (self.tags[i]) {
+        .lbracket => depth += 1,
+        .rbracket => {
+            depth -= 1;
+            if (depth == 0) return i + 1 < self.tags.len and self.tags[i + 1] == .dot;
+        },
+        .eof, .semicolon => return false,
+        else => {}, // else: any other token is inside the brackets
+    };
+    return false;
+}
+
+/// `name[k]` for §12.5's instance select `[ constant_expression ]` at the
+/// cursor, spelled as `parseDottedName` spells it; E0231 when it does not
+/// fold.
+pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
+    const tok = self.pos;
+    self.pos += 1;
+    const idx = try parse_expr.parseExpr(self);
+    _ = try self.expect(.rbracket);
+    const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
+    return self.file.intern(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ self.file.str(name), k }));
+}
+
 /// Folds A.9.3's `[ constant_expression ]` over literals only, with §4.2's
 /// integer typing: the same kernel elaboration applies to the instance-array
 /// range. Parameters are elaboration's, so a read of one does not fold, and
@@ -998,6 +1071,8 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // apply §7.4.4 (E0902). The entry adds no node: `internNode` finds the
         // port's slot by name.
         const port = if (is_ground) null else findPort(b, name);
+        // A discipline declaration is §7.4.4's to judge (E0902).
+        if (port != null and b.ansi and disc == .none) try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
         if (port != null and signed) port.?.is_signed = true;
         if (port != null and port.?.discipline == .none) {
             port.?.discipline = disc;

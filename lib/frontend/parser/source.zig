@@ -375,39 +375,65 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     // A.5.2 puts the output port first in both header arms, so
     // `ports[0]` is the output and `ports[1..]` the inputs.
     var ports: std.ArrayList(Ast.StrId) = .empty;
+    var outputs: u8 = 0;
+    var output: Ast.StrId = .none;
+    var has_reg = false;
+    var dir: ?token.Tag = null;
+    // A.5.3 `udp_initial_statement ::= initial output_port_identifier =
+    // init_val ;`, or A.5.2's `output reg port_identifier = constant_expression`.
+    var init_val: Ast.ExprId = .none;
+    var init_target: Ast.StrId = .none;
     while (true) {
         // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
         // only the second A.5.1 arm puts inside the parentheses.
-        if (self.eat(.kw_output) or self.eat(.kw_input)) {
+        if (self.peek() == .kw_output or self.peek() == .kw_input) {
+            dir = self.peek();
+            self.pos += 1;
             _ = try parse_module.optDiscipline(self);
-            _ = self.eat(.kw_reg);
+            if (self.eat(.kw_reg)) has_reg = true;
         }
-        try ports.append(self.arena, try self.expectIdent());
+        const port = try self.expectIdent();
+        try ports.append(self.arena, port);
+        if (dir == .kw_output) {
+            outputs +|= 1;
+            output = port;
+        }
         // `udp_output_declaration ::= … output [ discipline_identifier ]
         // reg port_identifier [ = constant_expression ]`
-        if (self.eat(.assign_eq)) _ = try parse_expr.parseExpr(self);
+        if (self.eat(.assign_eq)) {
+            init_val = try parse_expr.parseExpr(self);
+            init_target = port;
+        }
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
+    if (ports.items.len - 1 > max_udp_inputs)
+        return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), ports.items.len - 1 });
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
     while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
+        const kw = self.peek();
         self.pos += 1;
         _ = try parse_module.optDiscipline(self);
-        _ = self.eat(.kw_reg);
+        if (kw == .kw_reg or self.eat(.kw_reg)) has_reg = true;
         while (true) {
-            _ = try self.expectIdent();
-            if (self.eat(.assign_eq)) _ = try parse_expr.parseExpr(self);
+            const port = try self.expectIdent();
+            if (kw == .kw_output) {
+                outputs +|= 1;
+                output = port;
+            }
+            if (self.eat(.assign_eq)) {
+                init_val = try parse_expr.parseExpr(self);
+                init_target = port;
+            }
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
     }
-    // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
-    // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
-    var init_val: Ast.ExprId = .none;
+    // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`.
     if (self.eat(.kw_initial)) {
-        _ = try self.expectIdent();
+        init_target = try self.expectIdent();
         _ = try self.expect(.assign_eq);
         init_val = try parse_expr.parseExpr(self);
         _ = try self.expect(.semicolon);
@@ -422,6 +448,10 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
         .ports = ports.items,
         .is_sequential = sequential,
         .init = init_val,
+        .init_target = init_target,
+        .outputs = outputs,
+        .output = output,
+        .has_reg = has_reg,
         .rows = rows.items,
         .main_tok = main_tok,
     };
@@ -459,15 +489,20 @@ pub fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool
     return sequential orelse false;
 }
 
+/// E1017's bound: IEEE 1364-2005 §8.1.2 requires at least 9 sequential and
+/// 10 combinational inputs and lets a tool cap the count.
+pub const max_udp_inputs = 64;
+
 /// Parses one `combinational_entry` or `sequential_entry`, checks it column
 /// by column (E0233 bad symbol, E0234 wrong shape) and appends it to `rows`.
 /// `sequential` is null before the table's first entry, which sets it; each
-/// later entry must agree. A column holds at most 64 symbols.
+/// later entry must agree. A column holds `max_udp_inputs` symbols, one of
+/// them at most an edge `(vw)` of four characters.
 pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.UdpRow)) Error!void {
     const tok = self.pos;
     // Column 0 is the input list; a colon opens each of the 1 or 2 that
     // follow, so the colon count is the entry's `udp_body` alternative.
-    var cols: [3]struct { text: [64]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
+    var cols: [3]struct { text: [max_udp_inputs + 3]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
     var n: usize = 0;
     cols[0].tok = tok;
     while (!self.eat(.semicolon)) {
@@ -481,7 +516,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
         }
         const t = self.tokenText(self.pos);
         if (cols[n].len + t.len > cols[n].text.len)
-            return self.failAt(self.pos, .E0233, "a UDP table column of more than {d} symbols", .{cols[n].text.len});
+            return self.failAt(self.pos, .E0234, "a UDP table entry of more than {d} input symbols", .{max_udp_inputs});
         @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
         cols[n].len += t.len;
         self.pos += 1;
