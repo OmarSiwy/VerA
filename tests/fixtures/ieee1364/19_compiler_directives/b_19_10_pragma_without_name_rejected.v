@@ -11,7 +11,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 19.10
 //! reject requires a pragma name
-//! xfail VerA accepts a `pragma directive with no pragma_name
 `pragma
 module b_19_10_pragma_without_name_rejected;
   initial $display("accepted");

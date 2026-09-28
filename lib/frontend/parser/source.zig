@@ -64,7 +64,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             },
             // IEEE 1364 §19.6: between design elements is where `resetall
             // belongs; the preprocessor has already applied it.
-            .dir_resetall => self.pos += 1,
+            .dir_resetall, .dir_outside_module => self.pos += 1,
             // A.1.2 `module_keyword ::= module | macromodule`. §6.2: "The
             // keyword macromodule can be used interchangeably with the
             // keyword module to define a module. An implementation may

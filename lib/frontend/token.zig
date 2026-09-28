@@ -91,6 +91,10 @@ pub const Tag = enum(u8) {
     /// IEEE 1364 §19.6 `resetall, passed through so the parser can refuse one
     /// "within a module or UDP declaration".
     dir_resetall, // '`resetall'
+    /// IEEE 1364 §19.2 `default_nettype and §19.9 `unconnected_drive and
+    /// `nounconnected_drive, applied by the preprocessor and passed through
+    /// (word alone) so the parser can refuse one inside a module.
+    dir_outside_module,
 
     // ---- keywords: §2.8.2, annex B -------------------------------------------
     // Everything from here to the end of the enum is a keyword (`isKeyword`
@@ -380,6 +384,7 @@ pub const Tag = enum(u8) {
             .dir_begin_keywords => "`begin_keywords",
             .dir_end_keywords => "`end_keywords",
             .dir_resetall => "`resetall",
+            .dir_outside_module => "a directive used only outside a module",
 
             // Every keyword tag is "kw_" ++ its spelling (naming invariant).
             inline else => |t| comptime if (isKeyword(t)) @tagName(t)[3..] else @compileError("give `." ++ @tagName(t) ++ "` its spelling above"), // else: the keywords; any other tag fails to compile
@@ -491,9 +496,11 @@ fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
 // ---- §10.6 `begin_keywords: which words are reserved ---------------------
 
 /// A §10.6 version_specifier: "the valid set of reserved keywords in effect
-/// when a design unit is parsed". The five sets form a chain, oldest first
+/// when a design unit is parsed". Five sets form a chain, oldest first
 /// (1364-1995 ⊂ 1364-2001 ⊂ 1364-2005 ⊂ VAMS-2.3 ⊂ VAMS-2023), so a word is
-/// reserved in set `s` iff `keyword_intro` dates it no later than `s`.
+/// reserved in set `s` iff `keyword_intro` dates it no later than `s`; IEEE
+/// 1364-2005 §19.11's sixth, "1364-2001-noconfig", is 1364-2001 less
+/// `noconfig_words`.
 ///
 /// §10.6: the directives "do not affect the semantics, tokens, and other
 /// aspects" of the language. So the lexer ignores the set (`sin` is always
@@ -503,12 +510,16 @@ fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
 pub const KeywordSet = enum(u8) {
     v1364_1995,
     v1364_2001,
+    /// IEEE 1364-2005 §19.11: "1364-2001" without `noconfig_words`, so it
+    /// sits between its neighbours in the chain.
+    v1364_2001_noconfig,
     v1364_2005,
     vams_2_3,
     vams_2023,
 
-    /// Parses a §10.6 version_specifier. `null` for any other string; the LRM
-    /// names exactly these five, so the caller reports an unknown one.
+    /// Parses a §10.6 (IEEE 1364-2005 §19.11) version_specifier. `null` for
+    /// any other string; the two standards name exactly these six, so the
+    /// caller reports an unknown one.
     pub fn fromSpecifier(text: []const u8) ?KeywordSet {
         return specifier_map.get(text);
     }
@@ -517,6 +528,7 @@ pub const KeywordSet = enum(u8) {
         return switch (self) {
             .v1364_1995 => "1364-1995",
             .v1364_2001 => "1364-2001",
+            .v1364_2001_noconfig => "1364-2001-noconfig",
             .v1364_2005 => "1364-2005",
             .vams_2_3 => "VAMS-2.3",
             .vams_2023 => "VAMS-2023",
@@ -531,6 +543,7 @@ pub const default_keyword_set: KeywordSet = .vams_2023;
 const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
     .{ "1364-1995", KeywordSet.v1364_1995 },
     .{ "1364-2001", KeywordSet.v1364_2001 },
+    .{ "1364-2001-noconfig", KeywordSet.v1364_2001_noconfig },
     .{ "1364-2005", KeywordSet.v1364_2005 },
     .{ "VAMS-2.3", KeywordSet.vams_2_3 },
     .{ "VAMS-2023", KeywordSet.vams_2023 },
@@ -539,6 +552,7 @@ const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
 /// Returns whether the keyword spelled `name` is reserved under `set` (LRM §10.6,
 /// annex B). Only meaningful for a spelling in `keyword_map`.
 pub fn isReserved(name: []const u8, set: KeywordSet) bool {
+    if (set == .v1364_2001_noconfig and noconfig_words.has(name)) return false;
     return @intFromEnum(keyword_intro.get(name) orelse .vams_2_3) <= @intFromEnum(set);
 }
 
@@ -774,6 +788,13 @@ const kw_1364_2001 = [_][]const u8{
     "use",
 };
 
+/// IEEE 1364-2005 §19.11: "the following identifiers are excluded from the
+/// reserved list" under "1364-2001-noconfig".
+const noconfig_words = std.StaticStringMap(void).initComptime(.{
+    .{"cell"},    .{"config"},   .{"design"},  .{"endconfig"}, .{"incdir"},
+    .{"include"}, .{"instance"}, .{"liblist"}, .{"library"},   .{"use"},
+});
+
 /// Added by IEEE Std 1364-2005 (1).
 const kw_1364_2005 = [_][]const u8{"uwire"};
 
@@ -953,6 +974,9 @@ test "§10.6 keyword sets nest, and the intro table cannot drift from annex B" {
     try std.testing.expect(isReserved("localparam", .v1364_2001));
     try std.testing.expect(!isReserved("uwire", .v1364_2001));
     try std.testing.expect(isReserved("uwire", .v1364_2005));
+    try std.testing.expect(!isReserved("config", .v1364_2001_noconfig)); // §19.11
+    try std.testing.expect(isReserved("generate", .v1364_2001_noconfig));
+    try std.testing.expect(!isReserved("uwire", .v1364_2001_noconfig));
     try std.testing.expect(!isReserved("ln1p", .vams_2_3)); // annex G.7 item 7780
     try std.testing.expect(isReserved("ln1p", .vams_2023));
     // §10.6 version_specifier strings, all five of them.

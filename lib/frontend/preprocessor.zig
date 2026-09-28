@@ -639,10 +639,17 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         if (c == '"') {
             const start = i;
             i = stringStop(text, i);
-            if (i < text.len and text[i] == '"') i += 1;
+            const closed = i < text.len and text[i] == '"';
+            if (closed) i += 1;
             if (pp.emitting()) {
                 try pp.out.appendSlice(pp.arena, text[start..i]);
             } else {
+                // IEEE 1364 §19.4: an ignored group "shall still follow the
+                // Verilog HDL lexical conventions"; an emitted one is the
+                // lexer's to check.
+                // ponytail: of those conventions, only §3.6's one-line string
+                // is checked here.
+                if (!closed) return pp.fail(pp.spanAt(start, i), .E0138, "", .{});
                 try pp.putNewlines(text[start..i]);
             }
             continue;
@@ -756,17 +763,27 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         .default_transition => try pp_directive.handleDefaultTransition(pp, text[j..end], j),
         .line => try pp_directive.handleLine(pp, text[j..end], at, j),
         .timescale => try pp_directive.handleTimescale(pp, text[j..end], j),
-        .default_nettype => try pp_directive.handleDefaultNettype(pp, text[j..end], j),
-        .unconnected_drive => try pp_directive.handleUnconnectedDrive(pp, text[j..end], j),
-        // IEEE 1364 §19.1 and §19.10's closing half take no operand.
+        // Applied here, and the word passed through, as `resetall's is, for
+        // the parser to refuse inside a module (IEEE 1364 §19.2, §19.9).
+        .default_nettype, .unconnected_drive, .nounconnected_drive => {
+            switch (kind) {
+                .default_nettype => try pp_directive.handleDefaultNettype(pp, text[j..end], j),
+                .unconnected_drive => try pp_directive.handleUnconnectedDrive(pp, text[j..end], j),
+                else => try pp.mark(&pp.drives, .float), // else: `nounconnected_drive, the one other arm of this prong
+            }
+            try pp.out.appendSlice(pp.arena, text[at..j]);
+            try pp.putNewlines(text[j..end]);
+            return end;
+        },
+        // IEEE 1364 §19.1's pair takes no operand.
         .celldefine => try pp.mark(&pp.cells, true),
         .endcelldefine => try pp.mark(&pp.cells, false),
-        .nounconnected_drive => try pp.mark(&pp.drives, .float),
         // `protect` is not unrecognized: IEEE 1364 §28 reserves it, and §28.2
         // obliges decryption that VerA does not do.
         .pragma => {
             var r: Rest = .{ .s = text[j..end] };
-            if (std.mem.eql(u8, r.ident() orelse "", "protect"))
+            const pragma_name = r.ident() orelse return pp.fail(pp.spanAt(at, j), .E0147, "", .{});
+            if (std.mem.eql(u8, pragma_name, "protect"))
                 return pp.fail(pp.spanAt(at, j), .E0146, "", .{});
         },
         // §10.6: passed through instead of being blanked out, so the lexer and
