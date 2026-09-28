@@ -17,7 +17,6 @@
 //        t=31 "0 x"   t=33 "x x"
 // Every display falls strictly between a change and its delayed update.
 //! inherited IEEE 1364-2005 8.6
-//! xfail a UDP instance's delay is ignored: the output changes in the same time step as the input
 `timescale 1ns/1ns
 primitive inv(q, a);
   output q;

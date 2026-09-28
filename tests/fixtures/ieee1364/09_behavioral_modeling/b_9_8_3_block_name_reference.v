@@ -8,7 +8,6 @@
 //   -> "15". A second process reads the same location as
 //   b_9_8_3_block_name_reference.acc.count at t=1 -> "15".
 //! inherited IEEE 1364-2005 9.8.3
-//! xfail a variable of a named block cannot be referenced through the block name ("undeclared instance in a hierarchical reference")
 `timescale 1ns/1ns
 module b_9_8_3_block_name_reference;
   initial begin

@@ -12,7 +12,6 @@
 //! inherited IEEE 1364-2005 4.10.2
 //! reject E1100
 //! reject local parameter
-//! xfail VerA ignores a named parameter value assignment to a localparam (L still reads 1)
 module b_4_10_2_leaf;
   localparam L = 1;
   initial $display("%0d", L);

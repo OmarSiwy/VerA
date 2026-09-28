@@ -9,7 +9,6 @@
 // assigns at t5. Read at t4: a = 7, b not yet (x); at t6: b = 9.
 // Output: "a=7 b=x" then "b=9".
 //! inherited IEEE 1364-2005 A.6.2
-//! xfail VerA's parser refuses a repeat intra-assignment event control (E0209 expected an expression at `repeat`)
 `timescale 1ns/1ns
 module b_A_6_2_repeat_intra_assignment;
   reg clk;

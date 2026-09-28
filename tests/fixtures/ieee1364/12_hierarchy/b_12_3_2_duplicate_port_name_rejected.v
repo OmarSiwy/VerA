@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 12.3.2
 //! reject E1100
 //! reject port defined twice
-//! xfail VerA accepts two explicit ports with the same name
 module m(.p(a), .p(b));
   input a, b;
 endmodule
