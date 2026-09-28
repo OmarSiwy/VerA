@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 10.4.1 10.4.4
 //! reject E1100
 //! reject input
-//! xfail accepted: a function that declares no input compiles and runs when it is not called (a call is refused only by argument count)
 module b_10_4_1_function_without_input_rejected;
   reg x;
   function f;

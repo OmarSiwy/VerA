@@ -1226,6 +1226,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
         }
     }
+    // §10.4.2: "It is illegal to declare another object with the same name
+    // as the function in the scope where the function is declared."
+    for (r.subs.items[r.sub_base.get(scope).?..]) |sub| if (r.names.contains(.{ .scope = scope, .str = sub.decl.name }))
+        return r.fail(sub.decl.main_tok, "§10.4.2: duplicate declaration of `{s}`, a task or function name in this scope", .{r.file.str(sub.decl.name)});
     try implicitNets(r, e, scope, m);
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
@@ -2132,6 +2136,12 @@ pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u
 /// an automatic task's per-call-site one in pass two.
 pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const g = r.growing.?;
+    // §10.4.4 c) and d): at least one input, and no output or inout.
+    if (t.is_function) {
+        for (t.ports) |p| if (p.direction != .input)
+            return r.fail(p.v.main_tok, "§10.4.4: a function argument is an input, not an output or inout", .{});
+        if (t.ports.len == 0) return r.fail(t.main_tok, "§10.4.1: a function shall have at least one input declared", .{});
+    }
     const scope = try newScope(r, t.main_tok);
     try r.scope_info.append(r.arena, .{ .parent = inst, .name = t.name, .def = r.scope_info.items[inst].def, .lexical = true });
     const saved = r.scope;
@@ -2658,6 +2668,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         }
         const idx = r.sub_by_name.get(.{ .scope = r.instanceOf(d.name.scope), .str = d.name.str }) orelse
             return r.fail(d.tok, "undeclared named block or task", .{});
+        if (r.subs.items[idx].decl.is_function) return r.fail(d.tok, "§10.3: `disable` cannot name a function, only a named block within one", .{});
         r.code.items[d.at] = .{ .disable_task = idx };
     }
     // Pass two may have minted storage (an automatic task inlined at a call
