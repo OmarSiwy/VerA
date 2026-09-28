@@ -12,7 +12,6 @@
 //! inherited IEEE 1364-2005 4.2.2
 //! reject E1100
 //! reject a constant expression is required here
-//! xfail VerA accepts a variable declaration assignment whose value reads another variable
 module b_4_2_2_nonconstant_declaration_assignment_rejected;
   reg a;
   reg b = a;
