@@ -8,6 +8,7 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
+const strArg = @import("args.zig").strArg;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -503,10 +504,7 @@ const Site = struct {
 
 /// `$limit(V(a,b), "alg")` as it reads in the source, for the declined list.
 fn spell(g: Input, u_names: []const []const u8, args: []const Mir.Value) []const u8 {
-    const alg: []const u8 = if (args.len >= 2) switch (g.mir.valueDef(g.an.rv(args[1]))) {
-        .str_const => |s| s,
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => "?",
-    } else "?";
+    const alg = strArg(g, args, 1) orelse "?";
     const pair = probePair(g, args) orelse
         return std.fmt.allocPrint(g.arena, "$limit(…, \"{s}\")", .{alg}) catch "$limit(…)";
     return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ uName(u_names, pair[0]), uName(u_names, pair[1]), alg }) catch "$limit(…)";
@@ -546,15 +544,10 @@ fn algOf(g: Input, args: []const Mir.Value) ?Alg {
     // §4.5.15 bare `$limit(V(a,b))` asks for the simulator's own choice of
     // algorithm. Ours is none: inventing a clamp the model did not name would
     // change its answers with no way to say so in the source.
-    if (args.len < 2) return null;
-    const s = switch (g.mir.valueDef(g.an.rv(args[1]))) {
-        .str_const => |s| s,
-        // §9.17.3 also allows a user analog function here. That is a call, not
-        // a string, and it needs the whole body, so lowering handles it
-        // (`Lower.lowerLimitUser`) and it never reaches the clamp list.
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => return null,
-    };
-    return std.meta.stringToEnum(Alg, s);
+    // §9.17.3 also allows a user analog function here. That is a call, not a
+    // string, and it needs the whole body, so lowering handles it
+    // (`Lower.lowerLimitUser`) and it never reaches the clamp list.
+    return std.meta.stringToEnum(Alg, strArg(g, args, 1) orelse return null);
 }
 
 const Fixture = @import("fixture.zig").Fixture;
