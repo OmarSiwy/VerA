@@ -482,8 +482,10 @@ No fixture pins these. Each is measure B or C work.
 - AMS F.2.1 step 4.a: the continuous domain winning; digital behavioural code
   classifying a net digital. (`annex_f_resolution/COVERAGE.md:90-100`.)
 - AMS G.2 item 12: the retired `real [0:3] x;` spelling (E0208 today). (`annex_g_change_history/COVERAGE.md:161-163`.)
-- AMS A.1: a library map file read as its own input, binding a separate design
-  (A-EVID-001). (`annex_a_syntax/COVERAGE.md:83`.)
+- AMS A.1: a library map binding an analog (`.va`) design. `vera --libmap`
+  binds a `.v` design's cells (IEEE 1364 §13); an analog compile reads no map
+  and its configurations bind nothing (W0253) (A-EVID-001).
+  (`annex_a_syntax/COVERAGE.md:83`.)
 - AMS 11, 12: the VPI obligation backlog (VPI12-* rows).
   (`conformance-ch11-review-draft.md`, `conformance-ch12-review-draft.md`.)
 - IEEE Annex G: declarations absent from `src/vpi/vpi_user.h`: `vpi_control`,
