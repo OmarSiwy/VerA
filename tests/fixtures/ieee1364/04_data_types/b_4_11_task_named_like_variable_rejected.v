@@ -14,7 +14,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 4.11
 //! reject duplicate
-//! xfail VerA accepts a task with the name of a variable in one module
 module b_4_11_task_named_like_variable_rejected;
   reg t;
   task t;
