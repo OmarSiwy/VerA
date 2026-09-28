@@ -139,13 +139,20 @@ fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
         k -= 1;
         indices[k] = (try eval(self, a, ex.rhs(x), 0)).asInt() orelse return null;
     }
+    return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
+}
+
+/// §4.9 row-major: the element `indices` (one per dimension, outermost
+/// first) names, counted from the array's first; null when one is outside
+/// its declared range.
+pub fn elementOffset(arr: @import("root.zig").Array, indices: []const i64) ?u32 {
     var offset: u64 = 0;
-    for (indices[0..c.depth], 0..) |at, d| {
+    for (indices, 0..) |at, d| {
         const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
         if (at < span.low or at > span.high) return null;
         offset = offset * @as(u64, @intCast(span.high - span.low + 1)) + @as(u64, @intCast(at - span.low));
     }
-    return base + @as(u32, @intCast(offset));
+    return @intCast(offset);
 }
 
 /// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the declared
