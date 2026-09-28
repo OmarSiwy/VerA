@@ -668,6 +668,38 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
         .xfail = "error[E1100]: digital source execution failed: digital execution currently requires a module with only variables, nets, events, instances and processes",
     },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail 27.19: a name searched in scope u finds top's bus\np02: b_27_objects checks=81\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_values.c",
+        .design = "tests/fixtures/ieee_pli/b_27_values.v",
+        .stdout = "xfail 27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000\nxfail 27.14: vpiStrengthVal of a reg is not logic 1 at strong strength\nxfail 27.32: a put onto a named event is refused\nxfail 27.32: a vpiNoDelay put onto a net is refused\nxfail 27.32: vpiStringVal onto a real variable is not refused\nxfail 27.32: the net does not hold the put value until its driver changes\nxfail 27.32: the named event put did not toggle it\np02: b_27_values checks=140\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "xfail 27.33.3: cbError and cbPLIError are not defined\nxfail 27.33.1.1: cbStmt on a statement is refused\nxfail 27.33.1.3: cbStmt on a module is refused\nxfail 27.33.2: cbAtStartOfSimTime of delay zero from a later region is not an error\nxfail 27.33.2: cbReadWriteSynch of delay zero from read-only synch is not an error\np02: b_27_33_callbacks checks=73\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
+        .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
+        .stdout = "b27 printf 7 ok\nxfail 27.25: a file the HDL opened with $fopen does not return the HDL's mcd\nb27 mcd1\nxfail 27.24: the name of an fd from $fopen is not returned\nxfail 27.22: an mcd from the HDL's $fopen is not closed\nxfail 27.26: text for an mcd from the HDL's $fopen goes to the output channel, not the file\np02: b_27_mcd checks=32\n",
+        // The 27.26 xfail: text for the HDL's mcd lands on stderr.
+        .stderr = "hdl\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_delays.c",
+        .design = "tests/fixtures/ch11_vpi/p05_delays.v",
+        .stdout = "p02: b_27_delays checks=25\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_unprovided.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail 27.4: vpi_flush is not provided\nxfail 27.23: vpi_mcd_flush is not provided\nxfail 27.37: vpi_vprintf is not provided\nxfail 27.27: vpi_mcd_vprintf is not provided\nxfail 27.18: vpi_handle_by_multi_index is not provided\nxfail 27.31: vpi_put_userdata/vpi_get_userdata are not provided\nxfail 27.29: vpi_put_data/vpi_get_data are not provided\nxfail 27.3: vpi_control is not provided\np02: b_27_unprovided checks=17\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
