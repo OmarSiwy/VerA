@@ -72,6 +72,18 @@ pub const runner_body =
     \\pub const shape_check = true;
     \\/// The testbench calls `setup` after every card it writes (`tb/runner.zig`).
     \\pub const calls_setup = true;
+    \\/// The testbench builds no small-signal matrix; it reads `acDyn` for
+    \\/// `//! acdyn` (`acDynAt`), its one view of those slots.
+    \\pub const calls_ac_dyn = true;
+    \\/// `acDyn`'s term at slot (r, c) and angular frequency `w`, at `x`; 0 at a
+    \\/// slot `ac_dyn_slots` does not list.
+    \\fn acDynAt(r: usize, c: usize, w: f64, x: *const [n_u]f64, m: *const D.Model, inst: *D.Instance) std.math.Complex(f64) {
+    \\    if (comptime !@hasDecl(D, "ac_dyn_slots")) return .init(0.0, 0.0);
+    \\    var out: [D.ac_dyn_slots.len]std.math.Complex(f64) = undefined;
+    \\    D.acDyn(f64, m, inst, x, sim_state, w, &out);
+    \\    for (D.ac_dyn_slots, out) |s, v| if (s == r * n_u + c) return v;
+    \\    return .init(0.0, 0.0);
+    \\}
     \\fn shapeCheck(m: *const D.Model) void {
     \\    if (comptime !@hasDecl(D, "checkShape")) return;
     \\    const name = D.checkShape(m) orelse return;
