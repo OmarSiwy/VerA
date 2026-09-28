@@ -12,6 +12,7 @@ const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
 const VTy = Analysis.VTy;
+const diag = @import("diag");
 
 // -------------------------------------------------------- §9.4 display ----
 //
