@@ -13,7 +13,6 @@
 // The rejected automatic counterpart is
 // b_10_2_1_automatic_task_item_hierarchical_rejected.v.
 //! inherited IEEE 1364-2005 10.2.1
-//! xfail a hierarchical reference into a task scope is refused ("undeclared instance in a hierarchical reference"), static task or not
 module b_10_2_1_static_task_item_hierarchical;
   task t;
     reg [7:0] v;
