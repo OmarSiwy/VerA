@@ -1,6 +1,0 @@
-// IEEE 1364-2005 A.1.1: a library_description that is a config_declaration.
-library liba cells/a.v;
-config cfg;
-  design work.top;
-  default liblist liba;
-endconfig
