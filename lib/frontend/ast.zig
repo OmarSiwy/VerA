@@ -504,6 +504,9 @@ pub const ParamDecl = struct {
     ty: Type, // §3.4.1 (`.unspecified` ⇒ infer from `default`)
     default: ExprId, // §3.4 default expression (constant_mintypmax_expression)
     is_local: bool = false, // §3.4.5 localparam
+    /// IEEE 1364-2005 §4.10.3 a module-body `specparam`, kept as a
+    /// `localparam` (`is_local`) that no module parameter may read.
+    is_spec: bool = false,
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
     /// A.2.1.1's `[ range ]`, the first arm's width bracket (`parameter [3:0]

@@ -310,6 +310,10 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             // §5.10: events "do not hold any data", so a named event has no
             // value an expression could read.
             if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
+            // IEEE 1364-2005 §4.10.3: "A specify parameter declared outside a
+            // specify block shall be declared before it is referenced."
+            if (self.specparams.get(at)) |decl| if (ex.tag(e) == .ident and ex.mainTok(e) < decl)
+                return self.exprFail(e, "§4.10.3: a specify parameter is declared before it is referenced");
             if (self.reals.contains(at)) break :blk real_type;
             const v = self.values[at];
             const own = if (ex.tag(e) == .ident) self.port_signed.get(.{ .scope = self.scope, .str = ex.strOf(e) }) else null;

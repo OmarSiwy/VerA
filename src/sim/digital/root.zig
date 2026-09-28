@@ -408,6 +408,9 @@ pub const Run = struct {
     /// §12.2 parameter slots: constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// IEEE 1364-2005 §4.10.3 the parameters that are specparams, each to
+    /// its declaration's token: "declared before it is referenced".
+    specparams: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// IEEE 1364-2005 §4.8 `real` variables and VAMS §3.7 `wreal` nets: slots
     /// holding a double's 64 bits, which typing, conversion and change
     /// detection read as a real.
@@ -997,6 +1000,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         @memcpy(slot_value.planes, converted.planes);
         try e.values.append(arena, slot_value);
         try r.params.put(arena, at, {});
+        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
     }
     try declareEvents(r, e, m.events, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
@@ -1550,6 +1554,10 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
     defer r.scope = scope;
     if (r.mixed and !compile.constantExpression(r, src.e)) return null;
     const value = try r.constant(src.e, p.main_tok);
+    // §4.10.3: "module parameters shall not be assigned a constant
+    // expression that includes any specify parameters".
+    if (!p.is_spec and readsSpecparam(r, src.e))
+        return r.exprFail(src.e, "§4.10.3: a module parameter cannot be assigned an expression that includes a specify parameter");
     if (r.mixed and compile.typeOf(r, src.e).real) return null;
     if (scope == 0 and !p.is_local) for (r.card) |c| if (std.mem.eql(u8, c.name, r.file.str(p.name))) {
         // VAMS §6.3: the card sets the root's parameter as a `#( … )` would;
@@ -1559,6 +1567,15 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
     };
     return value;
+}
+
+/// Does `e`, read in the current scope, name a specparam?
+fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) == .ident) return if (r.lookup(r.scope, ex.strOf(e))) |at| r.specparams.contains(at) else false;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and readsSpecparam(r, c)) return true;
+    return false;
 }
 
 /// §6.2.2 one module or UDP instance, declared in `scope`, or IEEE 1364
