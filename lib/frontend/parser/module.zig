@@ -88,6 +88,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .defparams = b.defparams.items,
         .genvars = b.genvars.items,
         .events = b.events.items,
+        .event_toks = b.event_toks.items,
         .functions = b.functions.items,
         .analog = b.analog.items,
         .discrete = b.discrete.items,
@@ -376,6 +377,7 @@ pub const Body = struct {
     defparams: std.ArrayList(Ast.Defparam) = .empty, // §6.3.1
     genvars: std.ArrayList(Ast.StrId) = .empty,
     events: std.ArrayList(Ast.StrId) = .empty, // §5.10.4
+    event_toks: std.ArrayList(u32) = .empty,
     functions: std.ArrayList(Ast.FuncDecl) = .empty,
     analog: std.ArrayList(Ast.AnalogBlock) = .empty,
     discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
@@ -658,6 +660,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_event => {
             self.pos += 1;
             while (true) {
+                try b.event_toks.append(self.arena, self.pos);
                 try b.events.append(self.arena, try self.expectIdent());
                 if (!self.eat(.comma)) break;
             }

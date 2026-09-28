@@ -999,6 +999,9 @@ pub const ModuleDecl = struct {
     /// carries no value, only a per-timepoint triggered/not flag, which lowering
     /// materializes as an ordinary integer slot in the §2.8 declaration space.
     events: []const StrId = &.{},
+    /// Each `events` entry's name token: IEEE 1364-2005 §9.7.3 "An event
+    /// name shall be declared explicitly before it is used."
+    event_toks: []const u32 = &.{},
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
@@ -1326,6 +1329,8 @@ pub const CaseArm = struct {
 /// a module's. The digital engine elaborates them in the block's scope.
 pub const GenItems = struct {
     events: []const StrId = &.{},
+    /// As `ModuleDecl.event_toks`.
+    event_toks: []const u32 = &.{},
     discrete: []const DiscreteBlock = &.{},
     assigns: []const ContAssign = &.{},
     gates: []const GateInst = &.{},
