@@ -1208,7 +1208,15 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
+    var gate_names: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
     for (items.gates) |g| {
+        // A `buf`/`not` with several outputs is one instance of several rows.
+        if (g.name != .none) {
+            const seen = try gate_names.getOrPut(r.arena, g.name);
+            if (seen.found_existing and seen.value_ptr.* != g.main_tok)
+                return r.fail(g.main_tok, "§7.1.5: `{s}` names two instances; one instance identifier has one range", .{r.file.str(g.name)});
+            seen.value_ptr.* = g.main_tok;
+        }
         const net = try drivenNet(r, e, scope, g.out, g.main_tok, g.strength0, g.strength1, "a gate's output terminal must be a net", "a gate's output terminal is a net_lvalue");
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
