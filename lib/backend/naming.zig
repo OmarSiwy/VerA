@@ -232,40 +232,21 @@ fn assignDisambig(units: []Unit) void {
 // take disambig 0..N-1 and inserting one renames the later ones. Qualifying the
 // target with the enclosing contribution needs lower.zig to record that link.
 
-const Ast = @import("frontend").Ast;
-const diag = @import("diag");
+const Fixture = @import("codegen/plan/fixture.zig").Fixture;
+const nets = [_][]const u8{ "drain", "gate", "source" };
 
-const Fixture = struct {
-    arena: std.heap.ArenaAllocator,
-    mir: Mir = .{ .name = "mymod" },
-    file: Ast.SourceFile = .empty,
-    /// Naming is tested on a hand-built `Lowered` with no source behind it.
-    lowered: Lowered = undefined,
-
-    fn init(f: *Fixture) !void {
-        f.lowered = .{ .file = &f.file };
-        const a = f.arena.allocator();
-        for ([_][]const u8{ "drain", "gate", "source" }) |n|
-            try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });
+fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
+    const a = f.alloc();
+    const units = try enumerateUnits(a, &f.mir, &f.lowered);
+    for (units) |u| {
+        var buf: [max_name_len]u8 = undefined;
+        try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
     }
-
-    fn deinit(f: *Fixture) void {
-        f.arena.deinit();
-    }
-
-    fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
-        const a = f.arena.allocator();
-        const units = try enumerateUnits(a, &f.mir, &f.lowered);
-        for (units) |u| {
-            var buf: [max_name_len]u8 = undefined;
-            try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
-        }
-    }
-};
+}
 
 test "inserting a contribution for a different target renames nothing" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
@@ -274,7 +255,7 @@ test "inserting a contribution for a different target renames nothing" {
     try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
 
     var before: std.ArrayList([]const u8) = .empty;
-    try f.names(&before);
+    try names(&f, &before);
     try std.testing.expectEqualStrings("mymod__analog__I_drain_source", before.items[0]);
     try std.testing.expectEqualStrings("mymod__analog__V_gate_0", before.items[1]);
 
@@ -282,7 +263,7 @@ test "inserting a contribution for a different target renames nothing" {
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = 2 });
 
     var after: std.ArrayList([]const u8) = .empty;
-    try f.names(&after);
+    try names(&f, &after);
     try std.testing.expectEqual(@as(usize, 3), after.items.len);
     for (before.items, after.items[0..before.items.len]) |b, x| {
         try std.testing.expectEqualStrings(b, x);
@@ -292,11 +273,10 @@ test "inserting a contribution for a different target renames nothing" {
 
 test "same-target collisions take group-local ordinals, first stays bare" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
-    _ = try f.mir.addBlock(a);
     const slew = try f.mir.internString(a, "slew");
     const transition = try f.mir.internString(a, "transition");
     const ln = try f.mir.internString(a, "ln"); // not an analog operator: no unit
@@ -306,7 +286,7 @@ test "same-target collisions take group-local ordinals, first stays bare" {
     _ = try f.mir.emitCall(a, .entry, slew, &.{});
 
     var got: std.ArrayList([]const u8) = .empty;
-    try f.names(&got);
+    try names(&f, &got);
     try std.testing.expectEqual(@as(usize, 3), got.items.len);
     try std.testing.expectEqualStrings("mymod__analog_op__slew", got.items[0]);
     try std.testing.expectEqualStrings("mymod__analog_op__transition", got.items[1]);
@@ -350,12 +330,11 @@ test "names never overflow silently" {
 
 test "§9.17 kernel-control units drop the `$` and stay after the operator units" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
-    _ = try f.mir.addBlock(a);
     const slew = try f.mir.internString(a, "slew");
     const bs = try f.mir.internString(a, "$bound_step");
     const disc = try f.mir.internString(a, "$discontinuity");
@@ -365,7 +344,7 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
     _ = try f.mir.emitCall(a, .entry, disc, &.{});
 
     var got: std.ArrayList([]const u8) = .empty;
-    try f.names(&got);
+    try names(&f, &got);
     try std.testing.expectEqual(@as(usize, 4), got.items.len);
     // Contributions first: proof indexes `unit_modes` by this order.
     try std.testing.expectEqualStrings("mymod__analog__I_drain_source", got.items[0]);
