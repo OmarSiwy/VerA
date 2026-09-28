@@ -16,6 +16,7 @@ const Analysis = tb.Analysis;
 const Directives = tb.Directives;
 const NoiseWant = tb.NoiseWant;
 const AcWant = tb.AcWant;
+const AcDynWant = tb.AcDynWant;
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
 /// comments (§2.4). Other lines are ignored, so any .va is valid input.
@@ -35,6 +36,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var noise: std.ArrayList(NoiseWant) = .empty;
     var qsites: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
+    var acdyn: std.ArrayList(AcDynWant) = .empty;
     var seeds: std.ArrayList(Binding) = .empty;
     var abstols: std.ArrayList(Binding) = .empty;
     var limits: std.ArrayList(tb.LimitCase) = .empty;
@@ -126,6 +128,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try acstim.append(arena, try parseAcEntry(arena, rest));
             }
             d.asserts_acstim = true;
+        } else if (std.mem.eql(u8, kw, "acdyn")) {
+            try acdyn.append(arena, try parseAcDynEntry(arena, rest));
         } else if (std.mem.eql(u8, kw, "qsite")) {
             // §5.6.1.2 one expected charge site, in slot order, in the form
             // the runner prints (`tb.Directives.qsites`). `none`: no site.
@@ -192,6 +196,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.noise = noise.items;
     d.qsites = qsites.items;
     d.acstim = acstim.items;
+    d.acdyn = acdyn.items;
     d.seeds = seeds.items;
     d.abstols = abstols.items;
     d.limits = limits.items;
@@ -297,10 +302,9 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     return w;
 }
 
-/// Parses one `//! acstim` line (§4.6.3): the branch, then `key=value` fields.
-/// A stimulus has no kind tag and no `#source`. The branch is canonicalised to
-/// `(p,n)`, the device's spelling, so `(p, n)` compares equal.
-fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
+/// Splits a leading `(<row>,<col>)` off `s`: both names trimmed, and the text
+/// after the `)`.
+fn parsePair(s: []const u8) Error!struct { row: []const u8, col: []const u8, rest: []const u8 } {
     if (s.len == 0 or s[0] != '(') return error.BadSyntax;
     const close = std.mem.indexOfScalar(u8, s, ')') orelse return error.BadSyntax;
     const inner = s[1..close];
@@ -308,9 +312,16 @@ fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     const row = std.mem.trim(u8, inner[0..comma], " \t");
     const col = std.mem.trim(u8, inner[comma + 1 ..], " \t");
     if (row.len == 0 or col.len == 0) return error.BadSyntax;
+    return .{ .row = row, .col = col, .rest = s[close + 1 ..] };
+}
 
-    var w: AcWant = .{ .topo = try std.fmt.allocPrint(arena, "({s},{s})", .{ row, col }) };
-    var fields = std.mem.tokenizeAny(u8, s[close + 1 ..], " \t");
+/// Parses one `//! acstim` line (§4.6.3): the branch, then `key=value` fields.
+/// A stimulus has no kind tag and no `#source`. The branch is canonicalised to
+/// `(p,n)`, the device's spelling, so `(p, n)` compares equal.
+fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
+    const pr = try parsePair(s);
+    var w: AcWant = .{ .topo = try std.fmt.allocPrint(arena, "({s},{s})", .{ pr.row, pr.col }) };
+    var fields = std.mem.tokenizeAny(u8, pr.rest, " \t");
     while (fields.next()) |f| {
         const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
         const key = f[0..at];
@@ -326,6 +337,39 @@ fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
         } else return error.BadSyntax;
     }
     return w;
+}
+
+/// Parses one `//! acdyn` line (`tb.AcDynWant`): the slot, then `f`, `re` and
+/// `im`, all required, and an optional `tol`.
+fn parseAcDynEntry(arena: Allocator, s: []const u8) Error!AcDynWant {
+    const pr = try parsePair(s);
+    var f: ?f64 = null;
+    var re: ?f64 = null;
+    var im: ?f64 = null;
+    var tol: f64 = 1e-12;
+    var fields = std.mem.tokenizeAny(u8, pr.rest, " \t");
+    while (fields.next()) |fd| {
+        const at = std.mem.indexOfScalar(u8, fd, '=') orelse return error.BadSyntax;
+        const key = fd[0..at];
+        const val = try number(fd[at + 1 ..]);
+        if (std.mem.eql(u8, key, "f")) {
+            f = val;
+        } else if (std.mem.eql(u8, key, "re")) {
+            re = val;
+        } else if (std.mem.eql(u8, key, "im")) {
+            im = val;
+        } else if (std.mem.eql(u8, key, "tol")) {
+            tol = val;
+        } else return error.BadSyntax;
+    }
+    return .{
+        .row = try arena.dupe(u8, pr.row),
+        .col = try arena.dupe(u8, pr.col),
+        .f = f orelse return error.BadSyntax,
+        .re = re orelse return error.BadSyntax,
+        .im = im orelse return error.BadSyntax,
+        .tol = tol,
+    };
 }
 
 /// Returns the emitted `U` enum member a directive name refers to.

@@ -22,6 +22,7 @@ const display = @import("display.zig");
 /// `vera --emit-exe design.v`: an elaborated `Run` as an executable's root.
 pub const emit = @import("emit.zig");
 const driver = @import("driver.zig");
+const binding = @import("bind.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
@@ -57,7 +58,19 @@ pub const Options = struct {
     mixed: ?Mixed = null,
     /// The source language, `vera --std=`. See `Parser.setLanguage`.
     language: Front.token.KeywordSet = Front.token.default_keyword_set,
+    /// IEEE 1364-2005 §13.2.3 the library `source`'s cells are compiled into.
+    lib: []const u8 = "work",
+    /// The source files after `source`, in command-line order (§13.4.1), in
+    /// one text stream with it.
+    more: []const Unit = &.{},
+    /// §13.5.1/§13.7.1 the libraries searched, in order, for the cell of an
+    /// instance no configuration binds. Empty: every library, in the order
+    /// the files first name them.
+    search: []const []const u8 = &.{},
 };
+
+/// One more source file and the library it maps into (`vera --libmap`).
+pub const Unit = struct { name: []const u8, text: []const u8, lib: []const u8 };
 
 /// The digital half of a design an analog compile already accepted (VAMS
 /// §7.2.2's discrete context of an analog module). Elaboration then skips
@@ -177,6 +190,8 @@ pub const analog_payload: u32 = std.math.maxInt(u32);
 pub const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
+    /// The preprocessed text `starts` indexes.
+    text: []const u8 = "",
     starts: []const u32,
     bag: *diag.Bag,
     out: *std.Io.Writer,
@@ -196,7 +211,17 @@ pub const Run = struct {
     /// parent; an instance is a hierarchy boundary and is searched no further.
     /// `index` marks one iteration of a §12.4.1 loop generate, the `[i]` of
     /// its block name.
-    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId, lexical: bool = false, index: ?i64 = null }) = .empty,
+    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, def: u32, lexical: bool = false, index: ?i64 = null }) = .empty,
+    /// IEEE 1364-2005 §13.2.3 per `file.modules` row, the library its source
+    /// file maps into; per `file.configs` row, the same.
+    def_lib: []const Ast.StrId = &.{},
+    cfg_lib: []const Ast.StrId = &.{},
+    /// §13.5.1/§13.7.1 the library search order with no configuration.
+    search: []const Ast.StrId = &.{},
+    /// Per instance scope, the §13.3 state its children bind under.
+    binds: std.AutoHashMapUnmanaged(u32, binding.Ctx) = .empty,
+    /// The top-level modules' scopes (`isRoot`), 0 first.
+    roots: []const u32 = &.{0},
     /// IEEE 1364-2005 §10 the tasks and functions of every instance.
     subs: std.ArrayList(Sub) = .empty,
     /// A subroutine by its name in the instance that declares it.
@@ -330,9 +355,9 @@ pub const Run = struct {
     /// stores only ratios, and `%t` needs the absolute magnitude to reach
     /// §17.3's `units_number`.
     unit_exp: i32 = 0,
-    /// IEEE 1364 §19.8 each module definition's own time scale, by name.
-    /// Read through `timeOf`.
-    module_times: std.AutoHashMapUnmanaged(Ast.StrId, ModuleTime) = .empty,
+    /// IEEE 1364 §19.8 each module definition's own time scale, per
+    /// `file.modules` row. Read through `timeOf`.
+    module_times: []const ModuleTime = &.{},
     time_format: TimeFormat = .{},
     /// §17.3.2 Table 17-11's default `units_number`: "the smallest time
     /// precision argument of all the `timescale compiler directives".
@@ -431,6 +456,8 @@ pub const Run = struct {
     vcd: @import("vcd.zig").Vcd = .{},
     /// `vcd.catalog` of this run, built at the first dump.
     vcd_catalog: ?@import("vcd.zig").Catalog = null,
+    /// §18.3 the `$dumpports` calls compile has checked.
+    ports_dump: @import("vcd.zig").PortsCheck = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -654,8 +681,13 @@ pub const Run = struct {
         var s = self.instanceOf(self.scope);
         while (true) {
             if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
-            if (self.scope_info.items[s].module == name) return s;
-            if (s == 0) return null;
+            if (self.file.modules[self.scope_info.items[s].def].name == name) return s;
+            // §12.5: a top-level module's name starts a hierarchical name
+            // anywhere in the design.
+            if (isRoot(self, s)) {
+                for (self.roots) |t| if (self.scope_info.items[t].name == name) return t;
+                return null;
+            }
             s = self.instanceOf(self.scope_info.items[s].parent);
         }
     }
@@ -750,7 +782,7 @@ pub const Run = struct {
     pub fn timeOf(self: *const Run, scope: u32) ModuleTime {
         const root_time: ModuleTime = .{ .scale = self.scale.?, .unit_exp = self.unit_exp };
         if (scope >= self.scope_info.items.len) return root_time;
-        return self.module_times.get(self.scope_info.items[self.instanceOf(scope)].module) orelse root_time;
+        return self.module_times[self.scope_info.items[self.instanceOf(scope)].def];
     }
     /// A constant expression's value at elaboration (IEEE 1364-2005 §5.2 /
     /// §12.2): literals, parameters, operators and the constant system
@@ -910,13 +942,17 @@ pub const Elab = struct {
     procs: std.ArrayList(struct { scope: u32, blocks: []const Ast.DiscreteBlock }) = .empty,
 };
 
-/// §6.2.2: the root of the design is the description nothing instantiates.
-fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl {
-    var top: ?*const Ast.ModuleDecl = null;
+/// §6.2.2: the roots of the design are the descriptions nothing instantiates
+/// (IEEE 1364-2005 §12.1.1: "A model shall contain at least one top-level
+/// module"), as `file.modules` rows.
+fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
     // IEEE 1364-2005 §13.3.1.1: a configuration's `design` statement names
     // the top-level cells, whatever else the source leaves uninstantiated.
-    if (r.file.config_cells.len > 1) return r.fail(0, "digital execution requires exactly one top-level module", .{});
-    if (r.file.config_cells.len == 1) return findModule(r, r.file.config_cells[0], 0);
+    if (try binding.top(r)) |defs| {
+        for (defs) |d| _ = try connectable(r, &r.file.modules[d], 0);
+        return defs;
+    }
+    var tops: std.ArrayList(u32) = .empty;
     // §12.1.1: "an instantiated module is not a top", wherever it is
     // instantiated, a generate arm the scheme does not select included.
     var generated: std.ArrayList(Ast.StrId) = .empty;
@@ -927,21 +963,40 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
             if (inst.module == candidate.name) continue :outer;
         };
         if (std.mem.indexOfScalar(Ast.StrId, generated.items, candidate.name) != null) continue;
-        if (top != null) return r.fail(candidate.main_tok, "digital execution requires exactly one top-level module", .{});
-        top = candidate;
+        // §13.2.1.1: a later same-named cell of its library replaces it.
+        const d = defOf(r, candidate);
+        if (for (modules[d + 1 ..], r.def_lib[d + 1 ..]) |later, l| {
+            if (later.name == candidate.name and l == r.def_lib[d]) break true;
+        } else false) continue;
+        try tops.append(r.arena, d);
     }
-    return top orelse r.fail(0, "digital execution found no top-level module", .{});
+    if (tops.items.len == 0) return r.fail(0, "digital execution found no top-level module", .{});
+    return tops.items;
+}
+
+/// Is `scope` a top-level module's instance? The first is scope 0; every
+/// other is its own parent.
+pub fn isRoot(r: *const Run, scope: u32) bool {
+    return scope == 0 or r.scope_info.items[scope].parent == scope;
 }
 
 fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
-    for (r.file.modules) |*m| if (m.name == name) {
-        // VAMS §7.1: a connect module "can be manually inserted (by the user)
-        // or automatically inserted (by the simulator)", in a mixed design,
-        // which is the only one that can hold its continuous half.
-        if (m.is_connect and !r.mixed) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
-        return m;
-    };
+    for (r.file.modules) |*m| if (m.name == name) return connectable(r, m, tok);
     return r.fail(tok, "undeclared module in instantiation", .{});
+}
+
+/// `m`, unless it is a connect module and this is not a mixed design.
+fn connectable(r: *Run, m: *const Ast.ModuleDecl, tok: u32) Error!*const Ast.ModuleDecl {
+    // VAMS §7.1: a connect module "can be manually inserted (by the user) or
+    // automatically inserted (by the simulator)", in a mixed design, which is
+    // the only one that can hold its continuous half.
+    if (m.is_connect and !r.mixed) return r.fail(tok, "a connect module is inserted by §7.6 discipline resolution, not instantiated", .{});
+    return m;
+}
+
+/// The `file.modules` row `m` is.
+pub fn defOf(r: *const Run, m: *const Ast.ModuleDecl) u32 {
+    return @intCast(m - r.file.modules.ptr);
 }
 
 /// One instance's storage: its variables, its nets, its ports' nets, and the
@@ -1456,7 +1511,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
             try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
             const name: Ast.StrId = switch (r.file.stmt(f.body)) {
-                .block => |b| b.name,
+                // §12.4.3 an unnamed block's external name, genblk<n>.
+                .block => |b| b.gen_name,
                 else => .none, // else: a lone item is an unnamed generate block
             };
             var seen: std.ArrayList(i64) = .empty;
@@ -1466,7 +1522,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 if (std.mem.indexOfScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
                 try seen.append(r.arena, value);
                 const iter = try newScope(r, tok);
-                try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .module = m.name, .lexical = true, .index = value });
+                try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value });
                 r.scope = iter;
                 try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
                 try generate(r, e, m, iter, f.body, depth);
@@ -1540,7 +1596,16 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         while (true) {
             if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d|
                 break :blk .{ .e = d.value, .scope = at };
-            if (at == 0) break;
+            if (isRoot(r, at)) {
+                // §12.2.1: a defparam in one top-level module may name a
+                // parameter under another by its full hierarchical name.
+                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
+                if (r.file.strings.find(full)) |str| for (r.roots) |t| {
+                    if (t == at) continue;
+                    if (r.defparams.get(.{ .scope = t, .str = str })) |d| break :blk .{ .e = d.value, .scope = t };
+                };
+                break;
+            }
             path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
             at = r.scope_info.items[at].parent;
         }
@@ -1619,7 +1684,8 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
     r.scope = scope;
     {
         if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
-        const child = try findModule(r, inst.module, inst.main_tok);
+        const bound = try binding.child(r, scope, inst);
+        const child = try connectable(r, &r.file.modules[bound.def], inst.main_tok);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
         for (inst.ports, 0..) |conn, i| {
@@ -1657,7 +1723,8 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
-        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name, .index = index });
+        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .def = bound.def, .index = index });
+        try r.binds.put(arena, child_scope, bound.ctx);
         // §12.4's path is walked by name, so the instance's own identifier has
         // to outlive the recursion that consumes it. An array element's path
         // carries its index, which that walk does not read: not registered.
@@ -1846,7 +1913,7 @@ pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u
 pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const g = r.growing.?;
     const scope = try newScope(r, t.main_tok);
-    try r.scope_info.append(r.arena, .{ .parent = inst, .name = t.name, .module = r.scope_info.items[inst].module, .lexical = true });
+    try r.scope_info.append(r.arena, .{ .parent = inst, .name = t.name, .def = r.scope_info.items[inst].def, .lexical = true });
     const saved = r.scope;
     r.scope = scope;
     defer r.scope = saved;
@@ -2018,7 +2085,11 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     const pp: Front.Preprocessor.Output = if (opts.mixed) |mx| .{
         .text = source,
         .directives = .{ .timescales = if (mx.timescale) |t| try arena.dupe(Front.Preprocessor.TimescaleEvent, &.{.{ .at = 0, .value = t }}) else &.{} },
-    } else Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .bag = bag }) catch |e| return switch (e) {
+    } else Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .more = more: {
+        const more = try arena.alloc(Front.Preprocessor.File, opts.more.len);
+        for (opts.more, more) |u, *f| f.* = .{ .name = u.name, .text = u.text };
+        break :more more;
+    }, .bag = bag }) catch |e| return switch (e) {
         error.OutOfMemory => error.OutOfMemory,
         error.PreprocessFailed => error.DigitalFailed,
     };
@@ -2039,12 +2110,15 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    try binding.libraries(&r, file, opts, pp.more_starts);
+    var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
         if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
-        break :blk try pickTop(&r, file.modules);
+        tops = try pickTops(&r, file.modules);
+        break :blk &file.modules[tops[0]];
     };
     // IEEE 1364 §19.8: a `timescale applies to "all modules that follow this
     // directive until another `timescale compiler directive is read", so each
@@ -2079,11 +2153,13 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // directives in the design determines the precision of the time unit of
     // the simulation": that is the scheduler's tick, and every module's delays
     // are scaled to it.
-    for (file.modules, locals) |*def, l| try r.module_times.put(arena, def.name, .{
+    const module_times = try arena.alloc(ModuleTime, file.modules.len);
+    for (file.modules, locals, module_times) |*def, l, *mt| mt.* = .{
         .scale = Time.Scale.init(l.unit, l.precision, finest) catch return r.fail(def.main_tok, "invalid timescale", .{}),
         .unit_exp = @intFromEnum(l.unit),
-    });
-    const root_time = r.module_times.get(m.name).?;
+    };
+    r.module_times = module_times;
+    const root_time = module_times[defOf(&r, m)];
     r.scale = root_time.scale;
     r.unit_exp = root_time.unit_exp;
     // §17.3: "the default ... is the smallest time precision argument of
@@ -2095,7 +2171,23 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // waiters. §6.2.2 elaboration walks the instance tree parent-first, which
     // is what lets a port connection resolve against nets that already exist.
     var e: Elab = .{};
-    try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .module = m.name });
+    try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .def = defOf(&r, m) });
+    // IEEE 1364-2005 §12.1.1 every other top-level module is a root of its
+    // own, scoped before any instance so a defparam in it that names another
+    // top's parameter (§12.2.1) is registered when that parameter is set.
+    if (tops.len > 1) {
+        const roots = try arena.alloc(u32, tops.len);
+        roots[0] = 0;
+        for (tops[1..], roots[1..]) |d, *s| {
+            const t = &file.modules[d];
+            s.* = try newScope(&r, t.main_tok);
+            try r.scope_info.append(arena, .{ .parent = s.*, .name = t.name, .def = d });
+            for (t.defparams) |dp| try r.defparams.put(arena, .{ .scope = s.*, .str = dp.path }, dp);
+        }
+        r.roots = roots;
+    }
+    for (r.roots, 0..) |s, k| if (r.binds.get(0)) |b| if (b.cfg) |c|
+        try r.binds.put(arena, s, binding.rootCtx(&r, c, if (tops.len == 0) defOf(&r, m) else tops[k]));
     if (opts.mixed) |mx| {
         // VAMS §7.8.4 each bridge's segment, spelled as the flatten spells it
         // (`bridged` declares it), for the connections re-pointed at it.
@@ -2121,6 +2213,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     @memset(r.sys_calls, null);
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, &.{}, 0);
+    if (tops.len > 1) for (r.roots[1..], tops[1..]) |s, d| try declare(&r, &e, &file.modules[d], s, &.{}, &.{}, 0);
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
@@ -2253,6 +2346,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.scope = p.scope;
         try processes(&r, p.blocks);
     }
+    // Refused once every call is checked, so a malformed one is named first.
+    if (r.ports_dump.tok) |tok| return r.fail(tok, "digital system task `$dumpports` is not implemented", .{});
     // A.6.5's `disable` names a block that needs no declaration before its
     // use (it may be in another process), so the ranges are bound here, once
     // every process has a pc range.

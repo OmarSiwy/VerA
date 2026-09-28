@@ -234,6 +234,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // §4.6.3 magnitude and phase may read the card (`mdl`); also
             // stated at the first point.
             if (n == 0) try emitAcStim(arena, &out, d, mdl);
+            // `acDyn` linearizes at the point `eval` does; also the first.
+            if (n == 0) try emitAcDyn(arena, &out, d, mdl);
             // §9.17.3 the published clamp, with this point's `x` as `cur`.
             if (n == 0) try emitLimitCheck(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping: only `updateState` writes the
@@ -404,8 +406,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
-    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0)
-        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed and //! limit are not read by the mixed-signal runner\"); }\n");
+    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0 or d.acdyn.len != 0)
+        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
 
     try print(&out, arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try print(&out, arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
@@ -973,6 +975,24 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
         try out.appendSlice(arena, "            }\n");
     }
     try out.appendSlice(arena, "        }\n");
+}
+
+/// Emits the `//! acdyn` checks (`tb.AcDynWant`): `acDyn`'s term at each named
+/// slot and frequency, at the enclosing operating point. `mdl` names the card.
+fn emitAcDyn(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+    for (d.acdyn) |w| {
+        try print(out, arena, "        {{\n            const ad = acDynAt(ix(\"{f}\"), ix(\"{f}\"), 2.0 * std.math.pi * {f}, &x, &{s}, &inst);\n", .{
+            std.zig.fmtString(w.row), std.zig.fmtString(w.col), fmtF64(w.f), mdl,
+        });
+        const parts = [_]struct { []const u8, f64 }{ .{ "re", w.re }, .{ "im", w.im } };
+        for (parts) |p| try print(
+            out,
+            arena,
+            "            std.debug.print(\"acdyn[({f},{f}) f={f}].{s} got={{e}} want={{e}} ok={{d}}\\n\", .{{ ad.{s}, @as(f64, {f}), @intFromBool(@abs(ad.{s} - {f}) <= {f}) }});\n",
+            .{ std.zig.fmtString(w.row), std.zig.fmtString(w.col), fmtF64(w.f), p[0], p[0], fmtF64(p[1]), p[0], fmtF64(p[1]), fmtF64(w.tol) },
+        );
+        try out.appendSlice(arena, "        }\n");
+    }
 }
 
 /// Returns the cartesian product of `sweeps` then `psweeps`, last varying

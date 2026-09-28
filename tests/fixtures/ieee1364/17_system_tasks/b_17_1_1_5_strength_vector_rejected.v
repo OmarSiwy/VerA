@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 17.1.1.5
 //! reject E1100
 //! reject scalar
-//! xfail VerA refuses every %v as unimplemented ("only the §9.4.3 Table 9-22 conversions ... are implemented"), not because the argument is a vector
 module b_17_1_1_5_strength_vector_rejected;
   wire [3:0] v;
   assign v = 4'b1010;

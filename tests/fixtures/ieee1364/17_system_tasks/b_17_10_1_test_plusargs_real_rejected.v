@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 17.10.1
 //! reject E1100
 //! reject nonreal
-//! xfail VerA accepts a real variable as the $test$plusargs query and returns 0
 `timescale 1 ns / 1 ns
 module b_17_10_1_test_plusargs_real_rejected;
   real q;

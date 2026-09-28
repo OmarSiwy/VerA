@@ -18,7 +18,6 @@
 //   date=1 and timescale=1 and the value tokens as in the literal twin:
 //     $enddefinitions $end #0 $dumpvars 0! $end #1 1!
 //! inherited IEEE 1364-2005 18.2.3.8
-//! xfail the $version section names the file the variable evaluated to, $dumpfile("b_18_2_3_8_var.vcd"), not the unevaluated $dumpfile(fname)
 `timescale 1ns/1ns
 module b_18_2_3_8_var_dut;
   reg a;
