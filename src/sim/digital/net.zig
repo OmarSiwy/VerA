@@ -485,6 +485,10 @@ pub const Udp = struct {
     /// Whether the driver has published once; §8.5's initial value is
     /// published at time 0 whatever the instance delay.
     started: bool = false,
+    /// IEEE 1364-2005 §8.6 one instance of an array: the bit of a vector
+    /// input it reads (as `Gate.lane`), and the output bit it drives.
+    lane: ?u32 = null,
+    out_bit: ?u32 = null,
 };
 
 /// Split A.5.3's input characters into one field per input, or null when an

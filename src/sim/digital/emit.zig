@@ -1258,12 +1258,12 @@ fn netTables(self: *Emitter) Error!void {
     for (self.rt_drivers.items) |di| {
         const d = r.drivers[di];
         r.scope = d.scope;
-        try self.print("\n        .{{ .net = {d}, .s0 = .{t}, .s1 = .{t}, .delay = {f}, .init = .{t}, .delay_bit = ", .{ self.net_ix[d.net].?, d.s0, d.s1, fmtDelay(d.delay), d.current.bit(0) });
+        try self.print("\n        .{{ .net = {d}, .s0 = .{t}, .s1 = .{t}, .delay = {f}, .init = .{t}, .delay_bit = ", .{ self.net_ix[d.net].?, d.s0, d.s1, fmtDelay(d.delay), d.current.bit(if (d.source == .udp) d.source.udp.out_bit orelse 0 else 0) });
         switch (d.source) {
             .expr => try self.print("null, .source = .expr }},", .{}),
             .gate => |g| try self.print("{d}, .source = .{{ .gate = {d} }} }},", .{ g.out_bit orelse 0, g.out_bit orelse 0 }),
             .udp => |u| {
-                try self.print("0, .source = .{{ .udp = {d} }} }},", .{udps.items.len});
+                try self.print("{d}, .source = .{{ .udp = {d} }} }},", .{ u.out_bit orelse 0, udps.items.len });
                 try udps.append(self.arena, u);
             },
             .mos => |m| {
@@ -1368,7 +1368,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
             },
             .udp => |u| {
                 if (u.ins.len > 64) return self.refuse("a UDP of more than 64 inputs");
-                try bits(self, u.ins, null);
+                try bits(self, u.ins, u.lane);
                 try self.print("            try s.udp({d}, &b);\n", .{k});
             },
             .mos => |m| {

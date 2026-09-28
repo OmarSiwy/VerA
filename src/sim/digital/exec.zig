@@ -1259,11 +1259,12 @@ fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: 
 /// z as x (§8.1.6). A combinational table is simply consulted; a sequential
 /// one takes each input that changed since the last evaluation as one event,
 /// in terminal order, and its state follows the entries matched (§8.6).
-fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) Error!Int.Literal {
+fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp, width: u32) Error!Int.Literal {
     const net_mod = @import("net.zig");
     const bits = try scratch.alloc(Int.Bit, u.ins.len);
     for (u.ins, bits) |in, *b| {
-        const v = (try eval(self, scratch, in, 1)).bit(0);
+        const w = try eval(self, scratch, in, 1);
+        const v = w.bit(if (w.width > 1) u.lane orelse 0 else 0);
         b.* = if (v == .z) .x else v;
     }
     const out = if (!u.sequential) net_mod.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
@@ -1275,7 +1276,9 @@ fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) 
         }
         break :blk u.state;
     };
-    return filled(scratch, 1, false, out);
+    const result = try filled(scratch, width, false, .z);
+    setBit(result, u.out_bit orelse 0, out);
+    return result;
 }
 
 /// What a `Bridge` driver contributes: its window, z everywhere else.
@@ -1803,7 +1806,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const value = switch (d.source) {
                     .bridge => |b| try window(self, scratch, b, d.current.width),
                     .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
-                    .udp => |u| try udpValue(self, scratch, u),
+                    .udp => |u| try udpValue(self, scratch, u, d.current.width),
                     .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
                     .pull => |b| try filled(scratch, d.current.width, false, b),
                     .expr => |x| blk: {
@@ -1821,7 +1824,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
                 // later transitions wait for the instance delay.
-                const first_udp = if (d.source == .udp) !d.source.udp.started else false;
+                const first_udp = if (d.source == .udp) d.source.udp.sequential and !d.source.udp.started else false;
+                // A combinational one's output is x until its first delayed value.
+                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
@@ -1829,7 +1834,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         const delay = switch (d.source) {
                             .expr => d.delay.continuous(d.current, st.target),
                             .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
-                            .bridge, .udp, .mos, .pull => d.delay.to(st.target.bit(0)),
+                            .udp => |u| d.delay.to(st.target.bit(u.out_bit orelse 0)),
+                            .bridge, .mos, .pull => d.delay.to(st.target.bit(0)),
                         };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
