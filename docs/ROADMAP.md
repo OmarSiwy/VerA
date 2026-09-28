@@ -307,7 +307,6 @@ These need a call, not another agent pass.
 | IEEE A.6.5 | A hierarchical event trigger (`-> u.ev;`) does not parse. | `d04_SPEC.md:211-213` |
 | IEEE 17.2.9 | `$readmem` refuses a variable file name and variable start/finish addresses (E1100). | `conformance-readmem-validation-edges.md:66-70` |
 | IEEE 6.1, 3.10 | A net array (`wire [3:0] w [0:1];`) does not parse (E0207). | found 2026-09-27 |
-| IEEE 12.5 | An upward hierarchical reference (`top.r` read from a child) is refused (E1100, "undeclared instance"). Downward references work. | found 2026-09-27 |
 | IEEE 11.4.1 | Native executables under `--schedule=static` (the default): a `fork` arm that waits on an edge the statement before it causes misses the edge and the join hangs; `--run` and `fifo` complete. §11.4.1 permits the order, but a hang is not acceptable. | reported by the native perf work, not reproduced here |
 
 ### 5.4 Diagnostics and harness
