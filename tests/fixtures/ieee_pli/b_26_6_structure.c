@@ -26,9 +26,10 @@
  *   the following types: ... vpiIterator".
  * §26.3.5, p. 381: "The vpiIsProtected property shall be TRUE if the
  *   object_handle represents code that is protected; otherwise, it shall be
- *   FALSE." (Annex G has no vpiIsProtected. Its nearest constant is
- *   vpiProtected, 10, "source protected module (boolean)", which §26.6.1
- *   and §26.6.44 draw on module and gen scope only.)
+ *   FALSE." Annex G has no vpiIsProtected, so this is not asserted. Its
+ *   nearest constant is vpiProtected, 10, "source protected module
+ *   (boolean)", which §26.6.1 and §26.6.44 draw on module and gen scope; the
+ *   module's is asserted under §26.6.1.
  * §26.5.2, p. 384: "Integer and boolean properties are accessed with the
  *   routine vpi_get(). ... String properties are accessed with routine
  *   vpi_get_str()."
@@ -101,7 +102,8 @@
  *
  * §26.6.1  One top-level module (b26_leaf, b26_cell and b26_buf are all
  *   instantiated): b26_structure, vpiTopModule 1, vpiDefName
- *   "b26_structure". Its child instances include u, w4 and c1;
+ *   "b26_structure", vpiProtected FALSE (no decryption envelope). Its
+ *   child instances include u, w4 and c1;
  *   u is b26_leaf, not top, not an array member, so vpiIndex(u) is NULL
  *   (Details d), and vpiIndex(top) likewise. `timescale 1ns/1ps: vpiTimeUnit
  *   of the module is -9, and NULL's vpiTimePrecision -12 (Details b; §27.6's
@@ -199,7 +201,6 @@
 //! inherited-reject IEEE 1364-2005 26.3.2
 //! inherited IEEE 1364-2005 26.3.3
 //! inherited-reject IEEE 1364-2005 26.3.3
-//! inherited IEEE 1364-2005 26.3.5
 //! inherited IEEE 1364-2005 26.5.2
 //! inherited-reject IEEE 1364-2005 26.5.2
 //! inherited IEEE 1364-2005 26.5.3
@@ -454,8 +455,8 @@ static void instances_and_access(void)
   CHECK(vpi_handle(vpiUse, itr) == NULL, "26.6.43 b: a NULL reference handle");
   vpi_free_object(itr);
 
-  /* §26.3.5 */
-  XFAIL(vpi_get(vpiProtected, top) == 0, "26.3.5", "vpiProtected of an unprotected module is not FALSE");
+  /* §26.6.1 */
+  XFAIL(vpi_get(vpiProtected, top) == 0, "26.6.1", "vpiProtected of an unprotected module is not FALSE");
 
   /* §26.5.2 / §26.5.3 */
   CHECK(vpi_get(vpiSize, bus) == 8, "26.5.2: an int property through vpi_get()");
