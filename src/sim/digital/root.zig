@@ -806,8 +806,9 @@ pub const Run = struct {
     fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
         const hi = try self.declaredBound(range.msb, tok);
         const lo = try self.declaredBound(range.lsb, tok);
-        if (@abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
-        return @intCast(@abs(hi - lo) + 1);
+        const span = @abs(@as(i128, hi) - lo);
+        if (span >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
+        return @intCast(span + 1);
     }
     fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
         const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
@@ -1727,7 +1728,6 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
     if (v.ty == .string) return r.fail(v.main_tok, "string variables are not implemented", .{});
     const real = v.ty == .real;
-    if (v.dims.len > 16) return r.fail(v.main_tok, "arrays of more than 16 dimensions are not implemented", .{});
     // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
     // §4.8: a real is a double, held as its 64 bits.
     const width: u32 = if (real) 64 else if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
@@ -1762,13 +1762,15 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
 /// with `dims`, and its element count; 1, and no row, for no dimensions.
 fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len == 0) return 1;
+    // `address` and `netSlot` gather one index per dimension on the stack.
+    if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
     for (dims, spans) |d, *s| {
         const lo = try r.declaredBound(d.lsb, tok);
         const hi = try r.declaredBound(d.msb, tok);
         s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
-        const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+        const size = std.math.cast(u32, @as(i128, s.high) - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
         count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
     }
     try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
