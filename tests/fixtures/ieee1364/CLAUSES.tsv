@@ -305,7 +305,7 @@
 13.7.1	-	Using the command line to control library searching
 13.7.2	-	File path specification examples
 13.7.3	-	Resolving multiple path specifications
-14	-	Specify blocks
+14	non-normative	Specify blocks	Clause preamble: "This clause describes how paths are specified in a module and how delays are assigned to these paths." (p. 211). It states no rule of its own; the rules are §14.1-§14.3.1 (each cited both ways or classified) and §14.3.2-§14.6.4.2 (not-supported).
 14.1	-	Specify block declaration
 14.2	-	Module path declarations
 14.2.1	-	Module path restrictions
@@ -313,13 +313,13 @@
 14.2.3	-	Edge-sensitive paths
 14.2.4	-	State-dependent paths
 14.2.4.1	-	Conditional expression
-14.2.4.2	-	Simple state-dependent paths
+14.2.4.2	no-prohibition	Simple state-dependent paths	"If the path description of a state-dependent path is a simple path, then it is called a simple state-dependent path." A definition and two examples (XORgate, ALU); nothing is forbidden (the ifnone ban is §14.2.4.4, the condition operators §14.2.4.1, each cited both ways). Positive: 14_specify_blocks/b_14_2_4_state_dependent_paths.v (both examples).
 14.2.4.3	-	Edge-sensitive state-dependent paths
 14.2.4.4	-	The ifnone condition
 14.2.5	-	Full connection and parallel connection paths
 14.2.6	-	Declaring multiple module paths in a single statement
 14.2.7	-	Module path polarity
-14.2.7.1	-	Unknown polarity
+14.2.7.1	no-prohibition	Unknown polarity	"A module path specified either as a full connection or as a parallel connection, but without a polarity operator + or -, shall be treated as a module path with unknown polarity." The default when no operator is written; nothing is forbidden (a wrong or misplaced operator is §14.2.7, §14.2.7.2 and §14.2.7.3, each cited both ways). Positive: 14_specify_blocks/b_14_2_7_polarity.v (the clause example).
 14.2.7.2	-	Positive polarity
 14.2.7.3	-	Negative polarity
 14.3	-	Assigning delays to module paths
