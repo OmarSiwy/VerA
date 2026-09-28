@@ -363,6 +363,7 @@ pub const Code = enum(u16) {
     E1002,
     E1003,
     E1004,
+    E1010,
     E1100,
     E1101,
     E1102,
@@ -5803,6 +5804,21 @@ fn infoOf(c: Code) Info {
             \\operators are supported. Arbitrary constant-function control flow,
             \\loop-carried or multiway values, unsupported operators and expressions
             \\beyond the renderer's recursion limit remain implementation gaps.
+            ,
+        },
+        .E1010 => .{
+            .title = "a display or format call has more than 32 conversions",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA compiles each display,
+            \\file-output or `$sformat`/`$swrite` call into one Zig format
+            \\call, and Zig's formatter accepts at most 32 arguments per call.
+            \\LRM 9.4 states no bound on the argument list, so a longer call is
+            \\legal source that VerA refuses here, at the call, rather than as
+            \\an error in generated Zig.
+            \\
+            \\Split the call: two `$fwrite` calls to one descriptor write the
+            \\same bytes as one, and `$sformat` results concatenate with `{a, b}`.
             ,
         },
         .W1050 => .{

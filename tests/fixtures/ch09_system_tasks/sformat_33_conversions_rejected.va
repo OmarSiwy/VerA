@@ -1,0 +1,17 @@
+// An engine limit, not a language rule: §9.5.3 and §9.4.1 bound no argument
+// list. VerA compiles one call into one Zig format call, which takes at most 32
+// arguments, so a 33rd conversion is refused at the call with E1010 rather than
+// as an error in the generated Zig (sformat_32_conversions.va is the widest call
+// that runs).
+//
+//! lrm 9.5.3
+//! reject E1010
+module sformat_33_conversions_rejected(p, n);
+  inout p, n; electrical p, n;
+  string s;
+  analog begin
+    $sformat(s, "%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d",
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2);
+    I(p,n) <+ V(p,n) * (s == "");
+  end
+endmodule
