@@ -1717,7 +1717,9 @@ fn infoOf(c: Code) Info {
             \\parentheses, unary operators, conditional operators, statements
             \\and generate blocks by recursion, and past 1024 open levels it
             \\stops with this error rather than overflow its stack and crash
-            \\with no location.
+            \\with no location. A chain of binary operators counts one level
+            \\per operator: `a + b + c` is two levels deep, because every
+            \\later stage walks the tree it builds.
             \\
             \\No model needs that depth. Machine-generated source can reach it:
             \\split the expression through intermediate variables, or flatten
