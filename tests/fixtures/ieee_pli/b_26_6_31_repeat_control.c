@@ -13,8 +13,8 @@
  * REFUSAL: vpi_handle(vpiStmt, repeat control) - the diagram draws only the
  * expression and the event control - NULL with vpi_chk_error() nonzero.
  *
- * VerA does not parse a repeat event control (E0209), so build.zig runs this
- * as an xfail.
+ * checks=13: setup's and start's registrations (2), p02_by_name's lookup and
+ * no-error (2), and walk's nine.
  */
 
 //! inherited IEEE 1364-2005 26.6.31

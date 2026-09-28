@@ -708,7 +708,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.v",
-        .xfail = "error[E0209]: expected an expression: found `repeat`",
+        .stdout = "p02: b_26_6_31_repeat_control checks=13\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
