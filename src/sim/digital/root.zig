@@ -67,6 +67,9 @@ pub const Options = struct {
     /// instance no configuration binds. Empty: every library, in the order
     /// the files first name them.
     search: []const []const u8 = &.{},
+    /// Events at one time step before a zero-delay loop is refused
+    /// (`vera --event-budget=`).
+    event_budget: u64 = max_events_per_tick,
 };
 
 /// One more source file and the library it maps into (`vera --libmap`).
@@ -2146,7 +2149,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget };
     try binding.libraries(&r, file, opts, pp.more_starts);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {

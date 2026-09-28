@@ -276,8 +276,8 @@ const Range = struct { start: u32, end: u32 };
 /// declares `vera_overrides`.
 const overrides = @hasDecl(@import("root"), "vera_overrides");
 
-/// `root.max_events_per_tick`.
-const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
+/// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
+const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
 
 /// `get` of planes `v`, `x`; `k` as `poke`'s.
 inline fn peek(comptime k: bool, v: [*]const u64, x: [*]const u64, off: u32) W {
