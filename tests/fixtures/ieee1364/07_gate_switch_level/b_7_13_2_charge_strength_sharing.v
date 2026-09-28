@@ -22,7 +22,6 @@
 // Before joining, each trireg holds its own charge: "01 10 10 10".
 // Lines: "01 10 10 10", "00 11 xx 11".
 //! inherited IEEE 1364-2005 7.13.2
-//! xfail a trireg on a tranif1 terminal does not hold charge: once its nmos driver turns off it reads z even with the tranif1 off, so no capacitive network (§4.6.3.1) forms
 `timescale 1ns/1ns
 module b_7_13_2_charge_strength_sharing;
   reg c, e;
