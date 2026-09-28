@@ -12,7 +12,6 @@
 //                                              bits 1..0 stay forced -> 0011
 //   release w[1:0]                          -> 0000
 //! inherited IEEE 1364-2005 9.3.2
-//! xfail force of a constant bit-select or a part-select of a vector net is refused ("a procedural continuous assignment names one whole variable or net")
 `timescale 1ns/1ns
 module b_9_3_2_force_net_selects;
   wire [3:0] w;
