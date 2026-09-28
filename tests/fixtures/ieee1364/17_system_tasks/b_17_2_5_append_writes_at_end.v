@@ -11,7 +11,6 @@
 //   pointer after it at 3 -> "seek=0 tell=3".
 //   Reopened "r": A B C then EOF -> "65 66 67 -1".
 //! inherited IEEE 1364-2005 17.2.5
-//! xfail an "a" file written after $fseek(fd, 0, 0) is overwritten at offset 0 (the file becomes "CB", $ftell 1)
 module b_17_2_5_append_writes_at_end;
   integer fd, r, c;
   initial begin
