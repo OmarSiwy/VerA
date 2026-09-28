@@ -1,0 +1,22 @@
+// IEEE 1364-2005 §10.2.1, p. 147: "All items declared inside automatic tasks
+// are allocated dynamically for each invocation. Automatic task items cannot
+// be accessed by hierarchical references."
+//
+// `t.v` names an item of the automatic task t. Legal neighbour:
+// b_10_2_1_static_task_item_hierarchical.v, the same reference into a static
+// task.
+// digital-runner: reject
+//! inherited IEEE 1364-2005 10.2.1
+//! reject E1100
+//! reject automatic
+//! xfail refused, but as "undeclared instance in a hierarchical reference", which a static task's item gets too; the diagnostic does not name the automatic task
+module b_10_2_1_automatic_task_item_hierarchical_rejected;
+  task automatic t;
+    reg [7:0] v;
+    v = 5;
+  endtask
+  initial begin
+    t;
+    $display("%0d", t.v);
+  end
+endmodule
