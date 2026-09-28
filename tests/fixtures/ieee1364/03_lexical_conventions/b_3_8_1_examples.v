@@ -20,7 +20,6 @@
 //   a = b + c = 1 + 2 -> 3; a = add(b, c) -> 3; a = b ? c : d -> 2
 //   the instance mod1 copies its input 1 to its output -> 1 (after #1)
 //! inherited IEEE 1364-2005 3.8 3.8.1
-//! xfail any attribute instance in a module stops digital execution with E1100 "requires a module with only variables, nets, events, instances and processes"
 (* optimize_power *)
 module b_3_8_1_examples;
   reg [1:0] foo;
