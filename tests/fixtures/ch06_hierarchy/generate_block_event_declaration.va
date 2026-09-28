@@ -17,7 +17,6 @@
 //! lrm 6.6
 //! analysis tran
 //! time 10n, 30n
-//! xfail E0235: VerA has no generate scope for an event declaration and refuses it
 `timescale 1ns/1ns
 `include "disciplines.vams"
 `include "check.vh"
