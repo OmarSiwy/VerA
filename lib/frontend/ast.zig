@@ -947,6 +947,11 @@ pub const ParamOverride = struct {
 pub const Defparam = struct {
     path: StrId,
     value: ExprId,
+    /// IEEE 1364-2005 §12.2.1 a digital path's instance selects that do not
+    /// fold at parse time (a genvar's, inside a loop generate block), in
+    /// order: each is spelled `[]` in `path` and folded in the scope the
+    /// defparam is elaborated in.
+    indices: []const ExprId = &.{},
     main_tok: u32 = 0,
 };
 

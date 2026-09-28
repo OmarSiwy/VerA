@@ -438,9 +438,13 @@ pub const Run = struct {
     /// Pass one's slot space while it is still growing: the view `constant`
     /// evaluates a bound or a parameter against before `values` is final.
     growing: ?*std.ArrayList(Int.Literal) = null,
-    /// IEEE 1364-2005 §12.2.1 every `defparam`, by the instance that declares
-    /// it and its path relative to that instance (`paramValue`).
-    defparams: std.AutoHashMapUnmanaged(Name, Ast.Defparam) = .empty,
+    /// IEEE 1364-2005 §12.2.1 every `defparam`, by the scope its path is
+    /// relative to and that path (`bindDefparam`, `paramValue`).
+    /// Each value is evaluated in `decl`, the scope that declares it.
+    defparams: std.HashMapUnmanaged(PathKey, struct { d: Ast.Defparam, decl: u32 }, PathKey.Ctx, 80) = .empty,
+    /// Each defparam as pass one bound it, for §12.8.2's check against the
+    /// complete hierarchy (`checkDefparams`).
+    bound_defparams: std.ArrayList(struct { decl: u32, path: []const u8, at: u32, rest: []const u8, tok: u32 }) = .empty,
     /// `Mixed.params`: the root's parameter values on the host's card.
     card: []const Param = &.{},
     /// §12.2 parameter slots: constants an expression may fold, never a
@@ -1014,6 +1018,91 @@ fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
 
 /// Is `scope` a top-level module's instance? The first is scope 0; every
 /// other is its own parent.
+/// A defparam path relative to a scope, spelled as `Ast.Defparam.path` is.
+pub const PathKey = struct {
+    scope: u32,
+    path: []const u8,
+    pub const Ctx = struct {
+        pub fn hash(_: Ctx, k: PathKey) u64 {
+            return std.hash.Wyhash.hash(k.scope, k.path);
+        }
+        pub fn eql(_: Ctx, a: PathKey, b: PathKey) bool {
+            return a.scope == b.scope and std.mem.eql(u8, a.path, b.path);
+        }
+    };
+};
+
+/// IEEE 1364-2005 §12.2.1 registers defparam `d`, declared in `decl`: its
+/// unfolded instance selects folded there, then its first segment resolved
+/// as §12.6 resolves a hierarchical name. It names a child of `decl` when
+/// one of `children` (the instances the declaring text writes) has that
+/// name, else `decl` or a scope above it by name, else a child that
+/// elaboration mints later.
+fn bindDefparam(r: *Run, decl: u32, d: Ast.Defparam, children: []const Ast.Instance) Error!void {
+    var path: []const u8 = r.file.str(d.path);
+    if (d.indices.len != 0) {
+        var out: std.ArrayList(u8) = .empty;
+        var rest = path;
+        for (d.indices) |x| {
+            const at = std.mem.indexOf(u8, rest, "[]").?; // the parser spelled one per index
+            const k = (try r.constant(x, d.main_tok)).asInt() orelse return r.exprFail(x, "§12.2.1: a defparam's instance select is x or z");
+            try out.print(r.arena, "{s}[{d}]", .{ rest[0..at], k });
+            rest = rest[at + 2 ..];
+        }
+        try out.appendSlice(r.arena, rest);
+        path = out.items;
+    }
+    const b = try defparamBase(r, decl, path, children, d.main_tok);
+    try r.defparams.put(r.arena, .{ .scope = b.at, .path = b.rest }, .{ .d = d, .decl = decl });
+    try r.bound_defparams.append(r.arena, .{ .decl = decl, .path = path, .at = b.at, .rest = b.rest, .tok = d.main_tok });
+}
+
+/// The scope defparam `path` (declared in `decl`) is relative to once its
+/// first segment is resolved, and the rest of it. `children` is pass one's
+/// static view of `decl`'s children; null reads the complete hierarchy.
+fn defparamBase(r: *Run, decl: u32, path: []const u8, children: ?[]const Ast.Instance, tok: u32) Error!struct { at: u32, rest: []const u8 } {
+    const dot = std.mem.indexOfScalar(u8, path, '.') orelse return .{ .at = decl, .rest = path };
+    const seg = path[0..dot];
+    const bracket = std.mem.indexOfScalar(u8, seg, '[');
+    const name = seg[0 .. bracket orelse seg.len];
+    const index: ?i64 = if (bracket) |at| std.fmt.parseInt(i64, seg[at + 1 .. seg.len - 1], 10) catch null else null;
+    const same = struct {
+        fn f(rr: *const Run, s: u32, n: []const u8, k: ?i64) bool {
+            const info = rr.scope_info.items[s];
+            return info.name != .none and std.mem.eql(u8, rr.file.str(info.name), n) and std.meta.eql(info.index, k);
+        }
+    }.f;
+    if (children) |list| {
+        for (list) |c| if (c.name != .none and std.mem.eql(u8, r.file.str(c.name), name)) return .{ .at = decl, .rest = path };
+    } else for (r.scope_info.items, 0..) |info, s| if (s != decl and info.parent == decl and same(r, @intCast(s), name, index)) return .{ .at = decl, .rest = path };
+    var s = decl;
+    while (true) {
+        if (same(r, s, name, index)) return .{ .at = s, .rest = path[dot + 1 ..] };
+        const info = r.scope_info.items[s];
+        // §12.2.1: "a defparam statement in a hierarchy in or under a
+        // generate block instance ... or an array of instances ... shall
+        // not change a parameter value outside that hierarchy."
+        if (index != null and info.index != null and info.name != .none and std.mem.eql(u8, r.file.str(info.name), name))
+            return r.fail(tok, "§12.2.1: a defparam inside `{s}[{d}]` cannot change a parameter outside the generate block instance or array element it is in", .{ name, info.index.? });
+        if (isRoot(r, s)) break;
+        s = info.parent;
+    }
+    for (r.roots) |t| if (same(r, t, name, index)) return .{ .at = t, .rest = path[dot + 1 ..] };
+    return .{ .at = decl, .rest = path };
+}
+
+/// IEEE 1364-2005 §12.8.2: "It shall be an error if a hierarchical name in a
+/// defparam is resolved before the hierarchy is completely elaborated and
+/// that name would resolve differently once the model is completely
+/// elaborated."
+fn checkDefparams(r: *Run) Error!void {
+    for (r.bound_defparams.items) |b| {
+        const now = try defparamBase(r, b.decl, b.path, null, b.tok);
+        if (now.at != b.at or !std.mem.eql(u8, now.rest, b.rest))
+            return r.fail(b.tok, "§12.8.2: this defparam's hierarchical name was resolved before the hierarchy was complete and would resolve differently once it is", .{});
+    }
+}
+
 pub fn isRoot(r: *const Run, scope: u32) bool {
     return scope == 0 or r.scope_info.items[scope].parent == scope;
 }
@@ -1056,7 +1145,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // default may name an earlier one. A mixed module's real, string and array
     // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
     // no parameter of those kinds, and a digital read of one is undeclared.
-    for (m.defparams) |d| try r.defparams.put(arena, .{ .scope = scope, .str = d.path }, d);
+    for (m.defparams) |d| try bindDefparam(r, scope, d, m.instances);
     // §10: the instance's tasks and functions, named before its parameters
     // so a §10.4.5 constant function call in one can find its function.
     try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
@@ -1740,7 +1829,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
-            for (b.gen.defparams) |d| try r.defparams.put(r.arena, .{ .scope = scope, .str = d.path }, d);
+            for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
@@ -1827,28 +1916,32 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?struct { v: Int.Literal, real: bool = false } {
     const Src = struct { e: Ast.ExprId, scope: u32 };
     const src: Src = blk: {
-        // A defparam's path is relative to the instance that declares it, so
-        // each enclosing scope is asked for the path from it down to `p`.
-        // ponytail: downward paths only, the §12.2.1 form every fixture writes.
+        // A defparam's path is relative to the scope `bindDefparam` bound
+        // it to, so each enclosing scope is asked for the path from it down
+        // to `p`.
         var at = scope;
         var path: []const u8 = r.file.str(p.name);
         while (true) {
-            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d| {
-                if (p.is_local) return r.fail(d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
-                break :blk .{ .e = d.value, .scope = at };
-            };
+            if (r.defparams.get(.{ .scope = at, .path = path })) |dp| {
+                if (p.is_local) return r.fail(dp.d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
+                break :blk .{ .e = dp.d.value, .scope = dp.decl };
+            }
+            const info = r.scope_info.items[at];
             if (isRoot(r, at)) {
                 // §12.2.1: a defparam in one top-level module may name a
                 // parameter under another by its full hierarchical name.
-                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
-                if (r.file.strings.find(full)) |str| for (r.roots) |t| {
+                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+                for (r.roots) |t| {
                     if (t == at) continue;
-                    if (r.defparams.get(.{ .scope = t, .str = str })) |d| break :blk .{ .e = d.value, .scope = t };
-                };
+                    if (r.defparams.get(.{ .scope = t, .path = full })) |dp| break :blk .{ .e = dp.d.value, .scope = dp.decl };
+                }
                 break;
             }
-            path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
-            at = r.scope_info.items[at].parent;
+            path = if (info.index) |k|
+                try std.fmt.allocPrint(r.arena, "{s}[{d}].{s}", .{ r.file.str(info.name), k, path })
+            else
+                try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+            at = info.parent;
         }
         if (!p.is_local) for (over, 0..) |o, i| {
             if (o.value != .none and (o.name == p.name or (o.name == .none and i == pos)))
@@ -2580,7 +2673,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             const t = &file.modules[d];
             s.* = try newScope(&r, t.main_tok);
             try r.scope_info.append(arena, .{ .parent = s.*, .name = t.name, .def = d });
-            for (t.defparams) |dp| try r.defparams.put(arena, .{ .scope = s.*, .str = dp.path }, dp);
+            for (t.defparams) |dp| try bindDefparam(&r, s.*, dp, t.instances);
         }
         r.roots = roots;
     }
@@ -2612,6 +2705,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, &.{}, 0);
     if (tops.len > 1) for (r.roots[1..], tops[1..]) |s, d| try declare(&r, &e, &file.modules[d], s, &.{}, &.{}, 0);
+    try checkDefparams(&r);
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
