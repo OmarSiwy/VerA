@@ -451,21 +451,29 @@ pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show
     defer self.out = saved;
     try @import("display.zig").display(self, args[1..], a, show);
     self.out = saved;
-    try channels(table(self), self.io, self.out, d, buf.written());
+    if (try channels(table(self), self.io, self.out, d, buf.written())) {
+        const start = self.starts[@min(self.file.exprs.mainTok(args[0]), self.starts.len - 1)];
+        try self.bag.add(.lower, .W1153, .{ .start = start, .end = start }, unwritten, .{});
+    }
 }
+
+/// The W1153 text.
+pub const unwritten = "no file this descriptor names is open for writing: the output is not written";
 
 /// `bytes` to every channel descriptor `d` names: bit 0 of an mcd and fd 1
 /// (STDOUT) are the transcript `out`; fd 2 is STDERR; every other channel
-/// is the table's.
-pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, bytes: []const u8) std.Io.Writer.Error!void {
+/// is the table's. True when the table's channels took none of `bytes`:
+/// each is closed (§17.2.1: `$fclose` "does not allow any further output to
+/// the closed channels") or not open for writing.
+pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, bytes: []const u8) std.Io.Writer.Error!bool {
     const fd = d & (@as(i64, 1) << 31) != 0;
     const ch = d & 0x7fff_ffff;
     if ((fd and ch == 1) or (!fd and d & 1 != 0)) try out.writeAll(bytes);
     if (fd and ch == 2) if (io) |i| std.Io.File.stderr().writeStreamingAll(i, bytes) catch {};
     const files = if (fd) (if (ch > 2) d else 0) else d & ~@as(i64, 1);
-    if (files != 0) if (t) |tt| {
-        _ = tt.put(files, bytes);
-    };
+    if (files == 0 or bytes.len == 0) return false;
+    const tt = t orelse return false;
+    return tt.put(files, bytes) == 0;
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)` in the interpreter (`Scan`).
