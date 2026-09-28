@@ -221,31 +221,11 @@ pub const Scheduler = struct {
         return if (self.future.peek()) |entry| entry.time else null;
     }
 
-    /// Every time at which a live event waits, in no particular order and
-    /// with repeats, `now` included while a current-time region holds one.
-    /// Read-only: the future heap is scanned, not popped. IEEE 1364 §26.6.25's
-    /// `vpiTimeQueue` iteration is the reader (src/vpi/run.zig), which sorts.
-    pub fn pendingTimes(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Time)) std.mem.Allocator.Error!void {
-        if (self.phase == .stopped) return;
-        const state = self.slots.items(.state);
-        const links = self.slots.items(.next);
-        current: for (self.heads) |head| {
-            var cursor = head;
-            while (cursor != .none) : (cursor = links[@intFromEnum(cursor)]) {
-                if (state[@intFromEnum(cursor)] == .pending) {
-                    try out.append(a, self.now);
-                    break :current;
-                }
-            }
-        }
-        for (self.future.items) |entry| {
-            if (state[@intFromEnum(entry.slot)] == .pending) try out.append(a, entry.time);
-        }
-    }
-
-    /// `pendingTimes` with each event's payload: every live event as
-    /// (time, payload), in no particular order. Read-only. VAMS §9.23's
-    /// pending-driver queries are the reader (src/sim/digital/driver.zig).
+    /// Every live event as (time, payload), in no particular order; a
+    /// current-time event reports `now`. Read-only: the future heap is
+    /// scanned, not popped. Readers: VAMS §9.23's pending-driver queries
+    /// (src/sim/digital/driver.zig) and IEEE 1364 §26.6.25's `vpiTimeQueue`
+    /// iteration (src/vpi/run.zig).
     pub fn pendingPayloads(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Live)) std.mem.Allocator.Error!void {
         if (self.phase == .stopped) return;
         const state = self.slots.items(.state);
@@ -687,21 +667,25 @@ test "future sequence exhaustion reports before changing queued work" {
     try t.expectEqual(@as(Time, 0), scheduler.now);
 }
 
-test "pendingTimes lists the live future times and skips cancelled ones" {
+test "pendingPayloads lists the live events and skips cancelled ones" {
     var s = Scheduler.init(std.testing.allocator);
     defer s.deinit();
     _ = try s.scheduleAt(5, .inactive, 0);
     const dead = try s.scheduleAt(7, .inactive, 1);
     _ = try s.scheduleAt(9, .nba, 2);
     _ = try s.cancel(dead);
-    var out: std.ArrayList(Time) = .empty;
+    var out: std.ArrayList(Live) = .empty;
     defer out.deinit(std.testing.allocator);
-    try s.pendingTimes(std.testing.allocator, &out);
-    std.mem.sort(Time, out.items, {}, std.sort.asc(Time));
-    try std.testing.expectEqualSlices(Time, &.{ 5, 9 }, out.items);
+    try s.pendingPayloads(std.testing.allocator, &out);
+    std.mem.sort(Live, out.items, {}, byTime);
+    try std.testing.expectEqualSlices(Live, &.{ .{ .time = 5, .payload = 0 }, .{ .time = 9, .payload = 2 } }, out.items);
     _ = try s.schedule(.active, 3);
     out.clearRetainingCapacity();
-    try s.pendingTimes(std.testing.allocator, &out);
-    std.mem.sort(Time, out.items, {}, std.sort.asc(Time));
-    try std.testing.expectEqualSlices(Time, &.{ 0, 5, 9 }, out.items);
+    try s.pendingPayloads(std.testing.allocator, &out);
+    std.mem.sort(Live, out.items, {}, byTime);
+    try std.testing.expectEqualSlices(Live, &.{ .{ .time = 0, .payload = 3 }, .{ .time = 5, .payload = 0 }, .{ .time = 9, .payload = 2 } }, out.items);
+}
+
+fn byTime(_: void, a: Live, b: Live) bool {
+    return a.time < b.time;
 }
