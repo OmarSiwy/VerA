@@ -47,12 +47,12 @@
 3.8	-	Attributes
 3.8.1	-	Examples
 3.8.2	-	Syntax
-4	-	Data types
-4.1	-	Value set
-4.2	-	Nets and variables
+4	non-normative	Data types	"The set of Verilog HDL data types is designed to represent the data storage and transmission elements found in digital hardware." The chapter preamble; its rules are in §4.1 to §4.11.
+4.1	no-prohibition	Value set	The four values, z at a gate input or in an expression acting as x except through MOS switches, and "All bits of vectors can be independently set to one of the four basic values." Nothing is illegal. Positive: 04_data_types/b_4_1_value_set.v.
+4.2	non-normative	Nets and variables	"There are two main groups of data types: the variable data types and the net data types. These two groups differ in the way that they are assigned and hold values. They also represent different hardware structures." An introduction; the rules are §4.2.1 and §4.2.2, each cited both ways.
 4.2.1	-	Net declarations
 4.2.2	-	Variable declarations
-4.3	-	Vectors
+4.3	no-prohibition	Vectors	"A net or reg declaration without a range specification shall be considered 1 bit wide and is known as a scalar. Multibit net and reg data types shall be declared by specifying a range". Nothing is illegal (the range rules are §4.3.1's). Positive: 04_data_types/b_4_3_scalar_and_vector.v.
 4.3.1	-	Specifying vectors
 4.3.2	-	Vector net accessibility
 4.4	-	Strengths
@@ -71,7 +71,7 @@
 4.7	-	Regs
 4.8	-	Integers, reals, times, and realtimes
 4.8.1	-	Operators and real numbers
-4.8.2	-	Conversion
+4.8.2	no-prohibition	Conversion	Rounding to nearest with ties away from zero, and x/z bits taken as zero when converting to real. Nothing is illegal. Positive: 04_data_types/b_4_8_2_real_integer_conversion.v, b_4_8_2_unknown_bits_to_real.v (xfail).
 4.9	-	Arrays
 4.9.1	-	Net arrays
 4.9.2	-	reg and variable arrays
