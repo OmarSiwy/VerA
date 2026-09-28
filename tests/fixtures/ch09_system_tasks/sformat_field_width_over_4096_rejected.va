@@ -2,13 +2,16 @@
 // "the full formatting capabilities available in the C language", and C bounds
 // no field width. VerA composes one call's text in a 4096-byte buffer
 // (docs/IMPLEMENTATION.md), so a width above 4096 is refused at the call with
-// E1011 rather than clamped to a narrower field than the one written.
+// E1011 rather than clamped to a narrower field than the one written. The
+// text goes to $sformat and feeds the contribution, because a device drops a
+// $strobe it cannot print (W0850) before its format is read.
 //
 //! reject E1011
-module strobe_field_width_over_4096_rejected(p, n);
+module sformat_field_width_over_4096_rejected(p, n);
   inout p, n; electrical p, n;
+  string s;
   analog begin
-    $strobe("%5000d", 1);
-    I(p,n) <+ V(p,n);
+    $sformat(s, "%5000d", 1);
+    I(p,n) <+ V(p,n) * (s == "");
   end
 endmodule

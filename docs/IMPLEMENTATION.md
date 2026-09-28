@@ -62,7 +62,7 @@ truncation rule, so a shorter answer would be a wrong one.
 | loop generate unrolling | 4096 iterations | E0420 | `lib/ir/lower/control.zig:536` | `ch06_hierarchy/generate_nonterminating_rejected.va` |
 | solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig:308` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
 | conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig:137` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
-| text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `strobe_field_width_over_4096_rejected.va` |
+| text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
 | one `$fgets` line, one `$fscanf` look-ahead | 4096 bytes | E1011 | `lib/backend/file_kernels.zig:68,137` | `ch09_system_tasks/fgets_line_over_4096_is_fatal.va`, `fscanf_window_over_4096_is_fatal.va`, `s01_13_long_record_is_not_truncated.va` |
 | open file channels | 30 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:88` | `ch09_system_tasks/222_mcd_channels_exhausted_at_bit_31.va`, `224_two_instances_hold_distinct_channels.va` |
 | distinct paths opened for writing in one run | 64 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:108` | `ch09_system_tasks/write_mode_path_65_fails_open.va` |
