@@ -41,7 +41,8 @@ const Args = std.process.Args.Iterator;
 ///
 /// Returns the process exit code.
 pub fn main(init: std.process.Init) !u8 {
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(init.gpa);
+    defer args.deinit();
     _ = args.skip();
     // The `vera` binary, from `run.addArtifactArg(exe)`.
     const vera_exe = args.next() orelse return usage(init.io, "missing the vera executable path");

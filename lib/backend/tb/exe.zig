@@ -15,7 +15,8 @@ pub const BuildOptions = struct {
     work_dir: []const u8,
     /// Root of the `contract` module the generated device imports.
     contract: []const u8,
-    /// Artifact name: the module name, so the binary is `./<module>`.
+    /// Artifact name: the module name, so the binary is `./<module>` plus the
+    /// target's executable extension (`.exe` on Windows).
     name: []const u8,
     out_path: ?[]const u8 = null,
     zig_exe: []const u8 = "zig",
@@ -77,7 +78,10 @@ pub fn buildExe(
     const bin = if (opts.out_path) |p|
         try gpa.dupe(u8, p)
     else
-        try std.fs.path.join(gpa, &.{ opts.work_dir, opts.name });
+        try std.mem.concat(gpa, u8, &.{
+            try std.fs.path.join(arena, &.{ opts.work_dir, opts.name }),
+            builtin.target.exeFileExt(),
+        });
     errdefer gpa.free(bin);
 
     std.debug.assert(device_zig != null or opts.mixed);

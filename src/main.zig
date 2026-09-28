@@ -124,7 +124,8 @@ pub fn main(init: std.process.Init) !u8 {
     var logic: digital.emit.Logic = .auto;
     var logic_flag: ?[]const u8 = null;
 
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(gpa);
+    defer args.deinit();
     _ = args.skip();
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
