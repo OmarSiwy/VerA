@@ -11,7 +11,6 @@
 //   "Printing with minimum size - :10: :a:"
 // The same override on 16-bit c = 1 in binary and octal: %0b -> 1, %0o -> 1.
 //! inherited IEEE 1364-2005 17.1.1.3
-//! xfail %0h, %0b and %0o keep the leading zeros (%0h of 12'd10 prints 00a); only %0d is minimum-sized
 module b_17_1_1_3_zero_width_format;
   reg [11:0] r1;
   reg [15:0] c;
