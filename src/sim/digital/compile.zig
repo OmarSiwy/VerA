@@ -635,7 +635,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 // signed: `$clog2(x) - 1` at x = 0 is -1, not 4294967295.
                 .clog2 => {
                     if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$clog2 takes exactly one argument");
-                    _ = try inferValue(self, args[0], depth + 1);
+                    // "The argument can be an integer or an arbitrary sized
+                    // vector value" (§17.11.1).
+                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.11.1: $clog2 takes an integer or vector argument, not a real");
                     break :blk .{ .width = 32, .signed = true };
                 },
                 .make_signed, .make_unsigned => {
