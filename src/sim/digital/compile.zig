@@ -682,6 +682,10 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         };
                         if (written) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
                     }
+                    // §17.2.1: "The type is a character string ... of one of
+                    // the forms in Table 17-7".
+                    if (f == .fopen and args.len == 2 and ex.tag(args[1]) == .str_literal and !system.fileType(self.file.str(ex.strOf(args[1]))))
+                        return self.exprFail(args[1], "§17.2.1: an $fopen type is one of Table 17-7's r, w, a, r+, w+, a+ (with b)");
                     break :blk .{ .width = 32, .signed = f != .fopen };
                 },
                 .realtime => {

@@ -308,10 +308,7 @@ pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.E
 pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, name: ?[]const u8, mode: ?[]const u8, mcd: bool) std.mem.Allocator.Error!i64 {
     const path = name orelse return 0;
     const ty = if (mcd) "w" else mode orelse return 0;
-    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
-    for (types) |allowed| {
-        if (std.mem.eql(u8, allowed, ty)) break;
-    } else return 0;
+    if (!fileType(ty)) return 0;
     // A file read is looked for beside the source first, as `$readmemh`
     // looks (`display.readSideFile`).
     if (ty[0] == 'r') if (std.fs.path.dirname(file_name)) |dir| {
@@ -319,6 +316,13 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
         if (d != 0) return d;
     };
     return t.open(path, ty, mcd);
+}
+
+/// Is `ty` one of §17.2.1 Table 17-7's file types?
+pub fn fileType(ty: []const u8) bool {
+    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
+    for (types) |allowed| if (std.mem.eql(u8, allowed, ty)) return true;
+    return false;
 }
 
 /// §17.2.4.1 / §17.2.4.2 / §17.2.5 / §17.2.8 on the table `t`, C's
