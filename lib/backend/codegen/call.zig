@@ -427,6 +427,15 @@ pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool
     });
 }
 
+/// Returns `absdelayTd` at a small-signal point: §4.5.7 "td is evaluated as a
+/// constant at a particular time for any small signal analysis", so td and
+/// maxdelay are read live, not from the latches `updateState` fills.
+fn absdelayTdAc(self: *Gen, args: []const Mir.Value) Error![]const u8 {
+    const td = try ctrlEval(self, args, 1, "0.0");
+    if (args.len < 3) return td;
+    return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{ td, try ctrlEval(self, args, 2, "0.0") });
+}
+
 /// Returns whether a signal-valued `maxdelay` is latched into `Instance` at
 /// the start of the analysis instead of refused (§4.5.14: "the value of the
 /// dynamic expression at the start of the analysis defaults to the constant
@@ -1326,9 +1335,11 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // `__sec` always takes `model`, so keep the parameter named.
             self.uses_model = true;
             try opOpen(self, fm);
+            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcLaplace({s}, {d}, {d}, {s}, {s}__sec(model))", .{ kS, p.ns, p.deg, in, n }));
             try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
                 kS, p.ns, p.deg, in, n, n, n,
             });
+            try opClose(self);
             try opClose(self);
         },
         // §4.5.12 "samples every T seconds and exhibits no delay": between
@@ -1341,11 +1352,15 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // As for `.laplace`.
             self.uses_model = true;
             try opOpen(self, fm);
+            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
+                kS, p.ns, p.deg, in, n, p.period orelse "0.0",
+            }));
             try self.b(
                 "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
                     "sim.t, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
                 .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
             );
+            try opClose(self);
             try opClose(self);
         },
         // §4.5.4 `idt(expr, ic, assert)` "returns the initial conditions ...
@@ -1368,6 +1383,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         },
         .absdelay => {
             try opOpen(self, fm);
+            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcDelay({s}, {s}, {s})", .{ kS, in, try absdelayTdAc(self, args) }));
             try self.b(
                 "{s}({s}, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, sim.t, sim.dt, {s})",
                 .{
@@ -1380,6 +1396,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
                     try absdelayTd(self, n, args, false),
                 },
             );
+            try opClose(self);
             try opClose(self);
         },
         // §4.5.8 the ramp's origin comes from `Instance` and its target from
@@ -1445,6 +1462,13 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
 
 /// Writes `zLu(S, m, ` around an operator kernel whose scalar is `zL(S, m)`;
 /// `opClose` writes its `)`.
+/// Opens a §4.5.7/§4.5.11/§4.5.12 kernel for both families: `ac`, the
+/// operator's small-signal response, when the family is `acDyn`'s `zAc`,
+/// else `zSs` around the kernel the caller writes next. `opClose` closes it.
+fn acOpen(self: *Gen, kS: []const u8, ac: []const u8) Error!void {
+    try self.b("if (comptime @hasDecl(S.Of(0), \"acMul\")) {s} else zSs({s}, sim.kind, ", .{ ac, kS });
+}
+
 fn opOpen(self: *Gen, m: u64) Error!void {
     try self.b("zLu(S, 0x{x}, ", .{m});
 }

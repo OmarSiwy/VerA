@@ -1405,6 +1405,39 @@ pub const UdpDecl = struct {
     main_tok: u32 = 0,
 };
 
+/// IEEE 1364-2005 Syntax 13-1 `[library_identifier.]cell_identifier[:config]`.
+pub const LibCell = struct {
+    /// `.none` when omitted; the clause using it says which library that is.
+    lib: StrId = .none,
+    cell: StrId,
+    /// The `:config` suffix (§13.1.1), which only a use clause admits.
+    config: bool = false,
+};
+
+/// IEEE 1364-2005 §13.3.1 one `config_rule_statement`.
+pub const ConfigRule = struct {
+    select: union(enum) {
+        default,
+        /// §13.3.1.3 `inst_name`, interned whole (`top.a1`).
+        instance: StrId,
+        cell: LibCell,
+    },
+    expand: union(enum) {
+        liblist: []const StrId,
+        use: LibCell,
+    },
+    main_tok: u32,
+};
+
+/// IEEE 1364-2005 §13.3.1 / A.1.5 `config_declaration`.
+pub const ConfigDecl = struct {
+    name: StrId,
+    /// §13.3.1.1 the top-level cells, in the order the statement lists them.
+    design: []const LibCell,
+    rules: []const ConfigRule,
+    main_tok: u32,
+};
+
 // ---------------------------------------------------------------------------
 // Source file: LRM §1 source_text, A.1.2
 // ---------------------------------------------------------------------------
@@ -1429,10 +1462,7 @@ pub const SourceFile = struct {
     paramsets: []const ParamsetDecl = &.{}, // §6.4
     connectrules: []const ConnectRulesDecl = &.{}, // §7.7
     udps: []const UdpDecl = &.{}, // §8.5.3 / A.5.1
-    /// IEEE 1364-2005 §13.3.1.1 the cells every configuration's `design`
-    /// statement names, library prefix dropped: the design's top-level
-    /// modules when a configuration selects them.
-    config_cells: []const StrId = &.{},
+    configs: []const ConfigDecl = &.{}, // IEEE 1364-2005 §13.3
 
     /// How many leading entries of `modules` are the annex E prelude (Table E.1
     /// SPICE primitives, prepended as source by `Preprocessor.spice_primitives`)

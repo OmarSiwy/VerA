@@ -24,7 +24,6 @@
 // sources place on nets shall have pull strength") makes Pu0, and it reads
 // pd at time 0, racing the gate's first evaluation.
 //! inherited IEEE 1364-2005 17.1.1.5
-//! xfail %v is not implemented: "only the §9.4.3 Table 9-22 conversions ... and %c %s %m %l %t are implemented" (E1100)
 `timescale 1ns/1ns
 module b_17_1_1_5_strength_format;
   wire s1, p1, hz, sx;
