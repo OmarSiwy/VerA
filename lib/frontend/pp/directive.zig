@@ -56,7 +56,7 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         return error.PreprocessFailed;
     }
 
-    const inc = (try readInclude(pp, path)) orelse {
+    const inc = (try readInclude(pp, path, name_span)) orelse {
         var b = pp.failWith(name_span, .E0126);
         b.msg("\"{s}\"", .{path});
         if (pp.opts.include_dirs.len == 0) {
@@ -84,7 +84,7 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the include dirs, else a built-in annex D file by
 /// basename. Null if nothing matched. The bytes are arena-owned.
-pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
+pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
     const bases: []const []const u8 = if (std.fs.path.isAbsolute(path)) &.{""} else pp.opts.include_dirs;
@@ -97,6 +97,7 @@ pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
                 return .{ .text = bytes, .path = full };
             } else |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
+                error.StreamTooLong => return pp.fail(span, .E1013, "\"{s}\" is larger than {d} bytes", .{ full, max_include_bytes }),
                 else => {}, // try the next dir
             }
         }

@@ -66,6 +66,81 @@ pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedu
     }
 }
 
+/// A device root, or why `r` cannot be one.
+pub const Device = union(enum) { zig: []const u8, refused: []const u8 };
+
+/// The contract device of `r`'s top module (`rt.Device`): the native
+/// processes and tables, then one pin per port bit, 4-state. `r` is read and
+/// its time-0 queue drained, never run.
+pub fn device(arena: std.mem.Allocator, r: *Run, file_name: []const u8, schedule: Schedule) std.mem.Allocator.Error!Device {
+    var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .device = true };
+    // `rt` reads these from the root module, which in a host is the host's.
+    for (r.code.items) |ins| if (ins == .override_on) return .{ .refused = "a §9.3 procedural continuous assignment (assign or force)" };
+    if (native(&e, file_name, schedule)) |text| return .{ .zig = text } else |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Unsupported => return .{ .refused = e.why },
+    }
+}
+
+/// The contract decls of a device root (`rt.Device`), after the design: its
+/// top module's ports in declaration order, each bit a pin, a vector's from
+/// its left index to its right. A device is at most 64 pins, so every port
+/// sits in one plane word.
+fn deviceRoot(self: *Emitter) Error!void {
+    const r = self.r;
+    const m = &r.file.modules[r.scope_info.items[0].def];
+    var names: std.Io.Writer.Allocating = .init(self.arena);
+    var pins: std.Io.Writer.Allocating = .init(self.arena);
+    var n: u32 = 0;
+    for (m.ports) |p| {
+        const out = switch (p.direction) {
+            .input => false,
+            .output => true,
+            .inout, .unspecified => return self.refuse("an inout port: the analog side would drive a §7.9 resolved net"),
+        };
+        const at = r.names.get(.{ .scope = 0, .str = p.name }) orelse return self.refuse("a port with no net or variable behind it");
+        if (r.reals.contains(at)) return self.refuse("a real port");
+        for (m.vars) |v| if (v.name == p.name and v.storage != .reg) return self.refuse("an integer or time port");
+        const w = try self.slotWidth(at);
+        const vr = expr.vecRange(r, at, w);
+        const scalar = w == 1 and !r.vec_ranges.contains(at);
+        var i = vr.msb;
+        while (true) : (i = if (vr.msb >= vr.lsb) i - 1 else i + 1) {
+            if (n == 64) return self.refuse("more than 64 pins");
+            const name = if (scalar) r.file.str(p.name) else try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ r.file.str(p.name), i });
+            names.writer.print(" {f},", .{std.zig.fmtId(name)}) catch return error.OutOfMemory;
+            pins.writer.print("\n        .{{ .out = {}, .slot = {d}, .off = {d}, .bit = {d} }},", .{ out, at, self.off[at], @abs(i - vr.lsb) }) catch return error.OutOfMemory;
+            n += 1;
+            if (i == vr.lsb) break;
+        }
+    }
+    try self.print(
+        \\/// The contract ABI this device was generated for (`contract.abi_version`).
+        \\pub const contract_abi: u32 = 5;
+        \\pub const U = enum(u8) {{{s} }};
+        \\pub const num_ports: usize = {d};
+        \\const Dev = rt.Device(.{{ .U = U, .design = &design, .dispatch = Code(false).dispatch, .units = {d}, .pins = &.{{{s}
+        \\}} }});
+        \\pub const Model = Dev.Model;
+        \\pub const Instance = Dev.Instance;
+        \\pub const State = Dev.State;
+        \\pub const state_class = Dev.state_class;
+        \\pub const deriv_reads = Dev.deriv_reads;
+        \\pub const ddx_reads = Dev.ddx_reads;
+        \\pub const jac_pattern = Dev.jac_pattern;
+        \\pub const eval = Dev.eval;
+        \\pub const initState = Dev.initState;
+        \\pub const updateState = Dev.updateState;
+        \\pub const stateCtl = Dev.stateCtl;
+        \\pub const pendingBreakpoint = Dev.pendingBreakpoint;
+        \\
+        \\comptime {{
+        \\    @import("contract").validate(@This());
+        \\}}
+        \\
+    , .{ names.written(), n, r.finest, pins.written() });
+}
+
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
@@ -104,6 +179,8 @@ pub const Emitter = struct {
     two_state: bool = false,
     auto: bool = false,
     four: ?Reason = null,
+    /// Emitting a contract device (`device`), not an executable.
+    device: bool = false,
     /// The subroutines a call reached (§10), each emitted once as
     /// `fn proc<entry>` after the processes.
     subs_todo: std.ArrayList(u32) = .empty,
@@ -427,9 +504,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print(" }};\n\n", .{});
     try self.print(
         \\pub fn dispatch(s: *S, pc: u32) rt.Error!void {{
-        \\    if (pc < rt.show_base) return procs[pc](s, pc);
+        \\    if (pc < rt.show_base) {s};
         \\
-    , .{});
+    , .{if (entry_of.len == 0) "unreachable" else "return procs[pc](s, pc)"});
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word,
@@ -488,17 +565,14 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     }
     try self.print("}};\n\n", .{});
     if (dumps(r)) try catalog(self);
-    if (two_phase) try self.print(
+    if (self.device) try deviceRoot(self) else if (two_phase) try self.print(
         \\pub fn main(init: std.process.Init) u8 {{
         \\    return rt.auto(init, &design, {d}, Code(false).dispatch, Code(true).dispatch);
         \\}}
         \\
     , .{r.finest}) else try self.print(
         \\pub fn main(init: std.process.Init) u8 {{
-        \\    var s: S = undefined;
-        \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
-        \\    while (s.next() catch |e| return s.exit(e)) |pc| Code(false).dispatch(&s, pc) catch |e| return s.exit(e);
-        \\    return s.exit(null);
+        \\    return rt.main(init, &design, {d}, Code(false).dispatch);
         \\}}
         \\
     , .{r.finest});
@@ -811,6 +885,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print("            _ = s.monitorEnable(false);\n", .{}),
                 // §17.2.9: the bounds are read now; the file when the task runs.
                 .readmem => |radix| {
+                    if (self.device) return self.refuse("§17.2.9 $readmemb/$readmemh: a device reads no file");
                     const base = try self.slot(t.args[1]);
                     const arr = r.arrays.get(base).?;
                     const name = r.file.str(r.file.exprs.strOf(t.args[0]));
@@ -825,6 +900,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 // §17.6: inputs read, the shared queue engine, then each
                 // output written as `exec.assignInt` writes it, status last.
                 .queue => |op| {
+                    if (self.device) return self.refuse("a §17.6 stochastic queue, whose length a device's state cannot bound");
                     const lb = self.label();
                     const scale = r.timeOf(r.scope).scale;
                     try self.print("            const q{d} = try s.queue(.{t}, ", .{ lb, op });

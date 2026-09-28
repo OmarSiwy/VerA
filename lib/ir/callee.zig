@@ -205,6 +205,14 @@ pub const Callee = enum(u8) {
     pub fn fromName(name: []const u8) Callee {
         return by_name.get(name) orelse .systf;
     }
+
+    /// A spelling lowering mints for its own rewrites (`$held_int` to the end
+    /// of the `$rng$` family), never a §2.8.3 source name: a source call
+    /// that spells one is refused (E1014), since its facts assume lowering's
+    /// arguments.
+    pub fn synthetic(c: Callee) bool {
+        return @intFromEnum(c) >= @intFromEnum(Callee.@"$held_int") and c != .systf;
+    }
 };
 
 const by_name = std.StaticStringMap(Callee).initComptime(blk: {

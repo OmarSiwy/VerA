@@ -365,14 +365,29 @@ pub const Code = enum(u16) {
     E1002,
     E1003,
     E1004,
+    E1010,
+    E1011,
+    E1012,
+    E1013,
+    E1014,
+    E1015,
+    E1016,
+    E1017,
+    E1018,
     E1100,
     E1101,
     E1102,
+    /// A `.v` design that cannot be a contract device.
+    E1103,
+    /// A SystemVerilog source.
+    E1104,
     W1150,
     W1151,
     W1152,
     W1153,
     W1154,
+    /// A `.v` device whose digital tick is 1 s.
+    W1155,
     W1050,
     W0950,
     E0820,
@@ -1716,7 +1731,9 @@ fn infoOf(c: Code) Info {
             \\parentheses, unary operators, conditional operators, statements
             \\and generate blocks by recursion, and past 1024 open levels it
             \\stops with this error rather than overflow its stack and crash
-            \\with no location.
+            \\with no location. A chain of binary operators counts one level
+            \\per operator: `a + b + c` is two levels deep, because every
+            \\later stage walks the tree it builds.
             \\
             \\No model needs that depth. Machine-generated source can reach it:
             \\split the expression through intermediate variables, or flatten
@@ -5834,6 +5851,41 @@ fn infoOf(c: Code) Info {
             \\`--two-state` to run it with 4-state logic.
             ,
         },
+        .E1103 => .{
+            .title = "design cannot be a contract device",
+            .lrm = "7.8",
+            .explain =
+            \\`vera --emit-zig`, `--check` and `--emit-so` of a `.v` design build a
+            \\contract device an analog host loads: every bit of the top module's
+            \\ports is a pin, an `input` bit sensed through an analog-to-digital
+            \\bridge and an `output` bit driven through a digital-to-analog one, the
+            \\connect modules LRM 7.8 inserts where a digital port meets an
+            \\electrical net. The design's processes run natively inside the
+            \\device, which saves and restores their state at every tick so a host
+            \\can reject a time step.
+            \\
+            \\The message names what the device cannot hold: an `inout` port (the
+            \\analog side would be a driver of a resolved net), a real, integer or
+            \\time port, more than 64 pins, a construct the native code generator
+            \\does not compile, a file a device would read, a procedural continuous
+            \\assignment, or a logic mode other than 4-state (`--state=4`, the
+            \\default for a device; `--state=auto` reruns a design from time 0,
+            \\which a host that owns time cannot allow). `vera --run` and
+            \\`--emit-exe` still run such a design on its own.
+            ,
+        },
+        .E1104 => .{
+            .title = "a SystemVerilog source is not supported",
+            .lrm = "",
+            .explain =
+            \\A `.sv` file is SystemVerilog (IEEE 1800), a different language from
+            \\the IEEE 1364-2005 Verilog and Verilog-AMS VerA compiles. Its
+            \\constructs (`always_ff`, `logic`, `interface` and the rest) would
+            \\otherwise surface as misleading Verilog parse errors, so the file is
+            \\refused by its extension. Write the design in IEEE 1364-2005 Verilog
+            \\and name it `.v`.
+            ,
+        },
         .W1150 => .{
             .title = "memory file word count mismatch",
             .lrm = "IEEE 1364-2005 17.2.9",
@@ -5867,6 +5919,11 @@ fn infoOf(c: Code) Info {
             .lrm = "IEEE 1364-2005 17.2.1",
             .explain = "$fclose closes the channels a descriptor names and does not allow any further output to them. A $fdisplay or $fwrite whose descriptor names only closed channels, or a file opened only for reading, writes nothing; $ferror reports the error. The simulation continues.",
         },
+        .W1155 => .{
+            .title = "device digital tick is 1 s",
+            .lrm = "IEEE 1364-2005 19.8",
+            .explain = "A design with no `timescale directive runs at the simulator's default time unit and precision, which for VerA is 1 s. A contract device built from it delivers every analog-to-digital event at a whole second and schedules every delay in seconds, which an analog host rarely means. Add a `timescale directive (for example `timescale 1ns/1ps) to the design.",
+        },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",
             .lrm = "6.3.4",
@@ -5879,6 +5936,147 @@ fn infoOf(c: Code) Info {
             \\operators are supported. Arbitrary constant-function control flow,
             \\loop-carried or multiway values, unsupported operators and expressions
             \\beyond the renderer's recursion limit remain implementation gaps.
+            ,
+        },
+        .E1010 => .{
+            .title = "a display or format call has more than 32 conversions",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA compiles each display,
+            \\file-output or `$sformat`/`$swrite` call into one Zig format
+            \\call, and Zig's formatter accepts at most 32 arguments per call.
+            \\LRM 9.4 states no bound on the argument list, so a longer call is
+            \\legal source that VerA refuses here, at the call, rather than as
+            \\an error in generated Zig.
+            \\
+            \\Split the call: two `$fwrite` calls to one descriptor write the
+            \\same bytes as one, and `$sformat` results concatenate with `{a, b}`.
+            ,
+        },
+        .E1011 => .{
+            .title = "text exceeds the 4096-byte buffer of one call",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. Each `$sformat`, `$swrite`,
+            \\file-output, `$monitor` or run-time string concatenation site
+            \\composes its text in its own 4096-byte buffer, and each file
+            \\descriptor reads through one: `$fgets` returns at most one
+            \\4096-byte line, and one `$fscanf` sees at most 4096 bytes ahead.
+            \\
+            \\A field width or precision above 4096 written in a format string
+            \\is refused when the model compiles. Text that only grows past
+            \\4096 bytes while the model runs (a long `%s` operand, a
+            \\concatenation of long strings, a longer line in a file read by
+            \\`$fgets` or `$fscanf`) ends the run with this code and exit
+            \\status 1. LRM 9.5.3 and 9.5.4 give no truncation rule, so a cut,
+            \\empty or split string would be a wrong value, not a shorter
+            \\right one.
+            \\
+            \\Split the text over several calls. Two `$fwrite` calls to one
+            \\descriptor write the same bytes as one call.
+            ,
+        },
+        .E1012 => .{
+            .title = "absdelay needs a sample older than its history holds",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 4.5.7 defines absdelay
+            \\over all past time, Output(t) = Input(max(t - td, 0)), and bounds
+            \\no lookback. VerA keeps the last 1024 accepted samples of each
+            \\absdelay site. When the delay reaches past the oldest one, the run
+            \\ends with this code and exit status 1: answering from a newer
+            \\sample would be a shorter delay reported as this one.
+            \\
+            \\The count is of accepted timepoints, not of time. Take fewer,
+            \\larger steps across the delay (a larger maximum step in the host),
+            \\or shorten td.
+            ,
+        },
+        .E1013 => .{
+            .title = "a file is larger than VerA reads",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA reads a file whole
+            \\before it uses it, and stops at a fixed size: 16 MiB for an
+            \\`include file (LRM 10.3) and for the data file of a
+            \\`$table_model` (LRM 9.21) or `noise_table` (LRM 4.6.4.3) call,
+            \\and 64 MiB for the source file named on the command line and
+            \\for a `--spice` netlist. The LRM bounds none of these.
+            \\
+            \\The message names the file. A table file this large is usually
+            \\better resampled: the device searches it on every evaluation.
+            ,
+        },
+        .E1014 => .{
+            .title = "a system function name VerA reserves",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 2.8.3 lets any `$` name
+            \\be a user system function, but VerA spells some of its own
+            \\internal calls as `$` names (`$held_real`, `$idx`, `$limit$old`,
+            \\`$str$cat`, the `$rng$` family and a few more), and a source call
+            \\with one of those spellings would reach code that expects
+            \\VerA's own arguments. The call is refused where it is written.
+            \\
+            \\Rename the system function; a VPI application can register it
+            \\under any other `$` name.
+            ,
+        },
+        .E1015 => .{
+            .title = "more nets and unknowns than VerA's node table holds",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA numbers a module's
+            \\nets, ports, branch flows and analog operator states in one table
+            \\with 16-bit rows, so a module holds at most 65535 of them, and a
+            \\vector range (LRM 3.6.3) at most 65535 elements. The LRM bounds
+            \\neither.
+            \\
+            \\A device this size would also pass the 256-unknown bound on the
+            \\generated Jacobian (E1003). Split the module.
+            ,
+        },
+        .E1016 => .{
+            .title = "an array or assignment pattern has more than 1048576 elements",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA turns each element of
+            \\an analog-context array (LRM 3.2, 3.4.4) and each element of an
+            \\assignment pattern (LRM 4.2.14) into its own scalar, and stops at
+            \\2^20 elements rather than unroll without bound. The LRM bounds
+            \\neither.
+            \\
+            \\An array this size belongs in a data file read by `$table_model`
+            \\(LRM 9.21) or `$fscanf` (LRM 9.5.4).
+            ,
+        },
+        .E1017 => .{
+            .title = "a UDP has more than 64 inputs",
+            .lrm = "",
+            .explain =
+            \\An implementation limit the language allows. IEEE 1364-2005 8.1.2:
+            \\"Implementations may limit the maximum number of inputs to a UDP,
+            \\but they shall allow at least 9 inputs for sequential UDPs and 10
+            \\inputs for combinational UDPs." VerA's limit is 64 inputs, for
+            \\both kinds.
+            \\
+            \\Split the table: two UDPs whose outputs feed a third compute the
+            \\same function.
+            ,
+        },
+        .E1018 => .{
+            .title = "the instance tree is more than 64 instances deep",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 6.2.2 elaborates a
+            \\finite instance tree and bounds nothing about its depth. VerA
+            \\elaborates at most 64 nested instances below the top module and
+            \\stops at the 65th with this error rather than recurse without
+            \\bound. A cycle, which no depth
+            \\would finish, is E0905 instead.
+            \\
+            \\Flatten a level: a module that only passes its ports to one child
+            \\can be replaced by that child.
             ,
         },
         .W1050 => .{

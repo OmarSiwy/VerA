@@ -1,0 +1,45 @@
+// §9.5.1.1: "If a file is opened in a write mode in the first analysis and
+// reopened in that write mode in following analysis, then content written from
+// the following analyses shall be appended to the content written during the
+// previous analyses." To keep that promise VerA remembers each path opened for
+// writing, 64 of them per run (docs/IMPLEMENTATION.md). Forgetting one would
+// truncate it on a later analysis, silently. So the 65th distinct path opened
+// for writing fails the open the way §9.5.1 fails any open: "If a file cannot
+// be opened ... a zero is returned for the mcd or fd. Applications can call
+// $ferror to determine the cause of the most recent error." The §9.5.7 code is
+// unspecified and not asserted, only that there is one.
+//
+// HAND DERIVATION. Paths 1..64 are opened for writing and closed at once (the
+// 30 channels are never exhausted): 64 nonzero descriptors. Path 65 is new and
+// the table is full: $fopen returns 0 and $ferror reports a nonzero code. Path
+// 1 is remembered, so reopening it still succeeds.
+//
+//! lrm 9.5.1
+//! lrm 9.5.1.1
+//! bias V(p) = 0
+`include "check.vh"
+module write_mode_path_65_fails_open(p, n);
+  inout p, n; electrical p, n;
+  integer k, fd, opened, extra, again, code;
+  string name, why;
+  analog begin
+    @(initial_step) begin
+      opened = 0;
+      for (k = 1; k <= 64; k = k + 1) begin
+        $sformat(name, "wpath_%0d.dat", k);
+        fd = $fopen(name, "w");
+        if (fd != 0) opened = opened + 1;
+        $fclose(fd);
+      end
+      extra = $fopen("wpath_65.dat", "w");
+      code = $ferror(extra, why);
+      again = $fopen("wpath_1.dat", "w");
+      $fclose(again);
+    end
+    `CHECKI("64 distinct paths open for writing", opened, 64);
+    `CHECKI("§9.5.1 the 65th distinct path fails the open: zero", extra, 0);
+    `CHECKI("§9.5.7 and the cause is reported", code != 0, 1);
+    `CHECKI("a remembered path still opens", again != 0, 1);
+    I(p, n) <+ V(p, n);
+  end
+endmodule

@@ -1,0 +1,113 @@
+# Implementation-defined choices and resource limits
+
+This is the list `docs/ROADMAP.md` §1 E asks for and `CLAUSE-AUDIT.md` §5
+defines: every choice the LRM leaves to the tool, what VerA picks and the
+fixture that pins it; every engine limit, the diagnostic that fires when a
+design crosses it and the fixture that crosses it; and the limits that still
+fail badly, with enough detail to fix each one.
+
+Fixture paths are relative to `tests/fixtures/`. "AMS" clauses are the
+Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
+
+## 1. Implementation-defined choices
+
+A fixture here tests VerA's choice, not the clause. A tool that chooses
+differently also conforms.
+
+| Clause | What the LRM leaves open | VerA's choice | Code | Fixture |
+|---|---|---|---|---|
+| AMS 2.7 | an error for an octal escape above `\377` is optional | accepted, low 8 bits kept, no diagnostic | `lib/frontend/lexer.zig:532-539` | `ch02_lexical/octal_escape_above_377_keeps_low_byte.va` |
+| AMS 2.8 | the identifier length limit, at least 1024 | no limit; a long or escaped module name gets a hashed file stem for its build files | `src/main.zig` `fileStem` | `ch02_lexical/28_identifier_1024_chars.va`, `ch02_lexical/identifier_1024_char_module_name.va` |
+| AMS 2.9 | vendor attributes | `vera_lte`, `vera_interp`, `vera_nodiff` (AGENTS.md §6); every other attribute is parsed and ignored | `lib/ir/lower/stmt.zig:57-76` | `ch05_analog_behavior/charge_sites_lte_attribute.va`, `ch04_expressions/absdelay_vera_interp_quadratic.va`, `ch04_expressions/ddx_vera_nodiff_assignment.va`, and their `reject_*` neighbours |
+| AMS 4.5.4, 4.5.5 | `idt(x)` and `idtmod(x)` start at "c ... as determined by the simulator" | c = 0 | `lib/ir/lower/analog_op.zig:198-209` | `exhaustive/062_idt_integral.va`, `ch04_expressions/idtmod_one_argument_starts_at_zero.va` |
+| AMS 4.5.5 | where `idtmod` integrates | inside the device, wrapping each accepted step | `lib/backend/codegen/kernel_text.zig:434` | `ch04_expressions/17_idtmod.va`, `ch04_expressions/a04_08_idtmod_offset_window_negative_integrand.va` |
+| AMS 4.5.7 | interpolation between stored points of `absdelay` | linear by default; `(* vera_interp = 2 *)` gives quadratic | `lib/backend/codegen/kernel_text.zig:685,769` | `ch04_expressions/absdelay_vera_interp_linear.va`, `absdelay_vera_interp_quadratic.va` |
+| AMS 4.6.1 | analysis names beyond Table 4-21 | none: any other name is false | `lib/backend/codegen/call.zig` `analysis` | `ch04_expressions/143_analysis_transient.va` |
+| AMS 4.6.3 | the small-signal analysis name | `"ac"` | `lib/ir/lower/contrib.zig:1320` | `ch04_expressions/a06_ac_stim_ac_analysis.va` |
+| AMS 7.4.4.2 | discipline resolution mode | basic only | `lib/ir/elaborate/resolve.zig:128` | `ch07_mixed_signal/lrm_7_4_4_1.va` |
+| AMS 9.5.7, 1364 17.2.7 | `$ferror` codes | C errno values (2, 5, 9, 13, 21, 22, 24, 28); fixtures assert only nonzero | `lib/backend/file_kernels.zig:216` | `ch09_system_tasks/053_ferror.va`, `write_mode_path_65_fails_open.va` |
+| AMS 9.7.2 | what `$stop` does in a batch run | prints and exits 0 | `lib/backend/cg_display.zig:247` | `ch09_system_tasks/174_stop_terminates.va` |
+| AMS 9.13.1 | the seed of a seedless analog `$random` | one per call site, `1 + 7919·k` | `lib/backend/codegen/file.zig:751` | `ch09_system_tasks/115_random_no_seed.va` (width only) |
+| AMS 9.17.3 | the `$limit` built-ins | `pnjlim`, `pnjlimds`, `fetlim`, `fetlimds`, `limvds`, `steplim`; any other name, or a bare `$limit(x)`, returns the probe | `lib/backend/codegen/plan/limit.zig:108-153` | `annex_e_spice/limit_pnj.va`, `limit_fet.va`, `limit_vds.va`, `limit_pnjlimds_bulk_rung.va`, `ch09_system_tasks/limit_steplim_internal_node_honoured.va`, `227_limit_unknown_algorithm_returns_probe.va` |
+| AMS 9.17.3 | arguments past the algorithm's own | an optional frame sign, then an optional seed; more declines the site (W0853) | `lib/backend/codegen/plan/limit.zig:257-290` | `ch09_system_tasks/231_limit_polarity_sign_argument_honoured.va`, `230_limit_too_few_arguments_returns_probe.va`, `limit_too_many_arguments_returns_probe.va` |
+| AMS 9.17.3 | the starting value of a limited branch (SPICE MODEINITJCT) | seeds solved into node values from a 0 V root (ground, else lowest port, else lowest net); an unseeded pnjlim leg starts at vcrit; fetlimds vgd and pnjlimds vbd legs are never seeded; a seed reading the solution is E0527, one the tree cannot take W0854 | `lib/backend/codegen/plan/limit.zig:332-460` | `annex_e_spice/limit_seed_mos1_initjct.va`, `limit_seed_bsim3_pmos_initjct.va`, `limit_seed_explicit_beats_default.va`, `reject_limit_seed_reads_solution.va` |
+| AMS 12.36 | the number of `vpiRejectTransientStep` | 730 | `src/vpi/vpi_user.h:786` | `ch12_vpi_routines/p03_12_sim_control_reject_step.c` |
+| AMS E.1, E.2 | the SPICE flavour and primitive behaviour | `.MODEL` and `.SUBCKT` cards only; primitives per each `primitive_*.va` header | `lib/frontend/spice_cards.zig` | `annex_e_spice/spice_model.va`, `spice_subcircuit.va`, `primitive_*.va` |
+| AMS 2.8.3 | `$` names VerA uses internally | `$held_int`, `$held_real`, `$idx`, `$limit$old`, `$str$cat`, the `$rng$` family and the others after `$held_int` in `Callee` are reserved (E1014) | `lib/ir/callee.zig` `synthetic` | `ch09_system_tasks/reserved_system_function_name_rejected.va` |
+| 1364 8.1.2 | the UDP input limit, at least 9 sequential and 10 combinational | 64 inputs for both (E1017) | `lib/frontend/parser/source.zig` `max_udp_inputs` | `ieee1364/08_udp/b_8_1_2_input_minimums.v`, `b_8_1_2_sequential_64_inputs.v`, `b_8_1_2_udp_more_than_64_inputs_rejected.v` |
+| 1364 11.4.2 | the order of active events | processes start in source order from a FIFO queue; woken processes resume in the order they suspended; the interpreter and native code agree | `src/sim/scheduler.zig:155`, `src/sim/digital/exec.zig:835` | `ieee1364/11_scheduling/audit_sched_fork_arm_chain_order.v`, `audit_sched_fork_arm_wake_order.v`, `audit_sched_node_wake_order.v` (no clause cite) |
+| 1364 13.4.4 | which of several configs configures the design | the config no other config references | not implemented | `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v` (xfail) |
+| 1364 17.2.4.1 | how many characters `$ungetc` can push back | 16 per descriptor; the 17th returns EOF | `lib/backend/file_kernels.zig:74` | `ieee1364/17_system_tasks/b_17_2_4_1_ungetc_pushback_limit.v` |
+| 1364 17.9.1 | the stream of a seedless `$random` | one hidden seed per run, starting at 0 | `src/sim/digital/root.zig:425` | `ieee1364/17_system_tasks/b_17_9_1_seedless_random_starts_at_seed_0.v` |
+| 1364 19.8 | time unit and precision with no `` `timescale `` | 1 s / 1 s | `src/sim/digital/root.zig:2002` | `ieee1364/19_compiler_directives/b_19_8_no_timescale_is_1s_1s.v` |
+| none (CLI) | `--state=auto` | runs 4-state until a time step starts with no live x or z, then 2-state; an x or z stored later reruns the design 4-state | `src/sim/rt/root.zig:106-130` | `ieee1364/11_scheduling/auto_state_two.v`, `auto_state_rerun.v`, `auto_state_never_written.v` |
+
+## 2. Resource limits
+
+Each limit is stated here and fails with a named diagnostic. A run-time
+limit ends the run with exit status 1; the LRM gives none of these a
+truncation rule, so a shorter answer would be a wrong one.
+
+| Limit | Value | Diagnostic | Code | Fixture |
+|---|---|---|---|---|
+| parser nesting, and binary operators in one chain | 1024 levels | E0241 | `lib/frontend/parser.zig:20` | `annex_a_syntax/nesting_past_the_parser_limit_rejected.va`, `sum_chain_past_the_parser_limit_rejected.va`, `long_sum_under_the_nesting_limit.va` |
+| macro expansion depth | 128 | E0119 | `lib/frontend/preprocessor.zig:77` | `ch10_directives/macro_expansion_past_128_rejected.va` |
+| `` `include `` depth | 32 | E0125 | `lib/frontend/preprocessor.zig:76` | `ch10_directives/include_cycle_rejected.va` |
+| real literal length | 512 bytes | E0134 | `lib/frontend/lexer.zig:484` | `ch02_lexical/real_literal_over_512_bytes_rejected.va` |
+| `` `include `` file, `$table_model` and `noise_table` data file | 16 MiB | E1013 | `lib/frontend/preprocessor.zig:79`, `lib/ir/lower/table_model.zig:240` | `ch10_directives/include_file_over_16mib_rejected.va`, `ch09_system_tasks/table_model_file_over_16mib_rejected.va` |
+| source file and `--spice` netlist | 64 MiB | E1013 | `src/main.zig` `max_source_bytes` | none (needs a 64 MiB input) |
+| instance tree | 64 nested instances | E1018 | `lib/ir/elaborate.zig:40` | `ch06_hierarchy/instance_tree_64_levels.va`, `instance_tree_deeper_than_64_rejected.va` |
+| nets, ports, branch flows and operator states in one module; one vector range | 65535 | E1015 | `lib/ir/lower/node.zig` `max_nodes` | `ch03_data_types/vector_net_over_65535_elements_rejected.va`, `nets_over_65535_rows_rejected.va` |
+| analog-context array or assignment pattern | 2^20 elements | E1016 | `lib/ir/lower/param.zig` `max_cells` | `ch03_data_types/array_over_2_20_elements_rejected.va` |
+| loop generate unrolling | 4096 iterations | E0420 | `lib/ir/lower/control.zig:536` | `ch06_hierarchy/generate_nonterminating_rejected.va` |
+| solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig:308` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
+| conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig:137` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
+| text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
+| one `$fgets` line, one `$fscanf` look-ahead | 4096 bytes | E1011 | `lib/backend/file_kernels.zig:68,137` | `ch09_system_tasks/fgets_line_over_4096_is_fatal.va`, `fscanf_window_over_4096_is_fatal.va`, `s01_13_long_record_is_not_truncated.va` |
+| open file channels | 30 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:88` | `ch09_system_tasks/222_mcd_channels_exhausted_at_bit_31.va`, `224_two_instances_hold_distinct_channels.va` |
+| distinct paths opened for writing in one run | 64 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:108` | `ch09_system_tasks/write_mode_path_65_fails_open.va` |
+| `absdelay` history | 1024 samples | E1012 | `lib/backend/codegen.zig:596` (`hist_len`) | `ch04_expressions/absdelay_history_underrun_is_fatal.va`, `a04_05_absdelay_history_beyond_capacity.va` |
+| random distribution count | 1..2147483647, integral | the RNG diagnostics | `lib/backend/rng_kernels.zig:78` | `ch09_system_tasks/189_rng_*_rejected.va` |
+| UDP inputs | 64 | E1017 | `lib/frontend/parser/source.zig` | `ieee1364/08_udp/b_8_1_2_udp_more_than_64_inputs_rejected.v` |
+| digital: `$readmemb`/`$readmemh` file | 4 MiB | E1100, naming the bound | `src/sim/digital/display.zig:273` | `ieee1364/17_system_tasks/b_17_2_9_readmem_file_over_4mib_rejected.v` |
+| digital: `%d` of a known value | 64 bits | E1100 | `src/sim/digital/display.zig:588` | `ieee1364/17_system_tasks/b_17_1_1_4_decimal_over_64_bits_rejected.v` |
+| digital: expression and statement depth | 256 levels | E1100 | `src/sim/digital/compile.zig:511,803` | `ieee1364/05_expressions/b_5_expression_deeper_than_256_rejected.v` |
+| digital: hierarchy depth | 64 levels | E1100 | `src/sim/digital/root.zig:954` | `ieee1364/12_hierarchy/b_12_hierarchy_deeper_than_64_rejected.v` |
+| digital: loop generate | 65536 iterations | E1100 | `src/sim/digital/root.zig:1465` | `ieee1364/12_hierarchy/b_12_generate_past_65536_iterations_rejected.v` |
+| digital: nested task and function activations | 1024, or 4 MiB of stack | E1100 | `src/sim/digital/exec.zig:1433` (`max_sync_stack`) | `ieee1364/10_tasks_functions/b_10_4_recursion_past_the_stack_bound_rejected.v` |
+| digital: array dimensions | 16 | E1100 | `src/sim/digital/root.zig:1766` (`declareArray`) | `ieee1364/04_data_types/b_4_9_net_array_17_dimensions_rejected.v` |
+| digital: events in one time step | 10,000,000 | E1100 | `src/sim/digital/root.zig:170` | none |
+| testbench `//! sweep` product | 4096 points | a `//!` directive error | `lib/backend/tb.zig:259` | none (harness input, not source) |
+| VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223` | none |
+
+## 3. Unspecified behaviour
+
+`CLAUSE-AUDIT.md` §5.5: no test asserts one outcome where the LRM permits
+several. The `unspecified` rows in `ieee1364/CLAUSES.tsv` are 5.1.4, 11.4.2,
+11.5, 12.3.10.1 and 12.3.10.2. Their fixtures assert membership in the
+permitted set (`ieee1364/11_scheduling/audit_sched_allowed_active_race.v`) or
+choose inputs where every permitted outcome agrees
+(`ieee1364/12_hierarchy/b_12_3_10_net_type_warning.v`). The three
+`audit_sched_*_order.v` fixtures pin VerA's documented order (§1 above) and
+cite no clause. The `$ferror` fixtures assert only a nonzero code.
+
+## 4. Open defects
+
+Each row is a limit that is still hit silently, crashes, or reports the wrong
+thing. The v1.0.0 bar (ROADMAP §1 E) needs all of them closed.
+
+| Where | Trigger | What happens | Proposed fix |
+|---|---|---|---|
+| `lib/backend/codegen/kernel_text.zig:710,745` (`zHistAt`, `zHistPush`, `head: u32`) | an `absdelay` that runs more than 2^32 accepted steps | `head + n - 1` overflows (a panic in safe builds); saturated, every push rewrites one slot | make `head` a u64 |
+| `lib/backend/naming.zig:242` (`assignDisambig`, `n: u16`) | 65536 units with the same role and target, e.g. that many `$bound_step` calls in one module | overflow panic | widen to u32 |
+| `lib/frontend/integer.zig:655-663` | `4294967295'h0` | a 1 GiB allocation at compile time | cap a literal's size at 65536 bits, the vector length 1364 §4.3.1 requires a tool to support, with a new E code |
+| `lib/ir/lower/expr.zig:344-347` | `s = {1000000000000{"x"}};` | the constant replication is expanded with no bound: out of memory | refuse past a byte cap with a new E code, E1011's 4096 bytes if it feeds a format |
+| `src/sim/digital/display.zig:518`, `src/sim/digital/emit.zig:1562` | `$display("%.100f", 1.0)` | precision silently clamped to 60 | print the full precision (the buffer is 512 bytes, enough for 309 digits) or refuse past 60 by name |
+| `src/sim/digital/display.zig:450` | `$display("%99999999999d", x)` | width saturates at 2^32 and writes 4 GiB of spaces | refuse a width above 4096 like E1011 does for analog |
+| `src/sim/digital/display.zig:532` (`chain: [64]u32`) | `%m` inside more than 64 nested scopes | the outermost scopes are dropped from the name | size the chain from the scope depth |
+| `src/sim/digital/display.zig:551` (`found: [64]`) | `%m` under 65 nested named blocks | which blocks are dropped depends on hash order | the same |
+| `src/vpi/print.zig:446,458` | `vpi_printf("%.300f", 1e300)`, `vpi_printf("%.60e", x)` | precision clamped to 300 / 40; a render failure prints `?` | render through an allocating path, or return an error from `vpi_printf` |
+| `lib/backend/tb/runner.zig:102,916` (`[192]u8`) | a noise or AC-stimulus row whose node names pass 192 bytes | prints `<too long>` and the check reads `ok=0` | allocate the line |
+| `lib/backend/tb/runner.zig:531,563` (`[256]u8`) | a mixed-signal port or top-module name over about 85 characters | `NoSpaceLeft` is reported as `OutOfMemory` | allocate the buffer |
+| `lib/backend/tb/runner_text.zig:401,467` (`inline for (comptime contract.jacConst(D))`) | an `--emit-exe` device with more than about 1000 constant Jacobian entries or charge-site stamps | likely a Zig "evaluation exceeded 1000 backwards branches" error in the generated testbench (not reproduced) | `@setEvalBranchQuota` in these functions, as `kernel_text.zig:306` does |
+| `src/sim/mixed.zig:301` | an A2D crossing the secant search cannot bracket in 64 cuts | the crossing time is silently less precise | warn when the cuts run out |

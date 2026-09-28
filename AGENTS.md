@@ -52,6 +52,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
 | `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
 | `docs/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
+| `docs/IMPLEMENTATION.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
 | `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items are in `docs/ROADMAP.md` §5 |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`
@@ -330,11 +331,15 @@ result and a refusal):
 ```
 //! lrm 12.16          <- a result this clause requires is CHECKed
 //! lrm-reject 12.34   <- the routine refusing invalid input is CHECKed
-//!                       (error return, vpi_chk_error). No other key exists.
+//!                       (error return, vpi_chk_error).
+//! inherited IEEE 1364-2005 27.14         <- the same two polarities, for
+//! inherited-reject IEEE 1364-2005 27.14  <- measure B. No other key exists.
 ```
 
-`--coverage` counts them only for fixtures in `build.zig`'s `vpi_runs` (they
-run in-process under `zig build test`). A compile-only `.c` is listed as `~`
+`--coverage` (both `benchmark` and `test-1364`) counts them only for fixtures
+in `build.zig`'s `vpi_runs` (they run in-process under `zig build test`). A
+`vpi_runs` row with `.xfail = "<stderr text>"` is a known gap: it must exit 1
+saying so. A compile-only `.c` is listed as `~`
 and moves no number. Tag a clause only where an assertion stands behind it.
 
 ### The trap that produces confidently wrong work
