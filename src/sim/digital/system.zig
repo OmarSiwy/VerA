@@ -666,19 +666,15 @@ fn stringValue(a: std.mem.Allocator, s: []const u8) Error!Int.Literal {
     return v;
 }
 
-/// §17.2.3 `$swrite`/`$sformat`: `$fwrite`'s text of the arguments after the
-/// first, assigned to the first "using the string assignment to variable
-/// rules". `compile` has already required `$sformat`'s format to be a literal,
-/// which is the one argument `display` reads as a format there.
-pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
-    // ponytail: a string literal after `$sformat`'s format is read as a further
-    // format, where §17.2.3 says "No other arguments are interpreted as format
-    // strings"; split the walk when a source needs that.
+/// §17.2.3 `$swrite` (`show` set: `$fwrite`'s text) / `$sformat` (null:
+/// `display.sformat`'s) of the arguments after the first, assigned to the
+/// first "using the string assignment to variable rules".
+pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: ?@import("display.zig").Show) Error!void {
     var buf: std.Io.Writer.Allocating = .init(a);
     const saved = self.out;
     self.out = &buf.writer;
     defer self.out = saved;
-    try @import("display.zig").display(self, args[1..], a, show);
+    if (show) |sh| try @import("display.zig").display(self, args[1..], a, sh) else try @import("display.zig").sformat(self, args[1..], a);
     self.out = saved;
     try exec.assign(self, a, args[0], try stringValue(a, buf.written()));
 }

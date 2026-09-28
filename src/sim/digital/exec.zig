@@ -1703,6 +1703,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .fflush => {},
                     .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .sshow => |sh| try @import("system.zig").sformat(self, scratch, s.args, sh),
+                    .sformat => try @import("system.zig").sformat(self, scratch, s.args, null),
                     .printtimescale => try display.printTimescale(self, s.args),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {

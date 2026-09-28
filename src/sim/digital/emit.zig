@@ -870,6 +870,12 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try show(self, t.args[1..], sh);
                     try assignChars(self, t.args[0], "s.captured()");
                 },
+                .sformat => {
+                    if (r.file.exprs.tag(t.args[1]) != .str_literal) return self.refuse("a $sformat format held in a variable");
+                    try self.print("            s.capture();\n", .{});
+                    try showFormat(self, t.args[1..], .{ .radix = .decimal, .newline = false }, true);
+                    try assignChars(self, t.args[0], "s.captured()");
+                },
                 // §18.1: the arguments are read now; the targets were
                 // resolved at elaboration.
                 .dump => |op| switch (op) {
@@ -1503,12 +1509,22 @@ fn static(self: *Emitter, comptime f: anytype, args: anytype) Error!void {
 /// `display.display` walked at compile time: literal text is written as is,
 /// and each conversion becomes one call on its operand (§17.1, Table 9-22).
 fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
+    return showFormat(self, args, sh, false);
+}
+
+/// `show`, or with `only_first` `display.sformat`'s walk of a literal format.
+fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_first: bool) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
     var text: std.ArrayList(u8) = .empty;
     var arg: usize = 0;
     while (arg < args.len) : (arg += 1) {
         const e = args[arg];
+        if (only_first and arg != 0) {
+            try flush(self, &text);
+            try self.print("            s.warn(\"W1152\", \"{f}\", .{{}});\n", .{std.zig.fmtString(display.sformat_mismatch)});
+            return;
+        }
         if (e == .none) {
             try text.append(self.arena, ' ');
             continue;

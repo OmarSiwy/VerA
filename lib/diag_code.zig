@@ -368,6 +368,7 @@ pub const Code = enum(u16) {
     E1102,
     W1150,
     W1151,
+    W1152,
     W1050,
     W0950,
     E0820,
@@ -5790,6 +5791,11 @@ fn infoOf(c: Code) Info {
             .title = "probabilistic distribution argument not positive",
             .lrm = "IEEE 1364-2005 17.9.2",
             .explain = "The mean of $dist_exponential, $dist_poisson and $dist_erlang, the degree of freedom of $dist_chi_square and $dist_t, and the k_stage of $dist_erlang shall be greater than 0. The 17.9.3 reference listing prints a warning for such a call and returns 0 without drawing, so the seed argument is not written.",
+        },
+        .W1152 => .{
+            .title = "format specifiers and arguments do not pair up",
+            .lrm = "IEEE 1364-2005 17.2.3",
+            .explain = "The arguments after $sformat's format are consumed by its format specifiers. If not enough arguments are supplied for the specifiers, or too many are supplied, the application shall issue a warning and continue execution: the variable receives the text formatted so far.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",
