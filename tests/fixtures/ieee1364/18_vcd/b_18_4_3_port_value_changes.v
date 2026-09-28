@@ -48,7 +48,6 @@
 //      strength -> pD 3 0 <3.
 //   #5 the fixture releases io too: both three-stated -> pf 0 0 <3.
 //! inherited IEEE 1364-2005 18.4.3 18.4.3.1 18.4.3.2 18.4.4
-//! xfail extended VCD is not implemented: $dumpports is refused (E1100 "digital system task `$dumpports` is not implemented")
 `timescale 1ns/1ns
 module b_18_4_3_dev(a, b, y, io);
   input a, b;

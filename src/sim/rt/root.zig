@@ -13,6 +13,7 @@ pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
 pub const net = @import("net.zig");
 pub const vcd = @import("../digital/vcd.zig");
+const snapshot = @import("snapshot.zig");
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
@@ -24,6 +25,7 @@ const two = logic.two;
 test {
     _ = logic;
     _ = net;
+    _ = snapshot;
     std.testing.refAllDecls(State);
 }
 
@@ -116,7 +118,7 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
     s.live = s.gpa.alloc(u64, d.x.len) catch |e| return s.exit(e);
     @memset(s.live, std.math.maxInt(u64));
     for (d.dead) |w| @memset(s.live[w[0]..][0..w[1]], 0);
-    const failed = loop(&s, four, two_);
+    const failed = run(init_, &s, four, two_);
     if (failed == null or failed.? != error.Rerun) {
         if (s.two) report(init_, "vera-state: 2-state from tick {d}\n", .{s.two_at}) else report(init_, "vera-state: 4-state\n", .{});
         return s.exit(failed);
@@ -129,8 +131,9 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
     // ponytail: the rerun's whole transcript in memory; a writer that drops
     // the first `printed` bytes if a transcript outgrows it.
     var mem: std.Io.Writer.Allocating = .init(r.gpa);
-    r.out = &mem.writer;
-    const again = loop(&r, four, null);
+    r.sink = &mem.writer;
+    r.out = r.sink;
+    const again = run(init_, &r, four, null);
     const code = r.exit(again);
     const text = mem.written();
     s.out.writeAll(text[@min(printed, text.len)..]) catch return 1;
@@ -138,22 +141,48 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
     return code;
 }
 
-/// Dispatches every event of `s` in its phase; returns how the run ended.
-fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
+/// The `main` of a 4-state or `--two-state` executable.
+pub fn main(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch) u8 {
+    var s: State = undefined;
+    s.init(init_, d, units) catch |e| return s.exit(e);
+    return s.exit(run(init_, &s, four, null));
+}
+
+/// `loop` over the whole run. With the argument `--vera-snapshot`, every
+/// tick runs twice (`snapshot.twice`) and one `vera-snapshot:` line on
+/// stderr says how many ticks and the largest boundary in bytes.
+fn run(init_: std.process.Init, s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
+    if (!asked(init_, "--vera-snapshot")) return loop(s, four, two_, std.math.maxInt(u64));
+    var stats: snapshot.Stats = .{};
+    const failed = snapshot.twice(s, four, two_, &stats);
+    stderrLine(init_, "vera-snapshot: {d} ticks, boundary at most {d} bytes\n", .{ stats.ticks, stats.bytes });
+    return failed;
+}
+
+/// Dispatches every event of `s` at a tick up to `limit` in its phase;
+/// returns how the run ended, null also when the next event is past `limit`.
+pub fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch, limit: u64) ?Error {
     while (true) {
-        const pc = (@call(.always_inline, State.next, .{s}) catch |e| return e) orelse return null;
+        const pc = (@call(.always_inline, State.next, .{ s, limit }) catch |e| return e) orelse return null;
         (if (two_ != null and s.two) two_.?(s, pc) else four(s, pc)) catch |e| return e;
     }
 }
 
-fn report(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
-    var args = init_.minimal.args.iterateAllocator(init_.gpa) catch return;
+/// Whether the executable was run with the argument `flag`.
+fn asked(init_: std.process.Init, flag: []const u8) bool {
+    var args = init_.minimal.args.iterateAllocator(init_.gpa) catch return false;
     defer args.deinit();
     _ = args.skip();
-    const asked = while (args.next()) |a| {
-        if (std.mem.eql(u8, a, "--vera-state")) break true;
-    } else false;
-    if (!asked) return;
+    while (args.next()) |a| if (std.mem.eql(u8, a, flag)) return true;
+    return false;
+}
+
+fn report(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
+    if (asked(init_, "--vera-state")) stderrLine(init_, f, values);
+}
+
+/// One line on stderr.
+fn stderrLine(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
     var buf: [128]u8 = undefined;
     var e = std.Io.File.stderr().writer(init_.io, &buf);
     e.interface.print(f, values) catch {};
@@ -479,7 +508,6 @@ pub const State = struct {
     saved: std.ArrayList(u64) = .empty,
     /// §17.1.3: the standing monitor's site and the slots it watches.
     monitored: []bool,
-    mon_slots: []const u32 = &.{},
     mon_site: ?u32 = null,
     mon_on: bool = true,
     mon_pending: bool = false,
@@ -515,7 +543,14 @@ pub const State = struct {
     steps: u64 = 0,
     look_at: u64 = 1,
     stdout: std.Io.File.Writer,
+    /// Where the transcript goes (`stdout`, unless redirected), and where
+    /// it goes now: `sink`, or a `capture`.
+    sink: *std.Io.Writer,
     out: *std.Io.Writer,
+    /// A run whose effects outside `State` are dropped (`snapshot.twice`):
+    /// no transcript, no diagnostic, no file opened, read or written, no
+    /// dump. Every file descriptor reads as unknown.
+    quiet: bool = false,
     io: std.Io,
     buf: [1 << 16]u8,
 
@@ -551,12 +586,14 @@ pub const State = struct {
             .nets = try .init(gpa, d.nets, d.drivers, d.udps),
             .scratch = .init(gpa),
             .stdout = undefined,
+            .sink = undefined,
             .out = undefined,
             .io = init_.io,
             .buf = undefined,
         };
         self.stdout = std.Io.File.stdout().writer(init_.io, &self.buf);
-        self.out = &self.stdout.interface;
+        self.sink = &self.stdout.interface;
+        self.out = self.sink;
         @memset(self.terms, .empty);
         @memset(self.armed, false);
         @memset(self.pending, false);
@@ -574,15 +611,17 @@ pub const State = struct {
 
     /// The next process to dispatch, at the pc it resumes at, or
     /// `settle_pc`, or `show_base + k`; null once the queue is empty or
-    /// `$finish` ran. Nonblocking updates are applied here.
-    pub fn next(self: *State) Error!?u32 {
-        while (self.sched.next()) |event| {
+    /// `$finish` ran, or when the next event is past tick `limit`
+    /// (`Scheduler.nextUntil`). Nonblocking updates are applied here.
+    pub fn next(self: *State, limit: u64) Error!?u32 {
+        while (self.sched.nextUntil(limit)) |event| {
             try self.count(event.time);
             if (event.payload >= late_base) {
                 const k = event.payload - late_base;
                 const row = self.late.items[k];
                 try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
                 self.gpa.free(row.words);
+                self.late.items[k].words = &.{};
                 try self.free_late.append(self.gpa, k);
                 continue;
             }
@@ -709,6 +748,7 @@ pub const State = struct {
     }
 
     fn say(self: *State, comptime message: []const u8, args: anytype) void {
+        if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
         var e = std.Io.File.stderr().writer(self.io, &buf);
@@ -797,6 +837,9 @@ pub const State = struct {
         if (self.sensed(slot)) self.diff[off] = std.math.maxInt(u64);
         try self.wake(slot, before, logic.low(a));
     }
+
+    pub const save = snapshot.save;
+    pub const restore = snapshot.restore;
 
     pub const drive = net.drive;
     pub const gate = net.gate;
@@ -959,9 +1002,8 @@ pub const State = struct {
     /// §17.1.3 `$monitor` site `site`, watching `slots`, replaces the
     /// standing monitor; its first line is at the end of this timestep.
     pub fn monitor(self: *State, site: u32, slots: []const u32) Error!void {
-        for (self.mon_slots) |at| self.monitored[at] = false;
+        @memset(self.monitored, false);
         for (slots) |at| self.monitored[at] = true;
-        self.mon_slots = slots;
         self.mon_site = site;
         try self.requestMonitor();
     }
@@ -1141,6 +1183,7 @@ pub const State = struct {
     /// the type in `mode` (`mw` bits), or `mode` null for a multichannel
     /// descriptor; `source` is the design's file, which a read looks beside.
     pub fn fopen(self: *State, source: []const u8, name: anytype, comptime nw: u32, mode: anytype, comptime mw: u32) Error!i64 {
+        if (self.quiet) return 0;
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -1156,12 +1199,14 @@ pub const State = struct {
     }
 
     /// `system.fileOp`.
-    pub fn fileOp(_: *const State, f: system.FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
+    pub fn fileOp(self: *const State, f: system.FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
+        if (self.quiet) return -1;
         return system.fileOp(system.own, f, x, y, z);
     }
 
     /// §17.2.7 `$fclose`.
-    pub fn fclose(_: *const State, d: ?i64) void {
+    pub fn fclose(self: *const State, d: ?i64) void {
+        if (self.quiet) return;
         _ = system.own.close((d orelse return) & 0xffff_ffff);
     }
 
@@ -1181,7 +1226,7 @@ pub const State = struct {
 
     /// Ends a `capture`: the bytes printed since, valid until the next one.
     pub fn captured(self: *State) []const u8 {
-        self.out = &self.stdout.interface;
+        self.out = self.sink;
         return self.cap.written();
     }
 
@@ -1189,6 +1234,7 @@ pub const State = struct {
     /// channels (`system.channels`).
     pub fn fshow(self: *State, d: i64) Error!void {
         const bytes = self.captured();
+        if (self.quiet) return;
         if (try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes)) self.warn("W1154", system.unwritten, .{});
     }
 
@@ -1233,6 +1279,7 @@ pub const State = struct {
     /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`; `call` is
     /// the call as written.
     pub fn dumpFile(self: *State, name: anytype, comptime w: u32, call: []const u8) Error!void {
+        if (self.quiet) return;
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w), call) catch |e| return self.dumpFail(e);
@@ -1241,12 +1288,14 @@ pub const State = struct {
     /// §18.1.2 one `$dumpvars` (`vcd.Vcd.select`); its dump starts at the
     /// end of the step.
     pub fn dumpVars(self: *State, levels: ?i64, targets: []const vcd.Target) Error!void {
+        if (self.quiet) return;
         self.dump.select(self.gpa, self.sched.now, 0, std.math.lossyCast(u32, levels orelse 0), targets) catch |e| return self.dumpFail(e);
         try self.requestDump();
     }
 
     /// `$dumpoff`, `$dumpon`, `$dumpall`, `$dumpflush` (`vcd.Vcd.control`).
     pub fn dumpControl(self: *State, op: vcd.Op) Error!void {
+        if (self.quiet) return;
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         self.dump.control(arena.allocator(), self.io, self.catalog.?, self, self.sched.now, op) catch |e| return self.dumpFail(e);
@@ -1260,7 +1309,7 @@ pub const State = struct {
 
     /// One dump event per step however many dumped values moved.
     fn requestDump(self: *State) Error!void {
-        if (self.dump.pending) return;
+        if (self.dump.pending or self.quiet) return;
         self.dump.pending = true;
         _ = self.sched.schedule(.monitor, vcd_payload) catch |e| return self.schedFail(e);
     }
@@ -1283,6 +1332,7 @@ pub const State = struct {
     /// §18.2.2 named event `slot` was triggered (`vcd.Vcd.fire`); the
     /// `wake` that follows asks for the dump event.
     pub fn fire(self: *State, slot: u32) void {
+        if (self.quiet) return;
         if (self.dumped.len != 0 and self.dumped[slot]) self.dump.fire(self.catalog.?, slot);
     }
 
@@ -1302,6 +1352,7 @@ pub const State = struct {
 
     /// A run-time warning in `vera --run`'s words, on stderr.
     pub fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+        if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
         var e = std.Io.File.stderr().writer(self.io, &buf);
@@ -1314,6 +1365,7 @@ pub const State = struct {
     /// at word `off`, each element `width` bits. `given` is how many of the
     /// start and finish addresses `first`/`last` the call has (null: x or z).
     pub fn readmem(self: *State, source: []const u8, name: []const u8, radix: fmt.Radix, width: u32, slot: u32, off: u32, low: i64, high: i64, given: u2, first: ?i64, last: ?i64) Error!void {
+        if (self.quiet) return;
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -1367,7 +1419,7 @@ pub const State = struct {
     pub fn finish(self: *State, verbose: bool, file: []const u8, byte: u32) Error!void {
         if (verbose) try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.sched.now, file, byte });
         // §18: what this step changed is still part of the dump.
-        if (self.dump.pending) try self.dumpTick();
+        if (self.dump.pending and !self.quiet) try self.dumpTick();
         self.sched.finish();
     }
 

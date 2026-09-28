@@ -498,10 +498,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest}) else try self.print(
         \\pub fn main(init: std.process.Init) u8 {{
-        \\    var s: S = undefined;
-        \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
-        \\    while (s.next() catch |e| return s.exit(e)) |pc| Code(false).dispatch(&s, pc) catch |e| return s.exit(e);
-        \\    return s.exit(null);
+        \\    return rt.main(init, &design, {d}, Code(false).dispatch);
         \\}}
         \\
     , .{r.finest});
@@ -860,6 +857,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
                 },
                 .fflush => {},
+                .ports => return self.refuse("§18.3 extended VCD, whose port states need the driver strengths an executable does not keep"),
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);

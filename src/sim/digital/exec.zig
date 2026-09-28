@@ -783,7 +783,7 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     if (watchers.count() != 0) {
         if (watchers.contains(.monitor)) try requestMonitor(self);
         if (watchers.contains(.analog)) try requestAnalog(self);
-        if (watchers.contains(.vcd)) try requestVcd(self);
+        if (watchers.contains(.vcd) or watchers.contains(.ports)) try requestVcd(self);
         if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
     }
     try wake(self, target, before, dest.bit(0));
@@ -1001,6 +1001,8 @@ fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
 /// net.
 pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
+    // A §18.4 port's state can change with its drivers' strengths alone.
+    if (self.watch[n.slot].contains(.ports)) try requestVcd(self);
     if (n.trans.len != 0) return resolveJoined(self, net);
     // VAMS §3.7: a wreal has at most one driver and is that driver's value
     // (no four-state resolution, no strength), and 0.0 with none.
@@ -1213,7 +1215,7 @@ fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig
 
 /// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
 /// H/L when a gate's control is unknown.
-fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
+pub fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
     const b = dr.current.bit(at);
     return if (dr.or_z and b != .z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
 }
@@ -1744,6 +1746,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .sformat => try @import("system.zig").sformat(self, scratch, s.args, null),
                     .printtimescale => try display.printTimescale(self, s.args),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
+                    .ports => |op| try @import("evcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.
