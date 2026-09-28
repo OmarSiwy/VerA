@@ -235,6 +235,12 @@ fn digitalHost(path: []const u8) !u8 {
     vpi.runStartupRoutines();
     vpi.callback.endOfCompile();
     vpi.run.simulate() catch |e| {
+        if (vpi.systf.misuse) |name| {
+            try out.flush();
+            try err.print("vpi_host: `{s}` is registered as a system task and called as a function (IEEE 1364-2005 §20.3)\n", .{name});
+            try err.flush();
+            return 1;
+        }
         try out.flush();
         try vera.diag.render(&bag, err, .{});
         try err.print("vpi_host: the run of `{s}` failed: {t}\n", .{ path, e });

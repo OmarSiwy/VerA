@@ -492,11 +492,10 @@ No fixture pins these. Each is measure B or C work.
   (`annex_a_syntax/COVERAGE.md:83`.)
 - AMS 11, 12: the VPI obligation backlog (VPI12-* rows).
   (`conformance-ch11-review-draft.md`, `conformance-ch12-review-draft.md`.)
-- IEEE Annex G: declarations absent from `src/vpi/vpi_user.h`: `vpi_control`,
-  `vpi_flush`, `vpi_mcd_flush`, `vpi_vprintf`, `vpi_mcd_vprintf`,
-  `vpi_get_data`, `vpi_put_data`, `vpi_get_userdata`, `vpi_put_userdata`,
-  `vpi_handle_by_multi_index`, the `PLI_*`/`PROTO_PARAMS`/`XXTERN`/`EETERN`
-  macros, and the `VPI_USER_H` guard. (`conformance-ieee-annex-g-review.md:28,41`.)
+- IEEE Annex G: declarations absent from `src/vpi/vpi_user.h`: the
+  `PLI_*`/`PROTO_PARAMS`/`XXTERN`/`EETERN` macros, the `VPI_USER_H` guard, and
+  the constant names `ieee_pli/b_G_vpi_user.c` counts.
+  (`conformance-ieee-annex-g-review.md:28,41`.)
 - IEEE net initialization: a net reads `z` before its only delayed driver
   delivers. (`d06_SPEC.md:128-132`.)
 - IEEE 7: `tranif0`, `rtranif0`, `rtranif1` and resistive weak-to-medium

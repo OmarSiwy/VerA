@@ -99,6 +99,11 @@ pub fn asSystf(h: vpiHandle) ?*Systf {
     return live.get(@intFromPtr(p));
 }
 
+/// A registered system task that the design calls as a function (IEEE
+/// 1364-2005 §20.3), found by `buildCalls`; `run.simulate` refuses to run
+/// such a design.
+pub var misuse: ?[]const u8 = null;
+
 /// The call site whose compiletf, sizetf, derivtf or calltf is running, as an
 /// object index into the open design: §11.6.16 NOTE 1's
 /// `vpi_handle(vpiSysTfCall, NULL)`. Null outside one.
@@ -115,6 +120,12 @@ pub fn buildCalls() void {
     for (d.objects, 0..) |o, i| {
         if (o.kind != .code or (o.vtype != code.vpiSysTaskCall and o.vtype != code.vpiSysFuncCall)) continue;
         const reg = find(o.name, if (o.in_analog) .analog else .digital) orelse continue;
+        // IEEE 1364-2005 §20.3: "A user task can be used in the same places a
+        // Verilog HDL task can be used", which is never inside an expression.
+        if (reg.domain == .digital and reg.digital.type == vpiSysTask and o.vtype == code.vpiSysFuncCall) {
+            if (misuse == null) misuse = reg.name;
+            continue;
+        }
         active = @intCast(i);
         defer active = null;
         switch (reg.domain) {
@@ -157,6 +168,8 @@ pub fn partialsOf(call: u32) []const Pair {
 /// Frees every registration and declared partial; handles become invalid.
 pub fn reset() void {
     active = null;
+    misuse = null;
+    userdata.clearAndFree(gpa);
     var dit = declared.valueIterator();
     while (dit.next()) |v| gpa.free(v.*);
     declared.clearAndFree(gpa);
@@ -301,6 +314,47 @@ pub export fn vpi_get_analog_systf_info(obj: vpiHandle, systf_data_p: ?*AnalogSy
         return;
     }
     out.* = s.analog;
+}
+
+/// IEEE 1364-2005 §27.31/§27.13 user data, by the call's object index.
+var userdata: std.AutoHashMapUnmanaged(u32, ?*anyopaque) = .empty;
+
+/// `obj` as a system task or function call's object index, or null with the
+/// error recorded.
+fn callIndex(comptime who: []const u8, obj: vpiHandle) ?u32 {
+    const d = &(root.design orelse {
+        root.fail("NODESIGN", who ++ ": no design is open", .{});
+        return null;
+    });
+    const o = root.asObj(obj) orelse {
+        root.fail("BADHANDLE", who ++ ": that handle is not an object", .{});
+        return null;
+    };
+    if (o.kind != .code or (o.vtype != code.vpiSysTaskCall and o.vtype != code.vpiSysFuncCall)) {
+        root.fail("NOTCALL", who ++ ": `{s}` is not a system task or function call", .{o.name});
+        return null;
+    }
+    return @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(root.Obj));
+}
+
+/// IEEE 1364-2005 §27.31: "The routine will return a value of 1 on success or
+/// a 0 if it fails."
+pub export fn vpi_put_userdata(obj: vpiHandle, data: ?*anyopaque) c_int {
+    root.clearError();
+    const i = callIndex("vpi_put_userdata", obj) orelse return 0;
+    userdata.put(gpa, i, data) catch {
+        root.fail("NOMEM", "vpi_put_userdata: out of memory", .{});
+        return 0;
+    };
+    return 1;
+}
+
+/// IEEE 1364-2005 §27.13: "If no user data had been previously associated
+/// with the object or if the routine fails, the return value shall be NULL."
+pub export fn vpi_get_userdata(obj: vpiHandle) ?*anyopaque {
+    root.clearError();
+    const i = callIndex("vpi_get_userdata", obj) orelse return null;
+    return userdata.get(i) orelse null;
 }
 
 /// §12.22 / §12.22.1. `vpiDerivative` names the partial of `ref1` — the
