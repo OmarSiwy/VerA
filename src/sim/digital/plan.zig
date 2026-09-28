@@ -433,7 +433,7 @@ fn disabled(ranges: []const Range, p: Proc) bool {
 }
 
 /// A fixed-wait process that is a node: every term is a plain name (any
-/// change), its body writes only whole vectors or selects of them, and it
+/// change) of a value, not a named event, its body writes only whole vectors or selects of them, and it
 /// prints nothing. Its inputs are its terms; its outputs what it writes. A
 /// system function that writes (`$random`'s seed) would write what is not
 /// an output, so a body that calls one is no node.
@@ -447,7 +447,9 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
             var ts: std.ArrayList(Term) = .empty;
             try terms(self, e, &ts);
             for (ts.items) |t| {
-                if (t.edge != .any) return null;
+                // §9.7.3 a named event holds no value, so no change of one
+                // would ever dirty a node.
+                if (t.edge != .any or r.events.contains(t.slot)) return null;
                 try inputs.append(self.arena, t.slot);
             }
         },
