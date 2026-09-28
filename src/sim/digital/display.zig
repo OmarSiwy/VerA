@@ -17,6 +17,8 @@ const run = @import("root.zig").run;
 const expectRun = @import("root.zig").expectRun;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+const Signal = @import("net.zig").Signal;
+const netPull = @import("net.zig").netPull;
 /// §9.4.3 Table 9-23's C conversion, the one the analog devices run.
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("system.zig");
@@ -520,6 +522,24 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     if (allocator != null) try self.out.print("work.{s}", .{self.file.str(self.scope_info.items[self.scope].module)});
                     continue;
                 },
+                // §17.1.1.5 `%v`: "the strength of scalar nets".
+                'v', 'V' => {
+                    arg += 1;
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
+                    try compile.checkExpr(self, args[arg]);
+                    if (compile.typeOf(self, args[arg]).width != 1) return self.exprFail(args[arg], "§17.1.1.5: %v takes a scalar net reference");
+                    const net = if (ex.tag(args[arg]) == .ident) self.net_of.get(try self.slot(args[arg])) else null;
+                    // The resolution keeps a net's `signal` only when read.
+                    if (net) |n| self.nets[n].strength_read = true;
+                    if (allocator) |a| {
+                        const n = if (net) |k| self.nets[k] else null;
+                        const sig: Signal = if (n == null)
+                            .of((try exec.eval(self, a, args[arg], 0)).bit(0), .strong, .strong)
+                        else if (n.?.drivers.len == 0) netPull(n.?.kind) else n.?.signal[0];
+                        try strength(self.out, sig);
+                    }
+                    continue;
+                },
                 // §17.1.1.7 `%s` (the operand as 8-bit ASCII codes) and
                 // `%c` (its low eight bits as one character).
                 's', 'S', 'c', 'C' => {
@@ -531,7 +551,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                 },
                 else => return self.exprFail(
                     e,
-                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t are implemented",
+                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %v are implemented",
                 ),
             };
             arg += 1;
@@ -593,6 +613,22 @@ pub fn emitScope(self: *Run) Error!void {
         }
     }.lt);
     for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
+}
+
+/// §17.1.1.5 `%v` of the §7.10 signal `s`: a Table 17-5 mnemonic and the
+/// Table 17-4 value (0 1 X Z L H), or, where a 0 or 1 spans a range of
+/// strengths, its maximum and minimum levels as digits, and for an X whose
+/// sides differ, its 0 and 1 levels ("35X").
+fn strength(out: *std.Io.Writer, s: Signal) Error!void {
+    const names = [_][]const u8{ "Hi", "Sm", "Me", "We", "La", "Pu", "St", "Su" };
+    const lo: u8 = @abs(s.lo);
+    const hi: u8 = @abs(s.hi);
+    if (s.lo == 0 and s.hi == 0) return out.writeAll("HiZ");
+    if (s.lo >= 0 and s.hi > 0 and s.lo != 0) return if (lo == hi) out.print("{s}1", .{names[hi]}) else out.print("{d}{d}1", .{ hi, lo });
+    if (s.hi <= 0 and s.lo < 0 and s.hi != 0) return if (lo == hi) out.print("{s}0", .{names[lo]}) else out.print("{d}{d}0", .{ lo, hi });
+    if (s.lo == 0) return out.print("{s}H", .{names[hi]});
+    if (s.hi == 0) return out.print("{s}L", .{names[lo]});
+    return if (lo == hi) out.print("{s}X", .{names[lo]}) else out.print("{d}{d}X", .{ lo, hi });
 }
 
 /// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
