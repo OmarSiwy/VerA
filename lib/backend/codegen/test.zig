@@ -35,7 +35,7 @@ pub const Harness = struct {
     lowered: Lowered,
     bag: diag.Bag,
 
-    fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
+    pub fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
         return runOver(gpa, src, &.{}, out);
     }
 
@@ -66,7 +66,7 @@ pub const Harness = struct {
     }
 
     /// `gen` with §9.4 display tasks emitted: the printing artifact.
-    fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
+    pub fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
         const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
