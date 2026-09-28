@@ -385,6 +385,8 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
     return switch (ex.tag(e)) {
         .real_literal => ex.realValue(e),
         .ident, .hier_ident, .index => @bitCast((try leaf(self, a, e)).values()[0]),
+        // §10.4.1 a real or realtime function: its result variable's bits.
+        .call => @bitCast((try callSync(self, a, self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?, ex.args(e))).values()[0]),
         .unary => switch (ex.unOp(e)) {
             .minus => -(try evalReal(self, a, ex.lhs(e))),
             else => try evalReal(self, a, ex.lhs(e)), // else: `+`, the only other real-valued unary
