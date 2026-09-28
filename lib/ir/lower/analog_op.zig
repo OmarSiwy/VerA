@@ -152,21 +152,7 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // resolved here, not in `lookupName`, where it would shadow every
         // variable named after a nature (§3.13.1's global scope).
         if (abstol_slot == i) {
-            if (natureAbstol(self, a)) |t| {
-                try vals.append(self.arena, try self.mir.addFloatConst(self.arena, t));
-                continue;
-            }
-            // Table 4-20 lists abstol among each operator's "Constant
-            // expression arguments": "The constant expressions remain static
-            // throughout an analysis" (§4.5.14). Judged on what the value
-            // depends on, as E0515 is, so a tolerance held in a variable
-            // that only literals and parameters reach still passes.
-            const tv = try lower_expr.lowerExpr(self, a);
-            if (tv.ty != .string and !try lower_control.isStaticValue(self, tv.v)) {
-                try self.err(self.file.exprs.mainTok(a), .E0515, "`{s}()` abstol is a constant expression argument (Table 4-20), and this one moves during the analysis", .{name});
-                return poison;
-            }
-            try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
+            try vals.append(self.arena, try lowerAbstolArg(self, name, a) orelse return poison);
             continue;
         }
         if (try appendVectorArg(self, &vals, a)) continue;
@@ -313,15 +299,22 @@ fn abstolSlot(name: []const u8) ?usize {
     return null;
 }
 
-/// Returns the §4.5.3/§5.5.3 tolerance slot's value when it names a nature or a
-/// nature attribute, reporting its diagnostics. Returns null when the slot holds an
-/// ordinary expression, which the caller lowers as A.8.3's `constant_expression` arm.
-pub fn lowerAbstolArg(self: *Lower, e: Ast.ExprId) Oom!?f64 {
-    if (natureAbstol(self, e)) |t| return t;
-    // A `.banned` reference has no value; `lowerExpr` is where E0359 lives, so
-    // the argument is lowered for its diagnostic and the result discarded.
-    if (self.file.exprs.tag(e) == .hier_ident) _ = try lower_expr.lowerExpr(self, e);
-    return null;
+/// Returns the value in operator `name`'s tolerance slot, A.8.3's
+/// `abstol_expression ::= constant_expression | nature_identifier`, or null
+/// after reporting E0515 for an expression that moves during the analysis:
+/// Table 4-20 lists abstol among each operator's "Constant expression
+/// arguments", and "The constant expressions remain static throughout an
+/// analysis" (§4.5.14). Judged on what the value depends on, so a tolerance
+/// held in a variable that only literals and parameters reach still passes.
+pub fn lowerAbstolArg(self: *Lower, name: []const u8, e: Ast.ExprId) Oom!?Mir.Value {
+    if (natureAbstol(self, e)) |t| return try self.mir.addFloatConst(self.arena, t);
+    // A `.banned` §5.5.3 reference has no value and gets its E0359 here.
+    const tv = try lower_expr.lowerExpr(self, e);
+    if (tv.ty != .string and !try lower_control.isStaticValue(self, tv.v)) {
+        try self.err(self.file.exprs.mainTok(e), .E0515, "`{s}()` abstol is a constant expression argument (Table 4-20), and this one moves during the analysis", .{name});
+        return null;
+    }
+    return if (tv.ty == .string) tv.v else try self.toReal(tv);
 }
 
 /// The abstol a bare `nature_identifier` or `net.potential.abstol` in a tolerance

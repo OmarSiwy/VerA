@@ -373,12 +373,12 @@ const ParamEnv = struct {
         };
         return null;
     }
-    /// Refuses no binary operator.
-    pub fn refuse(_: ParamEnv, _: Ast.ExprId) bool {
-        return false;
-    }
-    /// Leaves `>>>` operand signedness unknown.
+    /// Leaves operand signedness unknown.
     pub fn signed(_: ParamEnv, _: Ast.ExprId) ?bool {
+        return null;
+    }
+    /// Leaves a parameter's width unknown.
+    pub fn width(_: ParamEnv, _: Ast.ExprId) ?u32 {
         return null;
     }
 };

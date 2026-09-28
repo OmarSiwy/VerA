@@ -1,15 +1,19 @@
-// IEEE 1364 §5.5.1 (carried by Verilog-AMS §4.2.11's expression rules): "If any
-// operand is unsigned, the result is unsigned, regardless of the operator", and
-// §5.5.2 propagates that type "back down to the context-determined operands" —
-// the two operands of `>`, and through them the left operand of `>>` — before
-// the shift is evaluated.
+// VAMS §4.2.9: "When one or both operands are unsigned, the expression shall be
+// interpreted as a comparison between unsigned values. If the operands are of
+// unequal bit lengths, the smaller operand shall be zero-extended to the size of
+// the larger operand." Each operand is evaluated at its own width, §3.2's 32
+// bits for an analog integer, and then extended. (IEEE 1364 §5.5's propagation
+// of the type down to context-determined operands is the digital context's
+// rule; in this analog expression it gives the same digits, since zero-extending
+// before or after a 32-bit `>>` agrees.)
 //
 //   32'h1 is unsigned (a based literal without `s`), so the comparison is
-//   unsigned and `operand` is read as 32'hFFFF_FFFF;
-//   32'hFFFF_FFFF >> 0 = 32'hFFFF_FFFF;   32'hFFFF_FFFF > 1  ->  mixed = 1.
+//   unsigned; operand >> count = -1 >> 0 is 32'hFFFF_FFFF at 32 bits, both
+//   operands are 32 bits, and 32'hFFFF_FFFF > 1  ->  mixed = 1.
 //
 // A compiler that compared the signed carrier would evaluate -1 > 1 = 0.
 //
+//! lrm 4.2.9
 //! lrm 4.2.11
 `include "check.vh"
 module dependent_control_shift_mixed(p);

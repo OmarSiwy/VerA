@@ -3112,6 +3112,23 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     try std.testing.expect(std.mem.indexOf(u8, s2, "__acc") == null);
 }
 
+test "codegen: an assert-form idt's offset is committed and reverted by stateCtl" {
+    // §4.5.4 `updateState` latches `<n>__off` in place; a rejected step must
+    // get the accepted one back (a04_idt_hold_revert_host.zig runs it).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(a, n);
+        \\  inout a, n; electrical a, n;
+        \\  analog I(a, n) <+ 1e-3 * idt(1e9, 7.0, V(a, n));
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "__idt__off__acc = inst.m__analog_op__idt__off;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "__idt__off = inst.m__analog_op__idt__off__acc;") != null);
+}
+
 test "codegen: a $prev-only model still gets latch staging and commit" {
     // `$prev` plants a path_prev site with NO path_acc sibling (the reactive
     // lowering always pairs them, a source site arrives alone), so every gate
