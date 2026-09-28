@@ -26,26 +26,26 @@
 1.8	non-normative	Examples	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 1.9	non-normative	Prerequisites	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 2	non-normative	Normative references	Normative references: a bibliography of other standards.
-3	-	Lexical conventions
+3	non-normative	Lexical conventions	"This clause describes the lexical tokens used in Verilog HDL source text and their conventions." An introduction that states no rule; the rules are §3.1 to §3.8.2.
 3.1	-	Lexical tokens
-3.2	-	White space
+3.2	no-prohibition	White space	"White space shall contain the characters for spaces, tabs, newlines, and formfeeds. These characters shall be ignored except when they serve to separate other lexical tokens. However, blanks and tabs shall be considered significant characters in strings" Defines white space and where it counts; no form is illegal (a token split by white space is §3.1's, cited both ways). Positive: 03_lexical_conventions/b_3_2_white_space.v (tab, formfeed and newline separators; blanks and a raw tab stored in a string).
 3.3	-	Comments
 3.4	-	Operators
 3.5	-	Numbers
 3.5.1	-	Integer constants
 3.5.2	-	Real constants
-3.5.3	-	Conversion
+3.5.3	no-prohibition	Conversion	"Real numbers shall be converted to integers by rounding the real number to the nearest integer, rather than by truncating it. ... The ties shall be rounded away from zero." A conversion rule; nothing is illegal. Positive: 03_lexical_conventions/b_3_5_3_real_to_integer_rounding.v (the clause's five values, ties on both sides of zero).
 3.6	-	Strings
-3.6.1	-	String variable declaration
-3.6.2	-	String manipulation
-3.6.3	-	Special characters in strings
+3.6.1	no-prohibition	String variable declaration	"String variables are variables of reg type (see 4.2) with width equal to the number of characters in the string multiplied by 8." The width a string needs; nothing is illegal (a narrower or wider reg is §3.6.2's truncation and padding). Positive: 03_lexical_conventions/audit_lexical_packed_strings.v, 05_expressions/b_5_2_3_string_test.v.
+3.6.2	no-prohibition	String manipulation	"Strings can be manipulated using the Verilog HDL operators. The value being manipulated by the operator is the sequence of 8-bit ASCII values." and the right-justify, zero-pad, left-truncate rule. Permissive; nothing is illegal. Positive: 05_expressions/b_5_2_3_string_test.v (the clause's string_test, which §5.2.3 repeats), 03_lexical_conventions/audit_lexical_packed_strings.v (padding and truncation).
+3.6.3	no-prohibition	Special characters in strings	Table 3-1's escapes \n \t \\ \" \ddd. "If less than three characters are used, the following character shall not be an octal digit." fixes how an escape is read (at most three octal digits) rather than forbidding a source; "Implementations may issue an error if the character represented is greater than \377" is optional. Positive: 03_lexical_conventions/audit_lexical_packed_strings.v (every escape; 1-, 2- and 3-digit octal).
 3.7	-	Identifiers, keywords, and system names
 3.7.1	-	Escaped identifiers
 3.7.2	-	Keywords
 3.7.3	-	System tasks and functions
 3.7.4	-	Compiler directives
 3.8	-	Attributes
-3.8.1	-	Examples
+3.8.1	non-normative	Examples	Eight examples of attribute placement; §1.8: "These examples are informative." The rules are §3.8 and §3.8.2 (cited both ways). Positive: 03_lexical_conventions/b_3_8_1_examples.v (xfail: any attribute instance stops digital execution, E1100).
 3.8.2	-	Syntax
 4	non-normative	Data types	"The set of Verilog HDL data types is designed to represent the data storage and transmission elements found in digital hardware." The chapter preamble; its rules are in §4.1 to §4.11.
 4.1	no-prohibition	Value set	The four values, z at a gate input or in an expression acting as x except through MOS switches, and "All bits of vectors can be independently set to one of the four basic values." Nothing is illegal. Positive: 04_data_types/b_4_1_value_set.v.
@@ -128,7 +128,7 @@
 6.2	-	Procedural assignments
 6.2.1	-	Variable declaration assignment
 6.2.2	-	Variable declaration syntax
-7	-	Gate- and switch-level modeling
+7	non-normative	Gate- and switch-level modeling	"There are 14 logic gates and 12 switches predefined in the Verilog HDL" and two advantages of gate modeling; an overview that states no rule. The inventory is Table 7-1 (§7.1.1, cited both ways; 07_gate_switch_level/b_7_1_1_every_primitive.v instantiates all 26).
 7.1	-	Gate and switch declaration syntax
 7.1.1	-	The gate type specification
 7.1.2	-	The drive strength specification
@@ -144,22 +144,22 @@
 7.7	-	CMOS switches
 7.8	-	pullup and pulldown sources
 7.9	-	Logic strength modeling
-7.10	-	Strengths and values of combined signals
-7.10.1	-	Combined signals of unambiguous strength
-7.10.2	-	Ambiguous strengths: sources and combinations
-7.10.3	-	Ambiguous strength signals and unambiguous signals
-7.10.4	-	Wired logic net types
-7.11	-	Strength reduction by nonresistive devices
-7.12	-	Strength reduction by resistive devices
-7.13	-	Strengths of net types
-7.13.1	-	tri0 and tri1 net strengths
+7.10	no-prohibition	Strengths and values of combined signals	"a net shall have either a single unambiguous strength level or an ambiguous strength consisting of more than one level. When signals combine, their strengths and values shall determine the strength and value of the resulting signal in accordance with the principles in 7.10.1 through 7.10.4." A resolution rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_10_figure_combinations.v (Figures 7-4, 7-9, 7-16).
+7.10.1	no-prohibition	Combined signals of unambiguous strength	"the stronger signal shall dominate all the weaker drivers and determine the result. The combination of two or more signals of like value shall result in the same value with the greater of all the strengths." Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_01_drive_strength_dominance.v, d03_14_wired_unequal_strength.v, b_7_9_strength_levels.v.
+7.10.2	no-prohibition	Ambiguous strengths: sources and combinations	"When two signals of equal strength and opposite value combine, the result shall be a value x" and "The combination of two signals of ambiguous strength shall result in a signal of ambiguous strength." Resolution; nothing is illegal. Positive: 07_gate_switch_level/b_7_10_figure_combinations.v, d03_13_wired_equal_strength_table.v, d03_15_wired_ambiguous_strength.v, audit_primitive_ambiguous_same_polarity.v.
+7.10.3	no-prohibition	Ambiguous strength signals and unambiguous signals	Rules a) to c): levels above the unambiguous signal remain, levels at or below it disappear, a gap between opposite values is filled. Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_04_ambiguous_strength_range.v, audit_primitive_ambiguous_same_polarity.v, d03_05_tri0_tri1_pull_strength.v, b_7_10_figure_combinations.v (PuH against St0 -> 0).
+7.10.4	no-prohibition	Wired logic net types	"The net types triand, wand, trior, and wor shall resolve conflicts when multiple drivers have the same strength." Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_07_wired_logic_under_strength.v, d03_13_wired_equal_strength_table.v, d03_14_wired_unequal_strength.v, d03_15_wired_ambiguous_strength.v.
+7.11	no-prohibition	Strength reduction by nonresistive devices	"The nmos, pmos, and cmos switches shall pass the strength from the data input to the output, except that a supply strength shall be reduced to a strong strength." (and the same for tran, tranif0, tranif1). A propagation rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_11_supply_reduced_to_strong.v (supply through nmos, pmos, cmos, tran, tranif1 meets St0 -> x; pull passes unchanged), audit_switch_bits_strength_delay.v.
+7.12	no-prohibition	Strength reduction by resistive devices	"The rnmos, rpmos, rcmos, rtran, rtranif1, and rtranif0 devices shall reduce the strength of signals that pass through them according to Table 7-8." A propagation rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_12_resistive_reduction_table.v (supply->pull, pull->weak, weak->medium, highz->highz across all six devices), d08_strength_reduction.v, audit_switch_bits_strength_delay.v.
+7.13	no-prohibition	Strengths of net types	"The tri0, tri1, supply0, and supply1 net types shall generate signals with specific strength levels. The trireg declaration can specify either of two signal strength levels other than a default strength level." Nothing is illegal here (the charge-strength form is §7.13.2, cited both ways). Positive: 07_gate_switch_level/d03_05_tri0_tri1_pull_strength.v, d03_06_supply_net_strength.v.
+7.13.1	no-prohibition	tri0 and tri1 net strengths	"In the absence of an overriding source, such a signal shall have a value 0 and a pull strength." (tri1: 1 and pull). Nothing is illegal. Positive: 07_gate_switch_level/d03_05_tri0_tri1_pull_strength.v.
 7.13.2	-	trireg strength
-7.13.3	-	supply0 and supply1 net strengths
+7.13.3	no-prohibition	supply0 and supply1 net strengths	"The supply0 and supply1 net types shall have supply driving strengths." Nothing is illegal. Positive: 07_gate_switch_level/d03_06_supply_net_strength.v, b_7_11_supply_reduced_to_strong.v.
 7.14	-	Gate and net delays
-7.14.1	-	min:typ:max delays
-7.14.2	-	trireg net charge decay
-7.14.2.1	-	Charge decay process
-7.14.2.2	-	Delay specification for charge decay time
+7.14.1	no-prohibition	min:typ:max delays	"There shall be no required relation (e.g., min ≤ typ ≤ max) between the expressions for minimum, typical, and maximum delays. These can be any three expressions." Permissive; nothing is illegal. Positive: 05_expressions/audit_expr_mintypmax_context.v (3:2:1 accepted); 07_gate_switch_level/b_7_14_1_unordered_delay_triples.v (xfail: #(5:3:1) on a gate, net or assign does not parse).
+7.14.2	no-prohibition	trireg net charge decay	"The third delay shall specify the charge decay time instead of the delay in a transition to the z logic state." and "The z value shall not propagate from the drivers of a trireg net to a trireg net." Behaviour rules; nothing is illegal. Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v, d03_09_trireg_capacitive_hold.v.
+7.14.2.1	no-prohibition	Charge decay process	The decay "shall begin when the drivers of the trireg net turn off" and ends when the decay time elapses (1 or 0 -> x) or a driver turns on. Nothing is illegal. Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v (both end conditions).
+7.14.2.2	no-prohibition	Delay specification for charge decay time	"The third delay in a trireg net declaration shall specify the charge decay time." The decay is the third position of delay3, so no expressible source violates "preceded by a rise and a fall delay". Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v (#(0, 0, 50)).
 8	-	User-defined primitives (UDPs)
 8.1	-	UDP definition
 8.1.1	-	UDP header
@@ -168,73 +168,73 @@
 8.1.4	-	UDP state table
 8.1.5	-	Z values in UDP
 8.1.6	-	Summary of symbols
-8.2	-	Combinational UDPs
+8.2	no-prohibition	Combinational UDPs	"In combinational UDPs, the output state is determined solely as a function of the current input states." ... "All combinations of the inputs that are not explicitly specified will drive the output state to the unknown value x." Evaluation rules; nothing is illegal (the table-shape bans are §8.1.4's, an edge in a combinational table is A.5.3's: 08_udp/d08_reject_udp_comb_edge.v). Positive: 08_udp/b_8_2_multiplexer.v (the clause's two tables over all 27 input combinations), audit_udp_comb_level.v, d08_udp_comb.v.
 8.3	-	Level-sensitive sequential UDPs
 8.4	-	Edge-sensitive sequential UDPs
 8.5	-	Sequential UDP initialization
 8.6	-	UDP instances
-8.7	-	Mixing level-sensitive and edge-sensitive descriptions
-8.8	-	Level-sensitive dominance
-9	-	Behavioral modeling
-9.1	-	Behavioral model overview
+8.7	no-prohibition	Mixing level-sensitive and edge-sensitive descriptions	"UDP definitions allow a mixing of the level-sensitive and the edge-sensitive constructs in the same table. When the input changes, the edge-sensitive cases are processed first, followed by level-sensitive cases." Nothing is illegal. Positive: 08_udp/b_8_7_jk_edge_ff.v (the clause's jk_edge_ff), audit_udp_potential_edges_dominance.v.
+8.8	no-prohibition	Level-sensitive dominance	Table 8-3 and "When the edge-sensitive case is processed first, followed by the level-sensitive case, the output changes to 1." An explanation of §8.7's order; nothing is illegal. Positive: 08_udp/audit_udp_potential_edges_dominance.v (an edge row and a level row match one input change with different outputs and the level row wins); no input sequence reaches Table 8-3's own case (b_8_7_jk_edge_ff.v says why).
+9	non-normative	Behavioral modeling	"This clause starts with a brief overview of a behavioral model to provide a context for many types of behavioral statements in the Verilog HDL." The chapter preamble; its rules are in §9.1 to §9.9.2.
+9.1	non-normative	Behavioral model overview	"Verilog behavioral models contain procedural statements ... These constructs are formally described in 9.9." An overview; the rules are §9.9's. Its model `behave` is run by 09_behavioral_modeling/b_9_9_initial_and_always.v.
 9.2	-	Procedural assignments
 9.2.1	-	Blocking procedural assignments
 9.2.2	-	The nonblocking procedural assignment
 9.3	-	Procedural continuous assignments
 9.3.1	-	The assign and deassign procedural statements
 9.3.2	-	The force and release procedural statements
-9.4	-	Conditional statement
-9.4.1	-	If-else-if construct
+9.4	no-prohibition	Conditional statement	"If the expression evaluates to true (that is, has a nonzero known value), the first statement shall be executed. If it evaluates to false (that is, has a zero value or the value is x or z), the first statement shall not execute." and the else binds to "the closest previous if that lacks an else". Nothing is illegal. Positive: 09_behavioral_modeling/b_9_4_if_truth_and_else_binding.v, control.v.
+9.4.1	no-prohibition	If-else-if construct	"The expressions shall be evaluated in order. If any expression is true, the statement associated with it shall be executed, and this shall terminate the whole chain." The trailing else "can be omitted". Nothing is illegal. Positive: 09_behavioral_modeling/b_9_4_1_if_else_if_chain.v.
 9.5	-	Case statement
-9.5.1	-	Case statement with do-not-cares
-9.5.2	-	Constant expression in case statement
-9.6	-	Looping statements
-9.7	-	Procedural timing controls
-9.7.1	-	Delay control
-9.7.2	-	Event control
+9.5.1	no-prohibition	Case statement with do-not-cares	"Do-not-care values (z values for casez, z and x values for casex) in any bit of either the case expression or the case items shall be treated as do-not-care conditions during the comparison". Matching rules; nothing is illegal (multiple defaults are §9.5's ban). Positive: 09_behavioral_modeling/b_9_5_1_dont_care_examples.v (the clause's two examples), control.v.
+9.5.2	no-prohibition	Constant expression in case statement	"A constant expression can be used for case expression. The value of the constant expression shall be compared against case item expressions." Nothing is illegal. Positive: 09_behavioral_modeling/b_9_5_2_constant_case_expression.v (the clause's priority encoder).
+9.6	no-prohibition	Looping statements	The four loops; a repeat count or for condition that is x or z "shall be treated as zero", a while that "starts out false" never executes. Nothing is illegal. Positive: 09_behavioral_modeling/b_9_6_loop_rules.v, control.v.
+9.7	non-normative	Procedural timing controls	"The Verilog HDL has two types of explicit timing control over when procedural statements can occur." An overview naming delay control, event control and wait, whose rules are §9.7.1 to §9.7.7.
+9.7.1	no-prohibition	Delay control	"If the delay expression evaluates to an unknown or high-impedance value, it shall be interpreted as zero delay. If the delay expression evaluates to a negative value, it shall be interpreted as a twos-complement unsigned integer of the same size as a time variable." Interpretation rules; nothing is illegal. Positive: 09_behavioral_modeling/b_9_7_1_delay_values.v.
+9.7.2	no-prohibition	Event control	Table 9-1's posedge/negedge transitions, "An edge event shall be detected only on the least significant bit of the expression", and an operand change without a result change is no event. Nothing is illegal (an edge of a real is §4.8.1's ban). Positive: 09_behavioral_modeling/b_9_7_2_edge_detection.v (all 12 transitions), b_9_7_2_expression_event.v (xfail).
 9.7.3	-	Named events
-9.7.4	-	Event or operator
-9.7.5	-	Implicit event_expression list
+9.7.4	no-prohibition	Event or operator	"The keyword or or a comma character (,) is used as an event logical or operator. A combination of these can be used in the same event expression. Comma-separated sensitivity lists shall be synonymous to or-separated sensitivity lists." Nothing is illegal. Positive: 09_behavioral_modeling/b_9_7_4_event_or.v.
+9.7.5	no-prohibition	Implicit event_expression list	@* adds "all nets and variables that are read by the statement", with two stated exceptions and the inclusions listed. Nothing is illegal. Positive: 09_behavioral_modeling/d04_01_implicit_sensitivity_star.v, d04_02_implicit_sensitivity_cascade.v, d04_16_implicit_sensitivity_paren_star.v, audit_sched_implicit_event_exclusion.v, audit_sched_implicit_lhs_index.v, audit_sched_implicit_write_only.v.
 9.7.6	-	Level-sensitive event control
-9.7.7	-	Intra-assignment timing controls
-9.8	-	Block statements
+9.7.7	no-prohibition	Intra-assignment timing controls	"the right-hand expression shall be evaluated before the delay, instead of after the delay"; a repeat count "less than or equal to 0 at the time of evaluation" means no wait. Nothing is illegal. Positive: 09_behavioral_modeling/d04_05_intra_assignment_delay_blocking.v, d04_06_intra_assignment_event_blocking.v, d04_07_intra_assignment_delay_nonblocking.v, b_9_7_7_repeat_event_control.v (xfail).
+9.8	no-prohibition	Block statements	"The sequential block shall be delimited by the keywords begin and end. The procedural statements in sequential block shall be executed sequentially in the given order." and "The procedural statements in parallel block shall be executed concurrently." An introduction; the declaration rules are §9.8.1 to §9.8.3 (cited both ways). Positive: 09_behavioral_modeling/b_9_8_1_sequential_block.v, b_9_8_4_parallel_block_timing.v.
 9.8.1	-	Sequential blocks
 9.8.2	-	Parallel blocks
 9.8.3	-	Block names
-9.8.4	-	Start and finish times
-9.9	-	Structured procedures
+9.8.4	no-prohibition	Start and finish times	Start and finish times, and "Execution shall not continue to the statement following a block until the finish time for the block has been reached". Nothing is illegal. Positive: 09_behavioral_modeling/b_9_8_4_parallel_block_timing.v (Examples 1 and 2), d04_13_fork_join_is_concurrent.v.
+9.9	no-prohibition	Structured procedures	"The initial construct shall execute only once ... the always construct shall execute repeatedly." "There shall be no limit to the number of initial and always constructs". "There shall be no implied order of execution between initial and always constructs" is unspecified (CLAUSE-AUDIT §5.5). Nothing is illegal (the null-statement ban is §9.9.1/§9.9.2's). Positive: 09_behavioral_modeling/b_9_9_initial_and_always.v.
 9.9.1	-	Initial construct
 9.9.2	-	Always construct
-10	-	Tasks and functions
+10	non-normative	Tasks and functions	"Tasks and functions provide the ability to execute common procedures from several different places in a description." The chapter preamble; its rules are in §10.1 to §10.4.5, each cited both ways.
 10.1	-	Distinctions between tasks and functions
 10.2	-	Tasks and task enabling
 10.2.1	-	Task declarations
 10.2.2	-	Task enabling and argument passing
 10.2.3	-	Task memory usage and concurrent activation
 10.3	-	Disabling of named blocks and tasks
-10.4	-	Functions and function calling
+10.4	non-normative	Functions and function calling	"The purpose of a function is to return a value that is to be used in an expression. The rest of this clause explains how to define and use functions." An introduction; the rules are §10.4.1 to §10.4.5, each cited both ways.
 10.4.1	-	Function declarations
 10.4.2	-	Returning a value from a function
 10.4.3	-	Calling a function
 10.4.4	-	Function rules
 10.4.5	-	Use of constant functions
-11	-	Scheduling semantics
-11.1	-	Execution of a model
-11.2	-	Event simulation
-11.3	-	The stratified event queue
-11.4	-	Verilog simulation reference model
-11.4.1	-	Determinism
-11.4.2	-	Nondeterminism
-11.5	-	Race conditions
-11.6	-	Scheduling implication of assignments
-11.6.1	-	Continuous assignment
-11.6.2	-	Procedural continuous assignment
-11.6.3	-	Blocking assignment
-11.6.4	-	Nonblocking assignment
-11.6.5	-	Switch (transistor) processing
+11	non-normative	Scheduling semantics	The chapter heading; it states no rule of its own. Its rules are §11.1 to §11.6.7.
+11.1	non-normative	Execution of a model	"This clause gives an overview of the interactions between these elements, especially with respect to the scheduling and execution of events." An introduction; states no rule.
+11.2	no-prohibition	Event simulation	"These resulting definitions provide the standard Verilog reference model for simulation, which all compliant simulators shall implement." ... "Every change in value of a net or variable ..., as well as the named event, is considered an update event." Definitions of the model; nothing is illegal. Positive: 11_scheduling/b_11_2_update_events.v (a named event, a net change and a variable change wake their waiters; a write of the same value does not).
+11.3	no-prohibition	The stratified event queue	The five regions and their order: inactive after active, nonblocking assign updates after both, monitor events last; #0 makes the process an inactive event. An ordering, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v (two #0 resumptions before a pending NBA, $strobe after it), scheduling.v, 09_behavioral_modeling/d06_intra_assign_delay.v.
+11.4	no-prohibition	Verilog simulation reference model	The reference algorithm (inactive, then nonblocking assign update, then monitor events are activated when no active event is left). An algorithm, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v.
+11.4.1	no-prohibition	Determinism	"Statements within a begin-end block shall be executed in the order in which they appear" and "Nonblocking assignments shall be performed in the order the statements were executed". Guarantees; nothing is illegal. Positive: 11_scheduling/scheduling.v, 09_behavioral_modeling/audit_nba_same_time_updates.v (two NBAs to one variable in one time step, both performed, in order).
+11.4.2	unspecified	Nondeterminism	"active events can be taken off the queue and processed in any order" and "At any time while evaluating a behavioral statement, the simulator may suspend execution" (statements without time control "do not have to be executed as one event"); the order is "nondeterministic and not under control of the user", so no test may assert one outcome (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v asserts only membership in the permitted set; the audit_sched_*_order.v fixtures pin VerA's own order and say the LRM also accepts others.
+11.5	unspecified	Race conditions	"The simulator is correct in displaying either a 1 or a 0." The clause's example race has two permitted outcomes, so no test may assert one (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v is the example, asserting only that the value is one of the two.
+11.6	non-normative	Scheduling implication of assignments	"Assignments are translated into processes and events as detailed in 11.6.1 through 11.6.7." An introduction; the rules are §11.6.1 to §11.6.7.
+11.6.1	no-prohibition	Continuous assignment	"A continuous assignment process is also evaluated at time 0 to ensure that constant values are propagated." Event semantics; nothing is illegal (a continuous assignment to a variable is §6.1.2's ban). Positive: 11_scheduling/audit_sched_constant_ports.v, 06_assignments/d06_cont_assign_reeval.v.
+11.6.2	no-prohibition	Procedural continuous assignment	An assign or force "corresponds to a process that is sensitive to the source elements in the expression" and "A deassign or a release statement deactivates any corresponding assign or force statement(s)." Event semantics; nothing is illegal (the target restrictions are §9.3.1's and §9.3.2's). Positive: 11_scheduling/b_11_6_2_procedural_continuous_tracks_sources.v.
+11.6.3	no-prohibition	Blocking assignment	"The values at the time the process resumes are used to determine the target(s)." Event semantics; nothing is illegal. Positive: 11_scheduling/audit_sched_blocking_target_return.v, 09_behavioral_modeling/d04_05_intra_assignment_delay_blocking.v.
+11.6.4	no-prohibition	Nonblocking assignment	"The values in effect when the update is placed on the event queue are used to compute both the right-hand value and the left-hand target." Event semantics; nothing is illegal. Positive: 09_behavioral_modeling/audit_nba_index_snapshot.v, d04_07_intra_assignment_delay_nonblocking.v.
+11.6.5	no-prohibition	Switch (transistor) processing	"Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on the net" and the x-gate rule (a node with one level in every conducting/nonconducting combination takes it, any other x). Nothing is illegal. Positive: 11_scheduling/b_11_6_5_switch_x_gate.v, 07_gate_switch_level/d08_bidirectional.v.
 11.6.6	-	Port connections
-11.6.7	-	Functions and tasks
-12	-	Hierarchical structures
+11.6.7	no-prohibition	Functions and tasks	"Task/function argument passing is by value, and it copies in on invocation and copies out on return." Nothing is illegal. Positive: 11_scheduling/audit_sched_task_copy_timing.v.
+12	non-normative	Hierarchical structures	"The Verilog HDL supports a hierarchical hardware description structure by allowing modules to be embedded within other modules. ... Each module definition stands alone; the definitions are not nested." The chapter preamble; its rules are §12.1 to §12.8 (the no-nesting rule is §12.1.2's, cited both ways).
 12.1	-	Modules
 12.1.1	-	Top-level modules
 12.1.2	-	Module instantiation
@@ -243,8 +243,8 @@
 12.2.2	-	Module instance parameter value assignment
 12.2.2.1	-	Parameter value assignment by ordered list
 12.2.2.2	-	Parameter value assignment by name
-12.2.3	-	Parameter dependence
-12.3	-	Ports
+12.2.3	no-prohibition	Parameter dependence	"overriding a parameter, whether by a defparam statement or in a module instantiation statement, effectively replaces the parameter definition with the new expression." A rule of evaluation; nothing is illegal. Positive: 12_hierarchy/b_12_2_3_parameter_dependence.v (the clause's word_size/memory_size under no override, override of either, defparam and ordered list).
+12.3	non-normative	Ports	"Ports provide a means of interconnecting a hardware description consisting of modules and primitives." An introduction; the rules are §12.3.1 to §12.3.11.
 12.3.1	-	Port definition
 12.3.2	-	List of ports
 12.3.3	-	Port declarations
@@ -256,11 +256,11 @@
 12.3.9	-	Port connection rules
 12.3.9.1	-	Rule 1
 12.3.9.2	-	Rule 2
-12.3.9.3	-	Rule 3
-12.3.10	-	Net types resulting from dissimilar port connections
-12.3.10.1	-	Net type resolution rule
-12.3.10.2	-	Net type table
-12.3.11	-	Connecting signed values via ports
+12.3.9.3	no-prohibition	Rule 3	"If the net on either side of a port has the net type uwire, a warning shall be issued if the nets are not merged into a single net". The warning is owed only by a tool that does not merge, and §12.3.10 makes merging permissible; nothing is illegal. Positive: 12_hierarchy/b_12_3_9_3_uwire_port.v (a uwire input port, value independent of merging). The fixture pins only the merge-independent value: whether VerA merges, and so whether it owes the warning, is not observable from it.
+12.3.10	no-prohibition	Net types resulting from dissimilar port connections	Table 12-1's net type for two nets merged through a port, and its warn cells ("A warning shall be issued"); connecting dissimilar net types is legal. Positive: 12_hierarchy/b_12_3_10_net_type_warning.v (xfail: no warning for the internal wand / external wor warn cell).
+12.3.10.1	unspecified	Net type resolution rule	"When the two nets connected by a port are of different net type, the resulting single net can be assigned one of the following". It types the single net of a merge, and §12.3.10 leaves merging to the tool ("It is permissible to merge the dominating and dominated nets into a single net"); merged and unmerged dissimilar nets resolve differently when both sides drive, so no test may assert the resolved type (CLAUSE-AUDIT §5.5). Not optional: CLAUSE-AUDIT §5.2 is for language subsets a tool opts into, and nothing in the source selects merging. The merge-independent obligations, the warn cells, are §12.3.10's (12_hierarchy/b_12_3_10_net_type_warning.v, xfail).
+12.3.10.2	unspecified	Net type table	"The simulated net shall take the net type specified in the table and the delay specified for that net." The simulated net exists only when a tool merges, which §12.3.10 permits and does not require, so no test may assert its type or delay (CLAUSE-AUDIT §5.5). The warn cells, owed either way, are pinned by 12_hierarchy/b_12_3_10_net_type_warning.v (xfail).
+12.3.11	no-prohibition	Connecting signed values via ports	"The sign attribute shall not cross hierarchy." ... "It shall be typed, sized, and evaluated, and the resulting value assigned to the object on the other side of the port using the same rules as an assignment." Nothing is illegal. Positive: 12_hierarchy/audit_hierarchy_port_signedness.v (signed and unsigned children of unsigned and signed parents).
 12.4	-	Generate constructs
 12.4.1	-	Loop generate constructs
 12.4.2	-	Conditional generate constructs
@@ -268,19 +268,19 @@
 12.5	-	Hierarchical names
 12.6	-	Upwards name referencing
 12.7	-	Scope rules
-12.8	-	Elaboration
-12.8.1	-	Order of elaboration
+12.8	non-normative	Elaboration	"Elaboration is the process that occurs between parsing and simulation." An introduction; its rules are §12.8.1 (no-prohibition) and §12.8.2 (cited both ways).
+12.8.1	no-prohibition	Order of elaboration	The three-step algorithm (expand, apply parameter overrides and defparams, then evaluate generate schemes); an order, nothing is illegal (the defparam that resolves differently is §12.8.2's error). Positive: 12_hierarchy/b_12_8_1_defparam_before_generate.v (a defparam deciding an if-generate).
 12.8.2	-	Early resolution of hierarchical names
-13	-	Configuring the contents of a design
+13	non-normative	Configuring the contents of a design	The chapter heading; it states no rule of its own. Its rules are §13.1 to §13.7.
 13.1	-	Introduction
 13.1.1	-	Library notation
-13.1.2	-	Basic configuration elements
-13.2	-	Libraries
+13.1.2	non-normative	Basic configuration elements	Walks through the §13.1 example (design rtlLib.top, default liblist, instance top.a2 liblist gateLib); the rules it narrates are §13.3.1.1, §13.3.1.2, §13.3.1.3 and §13.3.1.5, each cited both ways.
+13.2	non-normative	Libraries	"a library is a logical collection of cells that are mapped to particular source description files." An introduction; the mapping rules are §13.2.1 to §13.2.3.
 13.2.1	-	Specifying libraries—the library map file
 13.2.1.1	-	File path resolution
 13.2.2	-	Using multiple library map files
 13.2.3	-	Mapping source files to libraries
-13.3	-	Configurations
+13.3	non-normative	Configurations	"a configuration is simply a set of rules to apply when searching for library cells to which to bind instances. The syntax for configurations is shown in 13.3.1." An introduction; §13.3.1 to §13.3.2 carry the rules.
 13.3.1	-	Basic configuration syntax
 13.3.1.1	-	Design statement
 13.3.1.2	-	The default clause
@@ -289,22 +289,22 @@
 13.3.1.5	-	The liblist clause
 13.3.1.6	-	The use clause
 13.3.2	-	Hierarchical configurations
-13.4	-	Using libraries and configs
-13.4.1	-	Precompiling in a single-pass use model
-13.4.2	-	Elaboration-time compiling in a single-pass use model
-13.4.3	-	Precompiling using a separate compilation tool
+13.4	non-normative	Using libraries and configs	"This subclause describes potential use models for referencing configs on the command line. It is included for clarification purposes."
+13.4.1	non-normative	Precompiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; the precompiling strategy is a tool's choice. VerA is single-pass: one source file, from which every instance must bind (§13.1, cited both ways).
+13.4.2	non-normative	Elaboration-time compiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; whether a single-pass tool compiles cells as it binds them is not observable in a design.
+13.4.3	non-normative	Precompiling using a separate compilation tool	A use model under §13.4, which "is included for clarification purposes"; "The exact format and location for holding these compiled forms shall be vendor- or tool-specific." VerA has no separate compilation tool.
 13.4.4	-	Command line considerations
-13.5	-	Configuration examples
+13.5	non-normative	Configuration examples	The source files and lib.map the §13.5.x examples assume, and the library structure they yield. States no rule of its own.
 13.5.1	-	Default configuration from library map file
-13.5.2	-	Using default clause
-13.5.3	-	Using cell clause
-13.5.4	-	Using instance clause
-13.5.5	-	Using hierarchical config
-13.6	-	Displaying library binding information
-13.7	-	Library mapping examples
+13.5.2	non-normative	Using default clause	Worked examples (cfg1, cfg2) of §13.3.1.2 default and §13.3.1.5 liblist over the §13.5 libraries; the rules are cited both ways there. The multi-library search itself needs a map (§13.5.1).
+13.5.3	non-normative	Using cell clause	Worked example (cfg3) of §13.3.1.4 cell with §13.3.1.6 use; the rule is pinned by 13_configuration/b_13_3_1_4_cell_use_binds_named_cell.v (xfail: config rules bind nothing, W0253).
+13.5.4	non-normative	Using instance clause	Worked example (cfg4) of §13.3.1.3 instance with §13.3.1.5 liblist inheritance; the rules are cited both ways there. The multi-library search needs a map (§13.5.1).
+13.5.5	non-normative	Using hierarchical config	Worked example (cfg5, cfg6) of §13.3.2 hierarchical configs; the rule is pinned by 13_configuration/b_13_3_2_hierarchical_config.v and b_13_3_2_rule_inside_other_config_rejected.v (both xfail).
+13.6	no-prohibition	Displaying library binding information	"The format specifier %l or %L shall print out the library.cell binding information for the module instance containing the display". Nothing is illegal. Positive: 13_configuration/audit_config_binding_display.v, b_13_1_every_instance_bound.v (%l and %L at three hierarchy levels). Not pinned: the vpiLibrary, vpiCell and vpiConfig properties the clause requires are absent from src/vpi/vpi_user.h.
+13.7	non-normative	Library mapping examples	"In the absence of a configuration, it is possible to perform basic control of the library searching order when binding a design." An introduction to §13.7.1 to §13.7.3; states no rule of its own (the command-line rule is §13.7.1).
 13.7.1	-	Using the command line to control library searching
-13.7.2	-	File path specification examples
-13.7.3	-	Resolving multiple path specifications
+13.7.2	non-normative	File path specification examples	"For example:" Worked examples of file_path_spec wildcard resolution; the rules are §13.2.1's file_path_spec details. States no rule of its own.
+13.7.3	non-normative	Resolving multiple path specifications	"For example:" A worked example of §13.2.1.1's resolution order and its multiple-match error; the rules are §13.2.1.1's. States no rule of its own.
 14	-	Specify blocks
 14.1	-	Specify block declaration
 14.2	-	Module path declarations
@@ -473,9 +473,9 @@
 18.4.3.2	-	Drivers
 18.4.4	-	Extended VCD file format example
 19	-	Compiler directives
-19.1	-	`celldefine and `endcelldefine
+19.1	no-prohibition	`celldefine and `endcelldefine	"It is advisable to pair each `celldefine with an `endcelldefine, but it is not required." ... "These directives may appear anywhere in the source description". The cell tag is read only by PLI routines; nothing is illegal. Positive: 19_compiler_directives/b_19_1_celldefine.v (a pair, a pair inside a module definition, an unpaired `celldefine; the design computes as without them).
 19.2	-	`default_nettype
-19.3	-	`define and `undef
+19.3	no-prohibition	`define and `undef	"The text macro facility is not affected by the compiler directive `resetall." The rest introduces §19.3.1 and §19.3.2, each cited both ways. Positive: 19_compiler_directives/b_19_6_resetall_restores_defaults.v (a macro defined before `resetall still expands after it).
 19.3.1	-	`define
 19.3.2	-	`undef
 19.4	-	`ifdef, `else, `elsif, `endif, `ifndef
@@ -485,7 +485,7 @@
 19.8	-	`timescale
 19.9	-	`unconnected_drive and `nounconnected_drive
 19.10	-	`pragma
-19.10.1	-	Standard pragmas
+19.10.1	no-prohibition	Standard pragmas	"The reset and resetall pragmas shall restore the default values and state of pragma_keywords associated with the affected pragmas." A rule on pragma state, nothing illegal; VerA recognizes no stateful pragma_name, so reset and resetall leave the design as it is. Positive: 19_compiler_directives/b_19_10_1_standard_pragmas.v.
 19.11	-	`begin_keywords, `end_keywords
 20	-	Programming language interface (PLI) overview
 20.1	-	PLI purpose and history
