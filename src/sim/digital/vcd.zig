@@ -11,7 +11,6 @@ const exec = @import("exec.zig");
 const compile = @import("compile.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
-const zCReal = @import("kernels").str_kernels.zCReal;
 
 /// The §18.1 tasks: `$dumpfile`, `$dumpvars`, `$dumpoff`, `$dumpon`,
 /// `$dumpall`, `$dumplimit`, `$dumpflush`.
@@ -278,7 +277,7 @@ fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.I
     const lit: Front.Integer.Literal = .{ .width = v.width, .signed = false, .sized = true, .planes = @constCast(p) };
     if (v.real and !as_x) {
         var buf: [64]u8 = undefined;
-        try w.print("r{s} ", .{zCReal(&buf, @bitCast(p[0]), 'g', 0, 0, 16)});
+        try w.print("r{s} ", .{g16(&buf, @bitCast(p[0]))});
     } else if (v.width == 1) {
         try w.writeByte(if (as_x) 'x' else digit(lit.bit(0)));
     } else {
@@ -298,6 +297,36 @@ fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.I
     }
     try codeText(w, code);
     try w.writeByte('\n');
+}
+
+/// §18.2.1 "A real number is dumped using a %.16g printf() format": C's
+/// style e when the exponent is below -4 or at least 16, else style f with
+/// 16 significant digits, trailing zeros and point removed either way.
+fn g16(buf: *[64]u8, r: f64) []const u8 {
+    if (std.math.isNan(r)) return "nan";
+    if (std.math.isInf(r)) return if (r < 0) "-inf" else "inf";
+    var sci_buf: [64]u8 = undefined;
+    const sci = std.fmt.bufPrint(&sci_buf, "{e:.15}", .{r}) catch unreachable;
+    const e_at = std.mem.indexOfScalar(u8, sci, 'e').?;
+    const x = std.fmt.parseInt(i32, sci[e_at + 1 ..], 10) catch unreachable;
+    if (x < -4 or x >= 16) {
+        const mant = strip(sci[0..e_at]);
+        return std.fmt.bufPrint(buf, "{s}e{c}{d:0>2}", .{ mant, @as(u8, if (x < 0) '-' else '+'), @abs(x) }) catch unreachable;
+    }
+    return strip(std.fmt.bufPrint(buf, "{d:.[1]}", .{ r, @as(usize, @intCast(15 - x)) }) catch unreachable);
+}
+
+/// `%g`'s removal of trailing fraction zeros and a trailing point.
+fn strip(s: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    const t = std.mem.trimEnd(u8, s, "0");
+    return if (t[t.len - 1] == '.') t[0 .. t.len - 1] else t;
+}
+
+test "§18.2.1 %.16g" {
+    var buf: [64]u8 = undefined;
+    for ([_]f64{ 1.5, -2.25e10, 0.25, 6.02e23, 1e16, 0.0, 1.0 / 3.0, 1e-5, 123456789012345678.0 }, [_][]const u8{ "1.5", "-22500000000", "0.25", "6.02e+23", "1e+16", "0", "0.3333333333333333", "1e-05", "1.234567890123457e+17" }) |r, want|
+        try std.testing.expectEqualStrings(want, g16(&buf, r));
 }
 
 fn digit(b: Front.Integer.Bit) u8 {

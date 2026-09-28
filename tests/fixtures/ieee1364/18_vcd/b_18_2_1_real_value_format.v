@@ -23,7 +23,6 @@
 //   #5 0.0            X = 0   -> 0
 //   #6 1.0/3.0        X = -1  -> 0.3333333333333333 (16 digits)
 //! inherited IEEE 1364-2005 18.2.1
-//! xfail real values are dumped in %.16f style, not %.16g: 1.5 is written r1.5000000000000000 and 6.02e23 as r601999999999999995805696.0000000000000000
 `timescale 1ns/1ns
 module b_18_2_1_real_dut;
   real r;
