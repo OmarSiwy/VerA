@@ -451,27 +451,43 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
     const scopes = try a.alloc(Scope, r.scope_info.items.len);
     const var_start = try a.alloc(u32, scopes.len + 1);
     var vars: std.ArrayList(Var) = .empty;
-    for (r.scope_info.items, scopes, 0..) |info, *sc, s| {
+    // §18.2.3.4 a static task's or function's frame is a scope of its own.
+    const subs = try a.alloc(?*const Ast.Subroutine, scopes.len);
+    @memset(subs, null);
+    for (r.subs.items) |sub| if (sub.framed and !sub.decl.automatic) {
+        subs[sub.frame.scope] = sub.decl;
+    };
+    for (r.scope_info.items, scopes, subs, 0..) |info, *sc, sub, s| {
         var line: std.Io.Writer.Allocating = .init(a);
-        try line.writer.print("$scope {s} {s}", .{ if (info.lexical) "begin" else "module", r.file.str(info.name) });
+        const kind = if (sub) |t| (if (t.is_function) "function" else "task") else if (info.lexical) "begin" else "module";
+        try line.writer.print("$scope {s} {s}", .{ kind, r.file.str(info.name) });
         if (info.index) |i| try line.writer.print("[{d}]", .{i});
         try line.writer.writeAll(" $end\n");
-        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = !(info.lexical and info.index == null) };
+        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = sub != null or !(info.lexical and info.index == null) };
         var_start[s] = @intCast(vars.items.len);
-        if (info.lexical) continue;
-        const m = for (r.file.modules) |*m| {
-            if (m.name == info.module) break m;
-        } else unreachable; // every instance scope was minted from a module
+        var decls: std.ArrayList(Ast.VarDecl) = .empty;
         var names: std.ArrayList(Ast.StrId) = .empty;
-        for (m.ports) |p| try names.append(a, p.name);
-        for (m.nets) |n| try names.append(a, n.name);
-        for (m.vars) |x| try names.append(a, x.name);
-        for (m.events) |x| try names.append(a, x);
+        var events: []const Ast.StrId = &.{};
+        if (sub) |t| {
+            for (t.ports) |p| try decls.append(a, p.v);
+            try decls.appendSlice(a, t.vars);
+        } else {
+            if (info.lexical) continue;
+            const m = for (r.file.modules) |*m| {
+                if (m.name == info.module) break m;
+            } else unreachable; // every instance scope was minted from a module
+            for (m.ports) |p| try names.append(a, p.name);
+            for (m.nets) |n| try names.append(a, n.name);
+            try decls.appendSlice(a, m.vars);
+            events = m.events;
+        }
+        for (decls.items) |d| try names.append(a, d.name);
+        try names.appendSlice(a, events);
         for (names.items, 0..) |name, i| {
             if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;
             if (r.arrays.contains(at) or r.params.contains(at)) continue;
-            try vars.append(a, try variable(r, a, m, name, at, if (offs.len == 0) 0 else offs[at]));
+            try vars.append(a, try variable(r, a, decls.items, name, at, if (offs.len == 0) 0 else offs[at]));
         }
     }
     var_start[scopes.len] = @intCast(vars.items.len);
@@ -479,13 +495,13 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
 }
 
 /// §18.2.3.7 `$var var_type size identifier_code reference $end`.
-fn variable(r: *Run, a: std.mem.Allocator, m: *const Ast.ModuleDecl, name: Ast.StrId, at: u32, off: u32) Error!Var {
+fn variable(r: *Run, a: std.mem.Allocator, decls: []const Ast.VarDecl, name: Ast.StrId, at: u32, off: u32) Error!Var {
     const kind: []const u8 = if (r.events.contains(at)) "event" else if (r.net_of.get(at)) |n| switch (r.nets[n].kind) {
         // "a net of net type uwire shall have a variable type of wire"
         .uwire => "wire",
         .wreal => "real",
         .wire, .tri, .tri0, .tri1, .triand, .trior, .trireg, .wand, .wor, .supply0, .supply1 => @tagName(r.nets[n].kind),
-    } else if (r.reals.contains(at)) "real" else for (m.vars) |x| {
+    } else if (r.reals.contains(at)) "real" else for (decls) |x| {
         if (x.name == name) break switch (x.storage) {
             .reg => "reg",
             .time => "time",
