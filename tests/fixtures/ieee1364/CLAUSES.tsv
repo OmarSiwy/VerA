@@ -234,7 +234,7 @@
 11.6.5	no-prohibition	Switch (transistor) processing	"Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on the net" and the x-gate rule (a node with one level in every conducting/nonconducting combination takes it, any other x). Nothing is illegal. Positive: 11_scheduling/b_11_6_5_switch_x_gate.v, 07_gate_switch_level/d08_bidirectional.v.
 11.6.6	-	Port connections
 11.6.7	no-prohibition	Functions and tasks	"Task/function argument passing is by value, and it copies in on invocation and copies out on return." Nothing is illegal. Positive: 11_scheduling/audit_sched_task_copy_timing.v.
-12	-	Hierarchical structures
+12	non-normative	Hierarchical structures	"The Verilog HDL supports a hierarchical hardware description structure by allowing modules to be embedded within other modules. ... Each module definition stands alone; the definitions are not nested." The chapter preamble; its rules are §12.1 to §12.8 (the no-nesting rule is §12.1.2's, cited both ways).
 12.1	-	Modules
 12.1.1	-	Top-level modules
 12.1.2	-	Module instantiation
@@ -243,8 +243,8 @@
 12.2.2	-	Module instance parameter value assignment
 12.2.2.1	-	Parameter value assignment by ordered list
 12.2.2.2	-	Parameter value assignment by name
-12.2.3	-	Parameter dependence
-12.3	-	Ports
+12.2.3	no-prohibition	Parameter dependence	"overriding a parameter, whether by a defparam statement or in a module instantiation statement, effectively replaces the parameter definition with the new expression." A rule of evaluation; nothing is illegal. Positive: 12_hierarchy/b_12_2_3_parameter_dependence.v (the clause's word_size/memory_size under no override, override of either, defparam and ordered list).
+12.3	non-normative	Ports	"Ports provide a means of interconnecting a hardware description consisting of modules and primitives." An introduction; the rules are §12.3.1 to §12.3.11.
 12.3.1	-	Port definition
 12.3.2	-	List of ports
 12.3.3	-	Port declarations
@@ -256,11 +256,11 @@
 12.3.9	-	Port connection rules
 12.3.9.1	-	Rule 1
 12.3.9.2	-	Rule 2
-12.3.9.3	-	Rule 3
-12.3.10	-	Net types resulting from dissimilar port connections
-12.3.10.1	-	Net type resolution rule
-12.3.10.2	-	Net type table
-12.3.11	-	Connecting signed values via ports
+12.3.9.3	no-prohibition	Rule 3	"If the net on either side of a port has the net type uwire, a warning shall be issued if the nets are not merged into a single net". The warning is owed only by a tool that does not merge, and §12.3.10 makes merging permissible; nothing is illegal. Positive: 12_hierarchy/b_12_3_9_3_uwire_port.v (a uwire input port, value independent of merging). The fixture pins only the merge-independent value: whether VerA merges, and so whether it owes the warning, is not observable from it.
+12.3.10	no-prohibition	Net types resulting from dissimilar port connections	Table 12-1's net type for two nets merged through a port, and its warn cells ("A warning shall be issued"); connecting dissimilar net types is legal. Positive: 12_hierarchy/b_12_3_10_net_type_warning.v (xfail: no warning for the internal wand / external wor warn cell).
+12.3.10.1	unspecified	Net type resolution rule	"When the two nets connected by a port are of different net type, the resulting single net can be assigned one of the following". It types the single net of a merge, and §12.3.10 leaves merging to the tool ("It is permissible to merge the dominating and dominated nets into a single net"); merged and unmerged dissimilar nets resolve differently when both sides drive, so no test may assert the resolved type (CLAUSE-AUDIT §5.5). Not optional: CLAUSE-AUDIT §5.2 is for language subsets a tool opts into, and nothing in the source selects merging. The merge-independent obligations, the warn cells, are §12.3.10's (12_hierarchy/b_12_3_10_net_type_warning.v, xfail).
+12.3.10.2	unspecified	Net type table	"The simulated net shall take the net type specified in the table and the delay specified for that net." The simulated net exists only when a tool merges, which §12.3.10 permits and does not require, so no test may assert its type or delay (CLAUSE-AUDIT §5.5). The warn cells, owed either way, are pinned by 12_hierarchy/b_12_3_10_net_type_warning.v (xfail).
+12.3.11	no-prohibition	Connecting signed values via ports	"The sign attribute shall not cross hierarchy." ... "It shall be typed, sized, and evaluated, and the resulting value assigned to the object on the other side of the port using the same rules as an assignment." Nothing is illegal. Positive: 12_hierarchy/audit_hierarchy_port_signedness.v (signed and unsigned children of unsigned and signed parents).
 12.4	-	Generate constructs
 12.4.1	-	Loop generate constructs
 12.4.2	-	Conditional generate constructs
@@ -268,8 +268,8 @@
 12.5	-	Hierarchical names
 12.6	-	Upwards name referencing
 12.7	-	Scope rules
-12.8	-	Elaboration
-12.8.1	-	Order of elaboration
+12.8	non-normative	Elaboration	"Elaboration is the process that occurs between parsing and simulation." An introduction; its rules are §12.8.1 (no-prohibition) and §12.8.2 (cited both ways).
+12.8.1	no-prohibition	Order of elaboration	The three-step algorithm (expand, apply parameter overrides and defparams, then evaluate generate schemes); an order, nothing is illegal (the defparam that resolves differently is §12.8.2's error). Positive: 12_hierarchy/b_12_8_1_defparam_before_generate.v (a defparam deciding an if-generate).
 12.8.2	-	Early resolution of hierarchical names
 13	-	Configuring the contents of a design
 13.1	-	Introduction
