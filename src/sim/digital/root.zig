@@ -2076,6 +2076,34 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     _ = try r.runUntil(std.math.maxInt(Tick));
 }
 
+/// A `.v` design as a contract device an analog host loads (`rt.Device`).
+pub const DeviceZig = struct {
+    /// The top module's name.
+    name: []const u8,
+    /// The device's Zig root; it imports the modules `contract` and `sim`.
+    zig: []const u8,
+};
+
+/// `source`'s top module as a contract device (`emit.device`), 4-state and
+/// under `schedule`. A design that cannot be one is E1103 in `bag` and
+/// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
+pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try elaborate(arena, source, opts, bag, &sink.writer);
+    const top = r.file.modules[r.scope_info.items[0].def];
+    const at: diag.Span = .{ .start = r.starts[top.main_tok], .end = r.starts[top.main_tok] };
+    switch (try emit.device(arena, &r, opts.file_name, schedule)) {
+        .zig => |text| {
+            if (r.finest == 0) try bag.add(.lower, .W1155, at, "module `{s}`'s device ticks in whole seconds: its finest `timescale precision is 1 s, or it has none", .{r.file.str(top.name)});
+            return .{ .name = r.file.str(top.name), .zig = text };
+        },
+        .refused => |why| {
+            try bag.add(.lower, .E1103, at, "module `{s}`: {s}", .{ r.file.str(top.name), why });
+            return error.DigitalFailed;
+        },
+    }
+}
+
 /// Everything `run` does before the first event dispatches: preprocess,
 /// parse, §6.2.2 elaboration, and every driver and process compiled and
 /// enqueued at time 0. The returned `Run` owns nothing outside `arena`, so a

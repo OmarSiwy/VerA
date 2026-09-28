@@ -18,6 +18,7 @@ const Io = std.Io;
 const usage_text =
     \\usage: vera [options] FILE.va
     \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
+    \\       vera --emit-zig|--check|--emit-so [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
@@ -28,6 +29,8 @@ const usage_text =
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
     \\  --emit-exe              build a runnable Verilog-A testbench (needs --contract),
     \\                          or a .v design's executable; print its path
+    \\                          (--emit-zig, --check and --emit-so of a .v build its
+    \\                          top module as a contract device, 4-state, E1103)
     \\  --schedule=static|fifo  a .v executable's order of same-time events:
     \\                          combinational logic levelized (static, the
     \\                          default; IEEE 1364 §11.4.1), or the interpreter's
@@ -314,7 +317,14 @@ pub fn main(init: std.process.Init) !u8 {
 
     // Digital Verilog uses the shared frontend below. Other language families
     // need their own standard-conforming frontend and remain explicit refusals.
-    for ([_][]const u8{ ".sv", ".vhd", ".vhdl" }) |ext| {
+    if (std.mem.eql(u8, std.fs.path.extension(in_path), ".sv")) {
+        var sv: diag.Bag = .init(gpa);
+        defer sv.deinit(gpa);
+        try sv.add(.parse, .E1104, .none, "`{s}` is an IEEE 1800 source", .{in_path});
+        try report(&sv, err, json, false);
+        return 2;
+    }
+    for ([_][]const u8{ ".vhd", ".vhdl" }) |ext| {
         if (!std.mem.eql(u8, std.fs.path.extension(in_path), ext)) continue;
         try err.print(
             "error: {s}: this language extension has no enabled compilation path\n",
@@ -358,8 +368,9 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     if (digital_source) {
-        if (exe_flag == null or lint_flag or emit_zig or check or emit_so or out_path != null) {
-            try err.writeAll("error: digital .v source takes --run or --emit-exe; no other artifact is implemented\n");
+        const device = emit_zig or check or emit_so;
+        if ((exe_flag == null) == !device or lint_flag or (out_path != null and !emit_zig)) {
+            try err.writeAll("error: digital .v source takes --run or --emit-exe, or --emit-zig, --check or --emit-so for a contract device\n");
             return 2;
         }
         var arena = std.heap.ArenaAllocator.init(gpa);
@@ -368,6 +379,18 @@ pub fn main(init: std.process.Init) !u8 {
         digital_bag.levels = levels;
         var opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
         if (!try libraries(arena.allocator(), io, paths.items, libmaps.items, search.items, &opts, err, json, use_color)) return 1;
+        if (device) return emitDevice(gpa, io, arena.allocator(), &digital_bag, source, opts, schedule, if (logic_flag != null) logic else .four, .{
+            .zig = emit_zig,
+            .check = check,
+            .so = emit_so,
+            .out_path = out_path,
+            .contract = contract_path,
+            .dyn = dyn_path,
+            .work_dir = work_dir,
+            .zig_exe = zig_exe,
+            .optimize = opt,
+            .backend = backend,
+        }, out, err, json, use_color);
         const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
             .work_dir = wd,
@@ -708,6 +731,150 @@ fn emitDigital(
     }
     return 0;
 }
+
+/// What `emitDevice` builds, and with what.
+const DeviceFlags = struct {
+    zig: bool,
+    check: bool,
+    so: bool,
+    out_path: ?[]const u8,
+    contract: ?[]const u8,
+    dyn: ?[]const u8,
+    work_dir: ?[]const u8,
+    zig_exe: []const u8,
+    optimize: std.builtin.OptimizeMode,
+    backend: vera.orchestrator.Backend,
+};
+
+/// `vera --emit-zig|--check|--emit-so design.v`: the top module as a contract
+/// device (`digital.emitDevice`). `--check` builds it beside a root that
+/// validates it and calls every hook; `--emit-so` builds it over the VerA
+/// tree `--contract` sits in.
+fn emitDevice(
+    gpa: std.mem.Allocator,
+    io: Io,
+    arena: std.mem.Allocator,
+    bag: *diag.Bag,
+    source: []const u8,
+    opts: digital.Options,
+    schedule: digital.emit.Schedule,
+    logic: digital.emit.Logic,
+    f: DeviceFlags,
+    out: *Io.Writer,
+    err: *Io.Writer,
+    json: bool,
+    use_color: bool,
+) !u8 {
+    if (logic != .four) {
+        try bag.add(.lower, .E1103, .none, "a contract device is 4-state: {s}", .{if (logic == .auto)
+            "--state=auto reruns the design from time 0 when an x or z returns, and a host owns the device's time"
+        else
+            "--state=2 would make its logic depend on the host program's root module"});
+        try report(bag, err, json, use_color);
+        return 1;
+    }
+    const dev = digital.emitDevice(arena, source, opts, schedule, bag) catch |e| {
+        try report(bag, err, json, use_color);
+        if (e != error.DigitalFailed) try err.print("error: {s}: emitting the device failed: {t}\n", .{ opts.file_name, e });
+        return 1;
+    };
+    try report(bag, err, json, use_color);
+    if ((f.check or f.so) and f.contract == null) {
+        try err.writeAll("error: --check and --emit-so need --contract PATH (tools/contract.zig of a VerA tree)\n");
+        return 2;
+    }
+    if (f.check) {
+        const built = vera.tb.buildExe(gpa, io, dev.zig, device_check, .{
+            .work_dir = ".zig-cache/vera-check",
+            .contract = f.contract.?,
+            .name = dev.name,
+            .zig_exe = f.zig_exe,
+            .mixed = true,
+        }) catch |e| {
+            try err.print("error: {s}: checking the device failed: {t}\n", .{ opts.file_name, e });
+            return 1;
+        };
+        defer built.deinit(gpa);
+        if (built == .failed) {
+            try err.print("error: {s}: the generated device does not compile — this is an engine bug:\n", .{opts.file_name});
+            try err.writeAll(built.failed);
+            return 1;
+        }
+    }
+    if (f.so) {
+        const wd = f.work_dir orelse return missing(err, "--emit-so", "--work-dir DIR");
+        const dyn = f.dyn orelse return missing(err, "--emit-so", "--dyn PATH");
+        const tree = std.fs.path.dirname(std.fs.path.dirname(f.contract.?) orelse ".") orelse ".";
+        const at = struct {
+            fn path(a: std.mem.Allocator, r: []const u8, rel: []const u8) ![]const u8 {
+                return std.fs.path.join(a, &.{ r, rel });
+            }
+        };
+        // build.zig's `module_specs` rows for `sim` and what it imports.
+        const modules = [_]vera.orchestrator.Module{
+            .{ .name = "contract", .root = f.contract.? },
+            .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
+            .{ .name = "sim", .root = try at.path(arena, tree, "src/sim/root.zig"), .deps = &.{ "contract", "diag", "frontend", "kernels" } },
+            .{ .name = "diag", .root = try at.path(arena, tree, "lib/diag.zig") },
+            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{"diag"} },
+            .{ .name = "kernels", .root = try at.path(arena, tree, "lib/backend/kernels.zig") },
+        };
+        var r = vera.orchestrator.compileRelease(gpa, io, .{
+            .work_dir = wd,
+            .name = dev.name,
+            .optimize = f.optimize,
+            .backend = f.backend,
+            .modules = &modules,
+            .zig_exe = f.zig_exe,
+        }, .single(dev.zig), 1) catch |e| {
+            try err.print("error: {s}: building the device failed: {t}\n", .{ opts.file_name, e });
+            return 1;
+        };
+        defer r.deinit(gpa);
+        switch (r) {
+            .ok => |a| try out.print("{s}\n", .{a.so_path}),
+            .failed => |b| {
+                try err.print("error: {s}: the generated device did not compile:\n", .{opts.file_name});
+                try b.renderToWriter(.{}, err);
+                return 1;
+            },
+        }
+    }
+    if (f.zig) {
+        if (f.out_path) |p| {
+            Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = dev.zig }) catch |e| {
+                try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
+                return 1;
+            };
+        } else try out.writeAll(dev.zig);
+    }
+    try out.flush();
+    return 0;
+}
+
+/// `--check`'s root beside a `.v` device: the contract's checks, and every
+/// hook called once so each body is compiled.
+const device_check =
+    \\const contract = @import("contract");
+    \\const D = @import("device");
+    \\const n_u = @typeInfo(D.U).@"enum".fields.len;
+    \\const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+    \\comptime {
+    \\    contract.validate(D);
+    \\    contract.validateHost(struct {}, D);
+    \\}
+    \\pub fn main() void {
+    \\    const m: D.Model = .{};
+    \\    var inst: D.Instance = .{};
+    \\    var st = D.initState(&m, &inst);
+    \\    const x: [n_u]f64 = @splat(0);
+    \\    _ = D.eval(S, &x, &m, &inst, .{});
+    \\    _ = D.updateState(S, &m, &inst, x, &st, .{});
+    \\    _ = D.stateCtl(&m, &inst, &st, .commit);
+    \\    _ = D.pendingBreakpoint(&inst, 0);
+    \\}
+    \\
+;
 
 /// IEEE 1364-2005 §13.2 reads the library maps, then fills `opts` with each
 /// file after the first and the library every file maps into, and the
