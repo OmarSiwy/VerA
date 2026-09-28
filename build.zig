@@ -628,6 +628,46 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p06_specify.v",
         .stdout = "p02: b_20_4_timing_checks checks=7\n",
     },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
+        .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
+        .stdout = "xfail 27.31: no user data can be stored on a system function call\nxfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=40\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
+        .stdout = "xfail 26.6.1: vpiTimeUnit of a `timescale 1ns module is not -9\nxfail 26.6.1: vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12\nxfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.3.2: vpi_get_str(vpiType, iterator) is not \"vpiIterator\"\nxfail 26.3.2: vpiNetType of a wire is not vpiWire\nxfail 26.3.3: vpiLineNo of a net is not its source line\nxfail 26.3.3: vpiFile of a net is not its source file\nxfail 26.6.43: vpi_handle(vpiUse, iterator) is not its reference handle\nxfail 26.6.43: vpiIteratorType is not the iterated type\nxfail 26.3.5: vpiProtected of an unprotected module is not FALSE\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.6: a net array is not a vpiNetArray of vpiSize 2\nxfail 26.6.7: vpiArray of a reg array member is not TRUE\nxfail 26.6.7: vpiSize of a 2x3 reg array is not its 6 regs\nxfail 26.6.8: a time variable is not a vpiTimeVar\nxfail 26.6.8: module ->> variables does not yield i, ia, x, t\nxfail 26.6.10: reg array ->> range yields no range of size 4\nxfail 26.6.11: vpiArray of a scalar named event is not FALSE\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\nxfail 26.6.44: module ->> gen scope array yields no gen of size 2\np02: b_26_6_structure checks=249\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
+        .stdout = "xfail 26.6.3: module ->> vpiInternalScope omits bump, twice, main\nxfail 26.6.3: main ->> vpiInternalScope omits fk\nxfail 26.6.3: fk's vpiScope is not main\nxfail 26.6.34: forever is not a vpiForever\nxfail 26.6.34: vpi_handle(vpiCondition, forever) is not refused\nxfail 26.6.38: disable -> vpiExpr is not main\nxfail 26.6.26: {2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]\nxfail 26.6.26: a[i +: 2] is no vpiIndexedPartSelect\nxfail 26.6.26: vpiConstType of 4'd9 is not vpiDecConst\nxfail 26.6.26: vpiDecompile of a + b is not \"a + b\"\nxfail 26.6.25: vpi_iterate(vpiUse, a) yields no use of a\nxfail 26.3.4: vpiDelay of #(2,3) is not a vpiListOp operation\nxfail 26.6.24: the net declaration assignment of nd is no cont assign\nxfail 26.6.24: vpiNetDeclAssign of an assign statement is not FALSE\nxfail 26.6.24: vpi_get_value(cont assign) is refused\nxfail 26.6.4: vpiVector/vpiScalar of an io decl\nxfail 26.6.18: vpiSize of function [7:0] twice is not 8\nxfail 26.6.18: vpiFuncType of function [7:0] is not vpiSizedFunc\nxfail 26.6.18: the function holds no 8-bit reg named twice\nxfail 26.6.19: vpiFuncType of the call twice(d)\nxfail 26.6.19: vpiDecompile of the $display call is refused\nxfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=275\nd=12 c=1 q=9 p2=0101\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
+        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
+        .stdout = "xfail 26.6.13: vpi_get_value(prim term) is refused\nxfail 26.6.13: vpiArray of a gate outside an array is not FALSE\nxfail 26.6.14: no table entry decompiles (vpiStringVal) as 1 1 : ? : 1\nxfail 26.6.14: udp defn -> initial is NULL\nxfail 26.6.22: vpi_iterate(vpiDriver, y) omits the and's output\nxfail 26.6.22: vpi_iterate(vpiLoad, y) omits the not's input\nxfail 26.6.23: vpi_iterate(vpiLoad, reg a) omits the and's input\np02: b_26_6_primitives checks=65\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
+        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
+        .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: Annex G's vpiPolarity (34) is refused\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: Annex G's vpiTchkType (38) is refused\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_11_event_array.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_11_event_array.v",
+        .xfail = "error[E0207]: unexpected token: found `[`",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.v",
+        .xfail = "error[E0209]: expected an expression: found `repeat`",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
+        .xfail = "error[E1100]: digital source execution failed: digital execution currently requires a module with only variables, nets, events, instances and processes",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
