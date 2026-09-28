@@ -176,12 +176,6 @@ pub const CompileResult = struct {
         }
         return self.device;
     }
-
-    /// Returns the number of source units in the codegen/proof sense (LRM §5.6
-    /// contributions); `verdict.unit_modes` is parallel to them.
-    pub fn unitCount(self: *const CompileResult) usize {
-        return proof.unitCount(self.lowered);
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -437,7 +431,7 @@ test "lint: source → MIR, arena freed clean" {
     try std.testing.expectEqualStrings("res", res.mir.name);
     try std.testing.expectEqual(@as(u16, 2), res.lowered.num_ports);
     try std.testing.expect(res.verdict.ok());
-    try std.testing.expectEqual(res.unitCount(), res.verdict.unit_modes.len);
+    try std.testing.expectEqual(proof.unitCount(res.lowered), res.verdict.unit_modes.len);
 }
 
 test "IEEE 1364 §19.1 cell membership survives the preprocessor" {
