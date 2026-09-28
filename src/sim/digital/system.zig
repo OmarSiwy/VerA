@@ -228,7 +228,7 @@ const fk = @import("kernels").file_kernels;
 /// devices run, so both engines answer §17.2 one way (IEEE 1364-2005 §17.2.1's
 /// encodings: an mcd's bit 0 is standard output, an fd has bit 31 set and
 /// 0..2 are the standard streams).
-pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof };
+pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof, .err = fk.zFError };
 
 /// VAMS §9.5.1.2: one descriptor table per simulation, the host's
 /// (`Run.file_io`: a mixed simulation's device table), else this engine's
@@ -239,7 +239,7 @@ fn table(self: *Run) ?contract.FileIo {
 }
 
 /// The §17.2 functions an expression can call.
-pub const FileFn = enum { fopen, fgetc, ungetc, ftell, fseek, rewind, feof, sscanf };
+pub const FileFn = enum { fopen, fgetc, ungetc, fgets, fscanf, fread, ftell, fseek, rewind, feof, ferror, sscanf };
 
 /// The characters an operand holds (§17.1.1.7's reading: 8 bits each, leading
 /// NULs dropped), or null when any bit is x or z.
@@ -274,11 +274,26 @@ fn low32(d: ?i64) ?i64 {
 /// One §17.2 function call; every one of them returns an integer.
 pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, _: u32) Error!i64 {
     if (f == .sscanf) return scanCall(self, a, args);
-    const t = table(self) orelse return if (f == .fopen) 0 else -1;
-    if (f == .fopen) {
-        const name = try text(a, try exec.eval(self, a, args[0], 0));
-        const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
-        return fopen(t, a, self.file_name, name, mode, args.len == 1);
+    const t = table(self) orelse return switch (f) {
+        .fopen, .fgets, .fread, .ferror => 0,
+        else => -1, // else: EOF, the error answer of the rest
+    };
+    switch (f) {
+        .fopen => {
+            const name = try text(a, try exec.eval(self, a, args[0], 0));
+            const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
+            return fopen(t, a, self.file_name, name, mode, args.len == 1);
+        },
+        .fgets => return fgets(self, a, t, args),
+        .fscanf => return fscanf(self, a, t, args),
+        .fread => return fread(self, a, t, args),
+        // §17.2.7: the code, and its description in `str`, cleared when 0.
+        .ferror => {
+            const code = if (t.err) |err| err((try descriptor(self, a, args[0])) orelse 0) else 0;
+            try exec.assign(self, a, args[1], try stringValue(a, fk.zFErrorStr(code, 0)));
+            return code;
+        },
+        else => {}, // else: `fileOp`'s
     }
     var v: [3]?i64 = .{ null, null, null };
     for (args, 0..) |arg, i| v[i] = try int(self, a, arg);
@@ -325,8 +340,93 @@ pub fn fileOp(t: contract.FileIo, f: FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
             return t.seek(d, offset, whence);
         },
         .feof => return t.eof(low32(x) orelse return eof),
-        .fopen, .sscanf => unreachable, // `fopen` and `Scan`
+        .fopen, .sscanf, .fgets, .fscanf, .fread, .ferror => unreachable, // `fileCall`'s own
     }
+}
+
+/// §17.2.4.2 `$fgets(str, fd)`: characters into `str` "until str is filled,
+/// or a newline character is read and transferred to str, or an EOF
+/// condition is encountered"; a partial top byte of `str` holds none. The
+/// count, 0 when nothing was read (and `str` is left alone).
+fn fgets(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[1])) orelse return 0;
+    const room = (try exec.targetType(self, args[0])).width / 8;
+    var line: std.ArrayList(u8) = .empty;
+    while (line.items.len < room) {
+        const c = t.getc(d);
+        if (c < 0) break;
+        try line.append(a, @intCast(c));
+        if (c == '\n') break;
+    }
+    if (line.items.len != 0) try exec.assign(self, a, args[0], try stringValue(a, line.items));
+    return @intCast(line.items.len);
+}
+
+/// §17.2.4.3 `$fscanf(fd, format, args...)`: `$sscanf` over the file from its
+/// position, which then stands after the characters the scan used: "the
+/// offending input character is left unread in the input stream".
+fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[0])) orelse return -1;
+    const format = try text(a, try exec.eval(self, a, args[1], 0));
+    const start = t.tell(d);
+    if (start < 0) return -1;
+    // ponytail: reads the rest of the file per call; a streaming scan when a
+    // model reads large files this way.
+    var rest: std.ArrayList(u8) = .empty;
+    while (true) {
+        const c = t.getc(d);
+        if (c < 0) break;
+        try rest.append(a, @intCast(c));
+    }
+    const result = try scanInto(self, a, rest.items, format, args[2..]);
+    _ = t.seek(d, start + @as(i64, @intCast(result.used)), 0);
+    // A scan that ran to the end of the input met EOF (§17.2.8), which the
+    // repositioning cleared.
+    if (result.used == rest.items.len) _ = t.getc(d);
+    return result.code;
+}
+
+/// §17.2.4.4 `$fread(myreg, fd)` / `$fread(mem, fd, start, count)`: whole
+/// words of ceil(width/8) bytes each, the first byte the most significant;
+/// a memory from `start` (default its lowest address) for at most `count`
+/// words (default to its end). The count of characters read, 0 on none.
+fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[1])) orelse return 0;
+    const ex = &self.file.exprs;
+    const base = if (ex.tag(args[0]) == .ident) try self.slot(args[0]) else 0;
+    const arr = (if (ex.tag(args[0]) == .ident) self.arrays.get(base) else null) orelse {
+        const width = (try exec.targetType(self, args[0])).width;
+        const w = try readWord(a, t, d, width);
+        if (w.value) |v| try exec.assign(self, a, args[0], v);
+        return w.n;
+    };
+    var at = if (args.len > 2 and args[2] != .none) (try int(self, a, args[2])) orelse return 0 else arr.low;
+    var left = if (args.len > 3) (try int(self, a, args[3])) orelse return 0 else std.math.maxInt(i64);
+    var read: i64 = 0;
+    while (at >= arr.low and at <= arr.high and left > 0) : ({
+        at += 1;
+        left -= 1;
+    }) {
+        const w = try readWord(a, t, d, self.values[base].width);
+        read += w.n;
+        try exec.store(self, base + @as(u32, @intCast(at - arr.low)), (w.value orelse break).planes);
+    }
+    return read;
+}
+
+/// One `$fread` word: ceil(width/8) characters, big-endian, into `width`
+/// bits; the value is null when the file ends first. `n` is the characters
+/// read.
+fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Error!struct { value: ?Int.Literal, n: i64 } {
+    const bytes = (width + 7) / 8;
+    const v = try filled(a, width, false, .zero);
+    for (0..bytes) |k| {
+        const c = t.getc(d);
+        if (c < 0) return .{ .value = null, .n = @intCast(k) };
+        const lo: u32 = @intCast((bytes - 1 - k) * 8);
+        for (0..8) |b| if (lo + b < width and (c >> @intCast(b)) & 1 != 0) setBit(v, lo + @as(u32, @intCast(b)), .one);
+    }
+    return .{ .value = v, .n = bytes };
 }
 
 /// §17.2.7 `$fclose` of a file descriptor, or of every file a multichannel
@@ -368,12 +468,18 @@ pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, b
 fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
     const input = try text(a, try exec.eval(self, a, args[0], 0));
     const format = try text(a, try exec.eval(self, a, args[1], 0));
-    var sc: Scan = .init(input, format, args.len - 2);
+    return (try scanInto(self, a, input, format, args[2..])).code;
+}
+
+/// `Scan` of `input` by `format`, each value assigned to its output in
+/// `outs`: the call's code and the input characters the scan used.
+fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]const u8, outs: []const Ast.ExprId) Error!struct { code: i64, used: usize } {
+    var sc: Scan = .init(input, format, outs.len);
     while (sc.next()) |x| switch (x.value) {
-        .int => |v| try exec.assignInt(self, a, args[2 + x.arg], v),
-        .chars => |c| try exec.assign(self, a, args[2 + x.arg], try stringValue(a, c)),
+        .int => |v| try exec.assignInt(self, a, outs[x.arg], v),
+        .chars => |c| try exec.assign(self, a, outs[x.arg], try stringValue(a, c)),
     };
-    return sc.result;
+    return .{ .code = sc.result, .used = sc.at };
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters

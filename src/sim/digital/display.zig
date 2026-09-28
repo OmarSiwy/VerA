@@ -316,6 +316,9 @@ pub const Task = union(enum) {
     pla: system.Pla,
     /// §17.2.7 `$fclose`.
     fclose,
+    /// §17.2.6 `$fflush`: every write is already in its file
+    /// (`file_kernels.zFFlush`), so it only reads its argument.
+    fflush,
     /// §17.2.2 `$fdisplay`/`$fwrite`: `show` to a descriptor.
     fshow: Show,
     /// §17.2.3 `$swrite`/`$sformat`: `show` into the first argument, a variable.
@@ -361,6 +364,7 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$q_remove", Task{ .queue = .remove } },
     .{ "$q_exam", Task{ .queue = .exam } },
     .{ "$fclose", .fclose },
+    .{ "$fflush", .fflush },
     .{ "$fdisplay", Task{ .fshow = showAs(.decimal, true) } },
     .{ "$fdisplayb", Task{ .fshow = showAs(.binary, true) } },
     .{ "$fdisplayo", Task{ .fshow = showAs(.octal, true) } },
