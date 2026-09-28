@@ -368,6 +368,7 @@ pub const Code = enum(u16) {
     E1012,
     E1013,
     E1014,
+    E1015,
     E1100,
     E1101,
     E1102,
@@ -5894,6 +5895,20 @@ fn infoOf(c: Code) Info {
             \\
             \\Rename the system function; a VPI application can register it
             \\under any other `$` name.
+            ,
+        },
+        .E1015 => .{
+            .title = "more nets and unknowns than VerA's node table holds",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA numbers a module's
+            \\nets, ports, branch flows and analog operator states in one table
+            \\with 16-bit rows, so a module holds at most 65535 of them, and a
+            \\vector range (LRM 3.6.3) at most 65535 elements. The LRM bounds
+            \\neither.
+            \\
+            \\A device this size would also pass the 256-unknown bound on the
+            \\generated Jacobian (E1003). Split the module.
             ,
         },
         .W1050 => .{
