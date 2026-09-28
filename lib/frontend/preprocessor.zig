@@ -462,12 +462,12 @@ pub const Pp = struct {
 
     /// Returns §10.7 `__LINE__` at `at`: the physical line, remapped by an
     /// IEEE 1364 §19.7 `line when one is in force.
-    pub fn currentLine(pp: *const Pp, at: usize) u32 {
+    pub fn currentLine(pp: *const Pp, at: usize) u64 {
         const phys = pp.physicalLine(at);
         const to = pp.line_to orelse return phys;
         // Saturating: a `line whose operand is smaller than the offset it
         // corrects for cannot produce a line 0, let alone a negative one.
-        return if (phys >= pp.line_from) to + (phys - pp.line_from) else to;
+        return if (phys >= pp.line_from) @as(u64, to) + (phys - pp.line_from) else to;
     }
 
     /// Starts a diagnostic in the current file. Preprocessor spans are
