@@ -731,6 +731,9 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // Not copied when unchanged, which also covers `planes` aliasing
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
+    // A §10.4.5 constant function running during elaboration: nothing
+    // watches a slot yet.
+    if (self.growing != null) return;
     if (!changed) return driver.stored(self, target, false);
     // Most slots have no watcher, so one test skips them all.
     const watchers = self.watch[target];
@@ -1434,7 +1437,12 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
         in.* = try copyLiteral(a, try evalFor(self, a, arg, self.slotType(slot)));
     }
     const saved_len = self.saved_planes.items.len;
-    if (decl.automatic) for (f.first..f.first + f.count) |s| {
+    // §10.4.5: a call elaboration folds "has no effect on the initial values
+    // of the variables used either at simulation time or among multiple
+    // invocations of a function at elaboration time", so it runs as an
+    // automatic one does.
+    const fresh = decl.automatic or self.growing != null;
+    if (fresh) for (f.first..f.first + f.count) |s| {
         const v = self.values[s];
         try self.saved_planes.appendSlice(self.arena, v.planes);
         @memcpy(v.planes, (try filled(a, v.width, v.signed, .x)).planes);
@@ -1456,7 +1464,7 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     const result = if (decl.is_function) try copyLiteral(a, self.values[f.result]) else try filled(a, 1, false, .x);
     // §10.3: a disabled task's outputs are not copied back.
     if (self.unwind == null) for (decl.ports, args, f.ports) |p, arg, slot| if (p.direction != .input) try copyOut(self, a, arg, slot);
-    if (decl.automatic) {
+    if (fresh) {
         var at = saved_len;
         for (f.first..f.first + f.count) |s| {
             const planes = self.values[s].planes;

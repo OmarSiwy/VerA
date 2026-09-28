@@ -11,7 +11,6 @@
 //       max(4, 1) = 4 bits; 10 + 1 = 11 fits -> 11.
 //   U = dbl(21), dbl returns 2*x: a constant function call (§10.4.5) -> 42.
 //! inherited IEEE 1364-2005 5
-//! xfail a parameter bit/part-select in a parameter's value is refused ("a constant expression is required here"), and a constant function call there is "undeclared function"
 module b_5_constant_select_and_function;
   parameter P = 8'hA5;
   localparam Q = P[7:4] + P[0];
