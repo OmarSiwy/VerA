@@ -305,7 +305,7 @@
 13.7.1	-	Using the command line to control library searching
 13.7.2	non-normative	File path specification examples	"For example:" Worked examples of file_path_spec wildcard resolution; the rules are §13.2.1's file_path_spec details. States no rule of its own.
 13.7.3	non-normative	Resolving multiple path specifications	"For example:" A worked example of §13.2.1.1's resolution order and its multiple-match error; the rules are §13.2.1.1's. States no rule of its own.
-14	-	Specify blocks
+14	non-normative	Specify blocks	Clause preamble: "This clause describes how paths are specified in a module and how delays are assigned to these paths." (p. 211). It states no rule of its own; the rules are §14.1-§14.3.1 (each cited both ways or classified) and §14.3.2-§14.6.4.2 (not-supported).
 14.1	-	Specify block declaration
 14.2	-	Module path declarations
 14.2.1	-	Module path restrictions
@@ -313,13 +313,13 @@
 14.2.3	-	Edge-sensitive paths
 14.2.4	-	State-dependent paths
 14.2.4.1	-	Conditional expression
-14.2.4.2	-	Simple state-dependent paths
+14.2.4.2	no-prohibition	Simple state-dependent paths	"If the path description of a state-dependent path is a simple path, then it is called a simple state-dependent path." A definition and two examples (XORgate, ALU); nothing is forbidden (the ifnone ban is §14.2.4.4, the condition operators §14.2.4.1, each cited both ways). Positive: 14_specify_blocks/b_14_2_4_state_dependent_paths.v (both examples).
 14.2.4.3	-	Edge-sensitive state-dependent paths
 14.2.4.4	-	The ifnone condition
 14.2.5	-	Full connection and parallel connection paths
 14.2.6	-	Declaring multiple module paths in a single statement
 14.2.7	-	Module path polarity
-14.2.7.1	-	Unknown polarity
+14.2.7.1	no-prohibition	Unknown polarity	"A module path specified either as a full connection or as a parallel connection, but without a polarity operator + or -, shall be treated as a module path with unknown polarity." The default when no operator is written; nothing is forbidden (a wrong or misplaced operator is §14.2.7, §14.2.7.2 and §14.2.7.3, each cited both ways). Positive: 14_specify_blocks/b_14_2_7_polarity.v (the clause example).
 14.2.7.2	-	Positive polarity
 14.2.7.3	-	Negative polarity
 14.3	-	Assigning delays to module paths
@@ -335,7 +335,7 @@
 14.6.4	not-supported	Detailed pulse control capabilities	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 14.6.4.1	not-supported	On-event versus on-detect pulse filtering	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 14.6.4.2	not-supported	Negative pulse detection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
-15	-	Timing checks
+15	non-normative	Timing checks	Clause preamble: "This clause describes how timing checks are used in specify blocks to determine whether signals obey the timing constraints." (p. 237). It states no rule of its own; the syntax rules are §15.1 and §15.4 (each cited both ways) and the evaluation rules §15.2-§15.3.6, §15.5-§15.8 (not-supported).
 15.1	-	Overview
 15.2	not-supported	Timing checks using a stability window	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
 15.2.1	not-supported	$setup	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
@@ -371,107 +371,107 @@
 16.4	not-supported	Multiple SDF files	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 16.5	not-supported	Pulse limit annotation	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
 16.6	not-supported	SDF to Verilog delay value mapping	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
-17	-	System tasks and functions
-17.1	-	Display system tasks
+17	non-normative	System tasks and functions	"This clause describes system tasks and functions that are considered part of the Verilog HDL. These system tasks and functions are divided into ten categories" A list of the tasks by category; the rules are in §17.1 to §17.11.
+17.1	non-normative	Display system tasks	"The display group of system tasks is divided into three categories: the display and write tasks, strobed monitoring tasks, and continuous monitoring tasks." An introduction; the rules are §17.1.1 to §17.1.3, each cited both ways.
 17.1.1	-	The display and write tasks
-17.1.1.1	-	Escape sequences for special characters
+17.1.1.1	no-prohibition	Escape sequences for special characters	Table 17-1 defines what each escape sequence displays; "If fewer than three characters are used, the following character shall not be an octal digit" is part of the definition (a following octal digit would be read as part of \ddd), and "Implementations may issue an error if the character represented is greater than \377" is optional. Nothing a tool must refuse. Positive: 17_system_tasks/b_17_1_1_1_escape_sequences.v (the clause example and \ddd of one to three digits).
 17.1.1.2	-	Format specifications
-17.1.1.3	-	Size of displayed data
-17.1.1.4	-	Unknown and high-impedance values
+17.1.1.3	no-prohibition	Size of displayed data	"For expression arguments, the values written to the output file (or terminal) are sized automatically." ... "The automatic sizing of displayed data can be overridden by inserting a zero". Sizing rules; nothing is illegal. Positive: 17_system_tasks/audit_display_decimal_states.v, audit_display_write_runs.v; b_17_1_1_3_zero_width_format.v (xfail: %0h, %0b, %0o keep leading zeros).
+17.1.1.4	no-prohibition	Unknown and high-impedance values	The x/z digit rules for %d, %h, %o and %b ("If all bits in a group are at the unknown value, a lowercase x is displayed for that digit" ...). Display rules; nothing is illegal. Positive: 17_system_tasks/b_17_1_1_4_unknown_digits.v (the clause three examples and the z rules), audit_display_decimal_states.v.
 17.1.1.5	-	Strength format
-17.1.1.6	-	Hierarchical name format
+17.1.1.6	no-prohibition	Hierarchical name format	"The %m format specifier does not accept an argument. Instead, it causes the display task to print the hierarchical name of the module, task, function, or named block that invokes the system task". %m consumes no argument (a following expression is an ordinary argument), so nothing is illegal. Positive: 17_system_tasks/audit_display_named_scope.v.
 17.1.1.7	-	String format
 17.1.2	-	Strobed monitoring
 17.1.3	-	Continuous monitoring
-17.2	-	File input-output system tasks and functions
+17.2	non-normative	File input-output system tasks and functions	"The system tasks and functions for file-based operations are divided into the following categories" A list; the rules are §17.2.1 to §17.2.9.
 17.2.1	-	Opening and closing files
 17.2.2	-	File output system tasks
 17.2.3	-	Formatting data to a string
-17.2.4	-	Reading data from a file
-17.2.4.1	-	Reading a character at a time
-17.2.4.2	-	Reading a line at a time
+17.2.4	no-prohibition	Reading data from a file	"Files opened using file descriptors can be read from only if they were opened with either the r or r+ type values." The restriction binds the file, not the source: whether a descriptor was opened for reading is known only at run time, and §17.2.4.1 fixes the outcome of such a read ("If an error occurs reading from the file, then c is set to EOF (-1)"). No source construct is illegal. Table 17-7 also calls w+ and a+ "update", which this sentence contradicts; the fixtures read only through r and r+. Positive: 17_system_tasks/b_17_2_4_read_needs_read_type.v (a "w" descriptor reads -1; "r+" and "r" read the byte).
+17.2.4.1	no-prohibition	Reading a character at a time	$fgetc reads a byte or returns EOF (-1) on error; $ungetc pushes a character back, returning 0 or EOF. Results defined for every input, errors reported by return value; nothing is illegal. Positive: 17_system_tasks/audit_file_read_position.v, b_17_2_4_read_needs_read_type.v.
+17.2.4.2	no-prohibition	Reading a line at a time	"reads characters from the file specified by fd into the reg str until str is filled, or a newline character is read and transferred to str, or an EOF condition is encountered" ... "If an error occurs reading from the file, then code is set to zero." Results defined for every input; nothing is illegal. Positive: 17_system_tasks/b_17_2_4_2_fgets.v (xfail: $fgets is not implemented in the digital context).
 17.2.4.3	-	Reading formatted data
-17.2.4.4	-	Reading binary data
-17.2.5	-	File positioning
-17.2.6	-	Flushing output
-17.2.7	-	I/O error status
-17.2.8	-	Detecting EOF
+17.2.4.4	no-prohibition	Reading binary data	$fread loads a reg or memory byte by byte, big endian, from start for at most count words; "If an error occurs reading from the file, then code is set to zero." Nothing is illegal. Positive: 17_system_tasks/b_17_2_4_4_fread.v (xfail: $fread is not implemented in the digital context).
+17.2.5	no-prohibition	File positioning	$ftell, $fseek (operations 0, 1, 2), $rewind, the gap rule and append positioning; "If an error occurs repositioning the file, then code is set to -1." Errors are return values; nothing is illegal. Positive: 17_system_tasks/b_17_2_5_seek_gap_and_origin.v, audit_file_read_position.v; b_17_2_5_append_writes_at_end.v (xfail: an "a" file is overwritten after $fseek).
+17.2.6	no-prohibition	Flushing output	"writes any buffered output to the file(s) specified by mcd, to the file specified by fd, or if $fflush is invoked with no arguments, to all open files." Nothing is illegal. Positive: 17_system_tasks/b_17_2_6_fflush.v (xfail: $fflush is not implemented in the digital context).
+17.2.7	no-prohibition	I/O error status	"If the most recent operation did not result in an error, then the value returned shall be zero, and the reg str shall be cleared." The nonzero code of an error is not fixed ("an error code is returned"; CLAUSE-AUDIT §5.5), so only zero/nonzero is asserted. Nothing is illegal. Positive: 17_system_tasks/b_17_2_7_ferror.v (xfail: $ferror is not implemented in the digital context).
+17.2.8	no-prohibition	Detecting EOF	"returns a nonzero value when EOF has previously been detected reading the input file fd. It returns zero otherwise." Nothing is illegal. Positive: 17_system_tasks/audit_file_read_position.v.
 17.2.9	-	Loading memory data from a file
 17.2.10	not-supported	Loading timing data from an SDF file	Out of scope (ROADMAP.md §1 B): SDF back-annotation. VerA is no SDF annotator; $sdf_annotate, the only way source asks for one, is refused (E1102).
-17.3	-	Timescale system tasks
+17.3	no-prohibition	Timescale system tasks	"The following system tasks display and set timescale information: a) $printtimescale b) $timeformat" A list introducing §17.3.1 and §17.3.2, each cited both ways; nothing is forbidden here. Positive: 17_system_tasks/d09_07_timeformat.v.
 17.3.1	-	$printtimescale
 17.3.2	-	$timeformat
-17.4	-	Simulation control system tasks
+17.4	no-prohibition	Simulation control system tasks	"There are two simulation control system tasks: a) $finish b) $stop" A list introducing §17.4.1 (cited both ways) and §17.4.2 (implementation-defined); nothing is forbidden here. Positive: 17_system_tasks/b_17_4_1_finish_exits.v.
 17.4.1	-	$finish
-17.4.2	-	$stop
+17.4.2	implementation-defined	$stop	"The $stop system task causes simulation to be suspended. This task takes an optional expression argument (0, 1, or 2) that determines what type of diagnostic message is printed. The amount of diagnostic messages output increases with the value" What a suspended simulation does next (an interactive prompt, reading input, how a batch run ends) and the text of each diagnostic level are the tool's, so no transcript is portable. VerA's analog choice is CLAUSE-AUDIT §5.3's print-and-exit-0 row; the digital runner refuses $stop (E1100 "not implemented"), a gap. Syntax 17-12's one-argument limit: 17_system_tasks/b_17_4_2_stop_two_arguments_rejected.v (xfail: refused as not implemented).
 17.5	-	Programmable logic array (PLA) modeling system tasks
-17.5.1	-	Array types
-17.5.2	-	Array logic types
+17.5.1	no-prohibition	Array types	"The synchronous forms control the time at which the logic array shall be evaluated and the outputs shall be updated. For the asynchronous forms, the evaluations are automatically performed whenever an input term changes value or any word in the personality memory is changed." Evaluation rules for the two array types; no form is illegal (the output-term and ascending-order bans are §17.5 and §17.5.3, cited both ways). Positive: 17_system_tasks/audit_pla_async_personality.v.
+17.5.2	no-prohibition	Array logic types	"The logic arrays are modeled with and, or, nand, and nor logic planes. This applies to all array types and formats." Names the four planes; nothing is forbidden. Positive: 17_system_tasks/b_17_5_2_logic_planes.v (all four planes, array and plane formats).
 17.5.3	-	Logic array personality declaration and loading
-17.5.4	-	Logic array personality formats
-17.6	-	Stochastic analysis tasks
+17.5.4	no-prohibition	Logic array personality formats	The array format ("A 1 means take the input value, and a 0 means do not take the input value") and the plane format (0 complemented, 1 true, x worst case, z and ? do-not-care); the meaning of each personality bit, with no "shall not". Positive: 17_system_tasks/b_17_5_4_plane_example.v (the clause's Example 2 and its printed output), audit_pla_plane_ignore.v.
+17.6	no-prohibition	Stochastic analysis tasks	"This subclause describes a set of system tasks and functions that manage queues." Lists the five calls; their argument lists are refused when short in §17.6.1 to §17.6.5 (each cited both ways), and invalid queue operations report a Table 17-16 status rather than being illegal (§17.6.6). Positive: 17_system_tasks/audit_queue_capacity_stats.v.
 17.6.1	-	$q_initialize
 17.6.2	-	$q_add
 17.6.3	-	$q_remove
 17.6.4	-	$q_full
 17.6.5	-	$q_exam
-17.6.6	-	Status codes
-17.7	-	Simulation time system functions
+17.6.6	no-prohibition	Status codes	"All of the queue management tasks and functions return an output status code." Table 17-16 is how an invalid operation (undefined q_id, bad type, nonpositive length, duplicate q_id, full or empty queue) is reported at run time; none is illegal source. Positive: 17_system_tasks/audit_queue_status_boundaries.v (codes 2, 4, 5, 6).
+17.7	no-prohibition	Simulation time system functions	"The following system functions provide access to current simulation time: $time $stime $realtime" A list introducing §17.7.1 to §17.7.3, each cited both ways. Positive: 17_system_tasks/d09_05_time_queries.v, d09_06_time_rounding.v.
 17.7.1	-	$time
 17.7.2	-	$stime
 17.7.3	-	$realtime
 17.8	-	Conversion functions
-17.9	-	Probabilistic distribution functions
+17.9	no-prohibition	Probabilistic distribution functions	"There is a set of random number generators that return integer values distributed according to standard probabilistic functions." An introduction; the rules are §17.9.1, §17.9.2 (cited both ways) and §17.9.3 (classified). Positive: 17_system_tasks/b_17_9_2_same_seed_same_value.v.
 17.9.1	-	$random function
 17.9.2	-	$dist_ functions
-17.9.3	-	Algorithm for probabilistic distribution functions
-17.10	-	Command line input
+17.9.3	no-prohibition	Algorithm for probabilistic distribution functions	"The algorithm for these functions is defined by the following C code" The reference listing fixes every value; nothing is forbidden, and its inf/NaN and precision behaviour is unasserted (CLAUSE-AUDIT §5.5). Positive: 17_system_tasks/audit_dist_reference.v, audit_random_seed_reference.v.
+17.10	no-prohibition	Command line input	"These arguments, referred to below as plusargs, are accessible through the system functions described in 17.10.1 and 17.10.2." An introduction; the rules are those two clauses (cited both ways). Positive: 17_system_tasks/b_17_10_1_plusargs_variable_query.v.
 17.10.1	-	$test$plusargs (string)
 17.10.2	-	$value$plusargs (user_string, variable)
-17.11	-	Math functions
+17.11	no-prohibition	Math functions	"There are integer and real math functions. The math system functions may be used in constant expressions, as specified in Clause 5." Permissive; the argument rules are §17.11.1 and §17.11.2 (cited both ways). Positive: 17_system_tasks/audit_ieee_math_constant_expression.v, d09_10_clog2.v.
 17.11.1	-	Integer math functions
 17.11.2	-	Real math functions
-18	-	Value change dump (VCD) files
-18.1	-	Creating four-state VCD file
+18	non-normative	Value change dump (VCD) files	"A VCD file contains information about value changes on selected variables in the design stored by VCD system tasks. Two types of VCD files exist" The chapter preamble; its rules are in §18.1 to §18.4.
+18.1	no-prohibition	Creating four-state VCD file	"The steps involved in creating the four-state VCD file are listed below" (insert the VCD system tasks, run the simulation) and "A VCD file is an ASCII file that contains header information, variable definitions, and the value changes for all variables specified in the task calls." A description of the flow; the tasks and their refusals are §18.1.1 to §18.1.6, each cited both ways. Positive: 18_vcd/d09_11_vcd_dumpvars.v, d09_12_vcd_dumpoff_on.v.
 18.1.1	-	Specifying name of dump file ($dumpfile)
 18.1.2	-	Specifying variables to be dumped ($dumpvars)
 18.1.3	-	Stopping and resuming the dump ($dumpoff/$dumpon)
 18.1.4	-	Generating a checkpoint ($dumpall)
 18.1.5	-	Limiting size of dump file ($dumplimit)
 18.1.6	-	Reading dump file during simulation ($dumpflush)
-18.2	-	Format of four-state VCD file
+18.2	no-prohibition	Format of four-state VCD file	"The dump file is structured in a free format. White space is used to separate commands and to make the file easily readable by a text editor." Binds the writer; no source construct can break it (the harness compares dumps as white-space separated tokens). Positive: 18_vcd/d09_11_vcd_dumpvars.v, d09_12_vcd_dumpoff_on.v.
 18.2.1	-	Syntax of four-state VCD file
-18.2.2	-	Formats of variable values
-18.2.3	-	Description of keyword commands
-18.2.3.1	-	$comment
-18.2.3.2	-	$date
-18.2.3.3	-	$enddefinitions
-18.2.3.4	-	$scope
-18.2.3.5	-	$timescale
-18.2.3.6	-	$upscope
-18.2.3.7	-	$var
-18.2.3.8	-	$version
-18.2.3.9	-	$dumpall
-18.2.3.10	-	$dumpoff
-18.2.3.11	-	$dumpon
-18.2.3.12	-	$dumpvars
-18.2.4	-	Four-state VCD file format example
-18.3	-	Creating extended VCD file
+18.2.2	no-prohibition	Formats of variable values	"Dumps of value changes to scalar variables shall not have any white space between the value and the identifier code. Dumps of value changes to vectors shall not have any white space between the base letter and the value digits, but they shall have one white space between the value digits and the identifier code." and Tables 18-1/18-2 shortening; events dump as scalars. Rules on the writer; nothing a design writes is illegal. Positive: 18_vcd/b_18_2_2_table_18_2_shortening.v (every Table 18-2 row), d09_13_vcd_dumpvars_levels.v; b_18_2_2_event_marker.v (xfail: events are not dumped).
+18.2.3	no-prohibition	Description of keyword commands	"The general information in the VCD file is presented as a series of sections surrounded by keywords. Keyword commands provide a means of inserting information in the VCD file. Keyword commands can be inserted either by the dumper or manually." Table 18-3 lists them; each is its own subclause. Nothing is forbidden. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
+18.2.3.1	no-prohibition	$comment	"The $comment section provides a means of inserting a comment in the VCD file." Syntax 18-9. Permissive; the one comment a writer must insert is the §18.1.5 limit notice. Positive: 18_vcd/b_18_1_5_dumplimit_stops_with_comment.v (the $comment closing a limited dump).
+18.2.3.2	no-prohibition	$date	"The $date section indicates the date on which the VCD file was generated." Syntax 18-10. The date_text is the writer's and cannot be asserted; its presence can. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v (a non-empty $date section before $enddefinitions, read back).
+18.2.3.3	no-prohibition	$enddefinitions	"The $enddefinitions section marks the end of the header information and definitions." Syntax 18-11. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
+18.2.3.4	no-prohibition	$scope	"The $scope section defines the scope of the variables being dumped." Syntax 18-12 scope_type begin | fork | function | module | task. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (nested module scopes); b_18_2_3_4_task_function_scopes.v (xfail: task and function scopes are not dumped).
+18.2.3.5	no-prohibition	$timescale	"The $timescale keyword specifies what timescale was used for the simulation." Syntax 18-13 time_number 1 | 10 | 100. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (`timescale 100ps/100ps -> $timescale 100ps).
+18.2.3.6	no-prohibition	$upscope	"The $upscope section indicates a change of scope to the next higher level in the design hierarchy." Syntax 18-14. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (two levels closed).
+18.2.3.7	no-prohibition	$var	"The $var section prints the names and identifier codes of the variables being dumped." Syntax 18-15, "Size specifies how many bits are in the variable", the msb/lsb reference, "a net of net type uwire shall have a variable type of wire". Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (every net type, uwire as wire, reg, ascending range, integer, time); b_18_2_2_event_marker.v (xfail: no event $var).
+18.2.3.8	no-prohibition	$version	"The $version section indicates which version of the VCD writer was used to produce the VCD file and the $dumpfile system task used to create the file. If a variable or an expression was used to specify the filename within $dumpfile, the unevaluated variable or expression literal shall appear in the $version string." Binds the writer. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v; b_18_2_3_8_version_names_dumpfile_variable.v (xfail: the evaluated name is written).
+18.2.3.9	no-prohibition	$dumpall	"The $dumpall keyword specifies current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.10	no-prohibition	$dumpoff	"The $dumpoff keyword indicates all variables dumped with X values." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.11	no-prohibition	$dumpon	"The $dumpon keyword indicates resumption of dumping and lists current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.12	no-prohibition	$dumpvars	"The section beginning with $dumpvars keyword lists initial values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.4	no-prohibition	Four-state VCD file format example	"The following example illustrates the format of the four-state VCD file." An example of §18.2.1 to §18.2.3; nothing is forbidden. Positive: 18_vcd/b_18_2_4_example_value_changes.v (the example's every value-change section, $dumpvars at #500 to #2010).
+18.3	no-prohibition	Creating extended VCD file	"The four-state VCD file rules and syntax apply to the extended VCD file unless otherwise stated in this subclause." A description of the flow; the tasks and their refusals are §18.3.1 to §18.3.5, each cited both ways. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
 18.3.1	-	Specifying dump file name and ports to be dumped ($dumpports)
 18.3.2	-	Stopping and resuming the dump ($dumpportsoff/$dumpportson)
 18.3.3	-	Generating a checkpoint ($dumpportsall)
 18.3.4	-	Limiting size of dump file ($dumpportslimit)
 18.3.5	-	Reading dump file during simulation ($dumpportsflush)
-18.3.6	-	Description of keyword commands
-18.3.6.1	-	$vcdclose
-18.3.7	-	General rules for extended VCD system tasks
-18.4	-	Format of extended VCD file
-18.4.1	-	Syntax of extended VCD file
-18.4.2	-	Extended VCD node information
-18.4.3	-	Value changes
-18.4.3.1	-	State characters
-18.4.3.2	-	Drivers
-18.4.4	-	Extended VCD file format example
+18.3.6	no-prohibition	Description of keyword commands	"The general information in the extended VCD file is presented as a series of sections surrounded by keywords. ... Extended VCD provides one additional keyword command to that of the four-state VCD." Binds the writer. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v (the $dumpports, $dumpportsoff, $dumpportson and $dumpportsall sections) (xfail: $dumpports is not implemented, E1100).
+18.3.6.1	no-prohibition	$vcdclose	"The $vcdclose keyword indicates the final simulation time at the time the extended VCD file is closed." Syntax 18-26. A section the writer adds at close, after the last point a design can read its own dump; no source construct names it. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v derives the file's closing `$vcdclose #17 $end` in its header; its transcript cannot show it (xfail: $dumpports is not implemented, E1100).
+18.3.7	no-prohibition	General rules for extended VCD system tasks	"If a file_pathname is specified that does not match a file_pathname specified in a $dumpports call, the control task shall be ignored." and the bare-name and () forms of the tasks with only optional arguments "shall" run their defaults. Ignoring and defaulting, not refusal. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v ($dumpportsoff of an unknown file, $dumpportsoff; $dumpportson(); $dumpportsflush;) (xfail: $dumpports is not implemented, E1100).
+18.4	no-prohibition	Format of extended VCD file	"The format of the extended VCD file is similar to that of the four-state VCD file, as it is also structured in a free format." Binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
+18.4.1	no-prohibition	Syntax of extended VCD file	Syntax 18-27 and "A four-state VCD construct name that matches an extended VCD construct shall be considered equivalent, except if preceded by an *." The file grammar; it binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v ($var port sections, <n codes) (xfail: $dumpports is not implemented, E1100).
+18.4.2	no-prohibition	Extended VCD node information	"var_type The keyword port. No other keyword is allowed." size 1 or the port's index, codes "<" from zero "in the order found in the module declaration". Rules on the writer's node information; no source construct can break them. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (the clause's own test_device example) (xfail: $dumpports is not implemented, E1100).
+18.4.3	no-prohibition	Value changes	Syntax 18-29 pport_value 0_strength_component 1_strength_component identifier_code; "There is no space between the p and the port_value." Binds the writer. Positive: 18_vcd/b_18_4_3_port_value_changes.v (xfail: $dumpports is not implemented, E1100).
+18.4.3.1	no-prohibition	State characters	The state characters for input (D U N Z d u), output (L H X T l h) and unknown-direction (0 1 ? F A a B b C c f) values. A table the writer follows. Positive: 18_vcd/b_18_4_3_port_value_changes.v (D U N H X l f and 1) (xfail: $dumpports is not implemented, E1100).
+18.4.3.2	no-prohibition	Drivers	"Drivers are considered only in terms of primitives, continuous assignments, and procedural continuous assignments." and the three conflict rules (same value and strength range: 0/1 and the stronger strength; strong input over weak output: d/u; weak input under strong output: l/h). How the writer resolves a port; nothing is illegal. Positive: 18_vcd/b_18_4_3_port_value_changes.v (p1 0 6 and pl 6 0) (xfail: $dumpports is not implemented, E1100).
+18.4.4	no-prohibition	Extended VCD file format example	"The following example illustrates the format of the extended VCD file." An example of §18.4.1 to §18.4.3. Positive: 18_vcd/b_18_4_3_port_value_changes.v (the example's pD 6 0, pU 0 6, pN 6 6, pX 6 6, pH 0 6 and pf 0 0 lines) (xfail: $dumpports is not implemented, E1100).
 19	-	Compiler directives
 19.1	no-prohibition	`celldefine and `endcelldefine	"It is advisable to pair each `celldefine with an `endcelldefine, but it is not required." ... "These directives may appear anywhere in the source description". The cell tag is read only by PLI routines; nothing is illegal. Positive: 19_compiler_directives/b_19_1_celldefine.v (a pair, a pair inside a module definition, an unpaired `celldefine; the design computes as without them).
 19.2	-	`default_nettype
