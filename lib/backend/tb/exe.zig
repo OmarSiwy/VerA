@@ -79,7 +79,7 @@ pub fn buildExe(
         try gpa.dupe(u8, p)
     else
         try std.mem.concat(gpa, u8, &.{
-            try std.fs.path.join(arena, &.{ opts.work_dir, opts.name }),
+            try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
             builtin.target.exeFileExt(),
         });
     errdefer gpa.free(bin);
@@ -166,7 +166,7 @@ pub fn bind(
     binding: []const u8,
     text: []const u8,
 ) ![]const u8 {
-    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ opts.name, suffix });
+    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
     try dir.writeFile(io, .{ .sub_path = file, .data = text });
     const path = try std.fs.path.join(arena, &.{ opts.work_dir, file });
     return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, path });
