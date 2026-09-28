@@ -110,6 +110,9 @@ Fixtures live under `tests/fixtures/` and each names the clause it tests:
 
 ## Contributing
 
+While editing, build with `zig build --watch -fincremental`: it rebuilds
+`zig-out/bin/vera` from only what changed (`AGENTS.md` §4 has the traps).
+
 Read `AGENTS.md` before contributing. `docs/ROADMAP.md` holds the v1.0.0
 definition, the release ladder and the open items, and `docs/CLAUSE-AUDIT.md` defines the evidence
 classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.

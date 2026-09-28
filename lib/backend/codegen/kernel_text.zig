@@ -1065,7 +1065,7 @@ pub const hist_quad_txt =
 // ---- the `u/<key>.zig` file-scope prologue (see `Output.prelude`) ----------
 //
 // A unit file is a separate Zig file with none of device.zig's helpers in
-// scope, so these blocks alias them from `h.zig` (derived by `aliasesOf`).
+// scope, so these blocks alias them from `h.zig` (derived by `appendAliases`).
 // `..` is the work_dir: `u/<key>.zig` sits one level under `device.zig`.
 
 /// The `h.zig` header: banner and imports ahead of the public helper text.
@@ -1096,71 +1096,30 @@ pub const prelude_head_txt =
     \\
 ;
 
-/// Returns, at comptime, a `const zFoo = zh.zFoo;` alias for each top-level
-/// `z*` helper `src` declares, so a helper that is emitted is aliased by
-/// construction. A line is a declaration by `publish`'s predicate (`fn ` or
-/// `const `, optionally `pub `), and the name must be `z` plus an uppercase
-/// letter: the spelling of every helper an emitted body calls, which keeps a
-/// kernel's internals (`zstd`, `zfIo`, `zf_max`, `ZScan`) out.
-pub fn aliasesOf(comptime src: []const u8) []const u8 {
-    comptime {
-        // ponytail: a ceiling, two orders above the longest kernel block.
-        @setEvalBranchQuota(100_000);
-        var out: []const u8 = "";
-        var it = std.mem.splitScalar(u8, src, '\n');
-        while (it.next()) |line| {
-            const decl = if (std.mem.startsWith(u8, line, "pub ")) line[4..] else line;
-            const at: usize = if (std.mem.startsWith(u8, decl, "fn "))
-                "fn ".len
-            else if (std.mem.startsWith(u8, decl, "const "))
-                "const ".len
-            else
-                continue;
-            const rest = decl[at..];
-            var n: usize = 0;
-            while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
-            const name = rest[0..n];
-            if (name.len < 2 or name[0] != 'z' or !std.ascii.isUpper(name[1])) continue;
-            out = out ++ "const " ++ name ++ " = zh." ++ name ++ ";\n";
-        }
-        return out;
+/// Appends a `const zFoo = zh.zFoo;` alias for each top-level `z*` helper
+/// `src` declares, so a helper that is emitted is aliased by construction. A
+/// line is a declaration by `publish`'s predicate (`fn ` or `const `,
+/// optionally `pub `), and the name must be `z` plus an uppercase letter: the
+/// spelling of every helper an emitted body calls, which keeps a kernel's
+/// internals (`zstd`, `zfIo`, `zf_max`, `ZScan`) out.
+pub fn appendAliases(out: *std.ArrayList(u8), gpa: std.mem.Allocator, src: []const u8) std.mem.Allocator.Error!void {
+    var it = std.mem.splitScalar(u8, src, '\n');
+    while (it.next()) |line| {
+        const decl = if (std.mem.startsWith(u8, line, "pub ")) line[4..] else line;
+        const at: usize = if (std.mem.startsWith(u8, decl, "fn "))
+            "fn ".len
+        else if (std.mem.startsWith(u8, decl, "const "))
+            "const ".len
+        else
+            continue;
+        const rest = decl[at..];
+        var n: usize = 0;
+        while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
+        const name = rest[0..n];
+        if (name.len < 2 or name[0] != 'z' or !std.ascii.isUpper(name[1])) continue;
+        try out.print(gpa, "const {0s} = zh.{0s};\n", .{name});
     }
 }
-
-// Each `prelude_*_txt` aliases one helper block for the unit files, gated on
-// the same condition that emits the block (`buildPrelude`).
-
-/// Aliases of `math_txt` and `ops_txt`.
-pub const prelude_math_txt = aliasesOf(math_txt ++ ops_txt);
-/// Aliases of `timer_txt`.
-pub const prelude_timer_txt = aliasesOf(timer_txt);
-/// Aliases of `family_txt`.
-pub const prelude_family_txt = aliasesOf(family_txt);
-/// Aliases of `hist_txt`.
-pub const prelude_hist_txt = aliasesOf(hist_txt);
-/// Aliases of `hist_quad_txt`.
-pub const prelude_hist_quad_txt = aliasesOf(hist_quad_txt);
-/// Aliases of `arr_txt`.
-pub const prelude_arr_txt = aliasesOf(arr_txt);
-/// Aliases of `filt_txt`.
-pub const prelude_filt_txt = aliasesOf(filt_txt);
-/// Aliases of `ac_txt`.
-pub const prelude_ac_txt = aliasesOf(ac_txt);
-
-/// Aliases of `display_txt` (§9.4.3 `%<width>d`), for a printing artifact or
-/// any device that formats into a string: §9.5.3 runs the same formatter,
-/// from any unit.
-pub const prelude_display_txt = aliasesOf(display_txt);
-
-/// Aliases of `table_txt` (§9.21). `zTabRes` is a type function, aliased like
-/// a function because the recursion's return type names it.
-pub const prelude_table_txt = aliasesOf(table_txt);
-/// Aliases of `rng_txt`.
-pub const prelude_rng_txt = aliasesOf(rng_txt);
-/// Aliases of `file_txt`.
-pub const prelude_file_txt = aliasesOf(file_txt);
-/// Aliases of `str_txt`.
-pub const prelude_str_txt = aliasesOf(str_txt);
 
 /// §9.4.3 integer padding, for a printing artifact or a device that formats
 /// into a string. `std.fmt` writes `+42` for `{d:>5}`; §9.4.3 (like C's
