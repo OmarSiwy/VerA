@@ -546,11 +546,10 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
 }
 
 /// §4.8.2 integer to real (`exec.realOfInt`): the value read by its own
-/// signedness; an x or z bit makes it 0.
+/// signedness, each x or z bit as 0.
 pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
     // ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
-    if (anyX(a)) return 0;
-    const lo = wide(a).v[0];
+    const lo = wide(a).v[0] & ~wide(a).x[0];
     if (signed and w <= 64) return @floatFromInt(@as(i64, @bitCast(sext(lo, w))));
     return @floatFromInt(lo);
 }

@@ -7,7 +7,6 @@
 //   v = 4'bz1z1: each z counts as 0 -> 0101 = 5.000000
 // and from a net, wire [3:0] n = {2'bz1, 2'b1x}: -> 0110 = 6.000000
 //! inherited IEEE 1364-2005 4.8.2
-//! xfail a variable or net with an x or z bit converts to 0.0, not to its value with those bits taken as zero
 module b_4_8_2_unknown_bits_to_real;
   real r;
   reg [3:0] v;

@@ -334,13 +334,14 @@ pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
     return out;
 }
 
-/// §4.8.2 integer-to-real: the value, read by its own signedness. An x or z
-/// bit makes it 0 (§4.8.2 gives unknown bits no real reading).
+/// §4.8.2 integer-to-real: the value, read by its own signedness, "Individual
+/// bits that are x or z in the net or the variable shall be treated as zero".
 /// ponytail: the low 64 bits of a wider operand.
 fn realOfInt(v: Int.Literal) f64 {
-    if (v.hasUnknown()) return 0;
-    if (v.signed and v.width <= 64) return @floatFromInt(v.asInt().?);
-    return @floatFromInt(v.values()[0]);
+    const lo = v.values()[0] & ~v.unknowns()[0];
+    if (!v.signed or v.width > 64) return @floatFromInt(lo);
+    const shift: u6 = @intCast(64 - v.width);
+    return @floatFromInt(@as(i64, @bitCast(lo << shift)) >> shift);
 }
 
 /// §4.8.2 real-to-integer: "rounded off to the nearest integer" (35.5 is 36,
