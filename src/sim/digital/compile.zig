@@ -992,6 +992,9 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             const name = self.file.str(s.name);
             if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
             if (std.mem.eql(u8, name, "$sdf_annotate")) return self.failWith(.E1102, tok, "", .{});
+            // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
+            // below either way.
+            if (std.mem.eql(u8, name, "$stop") and s.args.len > 1) return self.fail(tok, "$stop accepts zero or one argument", .{});
             const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
             switch (task) {
                 // All three format the same surface, so all three are
