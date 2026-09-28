@@ -189,7 +189,8 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     const at_fn = self.out.items.len;
     try self.w("fn {s}(comptime S: type, ", .{name});
     const at_x = self.out.items.len;
-    try self.w("x: {s}, ", .{xType(self)});
+    // A body's unknowns: a tuple, each unknown typed by the lanes it carries.
+    try self.w("x: anytype, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
@@ -288,7 +289,8 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     const at_fn = self.out.items.len;
     try self.w("fn {s}(comptime S: type, ", .{name});
     const at_x = self.out.items.len;
-    try self.w("x: {s}, ", .{xType(self)});
+    // A body's unknowns: a tuple, each unknown typed by the lanes it carries.
+    try self.w("x: anytype, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
@@ -355,11 +357,6 @@ fn isIdent(c: u8) bool {
 }
 
 // ---- body emission ------------------------------------------------------
-
-/// A body's unknowns: a tuple, each unknown typed by the lanes it carries.
-fn xType(_: *const Gen) []const u8 {
-    return "anytype";
-}
 
 /// Returns the Zig type a value of type `t` is emitted as.
 pub fn zigTy(t: VTy) []const u8 {
