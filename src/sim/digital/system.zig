@@ -228,7 +228,7 @@ const fk = @import("kernels").file_kernels;
 /// devices run, so both engines answer §17.2 one way (IEEE 1364-2005 §17.2.1's
 /// encodings: an mcd's bit 0 is standard output, an fd has bit 31 set and
 /// 0..2 are the standard streams).
-pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof };
+pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof, .err = fk.zFError };
 
 /// VAMS §9.5.1.2: one descriptor table per simulation, the host's
 /// (`Run.file_io`: a mixed simulation's device table), else this engine's
@@ -239,7 +239,7 @@ fn table(self: *Run) ?contract.FileIo {
 }
 
 /// The §17.2 functions an expression can call.
-pub const FileFn = enum { fopen, fgetc, ungetc, ftell, fseek, rewind, feof, sscanf };
+pub const FileFn = enum { fopen, fgetc, ungetc, fgets, fscanf, fread, ftell, fseek, rewind, feof, ferror, sscanf };
 
 /// The characters an operand holds (§17.1.1.7's reading: 8 bits each, leading
 /// NULs dropped), or null when any bit is x or z.
@@ -274,11 +274,26 @@ fn low32(d: ?i64) ?i64 {
 /// One §17.2 function call; every one of them returns an integer.
 pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, _: u32) Error!i64 {
     if (f == .sscanf) return scanCall(self, a, args);
-    const t = table(self) orelse return if (f == .fopen) 0 else -1;
-    if (f == .fopen) {
-        const name = try text(a, try exec.eval(self, a, args[0], 0));
-        const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
-        return fopen(t, a, self.file_name, name, mode, args.len == 1);
+    const t = table(self) orelse return switch (f) {
+        .fopen, .fgets, .fread, .ferror => 0,
+        else => -1, // else: EOF, the error answer of the rest
+    };
+    switch (f) {
+        .fopen => {
+            const name = try text(a, try exec.eval(self, a, args[0], 0));
+            const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
+            return fopen(t, a, self.file_name, name, mode, args.len == 1);
+        },
+        .fgets => return fgets(self, a, t, args),
+        .fscanf => return fscanf(self, a, t, args),
+        .fread => return fread(self, a, t, args),
+        // §17.2.7: the code, and its description in `str`, cleared when 0.
+        .ferror => {
+            const code = if (t.err) |err| err((try descriptor(self, a, args[0])) orelse 0) else 0;
+            try exec.assign(self, a, args[1], try stringValue(a, fk.zFErrorStr(code, 0)));
+            return code;
+        },
+        else => {}, // else: `fileOp`'s
     }
     var v: [3]?i64 = .{ null, null, null };
     for (args, 0..) |arg, i| v[i] = try int(self, a, arg);
@@ -293,10 +308,7 @@ pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.E
 pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, name: ?[]const u8, mode: ?[]const u8, mcd: bool) std.mem.Allocator.Error!i64 {
     const path = name orelse return 0;
     const ty = if (mcd) "w" else mode orelse return 0;
-    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
-    for (types) |allowed| {
-        if (std.mem.eql(u8, allowed, ty)) break;
-    } else return 0;
+    if (!fileType(ty)) return 0;
     // A file read is looked for beside the source first, as `$readmemh`
     // looks (`display.readSideFile`).
     if (ty[0] == 'r') if (std.fs.path.dirname(file_name)) |dir| {
@@ -304,6 +316,13 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
         if (d != 0) return d;
     };
     return t.open(path, ty, mcd);
+}
+
+/// Is `ty` one of §17.2.1 Table 17-7's file types?
+pub fn fileType(ty: []const u8) bool {
+    const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab", "r+", "r+b", "rb+", "w+", "w+b", "wb+", "a+", "a+b", "ab+" };
+    for (types) |allowed| if (std.mem.eql(u8, allowed, ty)) return true;
+    return false;
 }
 
 /// §17.2.4.1 / §17.2.4.2 / §17.2.5 / §17.2.8 on the table `t`, C's
@@ -325,8 +344,93 @@ pub fn fileOp(t: contract.FileIo, f: FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
             return t.seek(d, offset, whence);
         },
         .feof => return t.eof(low32(x) orelse return eof),
-        .fopen, .sscanf => unreachable, // `fopen` and `Scan`
+        .fopen, .sscanf, .fgets, .fscanf, .fread, .ferror => unreachable, // `fileCall`'s own
     }
+}
+
+/// §17.2.4.2 `$fgets(str, fd)`: characters into `str` "until str is filled,
+/// or a newline character is read and transferred to str, or an EOF
+/// condition is encountered"; a partial top byte of `str` holds none. The
+/// count, 0 when nothing was read (and `str` is left alone).
+fn fgets(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[1])) orelse return 0;
+    const room = (try exec.targetType(self, args[0])).width / 8;
+    var line: std.ArrayList(u8) = .empty;
+    while (line.items.len < room) {
+        const c = t.getc(d);
+        if (c < 0) break;
+        try line.append(a, @intCast(c));
+        if (c == '\n') break;
+    }
+    if (line.items.len != 0) try exec.assign(self, a, args[0], try stringValue(a, line.items));
+    return @intCast(line.items.len);
+}
+
+/// §17.2.4.3 `$fscanf(fd, format, args...)`: `$sscanf` over the file from its
+/// position, which then stands after the characters the scan used: "the
+/// offending input character is left unread in the input stream".
+fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[0])) orelse return -1;
+    const format = try text(a, try exec.eval(self, a, args[1], 0));
+    const start = t.tell(d);
+    if (start < 0) return -1;
+    // ponytail: reads the rest of the file per call; a streaming scan when a
+    // model reads large files this way.
+    var rest: std.ArrayList(u8) = .empty;
+    while (true) {
+        const c = t.getc(d);
+        if (c < 0) break;
+        try rest.append(a, @intCast(c));
+    }
+    const result = try scanInto(self, a, rest.items, format, args[2..]);
+    _ = t.seek(d, start + @as(i64, @intCast(result.used)), 0);
+    // A scan that ran to the end of the input met EOF (§17.2.8), which the
+    // repositioning cleared.
+    if (result.used == rest.items.len) _ = t.getc(d);
+    return result.code;
+}
+
+/// §17.2.4.4 `$fread(myreg, fd)` / `$fread(mem, fd, start, count)`: whole
+/// words of ceil(width/8) bytes each, the first byte the most significant;
+/// a memory from `start` (default its lowest address) for at most `count`
+/// words (default to its end). The count of characters read, 0 on none.
+fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
+    const d = (try descriptor(self, a, args[1])) orelse return 0;
+    const ex = &self.file.exprs;
+    const base = if (ex.tag(args[0]) == .ident) try self.slot(args[0]) else 0;
+    const arr = (if (ex.tag(args[0]) == .ident) self.arrays.get(base) else null) orelse {
+        const width = (try exec.targetType(self, args[0])).width;
+        const w = try readWord(a, t, d, width);
+        if (w.value) |v| try exec.assign(self, a, args[0], v);
+        return w.n;
+    };
+    var at = if (args.len > 2 and args[2] != .none) (try int(self, a, args[2])) orelse return 0 else arr.low;
+    var left = if (args.len > 3) (try int(self, a, args[3])) orelse return 0 else std.math.maxInt(i64);
+    var read: i64 = 0;
+    while (at >= arr.low and at <= arr.high and left > 0) : ({
+        at += 1;
+        left -= 1;
+    }) {
+        const w = try readWord(a, t, d, self.values[base].width);
+        read += w.n;
+        try exec.store(self, base + @as(u32, @intCast(at - arr.low)), (w.value orelse break).planes);
+    }
+    return read;
+}
+
+/// One `$fread` word: ceil(width/8) characters, big-endian, into `width`
+/// bits; the value is null when the file ends first. `n` is the characters
+/// read.
+fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Error!struct { value: ?Int.Literal, n: i64 } {
+    const bytes = (width + 7) / 8;
+    const v = try filled(a, width, false, .zero);
+    for (0..bytes) |k| {
+        const c = t.getc(d);
+        if (c < 0) return .{ .value = null, .n = @intCast(k) };
+        const lo: u32 = @intCast((bytes - 1 - k) * 8);
+        for (0..8) |b| if (lo + b < width and (c >> @intCast(b)) & 1 != 0) setBit(v, lo + @as(u32, @intCast(b)), .one);
+    }
+    return .{ .value = v, .n = bytes };
 }
 
 /// §17.2.7 `$fclose` of a file descriptor, or of every file a multichannel
@@ -347,33 +451,53 @@ pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show
     defer self.out = saved;
     try @import("display.zig").display(self, args[1..], a, show);
     self.out = saved;
-    try channels(table(self), self.io, self.out, d, buf.written());
+    if (try channels(table(self), self.io, self.out, d, buf.written())) {
+        const start = self.starts[@min(self.file.exprs.mainTok(args[0]), self.starts.len - 1)];
+        try self.bag.add(.lower, .W1154, .{ .start = start, .end = start }, unwritten, .{});
+    }
 }
+
+/// The W1154 text.
+pub const unwritten = "no file this descriptor names is open for writing: the output is not written";
 
 /// `bytes` to every channel descriptor `d` names: bit 0 of an mcd and fd 1
 /// (STDOUT) are the transcript `out`; fd 2 is STDERR; every other channel
-/// is the table's.
-pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, bytes: []const u8) std.Io.Writer.Error!void {
+/// is the table's. True when the table's channels took none of `bytes`:
+/// each is closed (§17.2.1: `$fclose` "does not allow any further output to
+/// the closed channels") or not open for writing.
+pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, bytes: []const u8) std.Io.Writer.Error!bool {
     const fd = d & (@as(i64, 1) << 31) != 0;
     const ch = d & 0x7fff_ffff;
     if ((fd and ch == 1) or (!fd and d & 1 != 0)) try out.writeAll(bytes);
     if (fd and ch == 2) if (io) |i| std.Io.File.stderr().writeStreamingAll(i, bytes) catch {};
     const files = if (fd) (if (ch > 2) d else 0) else d & ~@as(i64, 1);
-    if (files != 0) if (t) |tt| {
-        _ = tt.put(files, bytes);
-    };
+    if (files == 0 or bytes.len == 0) return false;
+    const tt = t orelse return false;
+    return tt.put(files, bytes) == 0;
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)` in the interpreter (`Scan`).
 fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
     const input = try text(a, try exec.eval(self, a, args[0], 0));
     const format = try text(a, try exec.eval(self, a, args[1], 0));
-    var sc: Scan = .init(input, format, args.len - 2);
+    return (try scanInto(self, a, input, format, args[2..])).code;
+}
+
+/// `Scan` of `input` by `format`, each value assigned to its output in
+/// `outs`: the call's code and the input characters the scan used.
+fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]const u8, outs: []const Ast.ExprId) Error!struct { code: i64, used: usize } {
+    var sc: Scan = .init(input, format, outs.len);
     while (sc.next()) |x| switch (x.value) {
-        .int => |v| try exec.assignInt(self, a, args[2 + x.arg], v),
-        .chars => |c| try exec.assign(self, a, args[2 + x.arg], try stringValue(a, c)),
+        .bits => |b| {
+            const v = try filled(a, 64, true, .zero);
+            v.values()[0] = b[0];
+            v.unknowns()[0] = b[1];
+            try exec.assign(self, a, outs[x.arg], v);
+        },
+        .chars => |c| try exec.assign(self, a, outs[x.arg], try stringValue(a, c)),
+        .real => |r| try exec.assignReal(self, a, outs[x.arg], r),
     };
-    return sc.result;
+    return .{ .code = sc.result, .used = sc.at };
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters
@@ -381,8 +505,10 @@ fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i6
 /// once it returns null, `result` is how many were assigned, or EOF (-1)
 /// when the input ends before the first conversion, and (the clause's own
 /// rule) when either `str` or `format` has an x or z bit (null here).
+/// A conversion is `%`, an optional `*` (match, do not assign or count), an
+/// optional maximum field width, and one of %b %o %d %h %x %c %s %f %e %g.
 pub const Scan = struct {
-    // ponytail: the integral conversions %d %h %x %o %b, %c and %s.
+    // ponytail: %t %v %m %u %z stop the scan; add them when a source reads them.
     input: []const u8,
     format: []const u8,
     /// Output arguments the call has.
@@ -392,9 +518,10 @@ pub const Scan = struct {
     result: i64 = 0,
     done: bool = false,
 
-    /// Output argument `arg` (0 = the first after the format) takes an
-    /// integer or, from `%s`, characters.
-    pub const Assign = struct { arg: usize, value: union(enum) { int: i64, chars: []const u8 } };
+    /// Output argument `arg` (0 = the first after the format) takes a 64-bit
+    /// 4-state value (`bits`: value and unknown planes, signed), characters
+    /// (`%s`, `%c`) or a real (`%f %e %g`).
+    pub const Assign = struct { arg: usize, value: union(enum) { bits: [2]u64, chars: []const u8, real: f64 } };
 
     /// The scan of `input` by `format`; a null one ends it at once with EOF.
     pub fn init(input: ?[]const u8, format: ?[]const u8, outs: usize) Scan {
@@ -425,45 +552,121 @@ pub const Scan = struct {
                 continue;
             }
             self.i += 1;
-            const conv = std.ascii.toLower(format[self.i]);
-            if (conv == '%') {
+            if (format[self.i] == '%') {
                 if (self.at >= input.len or input[self.at] != '%') return self.stop(false);
                 self.at += 1;
                 continue;
             }
+            const suppress = format[self.i] == '*';
+            if (suppress) self.i += 1;
+            var width: usize = 0;
+            while (self.i < format.len and std.ascii.isDigit(format[self.i])) : (self.i += 1) width = width *| 10 +| (format[self.i] - '0');
+            if (self.i == format.len) return self.stop(false);
+            const conv = std.ascii.toLower(format[self.i]);
             if (conv != 'c') while (self.at < input.len and std.ascii.isWhitespace(input[self.at])) : (self.at += 1) {};
             if (self.at >= input.len) return self.stop(true);
-            const arg: usize = @intCast(self.result);
-            if (arg >= self.outs) return self.stop(false);
-            const value: @FieldType(Assign, "value") = switch (conv) {
-                'c' => blk: {
-                    self.at += 1;
-                    break :blk .{ .int = input[self.at - 1] };
-                },
+            // "it extends to the next inappropriate character or until the
+            // maximum field width, if one is specified, is exhausted".
+            const field = input[self.at..if (width == 0) input.len else @min(input.len, self.at + width)];
+            const n, const value: @FieldType(Assign, "value") = switch (conv) {
+                'c' => .{ 1, .{ .bits = .{ field[0], 0 } } },
                 's' => blk: {
-                    const start = self.at;
-                    while (self.at < input.len and !std.ascii.isWhitespace(input[self.at])) self.at += 1;
-                    break :blk .{ .chars = input[start..self.at] };
+                    const len = std.mem.indexOfAny(u8, field, &std.ascii.whitespace) orelse field.len;
+                    break :blk .{ len, .{ .chars = field[0..len] } };
                 },
-                'd', 'h', 'x', 'o', 'b' => blk: {
-                    const radix: u8 = switch (conv) {
-                        'd' => 10,
-                        'o' => 8,
-                        'b' => 2,
-                        else => 16,
-                    };
-                    const start = self.at;
-                    if (conv == 'd' and (input[self.at] == '-' or input[self.at] == '+')) self.at += 1;
-                    while (self.at < input.len and (std.fmt.charToDigit(input[self.at], radix) catch null) != null) self.at += 1;
-                    break :blk .{ .int = std.fmt.parseInt(i64, input[start..self.at], radix) catch return self.stop(false) };
-                },
+                'd', 'h', 'x', 'o', 'b' => number(field, conv) orelse return self.stop(false),
+                'f', 'e', 'g' => float(field) orelse return self.stop(false),
                 else => return self.stop(false),
             };
+            self.at += n;
+            if (suppress) continue;
+            const arg: usize = @intCast(self.result);
+            if (arg >= self.outs) return self.stop(false);
             self.i += 1;
             self.result += 1;
             return .{ .arg = arg, .value = value };
         }
         return self.stop(false);
+    }
+
+    /// The characters of `field` one integral conversion matches, and their
+    /// value, or null on a matching failure. `%d` is an optional sign and
+    /// decimal digits, or a single x, z or ?; the others take their radix's
+    /// digits and x, z, ?, which give §3.5.1's bits (an x or z leftmost pads
+    /// the value with itself). `_` separates digits in every radix.
+    fn number(field: []const u8, conv: u8) ?struct { usize, @FieldType(Assign, "value") } {
+        if (conv == 'd') {
+            const neg = field[0] == '-';
+            const sign: usize = @intFromBool(neg or field[0] == '+');
+            if (sign == 0) switch (std.ascii.toLower(field[0])) {
+                'x' => return .{ 1, .{ .bits = .{ ~@as(u64, 0), ~@as(u64, 0) } } },
+                'z', '?' => return .{ 1, .{ .bits = .{ 0, ~@as(u64, 0) } } },
+                else => {},
+            };
+            var n = sign;
+            var acc: u64 = 0;
+            while (n < field.len and (std.ascii.isDigit(field[n]) or field[n] == '_')) : (n += 1) {
+                if (field[n] != '_') acc = acc *% 10 +% (field[n] - '0');
+            }
+            if (std.mem.indexOfNone(u8, field[sign..n], "_") == null) return null;
+            return .{ n, .{ .bits = .{ if (neg) 0 -% acc else acc, 0 } } };
+        }
+        const per: u6 = switch (conv) {
+            'b' => 1,
+            'o' => 3,
+            else => 4, // else: 'h' and 'x'
+        };
+        var n: usize = 0;
+        var v: u64 = 0;
+        var u: u64 = 0;
+        var top: ?[2]u64 = null;
+        const ones = (@as(u64, 1) << per) - 1;
+        while (n < field.len) : (n += 1) {
+            const ch = std.ascii.toLower(field[n]);
+            if (ch == '_') continue;
+            const digit: [2]u64 = switch (ch) {
+                'x' => .{ ones, ones },
+                'z', '?' => .{ 0, ones },
+                else => .{ (std.fmt.charToDigit(ch, @as(u8, 1) << @intCast(per)) catch break), 0 },
+            };
+            top = top orelse digit;
+            v = v << per | digit[0];
+            u = u << per | digit[1];
+        }
+        const first = top orelse return null;
+        // §3.5.1: an unknown leftmost digit pads to the left with itself.
+        if (first[1] != 0) {
+            var bits: u32 = 0;
+            for (field[0..n]) |ch| bits += if (ch == '_') 0 else per;
+            if (bits < 64) {
+                const pad = ~@as(u64, 0) << @intCast(bits);
+                u |= pad;
+                if (first[0] != 0) v |= pad;
+            }
+        }
+        return .{ n, .{ .bits = .{ v, u } } };
+    }
+
+    /// "Matches a floating point number": C's sign, digits, fraction and
+    /// exponent.
+    fn float(field: []const u8) ?struct { usize, @FieldType(Assign, "value") } {
+        var n: usize = @intFromBool(field[0] == '+' or field[0] == '-');
+        var digits: usize = 0;
+        while (n < field.len and std.ascii.isDigit(field[n])) : (n += 1) digits += 1;
+        if (n < field.len and field[n] == '.') {
+            n += 1;
+            while (n < field.len and std.ascii.isDigit(field[n])) : (n += 1) digits += 1;
+        }
+        if (digits == 0) return null;
+        if (n < field.len and (field[n] == 'e' or field[n] == 'E')) {
+            var k = n + 1;
+            if (k < field.len and (field[k] == '+' or field[k] == '-')) k += 1;
+            if (k < field.len and std.ascii.isDigit(field[k])) {
+                while (k < field.len and std.ascii.isDigit(field[k])) k += 1;
+                n = k;
+            }
+        }
+        return .{ n, .{ .real = std.fmt.parseFloat(f64, field[0..n]) catch return null } };
     }
 };
 
@@ -475,19 +678,15 @@ fn stringValue(a: std.mem.Allocator, s: []const u8) Error!Int.Literal {
     return v;
 }
 
-/// §17.2.3 `$swrite`/`$sformat`: `$fwrite`'s text of the arguments after the
-/// first, assigned to the first "using the string assignment to variable
-/// rules". `compile` has already required `$sformat`'s format to be a literal,
-/// which is the one argument `display` reads as a format there.
-pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
-    // ponytail: a string literal after `$sformat`'s format is read as a further
-    // format, where §17.2.3 says "No other arguments are interpreted as format
-    // strings"; split the walk when a source needs that.
+/// §17.2.3 `$swrite` (`show` set: `$fwrite`'s text) / `$sformat` (null:
+/// `display.sformat`'s) of the arguments after the first, assigned to the
+/// first "using the string assignment to variable rules".
+pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: ?@import("display.zig").Show) Error!void {
     var buf: std.Io.Writer.Allocating = .init(a);
     const saved = self.out;
     self.out = &buf.writer;
     defer self.out = saved;
-    try @import("display.zig").display(self, args[1..], a, show);
+    if (show) |sh| try @import("display.zig").display(self, args[1..], a, sh) else try @import("display.zig").sformat(self, args[1..], a);
     self.out = saved;
     try exec.assign(self, a, args[0], try stringValue(a, buf.written()));
 }
