@@ -1,0 +1,14 @@
+// AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. §3.6.3 declares a vector
+// net by its range and bounds nothing about the element count. VerA numbers
+// nets, ports, branch flows and operator states in one table with 16-bit rows
+// (docs/IMPLEMENTATION.md), so a range past 65535 elements is refused with
+// E1015 at the declaration. It used to abort the compiler on the 65536th row.
+//
+// Legal neighbour: 32_vector_nets.va.
+//
+//! reject E1015
+module vector_net_over_65535_elements_rejected(a);
+  inout a; electrical a;
+  electrical [0:70000] b;
+  analog V(b[0]) <+ V(a);
+endmodule

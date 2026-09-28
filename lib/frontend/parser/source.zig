@@ -408,6 +408,8 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
+    if (ports.items.len - 1 > max_udp_inputs)
+        return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), ports.items.len - 1 });
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
     while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
@@ -487,15 +489,20 @@ pub fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool
     return sequential orelse false;
 }
 
+/// E1017's bound: IEEE 1364-2005 §8.1.2 requires at least 9 sequential and
+/// 10 combinational inputs and lets a tool cap the count.
+pub const max_udp_inputs = 64;
+
 /// Parses one `combinational_entry` or `sequential_entry`, checks it column
 /// by column (E0233 bad symbol, E0234 wrong shape) and appends it to `rows`.
 /// `sequential` is null before the table's first entry, which sets it; each
-/// later entry must agree. A column holds at most 64 symbols.
+/// later entry must agree. A column holds `max_udp_inputs` symbols, one of
+/// them at most an edge `(vw)` of four characters.
 pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.UdpRow)) Error!void {
     const tok = self.pos;
     // Column 0 is the input list; a colon opens each of the 1 or 2 that
     // follow, so the colon count is the entry's `udp_body` alternative.
-    var cols: [3]struct { text: [64]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
+    var cols: [3]struct { text: [max_udp_inputs + 3]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
     var n: usize = 0;
     cols[0].tok = tok;
     while (!self.eat(.semicolon)) {
@@ -509,7 +516,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
         }
         const t = self.tokenText(self.pos);
         if (cols[n].len + t.len > cols[n].text.len)
-            return self.failAt(self.pos, .E0233, "a UDP table column of more than {d} symbols", .{cols[n].text.len});
+            return self.failAt(self.pos, .E0234, "a UDP table entry of more than {d} input symbols", .{max_udp_inputs});
         @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
         cols[n].len += t.len;
         self.pos += 1;

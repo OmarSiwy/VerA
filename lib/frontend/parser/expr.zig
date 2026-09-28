@@ -28,11 +28,16 @@ pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
 /// Precedence climbing over LRM Table 4-3 (§4.2.2).
 fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
     var lhs = try parseUnary(self);
+    // Each operator folded into `lhs` makes its tree one level deeper, and
+    // every later walk recurses down that spine: it counts against E0241.
+    const base = self.depth;
+    defer self.depth = base;
     while (true) {
         const t = self.peek();
         // §4.2.12 conditional: lowest precedence, right associative.
         if (t == .question and min_prec <= prec_ternary) {
             const tok = self.pos;
+            try self.enter();
             self.pos += 1;
             try self.skipAttributes();
             const then_e = try parseExpr(self);
@@ -53,6 +58,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         const prec = binopPrec(op);
         if (prec < min_prec) return lhs;
         const tok = self.pos;
+        try self.enter();
         self.pos += 1;
         try self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
         // §4.2.2: "All operators associate left to right with the exception
