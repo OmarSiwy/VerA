@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 10.4.5
 //! reject E1100
 //! reject hierarchical
-//! xfail refused, but as "undeclared function": no constant function call is accepted, so the refusal does not name the hierarchical reference
 module b_10_4_5_constant_function_hierarchical_rejected;
   reg [7:0] q;
   function integer g;

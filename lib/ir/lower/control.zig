@@ -118,7 +118,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
         },
         // Operators, A.8.4 `constant_analog_built_in_function_call` and
         // `constant_concatenation`: constant when every operand is.
-        .unary, .binary, .range, .multi_concat, .ternary, .builtin_call, .concat => blk: {
+        .unary, .binary, .range, .indexed_range, .multi_concat, .ternary, .builtin_call, .concat => blk: {
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| if (!isAnalysisOrConst(self, c)) break :blk false;
             break :blk true;

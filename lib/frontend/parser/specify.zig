@@ -388,6 +388,7 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
             .ty = .unspecified, // §3.4.1: derived from the default, as for `parameter`
             .default = default,
             .is_local = true,
+            .is_spec = true,
             .packed_range = packed_range,
             .main_tok = tok,
         });

@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 5.2.1
 //! reject E1100
 //! reject a scalar has no bits to select
-//! xfail VerA accepts a bit-select of a scalar reg and prints its value
 module b_5_2_1_scalar_bit_select_rejected;
   reg s;
   initial begin

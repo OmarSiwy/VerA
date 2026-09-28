@@ -14,7 +14,6 @@
 // One dimension, reg [7:0] mema[0:3], mema[2] = 8'h3C = 0011_1100:
 //   mema[2][5:2] -> 1111, mema[2][0] -> 0
 //! inherited IEEE 1364-2005 5.2.2 5.2
-//! xfail a bit-select or part-select of an array element is refused ("a select is of a whole vector or an unpacked array element")
 module b_5_2_2_element_selects;
   reg [7:0] twod_array[0:255][0:255];
   reg [7:0] mema[0:3];

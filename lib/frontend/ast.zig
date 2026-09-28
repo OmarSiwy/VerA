@@ -178,6 +178,10 @@ pub const ExprTag = enum(u8) {
     /// `msb:lsb` part select and `analog_range_expression` (A.8.3):
     /// `lhs` = msb, `rhs` = lsb.
     range,
+    /// IEEE 1364-2005 §5.2.1 indexed part-select, A.8.3 `base +: width` or
+    /// `base -: width`: `lhs` = base, `rhs` = width, `extra` = 0 for `+:` and
+    /// 1 for `-:`.
+    indexed_range,
 
     // ---- event expressions: §5.10, A.6.5 ----
     /// `e1 or e2` / `e1, e2`: `lhs`, `rhs`.
@@ -391,7 +395,7 @@ pub const ExprStore = struct {
                 buf[0] = self.lhs(id);
                 return buf[0..1];
             },
-            .binary, .index, .range, .multi_concat, .pattern_repl, .event_or, .branch_access => {
+            .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl, .event_or, .branch_access => {
                 buf[0..2].* = .{ self.lhs(id), self.rhs(id) };
                 return buf[0..2];
             },
@@ -500,6 +504,9 @@ pub const ParamDecl = struct {
     ty: Type, // §3.4.1 (`.unspecified` ⇒ infer from `default`)
     default: ExprId, // §3.4 default expression (constant_mintypmax_expression)
     is_local: bool = false, // §3.4.5 localparam
+    /// IEEE 1364-2005 §4.10.3 a module-body `specparam`, kept as a
+    /// `localparam` (`is_local`) that no module parameter may read.
+    is_spec: bool = false,
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
     /// A.2.1.1's `[ range ]`, the first arm's width bracket (`parameter [3:0]
@@ -593,6 +600,9 @@ pub const NetStrength = struct {
     charge: Strength = .medium,
     strength0: Strength = .strong,
     strength1: Strength = .strong,
+    /// A `drive_strength` was written, which A.2.1.3 allows only before a
+    /// `list_of_net_decl_assignments` (IEEE 1364-2005 §4.4).
+    drive: bool = false,
 };
 
 /// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value [ , delay_value ] ] )`.
@@ -1781,8 +1791,6 @@ pub const SourceFile = struct {
 };
 
 // ponytail: not modelled, because nothing would produce or consume the tag:
-//   · `+:` / `-:` indexed part-selects (A.8.3 range_expression); `.range`
-//     covers `msb:lsb`, which is all the analog subset uses.
 //   · `min:typ:max` (A.8.3 mintypmax_expression); the parser keeps the typ
 //     value. Add a `.mintypmax` tag if a fixture needs the triple.
 

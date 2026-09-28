@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 5.2.1
 //! reject E1100
 //! reject part-select
-//! xfail VerA accepts v[0:3] on a reg [7:0] and prints v[3:0] in reverse bit order
 module b_5_2_1_reversed_part_select_rejected;
   reg [7:0] v;
   initial begin
