@@ -13,11 +13,11 @@
 //
 // top.bot is bound to config bot, so top.bot.a1 is inside the hierarchy bot
 // specifies, and cfg's instance clause for it is the error. Legal neighbour:
-// b_13_3_2_hierarchical_config.v (xfail), the binding without the rule.
+// b_13_3_2_hierarchical_config.v, the binding without the rule.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 13.3.2
 //! reject another config
-//! xfail every config's design cells become tops, so VerA refuses the file only as "digital execution requires exactly one top-level module"
+//! reject E0243
 config bot;
   design work.bot;
   default liblist work;
