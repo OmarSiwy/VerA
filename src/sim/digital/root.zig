@@ -1435,9 +1435,32 @@ pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
 fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
-        const target = try netSlot(r, a.target, a.main_tok);
-        const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        // §6.1.1 a net, a net array element, a constant select of a vector
+        // net, or a concatenation of them. Anything short of one whole net
+        // is driven through a hidden net as wide as the target, bridged into
+        // each operand's bits as a §12.3.9.2 output port's value is.
+        var leaves: std.ArrayList(Ast.ExprId) = .empty;
+        try concatLeaves(r, a.target, &leaves);
+        const args = leaves.items;
+        const operands = try r.arena.alloc(Sink, args.len);
+        var width: u32 = 0;
+        for (args, operands) |arg, *out| {
+            out.* = try sink(r, e, arg, a.main_tok, .assign);
+            width += out.width;
+        }
+        r.scope = scope;
+        const whole = operands.len == 1 and operands[0].lo == 0 and operands[0].width == e.nets.items[operands[0].net].resolved.width;
+        const net = if (whole) operands[0].net else try mintNet(r, e, .wire, width, false, .none, a.main_tok);
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+        if (whole) continue;
+        var lo: u32 = 0;
+        var k = operands.len;
+        while (k != 0) {
+            k -= 1;
+            const op = operands[k];
+            try e.wires.append(r.arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[net].slot, .src_lo = lo, .dst_lo = op.lo, .width = op.width } }, .tok = a.main_tok });
+            lo += op.width;
+        }
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
@@ -2251,7 +2274,7 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
         for (inst.params) |o| if (o.name != .none) return r.fail(o.main_tok, "§8.6: a UDP instance's `#( )` is a delay, not a parameter value assignment", .{});
         delay = .{ .rise = inst.params[0].value, .fall = inst.params[inst.params.len - 1].value, .off = if (inst.params.len == 1) inst.params[0].value else .none };
     }
-    const out = try sink(r, e, inst.ports[0].expr, tok);
+    const out = try sink(r, e, inst.ports[0].expr, tok, .port);
     const lanes: u32 = if (inst.range) |rg| try r.declaredWidth(rg, tok) else 1;
     if (out.width != 1 and out.width != lanes) return r.fail(tok, "§8.6: a UDP's output terminal is one bit, or one per instance of an array", .{});
     const wide = e.nets.items[out.net].resolved.width != 1;
@@ -2345,7 +2368,7 @@ fn bindPort(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn, scope: u32) E
         .output => blk: {
             const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
             const operands = try r.arena.alloc(Sink, args.len);
-            for (args, operands) |arg, *out| out.* = try sink(r, e, arg, conn.main_tok);
+            for (args, operands) |arg, *out| out.* = try sink(r, e, arg, conn.main_tok, .port);
             break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
         },
         // A collapse already covers the useful `inout`; anything else would
@@ -2355,17 +2378,30 @@ fn bindPort(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn, scope: u32) E
     };
 }
 
+/// The operands of `e`, a nested concatenation flattened in order, or `e`
+/// itself.
+fn concatLeaves(r: *Run, e: Ast.ExprId, out: *std.ArrayList(Ast.ExprId)) Error!void {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) != .concat) return out.append(r.arena, e);
+    for (ex.args(e)) |x| try concatLeaves(r, x, out);
+}
+
 /// IEEE 1364-2005 §12.3.9.2 one operand of a structural net expression: a
 /// net, a net array element, or a constant bit-select or part-select of a
-/// vector net.
-fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32) Error!Sink {
+/// vector net. `who` is what drives it: an output port, or a continuous
+/// assignment (§6.1.1 admits the same left-hand sides).
+fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: enum { port, assign }) Error!Sink {
     const ex = &r.file.exprs;
     r.values = e.values.items;
+    const name = switch (who) {
+        .port => "an output port",
+        .assign => "a continuous assignment",
+    };
     if (ex.tag(arg) == .ident or try r.indexedArray(arg) != null) {
-        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
+        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, name ++ " can only drive a net");
         return .{ .net = net, .lo = 0, .width = e.nets.items[net].resolved.width };
     }
-    const refused = "§12.3.9.2: an output port connects to a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
+    const refused = (if (who == .port) "§12.3.9.2: " else "§6.1.1: ") ++ name ++ " connects to a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
     if (ex.tag(arg) != .index or ex.tag(ex.lhs(arg)) != .ident) return r.exprFail(arg, refused);
     const rg = ex.rhs(arg);
     const index = switch (ex.tag(rg)) {
@@ -3221,7 +3257,7 @@ test "the net and array declaration boundaries are explicit" {
     // §6.1/§6.2.2: neither form of assignment accepts the other's target.
     try expectRejected("module m; wire w; initial w = 1; endmodule", "no procedural assignment to a net");
     try expectRejected("module m; reg r; initial $display(\"before\"); assign r = 1; endmodule", "can only drive a net");
-    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
+    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "a scalar has no bits to select");
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
     // §6.5.3 a wreal has at most one driver, and §3.7 closes the list of net
