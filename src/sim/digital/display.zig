@@ -599,39 +599,35 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
 /// the instance path from the root, then every §5.3.2 named block around the
 /// running instruction, outermost first.
 pub fn emitScope(self: *Run) Error!void {
-    var chain: [64]u32 = undefined;
-    var depth: usize = 0;
-    var s = self.scope;
+    try emitPath(self, self.scope);
+    // The named blocks enclosing `pc` in this scope nest, so each is one
+    // statement level deeper than the last: printed shallowest first, with no
+    // bound on how many.
+    var last: i32 = -1;
     while (true) {
-        chain[depth] = s;
-        depth += 1;
-        if (self.scope_info.items[s].parent == s or s == 0 or depth == chain.len) break;
-        s = self.scope_info.items[s].parent;
-    }
-    while (depth != 0) {
-        depth -= 1;
-        const info = self.scope_info.items[chain[depth]];
-        try self.out.writeAll(self.file.str(info.name));
-        // §12.4.1 one iteration of a loop generate is `name[value]`.
-        if (info.index) |i| try self.out.print("[{d}]", .{i});
-        if (depth != 0) try self.out.writeByte('.');
-    }
-    // The named blocks enclosing `pc` in this scope nest, so sorting them by
-    // statement depth is the outermost-first order.
-    var found: [64]struct { depth: u16, name: Ast.StrId } = undefined;
-    var count: usize = 0;
-    var it = self.blocks.iterator();
-    while (it.next()) |b| {
-        if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end or count == found.len) continue;
-        found[count] = .{ .depth = b.value_ptr.depth, .name = b.key_ptr.str };
-        count += 1;
-    }
-    std.mem.sort(@TypeOf(found[0]), found[0..count], {}, struct {
-        fn lt(_: void, a: @TypeOf(found[0]), b: @TypeOf(found[0])) bool {
-            return a.depth < b.depth;
+        var next: ?struct { depth: u16, name: Ast.StrId } = null;
+        var it = self.blocks.iterator();
+        while (it.next()) |b| {
+            if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end) continue;
+            const d = b.value_ptr.depth;
+            if (d > last and (next == null or d < next.?.depth)) next = .{ .depth = d, .name = b.key_ptr.str };
         }
-    }.lt);
-    for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
+        const b = next orelse break;
+        try self.out.print(".{s}", .{self.file.str(b.name)});
+        last = b.depth;
+    }
+}
+
+/// Scope `s`'s hierarchical name, root first.
+fn emitPath(self: *Run, s: u32) Error!void {
+    const info = self.scope_info.items[s];
+    if (info.parent != s and s != 0) {
+        try emitPath(self, info.parent);
+        try self.out.writeByte('.');
+    }
+    try self.out.writeAll(self.file.str(info.name));
+    // §12.4.1 one iteration of a loop generate is `name[value]`.
+    if (info.index) |i| try self.out.print("[{d}]", .{i});
 }
 
 /// §17.1.1.5 `%v` of the §7.10 signal `s`: a Table 17-5 mnemonic and the
