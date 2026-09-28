@@ -210,6 +210,9 @@ pub const Run = struct {
     /// progress: every activation returns at once until the outermost one.
     unwind: ?u32 = null,
     sync_depth: u16 = 0,
+    /// The frame address of the outermost synchronous activation, which
+    /// `callSync` measures the stack from.
+    sync_stack: usize = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
     /// The saved storage of the automatic activations in progress.
