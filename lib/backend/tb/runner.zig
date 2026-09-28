@@ -25,7 +25,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     var out: std.ArrayList(u8) = .empty;
 
     try out.appendSlice(arena, tb_runner_text.runner_head);
-    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
 
     // --- main -------------------------------------------------------------
@@ -37,12 +37,11 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     for (d.params) |p| {
         // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
         // integer parameter rounds, away from zero on a tie.
-        try print(&out, arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
+        try out.print(arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
             std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
         });
         // §9.19 `$param_given` reads the companion field when codegen emitted one.
-        try print(
-            &out,
+        try out.print(
             arena,
             "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n",
             .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
@@ -57,8 +56,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    var inst: D.Instance = .{};
         \\
     );
-    try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
-    try print(&out, arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
+    try out.print(arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     // §2.8.3/§12.32: this testbench is a host, so it binds `no_vpi_app` for
     // the device's unresolved `$name`s and passes `validateHost` like any other.
     try out.appendSlice(arena,
@@ -91,7 +90,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\        const want = [_][]const u8{
             \\
         );
-        for (d.noise) |e| try print(&out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
+        for (d.noise) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
         try out.appendSlice(arena,
             \\        };
             \\        if (comptime @hasDecl(D, "noise_gens")) {
@@ -141,7 +140,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     if (d.asserts_seed) try emitSeedCheck(arena, &out, d);
 
     // --- §3.6.1.2 the published tolerances ----------------------------------
-    for (d.abstols) |b| try print(&out, arena,
+    for (d.abstols) |b| try out.print(arena,
         \\    if (comptime std.meta.stringToEnum(D.U, "{0f}")) |u| {{
         \\        const g = u_abstol[@intFromEnum(u)];
         \\        std.debug.print("abstol[{0f}] got={{e}} want={{e}} ok={{d}}\n", .{{ g, @as(f64, {1f}), @intFromBool(near(g, {1f})) }});
@@ -171,11 +170,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try print(&out, arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{
+                try out.print(arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{
                     std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v),
                 });
-                try print(
-                    &out,
+                try out.print(
                     arena,
                     "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n",
                     .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
@@ -189,8 +187,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         // `forced` marks the unknowns the host drives rather than Newton. By
         // default every unknown is tied to the reference; `//! solve` unties
         // the ones no line names.
-        try print(
-            &out,
+        try out.print(
             arena,
             "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n" ++
                 // §3.6.3.2 a nodeset is an initial guess: it seeds `x` and does
@@ -202,32 +199,32 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 "        var state = newState(&{s}, &inst);\n",
             .{ if (d.solve_free) "null" else "0.0", mdl },
         );
-        for (d.op_states) |u| try print(&out, arena, "        forced[{d}] = null;\n", .{u});
+        for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
         for (d.bias) |b|
-            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
                 // A short `wave` holds its last value.
                 const v = wv.values[@min(k, wv.values.len - 1)];
-                try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
+                try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
             }
             // The first time is the DC point, dt = 0, which operator kernels
             // answer with their DC form (§4.5.4 initial condition, §4.5.11 DC gain).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
-            try print(&out, arena, "        sim_state.t = {f};\n        sim_state.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
+            try out.print(arena, "        sim_state.t = {f};\n        sim_state.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
             // Written at every point: a stale `true` would fire an event twice.
-            try print(&out, arena, "        sim_state.initial_step = {};\n        sim_state.final_step = {};\n", .{
+            try out.print(arena, "        sim_state.initial_step = {};\n        sim_state.final_step = {};\n", .{
                 k == 0 and (per_block or n == 0),
                 k + 1 == d.times.len and (per_block or n + 1 == points.len),
             });
             // §5.2.1 `analog initial` re-runs per sub-task: the first time of
             // every block, unlike `initial_step` (visible under `//! psweep`).
-            try print(&out, arena, "        sim_state.analog_initial = {};\n", .{k == 0});
+            try out.print(arena, "        sim_state.analog_initial = {};\n", .{k == 0});
             // §5.6 the model prints at a solution: solve first, then `point`.
-            try print(&out, arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
-            try print(&out, arena, "        point({d}, &x, &{s}, &inst);\n", .{ n, mdl });
+            try out.print(arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
+            try out.print(arena, "        point({d}, &x, &{s}, &inst);\n", .{ n, mdl });
             // §4.6.4.1/.2 the PSD depends on bias; fixtures state it at the
             // first point, the one every fixture has.
             if (n == 0) try emitNoisePsd(arena, &out, d, mdl);
@@ -240,7 +237,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             if (n == 0) try emitLimitCheck(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping: only `updateState` writes the
             // history `eval` reads.
-            try print(&out, arena, "        stepPost(&{s}, &inst, &x, &state, solved{d});\n", .{ mdl, n });
+            try out.print(arena, "        stepPost(&{s}, &inst, &x, &state, solved{d});\n", .{ mdl, n });
             n += 1;
         }
         try out.appendSlice(arena, "    }\n");
@@ -314,7 +311,7 @@ fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!vo
         \\        const want = [_][]const u8{
         \\
     );
-    for (d.qsites) |e| try print(out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+    for (d.qsites) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
     try out.appendSlice(arena,
         \\        };
         \\        const nq = if (comptime @hasDecl(D, "q")) contract.nQ(D) else 0;
@@ -351,7 +348,7 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
         \\        var want: [n_u]?f64 = @splat(null);
         \\
     );
-    for (d.seeds) |b| try print(out, arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+    for (d.seeds) |b| try out.print(arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
     try out.appendSlice(arena,
         \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
         \\        for (got, want, 0..) |g, w, i| {
@@ -372,8 +369,8 @@ fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error
 fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     for (d.limits, 0..) |c, k| {
         try out.appendSlice(arena, "        {\n            var old = x;\n            _ = &old;\n");
-        for (c.old) |b| try print(out, arena, "            old[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-        try print(out, arena,
+        for (c.old) |b| try out.print(arena, "            old[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+        try out.print(arena,
             \\            if (comptime !@hasDecl(D, "limit")) {{
             \\                std.debug.print("limit[{d}] got=none want=limit ok=0\n", .{{}});
             \\            }} else {{
@@ -382,9 +379,9 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
         , .{ k, mdl });
         for (c.want) |b| {
             if (std.mem.eql(u8, b.name, "converged")) {
-                try print(out, arena, "                std.debug.print(\"limit[{d}].converged got={{d}} want={d} ok={{d}}\\n\", .{{ @intFromBool(r.converged), @intFromBool(r.converged == {}) }});\n", .{ k, @intFromBool(b.value != 0), b.value != 0 });
+                try out.print(arena, "                std.debug.print(\"limit[{d}].converged got={{d}} want={d} ok={{d}}\\n\", .{{ @intFromBool(r.converged), @intFromBool(r.converged == {}) }});\n", .{ k, @intFromBool(b.value != 0), b.value != 0 });
             } else {
-                try print(out, arena, "                std.debug.print(\"limit[{d}].{f} got={{d}} want={{d}} ok={{d}}\\n\", .{{ r.x[ix(\"{f}\")], @as(f64, {f}), @intFromBool(near(r.x[ix(\"{f}\")], {f})) }});\n", .{
+                try out.print(arena, "                std.debug.print(\"limit[{d}].{f} got={{d}} want={{d}} ok={{d}}\\n\", .{{ r.x[ix(\"{f}\")], @as(f64, {f}), @intFromBool(near(r.x[ix(\"{f}\")], {f})) }});\n", .{
                     k, std.zig.fmtString(b.name), std.zig.fmtString(b.name), fmtF64(b.value), std.zig.fmtString(b.name), fmtF64(b.value),
                 });
             }
@@ -403,24 +400,24 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
-    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
     if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0 or d.acdyn.len != 0)
         try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
 
-    try print(&out, arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
-    try print(&out, arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
-    try print(&out, arena, "const mixed_timescale: ?Timescale = {s};\n", .{if (mx.unit) |u|
+    try out.print(arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
+    try out.print(arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
+    try out.print(arena, "const mixed_timescale: ?Timescale = {s};\n", .{if (mx.unit) |u|
         try std.fmt.allocPrint(arena, ".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
     else
         "null"});
     try out.appendSlice(arena, "const times = [_]f64{");
-    for (d.times, 0..) |t, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
     try out.appendSlice(arena, " };\n");
     for (d.waves, 0..) |wv, k| {
-        try print(&out, arena, "const wave_{d} = [_]f64{{", .{k});
-        for (wv.values, 0..) |v, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
         try out.appendSlice(arena, " };\n");
     }
 
@@ -480,7 +477,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
     );
     for (d.waves, 0..) |wv, k|
-        try print(&out, arena, "        set(a.x, a.forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
+        try out.print(arena, "        set(a.x, a.forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
         \\        sim_state.t = t;
         \\        sim_state.dt = dt;
@@ -533,20 +530,20 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     var buf: [256]u8 = undefined;
     try out.appendSlice(arena, "const input_ports = [_]Port{");
     for (mx.inputs) |name| {
-        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
         for (mx.xz) |x| if (std.mem.eql(u8, x, name)) {
             const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__xz", .{name})) catch return error.OutOfMemory;
-            try print(&out, arena, ", .xz = \"{s}\"", .{field});
+            try out.print(arena, ", .xz = \"{s}\"", .{field});
         };
         try out.appendSlice(arena, " },");
     }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
         const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__1b", .{name})) catch return error.OutOfMemory;
-        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
     }
     try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
-    for (mx.events) |ev| try print(&out, arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, naming.sanitize(&buf, ev.param) catch return error.OutOfMemory });
+    for (mx.events) |ev| try out.print(arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, naming.sanitize(&buf, ev.param) catch return error.OutOfMemory });
     try out.appendSlice(arena, " };\n");
     // VAMS §7.8.4 the inserted connect modules, which the source the digital
     // half re-elaborates does not hold (`sim.digital.Insert`).
@@ -554,7 +551,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     for (mx.inserts) |row| {
         try out.appendSlice(arena, " .{");
         inline for (@typeInfo(@TypeOf(row)).@"struct".fields) |f|
-            try print(&out, arena, " .{s} = \"{f}\",", .{ f.name, std.zig.fmtString(@field(row, f.name)) });
+            try out.print(arena, " .{s} = \"{f}\",", .{ f.name, std.zig.fmtString(@field(row, f.name)) });
         try out.appendSlice(arena, " },");
     }
     try out.appendSlice(arena, " };\n");
@@ -566,13 +563,13 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
         const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
-        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
         break;
     };
     // VAMS §6.3 the card's root parameters, so the digital half reads the
     // values `Model` gets (`sim.digital.Mixed.params`).
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
-    for (d.params) |p| try print(&out, arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
+    for (d.params) |p| try out.print(arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
     try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
 
     // --- main ---------------------------------------------------------------
@@ -582,10 +579,10 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
     );
     for (d.params) |p| {
-        try print(&out, arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
+        try out.print(arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
             std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
         });
-        try print(&out, arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n", .{
+        try out.print(arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n", .{
             std.zig.fmtString(p.name), std.zig.fmtString(p.name),
         });
     }
@@ -595,8 +592,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    var inst: D.Instance = .{};
         \\
     );
-    try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
-    try print(&out, arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
+    try out.print(arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
@@ -616,13 +613,13 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try print(&out, arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{ std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v) });
-                try print(&out, arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
+                try out.print(arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{ std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v) });
+                try out.print(arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
             }
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
         }
-        try print(&out, arena,
+        try out.print(arena,
             \\        var x: [n_u]f64 = @splat(0.0);
             \\        var forced: [n_u]?f64 = @splat({s});
             \\        if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {{
@@ -631,12 +628,12 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
             \\        var state = newState(&{s}, &inst);
             \\
         , .{ if (d.solve_free) "null" else "0.0", mdl });
-        for (d.op_states) |u| try print(&out, arena, "        forced[{d}] = null;\n", .{u});
+        for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
         for (d.bias) |b|
-            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
-        try print(&out, arena, "        runMixed(&{s}, &inst, &x, &forced, &state, &n);\n    }}\n", .{mdl});
+            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+        try out.print(arena, "        runMixed(&{s}, &inst, &x, &forced, &state, &n);\n    }}\n", .{mdl});
     }
     try out.appendSlice(arena, if (d.print_residual)
         \\}
@@ -664,14 +661,14 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
 pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
-    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
     try out.appendSlice(arena, "const times = [_]f64{");
-    for (d.times, 0..) |t, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
     try out.appendSlice(arena, " };\n");
     for (d.waves, 0..) |wv, k| {
-        try print(&out, arena, "const wave_{d} = [_]f64{{", .{k});
-        for (wv.values, 0..) |v, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
         try out.appendSlice(arena, " };\n");
     }
     try out.appendSlice(arena, tb_runner_text.vpi_lib_body);
@@ -683,10 +680,10 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| {
-        try print(&out, arena, "    g_model.{f} = cardValue(@TypeOf(g_model.{f}), {f});\n", .{
+        try out.print(arena, "    g_model.{f} = cardValue(@TypeOf(g_model.{f}), {f});\n", .{
             std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
         });
-        try print(&out, arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(g_model, \"{f}__given\") = true;\n", .{
+        try out.print(arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(g_model, \"{f}__given\") = true;\n", .{
             std.zig.fmtString(p.name), std.zig.fmtString(p.name),
         });
     }
@@ -696,7 +693,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    g_inst = .{};
         \\
     );
-    try print(&out, arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try out.print(arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
         \\    sim_state = .{ .kind = @enumFromInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
@@ -710,7 +707,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.bias) |b|
-        try print(&out, arena, "    set(&g_x, &g_forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+        try out.print(arena, "    set(&g_x, &g_forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
     try out.appendSlice(arena,
         \\    g_state = newState(&g_model, &g_inst);
         \\    q_prev = @splat(0.0);
@@ -721,7 +718,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.waves, 0..) |wv, k|
-        try print(&out, arena, "    set(&g_x, &g_forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
+        try out.print(arena, "    set(&g_x, &g_forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
         \\    sim_state.t = t;
         \\    sim_state.dt = dt;
@@ -766,9 +763,8 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
     if (any_points) try out.appendSlice(arena, noise_close);
     for (d.noise, 0..) |w, k| {
         if (w.name == null and w.interp == null and w.points == null) continue;
-        try print(out, arena, "        if (comptime D.noise_gens.len > {d}) {{\n", .{k});
-        if (w.name) |nm| try print(
-            out,
+        try out.print(arena, "        if (comptime D.noise_gens.len > {d}) {{\n", .{k});
+        if (w.name) |nm| try out.print(
             arena,
             "            std.debug.print(\"noise[{d}].name got={{s}} want={{s}} ok={{d}}\\n\", .{{\n" ++
                 "                D.noise_gens[{d}].name, \"{f}\",\n" ++
@@ -779,13 +775,12 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
         if (w.interp != null or w.points != null) {
             // Only a `.table` row has a spectrum; `points` on another row
             // FAILs with a reason instead of crashing on `g.table.?`.
-            try print(out, arena,
+            try out.print(arena,
                 \\            if (D.noise_gens[{d}].table) |ti| {{
                 \\                const tbl = D.noise_tables[ti];
                 \\
             , .{k});
-            if (w.interp) |ip| try print(
-                out,
+            if (w.interp) |ip| try out.print(
                 arena,
                 "                std.debug.print(\"noise[{d}].interp got={{s}} want={{s}} ok={{d}}\\n\", .{{\n" ++
                     "                    @tagName(tbl.interp), \"{s}\",\n" ++
@@ -812,10 +807,10 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                     \\
                 );
                 try out.appendSlice(arena, "                const want_pts = [_][2]f64{");
-                for (pts, 0..) |p, i| try print(out, arena, "{s}.{{ {f}, {f} }}", .{
+                for (pts, 0..) |p, i| try out.print(arena, "{s}.{{ {f}, {f} }}", .{
                     if (i == 0) " " else ", ", fmtF64(p[0]), fmtF64(p[1]),
                 });
-                try print(out, arena,
+                try out.print(arena,
                     \\ }};
                     \\                var pts_ok = got_pts.len == want_pts.len;
                     \\                if (pts_ok) for (got_pts, want_pts) |g, wp| {{
@@ -830,7 +825,7 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                     \\
                 , .{ fmtF64(w.rtol), fmtF64(w.rtol), k });
             }
-            try print(out, arena,
+            try out.print(arena,
                 \\            }} else std.debug.print("noise[{d}].table got=none want=a table ok=0\n", .{{}});
                 \\
             , .{k});
@@ -850,10 +845,10 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"noisePsd\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try print(out, arena, "            const psd = D.noisePsd(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
+    try out.print(arena, "            const psd = D.noisePsd(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
     for (d.noise, 0..) |w, k| {
         if (!w.needsPoint()) continue;
-        try print(out, arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
+        try out.print(arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
         // §4.6.4.6: a density is scaled by the square of the use's
         // coefficient, an exponent is not scaled at all.
         const fields = [_]struct { []const u8, ?f64, bool }{
@@ -867,8 +862,7 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
                 try std.fmt.allocPrint(arena, "psd[{d}].{s} * psd[{d}].coeff * psd[{d}].coeff", .{ k, f[0], k, k })
             else
                 try std.fmt.allocPrint(arena, "psd[{d}].{s}", .{ k, f[0] });
-            try print(
-                out,
+            try out.print(
                 arena,
                 "                std.debug.print(\"noise[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++
                     "                    {s}, {f},\n" ++
@@ -896,16 +890,16 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
         \\        const want = [_][]const u8{
         \\
     );
-    for (d.acstim) |e| try print(out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
+    for (d.acstim) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
     try out.appendSlice(arena, "        };\n");
     // A parallel `?[]const u8` column: `inline for` makes the index comptime,
     // so one lookup covers every line.
     try out.appendSlice(arena, "        const want_name = [_]?[]const u8{");
     for (d.acstim, 0..) |e, i| {
         if (e.name) |nm|
-            try print(out, arena, "{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(nm) })
+            try out.print(arena, "{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(nm) })
         else
-            try print(out, arena, "{s}null", .{if (i == 0) " " else ", "});
+            try out.print(arena, "{s}null", .{if (i == 0) " " else ", "});
     }
     try out.appendSlice(arena,
         \\ };
@@ -955,15 +949,14 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"acStim\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try print(out, arena, "            const stim = D.acStim(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
+    try out.print(arena, "            const stim = D.acStim(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
     for (d.acstim, 0..) |w, k| {
         if (!w.needsPoint()) continue;
-        try print(out, arena, "            if (comptime D.ac_gens.len > {d}) {{\n", .{k});
+        try out.print(arena, "            if (comptime D.ac_gens.len > {d}) {{\n", .{k});
         const fields = [_]struct { []const u8, ?f64 }{ .{ "mag", w.mag }, .{ "phase", w.phase } };
         for (fields) |f| {
             const want = f[1] orelse continue;
-            try print(
-                out,
+            try out.print(
                 arena,
                 "                std.debug.print(\"acstim[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++
                     "                    stim[{d}].{s}, {f},\n" ++
@@ -981,12 +974,11 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
 /// slot and frequency, at the enclosing operating point. `mdl` names the card.
 fn emitAcDyn(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     for (d.acdyn) |w| {
-        try print(out, arena, "        {{\n            const ad = acDynAt(ix(\"{f}\"), ix(\"{f}\"), 2.0 * std.math.pi * {f}, &x, &{s}, &inst);\n", .{
+        try out.print(arena, "        {{\n            const ad = acDynAt(ix(\"{f}\"), ix(\"{f}\"), 2.0 * std.math.pi * {f}, &x, &{s}, &inst);\n", .{
             std.zig.fmtString(w.row), std.zig.fmtString(w.col), fmtF64(w.f), mdl,
         });
         const parts = [_]struct { []const u8, f64 }{ .{ "re", w.re }, .{ "im", w.im } };
-        for (parts) |p| try print(
-            out,
+        for (parts) |p| try out.print(
             arena,
             "            std.debug.print(\"acdyn[({f},{f}) f={f}].{s} got={{e}} want={{e}} ok={{d}}\\n\", .{{ ad.{s}, @as(f64, {f}), @intFromBool(@abs(ad.{s} - {f}) <= {f}) }});\n",
             .{ std.zig.fmtString(w.row), std.zig.fmtString(w.col), fmtF64(w.f), p[0], p[0], fmtF64(p[1]), p[0], fmtF64(p[1]), fmtF64(w.tol) },
@@ -1037,11 +1029,4 @@ fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     if (std.math.isNan(x)) return w.writeAll("std.math.nan(f64)");
     if (std.math.isInf(x)) return w.writeAll(if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)");
     try w.print("{d}", .{x});
-}
-
-/// Appends formatted text to `out`, which must be backed by `arena`.
-pub fn print(out: *std.ArrayList(u8), arena: Allocator, comptime fmt: []const u8, args: anytype) Error!void {
-    var aw: Io.Writer.Allocating = .fromArrayList(arena, out);
-    defer out.* = aw.toArrayList();
-    aw.writer.print(fmt, args) catch return error.OutOfMemory;
 }
