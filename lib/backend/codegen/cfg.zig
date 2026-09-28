@@ -14,10 +14,8 @@ const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
-const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
-const VTy = codegen.VTy;
 
 /// Writes a body's exit: a unit returns its contribution value, the shared
 /// core returns its whole cache, and `setup` stores its roots.

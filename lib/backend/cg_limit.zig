@@ -7,8 +7,6 @@
 //! user-function form is lowered instead. Limiters live in `limit_kernels.zig`.
 
 const std = @import("std");
-const plan_topo = @import("codegen/plan/topology.zig");
-const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");

@@ -21,7 +21,6 @@ const Analysis = @import("ir").Analysis;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
 const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;

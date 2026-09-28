@@ -22,12 +22,7 @@ const Oom = Lower.Oom;
 const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
-const err = Lower.err;
-const errWith = Lower.errWith;
 const poison = Lower.poison;
-const emit = Lower.emit;
-const call = Lower.call;
-const toReal = Lower.toReal;
 
 /// Reports whether `name` is one of the two A.8.2 `analog_filter_function_call`
 /// names that keep no history (`ddx`, `limexp`). §5.8.1's ban on analog operators

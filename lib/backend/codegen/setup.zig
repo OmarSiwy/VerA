@@ -16,7 +16,6 @@ const plan_args = @import("plan/args.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
-const VTy = codegen.VTy;
 
 /// The roots and the emission state of `setup` (`Gen.su`).
 pub const Setup = struct {
