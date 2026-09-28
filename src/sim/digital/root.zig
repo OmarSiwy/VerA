@@ -251,6 +251,9 @@ pub const Run = struct {
     /// and a downward hierarchical reference walks these before it reaches a
     /// slot at all.
     instances: std.AutoHashMapUnmanaged(Name, u32) = .empty,
+    /// §12.5 the scope of each named block that declares something, keyed by
+    /// the scope it runs in and its statement (`blockScope`).
+    block_scopes: std.AutoHashMapUnmanaged(struct { scope: u32, stmt: Ast.StmtId }, u32) = .empty,
     /// IEEE 1364 §19.10's regions, in text-stream order. Read once per
     /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
@@ -670,14 +673,20 @@ pub const Run = struct {
     /// turn (steps b and c), where an enclosing instance of the module so
     /// named also answers (Syntax 12-7 `module_identifier.item_name`). The
     /// root is an instance of its module. Null when nothing up to the root
-    /// has that name.
-    /// ponytail: instance scopes only; a generate block name (§12.6's other
-    /// `scope_name`) is not a scope here.
+    /// has that name. A named block, task, function or generate block is a
+    /// scope too (§12.5), found by its name inside the scope around it and,
+    /// from within, by its own.
     pub fn upward(self: *const Run, name: Ast.StrId) ?u32 {
-        var s = self.instanceOf(self.scope);
+        var s = self.scope;
         while (true) {
             if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
-            if (self.file.modules[self.scope_info.items[s].def].name == name) return s;
+            const info = self.scope_info.items[s];
+            if (info.lexical) {
+                if (info.name == name and info.index == null) return s;
+                s = info.parent;
+                continue;
+            }
+            if (self.file.modules[info.def].name == name) return s;
             // §12.5: a top-level module's name starts a hierarchical name
             // anywhere in the design.
             if (isRoot(self, s)) {
@@ -726,10 +735,14 @@ pub const Run = struct {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
-            var scope = self.upward(parts[0]) orelse return self.exprFail(e, "undeclared instance in a hierarchical reference");
-            for (parts[1 .. parts.len - 1]) |part|
-                scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
-                    return self.exprFail(e, "undeclared instance in a hierarchical reference");
+            var scope: u32 = 0;
+            for (parts[0 .. parts.len - 1], 0..) |part, k| {
+                const next = if (k == 0) self.upward(part) else self.instances.get(.{ .scope = scope, .str = part });
+                scope = next orelse return if (std.mem.indexOfScalar(u8, self.file.str(part), '[') != null)
+                    self.fail(self.file.exprs.mainTok(e), "§12.5: `{s}`: an instance select out of range, or of no array", .{self.file.str(part)})
+                else
+                    self.exprFail(e, "undeclared instance in a hierarchical reference");
+            }
             return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
                 self.exprFail(e, "undeclared digital variable");
         }
@@ -1027,36 +1040,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         entry.value_ptr.* = @intCast(r.subs.items.len);
         try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
     }
-    var positional: usize = 0;
-    for (m.params) |p| {
-        const pos = positional;
-        if (!p.is_local) positional += 1;
-        if (p.dims.len != 0 or p.ty == .string or (r.mixed and p.ty == .real)) {
-            if (r.mixed) continue;
-            return r.fail(p.main_tok, "only scalar integral and real parameters are implemented by digital execution", .{});
-        }
-        const pv = (try paramValue(r, p, scope, over, pos)) orelse continue;
-        // §12.2: a range or a type (`signed` is one) converts the value like
-        // an assignment; otherwise the parameter takes the type of its value.
-        const ty: compile.Type = if (p.packed_range) |range|
-            .{ .width = try r.declaredWidth(range, p.main_tok), .signed = p.is_signed }
-        else if (p.ty == .integer)
-            .{ .width = 32, .signed = true }
-        else if (p.ty == .real or (pv.real and !p.is_signed))
-            compile.real_type
-        else
-            .{ .width = if (pv.real) 64 else pv.v.width, .signed = p.is_signed or pv.v.signed };
-        const converted = try exec.convertValue(arena, pv.v, pv.real, ty);
-        const at: u32 = @intCast(e.values.items.len);
-        try r.bind(p.name, at, p.main_tok);
-        const slot_value = try filled(arena, ty.width, ty.signed, .zero);
-        @memcpy(slot_value.planes, converted.planes);
-        try e.values.append(arena, slot_value);
-        try r.params.put(arena, at, {});
-        if (ty.real) try r.reals.put(arena, at, {});
-        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
-    }
-    try declareEvents(r, e, m.events, m.main_tok);
+    try declareParams(r, scope, m.params, over);
+    try declareEvents(r, m.events, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
         // VAMS §7.3.6.4: an analog variable a digital expression reads is
@@ -1088,10 +1073,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // storage a static subroutine shares between activations (§10.2.3).
     // Framed after the parameters its widths may read, unless a §10.4.5
     // constant function call framed it first (`earlyFrame`).
-    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| if (!sub.framed) {
-        sub.frame = try frame(r, sub.decl, scope);
-        sub.framed = true;
-    };
+    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| {
+        if (!sub.framed) {
+            sub.frame = try frame(r, sub.decl, scope);
+            sub.framed = true;
+        }
+        try blockScopes(r, sub.frame.scope, sub.decl.body);
+    }
+    for (m.discrete) |d| try blockScopes(r, scope, d.body);
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous, the analog solver's.
         if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
@@ -1230,6 +1219,44 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
 }
 
+/// IEEE 1364-2005 §12.2 the parameters `params` of `scope` (an instance, or a
+/// §12.5 named block, which `over` never reaches), in declaration order so a
+/// default may name an earlier one.
+fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []const Ast.ParamOverride) Error!void {
+    const arena = r.arena;
+    const g = r.growing.?;
+    var positional: usize = 0;
+    for (params) |p| {
+        const pos = positional;
+        if (!p.is_local) positional += 1;
+        if (p.dims.len != 0 or p.ty == .string or (r.mixed and p.ty == .real)) {
+            if (r.mixed) continue;
+            return r.fail(p.main_tok, "only scalar integral and real parameters are implemented by digital execution", .{});
+        }
+        const pv = (try paramValue(r, p, scope, over, pos)) orelse continue;
+        // §12.2: a range or a type (`signed` is one) converts the value like
+        // an assignment; otherwise the parameter takes the type of its value.
+        const ty: compile.Type = if (p.packed_range) |range|
+            .{ .width = try r.declaredWidth(range, p.main_tok), .signed = p.is_signed }
+        else if (p.ty == .integer)
+            .{ .width = 32, .signed = true }
+        else if (p.ty == .real or (pv.real and !p.is_signed))
+            compile.real_type
+        else
+            .{ .width = if (pv.real) 64 else pv.v.width, .signed = p.is_signed or pv.v.signed };
+        const converted = try exec.convertValue(arena, pv.v, pv.real, ty);
+        const at: u32 = @intCast(g.items.len);
+        try r.bind(p.name, at, p.main_tok);
+        const slot_value = try filled(arena, ty.width, ty.signed, .zero);
+        @memcpy(slot_value.planes, converted.planes);
+        try g.append(arena, slot_value);
+        try r.params.put(arena, at, {});
+        if (ty.real) try r.reals.put(arena, at, {});
+        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
+    }
+    r.values = g.items;
+}
+
 /// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
 /// module or primitive instance, or on the left of a continuous assignment,
 /// is an implicit scalar net of the `default_nettype in force there (§19.2).
@@ -1256,14 +1283,81 @@ fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
 /// point on the waiter list; the stored value is never read or written.
-fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!void {
+fn declareEvents(r: *Run, names: []const Ast.StrId, tok: u32) Error!void {
+    const g = r.growing.?;
     for (names) |name| {
-        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
-        const at: u32 = @intCast(e.values.items.len);
+        if (g.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
+        const at: u32 = @intCast(g.items.len);
         try r.bind(name, at, tok);
-        try e.values.append(r.arena, try filled(r.arena, 1, false, .x));
+        try g.append(r.arena, try filled(r.arena, 1, false, .x));
         try r.events.put(r.arena, at, {});
     }
+    r.values = g.items;
+}
+
+/// Does statement `s` hold a named block with declarations of its own?
+fn declares(file: *const Ast.SourceFile, s: Ast.StmtId) bool {
+    const W = struct {
+        f: *const Ast.SourceFile,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) error{Found}!void {}
+        pub fn stmt(w: @This(), c: Ast.StmtId) error{Found}!void {
+            if (c == .none) return;
+            switch (w.f.stmt(c)) {
+                .block => |b| if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) return error.Found,
+                else => {}, // else: only a block declares
+            }
+            try w.f.stmtEdges(c, w);
+        }
+    };
+    (W{ .f = file }).stmt(s) catch return true;
+    return false;
+}
+
+/// IEEE 1364-2005 §12.5 "each ... named begin-end or fork-join block shall
+/// define a new branch of the hierarchy": the named blocks of statement `s`,
+/// run in `scope`, that declare something or enclose one that does, each a
+/// scope with its declarations, made in pass one so a hierarchical name
+/// compiled first (`b.mod_1.x` from a sibling block) finds them. `compile`
+/// enters the scope `block_scopes` records.
+fn blockScopes(r: *Run, scope: u32, s: Ast.StmtId) Error!void {
+    if (s == .none) return;
+    const W = struct {
+        r: *Run,
+        scope: u32,
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
+        pub fn stmt(w: @This(), c: Ast.StmtId) Error!void {
+            try blockScopes(w.r, w.scope, c);
+        }
+    };
+    var inner = scope;
+    switch (r.file.stmt(s)) {
+        .block => |b| if (b.name != .none and !r.block_scopes.contains(.{ .scope = scope, .stmt = s }) and declares(r.file, s)) {
+            inner = try blockScope(r, scope, s);
+        },
+        else => {}, // else: only a block is a scope
+    }
+    try r.file.stmtEdges(s, W{ .r = r, .scope = inner });
+}
+
+/// Block `s`'s scope under `scope`, its parameters, events and variables
+/// declared there. Pass two calls it for an automatic activation's copy.
+pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
+    const b = r.file.stmt(s).block;
+    const tok = r.file.stmtTok(s);
+    const at = try newScope(r, tok);
+    try r.scope_info.append(r.arena, .{ .parent = scope, .name = b.name, .def = r.scope_info.items[scope].def, .lexical = true });
+    try r.block_scopes.put(r.arena, .{ .scope = scope, .stmt = s }, at);
+    if (b.name != .none) try r.instances.put(r.arena, .{ .scope = scope, .str = b.name }, at);
+    const saved = r.scope;
+    defer r.scope = saved;
+    r.scope = at;
+    try declareParams(r, at, b.params, &.{});
+    try declareEvents(r, b.events, tok);
+    for (b.vars) |v| {
+        if (v.init != .none) return r.fail(v.main_tok, "an initialized block-local variable is not implemented", .{});
+        _ = try mintVar(r, v);
+    }
+    return at;
 }
 
 /// The driver rows of `items`' continuous assignments, gates, switches and
@@ -1537,6 +1631,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 try seen.append(r.arena, value);
                 const iter = try newScope(r, tok);
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value });
+                try selectable(r, scope, name, value, iter);
                 r.scope = iter;
                 try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
                 try generate(r, e, m, iter, f.body, depth);
@@ -1546,9 +1641,10 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
-            try declareEvents(r, e, b.gen.events, tok);
+            try declareEvents(r, b.gen.events, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
+            for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
             // A mixed design's generate block also holds its analog blocks,
             // which are the analog compile's.
@@ -1571,7 +1667,20 @@ fn armScope(r: *Run, scope: u32, s: Ast.StmtId, tok: u32) Error!u32 {
     if (name == .none) return scope;
     const at = try newScope(r, tok);
     try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = r.scope_info.items[scope].def, .lexical = true });
+    // §12.4.3: "an unnamed generate block has no name that can be used in a
+    // hierarchical name".
+    if (r.file.stmt(s).block.name != .none) try r.instances.put(r.arena, .{ .scope = scope, .str = name }, at);
     return at;
+}
+
+/// §12.5 element `k` of the instance array or loop generate `name` in
+/// `scope`, reachable as `name[k]` (the spelling the parser gives an
+/// instance select) when the source writes one.
+fn selectable(r: *Run, scope: u32, name: Ast.StrId, k: i64, at: u32) Error!void {
+    if (name == .none) return;
+    var buf: [256]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{s}[{d}]", .{ r.file.str(name), k }) catch return;
+    if (r.file.strings.find(text)) |str| try r.instances.put(r.arena, .{ .scope = scope, .str = str }, at);
 }
 
 /// A genvar's storage in the current scope: a 32-bit signed constant
@@ -1762,7 +1871,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         // §12.4's path is walked by name, so the instance's own identifier has
         // to outlive the recursion that consumes it. An array element's path
         // carries its index, which that walk does not read: not registered.
-        if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
+        if (inst.name != .none) if (index) |k| try selectable(r, scope, inst.name, k, child_scope) else try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
         try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
         r.scope = scope;
     }

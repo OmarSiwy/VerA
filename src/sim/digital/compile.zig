@@ -808,20 +808,16 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             // of their own, searched before the one around it, so a local
             // shadows a module variable of the same name. The block's name
             // stays in the enclosing scope, where `disable` finds it.
+            // Pass one made the scope (`root.blockScopes`), except in an
+            // automatic activation's copy, which gets one here.
             // ponytail: `%m` inside such a block names the block but not the
             // named blocks around it.
-            if (b.params.len != 0) return self.fail(tok, "block-local parameters are not implemented", .{});
             const outer = self.scope;
             defer self.scope = outer;
-            if (b.vars.len != 0) {
-                const root = @import("root.zig");
-                const inner = try root.newScope(self, tok);
-                try self.scope_info.append(self.arena, .{ .parent = outer, .name = b.name, .def = self.scope_info.items[outer].def, .lexical = true });
+            if (self.block_scopes.get(.{ .scope = outer, .stmt = id })) |inner| {
                 self.scope = inner;
-                for (b.vars) |v| {
-                    if (v.init != .none) return self.fail(tok, "an initialized block-local variable is not implemented", .{});
-                    _ = try root.mintVar(self, v);
-                }
+            } else if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) {
+                self.scope = try @import("root.zig").blockScope(self, outer, id);
             }
             const start = position(self);
             if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);

@@ -177,6 +177,48 @@ fn varType(tag: token.Tag) ?Ast.Type {
     };
 }
 
+/// Parses an A.2.1.3 `reg_declaration`, cursor on `reg`, through its `;`,
+/// appending one `VarDecl` per name to `out`. An analog parse keeps Table
+/// 7-1's integer mapping and its 31-bit width gate; a digital parse keeps
+/// packed width and signedness.
+pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const tok = self.pos;
+    self.pos += 1;
+    const signed = self.digital and self.eat(.kw_signed);
+    const range: ?Ast.Dim = try optDim(self);
+    if (!self.digital) if (range) |d| if (literalWidth(self, d)) |w| {
+        if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
+    };
+    while (true) {
+        const name_tok = self.pos;
+        const name = try self.expectIdent();
+        // A.2.1.3 reg_declaration ends in A.2.3's
+        // list_of_variable_identifiers, whose A.2.2.1 `variable_type`
+        // takes dimensions and an initializer:
+        //
+        //     variable_type ::=
+        //         variable_identifier { dimension } [ = constant_assignment_pattern ]
+        //         | variable_identifier = constant_expression
+        //
+        // `integer`/`time` reach the same production through
+        // `parseVarDecl`, so neither is gated on `digital` here.
+        const dims = try parseDims(self);
+        const value = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else Ast.ExprId.none;
+        try out.append(self.arena, .{
+            .name = name,
+            .ty = .integer,
+            .main_tok = name_tok,
+            .storage = .reg,
+            .packed_range = range,
+            .is_signed = signed,
+            .dims = dims,
+            .init = value,
+        });
+        if (!self.eat(.comma)) break;
+    }
+    _ = try self.expect(.semicolon);
+}
+
 /// Parses an A.2.1.3 integer/real/string/time declaration (§3.2, §3.3), cursor
 /// on the type keyword, up to but not including the `;`. Appends one `VarDecl`
 /// per name to `out`. Asserts the cursor is on a variable type keyword.
@@ -815,6 +857,36 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
         try joined.appendSlice(self.arena, self.file.str(part));
     }
     return self.file.intern(self.arena, joined.items);
+}
+
+/// A digital parse's `[ … ] .` at the cursor: IEEE 1364-2005 §12.5's instance
+/// select inside a hierarchical name, not a bit-select.
+pub fn instanceSelectAhead(self: *const Parser) bool {
+    if (!self.digital or self.peek() != .lbracket) return false;
+    var depth: u32 = 0;
+    var i = self.pos;
+    while (i < self.tags.len) : (i += 1) switch (self.tags[i]) {
+        .lbracket => depth += 1,
+        .rbracket => {
+            depth -= 1;
+            if (depth == 0) return i + 1 < self.tags.len and self.tags[i + 1] == .dot;
+        },
+        .eof, .semicolon => return false,
+        else => {}, // else: any other token is inside the brackets
+    };
+    return false;
+}
+
+/// `name[k]` for §12.5's instance select `[ constant_expression ]` at the
+/// cursor, spelled as `parseDottedName` spells it; E0231 when it does not
+/// fold.
+pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
+    const tok = self.pos;
+    self.pos += 1;
+    const idx = try parse_expr.parseExpr(self);
+    _ = try self.expect(.rbracket);
+    const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
+    return self.file.intern(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ self.file.str(name), k }));
 }
 
 /// Folds A.9.3's `[ constant_expression ]` over literals only, with §4.2's
