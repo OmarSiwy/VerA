@@ -323,6 +323,19 @@ pub fn build(b: *std.Build) void {
         run.addCheck(.{ .expect_stderr_match = r.says });
         test_step.dependOn(&run.step);
     }
+    // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero
+    // never ends, so no file that size is committed or written.
+    if (b.graph.host.result.os.tag != .windows) for ([_][]const []const u8{
+        &.{ "--lint", "/dev/zero" },
+        &.{ "--lint", "--spice", "/dev/zero", "tests/fixtures/ch02_lexical/28_identifier_1024_chars.va" },
+    }) |args| {
+        const run = b.addRunArtifact(exe);
+        run.setCwd(b.path("."));
+        run.addArgs(args);
+        run.expectExitCode(2);
+        run.addCheck(.{ .expect_stderr_match = "error[E1013]: `/dev/zero` is larger than 67108864 bytes" });
+        test_step.dependOn(&run.step);
+    };
 }
 
 /// A host driver and the `.va` its `device` import is emitted from: device
