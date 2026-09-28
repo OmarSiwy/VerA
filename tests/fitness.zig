@@ -465,7 +465,7 @@ test "R6: no emitted print or exit in device-emitting files" {
 // ---------------------------------------------------------------------------
 // R7: a per-file ceiling on `std.mem.eql(u8` in lib/ and src/; a line
 // carrying `// str: <LRM data>` does not count. The ceilings are the counts
-// measured on 2026-10-17 (integrate/production-pass at 1518183f); a file
+// measured on 2026-10-17 (integrate/production-pass at e0c92073); a file
 // whose count falls lowers its row in the same commit.
 // ---------------------------------------------------------------------------
 

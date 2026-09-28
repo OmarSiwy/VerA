@@ -161,7 +161,7 @@ the commit that removes the violation. R3–R7 read production lines: outside to
 - **R6:** no emitted `debug.print(`/`process.exit(` in device-emitting files (`codegen.zig`, `codegen/**`, `cg_*`, `kernels*`). Allowlist: per-file counts in `cg_display.zig`, `kernel_text.zig`, `render.zig` and five kernel files until B2.
 - **R7:** a per-file ceiling on `std.mem.eql(u8` in `lib/` and `src/`; a line with `// str: <LRM data>` does not count. The ceilings are the counts of 2026-10-17 (479 sites in 81 files); they have no deleting phase.
 
-Sharpened on 2026-10-17 against the tree at `1518183f`, because a rule the test reads
+Sharpened on 2026-10-17 against the tree at `e0c92073`, because a rule the test reads
 from text has to say which text: R2's `beh_verilog.zig` → `fixture.zig` row is gone,
 since nothing under `tb/` reaches `beh_verilog.zig` (it returns at Phase 8, when R2
 becomes module-level and `verilog` is its own row); R2 names `codegen.zig`, which
