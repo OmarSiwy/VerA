@@ -158,7 +158,7 @@ pub const VecRange = struct {
 /// change asks for the end-of-step section (`vcd.zig`).
 /// `d2a` is VAMS §8.5's explicit D2A: the slot is the operand of a digital
 /// event term in an analog event control (see `watchEvent`).
-pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update };
+pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -457,7 +457,9 @@ pub const Run = struct {
     /// `vcd.catalog` of this run, built at the first dump.
     vcd_catalog: ?@import("vcd.zig").Catalog = null,
     /// §18.3 the `$dumpports` calls compile has checked.
-    ports_dump: @import("vcd.zig").PortsCheck = .{},
+    ports_dump: @import("evcd.zig").Check = .{},
+    /// §18.3 the extended dump.
+    evcd: @import("evcd.zig").Evcd = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -2074,6 +2076,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     var r = try elaborate(arena, source, opts, bag, out);
     // Nothing is `watchAnalog`ed in a digital-only run, so it never stops early.
     _ = try r.runUntil(std.math.maxInt(Tick));
+    try @import("evcd.zig").close(&r);
 }
 
 /// A `.v` design as a contract device an analog host loads (`rt.Device`).
@@ -2374,8 +2377,6 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.scope = p.scope;
         try processes(&r, p.blocks);
     }
-    // Refused once every call is checked, so a malformed one is named first.
-    if (r.ports_dump.tok) |tok| return r.fail(tok, "digital system task `$dumpports` is not implemented", .{});
     // A.6.5's `disable` names a block that needs no declaration before its
     // use (it may be in another process), so the ranges are bound here, once
     // every process has a pc range.
@@ -2425,6 +2426,7 @@ test {
     _ = emit;
     _ = @import("system.zig");
     _ = @import("vcd.zig");
+    _ = @import("evcd.zig");
     _ = @import("driver.zig");
 }
 
