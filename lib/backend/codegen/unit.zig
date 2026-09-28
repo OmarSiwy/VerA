@@ -187,16 +187,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     const lo = self.out.items.len;
     try self.w("{s}", .{doc});
     const at_fn = self.out.items.len;
-    try self.w("fn {s}(comptime S: type, ", .{name});
-    const at_x = self.out.items.len;
-    // A body's unknowns: a tuple, each unknown typed by the lanes it carries.
-    try self.w("x: anytype, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model, ", .{});
-    const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr, ", .{});
-    const at_sim = self.out.items.len;
-    try self.w("sim: contract.SimState", .{});
+    const slots = try openSig(self, name);
     // §5.10 whether the caller keeps the held arrays' end-of-block values
     // (`Gen.heldArg`).
     self.uses_held = false;
@@ -228,23 +219,11 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     }
     self.fatal = pre;
     try emitUnitBody(self, .undef);
-    if (self.fatal) |msg| {
-        self.any_fatal = true;
-        self.out.shrinkRetainingCapacity(body_start);
-        self.uses_x = false;
-        self.uses_model = false;
-        self.uses_inst = false;
-        self.uses_sim = false;
-        self.uses_held = false;
-        try self.b("    @compileError(\"{s}\");\n", .{msg});
-    }
-    if (!self.uses_x) patchParam(self, at_x, "x".len);
-    if (!self.uses_model) patchParam(self, at_model, "model".len);
-    if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
-    if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
+    if (self.fatal != null) self.uses_held = false;
+    try closeSig(self, slots, body_start);
     if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
     // A slice of integers and plain arrays alone never names `S`.
-    if (!try namesIdent(self, self.out.items[at_x..], "S")) patchParam(self, at_x - "S: type, ".len, "S".len);
+    if (!try namesIdent(self, self.out.items[slots.x..], "S")) patchParam(self, slots.x - "S: type, ".len, "S".len);
     try self.w("}}\n\n", .{});
     try gen_file.recordUnitFile(self, name, lo, at_fn);
 }
@@ -287,21 +266,40 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
 
     try self.w("/// {s}\n", .{comment});
     const at_fn = self.out.items.len;
-    try self.w("fn {s}(comptime S: type, ", .{name});
-    const at_x = self.out.items.len;
-    // A body's unknowns: a tuple, each unknown typed by the lanes it carries.
-    try self.w("x: anytype, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model, ", .{});
-    const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr, ", .{});
-    const at_sim = self.out.items.len;
-    try self.w("sim: contract.SimState) {s} {{\n", .{try family.ofText(self, family.mask(self, target))});
+    const slots = try openSig(self, name);
+    try self.w(") {s} {{\n", .{try family.ofText(self, family.mask(self, target))});
     try self.w("    @setFloatMode(.{s});\n", .{mode});
     self.float.strict = std.mem.eql(u8, mode, "strict");
 
     const body_start = self.out.items.len;
     try emitUnitBody(self, target);
+    try closeSig(self, slots, body_start);
+    try self.w("}}\n\n", .{});
+    return at_fn;
+}
+
+/// Offsets of a unit signature's four uniform parameter names.
+const Slots = struct { x: usize, model: usize, inst: usize, sim: usize };
+
+/// Writes `fn <name>(comptime S: type, x, model, inst, sim` up to the closing
+/// parenthesis, reserving each parameter's slot for `closeSig`.
+fn openSig(self: *Gen, name: []const u8) Error!Slots {
+    try self.w("fn {s}(comptime S: type, ", .{name});
+    const x = self.out.items.len;
+    // A body's unknowns: a tuple, each unknown typed by the lanes it carries.
+    try self.w("x: anytype, ", .{});
+    const model = self.out.items.len;
+    try self.w("model: *const Model, ", .{});
+    const inst = self.out.items.len;
+    try self.w("inst: InstancePtr, ", .{});
+    const sim = self.out.items.len;
+    try self.w("sim: contract.SimState", .{});
+    return .{ .x = x, .model = model, .inst = inst, .sim = sim };
+}
+
+/// Replaces a refused body (from `body_start`) with its `@compileError`, then
+/// back-patches every parameter the body never read to `_`.
+fn closeSig(self: *Gen, s: Slots, body_start: usize) Error!void {
     if (self.fatal) |msg| {
         self.any_fatal = true;
         self.out.shrinkRetainingCapacity(body_start);
@@ -311,12 +309,10 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
         self.uses_sim = false;
         try self.b("    @compileError(\"{s}\");\n", .{msg});
     }
-    if (!self.uses_x) patchParam(self, at_x, "x".len);
-    if (!self.uses_model) patchParam(self, at_model, "model".len);
-    if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
-    if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
-    try self.w("}}\n\n", .{});
-    return at_fn;
+    if (!self.uses_x) patchParam(self, s.x, "x".len);
+    if (!self.uses_model) patchParam(self, s.model, "model".len);
+    if (!self.uses_inst) patchParam(self, s.inst, "inst".len);
+    if (!self.uses_sim) patchParam(self, s.sim, "sim".len);
 }
 
 /// Overwrites a reserved parameter-name slot with `_`, space-padded to the
