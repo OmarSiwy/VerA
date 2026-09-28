@@ -364,6 +364,9 @@ fn skipParamsetStatement(self: *Parser) Error!void {
 /// becomes a `ModuleDecl` slice, in source order.
 pub const Body = struct {
     ports: std.ArrayList(Ast.Port) = .empty,
+    /// The header is A.1.3's `list_of_port_declarations`, whose ports "shall
+    /// not be redeclared within the body of the module" (§6.2).
+    ansi: bool = false,
     params: std.ArrayList(Ast.ParamDecl) = .empty,
     aliasparams: std.ArrayList(Ast.AliasParam) = .empty,
     vars: std.ArrayList(Ast.VarDecl) = .empty,
@@ -438,6 +441,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
             dir = d;
+            b.ansi = true;
             self.pos += 1;
             var kind: Ast.NetKind = .wire;
             disc = try optPortType(self, &kind, &signed);
@@ -466,6 +470,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         // [1:0] p` is two terminals). The consecutive entries carry the
         // external port's width and member order.
         const concat = self.eat(.lbrace);
+        const first = b.ports.items.len;
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
@@ -476,6 +481,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
                 .discipline = disc,
                 .range = range,
                 .external_name = external,
+                .concat_rest = b.ports.items.len != first,
                 .is_signed = signed,
                 .main_tok = tok,
             });

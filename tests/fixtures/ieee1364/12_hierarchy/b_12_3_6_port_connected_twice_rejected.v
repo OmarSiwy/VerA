@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 12.3.6
 //! reject E1100
 //! reject connected twice
-//! xfail VerA accepts two named connections to one port
 module m(a, y);
   input a;
   output y;

@@ -998,6 +998,8 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // apply §7.4.4 (E0902). The entry adds no node: `internNode` finds the
         // port's slot by name.
         const port = if (is_ground) null else findPort(b, name);
+        // A discipline declaration is §7.4.4's to judge (E0902).
+        if (port != null and b.ansi and disc == .none) try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
         if (port != null and signed) port.?.is_signed = true;
         if (port != null and port.?.discipline == .none) {
             port.?.discipline = disc;
