@@ -39,6 +39,8 @@ const usage_text =
     \\                          prints (auto, the default); every x or z is 0,
     \\                          NOT IEEE 1364 4-state logic (2, E1101); 4-state
     \\  --two-state             --state=2
+    \\  --event-budget=N        a .v design's events at one time step before a
+    \\                          zero-delay loop is refused (default 10000000)
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --libmap FILE           read an IEEE 1364 §13.2 library map (repeatable, read
     \\                          in order); each .v file compiles into the library
@@ -135,6 +137,7 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
     var schedule: digital.emit.Schedule = .static;
+    var event_budget: u64 = digital.max_events_per_tick;
     var logic: digital.emit.Logic = .auto;
     var logic_flag: ?[]const u8 = null;
 
@@ -217,6 +220,12 @@ pub fn main(init: std.process.Init) !u8 {
                 try err.print("error: `{s}`: not static|fifo\n", .{arg});
                 return 2;
             };
+        } else if (std.mem.startsWith(u8, arg, "--event-budget=")) {
+            event_budget = std.fmt.parseInt(u64, arg["--event-budget=".len..], 10) catch 0;
+            if (event_budget == 0) {
+                try err.print("error: `{s}`: not a positive integer\n", .{arg});
+                return 2;
+            }
         } else if (std.mem.startsWith(u8, arg, "--zig-backend=")) {
             const v = arg["--zig-backend=".len..];
             zig_backend = if (std.mem.eql(u8, v, "auto")) null else if (std.mem.eql(u8, v, "llvm")) .llvm else if (std.mem.eql(u8, v, "native")) .self_hosted else {
@@ -377,7 +386,7 @@ pub fn main(init: std.process.Init) !u8 {
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
-        var opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        var opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language, .event_budget = event_budget };
         if (!try libraries(arena.allocator(), io, paths.items, libmaps.items, search.items, &opts, err, json, use_color)) return 1;
         if (device) return emitDevice(gpa, io, arena.allocator(), &digital_bag, source, opts, schedule, if (logic_flag != null) logic else .four, .{
             .zig = emit_zig,

@@ -443,6 +443,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
     for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
+    if (r.budget != @import("root.zig").max_events_per_tick) try self.print("pub const vera_event_budget: u64 = {d};\n", .{r.budget});
     // Every function of the design, once per phase (`rt.Phase`): `main`
     // names `Code(true)` only when it runs both, and Zig compiles only what
     // is named.
@@ -1689,7 +1690,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try flush(self, &text);
                     try self.print("            try s.real(", .{});
                     try expr.real(self, args[arg]);
-                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], @min(precision, 60), width });
+                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], precision, width });
                 },
                 else => return self.refuse("a display conversion the engine refuses"),
             }
