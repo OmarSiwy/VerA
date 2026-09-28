@@ -335,7 +335,7 @@
 14.6.4	not-supported	Detailed pulse control capabilities	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 14.6.4.1	not-supported	On-event versus on-detect pulse filtering	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
 14.6.4.2	not-supported	Negative pulse detection	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 14 in scope as parsed and read by VPI): no module path delay or pulse limit is applied; the specify block warns W0251.
-15	-	Timing checks
+15	non-normative	Timing checks	Clause preamble: "This clause describes how timing checks are used in specify blocks to determine whether signals obey the timing constraints." (p. 237). It states no rule of its own; the syntax rules are §15.1 and §15.4 (each cited both ways) and the evaluation rules §15.2-§15.3.6, §15.5-§15.8 (not-supported).
 15.1	-	Overview
 15.2	not-supported	Timing checks using a stability window	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
 15.2.1	not-supported	$setup	Simulation behaviour VerA does not execute (ROADMAP.md §1 B keeps 15 in scope as parsed and read by VPI): no timing check is evaluated, no violation reported, no notifier toggled; W0251 names each check in the block.
