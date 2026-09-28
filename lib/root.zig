@@ -380,26 +380,20 @@ fn compileInArena(
 // Artifact build
 // ---------------------------------------------------------------------------
 
-/// Generates the device and builds it into a shared library. The host owns
-/// loading it and all simulation state. Fails with `error.NoArtifact` on a
-/// `.lint` result.
-///
-/// `resident` is a session-scoped incremental child (`o` is ignored: it was
-/// spawned with its own); `null` builds cold under `o`.
+/// Generates the device and builds it cold into a shared library
+/// (`orchestrator.compileRelease`). The host owns loading it and all
+/// simulation state. Fails with `error.NoArtifact` on a `.lint` result.
 pub fn buildArtifact(
     gpa: Allocator,
     io: std.Io,
     result: *CompileResult,
     o: orchestrator.Options,
     generation: u32,
-    resident: ?*orchestrator.ResidentChild,
     // Inferred error set: the orchestrator's failures are the open-ended OS
     // errors of a child process and its pipe.
 ) !orchestrator.Result {
     if (result.target == .lint) return error.NoArtifact;
-    const device = try result.generateOutput();
-    if (resident) |r| return r.rebuild(gpa, device, generation);
-    return orchestrator.compileRelease(gpa, io, o, device, generation);
+    return orchestrator.compileRelease(gpa, io, o, try result.generateOutput(), generation);
 }
 
 // ---------------------------------------------------------------------------
