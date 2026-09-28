@@ -944,6 +944,12 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .repeat_start => |x| {
             if ((try expr.natural(self, x.count)).width > 64) return self.refuse("a repeat count wider than 64 bits");
+            if (x.clamp) {
+                try self.print("            const c = ", .{});
+                const ty = try expr.selfDetermined(self, x.count);
+                try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, {}) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.signed, ty.width });
+                return self.print("            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.end, next });
+            }
             try self.print("            const n = try s.repeatCount(", .{});
             const ty = try expr.selfDetermined(self, x.count);
             try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
@@ -988,7 +994,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         // once, a blocking one parked in its cell until the control passes.
         .sample => |x| {
             const st = r.file.stmt(x.statement).assign;
-            if (st.nonblocking) {
+            if (st.nonblocking and st.timing_is_delay) {
                 try assignment(self, st.target, .{ .expr = st.value }, .{ .nba_after = st.timing });
                 return self.print("            continue :sw {d};\n", .{next});
             }
@@ -996,6 +1002,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            try M.set(s, {d}, ", .{try cellOf(self, x.cell, ty.width)});
             try expr.assigned(self, st.value, ty);
             try self.print(", {f});\n", .{full(ty.width)});
+            if (compile.parksOnly(st)) return self.print("            continue :sw {d};\n", .{next});
             if (st.timing_is_delay) {
                 try self.print("            try s.run({d}, ", .{next});
                 try delay(self, st.timing);
@@ -1011,7 +1018,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .deposit => |x| {
             const st = r.file.stmt(x.statement).assign;
             const ty = try targetType(self, st.target);
-            try assignment(self, st.target, .{ .stored = .{ .off = try cellOf(self, x.cell, ty.width), .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+            try assignment(self, st.target, .{ .stored = .{ .off = try cellOf(self, x.cell, ty.width), .ty = .{ .width = ty.width, .signed = false } } }, if (st.nonblocking) .nba else .blocking);
             try self.print("            continue :sw {d};\n", .{next});
         },
         // §10.3: a disable inside the block it names continues after it.

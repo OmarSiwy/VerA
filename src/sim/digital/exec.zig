@@ -1799,6 +1799,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 cell.width = parked.width;
                 cell.signed = parked.signed;
                 cell.sized = parked.sized;
+                if (compile.parksOnly(a)) {
+                    pc += 1;
+                    continue;
+                }
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
@@ -1819,7 +1823,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                try put(self, scratch, a.target, self.holds.items[s.cell], false, null);
+                try put(self, scratch, a.target, self.holds.items[s.cell], a.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -2014,8 +2018,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .repeat_start => |s| {
                 const value = try eval(self, scratch, s.count, 0);
                 const count = if (value.hasUnknown()) 0 else blk: {
-                    if (value.signed and value.asInt().? < 0)
+                    if (value.signed and value.asInt().? < 0) {
+                        if (s.clamp) break :blk 0;
                         return self.exprFail(s.count, "negative repeat counts are not implemented; IEEE1364-2005 does not define this case explicitly");
+                    }
                     break :blk value.values()[0];
                 };
                 self.repeats.items[s.counter] = count;

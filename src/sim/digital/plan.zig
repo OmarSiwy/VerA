@@ -103,7 +103,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| watched[t.slot] = true;
@@ -323,7 +323,7 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| reach[t.slot].terms = true;

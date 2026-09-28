@@ -1245,6 +1245,9 @@ pub const Stmt = union(enum) {
         nonblocking: bool = false,
         timing: ExprId = .none,
         timing_is_delay: bool = false,
+        /// IEEE 1364-2005 §9.7.7 `repeat ( count ) @ ...`: the event control
+        /// waits for `count` occurrences; `.none` without `repeat`.
+        timing_repeat: ExprId = .none,
         /// IEEE 1364-2005 §9.3 procedural continuous assignments, which only
         /// a digital parse makes: `assign`/`force` (with a `value`) and
         /// `deassign`/`release` (whose `value` is `.none`).
