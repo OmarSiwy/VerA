@@ -13,7 +13,6 @@
 //     strong drivers and resolves x)
 //   a = 1 drives pull1, b = 0 drives strong0 -> 0
 //! inherited IEEE 1364-2005 4.4.2 4.4
-//! xfail the drive strength on a net declaration assignment is dropped: both drivers resolve as strong and w is x
 module b_4_4_2_net_declaration_drive_strength;
   reg a, b;
   wire (pull1, pull0) w = a;

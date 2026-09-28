@@ -1033,7 +1033,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
             // not on the `=`), so the row it contributes carries none.
             if (n.init != .none)
-                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
+                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
         }
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a

@@ -988,6 +988,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
             try parse_expr.parseExpr(self)
         else
             .none;
+        // IEEE 1364-2005 §4.4: "Drive strength shall only be used when placing
+        // a continuous assignment on a net in the same statement that
+        // declares the net."
+        if (st.drive and nodeset == .none)
+            return self.failAt(tok, .E0207, "§4.4: a drive strength is only legal on a net declaration assignment", .{});
         // Only the first declaration binds. A port that already has a
         // discipline gets a net entry instead, so lowering sees both and can
         // apply §7.4.4 (E0902). The entry adds no node: `internNode` finds the
