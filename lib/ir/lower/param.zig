@@ -577,16 +577,23 @@ pub fn patternElems(self: *Lower, e: Ast.ExprId) Oom![]const Ast.ExprId {
         .int => |i| i,
         else => null,
     } else null;
-    // ponytail: the cap is an unrolling guard, not a rule; no declared array
-    // comes near 2^20 cells.
-    if (n == null or n.? < 0 or n.? * @as(i64, @intCast(group.len)) > 1 << 20) {
+    if (n == null or n.? < 0) {
         try self.err(ex.mainTok(count), .E0223, "", .{});
+        return &.{};
+    }
+    const cells = @as(i128, n.?) * group.len;
+    if (cells > max_cells) {
+        try self.err(ex.mainTok(count), .E1016, "the pattern has {d} elements", .{cells});
         return &.{};
     }
     const out = try self.arena.alloc(Ast.ExprId, @as(usize, @intCast(n.?)) * group.len);
     for (0..@intCast(n.?)) |k| @memcpy(out[k * group.len ..][0..group.len], group);
     return out;
 }
+
+/// E1016's bound on an array's or a pattern's cells: each becomes its own
+/// scalar, so this is an unrolling guard, not a language rule.
+const max_cells = 1 << 20;
 
 /// One declared array dimension, normalized so `lo <= hi`.
 pub const Bounds = struct {
@@ -624,6 +631,14 @@ pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u
         const x = a.asInt();
         const y = c.asInt();
         b.* = .{ .lo = @min(x, y), .hi = @max(x, y), .descending = x > y };
+    }
+    var cells: i128 = 1;
+    for (out) |b| {
+        cells *= @as(i128, b.hi) - b.lo + 1;
+        if (cells > max_cells) {
+            try self.err(tok, .E1016, "`{s}`", .{name});
+            return null;
+        }
     }
     return out;
 }

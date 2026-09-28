@@ -1,0 +1,25 @@
+// LRM 4.5.5, Table 4-19: idtmod(expr) returns the integral of expr from t0
+// plus c, "where c is the initial starting point as determined by the
+// simulator". The starting point is the tool's choice. VerA's
+// (docs/IMPLEMENTATION.md) is c = 0, the same as an explicit ic of 0. This
+// pins that choice; 17_idtmod.va declines to, because another tool may pick
+// the DC value and conform.
+//
+// HAND DERIVATION. The integrand is the constant 0.9e9, integrated exactly by
+// any rule, so on 1 ns steps the integral is 0, 0.9, 1.8. With c = 0 and no
+// modulus (idtmod without a modulus behaves like idt), idtmod(0.9e9) is
+// 0.9e9 * $abstime at every point: the residual below is 0.
+//
+//! lrm 4.5.5
+//! analysis tran
+//! time 0, 1n, 2n
+//! print none
+`include "check.vh"
+module idtmod_one_argument_starts_at_zero(p, n);
+    inout p, n;
+    electrical p, n;
+    analog begin
+        `CHECK("idtmod(expr) starts at c = 0", idtmod(0.9e9) - 0.9e9 * $abstime, 0.0, 1e-9);
+        I(p, n) <+ V(p, n);
+    end
+endmodule
