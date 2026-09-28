@@ -49,6 +49,22 @@ pub const Literal = struct {
             bits |= ~mask(self.width);
         return @bitCast(bits);
     }
+    /// Returns the numeric value when an i64 holds it exactly, at any width:
+    /// a wider literal qualifies when every bit above bit 63 repeats bit 63
+    /// (signed) or is 0 with bit 63 clear (unsigned). Null on an X or Z bit.
+    pub fn asExactInt(self: Literal) ?i64 {
+        if (self.width <= 64) return self.asInt();
+        if (self.hasUnknown()) return null;
+        const words = self.values();
+        const low: i64 = @bitCast(words[0]);
+        if (low < 0 and !self.signed) return null;
+        const fill: u64 = if (low < 0) std.math.maxInt(u64) else 0;
+        const last = words.len - 1;
+        for (words[1..], 1..) |word, i| {
+            if (word != if (i == last) fill & mask(self.width) else fill) return null;
+        }
+        return low;
+    }
     /// Returns bit `index`, bit zero least significant. Asserts
     /// `index < width`.
     pub fn bit(self: Literal, index: u32) Bit {
@@ -1724,4 +1740,15 @@ test "parse decodes every base, as the lexer spells the token (§2.6.1)" {
     // unsized form, it is no form at all.
     try std.testing.expectError(error.ZeroSize, parse(a, "0'b1"));
     try std.testing.expectError(error.ZeroSize, parse(a, "0_0'h1"));
+}
+
+test "asExactInt: a wide two-state literal is an integer only when an i64 holds its value" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqual(@as(?i64, 1), (try parse(a, "128'h1")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, -2), (try parse(a, "100'shF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFE")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h1_0000_0000_0000_0000")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h8000_0000_0000_0000")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'hx")).asExactInt());
 }

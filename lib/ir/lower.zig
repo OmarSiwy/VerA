@@ -1020,6 +1020,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         if (tag != .logic_literal or in_discrete) continue;
         const e: Ast.ExprId = @enumFromInt(i);
         const literal = self.file.exprs.logicValue(e);
+        if (literal.asExactInt() != null) continue; // `lower_expr` lowers it as an integer
         const span = self.tokenSpan(self.file.exprs.mainTok(e));
         try self.err(self.file.exprs.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit {s} literal", .{ self.src[span.start..span.end], literal.width, if (literal.hasUnknown()) "four-state" else "wide" });
     }
