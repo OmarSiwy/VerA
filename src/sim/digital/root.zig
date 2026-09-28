@@ -1075,7 +1075,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // a digital process naming one is an undeclared name.
         if (r.mixed and (v.init != .none or v.storage == .time or (v.ty != .integer and !written.contains(v.name)))) continue;
         if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
-        _ = try mintVar(r, v);
+        // IEEE 1364-2005 §12.3.3: "If either the port or the net/reg is
+        // declared as signed, then the other shall also be considered signed."
+        var d = v;
+        for (m.ports) |p| if (p.name == v.name and p.is_signed) {
+            d.is_signed = true;
+        };
+        _ = try mintVar(r, d);
     }
     // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
     // instance holding its formals, its locals and a function's result: the
