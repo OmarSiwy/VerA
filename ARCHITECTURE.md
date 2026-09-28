@@ -69,7 +69,7 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 **I1. A runtime never imports the compiler.**
 - `build.zig:42`: `sim` imports `diag` and `frontend`.
 - Through `Integer`: `src/sim/rt/logic.zig:8`, `src/sim/fmt.zig:8`.
-- Through `deep_stack`: `rt/root.zig:24`, `digital/compile.zig:15`, `exec.zig:17`, `digital/root.zig:22`, `emit.zig:79`.
+- ~~Through `deep_stack`: `rt/root.zig:24`, `digital/compile.zig:15`, `exec.zig:17`, `digital/root.zig:22`, `emit.zig:79`.~~ Phase 2: these and `digital/elab.zig:29` read `base`.
 - The whole interpreter (`digital/*.zig`).
 - Emitted text: `emit.zig:181`, `runner_text.zig:1432-1433`.
 - **Fix:** Phases 2–3 remove the `Integer`/`fmt`/`deep_stack` edges, Phase 9 removes the emitter, and B4 removes the rest. `vpi` is reclassified as a tool rather than fixed (§5.3).
@@ -84,7 +84,7 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 
 **I3. `ir` holds types only.**
 - `lib/ir/root.zig:16-27` exports logic: `Elaborate`, `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.
-- `mir.zig:9,47,311` takes `StrId` and the interner from the Ast.
+- ~~`mir.zig:9,47,311` takes `StrId` and the interner from the Ast.~~ Phase 2: it reads `base`.
 - `opcode.zig:8-9,45-47,194` takes the Ast operator enums and `constfold`.
 - `lower/tables.zig:23-30` imports Lexer, Preprocessor, Elaborate and `sysfunc`; `:878-889` is logic.
 - Downstream code calls lowering logic: `codegen/call.zig:35,269,697,704`, `host_expr.zig:337`, `plan/setup.zig:245`, `file.zig:542`, `render.zig:105`, `analysis.zig:1097`.
@@ -213,4 +213,5 @@ line numbers had moved.
 | Phase | Status |
 |---|---|
 | 1 | written 2026-10-17 on branch `phase1-fitness` (`ModuleSpec.role`, `tests/import_graph.zig`, `tests/fitness.zig`); awaits its gate, `zig build test` |
-| 0, 2–12, B1–B4 | not started (2026-10-17) |
+| 2 | written 2026-10-17 on branch `phase2-base` (`lib/base/`: `deep_stack`, `interner`, `big_arena`; `sim`'s six `deep_stack` sites and `mir.zig`'s interner read `base`); awaits its gate, G |
+| 0, 3–12, B1–B4 | not started (2026-10-17) |
