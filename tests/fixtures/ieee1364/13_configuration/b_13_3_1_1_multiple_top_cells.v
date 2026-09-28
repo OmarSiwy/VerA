@@ -11,7 +11,6 @@
 // t1 prints at t=0, t2 at t=1 (distinct times, no §11.4.2 order assumed),
 // and t1 finishes at t=2:  "t1", "t2".
 //! inherited IEEE 1364-2005 13.3.1.1 13.4.4
-//! xfail a design statement listing two cells is refused ("digital execution requires exactly one top-level module")
 `timescale 1ns/1ns
 config cfg;
   design work.t1 work.t2;

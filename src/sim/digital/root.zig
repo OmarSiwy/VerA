@@ -209,6 +209,8 @@ pub const Run = struct {
     search: []const Ast.StrId = &.{},
     /// Per instance scope, the §13.3 state its children bind under.
     binds: std.AutoHashMapUnmanaged(u32, binding.Ctx) = .empty,
+    /// The top-level modules' scopes (`isRoot`), 0 first.
+    roots: []const u32 = &.{0},
     /// IEEE 1364-2005 §10 the tasks and functions of every instance.
     subs: std.ArrayList(Sub) = .empty,
     /// A subroutine by its name in the instance that declares it.
@@ -661,7 +663,12 @@ pub const Run = struct {
         while (true) {
             if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
             if (self.file.modules[self.scope_info.items[s].def].name == name) return s;
-            if (s == 0) return null;
+            // §12.5: a top-level module's name starts a hierarchical name
+            // anywhere in the design.
+            if (isRoot(self, s)) {
+                for (self.roots) |t| if (self.scope_info.items[t].name == name) return t;
+                return null;
+            }
             s = self.instanceOf(self.scope_info.items[s].parent);
         }
     }
@@ -902,12 +909,17 @@ pub const Elab = struct {
     procs: std.ArrayList(struct { scope: u32, blocks: []const Ast.DiscreteBlock }) = .empty,
 };
 
-/// §6.2.2: the root of the design is the description nothing instantiates.
-fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl {
-    var top: ?*const Ast.ModuleDecl = null;
+/// §6.2.2: the roots of the design are the descriptions nothing instantiates
+/// (IEEE 1364-2005 §12.1.1: "A model shall contain at least one top-level
+/// module"), as `file.modules` rows.
+fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
     // IEEE 1364-2005 §13.3.1.1: a configuration's `design` statement names
     // the top-level cells, whatever else the source leaves uninstantiated.
-    if (try binding.top(r)) |d| return connectable(r, &r.file.modules[d], 0);
+    if (try binding.top(r)) |defs| {
+        for (defs) |d| _ = try connectable(r, &r.file.modules[d], 0);
+        return defs;
+    }
+    var tops: std.ArrayList(u32) = .empty;
     // §12.1.1: "an instantiated module is not a top", wherever it is
     // instantiated, a generate arm the scheme does not select included.
     var generated: std.ArrayList(Ast.StrId) = .empty;
@@ -918,10 +930,21 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
             if (inst.module == candidate.name) continue :outer;
         };
         if (std.mem.indexOfScalar(Ast.StrId, generated.items, candidate.name) != null) continue;
-        if (top != null) return r.fail(candidate.main_tok, "digital execution requires exactly one top-level module", .{});
-        top = candidate;
+        // §13.2.1.1: a later same-named cell of its library replaces it.
+        const d = defOf(r, candidate);
+        if (for (modules[d + 1 ..], r.def_lib[d + 1 ..]) |later, l| {
+            if (later.name == candidate.name and l == r.def_lib[d]) break true;
+        } else false) continue;
+        try tops.append(r.arena, d);
     }
-    return top orelse r.fail(0, "digital execution found no top-level module", .{});
+    if (tops.items.len == 0) return r.fail(0, "digital execution found no top-level module", .{});
+    return tops.items;
+}
+
+/// Is `scope` a top-level module's instance? The first is scope 0; every
+/// other is its own parent.
+pub fn isRoot(r: *const Run, scope: u32) bool {
+    return scope == 0 or r.scope_info.items[scope].parent == scope;
 }
 
 fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
@@ -1502,7 +1525,16 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         while (true) {
             if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d|
                 break :blk .{ .e = d.value, .scope = at };
-            if (at == 0) break;
+            if (isRoot(r, at)) {
+                // §12.2.1: a defparam in one top-level module may name a
+                // parameter under another by its full hierarchical name.
+                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
+                if (r.file.strings.find(full)) |str| for (r.roots) |t| {
+                    if (t == at) continue;
+                    if (r.defparams.get(.{ .scope = t, .str = str })) |d| break :blk .{ .e = d.value, .scope = t };
+                };
+                break;
+            }
             path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
             at = r.scope_info.items[at].parent;
         }
@@ -1965,11 +1997,13 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     try binding.libraries(&r, file, opts, pp.more_starts);
+    var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
         if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
-        break :blk try pickTop(&r, file.modules);
+        tops = try pickTops(&r, file.modules);
+        break :blk &file.modules[tops[0]];
     };
     // IEEE 1364 §19.8: a `timescale applies to "all modules that follow this
     // directive until another `timescale compiler directive is read", so each
@@ -2023,6 +2057,22 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // is what lets a port connection resolve against nets that already exist.
     var e: Elab = .{};
     try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .def = defOf(&r, m) });
+    // IEEE 1364-2005 §12.1.1 every other top-level module is a root of its
+    // own, scoped before any instance so a defparam in it that names another
+    // top's parameter (§12.2.1) is registered when that parameter is set.
+    if (tops.len > 1) {
+        const roots = try arena.alloc(u32, tops.len);
+        roots[0] = 0;
+        for (tops[1..], roots[1..]) |d, *s| {
+            const t = &file.modules[d];
+            s.* = try newScope(&r, t.main_tok);
+            try r.scope_info.append(arena, .{ .parent = s.*, .name = t.name, .def = d });
+            for (t.defparams) |dp| try r.defparams.put(arena, .{ .scope = s.*, .str = dp.path }, dp);
+        }
+        r.roots = roots;
+    }
+    for (r.roots, 0..) |s, k| if (r.binds.get(0)) |b| if (b.cfg) |c|
+        try r.binds.put(arena, s, binding.rootCtx(&r, c, if (tops.len == 0) defOf(&r, m) else tops[k]));
     if (opts.mixed) |mx| {
         // VAMS §7.8.4 each bridge's segment, spelled as the flatten spells it
         // (`bridged` declares it), for the connections re-pointed at it.
@@ -2048,6 +2098,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     @memset(r.sys_calls, null);
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, &.{}, 0);
+    if (tops.len > 1) for (r.roots[1..], tops[1..]) |s, d| try declare(&r, &e, &file.modules[d], s, &.{}, &.{}, 0);
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;

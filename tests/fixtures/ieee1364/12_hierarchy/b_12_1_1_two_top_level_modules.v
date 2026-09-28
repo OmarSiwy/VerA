@@ -12,7 +12,6 @@
 //   m1: size = 5, delay = 10 -> "top.m1 size=5 delay=10" at t = 10
 //   m2: size = 10, delay = 20 -> "top.m2 size=10 delay=20" at t = 20
 //! inherited IEEE 1364-2005 12.1.1 12.2.1 12.5
-//! xfail `vera --run` refuses a design with two top-level modules ("digital execution requires exactly one top-level module")
 `timescale 1ns/1ns
 module top;
   reg clk;

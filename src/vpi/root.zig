@@ -1249,6 +1249,9 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     defer gpa.free(vpi_of);
     for (r.scope_info.items, 0..) |info, e| {
         if (info.lexical) continue;
+        // ponytail: the model has one top-level module; a second (§12.1.1)
+        // is refused until `Design` names objects from more than one root.
+        if (e != 0 and info.parent == e) return error.NotElaborated;
         const at: u32 = @intCast(scopes.items.len);
         vpi_of[e] = at;
         var parent: ?u32 = null;

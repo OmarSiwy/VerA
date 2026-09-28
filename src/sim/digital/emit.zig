@@ -886,7 +886,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     },
                     .vars => {
                         try self.print("            try s.dumpVars(", .{});
-                        if (t.args.len == 0) try self.print("0, &.{{.{{ .scope = 0 }}}});\n", .{}) else {
+                        if (t.args.len == 0) {
+                            try self.print("0, &.{{", .{});
+                            for (r.roots) |sc| try self.print(" .{{ .scope = {d} }},", .{sc});
+                            try self.print(" }});\n", .{});
+                        } else {
                             try int64(self, t.args[0]);
                             try self.print(", &.{{", .{});
                             for (t.args[1..]) |e| switch (vcd.target(r, e) catch return self.refuse("a $dumpvars target the engine resolves only at run time")) {
