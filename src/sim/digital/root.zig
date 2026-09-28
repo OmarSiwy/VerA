@@ -1869,8 +1869,8 @@ pub fn earlyFrame(r: *Run, idx: u32, tok: u32) Error!void {
     const sub = &r.subs.items[idx];
     sub.frame = try frame(r, sub.decl, sub.inst);
     sub.framed = true;
-    if (!try compile.constantFunction(r, idx))
-        return r.fail(tok, "§10.4.5: a function called during elaboration is a constant function, which uses only its own variables and parameters", .{});
+    if (try compile.notConstant(r, idx)) |why|
+        return r.fail(tok, "§10.4.5: a function called during elaboration is a constant function, and {s}", .{why});
     const saved = r.scope;
     defer r.scope = saved;
     try compile.compileSub(r, idx);
