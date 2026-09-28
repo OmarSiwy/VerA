@@ -18,6 +18,8 @@ pub const vpi = @import("vpi");
 
 /// The stage-boundary exhaustiveness guard.
 pub const exhaustive = @import("exhaustive.zig");
+/// ARCHITECTURE.md's fitness rules R1-R7, each with its shrinking allowlist.
+pub const fitness = @import("fitness.zig");
 /// The in-process fuzz targets, replayed with seeded
 /// inputs by zrunner's `fuzz`.
 pub const fuzz_targets = @import("fuzz.zig");
