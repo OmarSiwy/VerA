@@ -1,0 +1,6 @@
+// IEEE 1364-2005 A.1.1 support source for A_formal_syntax/b_A_1_1_*: the
+// cell c1, printing its instance and its library binding (%l, §13.6).
+module c1;
+  parameter D = 0;
+  initial #D $display("%m %l");
+endmodule
