@@ -490,24 +490,6 @@ pub fn blockCount(self: *const Mir) u32 {
     return @intCast(self.blocks.len);
 }
 
-/// Iterator over block handles `0..count`.
-pub const BlockIterator = struct {
-    count: u32,
-    i: u32 = 0,
-
-    /// Returns the next block, or null past the last.
-    pub fn next(it: *BlockIterator) ?Block {
-        if (it.i >= it.count) return null;
-        defer it.i += 1;
-        return @enumFromInt(it.i);
-    }
-};
-
-/// Returns the blocks in creation order, the deterministic codegen walk order.
-pub fn blockIter(self: *const Mir) BlockIterator {
-    return .{ .count = self.blockCount() };
-}
-
 /// Iterator over one block's instruction chain.
 pub const InstIterator = struct {
     /// Borrowed `next` column. Adding instructions invalidates it: iterate only

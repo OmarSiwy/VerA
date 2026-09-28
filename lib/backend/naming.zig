@@ -164,7 +164,7 @@ pub fn unitName(
 ///      (§5.6.7 indirect statements are never deduped, so several to one
 ///      branch form a collision group);
 ///   2. every §4.5 operator, §5.10 event and §9.17 kernel-control `call`, in
-///      `Mir.blockIter` then `Mir.blockInsts` order, role `.analog_op`. The
+///      block creation order then `Mir.blockInsts` order, role `.analog_op`. The
 ///      §9.17 `$bound_step`/`$discontinuity` calls come last, in that order.
 ///
 /// The order is a pure function of the source; `disambig` counts 0, 1, 2 in
@@ -195,8 +195,8 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
 
     // (2) §4.5 stateful operators. `Instance` state fields are keyed on these
     // names, so adding an unrelated operator must not rename existing state.
-    var blocks = mir.blockIter();
-    while (blocks.next()) |block| {
+    for (0..mir.blockCount()) |bi| {
+        const block: Mir.Block = @enumFromInt(bi);
         var insts = mir.blockInsts(block);
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call) continue;
