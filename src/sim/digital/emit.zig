@@ -495,10 +495,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest}) else try self.print(
         \\pub fn main(init: std.process.Init) u8 {{
-        \\    var s: S = undefined;
-        \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
-        \\    while (s.next() catch |e| return s.exit(e)) |pc| Code(false).dispatch(&s, pc) catch |e| return s.exit(e);
-        \\    return s.exit(null);
+        \\    return rt.main(init, &design, {d}, Code(false).dispatch);
         \\}}
         \\
     , .{r.finest});

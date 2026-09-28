@@ -1,0 +1,160 @@
+//! A native design's `State` at a tick boundary -> flat bytes (`save`), and
+//! back (`restore`); `twice`, the run that proves the two lossless.
+//! A boundary is where IEEE 1364-2005 §11.4 has emptied the active, NBA and
+//! monitor regions of a time step, so nothing mid-step (rows, a settle, a
+//! subroutine frame) is in it. The one pointer the bytes carry is the §17.3.2
+//! `$timeformat` suffix, into the executable's constant strings. Outside them,
+//! and dropped by a `quiet` run: the transcript, the §17.2 file table and
+//! positions, and the §18 dump.
+const std = @import("std");
+const root = @import("root.zig");
+const State = root.State;
+const Error = root.Error;
+const Dispatch = root.Dispatch;
+
+/// The fixed-size fields that change while a design runs, as names of
+/// `State` fields (one value or a slice each), then of `State.nets`.
+const fixed = .{ "v", "armed", "waiting", "seq", "repeats", "joins", "monitored", "mon_site", "mon_on", "mon_pending", "random_seed", "layers", "time_format", "budget_time", "budget_used", "two", "two_at", "steps", "look_at" };
+const nets = .{ "cur", "tgt", "or_z", "tgt_or_z", "s0", "s1", "flight", "started", "res", "ntgt", "nflight", "capacitive", "decay_ev", "sig0", "prev", "state" };
+
+fn bytes(p: anytype) []u8 {
+    return @constCast(if (@typeInfo(@TypeOf(p.*)) == .pointer) std.mem.sliceAsBytes(p.*) else std.mem.asBytes(p));
+}
+
+/// `s` at a tick boundary, appended to `w`. Its length is fixed by the
+/// design, plus O(the events, suspensions, `<= #d` updates and §17.6 queue
+/// entries pending); a fixed `w` bounds it.
+pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    std.debug.assert(s.settle == .idle and s.rows.items.len == 0 and s.changed.items.len == 0 and
+        s.depth == 0 and s.unwind == null and !s.overriding);
+    try s.sched.save(w);
+    inline for (fixed) |f| try w.writeAll(bytes(&@field(s, f)));
+    if (!root.logic.two) try w.writeAll(bytes(&s.x));
+    inline for (nets) |f| try w.writeAll(bytes(&@field(s.nets, f)));
+    try list(w, s.susps.items);
+    try list(w, s.free_susps.items);
+    try list(w, s.free_late.items);
+    try count(w, s.late.items.len);
+    for (s.late.items) |l| {
+        try w.writeAll(std.mem.asBytes(&[3]u32{ l.slot, l.off, l.n }));
+        try list(w, l.words);
+    }
+    // The live terms, slot by slot in filed order: a stale one never wakes.
+    var live: usize = 0;
+    for (s.terms) |l| for (l.items) |t| {
+        live += @intFromBool(s.susps.items[t.susp].gen == t.gen);
+    };
+    try count(w, live);
+    for (s.terms, 0..) |l, slot| for (l.items) |t| if (s.susps.items[t.susp].gen == t.gen) {
+        try w.writeAll(std.mem.asBytes(&@as(u32, @intCast(slot))));
+        try w.writeAll(std.mem.asBytes(&t));
+    };
+    try count(w, s.queues.count());
+    var it = s.queues.iterator();
+    while (it.next()) |e| {
+        var q = e.value_ptr.*;
+        q.jobs = .empty;
+        try w.writeAll(std.mem.asBytes(e.key_ptr));
+        try w.writeAll(std.mem.asBytes(&q));
+        try list(w, e.value_ptr.jobs.items);
+    }
+}
+
+fn count(w: *std.Io.Writer, n: usize) std.Io.Writer.Error!void {
+    try w.writeAll(std.mem.asBytes(&@as(u32, @intCast(n))));
+}
+
+fn list(w: *std.Io.Writer, items: anytype) std.Io.Writer.Error!void {
+    try count(w, items.len);
+    try w.writeAll(std.mem.sliceAsBytes(items));
+}
+
+/// `s` as `save` wrote it to `b`, for the same design.
+pub fn restore(s: *State, b: []const u8) Error!void {
+    var r: std.Io.Reader = .fixed(b);
+    load(s, &r) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else s.fail("a saved tick boundary is truncated", .{});
+}
+
+fn load(s: *State, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.Error)!void {
+    const gpa = s.gpa;
+    try s.sched.restore(r);
+    inline for (fixed) |f| try r.readSliceAll(bytes(&@field(s, f)));
+    if (!root.logic.two) try r.readSliceAll(bytes(&s.x));
+    inline for (nets) |f| try r.readSliceAll(bytes(&@field(s.nets, f)));
+    try reload(r, gpa, &s.susps);
+    try reload(r, gpa, &s.free_susps);
+    // `park` grows the free list so `retire` never fails.
+    try s.free_susps.ensureTotalCapacity(gpa, s.susps.items.len);
+    try reload(r, gpa, &s.free_late);
+    for (s.late.items) |l| gpa.free(l.words);
+    try s.late.resize(gpa, try take(r));
+    for (s.late.items) |*l| {
+        var h: [3]u32 = undefined;
+        try r.readSliceAll(std.mem.asBytes(&h));
+        const words = try gpa.alloc(u64, try take(r));
+        try r.readSliceAll(std.mem.sliceAsBytes(words));
+        l.* = .{ .slot = h[0], .off = h[1], .n = h[2], .words = words };
+    }
+    for (s.terms) |*l| l.clearRetainingCapacity();
+    for (0..try take(r)) |_| {
+        var slot: u32 = undefined;
+        var t: @TypeOf(s.terms[0].items[0]) = undefined;
+        try r.readSliceAll(std.mem.asBytes(&slot));
+        try r.readSliceAll(std.mem.asBytes(&t));
+        try s.terms[slot].append(gpa, t);
+    }
+    var it = s.queues.valueIterator();
+    while (it.next()) |q| q.jobs.deinit(gpa);
+    s.queues.clearRetainingCapacity();
+    for (0..try take(r)) |_| {
+        var id: i64 = undefined;
+        var q: @import("../digital/system.zig").Queue = undefined;
+        try r.readSliceAll(std.mem.asBytes(&id));
+        try r.readSliceAll(std.mem.asBytes(&q));
+        q.jobs = .empty;
+        try reload(r, gpa, &q.jobs);
+        try s.queues.put(gpa, id, q);
+    }
+}
+
+fn take(r: *std.Io.Reader) std.Io.Reader.Error!u32 {
+    var n: u32 = undefined;
+    try r.readSliceAll(std.mem.asBytes(&n));
+    return n;
+}
+
+fn reload(r: *std.Io.Reader, gpa: std.mem.Allocator, l: anytype) (std.Io.Reader.Error || std.mem.Allocator.Error)!void {
+    try l.resize(gpa, try take(r));
+    try r.readSliceAll(std.mem.sliceAsBytes(l.items));
+}
+
+/// What `twice` saw.
+pub const Stats = struct { ticks: u64 = 0, bytes: usize = 0 };
+
+/// `root.loop`, with every tick run twice from its boundary: first
+/// `quiet`, then `restore`d and run for real. A field `save` misses carries
+/// the quiet run's effect into the real one, and the transcript differs
+/// from `root.loop`'s.
+pub fn twice(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch, stats: *Stats) ?Error {
+    var at: std.Io.Writer.Allocating = .init(s.gpa);
+    defer at.deinit();
+    var drop_buf: [64]u8 = undefined;
+    var drop: std.Io.Writer.Discarding = .init(&drop_buf);
+    const sink = s.sink;
+    while (true) {
+        const t = s.sched.peekTime() orelse return null;
+        at.clearRetainingCapacity();
+        save(s, &at.writer) catch return error.OutOfMemory;
+        stats.ticks += 1;
+        stats.bytes = @max(stats.bytes, at.written().len);
+        s.quiet = true;
+        s.sink = &drop.writer;
+        s.out = s.sink;
+        _ = root.loop(s, four, two_, t);
+        s.quiet = false;
+        s.sink = sink;
+        s.out = sink;
+        restore(s, at.written()) catch |e| return e;
+        if (root.loop(s, four, two_, t)) |e| return e;
+    }
+}

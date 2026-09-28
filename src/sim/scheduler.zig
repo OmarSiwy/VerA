@@ -262,6 +262,30 @@ pub const Scheduler = struct {
         }
     }
 
+    /// The whole queue as bytes `restore` reads back: every slot, so a
+    /// `Handle` taken before `save` names the same event after `restore`;
+    /// the region lists; the future heap in its array order; the clock.
+    /// Its length is O(the most events ever pending at once).
+    pub fn save(self: *const Scheduler, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const lens = [2]u32{ @intCast(self.slots.len), @intCast(self.future.items.len) };
+        try w.writeAll(std.mem.asBytes(&lens));
+        inline for (.{ &self.now, &self.heads, &self.tails, &self.free, &self.sequence, &self.phase }) |f| try w.writeAll(std.mem.asBytes(f));
+        inline for (comptime std.enums.values(std.MultiArrayList(Slot).Field)) |f| try w.writeAll(std.mem.sliceAsBytes(self.slots.items(f)));
+        try w.writeAll(std.mem.sliceAsBytes(self.future.items));
+    }
+
+    /// The queue `save` wrote to `r`.
+    pub fn restore(self: *Scheduler, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.Error)!void {
+        var lens: [2]u32 = undefined;
+        try r.readSliceAll(std.mem.asBytes(&lens));
+        inline for (.{ &self.now, &self.heads, &self.tails, &self.free, &self.sequence, &self.phase }) |f| try r.readSliceAll(std.mem.asBytes(f));
+        try self.slots.resize(self.allocator, lens[0]);
+        inline for (comptime std.enums.values(std.MultiArrayList(Slot).Field)) |f| try r.readSliceAll(std.mem.sliceAsBytes(self.slots.items(f)));
+        try self.future.ensureTotalCapacity(self.allocator, lens[1]);
+        self.future.items.len = lens[1];
+        try r.readSliceAll(std.mem.sliceAsBytes(self.future.items));
+    }
+
     fn checkMutation(self: *const Scheduler) Error!void {
         switch (self.phase) {
             .stopped => return error.Stopped,
@@ -413,6 +437,28 @@ test "nextUntil never advances past its limit; peekTime reports what next would"
     try t.expectEqual(@as(u32, 3), e.payload);
     try t.expectEqual(@as(Time, 9), e.time);
     try t.expectEqual(@as(?Time, null), scheduler.peekTime());
+}
+
+test "restore replays the events save saw, and a handle cancels the same event" {
+    var s = Scheduler.init(t.allocator);
+    defer s.deinit();
+    _ = try s.schedule(.nba, 1);
+    const h = try s.scheduleAt(5, .inactive, 2);
+    _ = try s.scheduleAt(5, .nba, 3);
+    _ = try s.scheduleAt(9, .inactive, 4);
+    var buf: [1024]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try s.save(&w);
+    var first: [4]u32 = undefined;
+    for (&first) |*p| p.* = s.next().?.payload;
+    _ = try s.scheduleAt(20, .inactive, 99);
+    var r: std.Io.Reader = .fixed(w.buffered());
+    try s.restore(&r);
+    try t.expect(try s.cancel(h));
+    try t.expectEqualSlices(u32, &.{ 1, 2, 3, 4 }, &first);
+    for ([_]u32{ 1, 3, 4 }) |p| try t.expectEqual(p, s.next().?.payload);
+    try t.expect(s.next() == null);
+    try t.expectEqual(@as(Time, 9), s.now);
 }
 
 test "NBA batch, inactive reentry and analog feedback settle before monitor" {
