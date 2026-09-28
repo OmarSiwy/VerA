@@ -1,0 +1,20 @@
+// An engine limit, not a language rule. §3.3 Table 3-3 lets a replication
+// multiply a string by any non-negative count. A replication whose count is
+// known only at run time builds its text in a 4096-byte buffer and ends the
+// run past it (E1011); one whose count and text fold is refused past the same
+// 4096 bytes when the model compiles (docs/IMPLEMENTATION.md), so the two
+// agree. {5000{"x"}} is 5000 bytes. A count of 10^12 used to exhaust memory
+// while folding.
+//
+// Legal neighbour: string_replication_4096_bytes.va.
+//
+//! reject E1011
+//! reject the replication makes 5000 copies of 1 bytes
+module string_replication_over_4096_bytes_rejected(p, n);
+  inout p, n; electrical p, n;
+  string s;
+  analog begin
+    s = {5000{"x"}};
+    I(p, n) <+ V(p, n) * (s == "");
+  end
+endmodule

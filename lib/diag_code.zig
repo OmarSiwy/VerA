@@ -5964,8 +5964,9 @@ fn infoOf(c: Code) Info {
             \\descriptor reads through one: `$fgets` returns at most one
             \\4096-byte line, and one `$fscanf` sees at most 4096 bytes ahead.
             \\
-            \\A field width or precision above 4096 written in a format string
-            \\is refused when the model compiles. Text that only grows past
+            \\A field width or precision above 4096 written in a format string,
+            \\or a string replication (LRM 3.3 Table 3-3) whose count and text
+            \\fold to more than 4096 bytes, is refused when the model compiles. Text that only grows past
             \\4096 bytes while the model runs (a long `%s` operand, a
             \\concatenation of long strings, a longer line in a file read by
             \\`$fgets` or `$fscanf`) ends the run with this code and exit
