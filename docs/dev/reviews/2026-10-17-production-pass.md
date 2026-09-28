@@ -64,3 +64,16 @@ Built once, after merging (the user's rule: agents check syntax with `zig ast-ch
 | `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
 
 P1: −10 net lines over 119 files (152 `pub` made private, 116 std renames, dead aliases). Issues: #35–#39 (P6), #40 (P0).
+
+### Waves 2–4 — P2–P5, P7–P10, #41–#47 (gate 1518183f against base 670b9254)
+
+| Check | Result |
+|---|---|
+| `zig build check` | exit 0 |
+| `zig build test` Debug / ReleaseSafe | exit 0 / exit 0, after two fixes found by the first run: P7b's `linkArgv` precondition moved to its caller (b8c05925); #47's NaN delay was still dropped by two later `@max` calls (758e5223) |
+| `printf_reference` (glibc oracle) | caught #41's `%#g` at a rounding carry; zCReal follows C11 7.21.6.1 (X after rounding), glibc 2.42 prints `1.e+06`; the oracle takes C11's rule there (2d8e5ff5) |
+| golden diff | 201 of 7568: 118 `.va` move by #41's string-kernel text and P9's Zig 0.17 std names in emitted text; 51 `.v` move by #43's flags argument on `s.real(`; 26 new fixture files; no `.stderr` changed |
+| fixture suite | 2604/2605 → 2615/2615, FAIL list empty |
+| `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
+
+Issues closed by these waves: #35–#48 (bugs found by the pass, each with a fixture and, where a limit was added, a `Vague_Decisions.md` row).
