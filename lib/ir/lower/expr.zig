@@ -598,7 +598,7 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const op = ex.binOp(e);
     if (lower_constfold.mixedShiftComparison(self, e)) {
-        try self.err(ex.mainTok(e), .E0364, "comparison mixes signed and unsigned operands around a logical shift", .{});
+        try self.err(ex.mainTok(e), .E0364, "comparison mixes signed and unsigned operands around a logical shift wider than 32 bits", .{});
         return poison;
     }
 

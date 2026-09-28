@@ -2822,13 +2822,14 @@ fn infoOf(c: Code) Info {
             .title = "mixed signedness around a shift is not implemented",
             .lrm = "4.2.11",
             .explain =
-            \\The analog MIR does not preserve enough expression signedness to
-            \\apply an unsigned comparison context to a signed shift operand.
-            \\For example, (a >> n) > 32'h1 with integer a = -1 and n = 0
-            \\requires unsigned comparison; comparing the signed i64 carrier
-            \\would silently give the wrong result. VerA rejects this known
-            \\mixed case until context typing is implemented. This is an
-            \\implementation limitation, not an illegal Verilog-AMS expression.
+            \\A comparison with an operand unsigned is unsigned at the wider
+            \\operand's width (LRM 4.2.9), and the shift under it must run at
+            \\that width. VerA shifts at 32 bits (3.2), so a comparison against
+            \\a sized literal wider than 32 bits, such as (a >> n) > 40'h1 with
+            \\integer a = -1, would zero-extend the operand after the shift
+            \\instead of before it. VerA rejects this mixed case until
+            \\expression widths are carried. This is an implementation
+            \\limitation, not an illegal Verilog-AMS expression.
             ,
         },
         .E0368 => .{

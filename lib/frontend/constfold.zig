@@ -374,9 +374,14 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
         },
         .binary => {
             if (env.refuse(e)) return null;
-            const a = fold(file, ex.lhs(e), env) orelse return null;
-            const b = fold(file, ex.rhs(e), env) orelse return null;
+            var a = fold(file, ex.lhs(e), env) orelse return null;
+            var b = fold(file, ex.rhs(e), env) orelse return null;
             const op = ex.binOp(e);
+            const compare = op == .eq or op == .neq or op == .case_eq or op == .case_neq or op == .lt or op == .le or op == .gt or op == .ge;
+            if (compare and a == .int and b == .int) if (unsignedMask(ex, ex.lhs(e), ex.rhs(e), env.signed(ex.lhs(e)), env.signed(ex.rhs(e)))) |m| {
+                a.int &= m;
+                b.int &= m;
+            };
             return binary(op, a, b, if (op == .ashr) env.signed(ex.lhs(e)) else null);
         },
         .ternary => {
@@ -394,6 +399,34 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
         },
         else => return env.leaf(e), // else: every other tag names something only the caller can resolve
     }
+}
+
+/// Returns the zero-extension mask for a comparison of `l` and `r`, whose
+/// source signedness is `sl` and `sr`, or null when neither is known unsigned
+/// and the signed compare stands. "When one or both operands are unsigned, the
+/// expression shall be interpreted as a comparison between unsigned values"
+/// (LRM §4.2.9). Masking both sides to the wider width makes them non-negative,
+/// so a signed i64 compare orders them as unsigned: `a < 32'd1` with `a` at -1
+/// is 4294967295 < 1. Unsized operands are 32 bits (§3.2).
+///
+/// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
+/// widening the carrier. The integer carrier is i64 and the top bit is its
+/// sign, so a 64-bit unsigned comparison has nowhere to be performed; the
+/// upgrade path is a u64 compare opcode pair.
+pub fn unsignedMask(ex: *const Ast.ExprStore, l: Ast.ExprId, r: Ast.ExprId, sl: ?bool, sr: ?bool) ?i64 {
+    if ((sl orelse true) and (sr orelse true)) return null;
+    const w = @max(operandWidth(ex, l), operandWidth(ex, r));
+    if (w >= 64) return null;
+    return (@as(i64, 1) << @intCast(w)) - 1;
+}
+
+/// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
+pub fn operandWidth(ex: *const Ast.ExprStore, e: Ast.ExprId) u32 {
+    if (e != .none and ex.tag(e) == .int_literal) {
+        const w = ex.intLiteral(e).width;
+        if (w != 0) return w;
+    }
+    return 32;
 }
 
 /// The `env` that knows nothing: `fold(file, e, literal_env)` folds literals
