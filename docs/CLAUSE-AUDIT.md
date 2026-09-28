@@ -611,6 +611,9 @@ grammar (Annex A), not in G.
 
 ### 5.3 Implementation-defined — requires a document *and* a test
 
+`docs/IMPLEMENTATION.md` §1 is the maintained list; the table below is the
+2026-09-21 audit it grew from.
+
 | Item | Choice made | Documented? | Tested? |
 |---|---|---|---|
 | `$fflush` is a no-op because writes are unbuffered and positional | unbuffered | yes, `file_kernels.zig:384-389` | yes, `052_fflush.va` (on the descriptor, which is all §9.5.6 leaves observable) |
@@ -625,6 +628,9 @@ requires the published support statements to match the shipped combination.
 **This table should become that list.**
 
 ### 5.4 Resource limits — must be stated and must fail loudly
+
+`docs/IMPLEMENTATION.md` §2 is the maintained table and its §4 lists the
+limits that do not yet fail loudly; the table below is the 2026-09-21 audit.
 
 **Re-derived at HEAD, 2026-09-21.** Two bounds moved from 512 to 4096 and gained
 fixtures, a fifth limit was found unenumerated, and one citation died with
