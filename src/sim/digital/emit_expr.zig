@@ -580,6 +580,15 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         try self.print(", {d}, {d}, {d}), {d}, {d}, {})", .{ p.shift, p.count, sw, n.width, w, sg });
         return;
     }
+    // A known constant index inside the range reads its one plane word, not
+    // the whole vector.
+    if (sw > 64 and compile.constantExpression(r, rg)) {
+        const v = exec.eval(r, self.arena, rg, 0) catch return self.refuse("a constant the engine does not fold");
+        if (v.asInt()) |i| {
+            const p = if (range.msb >= range.lsb) i - range.lsb else range.lsb - i;
+            if (p >= 0 and p < sw) return self.print("L.rs(L.bitAt(M.get(s, {d}), {d}, 63, 0, 64), 1, {d}, {})", .{ self.off[at] + @as(u32, @intCast(p)) / 64, @mod(p, 64), w, sg });
+        }
+    }
     try self.print("L.rs(L.bitAt(", .{});
     try self.get(at);
     try self.print(", L.asInt(", .{});
