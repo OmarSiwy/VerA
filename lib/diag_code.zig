@@ -365,6 +365,7 @@ pub const Code = enum(u16) {
     E1004,
     E1010,
     E1011,
+    E1012,
     E1100,
     E1101,
     E1102,
@@ -5840,6 +5841,22 @@ fn infoOf(c: Code) Info {
             \\
             \\Split the text over several calls. Two `$fwrite` calls to one
             \\descriptor write the same bytes as one call.
+            ,
+        },
+        .E1012 => .{
+            .title = "absdelay needs a sample older than its history holds",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 4.5.7 defines absdelay
+            \\over all past time, Output(t) = Input(max(t - td, 0)), and bounds
+            \\no lookback. VerA keeps the last 1024 accepted samples of each
+            \\absdelay site. When the delay reaches past the oldest one, the run
+            \\ends with this code and exit status 1: answering from a newer
+            \\sample would be a shorter delay reported as this one.
+            \\
+            \\The count is of accepted timepoints, not of time. Take fewer,
+            \\larger steps across the delay (a larger maximum step in the host),
+            \\or shorten td.
             ,
         },
         .W1050 => .{
