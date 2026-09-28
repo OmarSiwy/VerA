@@ -1799,6 +1799,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // execution of the triggering process continues meanwhile.
             .trigger => |at| {
                 if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
+                if (self.watch[at].contains(.vcd)) {
+                    self.vcd.fire(&self.vcd_catalog.?, at);
+                    try requestVcd(self);
+                }
                 try wake(self, at, .x, .x);
                 pc += 1;
                 continue;
