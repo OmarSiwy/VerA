@@ -219,6 +219,13 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
             },
+            // IEEE 1364-2005 A.2.8 a `reg` declaration, which Syntax 9-13
+            // and 9-14 admit after a discrete block's name alone.
+            .kw_reg => if (blk.name != .none and (self.digital or self.in_discrete)) try parse_decl.parseBlockVars(self, &vars) else {
+                self.pos = before_attrs;
+                self.attrs.shrinkRetainingCapacity(attr_mark);
+                break;
+            },
             else => { // else: not a declaration: the block's statements start here
                 // The attributes just read prefix the first statement
                 // (A.6.4), so they are handed back for `parseStmt`.
