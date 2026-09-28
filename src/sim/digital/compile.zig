@@ -456,6 +456,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
                 }
                 const index = try inferValue(self, ex.rhs(e), depth + 1);
+                if (index.real) return self.exprFail(ex.rhs(e), "§4.8.1: a real is not a bit-select index");
                 if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
                 break :blk .{ .width = 1, .signed = false };
             }
@@ -1312,7 +1313,10 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
             try checkEvent(self, ex.lhs(e));
             try checkEvent(self, ex.rhs(e));
         },
-        .event_posedge, .event_negedge => _ = try self.scalarSlot(ex.lhs(e)),
+        // §4.8.1: real variables are prohibited in "Edge descriptors
+        // (posedge, negedge) applied to real variables".
+        .event_posedge, .event_negedge => if (self.reals.contains(try self.scalarSlot(ex.lhs(e))))
+            return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable"),
         .ident => _ = try self.scalarSlot(e),
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
