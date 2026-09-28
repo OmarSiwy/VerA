@@ -933,12 +933,12 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
         return .{ .rise = v, .fall = v, .off = v };
     }
     var out: Ast.Delay3 = .{};
-    out.rise = try parseDelayValue(self);
+    out.rise = try parse_expr.parseMinTypMax(self);
     out.fall = out.rise;
     out.off = out.rise;
     if (self.eat(.comma)) {
-        out.fall = try parseDelayValue(self);
-        out.off = if (self.eat(.comma)) try parseDelayValue(self) else .none;
+        out.fall = try parse_expr.parseMinTypMax(self);
+        out.off = if (self.eat(.comma)) try parse_expr.parseMinTypMax(self) else .none;
     }
     // After the third value the production admits only `)`. E0210 names the
     // missing parenthesis; E0207 would send the reader to the previous
@@ -948,8 +948,7 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
     return out;
 }
 
-/// One delay value, parsed as an expression. A `min:typ:max` value is not
-/// admitted here, though A.2.2.3's parenthesized arm allows one.
+/// A.2.2.3 `delay_value`, the unparenthesized arm, parsed as an expression.
 fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }
