@@ -1444,15 +1444,31 @@ pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
 }
 
+/// `exec.assign` of the Zig `[2]u64` `v`, a signed 64-bit value's value and
+/// unknown planes, to `target`.
+pub fn assignPlanes(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const at = try cellOf(self, std.math.maxInt(u32), 64);
+    try self.print("            try M.set(s, {d}, L.k({s}[0], {s}[1]), 0x{x});\n", .{ at, v, v, std.math.maxInt(u64) });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
+}
+
+/// `exec.assignReal` of the Zig `f64` `v` to `target`.
+pub fn assignReal(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const at = try cellOf(self, std.math.maxInt(u32), 64);
+    try self.print("            try M.set(s, {d}, L.k(@bitCast(@as(f64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = compile.real_type } }, .blocking);
+}
+
 /// `system.stringValue` of the Zig `[]const u8` `v` assigned to `target`,
 /// through a scratch cell as wide as the target (§17.2.3: "the string
 /// assignment to variable rules").
 pub fn assignChars(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
-    const ty = try targetType(self, target);
-    if (ty.real) return self.refuse("characters assigned to a real");
-    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
-    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, ty.width, v });
-    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+    // A real takes the characters' low 64 bits as an unsigned number.
+    const tt = try targetType(self, target);
+    const w = if (tt.real) 64 else tt.width;
+    const at = try cellOf(self, std.math.maxInt(u32) - words(w), w);
+    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, w, v });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = w, .signed = false } } }, .blocking);
 }
 
 /// `exec.eval(e, 0).asInt()` as a Zig `?i64`.
