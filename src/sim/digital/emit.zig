@@ -30,6 +30,9 @@ pub const Embed = struct {
     file_name: []const u8,
     include_dirs: []const []const u8,
     language: Front.token.KeywordSet,
+    lib: []const u8 = "work",
+    more: []const root.Unit = &.{},
+    search: []const []const u8 = &.{},
 };
 
 pub const Program = struct {
@@ -74,6 +77,10 @@ fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.
         \\    return @import("sim").rt.interpret(init, .{{ .file_name = "{f}", .language = .{t}, .include_dirs = &.{{
     , .{ embed.file_name, why, std.zig.fmtString(embed.file_name), embed.language }) catch return error.OutOfMemory;
     for (embed.include_dirs) |d| w.print(" \"{f}\",", .{std.zig.fmtString(d)}) catch return error.OutOfMemory;
+    w.print(" }}, .lib = \"{f}\", .more = &.{{", .{std.zig.fmtString(embed.lib)}) catch return error.OutOfMemory;
+    for (embed.more) |u| w.print(" .{{ .name = \"{f}\", .text = \"{f}\", .lib = \"{f}\" }},", .{ std.zig.fmtString(u.name), std.zig.fmtString(u.text), std.zig.fmtString(u.lib) }) catch return error.OutOfMemory;
+    w.writeAll(" }, .search = &.{") catch return error.OutOfMemory;
+    for (embed.search) |l| w.print(" \"{f}\",", .{std.zig.fmtString(l)}) catch return error.OutOfMemory;
     w.print(" }} }}, \"{f}\");\n}}\n", .{std.zig.fmtString(embed.source)}) catch return error.OutOfMemory;
     return out.written();
 }
@@ -886,7 +893,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     },
                     .vars => {
                         try self.print("            try s.dumpVars(", .{});
-                        if (t.args.len == 0) try self.print("0, &.{{.{{ .scope = 0 }}}});\n", .{}) else {
+                        if (t.args.len == 0) {
+                            try self.print("0, &.{{", .{});
+                            for (r.roots) |sc| try self.print(" .{{ .scope = {d} }},", .{sc});
+                            try self.print(" }});\n", .{});
+                        } else {
                             try int64(self, t.args[0]);
                             try self.print(", &.{{", .{});
                             for (t.args[1..]) |e| switch (vcd.target(r, e) catch return self.refuse("a $dumpvars target the engine resolves only at run time")) {
@@ -1522,7 +1533,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
         const e = args[arg];
         if (only_first and arg != 0) {
             try flush(self, &text);
-            try self.print("            s.warn(\"W1152\", \"{f}\", .{{}});\n", .{std.zig.fmtString(display.sformat_mismatch)});
+            try self.print("            s.warn(\"W1153\", \"{f}\", .{{}});\n", .{std.zig.fmtString(display.sformat_mismatch)});
             return;
         }
         if (e == .none) {
@@ -1583,8 +1594,8 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 },
                 'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope, .{})),
                 'l', 'L' => {
-                    try text.appendSlice(self.arena, "work.");
-                    try text.appendSlice(self.arena, r.file.str(r.scope_info.items[r.scope].module));
+                    const def = r.scope_info.items[r.scope].def;
+                    try text.appendSlice(self.arena, try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
                 },
                 // §17.1.1.2 Table 17-3's real conversions, and §9.4.7's %r.
                 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R' => {

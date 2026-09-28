@@ -414,17 +414,17 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
 /// interprets its second argument, and only its second argument as a format
 /// string", which "can be a static string ... or can be a reg variable whose
 /// content is interpreted as the format string". Specifiers and arguments
-/// that do not pair up at run time warn (W1152) and the task continues.
+/// that do not pair up at run time warn (W1153) and the task continues.
 pub fn sformat(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator) Error!void {
     return walk(self, args, allocator, .{ .radix = .decimal, .newline = false }, true);
 }
 
-/// The W1152 text.
+/// The W1153 text.
 pub const sformat_mismatch = "$sformat: the format's specifiers and the arguments after it do not pair up";
 
 fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     const at = self.starts[@min(self.file.exprs.mainTok(e), self.starts.len - 1)];
-    try self.bag.add(.lower, .W1152, .{ .start = at, .end = at }, sformat_mismatch, .{});
+    try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
@@ -519,7 +519,8 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     continue;
                 },
                 'l', 'L' => {
-                    if (allocator != null) try self.out.print("work.{s}", .{self.file.str(self.scope_info.items[self.scope].module)});
+                    const def = self.scope_info.items[self.scope].def;
+                    if (allocator != null) try self.out.print("{s}.{s}", .{ self.file.str(self.def_lib[def]), self.file.str(self.file.modules[def].name) });
                     continue;
                 },
                 // §17.1.1.5 `%v`: "the strength of scalar nets".
@@ -586,7 +587,7 @@ pub fn emitScope(self: *Run) Error!void {
     while (true) {
         chain[depth] = s;
         depth += 1;
-        if (s == 0 or depth == chain.len) break;
+        if (self.scope_info.items[s].parent == s or s == 0 or depth == chain.len) break;
         s = self.scope_info.items[s].parent;
     }
     while (depth != 0) {
@@ -648,7 +649,7 @@ pub fn printTimescale(self: *Run, args: []const Ast.ExprId) Error!void {
     const mt = self.timeOf(scope);
     const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
     try self.out.writeAll("Time scale of (");
-    if (args.len == 0) try self.out.writeAll(self.file.str(self.scope_info.items[self.scope].module)) else {
+    if (args.len == 0) try self.out.writeAll(self.file.str(self.file.modules[self.scope_info.items[self.scope].def].name)) else {
         const ex = &self.file.exprs;
         const parts: []const Ast.StrId = if (ex.tag(args[0]) == .ident) &.{ex.strOf(args[0])} else ex.nameParts(args[0]);
         for (parts, 0..) |p, i| try self.out.print("{s}{s}", .{ if (i == 0) "" else ".", self.file.str(p) });

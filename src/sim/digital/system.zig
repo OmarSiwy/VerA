@@ -453,11 +453,11 @@ pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show
     self.out = saved;
     if (try channels(table(self), self.io, self.out, d, buf.written())) {
         const start = self.starts[@min(self.file.exprs.mainTok(args[0]), self.starts.len - 1)];
-        try self.bag.add(.lower, .W1153, .{ .start = start, .end = start }, unwritten, .{});
+        try self.bag.add(.lower, .W1154, .{ .start = start, .end = start }, unwritten, .{});
     }
 }
 
-/// The W1153 text.
+/// The W1154 text.
 pub const unwritten = "no file this descriptor names is open for writing: the output is not written";
 
 /// `bytes` to every channel descriptor `d` names: bit 0 of an mcd and fd 1

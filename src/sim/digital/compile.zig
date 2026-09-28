@@ -861,7 +861,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (b.vars.len != 0) {
                 const root = @import("root.zig");
                 const inner = try root.newScope(self, tok);
-                try self.scope_info.append(self.arena, .{ .parent = outer, .name = b.name, .module = self.scope_info.items[outer].module, .lexical = true });
+                try self.scope_info.append(self.arena, .{ .parent = outer, .name = b.name, .def = self.scope_info.items[outer].def, .lexical = true });
                 self.scope = inner;
                 for (b.vars) |v| {
                     if (v.init != .none) return self.fail(tok, "an initialized block-local variable is not implemented", .{});
