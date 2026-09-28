@@ -25,12 +25,5 @@ pub const ifconv = @import("ifconv.zig");
 pub const proof = @import("proof.zig");
 
 test {
-    _ = Mir;
-    _ = op;
-    _ = Analysis;
-    _ = Ssa;
-    _ = Elaborate;
-    _ = Lower;
-    _ = ifconv;
-    _ = proof;
+    @import("std").testing.refAllDecls(@This());
 }

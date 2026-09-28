@@ -18,10 +18,5 @@ pub const file_kernels = @import("file_kernels.zig");
 pub const limit_kernels = @import("limit_kernels.zig");
 
 test {
-    _ = str_kernels;
-    _ = table_kernels;
-    _ = rng_kernels;
-    _ = filter_kernels;
-    _ = file_kernels;
-    _ = limit_kernels;
+    @import("std").testing.refAllDecls(@This());
 }
