@@ -103,6 +103,9 @@ pub const vpiFullName: c_int = 3;
 pub const vpiSize: c_int = 4;
 pub const vpiTopModule: c_int = 7;
 pub const vpiDefName: c_int = 9;
+pub const vpiCell: c_int = 51;
+pub const vpiConfig: c_int = 52;
+pub const vpiLibrary: c_int = 58;
 pub const vpiScalar: c_int = 17;
 pub const vpiVector: c_int = 18;
 pub const vpiDirection: c_int = 20;
@@ -376,6 +379,9 @@ const Scope = struct {
     /// §11.6.1 `vpiDefName`: the module definition this is an instance of,
     /// which the flattened design does not carry.
     def_name: []const u8,
+    /// IEEE 1364-2005 §13.6 `vpiLibrary`, and `vpiConfig` (empty: none).
+    library: []const u8 = "work",
+    config: []const u8 = "",
     /// The §6.7 path relative to the top, `""` at the root. The key the flat
     /// declarations are bucketed by.
     path: []const u8,
@@ -518,6 +524,8 @@ pub const StartupFn = *const fn () callconv(.c) void;
 const Building = struct {
     decl: *const Ast.ModuleDecl,
     def_name: []const u8,
+    library: []const u8 = "work",
+    config: []const u8 = "",
     path: []const u8,
     parent: ?u32,
     /// A digital model's `digital.Run` scope id for this instance.
@@ -1047,6 +1055,8 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
     for (scopes, 0..) |*s, i| d.scopes[i] = .{
         .parent = s.parent,
         .def_name = s.def_name,
+        .library = s.library,
+        .config = s.config,
         .path = s.path,
         .children = try arena.dupe(u32, s.children.items),
         .ports = try arena.dupe(u32, s.ports.items),
@@ -1214,11 +1224,6 @@ pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     run.attach(r);
 }
 
-fn digitalModule(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
-    for (file.modules) |*m| if (m.name == name) return m;
-    return null;
-}
-
 fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     var d: Design = .{
         .gpa = gpa,
@@ -1256,8 +1261,17 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             parent = vpi_of[p];
             path = try joinPath(arena, scopes.items[vpi_of[p]].path, path);
         }
-        const m = digitalModule(file, info.module) orelse return error.NotElaborated;
-        try scopes.append(gpa, .{ .decl = m, .def_name = try arena.dupe(u8, file.str(m.name)), .path = path, .parent = parent, .engine = @intCast(e) });
+        const m = &file.modules[info.def];
+        const cfg = if (r.binds.get(@intCast(e))) |b| b.cfg else null;
+        try scopes.append(gpa, .{
+            .decl = m,
+            .def_name = try arena.dupe(u8, file.str(m.name)),
+            .library = try arena.dupe(u8, file.str(r.def_lib[info.def])),
+            .config = if (cfg) |c| try std.fmt.allocPrint(arena, "{s}.{s}", .{ file.str(r.cfg_lib[c]), file.str(file.configs[c].name) }) else "",
+            .path = path,
+            .parent = parent,
+            .engine = @intCast(e),
+        });
         if (parent) |p| try scopes.items[p].children.append(gpa, at);
     }
 
@@ -2388,6 +2402,20 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
             }
             break :blk d.scopes[o.scope].def_name;
         },
+        // IEEE 1364-2005 §13.6: "The following VPI properties shall exist for
+        // objects of type vpiModule".
+        vpiLibrary, vpiCell, vpiConfig => blk: {
+            if (o.kind != .module) {
+                fail("NOPROP", "vpi_get_str: a {s} has no library binding", .{@tagName(o.kind)});
+                return null;
+            }
+            const sc = d.scopes[o.scope];
+            break :blk switch (prop) {
+                vpiLibrary => sc.library,
+                vpiCell => sc.def_name,
+                else => if (sc.config.len == 0) return null else sc.config,
+            };
+        },
         else => {
             fail("NOPROP", "vpi_get_str: string property {d} is not answered for a {s}", .{ prop, @tagName(o.kind) });
             return null;
@@ -3234,6 +3262,22 @@ test "a digital scope is the engine's instance, past a task frame and a loop gen
     const itr = vpi_iterate(vpiModule, vpi_handle_by_name("top", null));
     while (vpi_scan(itr)) |_| children += 1;
     try std.testing.expectEqual(@as(u32, 3), children);
+}
+
+test "IEEE 1364-2005 §13.6: vpiLibrary, vpiCell and vpiConfig of a configured module" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\config cfg; design work.top; instance top.u use gate; endconfig
+        \\module rtl; endmodule
+        \\module gate; endmodule
+        \\module top; rtl u(); endmodule
+    );
+    defer h.deinit();
+    try run.simulate();
+    const u = vpi_handle_by_name("top.u", null);
+    try std.testing.expectEqualStrings("work", std.mem.span(vpi_get_str(vpiLibrary, u)));
+    try std.testing.expectEqualStrings("gate", std.mem.span(vpi_get_str(vpiCell, u)));
+    try std.testing.expectEqualStrings("work.cfg", std.mem.span(vpi_get_str(vpiConfig, u)));
 }
 
 test "an analog real array and real variable are §11.6.10's classes" {

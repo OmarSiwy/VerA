@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 
 const token = @import("frontend").token;
 pub const Preprocessor = @import("frontend").Preprocessor;
+pub const libmap = @import("frontend").libmap;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;

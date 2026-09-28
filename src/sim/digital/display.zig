@@ -478,7 +478,8 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                     continue;
                 },
                 'l', 'L' => {
-                    if (allocator != null) try self.out.print("work.{s}", .{self.file.str(self.scope_info.items[self.scope].module)});
+                    const def = self.scope_info.items[self.scope].def;
+                    if (allocator != null) try self.out.print("{s}.{s}", .{ self.file.str(self.def_lib[def]), self.file.str(self.file.modules[def].name) });
                     continue;
                 },
                 // §17.1.1.7 `%s` (the operand as 8-bit ASCII codes) and
@@ -567,7 +568,7 @@ pub fn printTimescale(self: *Run) Error!void {
     // ponytail: the no-argument form only; `compile` refuses a named module.
     const mt = self.timeOf(self.scope);
     const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
-    const name = self.file.str(self.scope_info.items[self.scope].module);
+    const name = self.file.str(self.file.modules[self.scope_info.items[self.scope].def].name);
     try self.out.print("Time scale of ({s}) is ", .{name});
     try fmt.decade(self.out, mt.unit_exp);
     try self.out.writeAll(" / ");
