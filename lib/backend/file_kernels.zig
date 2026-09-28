@@ -59,11 +59,12 @@ const ZFSlot = struct {
     /// into the count plus one reader per destination, exactly as `lowerScan`
     /// splits `$sscanf`. The readers are pure over this latch, so the read
     /// happens once however many destinations there are.
-    /// 4096 and not 512, for the reason `str_kernels.zSBuf`'s row is: §9.5.4.1
-    /// puts no length limit on a line ("until a newline character is read and
-    /// transferred to str, or an EOF condition is encountered") and §3.3's
-    /// `string` is not a fixed-width type, so a short row does not truncate a
-    /// record — it silently splits it across two reads.
+    /// §9.5.4.1 puts no length limit on a line ("until a newline character is
+    /// read and transferred to str, or an EOF condition is encountered") and
+    /// §3.3's `string` is not a fixed-width type, so a longer line, or a
+    /// `$fscanf` that needs more than this window, ends the run with E1011
+    /// (`zfOver`) rather than splitting the record. 4096 is `str_kernels.zSBuf`'s
+    /// row.
     line: [4096]u8 = undefined,
     line_len: usize = 0,
     /// IEEE 1364-2005 §17.2.4.2 the characters `$ungetc` pushed back, read by
@@ -100,12 +101,12 @@ var zf_last_err: i64 = 0;
 /// `zf_analysis` at the first point of every analysis after the first
 /// (`zFNewAnalysis`); a host that never calls it runs one analysis, and then
 /// `base` is 0 and "w" is C's truncate, exactly as before.
-// ponytail: 64 remembered paths, by hash — a model that opens more distinct
-// files for writing than that across a run forgets the oldest and truncates it.
+// ponytail: 64 remembered paths, by hash. Forgetting one would truncate it on
+// a later analysis, so a 65th distinct path opened for writing fails the open
+// instead (`zFOpen`: 0, `$ferror` 24), like a 31st channel.
 const ZFWritten = struct { hash: u64, analysis: u32, base: u64 };
 var zf_written: [64]ZFWritten = @splat(.{ .hash = 0, .analysis = 0, .base = 0 });
 var zf_nwritten: usize = 0;
-var zf_wnext: usize = 0;
 var zf_analysis: u32 = 0;
 
 /// §9.5.1.1 a new analysis of the same simulation process begins.
@@ -114,8 +115,9 @@ pub fn zFNewAnalysis() void {
 }
 
 /// The length a write-mode open of `path` truncates to: 0 the first time, the
-/// earlier analyses' content after that (§9.5.1.1).
-fn zfWriteBase(io: zfstd.Io, path: []const u8) u64 {
+/// earlier analyses' content after that (§9.5.1.1). Null when the path is new
+/// and all 64 rows are taken.
+fn zfWriteBase(io: zfstd.Io, path: []const u8) ?u64 {
     const h = zfstd.hash.Wyhash.hash(0, path);
     for (zf_written[0..zf_nwritten]) |*w| if (w.hash == h) {
         if (w.analysis != zf_analysis) {
@@ -124,10 +126,17 @@ fn zfWriteBase(io: zfstd.Io, path: []const u8) u64 {
         }
         return w.base;
     };
-    zf_written[zf_wnext] = .{ .hash = h, .analysis = zf_analysis, .base = 0 };
-    zf_wnext = (zf_wnext + 1) % zf_written.len;
-    zf_nwritten = @min(zf_nwritten + 1, zf_written.len);
+    if (zf_nwritten == zf_written.len) return null;
+    zf_written[zf_nwritten] = .{ .hash = h, .analysis = zf_analysis, .base = 0 };
+    zf_nwritten += 1;
     return 0;
+}
+
+/// E1011: a line or scan outgrew `ZFSlot.line`. Fatal: the clause has no
+/// shorter answer to give.
+fn zfOver() noreturn {
+    zfstd.debug.print("error[E1011]: a line read from a file exceeds the 4096-byte buffer of one call; see `vera --explain E1011`\n", .{});
+    zfstd.process.exit(1);
 }
 
 fn zfIo() zfstd.Io {
@@ -168,7 +177,10 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
         },
         'w' => w: {
             // §9.5.1.1: truncate to what the earlier analyses wrote, not to 0.
-            const base = zfWriteBase(io, path);
+            const base = zfWriteBase(io, path) orelse {
+                zf_last_err = 24; // EMFILE
+                return 0;
+            };
             const f = cwd.createFile(io, path, .{ .read = plus, .truncate = base == 0 }) catch |e| {
                 zf_last_err = zfErrno(e);
                 return 0;
@@ -333,6 +345,12 @@ pub fn zFGets(d: i64) i64 {
         n += 1;
         if (b[0] == '\n') break;
     }
+    // A full buffer with no newline: the line goes on unless the file ends.
+    if (n == s.line.len and s.line[n - 1] != '\n') {
+        const more = s.f.readPositionalAll(io, &b, s.pos + n) catch 0;
+        if (more != 0) zfOver();
+        s.eof = true;
+    }
     s.pos += n;
     s.line_len = n;
     s.err = 0;
@@ -373,8 +391,8 @@ pub fn zFLine(n: i64, d: i64) []const u8 {
 /// returns -1 when nothing was tried, which is "if the input ends before the
 /// first matching failure or conversion, EOF is returned".
 //
-// ponytail: the window is one buffer, so a single directive cannot match
-// across more than `ZFSlot.line` bytes of leading white space. A streaming
+// ponytail: the window is one buffer, so a scan that needs more than
+// `ZFSlot.line` bytes ahead ends the run with E1011 (`zFTake`). A streaming
 // window is the upgrade, the day a model scans a file with megabytes of it.
 pub fn zFWindow(d: i64) []const u8 {
     const k = zfSlot(d) orelse {
@@ -411,6 +429,9 @@ pub fn zFWindow(d: i64) []const u8 {
 pub fn zFTake(d: i64, n: i64, used: i64) i64 {
     const k = zfSlot(d) orelse return n;
     const s = &zf_slots[k];
+    // A scan that ran to the end of a FULL window may have needed the bytes
+    // after it; its answer is not the file's.
+    if (s.line_len == s.line.len and used >= s.line_len) zfOver();
     if (used > 0) s.pos += @intCast(used);
     if (n < 0) s.eof = true;
     return n;

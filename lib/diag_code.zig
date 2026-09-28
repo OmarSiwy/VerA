@@ -5824,20 +5824,23 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E1011 => .{
-            .title = "formatted text exceeds the 4096-byte buffer of one call",
+            .title = "text exceeds the 4096-byte buffer of one call",
             .lrm = "",
             .explain =
             \\An engine limit, not a language rule. Each `$sformat`, `$swrite`,
             \\file-output, `$monitor` or run-time string concatenation site
-            \\composes its text in its own 4096-byte buffer, and a field width
-            \\or precision above 4096 is refused.
+            \\composes its text in its own 4096-byte buffer, and each file
+            \\descriptor reads through one: `$fgets` returns at most one
+            \\4096-byte line, and one `$fscanf` sees at most 4096 bytes ahead.
             \\
-            \\A width or precision above 4096 written in the format string is
-            \\refused when the model compiles. Text that only grows past 4096
-            \\bytes while the model runs (a long `%s` operand, a concatenation
-            \\of long strings) ends the run with this code and exit status 1:
-            \\LRM 9.5.3 gives no truncation rule, so a cut or empty string
-            \\would be a wrong value, not a shorter right one.
+            \\A field width or precision above 4096 written in a format string
+            \\is refused when the model compiles. Text that only grows past
+            \\4096 bytes while the model runs (a long `%s` operand, a
+            \\concatenation of long strings, a longer line in a file read by
+            \\`$fgets` or `$fscanf`) ends the run with this code and exit
+            \\status 1. LRM 9.5.3 and 9.5.4 give no truncation rule, so a cut,
+            \\empty or split string would be a wrong value, not a shorter
+            \\right one.
             \\
             \\Split the text over several calls. Two `$fwrite` calls to one
             \\descriptor write the same bytes as one call.
