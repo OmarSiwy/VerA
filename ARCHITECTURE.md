@@ -212,6 +212,7 @@ line numbers had moved.
 
 | Phase | Status |
 |---|---|
+| 0 | landed 2026-10-17 (e0c92073): `golden` also snapshots the runner text (`.runner.txt`), the `--emit-so` tree (`.so/`) and the `.v` program text (`.program.txt`), root-free on disk; gate: wave 5 |
 | 1 | written 2026-10-17 on branch `phase1-fitness` (`ModuleSpec.role`, `tests/import_graph.zig`, `tests/fitness.zig`); awaits its gate, `zig build test` |
 | 2 | written 2026-10-17 on branch `phase2-base` (`lib/base/`: `deep_stack`, `interner`, `big_arena`; `sim`'s six `deep_stack` sites and `mir.zig`'s interner read `base`); awaits its gate, G |
-| 0, 3–12, B1–B4 | not started (2026-10-17) |
+| 3–12, B1–B4 | not started (2026-10-17) |
