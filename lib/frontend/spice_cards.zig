@@ -28,7 +28,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const token = @import("token.zig");
 const Preprocessor = @import("preprocessor.zig");
-const deep_stack = @import("deep_stack.zig");
+const deep_stack = @import("base").deep_stack;
 const assert = std.debug.assert;
 
 /// Synthesized prelude text plus the number of module declarations it holds,

@@ -108,16 +108,17 @@ pub fn buildExe(
     } else try argv.append(arena, m_root);
     try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
     if (opts.mixed) {
-        // build.zig's `module_specs` rows for these four, spelled for build-exe.
+        // build.zig's `module_specs` rows for these five, spelled for build-exe.
         const root = std.fs.path.dirname(std.fs.path.dirname(opts.contract) orelse ".") orelse ".";
         const src = struct {
             fn m(a: Allocator, r: []const u8, name: []const u8, rel: []const u8) ![]const u8 {
                 return a.print("-M{s}={s}", .{ name, try std.fs.path.join(a, &.{ r, rel }) });
             }
         };
-        try argv.appendSlice(arena, &.{ "--dep", "contract", "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
+        try argv.appendSlice(arena, &.{ "--dep", "contract", "--dep", "base", "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
+        try argv.append(arena, try src.m(arena, root, "base", "lib/base/root.zig"));
         try argv.append(arena, try src.m(arena, root, "diag", "lib/diag.zig"));
-        try argv.appendSlice(arena, &.{ "--dep", "diag", "--dep", "contract", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
+        try argv.appendSlice(arena, &.{ "--dep", "base", "--dep", "diag", "--dep", "contract", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
         try argv.appendSlice(arena, &.{ "--dep", "contract", try src.m(arena, root, "kernels", "lib/backend/kernels.zig") });
     }
     return runZig(gpa, io, argv.items, bin);

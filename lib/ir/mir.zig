@@ -6,7 +6,7 @@
 //! reach an emitted name or a content hash (naming.zig canonicalizes).
 
 const std = @import("std");
-const Ast = @import("frontend").Ast;
+const base = @import("base");
 const assert = std.debug.assert;
 /// The per-opcode fact table (class, type, domain, …).
 pub const opcode = @import("opcode.zig");
@@ -42,9 +42,9 @@ pub const Value = enum(u32) {
 /// Handle to a basic block; block 0 is the entry.
 pub const Block = enum(u32) { entry = 0, _ };
 /// Interned string handle (call names, §4.4 access names, ch9 arguments). The
-/// AST's type, but it indexes this Mir's `strings` table, not the AST's.
+/// AST's type (`base`'s), but it indexes this Mir's `strings` table, not the AST's.
 /// `.none` is the absent sentinel.
-pub const StrId = Ast.StrId;
+pub const StrId = base.StrId;
 
 /// Opcode set: §4.2 arithmetic, relational, logical, bitwise and shift
 /// operators, §4.3 math, casts. Every opcode has a row of facts in
@@ -306,9 +306,9 @@ blocks: std.MultiArrayList(BlockRow) = .empty,
 defs: std.MultiArrayList(ValueRow) = .empty,
 /// Shared variable-length payload pool (call args, phi operands).
 extra: std.ArrayList(u32) = .empty,
-/// String table (the AST's interner type). Slices are not copied: they must
+/// String table (`base`'s interner, as the AST's). Slices are not copied: they must
 /// outlive the Mir.
-strings: Ast.StringInterner = .empty,
+strings: base.StringInterner = .empty,
 /// Constant dedup, keyed by exact bits so -0.0 / 0.0 stay distinct and NaN
 /// payloads survive. Lookup only: iteration order is not deterministic.
 fconst_map: std.AutoHashMapUnmanaged(u64, Value) = .empty,

@@ -20,7 +20,7 @@ const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const diag = @import("diag");
 const Parser = parser.Parser;
-const deep_stack = @import("../deep_stack.zig");
+const deep_stack = @import("base").deep_stack;
 
 /// A parsed file and the bag holding its diagnostics.
 pub const TestResult = struct {

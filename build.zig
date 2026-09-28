@@ -35,6 +35,8 @@ const ModuleSpec = struct {
 /// declared above it, and `defineModules` panics otherwise.
 const module_specs = [_]ModuleSpec{
     .{ .name = "contract", .path = "tools/contract.zig", .role = .runtime },
+    // `deep_stack`, the string interner and `BigArena`: any tier may take them.
+    .{ .name = "base", .path = "lib/base/root.zig", .role = .leaf },
 
     // lib/ — the compiler. `vera` is its facade and what an embedder takes.
     .{ .name = "diag", .path = "lib/diag.zig", .role = .compiler },
@@ -43,17 +45,17 @@ const module_specs = [_]ModuleSpec{
     // `contract`: the compile-time folds and the prover's bounds use the
     // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
     // the device would compute (§9.14: `$exp` and `exp` are one function).
-    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "diag", "contract" } },
+    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "contract" } },
     .{ .name = "kernels", .path = "lib/backend/kernels.zig", .role = .runtime, .imports = &.{"contract"} },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "kernels", "contract" } },
+    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels", "contract" } },
     .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "ir", "backend", "kernels" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the
     // §9.4.3 real conversion and §17.2 file I/O match the analog devices
     // (`contract.FileIo`, LRM §9.5.1.2).
-    .{ .name = "sim", .path = "src/sim/root.zig", .role = .runtime, .imports = &.{ "contract", "diag", "frontend", "kernels" } },
+    .{ .name = "sim", .path = "src/sim/root.zig", .role = .runtime, .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
     // `c`: the variadic routines, which Zig cannot define on every target.
     .{ .name = "vpi", .path = "src/vpi/root.zig", .role = .tool, .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };

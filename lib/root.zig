@@ -20,7 +20,7 @@ const Allocator = std.mem.Allocator;
 
 /// The compilation arena (`CompileResult.arena`); `src/main.zig` also keeps a
 /// `.v` design's tables in one.
-pub const BigArena = @import("big_arena.zig");
+pub const BigArena = @import("base").BigArena;
 /// §10 preprocessing (`Preprocessor.process`), for callers that need the
 /// text without a compilation.
 pub const Preprocessor = @import("frontend").Preprocessor;
@@ -47,7 +47,7 @@ const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
-const deep_stack = @import("frontend").deep_stack;
+const deep_stack = @import("base").deep_stack;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Ssa = @import("ir").Ssa;

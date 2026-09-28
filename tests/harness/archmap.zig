@@ -333,6 +333,7 @@ fn split(a: Allocator, g: *const Graph, u: []const u32) !struct { hubs: []u32, s
 /// the order inside a group is the path order.
 const groups = [_]struct { title: []const u8, prefixes: []const []const u8 }{
     .{ .title = "Host ABI (`contract` module)", .prefixes = &.{"tools/contract.zig"} },
+    .{ .title = "Leaf tables (`base` module)", .prefixes = &.{"lib/base/"} },
     .{ .title = "Diagnostics (`diag` module)", .prefixes = &.{ "lib/diag", "lib/diag_code.zig" } },
     .{ .title = "Frontend: tokens, AST, folding (`frontend` module)", .prefixes = &.{
         "lib/frontend/token.zig",  "lib/frontend/lexer.zig",     "lib/frontend/integer.zig",
@@ -347,7 +348,7 @@ const groups = [_]struct { title: []const u8, prefixes: []const []const u8 }{
     .{ .title = "Runtime kernels (`kernels` module, embedded in devices)", .prefixes = &.{"lib/backend/kernels"} },
     .{ .title = "Backend: codegen (`backend` module)", .prefixes = &.{ "lib/backend/codegen", "lib/backend/cg_" } },
     .{ .title = "Backend: naming, orchestrator, testbench", .prefixes = &.{"lib/backend/"} },
-    .{ .title = "Compiler facade (`vera` module)", .prefixes = &.{ "lib/root.zig", "lib/big_arena.zig" } },
+    .{ .title = "Compiler facade (`vera` module)", .prefixes = &.{"lib/root.zig"} },
     .{ .title = "CLI", .prefixes = &.{ "src/main.zig", "src/cli/" } },
     .{ .title = "Digital simulator and mixed-signal runner (`sim` module)", .prefixes = &.{"src/sim/"} },
     .{ .title = "VPI (`vpi` module)", .prefixes = &.{"src/vpi/"} },

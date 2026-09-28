@@ -10,7 +10,7 @@ const std = @import("std");
 /// need not import `std` for it.
 pub const Allocator = std.mem.Allocator;
 const diag = @import("diag");
-const deep_stack = @import("deep_stack.zig");
+const deep_stack = @import("base").deep_stack;
 /// Annex E.2 `.MODEL`/`.SUBCKT` reader; its modules follow the prelude.
 const spice_cards = @import("spice_cards.zig");
 

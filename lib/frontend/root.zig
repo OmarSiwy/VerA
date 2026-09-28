@@ -34,9 +34,9 @@ pub const wreal = @import("wreal.zig");
 pub const libmap = @import("libmap.zig");
 
 /// Runs a recursive walk on a stack reserved for its nesting depth, so
-/// nesting is bounded by memory. Imports only std: every stage that recurses
-/// over source nesting (the parser, lowering, the digital engine) shares it.
-pub const deep_stack = @import("deep_stack.zig");
+/// nesting is bounded by memory: `base.deep_stack`, re-exported for callers
+/// that reach it through `frontend`.
+pub const deep_stack = @import("base").deep_stack;
 
 test {
     @import("std").testing.refAllDecls(@This());

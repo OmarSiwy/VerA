@@ -7,7 +7,7 @@
 const std = @import("std");
 const diag = @import("diag");
 const Preprocessor = @import("preprocessor.zig");
-const deep_stack = @import("deep_stack.zig");
+const deep_stack = @import("base").deep_stack;
 const Io = std.Io;
 
 /// §13.2.1.1's resolution order, most specific first: a specification that

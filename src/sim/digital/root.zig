@@ -20,7 +20,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 /// Scheduler ticks. `Time` below is the timescale module, not this.
 pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
-const deep = @import("frontend").deep_stack;
+const deep = @import("base").deep_stack;
 const compile = @import("compile.zig");
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
 /// process does (`waiters.store` now, `exec.enqueue` of a `.write` later), so a

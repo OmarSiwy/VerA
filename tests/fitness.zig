@@ -141,6 +141,11 @@ test "R1: a runtime row's closure contains no compiler row" {
     for (repo.module_roles, roles) |tag, *r| r.* = std.meta.stringToEnum(Role, tag) orelse return error.UnknownRole;
     var used: [r1_allow.len]bool = @splat(false);
     var bad: usize = 0;
+    // A `leaf` imports only std (ARCHITECTURE.md §1).
+    for (names, roles, repo.module_imports) |name, role, imports| if (role == .leaf and imports.len != 0) {
+        std.debug.print("R1: leaf `{s}` imports `{s}`\n", .{ name, imports });
+        bad += 1;
+    };
     const in = try a.alloc(bool, names.len);
     var stack: std.ArrayList(usize) = .empty;
     for (names, roles, 0..) |from, role, i| {
@@ -487,8 +492,8 @@ const r7_rows = [_]Row{
     .{ .path = "lib/backend/tb/directive.zig", .n = 31 },
     .{ .path = "lib/backend/tb/exe.zig", .n = 1 },
     .{ .path = "lib/backend/tb/runner.zig", .n = 9 },
+    .{ .path = "lib/base/interner.zig", .n = 2 },
     .{ .path = "lib/diag/suggest.zig", .n = 1 },
-    .{ .path = "lib/frontend/ast.zig", .n = 2 },
     .{ .path = "lib/frontend/ast_decl.zig", .n = 1 },
     .{ .path = "lib/frontend/constfold.zig", .n = 9 },
     .{ .path = "lib/frontend/lexer.zig", .n = 5 },

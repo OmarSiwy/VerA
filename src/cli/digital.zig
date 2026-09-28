@@ -243,9 +243,10 @@ fn emitDevice(
         const modules = [_]vera.orchestrator.Module{
             .{ .name = "contract", .root = f.contract.? },
             .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
-            .{ .name = "sim", .root = try at.path(arena, tree, "src/sim/root.zig"), .deps = &.{ "contract", "diag", "frontend", "kernels" } },
+            .{ .name = "sim", .root = try at.path(arena, tree, "src/sim/root.zig"), .deps = &.{ "contract", "base", "diag", "frontend", "kernels" } },
+            .{ .name = "base", .root = try at.path(arena, tree, "lib/base/root.zig") },
             .{ .name = "diag", .root = try at.path(arena, tree, "lib/diag.zig") },
-            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{ "diag", "contract" } },
+            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{ "base", "diag", "contract" } },
             .{ .name = "kernels", .root = try at.path(arena, tree, "lib/backend/kernels.zig") },
         };
         var o: vera.orchestrator.Options = .{

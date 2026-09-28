@@ -21,7 +21,7 @@ pub const vcd = @import("../digital/vcd.zig");
 /// §18.3 the extended (ports) dump.
 pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
-const deep = @import("frontend").deep_stack;
+const deep = @import("base").deep_stack;
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;

@@ -18,7 +18,7 @@ const token = @import("token.zig");
 const lexer = @import("lexer.zig");
 const Ast = @import("ast.zig");
 const diag = @import("diag");
-const deep_stack = @import("deep_stack.zig");
+const deep_stack = @import("base").deep_stack;
 
 /// `ParseError` unwinds to the nearest recovery point (module item, statement or
 /// top-level declaration); its diagnostic is already in the bag.
