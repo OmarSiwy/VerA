@@ -716,8 +716,10 @@ fn cFixtureRuns(path: []const u8) bool {
 ///   //! lrm-reject 12.34   a refusal (error return, vpi_chk_error) is asserted
 ///
 /// Neither counts unless the fixture runs (`runs`): a compile-only fixture's
-/// cites become `.compiled`, listed and never counted. Any other `//!` key is
-/// a malformed tag, reported rather than skipped.
+/// cites become `.compiled`, listed and never counted. `inherited` and
+/// `inherited-reject` cite IEEE 1364-2005 and are `tests/ieee1364.zig`'s, so
+/// they are skipped here. Any other `//!` key is a malformed tag, reported
+/// rather than skipped.
 fn cCites(
     arena: std.mem.Allocator,
     out: *std.ArrayList(Cite),
@@ -731,6 +733,7 @@ fn cCites(
         if (!std.mem.startsWith(u8, line, "//!")) continue;
         var words = std.mem.tokenizeAny(u8, line["//!".len..], " \t");
         const key = words.next() orelse return error.BadCTag;
+        if (std.mem.eql(u8, key, "inherited") or std.mem.eql(u8, key, "inherited-reject")) continue;
         const reject = if (std.mem.eql(u8, key, "lrm"))
             false
         else if (std.mem.eql(u8, key, "lrm-reject"))
@@ -751,7 +754,8 @@ test "a .c fixture's polarity is per line, and only a running one counts" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\nint x;\n";
+    const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\n" ++
+        "//! inherited IEEE 1364-2005 27.14\n//! inherited-reject IEEE 1364-2005 27.14\nint x;\n";
     var cites: std.ArrayList(Cite) = .empty;
     try cCites(arena, &cites, "a.c", src, true);
     try std.testing.expectEqual(@as(usize, 2), cites.items.len);

@@ -246,9 +246,14 @@ pub fn build(b: *std.Build) void {
         // Channels a fixture opens (§12.26) land in the cwd, which is the
         // cache and not the source tree.
         r.setCwd(b.path(".zig-cache"));
-        r.expectExitCode(0);
-        r.expectStdOutEqual(f.stdout);
-        if (f.stderr) |e| r.expectStdErrEqual(e);
+        if (f.xfail) |m| {
+            r.expectExitCode(1);
+            r.expectStdErrMatch(m);
+        } else {
+            r.expectExitCode(0);
+            r.expectStdOutEqual(f.stdout);
+            if (f.stderr) |e| r.expectStdErrEqual(e);
+        }
         test_step.dependOn(&r.step);
         test_vpi.dependOn(&r.step);
     }
@@ -371,8 +376,16 @@ fn vpiApp(
 
 /// One runnable VPI application: its C file, the design it runs against, and
 /// the exact output it must produce. The `checks=N` count catches a run that
-/// returns early and still exits 0.
-const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
+/// returns early and still exits 0. `xfail` is a known VerA gap instead: the
+/// run exits 1 with this text in its stderr, so the run that stops failing
+/// fails the step until the marker is removed.
+const VpiRun = struct {
+    c: []const u8,
+    design: []const u8,
+    stdout: []const u8 = "",
+    stderr: ?[]const u8 = null,
+    xfail: ?[]const u8 = null,
+};
 
 /// Not here, each for a reason outside the routine it exercises:
 ///   p02_10  a $systf call in digital code: the engine has no user-systf call
