@@ -315,8 +315,8 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     }
 
-    const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(64 * 1024 * 1024)) catch |e| {
-        try err.print("error: cannot read `{s}`: {t}\n", .{ in_path, e });
+    const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(max_source_bytes)) catch |e| {
+        try readFailed(err, in_path, e);
         return 2;
     };
     defer gpa.free(source);
@@ -380,8 +380,8 @@ pub fn main(init: std.process.Init) !u8 {
     // `spice_cards.synthesize` works on the text and a `+` continuation makes a
     // card longer than a line.
     const netlist: []const u8 = if (spice_path) |p|
-        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(64 * 1024 * 1024)) catch |e| {
-            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(max_source_bytes)) catch |e| {
+            try readFailed(err, p, e);
             return 2;
         }
     else
@@ -693,6 +693,16 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
         else => try err.print("error: {t}\n", .{e}),
     }
     return 1;
+}
+
+/// The largest source file or `--spice` netlist read (E1013).
+const max_source_bytes = 64 * 1024 * 1024;
+
+fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
+    if (e == error.StreamTooLong)
+        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, max_source_bytes })
+    else
+        try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
 }
 
 fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
