@@ -175,7 +175,7 @@ fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
 /// index and an indexed part-select's base are evaluated; a part-select's
 /// bounds and an indexed one's width were folded by `infer`. Null is an x/z
 /// index, which names no bit.
-fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
+pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rg = ex.rhs(e);
     const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
