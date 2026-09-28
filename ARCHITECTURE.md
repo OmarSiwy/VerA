@@ -145,16 +145,29 @@ Sizes come from `wc`. The previous plan's estimates were optimistic (its §8), s
 | 11 | `Lowered` drops the Ast | What backends read through `Lowered.file`/`.module`/`.directives` becomes precomputed `Lowered` rows (`beh_verilog.zig:109-115`, `call.zig:1422`, `instance.zig` ×2, `tb/runner.zig` ×2, `prover.zig` ×1). `vpi` (9 reads) takes the Ast from `CompileResult`. `Ast.Type`/`Direction`/`ValueRange` move to `base`; `ir` drops `frontend`/`elab`. | Same values, computed earlier | patch | G | ~1k lines | medium-high | I3 |
 | 12 | Elaboration overlay | The parser's `Ast` becomes `*const`. Elaboration appends to a `Design.exprs` overlay whose `ExprId`s continue after the parser's, so the ids keep their numbers. `ExprStore` accessors take the pair; `sim` uses the same overlay. | The id space and append order are kept exactly | patch | G+T, `fuzz` replay | 16 signatures, ~434 sites | **high**: stop and re-scope if any golden moves | I4 |
 
-**Fitness rules (Phase 1).** Every allowlist row names the phase that deletes it, and a
-row whose violation no longer exists **fails**, so the allowlist can only shrink.
+**Fitness rules (Phase 1).** `tests/fitness.zig` checks them under `zig build test`
+(the `test_all` root). Every allowlist row names the phase that deletes it, and a
+row whose violation no longer exists **fails**, as does a per-file count that fell
+below its row, so the allowlist can only shrink. A phase deletes or lowers its rows in
+the commit that removes the violation. R3–R7 read production lines: outside top-level
+`test` blocks and `test.zig` files, comment lines skipped; R5 and R6 also read `\\`
+(emitted) lines.
 
 - **R1:** a runtime row's closure contains no compiler row. Allowlist: `sim` → {`diag`, `frontend`} until B4.
-- **R2:** backend closures are pairwise disjoint. Until Phase 8 this is checked at file level: the closure of `lib/backend/tb/**` must not reach `codegen/**` ∪ `cg_*`. Allowlist: `tb/exe.zig` until Phase 7, and `naming.zig`/`beh_verilog.zig` → `fixture.zig` until Phase 8.
-- **R3:** no Ast writes outside `lib/frontend`. Allowlist: the I4 list until Phase 12.
-- **R4:** no `*Lowered` mutated outside lowering. Allowlist: `setup.zig:700` until Phase 6.
-- **R5:** each of the `__xz`/`__w{d}`/`__1b`/`__held__` literals has one owner. Allowlist: the four spellers until Phase 8.
-- **R6:** no emitted `std.debug.print`/`process.exit` in device-emitting files. Allowlist: the I5 list until B2.
-- **R7:** a per-file ceiling on `std.mem.eql(u8`; a line with `// str: <LRM data>` does not count.
+- **R2:** backend closures are pairwise disjoint. Until Phase 8 this is checked at file level: the closure of `lib/backend/tb/**` must not reach `codegen.zig` ∪ `codegen/**` ∪ `cg_*`. An allowlisted edge is cut from the walk. Allowlist: `tb/exe.zig` → `orchestrator.zig` until Phase 7, and `naming.zig` → `codegen/plan/fixture.zig` until Phase 8.
+- **R3:** no Ast writes outside `lib/frontend`. A write is a call to an Ast appender (`exprs.add*`, `addStmt`, `seqBlockMut`, `seedFrom`) or an assignment to a `SourceFile` field other than `strings` through a receiver spelled `…file`. Allowlist: per-file counts in `elaborate.zig`, `elaborate/{clone,fixture,insert,instance,names}.zig`, `hier_param.zig`, `lower.zig` (its test harness), `lib/root.zig` (the five caller-set fields) and `src/sim/digital/root.zig`, until Phase 12.
+- **R4:** no `*Lowered` mutated outside lowering. Checked as a mutable `*Lowered` on a `pub` line or in a struct field outside `lib/ir/lower{.zig,/}`. Allowlist: `pruneHeld` (`plan/setup.zig:742`) until Phase 6.
+- **R5:** each of the `__xz`/`__w{d}`/`__1b`/`__held__` literals has one owner: `lower/context.zig` for the first three, `plan/names.zig` for `__held__`. Allowlist: `lower/expr.zig` (three) and `tb/runner.zig` (four) until Phase 8.
+- **R6:** no emitted `debug.print(`/`process.exit(` in device-emitting files (`codegen.zig`, `codegen/**`, `cg_*`, `kernels*`). Allowlist: per-file counts in `cg_display.zig`, `kernel_text.zig`, `render.zig` and five kernel files until B2.
+- **R7:** a per-file ceiling on `std.mem.eql(u8` in `lib/` and `src/`; a line with `// str: <LRM data>` does not count. The ceilings are the counts of 2026-10-17 (479 sites in 81 files); they have no deleting phase.
+
+Sharpened on 2026-10-17 against the tree at `1518183f`, because a rule the test reads
+from text has to say which text: R2's `beh_verilog.zig` → `fixture.zig` row is gone,
+since nothing under `tb/` reaches `beh_verilog.zig` (it returns at Phase 8, when R2
+becomes module-level and `verilog` is its own row); R2 names `codegen.zig`, which
+`orchestrator.zig:19` reaches, beside `codegen/**`; R3 and R4 say what counts as a write;
+R6 matches the kernels' `std` aliases (`zstd.`, `zhs.`); the `setup.zig:700` and I4/I5
+line numbers had moved.
 
 **Behaviour changes come last.** Each is its own commit series and its own minor release.
 
@@ -199,4 +212,5 @@ row whose violation no longer exists **fails**, so the allowlist can only shrink
 
 | Phase | Status |
 |---|---|
-| 0–12, B1–B4 | not started (2026-10-17) |
+| 1 | written 2026-10-17 on branch `phase1-fitness` (`ModuleSpec.role`, `tests/import_graph.zig`, `tests/fitness.zig`); awaits its gate, `zig build test` |
+| 0, 2–12, B1–B4 | not started (2026-10-17) |
