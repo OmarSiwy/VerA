@@ -296,6 +296,43 @@ pub fn checkMfactor(self: *Flatten, tok: u32, e: Ast.ExprId) Error!bool {
     return true;
 }
 
+/// Returns whether `child` has an overridable parameter `target`; otherwise
+/// reports E0907 naming it `shown` (an alias reads as written, §3.4.7).
+pub fn checkOverridable(self: *Flatten, child: *const Ast.ModuleDecl, target: Ast.StrId, shown: Ast.StrId, tok: u32) Error!bool {
+    const decl = for (child.params) |*p| {
+        if (p.name == target) break p;
+    } else {
+        try self.err(tok, .E0907, "`{s}` is not a parameter of `{s}`", .{ self.ctx.file.str(shown), self.ctx.file.str(child.name) });
+        return false;
+    };
+    // §3.4.5 a localparam is not overridable.
+    if (decl.is_local) {
+        try self.err(tok, .E0907, "`{s}` is a localparam of `{s}`", .{ self.ctx.file.str(shown), self.ctx.file.str(child.name) });
+        return false;
+    }
+    return true;
+}
+
+/// §9.18 `mfactor` times `v`, where `.none` is the unit factor.
+pub fn mulMfactor(self: *Flatten, mfactor: Ast.ExprId, v: Ast.ExprId, tok: u32) Error!Ast.ExprId {
+    return if (mfactor == .none) v else self.ctx.file.exprs.add(self.ctx.arena, .{
+        .tag = .binary,
+        .main_tok = tok,
+        .lhs = mfactor,
+        .rhs = v,
+        .extra = @intFromEnum(Ast.BinaryOp.mul),
+    });
+}
+
+/// §9.19 `$param_given` is a fact about the instantiation, one answer per
+/// flattened parameter (an alias shares its target's), so the clone can
+/// substitute a literal.
+pub fn markGiven(self: *Flatten, child: *const Ast.ModuleDecl, over: *const std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId), unit: *Unit) Error!void {
+    for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
+    for (child.aliasparams) |al| if (over.contains(al.target))
+        try unit.given.put(self.ctx.arena, al.alias, true);
+}
+
 /// Computes the module parameter values a paramset instance gives `child`
 /// into `over`, and sets `unit`'s §9.18 `$mfactor` and §9.19 `$param_given`
 /// (§6.4). Two levels: the instance overrides the paramset's own parameters,
@@ -366,20 +403,7 @@ pub fn paramsetOverrides(
         i -= 1;
         for (chain.items[i].overrides) |o| switch (o.kind) {
             .module_param => {
-                const decl = for (child.params) |*p| {
-                    if (p.name == o.name) break p;
-                } else {
-                    try self.err(o.main_tok, .E0907, "`{s}` is not a parameter of `{s}`", .{
-                        self.ctx.file.str(o.name), self.ctx.file.str(child.name),
-                    });
-                    continue;
-                };
-                if (decl.is_local) {
-                    try self.err(o.main_tok, .E0907, "`{s}` is a localparam of `{s}`", .{
-                        self.ctx.file.str(o.name), self.ctx.file.str(child.name),
-                    });
-                    continue;
-                }
+                if (!try checkOverridable(self, child, o.name, o.name, o.main_tok)) continue;
                 // §6.4.1 "these variables shall not be used to assign values
                 // to the module's parameters". Named here, where the paramset
                 // is still in hand: once cloned, `t` is only an unknown name.
@@ -401,14 +425,7 @@ pub fn paramsetOverrides(
                     continue;
                 }
                 if (try checkMfactor(self, o.main_tok, o.value)) continue;
-                const v = try elab_clone.cloneExpr(self, o.value);
-                mfactor = if (mfactor == .none) v else try self.ctx.file.exprs.add(self.ctx.arena, .{
-                    .tag = .binary,
-                    .main_tok = o.main_tok,
-                    .lhs = mfactor,
-                    .rhs = v,
-                    .extra = @intFromEnum(Ast.BinaryOp.mul),
-                });
+                mfactor = try mulMfactor(self, mfactor, try elab_clone.cloneExpr(self, o.value), o.main_tok);
             },
             .output_var => {}, // §6.4.3, dropped in the parser
         };
@@ -417,10 +434,7 @@ pub fn paramsetOverrides(
     self.unit = saved;
 
     unit.mfactor = mfactor;
-    // §9.19 as for a module instance: decided here, once, per parameter.
-    for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
-    for (child.aliasparams) |al| if (over.contains(al.target))
-        try unit.given.put(self.ctx.arena, al.alias, true);
+    try markGiven(self, child, over, unit);
 }
 
 /// §6.4.1 the first identifier in `e` that names one of `ps`'s variables.

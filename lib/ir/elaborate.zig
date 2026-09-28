@@ -1219,16 +1219,7 @@ pub const Flatten = struct {
                 // §9.18 that leaves the inherited product unchanged (times 1).
                 if (o.value == .none) continue;
                 if (try elab_paramset.checkMfactor(self, o.main_tok, o.value)) continue;
-                mfactor = if (mfactor == .none)
-                    value
-                else
-                    try self.ctx.file.exprs.add(self.ctx.arena, .{
-                        .tag = .binary,
-                        .main_tok = o.main_tok,
-                        .lhs = mfactor,
-                        .rhs = value,
-                        .extra = @intFromEnum(Ast.BinaryOp.mul),
-                    });
+                mfactor = try elab_paramset.mulMfactor(self, mfactor, value, o.main_tok);
                 continue;
             }
             // §3.4.7 an aliasparam is a second NAME for one parameter, so an
@@ -1238,21 +1229,7 @@ pub const Flatten = struct {
                 target = al.target;
                 break;
             };
-            const decl = for (child.params) |*p| {
-                if (p.name == target) break p;
-            } else {
-                try self.err(o.main_tok, .E0907, "`{s}` is not a parameter of `{s}`", .{
-                    self.ctx.file.str(o.name), self.ctx.file.str(child.name),
-                });
-                continue;
-            };
-            // §3.4.5 a localparam is not overridable.
-            if (decl.is_local) {
-                try self.err(o.main_tok, .E0907, "`{s}` is a localparam of `{s}`", .{
-                    self.ctx.file.str(o.name), self.ctx.file.str(child.name),
-                });
-                continue;
-            }
+            if (!try elab_paramset.checkOverridable(self, child, target, o.name, o.main_tok)) continue;
             // §6.3.3 / IEEE 12.2.2.2: .name() documents the parameter but
             // leaves its default, dependencies and $param_given unchanged.
             // Validate the name/localparam above even when no value is given.
@@ -1283,11 +1260,7 @@ pub const Flatten = struct {
             try over.put(self.ctx.arena, p.name, dp.value);
         }
 
-        // §9.19 `$param_given` is a fact about the instantiation, one answer
-        // per flattened parameter, so the clone can substitute a literal.
-        for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
-        for (child.aliasparams) |al| if (over.contains(al.target))
-            try unit.given.put(self.ctx.arena, al.alias, true);
+        try elab_paramset.markGiven(self, child, over, unit);
     }
 
     const elab_paramset = @import("elaborate/paramset.zig");
