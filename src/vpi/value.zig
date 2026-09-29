@@ -186,6 +186,14 @@ pub var cb_store: Store = .{};
 /// Fills `v` from `o` in the format `v.format` names, into `st`'s storage.
 /// Errors are recorded (`vpi_chk_error`) and leave `v` as it was.
 pub fn read(o: *const Obj, v: *Value, st: *Store) void {
+    // §26.6.14/§27.14: a table entry's vector is ASCII symbols, not the
+    // ordinary aval/bval representation of a string's packed bits.
+    if (o.kind == .code and o.vtype == root.code.vpiTableEntry and v.format == vpiVectorVal) {
+        tableVector(o.value.?.str, v, st) catch {
+            root.fail("NOMEM", "vpi_get_value: out of memory", .{});
+        };
+        return;
+    }
     // A named event occurs; it holds no value (its slot is a rendezvous).
     if (o.kind == .code and o.vtype == root.code.vpiNamedEvent) {
         root.fail("NOVALUE", "vpi_get_value: `{s}` is a named event, which has no value", .{o.full});
@@ -219,6 +227,32 @@ pub fn read(o: *const Obj, v: *Value, st: *Store) void {
     formatInto(src, v, st) catch {
         root.fail("NOMEM", "vpi_get_value: out of memory", .{});
     };
+}
+
+/// IEEE 1364-2005 §27.14: four two-byte ASCII symbols per vecval, first in
+/// aval's high half, then its low half, then the two halves of bval. A
+/// single-character symbol has a zero second byte; an edge (01) stores 01.
+/// `text` is the validated, canonical table decompilation code.zig built.
+fn tableVector(text: []const u8, v: *Value, st: *Store) !void {
+    st.vec.clearRetainingCapacity();
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < text.len) {
+        const c = text[i];
+        if (c == ' ' or c == '\t' or c == ':') {
+            i += 1;
+            continue;
+        }
+        const symbol: u32 = if (c == '(') (@as(u32, text[i + 1]) << 8) | text[i + 2] else @as(u32, c) << 8;
+        i += if (c == '(') @as(usize, 4) else 1;
+        if (n % 4 == 0) try st.vec.append(gpa, .{ .aval = 0, .bval = 0 });
+        const row = &st.vec.items[n / 4];
+        const word = if (n % 4 < 2) &row.aval else &row.bval;
+        const shift: u5 = if (n % 2 == 0) 16 else 0;
+        word.* = @bitCast(@as(u32, @bitCast(word.*)) | (symbol << shift));
+        n += 1;
+    }
+    v.value.vector = st.vec.items.ptr;
 }
 
 /// IEEE 1364-2005 §27.14 vpiStrengthVal: into the application's array, one

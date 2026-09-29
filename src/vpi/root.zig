@@ -426,6 +426,10 @@ pub const Obj = struct {
     expr_scope: ?u32 = null,
     /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
     net_type: Ast.NetKind = .wire,
+    /// A force/assign statement's RHS source expression. The engine's live
+    /// override ranges retain this identity, so traversal can distinguish
+    /// two source statements that write the same target (§26.6.6 i, j).
+    override_expr: Ast.ExprId = .none,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -2553,12 +2557,10 @@ fn useFail(o: *const Obj) vpiHandle {
 /// ports are loads, input and inout ports are drivers)"; the module's ports
 /// are listed for vpiDriver and vpiLoad as well.
 ///
-/// ponytail: a scan of every object per call; an active force is told by
-/// its target alone, so every force of that target is listed while one
-/// holds it; the parent's instance ports, delay terms and cont assign bits
-/// are not listed. Each needs its own relation built at `open`.
+/// ponytail: a scan of every object per call; the parent's instance ports,
+/// delay terms and cont assign bits are not listed. Each needs its own
+/// relation built at `open`.
 fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle {
-    const overrides = if (o.slot) |at| if (run.attached()) |r| r.overrides.get(at) else null else null;
     var out: std.ArrayList(vpiHandle) = .empty;
     for (d.objects, 0..) |*x, i| {
         if (local and x.owner != o.owner) continue;
@@ -2570,11 +2572,7 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
                     else => !drivers,
                 },
                 code.vpiContAssign => mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o),
-                code.vpiForce, code.vpiAssignStmt => blk: {
-                    const layers = overrides orelse break :blk false;
-                    const active = if (x.vtype == code.vpiForce) layers.force != null else layers.assign != null;
-                    break :blk active and mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o);
-                },
+                code.vpiForce, code.vpiAssignStmt => activeOverride(d, x) and mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o),
                 else => false, // else: §26.6.22/§26.6.23 list no other behavioural class
             },
             .port => o.kind == .net and x.owner == o.owner and std.mem.eql(u8, x.name, o.name) and switch (x.direction) {
@@ -2598,6 +2596,32 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
         return null;
     };
     return newHandleIter(d, handles);
+}
+
+/// §26.6.6 i, j: activity belongs to the statement maintaining an override,
+/// not to the object whose loads or drivers are being queried. In particular
+/// a load is on the RHS, while the override registry is keyed by the LHS.
+fn activeOverride(d: *const Design, o: *const Obj) bool {
+    if (o.override_expr == .none) return false;
+    const r = run.attached() orelse return false;
+    var it = r.overrides.valueIterator();
+    while (it.next()) |layers| {
+        if (if (o.vtype == code.vpiForce) layers.force else layers.assign) |range|
+            if (overrideRange(d, o, r, range)) return true;
+        if (o.vtype == code.vpiForce) for (layers.parts.items) |part|
+            if (overrideRange(d, o, r, part.range)) return true;
+    }
+    return false;
+}
+
+fn overrideRange(d: *const Design, o: *const Obj, r: *const sim.digital.Run, range: sim.digital.PcRange) bool {
+    // A VPI force has an empty range; it activates no HDL source statement.
+    if (range.start == range.end) return false;
+    if (r.instanceOf(r.code_scope.items[range.start]) != d.scopes[o.owner.?].engine) return false;
+    return switch (r.code.items[range.start]) {
+        .override_eval => |op| op.value == o.override_expr and op.force == (o.vtype == code.vpiForce),
+        else => false, // else: only an override_eval maintains a procedural continuous assignment
+    };
 }
 
 /// `x`'s single arrow `tag`, or `no_obj`.
