@@ -75,6 +75,21 @@ pub const Options = struct {
     /// A PLI application's system tasks and functions, which the design's
     /// `$name` calls reach before any built-in of that name.
     systf: ?UserSystf = null,
+    /// Record where each statement starts (`Run.stmt_sites`), for a host's
+    /// statement callbacks (IEEE 1364-2005 §27.33.1.1).
+    stmt_sites: bool = false,
+};
+
+/// Where statement `stmt` of instance `scope` is reached: its first
+/// instruction, or a `for`'s increment or a `repeat`'s next-iteration test,
+/// which Table 27-6 also calls it at.
+pub const StmtSite = struct { scope: u32, stmt: Ast.StmtId, pc: u32 };
+
+/// A host's statement callbacks (IEEE 1364-2005 §27.33.1.1): `fire` runs
+/// "just before the indicated statement executes", at each pc set in `at`.
+pub const StmtHook = struct {
+    at: *const std.DynamicBitSetUnmanaged,
+    fire: *const fn (r: *Run, pc: u32) Error!void,
 };
 
 /// A PLI application's system tasks and functions (IEEE 1364-2005 §20.3):
@@ -438,6 +453,12 @@ pub const Run = struct {
     probe_ctx: *anyopaque = undefined,
     /// `Options.systf`.
     systf: ?UserSystf = null,
+    /// Every statement's sites in compile order, outer before inner, while
+    /// `Options.stmt_sites`; null otherwise.
+    stmt_sites: ?std.ArrayList(StmtSite) = null,
+    /// Set while a host has statement callbacks; `exec.execute` reads it once
+    /// per process run.
+    stmt_hook: ?StmtHook = null,
     /// Some digital expression probes the analog solution (`probe`).
     has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
@@ -2830,7 +2851,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget, .systf = opts.systf };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null };
     try binding.libraries(&r, file, opts, pp.more_starts);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {

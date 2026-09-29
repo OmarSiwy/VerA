@@ -859,6 +859,13 @@ fn position(self: *Run) u32 {
     return @intCast(self.code.items.len);
 }
 
+/// Records that statement `id` is reached at the next instruction
+/// (`Run.stmt_sites`).
+fn site(self: *Run, id: Ast.StmtId) Error!void {
+    const sites = &(self.stmt_sites orelse return);
+    try sites.append(self.arena, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = position(self) });
+}
+
 pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     if (self.code.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital instructions", .{});
     const at = position(self);
@@ -870,6 +877,7 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
 pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     const tok = self.file.stmtTok(id);
     if (depth == 256) return self.fail(tok, "digital statements deeper than 256 AST levels are not implemented", .{});
+    try site(self, id);
     switch (self.file.stmt(id)) {
         .empty => {},
         .block => |b| {
@@ -931,6 +939,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             try checkExpr(self, s.cond);
             const test_pc = try append(self, .{ .branch = .{ .condition = s.cond, .otherwise = 0 } });
             try compileStmt(self, s.body, depth + 1);
+            try site(self, id);
             try compileStmt(self, s.step, depth + 1);
             _ = try append(self, .{ .jump = test_pc });
             self.code.items[test_pc].branch.otherwise = position(self);
@@ -944,6 +953,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             const test_pc = try append(self, .{ .repeat_start = .{ .count = s.count, .counter = counter, .end = 0 } });
             const body_pc = position(self);
             try compileStmt(self, s.body, depth + 1);
+            try site(self, id);
             _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
             self.code.items[test_pc].repeat_start.end = position(self);
         },

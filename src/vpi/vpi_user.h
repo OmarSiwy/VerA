@@ -497,6 +497,8 @@ typedef struct t_cb_data {
  *
  *   §12.31.1 event   cbValueChange        a net, reg, variable or array word
  *                                          changed value
+ *   IEEE 1364-2005   cbStmt               just before a Table 27-6 statement
+ *   §27.33.1.1                             runs; on a module, each of its own
  *                    cbForce, cbRelease   accepted; they fire on a force or
  *                                          release, and VerA's digital engine
  *                                          performs neither, so they never do
@@ -514,9 +516,10 @@ typedef struct t_cb_data {
  * 27.33.2); NULL or vpiSuppressTime is refused, as is a cbAtStartOfSimTime
  * for the current time once it has started, outside a cbAtStartOfSimTime
  * callback, and a cbReadWriteSynch of delay zero at read-only synch. Every
- * callback is ONE-SHOT except cbValueChange, cbForce, cbRelease, cbError and
- * cbPLIError, which stand until removed. */
+ * callback is ONE-SHOT except cbValueChange, cbStmt, cbForce, cbRelease,
+ * cbError and cbPLIError, which stand until removed. */
 #define cbValueChange           1
+#define cbStmt                  2
 #define cbForce                 3
 #define cbRelease               4
 #define cbAtStartOfSimTime      5

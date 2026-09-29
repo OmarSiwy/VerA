@@ -376,6 +376,9 @@ pub const Obj = struct {
     /// task or function call, the token the engine runs its calltf by
     /// (`systf.hook`).
     src_tok: u32 = 0,
+    /// `.code` statement: its AST statement, which with `owner` names the
+    /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
+    stmt: Ast.StmtId = .none,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
