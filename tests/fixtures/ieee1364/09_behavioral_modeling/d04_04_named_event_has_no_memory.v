@@ -1,32 +1,11 @@
-// §5.10, the list of what an event IS:
+// IEEE §9.7.3 and AMS §5.10.4: an event-controlled procedure waits for
+// another procedure to execute the matching trigger. The event carries no
+// stored data; a trigger before the wait does not release a later wait.
 //
-//     — events have no time duration
-//     — events can be triggered and detected in different parts of the model
-//     — events do not block the execution of an analog block
-//     — events can be detected using the @ operator
-//     — events do not hold any data
-//
-// "No time duration" and "do not hold any data" together say a named event is
-// not a flag. A `-> e` that happens when no process is waiting on `e` is gone;
-// a `@(e)` reached afterwards waits for the NEXT trigger, not for the one that
-// already passed. This is the rule a "set a bit, test the bit" implementation
-// gets wrong, and it is worth its own fixture because that implementation is
-// exactly what the analog side of VerA does today (lower.zig writes the event's
-// flag slot at `->` and reads it at `@`) — correct for a single-pass analog
-// block, wrong for two suspendable digital processes.
-//
-// HAND DERIVATION — the trigger is deliberately EARLY.
-//   t=0   arm:    r<-0011, then delays to t=2
-//         late:   delays to t=5
-//   t=1   fire:   -> e      nobody is waiting; the event is discarded
-//   t=2   arm:    prints "armed 0011", then blocks at @(e) forever
-//   t=5   late:   prints "end 0011" and finishes; `arm` never resumes
-//
-// So the transcript has exactly two lines and does NOT contain "resumed". A
-// latched event prints a third line, "resumed 0011", between them.
-//
-// r is printed only to keep both lines value-bearing; the assertion is the
-// PRESENCE and ORDER of the lines.
+// DERIVATION: r is set to 0011 at t=0. The only trigger is at t=1,
+// before the reader prints "armed 0011" and starts waiting at t=2.
+// At t=5 the other process prints "end 0011" and terminates the run.
+// The exact transcript therefore contains those two lines and no "resumed".
 //
 //! lrm 5.10
 //! lrm 5.10.4

@@ -17,16 +17,11 @@
 // is supplied by this fixture except the sixteen values; the structure under
 // test is the annex file's.
 //
-// WHAT IS NOT ASSERTED, AND WHY. `abstol` is not readable from the language:
-// §5.5.3's `p.potential.abstol` is not parsed by VerA (E0207) and no other
-// construct reads the attribute back, so no fixture can compare the selected
-// tolerance against its value. The checks below are therefore that the
-// overridden natures still ELABORATE and still bind their access functions —
-// which is what distinguishes a taken `ifdef arm from a syntax error, and is
-// all that is observable. An earlier revision instead summed the sixteen macros
-// it had itself `defined and checked the total against 69.0: arithmetic over
-// the fixture's own literals, which cannot fail for any Annex D reason. That
-// check and its `current_abstol` twin are gone.
+// §5.5.3 makes potential.abstol readable. The local nature below checks
+// the selected value 2e-6 directly, as well as access-function binding.
+// Its other branch would select 1e-6, so this detects an ignored override.
+// The built-in natures have already been prepended under VerA; their later
+// macro definitions cannot retroactively alter the earlier declarations.
 //
 // UNDER VERA specifically, the include is a no-op — the engine prepends both
 // annex files before any user text, so DISCIPLINES_VAMS is already set and the
@@ -38,11 +33,12 @@
 // compiler is entitled to reject as a duplicate declaration — the guard exists
 // precisely to stop it. Not portable, so not done.)
 //
-// The wants are the biases stored into the unknown vector and loaded straight
-// back, exact in binary64.
+// The two potential wants are the stated biases, exact in binary64. The
+// attribute want is the local macro's 2e-6 literal read through the nature.
 //
 //! lrm D.1
 //! lrm 3.6.1.2
+//! lrm 5.5.3
 //! bias p = 1.25
 //! bias V(q) = 3.0
 `include "check.vh"
@@ -98,7 +94,8 @@ module annex_d_abstol_overrides(p, q);
   electrical q;
   analog begin
     `CHECKX("a nature whose abstol came from the `ifdef arm still binds its access function", AnnexDOvr(p), 1.25);
-    `CHECKX("D.1's Voltage still binds V after VOLTAGE_ABSTOL overrides its abstol", V(q), 3.0);
+    `CHECKX("the local override reaches the declared nature attribute", p.potential.abstol, 2e-6);
+    `CHECKX("D.1's Voltage access function remains bound", V(q), 3.0);
     AnnexDOvrFlow(p) <+ AnnexDOvr(p);
     I(q) <+ V(q);
   end

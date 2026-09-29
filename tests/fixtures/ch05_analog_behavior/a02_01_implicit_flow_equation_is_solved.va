@@ -40,20 +40,9 @@
 // is a dyadic rational, so CHECKX would be defensible; 1e-12 is used only
 // because Newton stops on a tolerance and not on an identity.
 //
-// WHAT A NON-IMPLICIT COMPILER ANSWERS. Feed the right-hand-side occurrence of
-// I(b) a zero instead of the branch unknown — which is what VerA does today —
-// and (1) degenerates to I = 0.5*(1 - V(m)) = 0.5*(1 - 4I), i.e. I = 1/6 =
-// 0.1666... and V(m) = 0.6666... Neither is 0.125, and neither is a rounding of
-// it, so the two assertions cannot pass by accident.
-//
-// OBSERVED TODAY. `vera --emit-zig` gives the branch-flow unknown a KCL
-// presence but NO defining row of its own: the testbench prints
-// `res[flowZ28pZ2cgZ29] = 0` with no Jacobian entries at all, so the unknown
-// holds its seed of 0 and the contribution evaluates to gm*V(b). This is the
-// plan's "each introduced unknown needs a defining equation", and it is the
-// single row-A02 defect with the widest blast radius: every implicit device
-// model (the LRM's own series-resistance diode included) is silently linearised
-// by it.
+// Replacing the RHS probe I(b) by zero instead would solve
+// I=0.5*(1-4I), giving I=1/6 and V(m)=2/3. Those differ from the
+// derived solution, so the assertions distinguish the missing feedback.
 //
 //! lrm 5.6.6
 //! lrm 5.6.1.2

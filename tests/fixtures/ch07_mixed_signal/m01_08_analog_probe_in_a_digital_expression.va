@@ -39,25 +39,8 @@
 // on both edges reads 2.0 at t = 25n and a tool that sampled on negedge only
 // reads 2.0 at t = 25n and t = 35n. Neither can pass by accident.
 //
-// WHAT USED TO FAIL (green since ch07 steps 5/7), RE-CAPTURED AFTER REVIEW. This block used to record
-// `error[E0205]: unsupported module item: found `always`` as the first
-// diagnostic. It is not — the clock stimulus dies first, on the `#`:
-//
-//   $ zig-out/bin/vera --lint -I tests/fixtures \
-//       tests/pending/M01/08_analog_probe_in_a_digital_expression.va
-//   error[E0209]: expected an expression: found `#`
-//     --> tests/pending/M01/08_analog_probe_in_a_digital_expression.va:77:5
-//      |
-//   77 |     #10 clk = 1'b1;
-//      |     ^
-//
-// `lib/frontend/parser.zig:2324` gates `#` on `self.digital`. The E0205 on
-// `always` (`parser.zig:1265`) is real and is this fixture's second blocker, but
-// it is not what the compiler reaches first.
-//
-// §7.3.3 has no coverage at all in the suite: `tests/fixtures/ch07_mixed_signal/
-// digital_probe_unsupported.va` is this shape, cites §7.3.6.3, and pins the
-// E0205 — a refusal of the enclosing block, not a judgement about the probe.
+// This runs through the mixed runner: the discrete processes execute
+// and the analog assertions observe sampled values on the listed grid.
 //
 //! lrm 7.3.3
 //! lrm 7.3.6.3

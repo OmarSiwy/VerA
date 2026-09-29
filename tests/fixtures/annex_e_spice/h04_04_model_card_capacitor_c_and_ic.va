@@ -35,7 +35,7 @@
 //
 // and subtracting the t term leaves the constant: the asserted want is `ic`
 // itself, 2.5, at t = 0, 0.5 and 1.0. A tool that dropped the card's C answers
-// with c = 1 F, integrand 1e-3, and V - 1.0*t = 2.5 - 0.9995 at t = 0.5 — caught
+// with c = 1 F, integrand 1e-3, and V - 1.0*t = 2.5 - 0.4995 at t = 0.5 — caught
 // at the second and third time points. A tool that dropped the card's IC answers
 // 0.0 at every point — caught at all three. A tool that dropped both answers 0.0
 // at t = 0 and -0.4995 at t = 0.5.

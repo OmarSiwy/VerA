@@ -61,12 +61,8 @@
 // row owns it, and tests/fixtures/ch06_hierarchy/h01_SPEC.md at 8b1514d4 records it as withdrawn rather than covered. It comes
 // back if §9.19's list grows a third item, or if §6.4 says a paramset statement
 // is a module instance parameter value assignment made on the instance's behalf.
-// VerA answers 1 today, which is the reading this row would have taken; tests/fixtures/ch06_hierarchy/h01_SPEC.md at 8b1514d4
-// keeps that as an observation, not a claim.
-//
-// GROUND TRUTH TODAY: green, all five, and previously unasserted — ch06_hierarchy's
-// paramset fixtures all override something. Kept as the evidence for a row the
-// audit found claimed but untested.
+// That unresolved claim is not part of the assertions below; see the
+// archived h01_SPEC.md discussion for the competing readings.
 //
 //! lrm 6.4
 //! lrm 3.4.1

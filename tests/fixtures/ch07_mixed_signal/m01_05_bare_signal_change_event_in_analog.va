@@ -39,35 +39,8 @@
 // One that fired on every analog timestep instead of on d's changes reads 0.5
 // at t = 5n. One that never fired reads 0.0 throughout.
 //
-// WHAT USED TO FAIL (green since ch07 steps 5/7), RE-CAPTURED AFTER REVIEW. This block used to record
-// `error[E0705]: not a declared named event: `d`` as the first diagnostic. It is
-// not; it is the second. What the compiler actually reports first is the `#` in
-// the stimulus:
-//
-//   $ zig-out/bin/vera --lint -I tests/fixtures \
-//       tests/pending/M01/05_bare_signal_change_event_in_analog.va
-//   error[E0209]: expected an expression: found `#`
-//     --> tests/pending/M01/05_bare_signal_change_event_in_analog.va:86:5
-//      |
-//   86 |     #10 d = 1'b1;
-//      |     ^
-//
-// `lib/frontend/parser.zig:2324` gates `#` on `self.digital`, which `src/main.zig`
-// sets only for a `.v` input, so the stimulus dies before the event does.
-//
-// Strip the delays and the SECOND failure is the one this fixture is about,
-// captured on the reduced module (`reg d; real held; initial d = 1'b0; analog
-// begin @(d) held = V(p); I(p) <+ held; end`):
-//
-//   error[E0705]: not a declared named event: `d`
-//    --> probe.va:6:7
-//     |
-//   6 |     @(d) held = V(p);
-//     |       ^
-//
-// VerA reads every bare identifier in an `@()` as a §5.10.4 named event, so
-// Syntax 7-2's first alternative has no implementation at all — not a refusal of
-// it, a misparse of it as something else.
+// This runs through the mixed runner: the discrete processes execute
+// and the analog assertions observe sampled values on the listed grid.
 //
 //! lrm 7.3.4
 //! lrm 5.10.5
