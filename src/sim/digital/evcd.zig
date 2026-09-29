@@ -496,7 +496,7 @@ pub fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
 }
 
 /// `set`'s character for 0, 1, else unknown.
-fn pick(b: Front.Integer.Bit, set: *const [3]u8) u8 {
+fn pick(b: @import("kernels").Integer.Bit, set: *const [3]u8) u8 {
     return switch (b) {
         .zero => set[0],
         .one => set[1],

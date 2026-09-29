@@ -14,7 +14,7 @@
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
-const Int = Front.Integer;
+const Int = @import("kernels").Integer;
 const diag = @import("diag");
 const Scheduler = @import("../scheduler.zig").Scheduler;
 /// Scheduler ticks. `Time` below is the timescale module, not this.

@@ -6,8 +6,7 @@
 //! pass switches, §7.8.5 gates, §7.9, §7.10, §7.11, §7.12, §8 UDPs,
 //! §8.5.3.5; VAMS §3.7 wreal.
 const std = @import("std");
-const Front = @import("frontend");
-const Int = Front.Integer;
+const Int = @import("kernels").Integer;
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;

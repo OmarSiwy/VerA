@@ -182,7 +182,7 @@ fn changes(s: *State, f: *Live, file: File, at: u64) Error!void {
     return devcd.writeChanges(Dump{ .s = s, .f = f, .file = file, .scratch = s.gpa, .keep = s.gpa }, at);
 }
 
-fn shown(s: *const State, p: Port, at: u32) @import("frontend").Integer.Bit {
+fn shown(s: *const State, p: Port, at: u32) @import("kernels").Integer.Bit {
     const o = p.off + at / 64;
     const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
     const x: u2 = if (root.logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);

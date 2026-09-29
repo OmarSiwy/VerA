@@ -24,7 +24,7 @@ const snapshot = @import("snapshot.zig");
 const deep = @import("base").deep_stack;
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
-const Int = @import("frontend").Integer;
+const Int = @import("kernels").Integer;
 const system = @import("../digital/system.zig");
 const display = @import("../digital/display.zig");
 const rt_system = @import("system.zig");

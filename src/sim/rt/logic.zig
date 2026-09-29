@@ -5,7 +5,7 @@
 //! make is 0. Clauses: §5.1.5 to §5.1.14 with Tables 5-12 to 5-21, §5.5.2
 //! extension, §5.2.1 packed selects, §9.5.1 casez/casex.
 const std = @import("std");
-const Int = @import("frontend").Integer;
+const Int = @import("kernels").Integer;
 
 /// `vera --emit-exe --two-state`: not IEEE 1364 §3.2/§4.1 4-state logic.
 pub const two = blk: {

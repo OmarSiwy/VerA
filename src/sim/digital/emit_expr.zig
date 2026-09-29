@@ -575,7 +575,7 @@ pub fn effects(self: *Emitter, e: Ast.ExprId) bool {
 }
 
 /// A folded constant; `known` makes its x and z bits 0 (`--two-state`).
-fn constant(self: *Emitter, v: @import("frontend").Integer.Literal, w: u32, known: bool) Error!void {
+fn constant(self: *Emitter, v: @import("kernels").Integer.Literal, w: u32, known: bool) Error!void {
     const n = emit.words(w);
     const vs = v.values()[0..n];
     const xs = v.unknowns()[0..n];

@@ -336,7 +336,7 @@ fn codeText(w: *std.Io.Writer, code: u32) std.Io.Writer.Error!void {
 /// and code with no space, a vector's `b` digits then one space, a real's
 /// `r` and `%.16g`.
 fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.Io.Writer.Error!void {
-    const lit: Front.Integer.Literal = .{ .width = v.width, .signed = false, .sized = true, .planes = @constCast(p) };
+    const lit: @import("kernels").Integer.Literal = .{ .width = v.width, .signed = false, .sized = true, .planes = @constCast(p) };
     if (v.real and !as_x) {
         var buf: [64]u8 = undefined;
         try w.print("r{s} ", .{g16(&buf, @bitCast(p[0]))});
@@ -391,7 +391,7 @@ test "§18.2.1 %.16g" {
         try std.testing.expectEqualStrings(want, g16(&buf, r));
 }
 
-fn digit(b: Front.Integer.Bit) u8 {
+fn digit(b: @import("kernels").Integer.Bit) u8 {
     return switch (b) {
         .zero => '0',
         .one => '1',
@@ -662,7 +662,7 @@ test codeText {
     }
 }
 
-fn testLiteral(a: std.mem.Allocator, bits: []const u8) !Front.Integer.Literal {
+fn testLiteral(a: std.mem.Allocator, bits: []const u8) !@import("kernels").Integer.Literal {
     const v = try @import("net.zig").filled(a, @intCast(bits.len), false, .zero);
     for (bits, 0..) |c, i| @import("net.zig").setBit(v, @intCast(bits.len - 1 - i), switch (c) {
         '0' => .zero,
