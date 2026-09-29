@@ -275,6 +275,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .inserts = lowered.inserts,
         .reads = lowered.discrete_reads.keys(),
         .held = lowered.held_vars.items,
+        .params = lowered.params.items,
+        .param_reads = lowered.discrete_params.keys(),
     };
 }
 
@@ -588,6 +590,18 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     // values `Model` gets (`sim.digital.Mixed.params`).
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
     for (d.params) |p| try out.print(arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
+    // The host has already derived these values, including defaults that the
+    // digital expression subset cannot evaluate. Copy from each analysis's
+    // actual Model, after card writes and per-point parameter overrides.
+    try out.appendSlice(arena, " };\nconst mixed_real_ports = [_]Port{");
+    for (mx.params) |p| {
+        if (p.ty != .real) continue;
+        const read = for (mx.param_reads) |name| {
+            if (std.mem.eql(u8, p.name, name)) break true;
+        } else false;
+        if (!read) continue;
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(p.name), naming.sanitize(&buf, p.name) catch return error.OutOfMemory });
+    }
     try out.appendSlice(arena, " };\nconst mixed_reads = blk: {\n    var names: [a2d_ports.len][]const u8 = undefined;\n    for (a2d_ports, &names) |p, *n| n.* = p.name;\n    const out = names;\n    break :blk out;\n};\n\n");
 
     // --- main ---------------------------------------------------------------

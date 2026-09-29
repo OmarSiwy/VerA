@@ -190,6 +190,11 @@ pub const Mixed = struct {
     /// The device's §5.10 held variables: the `Instance` fields a read
     /// variable's value can be copied from.
     held: []const @import("ir").Lower.HeldVar = &.{},
+    /// §6.3.4 model parameters and those the discrete source depends on.
+    /// Only the selected real values need transport: the digital engine can
+    /// already evaluate its integral parameters and their explicit cards.
+    params: []const @import("ir").Lower.ParamInfo = &.{},
+    param_reads: []const []const u8 = &.{},
 };
 
 /// One `//! noise` line:

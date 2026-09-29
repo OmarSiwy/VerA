@@ -215,6 +215,10 @@ discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// block's), name → first reading token. The mixed runner copies each one's
 /// §5.10 held value into the digital engine after every accepted solution.
 discrete_reads: std.StringArrayHashMapUnmanaged(u32) = .empty,
+/// §6.3.4 scalar parameters read by the discrete source, including defaults
+/// they depend on. The mixed host transports selected real values from the
+/// derived model card; unrelated analog parameters need no digital storage.
+discrete_params: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// The module's discrete half needs the event queue (`lower_context.isMixed`).
 mixed_signal: bool = false,
 /// §7.8.4 the connect modules elaboration inserted (see `Elaborate.Design.inserts`).
