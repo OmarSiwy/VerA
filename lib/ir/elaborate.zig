@@ -200,6 +200,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     const top = try pickTop(ctx);
 
     var f: Flatten = .{ .ctx = ctx };
+    try @import("elaborate/names.zig").warnSpiceShadows(&f);
     // §7.7's names are judged whether or not the design has a hierarchy to
     // resolve: a `connectrules` block is a description of the COMPILATION
     // (A.1.2), not of the top module, so the tree-of-one shortcut below must

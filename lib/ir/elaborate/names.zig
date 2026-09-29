@@ -94,11 +94,14 @@ pub fn netRefName(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
 /// defined within SPICE regardless of the case", over the netlist-derived
 /// modules only (already lower-cased).
 ///
-/// E.3.3's optional shadowing warning is not issued. A netlist `.MODEL` and a
-/// Table E.1 primitive of the same name resolve primitive-first; Annex E
-/// does not order two SPICE objects, and Table E.1 is the standardised one.
+/// An exact paramset match returns null so the caller selects that paramset
+/// before considering any SPICE definition. Declaration collisions with a
+/// netlist are diagnosed by `warnSpiceShadows`; the optional warning for a
+/// Table E.1 primitive alone is not issued. Two SPICE objects of the same
+/// name resolve primitive-first; Annex E does not order them.
 pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
     for (self.ctx.file.userModules()) |*m| if (m.name == name) return m;
+    for (self.ctx.file.paramsets) |ps| if (ps.name == name) return null;
     for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*m| {
         if (m.name == name) return m;
     }
@@ -107,6 +110,25 @@ pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
         if (std.ascii.eqlIgnoreCase(self.ctx.file.str(m.name), want)) return m;
     }
     return null;
+}
+
+/// E.3.3 requires a warning for a same-named HDL declaration and a SPICE
+/// model/subcircuit. Check definitions once, independently of the repeated
+/// lookups used for ports, connect planning and parameter selection. Netlist
+/// names have E.2.1's canonical lowercase spelling; a differently cased HDL
+/// declaration leaves case-insensitive fallback available and does not warn.
+pub fn warnSpiceShadows(self: *Flatten) Error!void {
+    const file = self.ctx.file;
+    for (file.netlistModules()) |spice| {
+        for (file.userModules()) |m| if (m.name == spice.name)
+            try spiceShadowWarning(self, m.name, m.main_tok, "module");
+        for (file.paramsets) |ps| if (ps.name == spice.name)
+            try spiceShadowWarning(self, ps.name, ps.main_tok, "paramset");
+    }
+}
+
+fn spiceShadowWarning(self: *Flatten, name: Ast.StrId, tok: u32, kind: []const u8) Error!void {
+    try self.ctx.bag.add(.lower, .W0951, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, tok), "{s} `{s}` is used instead of the SPICE model or subcircuit when this name is instantiated", .{ kind, self.ctx.file.str(name) });
 }
 
 /// §6.4: "The second identifier is usually the name of a module with which

@@ -1,0 +1,24 @@
+// E.3.3 also gives a same-named paramset precedence over an always-present
+// Table E.1 primitive. Here resistor denotes a paramset choosing gain=3,
+// not the built-in resistor with r=1. At 1 V the current must be 3 A.
+// For primitive shadowing the simulator "may issue a warning"; VerA
+// chooses silence.
+// The mandatory model/subcircuit warning has separate shadow_warning cases.
+//! lrm E.3.3
+//! nowarn
+//! bias V(p) = 1, V(n) = 0
+//! checks 1
+`include "check.vh"
+module spice_paramset_primitive_shadow(p,n);
+  inout p,n; electrical p,n;
+  resistor selected(p,n);
+  analog `CHECKX("the paramset overrides the built-in primitive", I(p,n), 3.0);
+endmodule
+paramset resistor user_resistor;
+  .gain=3;
+endparamset
+module user_resistor(p,n);
+  inout p,n; electrical p,n;
+  parameter real gain=1;
+  analog I(p,n) <+ gain*V(p,n);
+endmodule

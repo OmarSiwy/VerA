@@ -401,6 +401,7 @@ pub const Code = enum(u16) {
     W1160,
     W1050,
     W0950,
+    W0951,
     E0820,
     E0821,
     E0822,
@@ -5909,6 +5910,21 @@ fn infoOf(c: Code) Info {
             .title = "multiple discipline resolution rules match",
             .lrm = "7.7.2.1",
             .explain = "The first matching rule is used. Exact matches take precedence over subset matches. Remove the ambiguity to silence this warning.",
+        },
+        .W0951 => .{
+            .title = "a Verilog-AMS definition shadows a SPICE model or subcircuit",
+            .lrm = "E.3.3",
+            .explain =
+            \\A Verilog-AMS module or paramset takes precedence over a SPICE
+            \\model or subcircuit with the same name. E.3.3 requires this
+            \\warning so the selected definition is explicit. Rename one
+            \\definition to make both available under distinct names.
+            \\
+            \\Shadowing an always-available Table E.1 primitive permits an
+            \\optional warning; VerA does not warn for that case. Names that
+            \\differ in case retain E.2.1's case-sensitive HDL lookup followed
+            \\by case-insensitive SPICE lookup.
+            ,
         },
         .E1001 => .{
             .title = "source contains no module declaration",
