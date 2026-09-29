@@ -158,6 +158,10 @@ charge_sites: std.ArrayList(Lower.ChargeSite) = .empty,
 /// (`@(cross(...)) x = V(p);`), which an SSA place re-initialised every evaluation
 /// cannot express, so each gets a persistent `Instance` slot.
 held_vars: std.ArrayList(Lower.HeldVar) = .empty,
+/// §5.10.3.3 final start/period expressions, distinct from the call operands
+/// which decided whether to execute the event body. Only changed controls
+/// have a row; codegen reads these for the following breakpoint.
+timer_controls: std.AutoHashMapUnmanaged(Mir.Inst, [2]Mir.Value) = .empty,
 /// §3.2.2 the arrays some subscript indexes at run time. Each is ONE storage
 /// of `len` elements (dimensions flattened in declaration order), reached
 /// through `Mir.Opcode.anew`/`fload`/`iload`/`store` instead of one SSA place

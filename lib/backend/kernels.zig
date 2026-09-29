@@ -1,4 +1,4 @@
-//! Module root for the six device-runtime kernel files, which are `@embedFile`d
+//! Module root for the device-runtime kernel files, which are `@embedFile`d
 //! verbatim into generated devices. Each file belongs to exactly one module, so
 //! codegen's tests and `ir/elaborate.zig` (§9.13 folding via `rng_kernels`)
 //! reach them through here; `zig build test-kernels` runs their tests alone.
@@ -16,6 +16,8 @@ pub const filter_kernels = @import("filter_kernels.zig");
 pub const file_kernels = @import("file_kernels.zig");
 /// §4.5.15 SPICE limiting functions.
 pub const limit_kernels = @import("limit_kernels.zig");
+/// §5.10.3.3 absolute timer scheduling, also used by the mixed coordinator.
+pub const timer_kernels = @import("timer_kernels.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

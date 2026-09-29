@@ -88,7 +88,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.out.appendSlice(self.gpa, kt.ops_txt);
     try self.out.appendSlice(self.gpa, kt.family_txt);
     try self.out.appendSlice(self.gpa, kt.family_dev_txt);
-    if (f.timer) try self.out.appendSlice(self.gpa, kt.timer_txt);
+    if (f.timer) try depublish(self.gpa, &self.out, kt.timer_txt);
     if (f.hist) try self.out.appendSlice(self.gpa, kt.hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, kt.hist_quad_txt);
     if (f.arrs) try self.out.appendSlice(self.gpa, kt.arr_txt);

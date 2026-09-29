@@ -476,15 +476,6 @@ pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     return argF64(self, args, 1, "0.0");
 }
 
-/// §5.10.3.3: "If the period expression evaluates to a value less than or
-/// equal to 0.0, the timer shall trigger only once". An absent period
-/// defaults to 0.0; one that does not fold is treated as periodic.
-fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
-    if (args.len < 2) return true;
-    const c = self.an.foldConst(args[1], false) orelse return false;
-    return c.f <= 0.0;
-}
-
 /// Returns the test "the signal crossed zero since the last accepted step, in
 /// the direction argument 1 asks for" (+1 rising, -1 falling, 0 or absent
 /// either), shared by §4.5.10 `last_crossing` and §5.10.3 `cross`. `in` is
@@ -1434,21 +1425,13 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in0})),
             try enableTest(self, .cross, args),
         }),
-        // §5.10.3.3 fires at `start_time` and every `period` after it. Until
-        // `updateState` schedules (`__start` is NaN), `__next` is 0.0 and the
-        // start is clamped in here. After that `__next` is the event: a start
-        // that moves now schedules the next one. A one-shot fires only if
-        // "the start_time is in the future", so a negative start never fires.
-        //
-        // ponytail: the one-shot rule applies only when the period folds
-        // non-positive; a solve-time period is treated as periodic.
-        .timer => try self.b("S.con(if (sim.t >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
+        // §5.10.3.3 a change BEFORE the event test replaces its pending
+        // deadline using the latest absolute start + k*period. Changes in an
+        // event body cannot retroactively cancel the event already evaluated.
+        .timer => try self.b("S.con(if (zTimerDue(({1s}).val(), {2s}, sim.t, inst.{0s}__start, inst.{0s}__per, inst.{0s}__next) and ({3s})) 1.0 else 0.0)", .{
             n,
             in0,
-            if (timerIsOneShot(self, args))
-                try std.fmt.allocPrint(self.arena, " and ({s}).val() >= 0.0", .{in0})
-            else
-                "",
+            try ctrlEval(self, args, 1, "0.0"),
             try enableTest(self, .timer, args),
         }),
         // §5.10.3.2 fires "when the expression crosses zero (0) from below":

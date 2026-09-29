@@ -46,10 +46,11 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .zi_np,
         .cross,
         .above,
-        .timer,
         .@"$bound_step",
         .@"$discontinuity",
         => (enableArgIdx(Mir.callee.opKind(c)) orelse return false) == i,
+        // §5.10.3.3 a latest period participates in the event condition too.
+        .timer => i == 1 or i == 3,
         // §9.4.1/§9.7.3 the printing tasks.
         .@"$display",
         .@"$displayb",

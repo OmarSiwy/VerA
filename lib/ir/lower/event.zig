@@ -3,7 +3,7 @@
 //! In: event-controlled statements. Out: event-guarded MIR and the event side tables codegen
 //! turns into updateState.
 //!
-//! LRM clauses this file's code cites: §5.10, §5.10.2, §5.10.3, §5.10.3.1, §5.10.3.4, §9.4.1, §9.4.3, §9.5, §9.5.2, §9.5.4.2, §9.7.3, §9.13.1, §9.13.2.
+//! LRM clauses this file's code cites: §5.10, §5.10.2, §5.10.3, §5.10.3.1, §5.10.3.3, §5.10.3.4, §9.4.1, §9.4.3, §9.5, §9.5.2, §9.5.4.2, §9.7.3, §9.13.1, §9.13.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -25,6 +25,12 @@ const poison = Lower.poison;
 
 /// This file's private state on `Lower` (`Lower.event_state`).
 pub const State = struct {
+    /// Timer arguments have an at-event value and an end-of-evaluation value.
+    /// Capture expression leaves while lowering once; replay only arithmetic,
+    /// never event bodies, stateful operators or side-effecting calls.
+    timer_capture: ?*TimerCapture = null,
+    timer_replay: ?*const std.AutoHashMapUnmanaged(Ast.ExprId, TypedValue) = null,
+    timers: std.ArrayList(DeferredTimer) = .empty,
     /// §9.4.1 display statements whose CALL is created at the end of the analog
     /// block (`finishDisplays`), in source order — see `queueDisplay` for the
     /// clause reading. Parallel-ish to `displays`: each entry names the
@@ -42,6 +48,53 @@ pub const State = struct {
 };
 
 const InternalSeed = struct { seed: VarSlot, ready: VarSlot };
+pub const CapturedExpr = struct { value: TypedValue, variable: ?VarSlot = null };
+pub const TimerCapture = std.AutoHashMapUnmanaged(Ast.ExprId, CapturedExpr);
+const DeferredTimer = struct {
+    inst: Mir.Inst,
+    args: []const Ast.ExprId,
+    values: [2]Mir.Value,
+    captured: TimerCapture,
+};
+
+/// §5.10.3.3 schedule using controls after event bodies have run. The event
+/// condition itself keeps its original operands, so an already delivered
+/// event is neither canceled nor executed a second time.
+pub fn finishTimers(self: *Lower) Oom!void {
+    for (self.event_state.timers.items) |tm| {
+        var replay: std.AutoHashMapUnmanaged(Ast.ExprId, TypedValue) = .empty;
+        var changed = false;
+        for (tm.args[0..@min(tm.args.len, 2)]) |arg| if (arg != .none)
+            try replayTimerExpr(self, arg, &tm.captured, &replay, &changed);
+        if (!changed) continue;
+        self.event_state.timer_replay = &replay;
+        defer self.event_state.timer_replay = null;
+        var latest = tm.values;
+        for (tm.args[0..@min(tm.args.len, 2)], 0..) |arg, k| {
+            if (arg != .none) latest[k] = try self.toReal(try lower_expr.lowerExpr(self, arg));
+        }
+        if (self.mir.resolveAlias(latest[0]) != self.mir.resolveAlias(tm.values[0]) or
+            self.mir.resolveAlias(latest[1]) != self.mir.resolveAlias(tm.values[1]))
+            try self.out.timer_controls.put(self.arena, tm.inst, latest);
+    }
+}
+
+fn replayTimerExpr(self: *Lower, e: Ast.ExprId, captured: *const TimerCapture, replay: *std.AutoHashMapUnmanaged(Ast.ExprId, TypedValue), changed: *bool) Oom!void {
+    const before = captured.get(e) orelse return;
+    if (before.variable) |slot| {
+        const after = try self.builder.readVariable(slot.place, self.cur);
+        changed.* = changed.* or self.mir.resolveAlias(after) != self.mir.resolveAlias(before.value.v);
+        return replay.put(self.arena, e, .{ .v = after, .ty = slot.ty });
+    }
+    switch (self.file.exprs.tag(e)) {
+        .unary, .binary, .ternary, .builtin_call, .concat, .multi_concat => {
+            var buf: [3]Ast.ExprId = undefined;
+            for (self.file.exprs.children(e, &buf)) |child|
+                try replayTimerExpr(self, child, captured, replay, changed);
+        },
+        else => try replay.put(self.arena, e, before.value), // else: leaves/calls keep the one evaluated value; only arithmetic is replayed
+    }
+}
 
 /// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
 /// every unconditional display-family statement takes this route (see
@@ -159,15 +212,26 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             try checkEventArgBounds(self, e, name); // §5.10.3.1-§5.10.3.3
             var args: std.ArrayList(Mir.Value) = .empty;
             defer args.deinit(self.arena);
-            for (ex.args(e)) |a| {
+            var captured: TimerCapture = .empty;
+            const is_timer = std.mem.eql(u8, name, "timer");
+            for (ex.args(e), 0..) |a, k| {
                 // A.6.5 permits omitted arguments; keep the position.
                 if (a == .none) {
                     try args.append(self.arena, .f_zero);
                     continue;
                 }
+                if (is_timer and k < 2) self.event_state.timer_capture = &captured;
+                defer self.event_state.timer_capture = null;
                 try args.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, a)));
             }
-            return try self.call(name, args.items);
+            const result = try self.call(name, args.items);
+            if (is_timer) try self.event_state.timers.append(self.arena, .{
+                .inst = self.mir.valueDef(result).inst_result,
+                .args = ex.args(e),
+                .values = .{ args.items[0], if (args.items.len > 1) args.items[1] else .f_zero },
+                .captured = captured,
+            });
+            return result;
         },
         .event_posedge, .event_negedge => {
             try self.err(self.file.exprs.mainTok(e), .E0704, "", .{});
