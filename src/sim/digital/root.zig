@@ -926,7 +926,16 @@ pub const Run = struct {
         const c = self.chainBase(e);
         if (ex.tag(c.base) != .ident) return null;
         const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
-        return if (c.depth == 1 + arr.rest.len) arr else null;
+        if (c.depth != 1 + arr.rest.len) return null;
+        // IEEE 1364-2005 §4.9: "complete or partial array dimensions" are
+        // never assigned or read, so a range in an array's own dimension
+        // selects several elements, not one.
+        var at = e;
+        while (ex.tag(at) == .index) : (at = ex.lhs(at)) switch (ex.tag(ex.rhs(at))) {
+            .range, .indexed_range => return self.exprFail(e, "an unpacked array reference requires an element index"),
+            else => {}, // else: an element index
+        };
+        return arr;
     }
 };
 
