@@ -329,7 +329,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// §9.14 / IEEE 1364-2005 §17.11.1's integral argument and its source width,
 /// shared by expression and statement calls (the latter discard the result).
 pub fn lowerClog2(self: *Lower, tok: u32, arg: Ast.ExprId) Oom!TypedValue {
-    const tv = try lower_expr.lowerExpr(self, arg);
+    const tv = try lower_expr.lowerClog2Arg(self, arg, null);
     if (tv.ty != .integer or arg == .none) {
         try self.err(tok, .E0892, "got {s}", .{@tagName(tv.ty)});
         return poison;

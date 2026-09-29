@@ -4,6 +4,7 @@
 //! is not constant. Reads the symbol tables, never writes. The operator rules are
 //! `frontend/constfold.zig`'s; this file supplies identifiers (through `consts`) and §4.2.9 signedness.
 //! LRM: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1, §4.2.9, §4.2.11, §4.3, §4.7.2, §6.6.1, §6.6.2.
+//! §9.14 / IEEE §§5.4–5.5, §17.11.1 preserve the `$clog2` operand context.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -71,7 +72,8 @@ const Env = struct {
         const name = self.file.str(ex.strOf(e));
         const args = ex.args(e);
         if (args.len != 1) return null;
-        const a = constfold.fold(self.file, args[0], env) orelse return null;
+        const is_clog2 = std.mem.eql(u8, name, "$clog2");
+        const a = (if (is_clog2) constfold.foldSized(self.file, args[0], ClogEnv{ .base = env }) else constfold.fold(self.file, args[0], env)) orelse return null;
         if (a == .str) return null;
         if (std.mem.eql(u8, name, "$rtoi")) {
             // §3.2's 32-bit integer; anything outside it (or NaN) stays a
@@ -83,7 +85,7 @@ const Env = struct {
         if (std.mem.eql(u8, name, "$itor")) return .{ .real = @floatFromInt(a.asIntExact() orelse return null) };
         // §9.14 / IEEE 1364-2005 §17.11.1: interpret the argument unsigned
         // at its source width, not at the i64 carrier's width.
-        if (std.mem.eql(u8, name, "$clog2")) {
+        if (is_clog2) {
             if (a != .int) return null;
             const bits = clog2Width(self, args[0]) orelse return null;
             if (bits > 64 and !clog2WideCarrier(self, args[0], 0)) return null;
@@ -98,6 +100,19 @@ const Env = struct {
     /// Returns name `e`'s bit length, or null when nothing states it.
     pub fn width(env: Env, e: Ast.ExprId) ?u32 {
         return nameWidth(env.self, e, 0);
+    }
+};
+
+const ClogEnv = struct {
+    base: Env,
+    pub fn leaf(env: ClogEnv, e: Ast.ExprId) ?Const {
+        return env.base.leaf(e);
+    }
+    pub fn width(env: ClogEnv, e: Ast.ExprId) ?u32 {
+        return nameWidthFor(env.base.self, e, 0, true);
+    }
+    pub fn signed(env: ClogEnv, e: Ast.ExprId) ?bool {
+        return clog2Signed(env.base.self, e);
     }
 };
 
@@ -154,12 +169,39 @@ fn WidthEnv(comptime self_determined: bool) type {
         pub fn width(env: @This(), e: Ast.ExprId) ?u32 {
             return nameWidthFor(env.self, e, env.depth, self_determined);
         }
+        pub fn signed(env: @This(), e: Ast.ExprId) ?bool {
+            return nameSignedForClog2(env.self, e, env.depth);
+        }
     };
 }
 
 /// `$clog2`'s IEEE self-determined source width, before integer MIR erases it.
 pub fn clog2Width(self: *const Lower, e: Ast.ExprId) ?u32 {
     return constfold.clog2Width(self.file, e, WidthEnv(true){ .self = self, .depth = 0 });
+}
+
+pub fn clog2Signed(self: *const Lower, e: Ast.ExprId) ?bool {
+    return constfold.clog2Signed(self.file, e, WidthEnv(true){ .self = self, .depth = 0 });
+}
+
+fn nameSignedForClog2(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
+    if (depth > 32) return null;
+    const name = self.file.str(self.file.exprs.strOf(e));
+    if (self.vars.get(name)) |v| return if (v.ty == .integer) true else null;
+    if (self.arrays.get(name)) |a| return if (a.ty == .integer) true else null;
+    for (self.func_params) |p| {
+        if (!self.file.strings.eql(p.name, name)) continue;
+        if (p.ty == .integer) return true;
+        if (p.packed_range != null or p.is_signed) return p.is_signed;
+        return constfold.clog2Signed(self.file, p.default, WidthEnv(true){ .self = self, .depth = depth + 1 });
+    }
+    const pi = self.param_index.get(name) orelse return null;
+    const p = self.out.params.items[pi];
+    return if (p.ty != .integer) null else if (p.integer32) true else p.source_signed;
+}
+
+pub fn clog2Plan(self: *const Lower, e: Ast.ExprId, parent: ?constfold.IntContext) ?constfold.IntPlan {
+    return constfold.intPlan(self.file, e, ClogEnv{ .base = .{ .self = self, .params = false } }, parent);
 }
 
 /// Above 64 bits, an i64 sign bit describes the source high bits only when

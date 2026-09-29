@@ -3,6 +3,7 @@
 //! In: expression AST. Out: typed MIR values (`TypedValue`).
 //!
 //! LRM clauses this file's code cites: §3.3, §4.2.3, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
+//! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -17,6 +18,7 @@ const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const Const = @import("frontend").constfold.Const;
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
@@ -32,6 +34,46 @@ const astTy = Lower.astTy;
 /// Lowers an expression, returning its value and its LRM type; every
 /// operator's opcode family depends on the type (LRM §4, §4.2.1.1–§4.2.1.3).
 pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    return lowerExprRaw(self, e, null, false);
+}
+
+/// IEEE §§5.4–5.5 inside a self-determined `$clog2` argument. Function
+/// calls still lower their bodies and arguments on their own ordinary path.
+pub fn lowerClog2Arg(self: *Lower, e: Ast.ExprId, parent: ?constfold.IntContext) Oom!TypedValue {
+    if (e == .none) return poison;
+    const plan = lower_constfold.clog2Plan(self, e, parent);
+    if (plan) |p| if (!p.supported) {
+        var width = p.from_width;
+        for (p.operands) |operand| if (operand) |c| {
+            width = @max(width, c.width);
+        };
+        try self.err(self.file.exprs.mainTok(e), .E0893, "this intermediate needs {d} bits", .{width});
+        return poison;
+    };
+    var value = try lowerExprRaw(self, e, plan, true);
+    if (value.ty == .integer) if (plan) |p| {
+        value.v = try resizeInt(self, value.v, .{ .width = p.from_width, .signed = p.result.signed });
+        if (p.from_width != p.result.width) value.v = try resizeInt(self, value.v, p.result);
+    };
+    return value;
+}
+
+fn lowerOperand(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool, index: usize) Oom!TypedValue {
+    return if (sized) lowerClog2Arg(self, e, if (plan) |p| p.operands[index] else null) else lowerExpr(self, e);
+}
+
+/// IntContext.normalize without any width-erasing arithmetic opcode.
+fn resizeInt(self: *Lower, v: Mir.Value, context: constfold.IntContext) Oom!Mir.Value {
+    if (context.width >= 64) return v;
+    const mask: i64 = @intCast((@as(u64, 1) << @intCast(context.width)) - 1);
+    const bits = try self.emit(.bitand, &.{ v, try self.mir.addIntConst(self.arena, mask) });
+    if (!context.signed) return bits;
+    const sign = try self.emit(.bitand, &.{ bits, try self.mir.addIntConst(self.arena, @as(i64, 1) << @intCast(context.width - 1)) });
+    const negative = try self.emit(.bitor, &.{ bits, try self.mir.addIntConst(self.arena, ~mask) });
+    return self.emit(.select, &.{ try self.toBool(.{ .v = sign, .ty = .integer }), negative, bits });
+}
+
+fn lowerExprRaw(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     if (e == .none) return poison;
     const ex = &self.file.exprs;
     // Provenance: every MIR instruction emitted while this node is being
@@ -110,9 +152,9 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         },
 
-        .unary => return lowerUnary(self, e),
-        .binary => return lowerBinary(self, e),
-        .ternary => return lowerTernary(self, e), // §4.2.3 / §4.2.12
+        .unary => return lowerUnary(self, e, plan, sized),
+        .binary => return lowerBinary(self, e, plan, sized),
+        .ternary => return lowerTernary(self, e, plan, sized), // §4.2.3 / §4.2.12
 
         .call => return lower_func.lowerUserCall(self, e), // §4.7
         .builtin_call => return lowerBuiltin(self, e), // §4.3
@@ -458,9 +500,9 @@ pub fn funcParamShadows(self: *const Lower, name: []const u8) bool {
 }
 
 /// A.8.6 unary operators. §4.2.3 (+/-), §4.2.7 (!), §4.2.9 (~).
-fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerUnary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
-    const a = try lowerExpr(self, ex.lhs(e));
+    const a = try lowerOperand(self, ex.lhs(e), plan, sized, 0);
     switch (ex.unOp(e)) {
         .plus => return a,
         .minus => {
@@ -591,12 +633,12 @@ fn twoState(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
 
 /// A.8.6 binary operators. LRM Table 4-3 precedence is the parser's job; this
 /// only picks the opcode family from the operand types (§4.2.1).
-pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerBinary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
     const op = ex.binOp(e);
     // §4.2.7 && and || short-circuit: the rhs must not be evaluated when the
     // lhs already decides the result, so this needs real control flow.
-    if (op == .logical_and or op == .logical_or) return lowerShortCircuit(self, e, op);
+    if (op == .logical_and or op == .logical_or) return lowerShortCircuit(self, e, op, plan, sized);
 
     // §3.3 Table 3-3: "If both operands are string literals, the operator is
     // the same Verilog equality operator as for integer types." Each literal
@@ -613,8 +655,8 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     if (op == .case_eq or op == .case_neq) if (try caseEquality(self, ex.lhs(e), ex.rhs(e))) |same|
         return .{ .v = if (op == .case_eq) same else try self.emit(.lognot, &.{same}), .ty = .integer };
-    var a = try lowerExpr(self, ex.lhs(e));
-    var b = try lowerExpr(self, ex.rhs(e));
+    var a = try lowerOperand(self, ex.lhs(e), plan, sized, 0);
+    var b = try lowerOperand(self, ex.rhs(e), plan, sized, 1);
     // §2.7 makes a string operand an unsigned integer, so a MIXED pair is
     // arithmetic and not a string operation. Two strings stay strings: Table
     // 3-3's relational row is a string comparison and `{a, " ", b}` is a
@@ -667,6 +709,13 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 return poison;
             }
             const op_cmp: Ast.BinaryOp = if (!case) op else if (op == .case_eq) .eq else .neq;
+            if (sized and a.ty == .integer and b.ty == .integer) if (plan) |p| if (p.operands[0]) |c| {
+                if (!c.signed and c.width == 64) {
+                    a.v = try extendUnsigned(self, a.v, null, true);
+                    b.v = try extendUnsigned(self, b.v, null, true);
+                }
+                return .{ .v = try cmp(self, op_cmp, a, b), .ty = .integer };
+            };
             // §4.2.9's unsigned comparison: each operand zero-extended from
             // its own width. See `constfold.UnsignedCompare`.
             if (a.ty == .integer and b.ty == .integer) if (lower_constfold.unsignedCompare(self, e)) |u| {
@@ -681,6 +730,11 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 try self.err(self.file.exprs.mainTok(e), .E0322, "got {s} and {s}", .{ @tagName(a.ty), @tagName(b.ty) });
                 return poison;
             }
+            // A logical right shift clears the sign extension before shifting
+            // the source-width bit pattern; its result keeps the result type.
+            if (sized and op == .shr) if (plan) |p| if (p.operands[0]) |c| {
+                a.v = try resizeInt(self, a.v, .{ .width = c.width, .signed = false });
+            };
             const opc: Mir.Opcode = switch (op) {
                 .bit_and => .bitand,
                 .bit_or => .bitor,
@@ -746,10 +800,10 @@ pub fn cmp(self: *Lower, op: Ast.BinaryOp, a: TypedValue, b: TypedValue) Oom!Mir
 /// and the `.itof` each arm may need can still be emitted before its jump.
 /// Nothing between the two reads the then-arm's terminator: the SSA builder
 /// walks predecessors, and the else-arm has none of the then-arm's blocks.
-fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+fn lowerTernary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
     const cond = ex.lhs(e);
-    const c = try self.toBool(try lowerExpr(self, cond));
+    const c = try self.toBool(try lowerOperand(self, cond, plan, sized, 0));
 
     // §4.5.15 "Analog operators shall not be used inside conditional (if, case,
     // or ?:) statements unless the conditional expression controlling the
@@ -774,13 +828,13 @@ fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const pure = lower_control.isAnalysisOrConst(self, cond);
     self.cur = then_b;
     try lower_hier_name.pushCond(self, .{ .e = cond, .pol = true, .pure = pure });
-    const t = try lowerExpr(self, ex.rhs(e));
+    const t = try lowerOperand(self, ex.rhs(e), plan, sized, 1);
     lower_hier_name.popCond(self);
     const then_end = self.cur; // an arm may have branched on its own (`&&`, a nested `?:`)
 
     self.cur = else_b;
     try lower_hier_name.pushCond(self, .{ .e = cond, .pol = false, .pure = pure });
-    const f = try lowerExpr(self, ex.ternaryElse(e));
+    const f = try lowerOperand(self, ex.ternaryElse(e), plan, sized, 2);
     lower_hier_name.popCond(self);
     const else_end = self.cur;
 
@@ -818,7 +872,7 @@ fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
 
 /// §4.2.7 `&&` / `||` with LRM short-circuit evaluation. The rhs gets its own
 /// block, so a guard like `(x != 0) && (1/x > k)` never divides by zero.
-fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
+fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
     // §4.5.15's evaluate-every-iteration rule wins over §4.2.7's skip when the
     // rhs holds an analog operator: a skipped step would feed that operator the
@@ -828,15 +882,15 @@ fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedVal
     // §4.5.15's restriction names only `if`, `case` and `?:`, so this spelling
     // is legal and not diagnosed.
     if (hasStatefulOp(self, ex.rhs(e))) {
-        const l = try self.toBool(try lowerExpr(self, ex.lhs(e)));
-        const r = try self.toBool(try lowerExpr(self, ex.rhs(e)));
+        const l = try self.toBool(try lowerOperand(self, ex.lhs(e), plan, sized, 0));
+        const r = try self.toBool(try lowerOperand(self, ex.rhs(e), plan, sized, 1));
         // `toBool` normalises both to 0/1, so max is `||` and min is `&&`.
         return .{
             .v = try self.emit(if (op == .logical_and) .imin else .imax, &.{ l, r }),
             .ty = .integer,
         };
     }
-    const a = try self.toBool(try lowerExpr(self, ex.lhs(e)));
+    const a = try self.toBool(try lowerOperand(self, ex.lhs(e), plan, sized, 0));
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, a);
 
@@ -853,7 +907,7 @@ fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedVal
     try self.builder.sealBlock(rhs_b);
 
     self.cur = rhs_b;
-    const b = try self.toBool(try lowerExpr(self, ex.rhs(e)));
+    const b = try self.toBool(try lowerOperand(self, ex.rhs(e), plan, sized, 1));
     try self.builder.writeVariable(place, self.cur, b);
     try self.gotoBlock(join);
 

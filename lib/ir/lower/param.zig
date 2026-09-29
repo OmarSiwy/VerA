@@ -141,6 +141,12 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         32
     else
         lower_constfold.clog2Width(self, decl.default);
+    self.out.params.items[self.out.params.items.len - 1].source_signed = if (decl.ty == .integer)
+        true
+    else if (decl.packed_range != null or decl.is_signed)
+        decl.is_signed
+    else
+        lower_constfold.clog2Signed(self, decl.default);
 }
 
 /// Packed bounds are source shape: a numeric model card cannot resize them.

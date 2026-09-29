@@ -4676,7 +4676,7 @@ fn infoOf(c: Code) Info {
         .E0893 => .{
             .title = "analog $clog2 cannot recover this wide operand's high bits",
             .lrm = "9.14",
-            .explain = "Above 64 bits the analog backend supports an exact wide literal and parameter aliases preserving its width. Widening a narrower initializer or evaluating wide arithmetic requires bit planes this carrier does not retain. The compiler refuses that case rather than treating bit 63 as an unproven sign extension; digital execution preserves arbitrary vector widths.",
+            .explain = "Inside an analog $clog2 operand, arithmetic, unary negation and shifts retain at most 32 bits per intermediate. Bitwise, conditional and comparison contexts retain at most 64 bits. Above 64 bits only exact wide literals and parameter aliases preserving their width retain proven high bits. The compiler refuses a wider intermediate rather than inventing erased bits; digital execution preserves arbitrary vector widths.",
         },
         .E0888 => .{
             .title = "descriptor argument is not an integer",
