@@ -67,7 +67,10 @@
  *     `input [3:0] by` (vpiInput, size 4), twice's is `input [7:0] v`
  *     (size 8); each -> stmt is its body.
  *   11.6.17: module ->> cont assign, one: vpiLhs the net w, vpiRhs a
- *     vpiBitAndOp over a and b, vpiDelay a constant.
+ *     vpiBitAndOp over a and b. 11.6.17 draws vpiDelay to an expr; IEEE
+ *     1364-2005 §26.3.4 says which: "an operation if there are more than one
+ *     delay specified ... the operation's vpiOpType shall be vpiListOp", so
+ *     #(2,3) is a vpiListOp over two operands.
  *   12.11 over `assign #(2,3)`: under `timescale 1ns/1ns the module's unit
  *     and the simulation tick are both 1 ns, so vpiScaledRealTime gives 2.0
  *     and 3.0 and vpiSimTime gives low = 2, 3. A third delay (turn-off) is
@@ -197,7 +200,7 @@ static void declarations(void)
   operation(rhs, vpiBitAndOp, 2, "a & b");
   CHECK(scan_all(vpi_iterate(vpiOperand, rhs), got, 8) == 2 && same(got[0], "p04_behaviour.a") && same(got[1], "p04_behaviour.b"),
         "whose operands are the regs a and b");
-  CHECK(vpi_get(vpiType, vpi_handle(vpiDelay, ca)) == vpiConstant, "vpiDelay is a constant");
+  operation(vpi_handle(vpiDelay, ca), vpiListOp, 2, "IEEE 1364-2005 §26.3.4: vpiDelay of #(2,3)");
   CHECK(vpi_handle(vpiCondition, ca) == NULL, "11.6.17: no vpiCondition");
   expect_error("vpi_handle(vpiCondition, cont assign)");
 

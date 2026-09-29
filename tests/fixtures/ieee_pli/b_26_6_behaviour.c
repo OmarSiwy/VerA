@@ -433,8 +433,9 @@ static void cont_assigns(void)
   CHECK(d != NULL && vpi_get(vpiType, d) == vpiConstant && int_value(d) == 4, "26.3.4: one delay is a constant, 4");
   expect_no_error("the continuous assignments");
   d = vpi_handle(vpiDelay, ca_w);
-  XFAIL(d != NULL && vpi_get(vpiType, d) == vpiOperation && vpi_get(vpiOpType, d) == vpiListOp, "26.3.4",
-        "vpiDelay of #(2,3) is not a vpiListOp operation");
+  CHECK(d != NULL && vpi_get(vpiType, d) == vpiOperation && vpi_get(vpiOpType, d) == vpiListOp && count(vpiOperand, d) == 2,
+        "26.3.4: two delays are a vpiListOp operation over two operands");
+  expect_no_error("the list of delays");
   CHECK(vpi_handle(vpiDelay, a) == NULL, "26.3.4: a reg has no delay");
   expect_refusal("vpi_handle(vpiDelay, reg)");
   XFAIL(count(vpiContAssign, top) == 3, "26.6.24", "the net declaration assignment of nd is no cont assign");

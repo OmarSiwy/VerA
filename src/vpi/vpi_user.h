@@ -294,6 +294,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiConcatOp            33
 #define vpiMultiConcatOp       34
 #define vpiEventOrOp           35
+#define vpiListOp              37   /* IEEE 1364-2005 §26.3.4: a vpiDelay of more than one delay */
 #define vpiPosedgeOp           39
 #define vpiNegedgeOp           40
 #define vpiArithLShiftOp       41
