@@ -137,13 +137,15 @@
  *   §26.6.3  the module's internal scopes are bump, twice and main; main's is
  *            fk (full name "b26_behaviour.main.fk", above).
  *   §26.6.4  bump's io decl `input [3:0] by`: "by", vpiInput, 4 bits,
- *            vpiVector TRUE, vpiScalar FALSE.
- *   §26.6.18 bump is a vpiTask, twice a vpiFunction of vpiSize 8; the
- *            function holds an 8-bit reg named "twice" (found by scanning
- *            the function's regs, since no clause fixes its full name).
+ *            vpiVector TRUE, vpiScalar FALSE, vpiSigned FALSE (no `signed`).
+ *   §26.6.18 bump is a vpiTask, twice a vpiFunction of vpiSize 8 and
+ *            vpiFuncType vpiSizedFunc (`[7:0]`, no `signed`); the function
+ *            holds an 8-bit reg named "twice" (found by scanning the
+ *            function's regs, since no clause fixes its full name).
  *   §26.6.19 statement 15: task call -> task bump, one argument (the
  *            constant 1); statement 16's rhs: func call -> function twice,
- *            one argument, the reg d; statement 19: sys task call "$display",
+ *            one argument, the reg d, and the call's vpiFuncType is the
+ *            function's, vpiSizedFunc; statement 19: sys task call "$display",
  *            vpiUserDefn FALSE, five arguments (the format and d, c, q, p2),
  *            and (§26.6.19 g) a vpiDecompile string: the call as written,
  *            `$display("d=%0d c=%0d q=%0d p2=%b", d, c, q, p2)`, the
@@ -658,17 +660,19 @@ static void tasks_and_calls(void)
   CHECK(vpi_get(vpiDirection, io) == vpiInput && vpi_get(vpiSize, io) == 4, "26.6.4: input [3:0]");
   CHECK(count(vpiIODecl, twice) == 1, "26.6.18: twice's io decl");
   expect_no_error("the task walk");
-  XFAIL(vpi_get(vpiVector, io) == 1 && vpi_get(vpiScalar, io) == 0, "26.6.4", "vpiVector/vpiScalar of an io decl");
-  XFAIL(vpi_get(vpiSize, twice) == 8, "26.6.18", "vpiSize of function [7:0] twice is not 8");
-  XFAIL(vpi_get(vpiFuncType, twice) == vpiSizedFunc, "26.6.18", "vpiFuncType of function [7:0] is not vpiSizedFunc");
+  CHECK(vpi_get(vpiVector, io) == 1 && vpi_get(vpiScalar, io) == 0 && vpi_get(vpiSigned, io) == 0,
+        "26.6.4: input [3:0] is a vector, not a scalar, unsigned");
+  CHECK(vpi_get(vpiSize, twice) == 8, "26.6.18: vpiSize of function [7:0] twice is 8");
+  CHECK(vpi_get(vpiFuncType, twice) == vpiSizedFunc, "26.6.18: vpiFuncType of function [7:0] is vpiSizedFunc");
   {
     vpiHandle itr = vpi_iterate(vpiReg, twice), h;
     int found = 0;
     if (itr != NULL)
       while ((h = vpi_scan(itr)) != NULL)
         if (strcmp(vpi_get_str(vpiName, h), "twice") == 0 && vpi_get(vpiSize, h) == 8) found = 1;
-    XFAIL(found, "26.6.18", "the function holds no 8-bit reg named twice");
+    CHECK(found, "26.6.18: the function holds an 8-bit reg named twice");
   }
+  expect_no_error("the function's properties");
   CHECK(vpi_get(vpiPortIndex, io) == vpiUndefined, "26.6.4: an io decl has no port index");
   expect_refusal("vpi_get(vpiPortIndex, io decl)");
   CHECK(vpi_get(vpiSize, bump) == vpiUndefined, "26.6.18: a task has no size");
@@ -689,7 +693,7 @@ static void tasks_and_calls(void)
   CHECK(vpi_get(vpiUserDefn, st[19]) == 0 && count(vpiArgument, st[19]) == 5, "26.6.19: built in, five arguments");
   expect_no_error("the call walk");
   CHECK(vpi_handle(vpiSysTfCall, NULL) == NULL, "26.6.19 a: no application is running");
-  XFAIL(vpi_get(vpiFuncType, fc) == vpiSizedFunc, "26.6.19", "vpiFuncType of the call twice(d)");
+  CHECK(vpi_get(vpiFuncType, fc) == vpiSizedFunc, "26.6.19: vpiFuncType of the call twice(d) is its function's");
   {
     const char *s = vpi_get_str(vpiDecompile, st[19]);
     CHECK(s != NULL && strcmp(s, "$display(\"d=%0d c=%0d q=%0d p2=%b\", d, c, q, p2)") == 0,
