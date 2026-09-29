@@ -227,7 +227,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // reads one of the two names that need it (`simparamIsRuntime`).
         if (args.len >= 1) if (constStrArg(self, args[0])) |s| {
             if (simparamIsRuntime(s)) self.out.uses.insert(.newton_iter);
-            if (simparamHostField(s) != null) self.out.uses.insert(.host_simparam);
+            for (host_simparams) |h| if (std.mem.eql(u8, h.name, s)) self.out.uses.insert(h.use);
         };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
@@ -469,6 +469,12 @@ pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const
     // is also a `simparamHostField`, so codegen reads the host's Model field and
     // uses this number as that field's initializer.
     if (eq(u8, name, "tnom")) return 27.0;
+    // Not in Table 9-27, which §9.15 allows ("There is no fixed list"): SPICE's
+    // `.options` Newton tolerances, host fields like `tnom`, defaulting to
+    // SPICE's values.
+    if (eq(u8, name, "reltol")) return 1e-3;
+    if (eq(u8, name, "abstol")) return 1e-12;
+    if (eq(u8, name, "vntol")) return 1e-6;
     // Three unit-valued homotopy/geometry factors: a device compiled here is
     // never being stepped or shrunk, so 1.0 is the true answer, not a stand-in.
     if (eq(u8, name, "scale") or eq(u8, name, "shrink") or eq(u8, name, "sourceScaleFactor")) return 1.0;
@@ -482,13 +488,24 @@ pub fn simparamIsRuntime(name: []const u8) bool {
     return std.mem.eql(u8, name, "iteration");
 }
 
-/// Returns the reserved `Model` field for a §9.15 simulation parameter whose value
-/// is the host's (written before `derive()`), or null for a compile-time constant.
-/// `tnom` (degrees Celsius) is SPICE's `.options tnom`, the temperature a model card
-/// without its own `TNOM` was extracted at. The `__` suffix cannot collide:
-/// `naming.sanitize` escapes a trailing `_` and every `__` run in an identifier.
+/// The §9.15 simulation parameters whose value is the host's, in `Model` field
+/// order: the name, its reserved `Model` field (written before `derive()`), and
+/// the `uses` flag that emits the field. Each is SPICE's `.options` entry of that
+/// name; `tnom` (degrees Celsius) is the temperature a model card without its own
+/// `TNOM` was extracted at. The `__` suffix cannot collide: `naming.sanitize`
+/// escapes a trailing `_` and every `__` run in an identifier.
+pub const host_simparams = [_]struct { name: []const u8, field: []const u8, use: Lower.Lowered.Kernel }{
+    .{ .name = "tnom", .field = "nom_temp__", .use = .host_tnom },
+    .{ .name = "reltol", .field = "reltol__", .use = .host_reltol },
+    .{ .name = "abstol", .field = "abstol__", .use = .host_abstol },
+    .{ .name = "vntol", .field = "vntol__", .use = .host_vntol },
+};
+
+/// Returns the reserved `Model` field of a `host_simparams` name, or null for a
+/// compile-time constant.
 pub fn simparamHostField(name: []const u8) ?[]const u8 {
-    return if (std.mem.eql(u8, name, "tnom")) "nom_temp__" else null;
+    for (host_simparams) |h| if (std.mem.eql(u8, h.name, name)) return h.field;
+    return null;
 }
 
 /// Returns a system function's result type from `callee.zig`'s `ty` column, the
