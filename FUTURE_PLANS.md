@@ -8,8 +8,8 @@ does not close the unmarked implementation gaps in that list.
 
 | Req | State |
 |---|---|
-| A | AMS strict and digital fixture gates pass at `4e90fcdd`; the original digital XFAIL name list is retired. VPI `vpi_runs` still carries known gaps, partly implemented on the queued `wave23/vpi-*` branches. Unmarked AMS defects in ROADMAP §5 remain open. |
-| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `4e90fcdd`. This is a static inventory; VPI runtime obligations remain. |
+| A | AMS strict and digital fixture gates pass at `2cc078b1`; the original digital XFAIL name list is retired. VPI `vpi_runs` still carries known gaps, partly implemented on the queued `wave23/vpi-*` branches. Unmarked AMS defects in ROADMAP §5 remain open. |
+| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `2cc078b1`. This is a static inventory; VPI runtime obligations remain. |
 | C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
 | D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
 | E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
@@ -32,10 +32,10 @@ the AGENTS.md §9 gates passed at the commit named in that row.
 | 1 | `wave18/bvpi` | 33a64b20 | Generate-block nets scoped per iteration; null and select ports; instance-array split (§7.1.6); hierarchical task enable; `-incdir`; task/function parameters and events. | Merged by `f8501782`, integrated and fully gated through `4e90fcdd`. Review fixes preserve automatic subroutine constants, validate combined null-port forms and array-width products, parse PATHPULSE mintypmax limits, and copy recursive task outputs into the restored caller. |
 | 2 | `wave22/iter` | 18ea1499 | ARPice: `$discontinuity(-1)` becomes `limit`'s `converged` verdict (device stays GPU-eligible); `$simparam("reltol"/"abstol"/"vntol")` as optional host-written Model fields. | Merged and fully gated at `78c53446`; strict and digital FAIL/XFAIL name lists are unchanged. Consumer integration point: write `reltol__`, `abstol__`, `vntol__` in `builder.zig` `deriveModel` next to `nom_temp__`, guarded by `@hasField`. |
 | 3 | `wave22/vdev2` | 91138be4 | `.v` devices: locate only A2D crossings some process wakes on; default A2D ttol `min(trise, tfall)/50`; up to 256 pins. | Merged and fully gated at `15bb97ca`; strict and digital FAIL/XFAIL name lists are unchanged. The host tests run the wide counter across packed-plane word boundaries and refuse the first pin count above the limit. |
-| 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. Last commit includes useful README/CLI changes and generated `.log`/`.dat` files in `ch09_system_tasks` (exclude the generated files). | Not integrated. Add reviewed fix `989ea88f`: denied W0750 must stop before building or running the testbench. Tell the TinyTapeout session the integrated hash. |
+| 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. | Merged by `cecf3118`, fully gated through `2cc078b1`. Generated `.log`/`.dat` files were excluded. The reviewed CLI fix stops denied W0750 before execution, and the latch fixture now asserts literal expectations derived from its sample times. TinyTapeout integration hash: `2cc078b1`. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Not gated as a whole. |
-| 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. Last commit is WIP (a generate-net attempt that `wave18/bvpi` supersedes: drop it). | Not gated. |
-| 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. Last commit is WIP (uncommitted edits in `src/vpi` and `b_26_6_behaviour.c` when stopped). | Not gated. |
+| 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. | Not gated. Merge through `434e7906`, then add reviewed `288a11c2` for generated-net metadata and scope relationships; exclude the superseded engine/parser changes from the original final WIP. |
+| 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. | Not gated. Merge through `d61a0e82`; final WIP `62875a50` adds useful function/IO metadata, with result/local/formal name resolution under separate review. |
 | 8 | `wave23/vpi-prim` | 53693967 | Primitives, UDP tables, path and timing-check terms, values and strengths. Annex G numbering of `vpiPolarity`=34, `vpiDataPolarity`=35, `vpiTchkType`=38 (were 38, 39, 40): a C ABI change for VPI apps. | Not gated. |
 
 The four VPI branches all edit `src/vpi` and `build.zig`'s `vpi_runs`; merge one
@@ -55,11 +55,15 @@ Additional reviewed work waiting for its queue position:
   requests it, in its lexical scope. Focused VPI, simulator and build checks
   pass. Preserve its expression-scope metadata when merging the behaviour
   branch's overlapping expression wrapper.
-- Generated-net VPI metadata remains necessary after `wave18/bvpi`: its
-  engine scoping does not by itself publish `gen[0].gw` or its `vpiScope`.
-- AMS `cross`/`absdelta` argument validation is being repaired separately.
-  The mixed runner also ignores several `absdelta` controls; ROADMAP §5.3
-  records that independent runtime defect.
+- `288a11c2` on `v1/vpi-generated-nets` retains declarations by engine scope
+  and publishes generated scalar/vector nets, their bits and their enclosing
+  `vpiScope`. Its focused structural VPI fixture and build/format checks pass.
+- `e96792cb` validates AMS `cross`/`absdelta` arguments; `3171287e` implements
+  the mixed runner's `absdelta` enable, tolerances, direction changes and
+  dynamic controls. Focused emitted-host and simulator checks pass. Both
+  await integrated gates; interpolated A2D-to-D2A rollback remains open.
+- Parameters read only by mixed event expressions, and unsigned/source-width
+  handling for analog `$clog2`, are being repaired separately.
 
 The second merge passed the same gate matrix, including the generated
 Newton-verdict and host-tolerance fixtures, and was measured by
@@ -68,6 +72,11 @@ Newton-verdict and host-tolerance fixtures, and was measured by
 The third merge passed the same gate matrix and was measured by
 `tools/conformance.sh` at `15bb97ca`. The `.v` contract-device extension is
 implemented; additional consumer requests remain in §4.
+
+The fourth merge passed the same gate matrix and was measured by
+`tools/conformance.sh` at `2cc078b1`. The initial strict run caught the new
+latch fixture deriving its expectation from the tested clock expression;
+the corrected fixture passes, and both final name lists match the third merge.
 
 Each merge: `git merge --no-ff`, then the AGENTS.md §9 gates (`zig build`,
 `test`, `test-devices`, `test-vpi-fixtures`, `test-1364` in the interpreter
@@ -122,7 +131,7 @@ Two older user worktrees remain untouched after read-only review:
 - **Library maps:** `.va` compiles read no map (W0253); VPI refuses a second
   top module; an instance rule cannot reach inside a generate; UDPs bind by
   name, not library.
-- **ROADMAP §5.1 decisions** (sixteen questions that need a call, not code) and
+- **ROADMAP §5.1 decisions** (the remaining open readings) and
   the §5.2/§5.3 tables: re-verify each row against main first.
 
 ## 4. Consumer requests deferred (ARPice, TinyTapeout)

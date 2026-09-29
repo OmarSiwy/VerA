@@ -92,7 +92,7 @@ Run these. Do not copy their output into a document.
 `grep -rl '^//! xfail' tests/fixtures` lists every gap VerA owns and a fixture
 pins. §5 lists the ones no fixture pins yet.
 
-Measured by `tools/conformance.sh` on 2026-09-29 at `4e90fcdd`, superseding
+Measured by `tools/conformance.sh` on 2026-09-29 at `2cc078b1`, superseding
 the 2026-09-27 inventory previously recorded here:
 
 - **A** passes the AMS strict and digital fixture gates. VPI's known gaps
