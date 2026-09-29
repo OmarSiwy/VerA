@@ -2066,8 +2066,11 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         else => null, // else: no other class but module draws a double arrow VerA holds
     };
     if (analog) |items| return if (items.len == 0) null else newIter(d, items);
-    if ((obj_type == code.vpiDriver or obj_type == code.vpiLoad) and (o.kind == .net or o.kind == .reg))
-        return driversLoads(d, o, obj_type == code.vpiDriver);
+    switch (obj_type) {
+        code.vpiDriver, code.vpiLoad, code.vpiLocalDriver, code.vpiLocalLoad => if (o.kind == .net or o.kind == .reg)
+            return driversLoads(d, o, obj_type == code.vpiDriver or obj_type == code.vpiLocalDriver, obj_type == code.vpiLocalDriver or obj_type == code.vpiLocalLoad),
+        else => {},
+    }
     if (o.kind != .module) {
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship {d}", .{ @tagName(o.kind), obj_type });
         return null;
@@ -2103,24 +2106,39 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
 }
 
 /// IEEE 1364-2005 §26.6.22/§26.6.23: the drivers (`drivers`) or loads of net
-/// or reg `o`. A prim term drives what its output terminal names and loads
-/// what an input names; a continuous assignment, force or assign stmt drives
-/// its left side and loads what its right side reads; a port of `o`'s own
-/// module drives the net it declares when it is an input, loads it when an
-/// output, both when an inout.
+/// or reg `o`. A prim term drives what its output terminal names, loads what
+/// an input names, and does both through an inout; a continuous assignment
+/// drives its left side and loads what its right side reads; a force or
+/// assign stmt does too while one is active (§26.6.6 Details i, j). A net
+/// collapsed across a port is one simulated net (§12.3.10), so what drives
+/// or loads it in another instance is listed too (Details b). `local`
+/// (vpiLocalDriver/vpiLocalLoad, Details l) keeps what `o`'s own module
+/// contains, "including any ports connected to the net (output and inout
+/// ports are loads, input and inout ports are drivers)"; the module's ports
+/// are listed for vpiDriver and vpiLoad as well.
 ///
-/// ponytail: a scan of every object per call, and the parent's side of a
-/// port (the instance port a net connects to), delay terms and cont assign
-/// bits are not listed; each needs its own relation built at `open`.
-fn driversLoads(d: *Design, o: *const Obj, drivers: bool) vpiHandle {
-    const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+/// ponytail: a scan of every object per call; an active force is told by
+/// its target alone, so every force of that target is listed while one
+/// holds it; the parent's instance ports, delay terms and cont assign bits
+/// are not listed. Each needs its own relation built at `open`.
+fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle {
+    const overrides = if (o.slot) |at| if (run.attached()) |r| r.overrides.get(at) else null else null;
     var out: std.ArrayList(vpiHandle) = .empty;
     for (d.objects, 0..) |*x, i| {
+        if (local and x.owner != o.owner) continue;
         const hit = switch (x.kind) {
             .code => switch (x.vtype) {
-                code.vpiPrimTerm => mentions(d, edgeTo(x, code.vpiExpr), target) and
-                    (codeProp(x, vpiDirection) == vpiOutput) == drivers,
-                code.vpiContAssign, code.vpiForce, code.vpiAssignStmt => mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), target),
+                code.vpiPrimTerm => mentions(d, edgeTo(x, code.vpiExpr), o) and switch (codeProp(x, vpiDirection)) {
+                    vpiOutput => drivers,
+                    vpiInout => true,
+                    else => !drivers,
+                },
+                code.vpiContAssign => mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o),
+                code.vpiForce, code.vpiAssignStmt => blk: {
+                    const layers = overrides orelse break :blk false;
+                    const active = if (x.vtype == code.vpiForce) layers.force != null else layers.assign != null;
+                    break :blk active and mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o);
+                },
                 else => false, // else: §26.6.22/§26.6.23 list no other behavioural class
             },
             .port => o.kind == .net and x.owner == o.owner and std.mem.eql(u8, x.name, o.name) and switch (x.direction) {
@@ -2152,12 +2170,13 @@ fn edgeTo(x: *const Obj, tag: c_int) u32 {
     return no_obj;
 }
 
-/// Does expression `e` read object `target`: is it, or a select of it, or an
-/// operation or call with such an operand?
-fn mentions(d: *const Design, e: u32, target: u32) bool {
+/// Does expression `e` read `target`'s storage: is it the same slot (or the
+/// same object), a select of it, or an operation or call with such an
+/// operand?
+fn mentions(d: *const Design, e: u32, target: *const Obj) bool {
     if (e == no_obj) return false;
-    if (e == target) return true;
     const x = &d.objects[e];
+    if (x == target or (x.slot != null and x.slot == target.slot and x.kind != .code)) return true;
     if (x.kind != .code) return false;
     switch (x.vtype) {
         code.vpiPartSelect, code.vpiNetBit, code.vpiRegBit => return mentions(d, edgeTo(x, vpiParent), target),
@@ -3585,4 +3604,67 @@ test "IEEE 1364-2005 §26.6.22/§26.6.23: drivers and loads of nets and regs" {
             try std.testing.expectEqualSlices(c_int, types, got[0..k]);
         }
     }
+}
+
+test "IEEE 1364-2005 §26.6.13 switches, pull sources and strengths; §26.6.6 l local drivers across a port" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m;
+        \\  wire w, z;
+        \\  reg a, c;
+        \\  pullup (w);
+        \\  nmos (w, a, c);
+        \\  and (strong0, pull1) g1 (z, a, c);
+        \\  leaf u(.x(w));
+        \\endmodule
+        \\module leaf(x);
+        \\  input x;
+        \\  wire y;
+        \\  buf (y, x);
+        \\endmodule
+    );
+    defer h.deinit();
+    const top = vpi_handle_by_name("m", null);
+    var prims: [3]vpiHandle = undefined;
+    var n: usize = 0;
+    const itr = vpi_iterate(code.vpiPrimitive, top);
+    while (vpi_scan(itr)) |x| : (n += 1) prims[n] = x;
+    try std.testing.expectEqual(@as(usize, 3), n);
+    // Gates, then pull sources, then switches.
+    try std.testing.expectEqualStrings("g1", std.mem.span(vpi_get_str(vpiName, prims[0])));
+    try std.testing.expectEqual(@as(c_int, 0x40), vpi_get(code.vpiStrength0, prims[0]));
+    try std.testing.expectEqual(@as(c_int, 0x20), vpi_get(code.vpiStrength1, prims[0]));
+    try std.testing.expectEqual(code.vpiGate, vpi_get(vpiType, prims[1]));
+    try std.testing.expectEqual(code.vpiPullupPrim, vpi_get(code.vpiPrimType, prims[1]));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiSize, prims[1]));
+    try std.testing.expectEqual(@as(c_int, 0x20), vpi_get(code.vpiStrength1, prims[1]));
+    try std.testing.expectEqual(code.vpiSwitch, vpi_get(vpiType, prims[2]));
+    try std.testing.expectEqual(@as(c_int, 13), vpi_get(code.vpiPrimType, prims[2]));
+    try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, prims[2]));
+
+    const count = struct {
+        fn f(tag: c_int, obj: vpiHandle) usize {
+            var k: usize = 0;
+            const it = vpi_iterate(tag, obj);
+            if (it != null) while (vpi_scan(it)) |_| {
+                k += 1;
+            };
+            return k;
+        }
+    }.f;
+    const w = vpi_handle_by_name("m.w", null);
+    // The pullup's and the switch's output terms; the buf in u reads w
+    // through the collapsed port, a load of w but not a local one.
+    try std.testing.expectEqual(@as(usize, 2), count(code.vpiLocalDriver, w));
+    try std.testing.expectEqual(@as(usize, 0), count(code.vpiLocalLoad, w));
+    try std.testing.expectEqual(@as(usize, 1), count(code.vpiLoad, w));
+    var ux: vpiHandle = null;
+    const nets = vpi_iterate(vpiNet, vpi_handle_by_name("m.u", null));
+    while (vpi_scan(nets)) |x| if (std.mem.eql(u8, std.mem.span(vpi_get_str(vpiName, x)), "x")) {
+        ux = x;
+    };
+    // Details l: an input port drives its net locally; across the port the
+    // pullup and the switch drive it too.
+    try std.testing.expectEqual(@as(usize, 1), count(code.vpiLocalDriver, ux));
+    try std.testing.expectEqual(@as(usize, 3), count(code.vpiDriver, ux));
 }
