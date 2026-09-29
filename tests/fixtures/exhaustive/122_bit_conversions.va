@@ -1,4 +1,4 @@
-// §9.11 Table 9-8 conversions. $realtobits/$bitstoreal are the IEEE-754 bit
+// §9.11 conversions (Table 9-8 is in §9.2). $realtobits/$bitstoreal are the IEEE-754 bit
 // pattern verbatim, so the round trip must be EXACT — a value that survives it
 // only approximately means the pattern was routed through a float somewhere.
 //
@@ -9,14 +9,9 @@ module ex122_bit_conversions(p, n);
   electrical p, n;
   integer bits;
   analog begin
-    // $rtoi and $itor are NOT tested here because VerA implements neither, not
-    // because they are illegal: §9.11 carries four names into the analog
-    // context — "$bitstoreal and $realtobits, $rtoi and $itor" — and Table 9-8
-    // reads `$rtoi Yes Yes`, `$itor Yes Yes`. (This comment used to claim the
-    // opposite, on the authority of ch09_system_tasks/061/062; those fixtures
-    // asserted the same false rule and have been deleted. The gap is in the
-    // compiler and is pinned by the M04 row
-    // (tests/fixtures/ch07_mixed_signal/m04_SPEC.md at 8b1514d4).)
+    // §9.11 also permits $rtoi and $itor in analog code. Their numerical
+    // conversions run in ch09_system_tasks/15_conversion_functions.va and
+    // audit_conversion_truncation_signed.va; this file checks bit patterns.
     // 1.0 is 0x3FF0000000000000 = 4607182418800017408.
     `CHECKI("$realtobits(1.0)", $realtobits(1.0), 4607182418800017408);
     `CHECKX("$bitstoreal round trip", $bitstoreal($realtobits(0.1)), 0.1);

@@ -341,11 +341,10 @@ no-warning fixtures pass in the strict suite at `4e90fcdd`.
 
 Test data, not compiler work. Each header claims something false or stale.
 
-- `s01_05` and `s01_06` quote "the initial_step event is active on the first
-  point of an analysis", which is not in the LRM. `m02_04:77-78` misquotes §3.2.
-  `p03_vpi_analog.h:52-53` says §12.2 defers to Annex G; only §12.31 does.
-  `a08_nodeset_02:39-47` carries an invented grammar path. (`MANIFEST.md` §5.1(b),
-  :372-395.)
+- The `s01_05` initial-step explanation, `m02_04` initialization wording,
+  `p03_vpi_analog.h` Annex G reference and nodeset grammar explanation were
+  corrected on 2026-09-29 against the local 2023 clauses. The nodeset files
+  now state their harness-specific final-root policy and its evidence limits.
 - Figures and transcripts that do not reproduce: `h04_03:79-80`, `h04_04:38`,
   `a01_08:29`, `a02_01:51`, `h01_06:67`, `h04_10:43-45`, `m01_05:50-52`,
   `m01_08:50-51`. Overreaching quotes: `d04_04_named_event_has_no_memory.v:4`,
@@ -382,18 +381,12 @@ Test data, not compiler work. Each header claims something false or stale.
   nodes. (`conformance-mixed-signal.md:178-191`.)
 - `abstol_override_branches.va:20-29` says `p.potential.abstol` does not parse;
   it does. (`conformance-standard-definitions.md:23`.)
-- `025_type_conversions.va` and `122_bit_conversions.va` say VerA implements
-  neither `$rtoi` nor `$itor`; it implements both. (`exhaustive/COVERAGE.md:83`.)
-- `09_nonlinear_nr_relationship.va:21-23` says VerA "adds" NIST2018; D.2 already
-  has it. (`annex_h_glossary/COVERAGE.md:14-15`.)
-- `14_predefined_compact_modeling.va:17-21` says a tool that never defines the
-  macro conforms, against §10.5's "if and only if". (`d10_SPEC.md:355-372`.)
-- `d10_07:34-40` says `` `resetall `` removes user macros (E0115). It does not,
-  and IEEE §19.6 says it must not. (found 2026-09-27.)
-- `p03_dc_divider.va:34` and `p03_ramp_load.va:36` say the circuit does not solve
-  and an xfail records why; both solve and carry no xfail. The
-  `a08_nodeset_01`/`02` "why it fails today" paragraphs describe passing files.
-  (found 2026-09-27.)
+- Corrected on 2026-09-29: the implemented `$rtoi`/`$itor` descriptions in
+  exhaustive fixtures 025/122; Annex D.2's existing NIST2018 set in glossary
+  fixture 09; §10.5's required macro in fixture 14; IEEE §19.3's preservation
+  of user macros across `resetall` in `d10_07`; and the solved P03 and nodeset
+  fixtures' obsolete failure descriptions. The compact-modeling completeness
+  claim and null-nodeset metadata claim remain in §5.7 below.
 - Reject substrings that pin wording, not behaviour: `d03_13` and
   `d08_reject_udp_z_output.v:49`. (`MANIFEST.md:533-539`.)
 
@@ -473,6 +466,9 @@ No fixture pins these. Each is measure B or C work.
 - AMS 3.2.1, 3.4.3, 3.6.3.1: `(* desc, units *)` on a module variable,
   parameter or net; host-visible export of output variables. (`ch03_data_types/COVERAGE.md:227`; `conformance-types.md:35-36`.)
 - AMS 3.11.1: the Domain, Domainless and Natureless rules (E0355 exists). (`ch03_data_types/COVERAGE.md:214`.)
+- AMS 3.6.3.2: distinguish a null bus nodeset from an explicit zero in the
+  published metadata. The final-root check in `a08_nodeset_02` cannot do so
+  with this runner's zero cold start.
 - AMS 4.3.1: the derivative of `abs` at 0 is -1. (`conformance-minmax-derivative-fix.md:89`.)
 - AMS 4.5.14: the other dynamic-argument slots and analysis restarts. (`ch04_expressions/COVERAGE.md:99`.)
 - AMS 4.6.4.6: anti-correlation. `//! noise` has no `coeff=` field. (`a06_SPEC.md:253-255`.)
@@ -487,6 +483,9 @@ No fixture pins these. Each is measure B or C work.
 - AMS 9.17.2: `$bound_step(1.0/0.0)` compiles. Refuse it, or read it as no bound? (`a01_SPEC.md:193-195`.)
 - AMS 9.21.1: a per-instance table snapshot, and capture around a rejected step
   (needs a host netlist). (`a05_SPEC.md:109-112`.)
+- AMS 10.5: establish the complete compact-modeling extension set when
+  checking whether `__VAMS_COMPACT_MODELING__` must be defined. Fixture 14's
+  selected `ddx` arm alone does not establish that completeness.
 - AMS D.1, D.3: the standard natures' abstol and units defaults, `Acc`/`Imp`/`Alpha`,
   the `idt`/`ddt` nature links, guard idempotence. (`annex_d_standard_definitions/COVERAGE.md:38-59,109-133`.)
 - AMS Annex B: keywords used as parameter, label, genvar, branch, function,

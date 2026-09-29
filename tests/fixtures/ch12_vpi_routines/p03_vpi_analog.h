@@ -1,62 +1,25 @@
-/* p03_vpi_analog.h — the P03 half of the VPI, as a C application needs to see
- * it. NOT a fixture: the twelve `NN_*.c` plugins beside it are the fixtures,
- * and this is the header they will not compile without.
+/* Helpers shared by the P03 analog VPI fixtures.
  *
- * WHY IT EXISTS AS A SEPARATE FILE. src/vpi/vpi_user.h says in its own banner
- * that "a constant VerA does not answer is ABSENT rather than
- * declared-and-unimplemented", and lists P03 — callbacks, analog values,
- * analog system task registration — as what is missing. So today none of the
- * names below exist anywhere in the tree (verified: src/vpi/root.zig exports
- * exactly eleven routines, none of them a value, callback or analog routine),
- * and a plugin that uses them cannot be compiled at all.
+ * src/vpi/vpi_user.h supplies the public value, callback and system-function
+ * interfaces. This compatibility header retains the fixture aliases and
+ * assertion helpers below; it does not describe an unimplemented P03 phase.
  *
- * WHEN P03 LANDS, this file is DELETED and every declaration in it moves into
- * src/vpi/vpi_user.h, where it belongs. The plugins then `#include
- * "vpi_user.h"` alone. Nothing here may be given a different layout or a
- * different meaning on the way: the structures are copied from Figures 12-3,
- * 12-17 and 12-18 and from §12.32.2, field for field and in order.
+ * Three interface choices follow the normative structures where illustrative
+ * listings differ:
+ * - Figure 12-17 gives s_cb_data.time a pointer type. Each fixture owns an
+ *   s_vpi_time and points at it, despite the embedded-field spelling in the
+ *   §12.32.3 sampler example.
+ * - §12.32.2 names the partials member derivative_wrt. The public header also
+ *   accepts the derivative_to spelling used in the §12.22.2 example.
+ * - The public analog systf callbacks take p_cb_data. Figure 12-18's
+ *   unprototyped callbacks and the examples do not supply a consistent C
+ *   prototype; p_cb_data carries the active call and user data.
  *
- * MOVED ALREADY, and now src/vpi/vpi_user.h's: s_cb_data/p_cb_data (Figure
- * 12-17, unchanged), cbEndOfCompile/cbStartOfSimulation/cbEndOfSimulation,
- * vpi_register_cb, vpi_remove_cb, vpi_get_cb_info; the Table 12-4 value
- * formats and the §12.30 delay modes, with vpi_get_value and vpi_put_value;
- * the §12.32 registration types, constants and routines (vpiIntFunc,
- * vpiRealFunc and vpiSysTfCall now carry Annex G's numbers, 1, 2 and 85, not
- * this file's 742, 743 and 750), t_vpi_stf_partials, and vpi_handle_multi —
- * Annex G's variadic prototype. The unused vpiCallbackObj is gone; §11.6.25's
- * callback type is Annex G's vpiCallback (107).
- * Declaring them here as
- * well would be a C redefinition, not a harmless repeat.
- *
- * TWO INCONSISTENCIES IN THE LRM'S OWN TEXT, resolved here in favour of the
- * normative structure definitions rather than the illustrative code:
- *
- *   1. Figure 12-17 declares `p_vpi_time time;` — a POINTER. §12.32.3's own
- *      sampler listing writes `sampler->cb_data.time.real = 0.0;`, which only
- *      compiles against an embedded struct. Figure 12-17 is the definition of
- *      the structure and the example is prose; the pointer wins. Every plugin
- *      here therefore owns an s_vpi_time and points `time` at it, which is
- *      also what IEEE 1364 §27.2 requires of the same field.
- *   2. §12.32.2 defines the partials structure with a member named
- *      `derivative_wrt`; §12.22.2's resistor_derivtf() assigns
- *      `derivs.derivative_to`. The structure definition wins.
- *   3. Figure 12-18 declares every systf callback as `int (*f)()` — an
- *      unprototyped C89 spelling that says nothing. §12.22.2 then writes
- *      `resistor_compiletf(p_cb_data)` and `resistor_derivtf(p_cb_data)`, but
- *      `resistor_calltf(int data, int reason)`. Two of the three take a
- *      p_cb_data, one does not, and no clause explains the difference. All four
- *      take a `p_cb_data` here: it carries the user_data the bare `int data`
- *      was standing in for, and it is the only spelling under which §12.32.3's
- *      `vpi_handle(vpiSysTfCall, NULL)` has a documented context to read.
- *
- * NUMBERING. Verilog-AMS prints no header listing: §12.2 and §12.31 both defer
- * to "the vpi_user.h file listing in Annex G of the IEEE Std 1364 Verilog
- * specification". Annex G has numbers for the 1364 names below and NONE for the
- * AMS-only ones — there is no standard value for acbAcceptedPoint, vpiDerivative
- * or vpiExpStrVal anywhere. Those are allocated here, in one clearly fenced
- * block, and NO FIXTURE ASSERTS ANY OF THEIR VALUES: every assertion in this
- * directory is about behaviour. An implementation is free to renumber the
- * fenced block; it is not free to change what the constants mean.
+ * AMS §12.31 refers to the IEEE 1364 Annex G header for callback reason
+ * constants; §12.2 describes vpi_chk_error and makes no such reference.
+ * IEEE names retain Annex G's numbers. AMS-only names use the implementation
+ * values declared in the public header; these fixtures assert behavior,
+ * not those implementation-assigned numbers.
  */
 
 #ifndef VERA_P03_VPI_ANALOG_H

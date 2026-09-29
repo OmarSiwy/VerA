@@ -26,9 +26,10 @@
 // only by an implementation that prints inline, which is exactly the
 // implementation §9.4.1 excludes. It now measures ACROSS steps instead.
 //
-// THE MEASUREMENT. The descriptor is opened ONCE, under §5.10.2's
-// `@(initial_step)` — "the initial_step event is active on the first point of
-// an analysis" — and the monitor is registered there, once, for the whole run.
+// THE MEASUREMENT. §5.10.2 makes an unqualified initial_step active during
+// the solution of the first point, or initial DC analysis. This fixture's
+// fixed-grid runner evaluates each declared point once, so its descriptor is
+// opened and its monitor registered once under `@(initial_step)`.
 // Nothing closes or truncates it mid-run, so §9.5.5's $ftell ("returns in pos
 // the offset from the beginning of the file of the current byte") read at the
 // TOP of step k is the total number of bytes the monitor has produced at the

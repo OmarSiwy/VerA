@@ -18,9 +18,9 @@
 // intersection, so no pointwise want is written on limexp. limexp stays where
 // the LRM wants it, in the contribution.
 //
-// $vt is kT/q (§9.15, Syntax 9-10). Annex D (D.2, constants.vams) offers FOUR
-// constant sets — SPICE, OLD (LRM 1.0), NIST1998 and NIST2010; VerA adds a
-// fifth, NIST2018, as its default. The window is the same either way: both
+// $vt is kT/q (§9.15, Syntax 9-10). Annex D.2's constants.vams includes
+// SPICE, OLD (LRM 1.0), NIST1998, NIST2010 and NIST2018. VerA uses NIST2018
+// for $vt. The window includes all these sets: both
 // extremes are Annex D sets (SPICE at one end, NIST1998 at the other) and
 // NIST2018 falls inside. At 300 K:
 //

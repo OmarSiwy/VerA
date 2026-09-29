@@ -6,9 +6,9 @@
 //     V(a, gnd) = 1.25 V                   exactly
 //     I through r1 = 1.25 / 500 = 2.5e-3 A exactly
 //
-// 1.25 and 2.5e-3 are both exactly representable in binary64 (1.25 = 5*2^-2;
-// 2.5e-3 is not, but is the correctly-rounded quotient of two exact operands,
-// so an ideal solver reproduces it to the last bit). That is why these numbers
+// 1.25 is exactly representable in binary64 (5*2^-2). The quotient 2.5e-3
+// is not; the testbench checks its correctly rounded binary64 value.
+// That is why these numbers
 // and not 1/3: fixture 08 asserts the %e and %g SPELLINGS of the value, and a
 // value whose decimal expansion depends on the solver's rounding could not be
 // spelled in a fixture at all.
@@ -31,19 +31,10 @@
 // here would let a solution that is merely close through, and then 08's %e
 // column would be a different string.
 //
-// VerA DOES NOT SOLVE THIS DECK TODAY, and the `//! xfail` records why. When a
-// module instance contributes a POTENTIAL to a node pair and another instance
-// contributes a FLOW to the same pair, VerA keeps only the last one elaborated
-// and silently drops the other: here `v1`'s branch equation V(a,gnd) − 1.25 = 0
-// never reaches the residual at all — the flow unknown is declared and never
-// written — so the deck solves to x = 0 and both checks read 0. Reversing the
-// two instantiations reverses which one survives, which is what makes it a
-// merge and not a missing feature. §5.4.2.2 is the sentence it contradicts: "A
-// branch, either named or unnamed, is a source branch if either the potential
-// or the flow of that branch is assigned a value by a contribution statement
-// ... anywhere in the MODULE." A branch belongs to a module instance, so `v1`
-// and `r1` own two different branches between a and gnd and neither can turn
-// the other into a switch branch.
+// The potential source and resistive flow contribution belong to different
+// instances. Both equations must survive elaboration even though their
+// terminals share a node pair (§5.4.2.2). The solved assertions below catch
+// dropping either contribution; this is a passing regression.
 //
 //! lrm 3.6
 //! lrm 5.4.2.2
