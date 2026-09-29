@@ -280,11 +280,13 @@ Also closed at `6dca90a7`: `cross`/`absdelta` argument validation (`86843c23`)
 and parameter-list grammar in both languages (`eff0e2ac`). Named rejection
 fixtures have behavioral legal neighbors; empty named values still work.
 
+The `b033ac35` gate also closes scaled digital delays (`f959eea4`, E0247),
+aliasparam equation reads (`256eafcc`, E0373), and defparams in selected
+paramset hierarchies (`7bed3930`, E0926). Inactive generate branches and
+unused paramsets retain their legal behavior.
+
 | Clause | Item | Source |
 |---|---|---|
-| AMS 2.6.2 | A scale factor in a digital delay (`#5u`) is accepted and runs as zero delay. | `conformance-lexical.md:158`; found 2026-09-27 |
-| AMS 3.4.7 | An `aliasparam` name used in an equation is accepted. | `conformance-parameters.md:36`; found 2026-09-27 |
-| AMS 6.4 | A paramset over a module that holds a `defparam` is accepted. | `h01_SPEC.md:133-135` |
 | AMS E.3.3 | No warning when a module shadows a SPICE model or subcircuit ("shall issue a warning"); `lib/ir/elaborate/names.zig` calls it optional. | `h04_SPEC.md:120-122` |
 | IEEE 8.1.4 | A UDP table mapping one input combination to two outputs remains to verify. The output-first declaration rule is enforced by `9854a214`. | `d08_SPEC.md:199-204` |
 
@@ -299,6 +301,12 @@ stream, geometry-override, packed-reg analog-read and mixed `absdelta` rows.
 It includes absolute timer schedules, final control changes and emitted-host
 rollback checks; `IMPLEMENTATION.md` documents the E0528 effectful-control
 limit. The wide-register part-select case below remains open.
+
+Named event arrays and hierarchical event triggers execute at `c2930d63`,
+fully gated through `b033ac35`; VPI traversals and automatic-task activation
+isolation run in the same gate. Indexed event controls still use the native
+path's explicit interpreter fallback. `FUTURE_PLANS.md` §3 records the current
+native compilation backlog separately from passing interpreter behavior.
 
 | Clause | Item | Source |
 |---|---|---|
@@ -318,7 +326,6 @@ limit. The wide-register part-select case below remains open.
 | IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is refused (E0907) by the analog path. The digital upward/indexed resolution is fixed by `b700311a`. | `conformance-ieee-scope-review.md:47-76` |
 | IEEE 17.5.4 | A PLA personality bit `x` is treated as "ignore"; the standard says "worst case". | `conformance-ieee-pla-review.md:58` |
 | IEEE 9.7.5 | `@*` over a statement that reads nothing is refused with an E1100 that cites §9.7.5, which has no such rule. | `conformance-ieee-scheduling-review.md:95-98` |
-| IEEE A.6.5 | A hierarchical event trigger (`-> u.ev;`) does not parse. | `d04_SPEC.md:211-213` |
 | IEEE 17.2.9 | `$readmem` refuses a variable file name and variable start/finish addresses (E1100). | `conformance-readmem-validation-edges.md:66-70` |
 
 ### 5.4 Diagnostics and harness
@@ -326,11 +333,11 @@ limit. The wide-register part-select case below remains open.
 W0651's closed-infinity range check is fixed by `4b87e373`; its warning and
 no-warning fixtures pass in the strict suite at `4e90fcdd`. Array diagnostics
 and analog-conversion explanations were corrected by `8bf8b5ff` and are gated
-at `6dca90a7`.
+at `6dca90a7`. E0908 now explains both ordinary duplicate overrides and alias
+collisions (`e11553ca`, gated at `b033ac35`).
 
 | Clause | Item | Source |
 |---|---|---|
-| AMS 6.3.3 | Overriding an ordinary parameter twice reports the aliasparam message (E0908). | `conformance-empty-parameter-fix.md:134-135` |
 | AMS 5.9.3 | `break` in an analog `for` is refused as "outside a loop" (E0404). | `ch05_analog_behavior/COVERAGE.md:85` |
 | AMS A.6.4 | `force`, `fork`, `wait`, `#5` and analog `forever` all get the generic E0209. | `annex_a_syntax/COVERAGE.md:278-282` |
 | AMS 4.5.12 | A non-zero τ or t0 on `zi_*` gets the generic "codegen refused". | `ch04_expressions/COVERAGE.md:93` |
@@ -346,14 +353,13 @@ Test data, not compiler work. Each header claims something false or stale.
   `p03_vpi_analog.h` Annex G reference and nodeset grammar explanation were
   corrected on 2026-09-29 against the local 2023 clauses. The nodeset files
   now state their harness-specific final-root policy and its evidence limits.
-- Figures and transcripts that do not reproduce: `h04_03:79-80`, `h04_04:38`,
-  `a01_08:29`, `a02_01:51`, `h01_06:67`, `h04_10:43-45`, `m01_05:50-52`,
-  `m01_08:50-51`. Overreaching quotes: `d04_04_named_event_has_no_memory.v:4`,
-  `a10_12:7`, `a10_04:19`. Wrong clause: `s01_01:72` (§4.2.5 for a string `==`),
-  `a06_ac_stim_ac_analysis.va:26` (`M_PI` is D.2). (`MANIFEST.md:426-485`.)
-- `m01_10` tags `//! lrm 7.3.4` for an `always @(absdelta ...)`, which is §7.3.5,
-  and calls itself latitude-free although a tool may choose `time_tol`.
-  (`MANIFEST.md:416-418,520-524`.)
+- `b033ac35` removes stale results and unsupported mechanism claims from
+  `h04_03`, `h04_04`, `a01_08`, `a02_01`, `h01_06`, `h04_10`, `m01_05`,
+  `m01_08`, `d04_04`, `a10_12` and `a10_04`. It corrects `m01_10` to §7.3.5
+  and states the harness tolerances behind its observations, and fixes the
+  Annex D.2 reference for `M_PI` in `a06_ac_stim_ac_analysis.va`.
+  Remaining wrong clause: `s01_01:72` (§4.2.5 for a string `==`).
+  (`MANIFEST.md:416-485,520-524`.)
 - `a03_01`, `a03_02`, `a03_03` and `a03_11` rest on IEEE 1364 §10.3 `disable`
   and carry no `//! inherited`. ch10 fixtures 58 to 61 lack
   `//! inherited 19.9`, and several files cite `` `unconnected_drive `` as
@@ -364,25 +370,26 @@ Test data, not compiler work. Each header claims something false or stale.
   §9.4.1, §9.5, §9.6, §9.10 and §9.14. (`MANIFEST.md:585-587`.)
 - Checks that cannot fail: `a06_psd_white_flicker_export.va:63,66` and
   `a06_noise_table_array_parameter.va:67-68`. (`MANIFEST.md:729-733`.)
-- `a04_10` applies §4.5.12's "unity transfer function ... exhibits no delay" to
-  `1/(1-0.5z^-1)` without saying it extends the sentence. (`MANIFEST.md` §5.8
-  item 9.)
+- `b033ac35` derives `a04_10` from its actual transfer function and recurrence,
+  removing the unrelated unity-filter quotation. (`MANIFEST.md` §5.8 item 9.)
 - `s01_01` says its two `%g` derivations agree; under §9.4.3's own example gloss
   ("three fractional digits") row 1 is `1234.5678`, which VerA prints. Decide the
   reading, then fix the header. (`MANIFEST.md` §5.8 item 10.)
 - Fixtures 177 to 180 and 184 assert VerA-specific `$limit` trajectories under
   normative `//! lrm` tags; callbacks 177 to 180 skip `$discontinuity(-1)`.
   (`conformance-ch9-review.md:376-394`.)
-- `a03_04:23-24` and `a10_03:29-30` claim timer times exact to the step; §5.10.3.3
-  allows "at or just beyond". `event_cross_falling.va` starts on the threshold,
+- `b033ac35` states the fixed-grid policy behind `a03_04`/`a10_03`'s exact
+  timer times and moves `nature_attribute_unsupported.va`'s unsupported
+  §11.6.2 claim to the executed `p04_06` VPI fixture.
+  Remaining: `event_cross_falling.va` starts on the threshold,
   `event_cross_any.va` runs DC only, `analog_initial.va` cannot tell once per
-  analysis from once per evaluation, and `nature_attribute_unsupported.va`
-  still tags `lrm 11.6.2`. (`conformance-analog-behavior.md:147-215`.)
+  analysis from once per evaluation. (`conformance-analog-behavior.md:147-215`.)
 - `92fa96d5` corrected `lrm_7_2_4.va` to join continuous segments through
   one bound port. Its published minimum tolerance and local nature attributes
   run at the `6dca90a7` gate, alongside vector and intermediate-resolution cases.
-- `abstol_override_branches.va:20-29` says `p.potential.abstol` does not parse;
-  it does. (`conformance-standard-definitions.md:23`.)
+- `b033ac35` adds a runtime assertion for `p.potential.abstol` to
+  `abstol_override_branches.va` and removes its false parse-refusal claim.
+  (`conformance-standard-definitions.md:23`.)
 - Corrected on 2026-09-29: the implemented `$rtoi`/`$itor` descriptions in
   exhaustive fixtures 025/122; Annex D.2's existing NIST2018 set in glossary
   fixture 09; §10.5's required macro in fixture 14; IEEE §19.3's preservation
