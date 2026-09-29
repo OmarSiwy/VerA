@@ -223,7 +223,7 @@ test "render: full diagnostic with label, note, suggestion" {
     const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
 
     // Headline carries severity, code and the catalogue title.
-    try std.testing.expect(std.mem.startsWith(u8, out, "error[E0601]: divisor cannot be proven non-zero: divisor is parameter `k`\n"));
+    try std.testing.expect(std.mem.startsWith(u8, out, "error[E0601]: zero divisor: divisor is parameter `k`\n"));
     // Location resolves to the right line and column.
     try std.testing.expect(std.mem.indexOf(u8, out, "--> res.va:3:31\n") != null);
     // Both the primary caret and the secondary label are drawn.
