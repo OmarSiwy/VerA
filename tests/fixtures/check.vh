@@ -73,8 +73,8 @@
 // The others pin a value against a literal a human derived, so VerA cannot
 // supply its own expectation. This one pins two VerA expressions against EACH
 // OTHER, for the rules the LRM states as an identity with no value to write
-// down: `V(br)` must equal `V(a,b)`, `$ln(x)` must equal `ln(x)`, an
-// `aliasparam` must name the same storage as the parameter it aliases.
+// down: `V(br)` must equal `V(a,b)`, `$ln(x)` must equal `ln(x)`.
+// Alias names are binding-only (§3.4.7); do not read one in a CHECKEQ.
 //
 // It is still restricting — a compiler that lowers the two sides differently
 // fails it — but it is NOT independent: an error common to both sides passes.

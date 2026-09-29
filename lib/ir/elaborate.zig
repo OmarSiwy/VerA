@@ -7,6 +7,8 @@
 
 const std = @import("std");
 const hier_param = @import("hier_param.zig");
+const elab_alias = @import("elaborate/alias.zig");
+pub const flatReference = @import("elaborate/names.zig").flatReference;
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
@@ -180,6 +182,8 @@ pub const Ctx = struct {
 /// distribution of a vector net across an instance array is not supported.
 pub fn elaborate(ctx: Ctx) Error!Design {
     if (ctx.file.userModules().len == 0) return error.NoModule;
+    try elab_alias.checkSource(ctx); // §3.4.7, before any folding or cloning
+
     const top = try pickTop(ctx);
 
     var f: Flatten = .{ .ctx = ctx };
@@ -201,6 +205,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     for (top.analog) |blk| try genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
     if (top.instances.len == 0 and top.defparams.len == 0 and gen.items.len == 0) {
         if (f.had_error) return error.DiagnosticsReported;
+        try elab_alias.checkFlat(ctx, top, top.aliasparams);
         return .{ .top = top };
     }
 
@@ -449,6 +454,9 @@ pub const Flatten = struct {
     /// per-instance rewrites §9.19 and §9.18 need. `inlineInstance` saves and
     /// restores it around the recursive call.
     unit: Unit = .{},
+    /// Source aliases in each instantiated scope, including geometry aliases
+    /// that cloning represents as local parameters rather than declarations.
+    expression_aliases: std.ArrayList(Ast.AliasParam) = .empty,
 
     /// True while `paramsetOverrides` clones text written inside a §6.4
     /// paramset body, the one scope §9.13.1/§9.13.2 admit a distribution
@@ -577,6 +585,9 @@ pub const Flatten = struct {
         // in the device for no change.
         try self.params.appendSlice(self.ctx.arena, top.params);
         try self.aliasparams.appendSlice(self.ctx.arena, top.aliasparams);
+        for (top.aliasparams) |al| if (elab_alias.original(self.ctx.file, top.params, top.aliasparams, al)) |target|
+            try self.expression_aliases.append(self.ctx.arena, .{ .alias = al.alias, .target = target });
+
         // A host can set a top-level geometry alias through the model card.
         // Retain that parameter read in every descendant's composition. The
         // mfactor host field has its own automatic scaling convention.
@@ -655,6 +666,7 @@ pub const Flatten = struct {
         };
 
         if (self.had_error) return error.DiagnosticsReported;
+        try elab_alias.checkFlat(self.ctx, out, self.expression_aliases.items);
         return .{
             .top = out,
             .names = self.names,
