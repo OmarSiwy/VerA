@@ -101,8 +101,11 @@
  *           Verilog index select expression" -> NULL. (mem[4] is legal
  *           SYNTAX, reading x in the HDL; the reading taken is that no
  *           object is selected.) A module has no access by index -> NULL.
- *   §27.19  "p04_objects.u.a" from the top; "a" in scope u is the same object;
- *           "bus" in scope u -> NULL (bus is top's, not u's); "nosuch" -> NULL.
+ *   §27.19  "p04_objects.u.a" from the top; "a" in scope u is the same object,
+ *           and so is "u.a" in scope top; "bus" in scope u -> NULL and an
+ *           error ("search within that scope only": bus is top's, not u's);
+ *           "nosuch" -> NULL. Verilog-AMS §12.21 searches upward instead; this
+ *           design runs as IEEE 1364, whose rule this is.
  *   §27.20  9999 is not vpiInterModPath -> NULL and an error.
  *   §27.21  top ->> net: an iterator of vpiType vpiIterator, three nets. u
  *           declares no reg: NULL with no error. 9999 is no object type:
@@ -239,7 +242,10 @@ static PLI_INT32 walk(p_cb_data cb_data)
   /* §27.19 */
   h = vpi_handle_by_name((PLI_BYTE8 *)"a", u);
   CHECK(h != NULL && vpi_compare_objects(h, ua) == 1, "27.19: a simple name in scope u");
-  XFAIL(vpi_handle_by_name((PLI_BYTE8 *)"bus", u) == NULL, "27.19", "a name searched in scope u finds top's bus");
+  CHECK(vpi_handle_by_name((PLI_BYTE8 *)"bus", u) == NULL, "27.19: bus is top's, and scope u is searched alone");
+  expect_refusal("vpi_handle_by_name(\"bus\", u)");
+  h = vpi_handle_by_name((PLI_BYTE8 *)"u.a", top);
+  CHECK(h != NULL && vpi_compare_objects(h, ua) == 1, "27.19: a hierarchical name within scope top");
   CHECK(vpi_handle_by_name((PLI_BYTE8 *)"p04_objects.nosuch", NULL) == NULL, "27.19: no such name");
 
   /* §27.20 */

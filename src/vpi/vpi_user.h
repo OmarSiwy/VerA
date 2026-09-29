@@ -316,6 +316,45 @@ typedef struct t_vpi_delay {
                                        that is not in an array */
 #define vpiParent              81   /* one-to-one: word/var select -> its array */
 
+/* IEEE 1364-2005's structural objects over a digital run (§26.6.1-§26.6.12,
+ * §26.6.43): a time variable, a net array (->> net), module ->> variables,
+ * a vector net or reg ->> its bits (vpiNetBit/vpiRegBit), a port's
+ * vpiHighConn, an instance's ->> param assign (vpiLhs, vpiRhs), and an
+ * iterator's vpiUse. vpiListOp is an instance array's -> expr. */
+#define vpiTimeVar             63
+#define vpiNetArray           114
+#define vpiParamAssign         40
+#define vpiVariables          100
+#define vpiBit                 90
+#define vpiHighConn            76
+#define vpiUse                101
+#define vpiListOp              37
+/* §26.3.3 location (a digital run's declared objects and statements),
+ * §26.6.1 module time scale (NULL: the finest precision in the design) and
+ * protection (always FALSE), §26.6.5/§26.6.12 connection by name,
+ * §26.6.6 net type (one of the values after it; a wreal has none), and
+ * §26.6.43 the iterated type. */
+#define vpiFile                 5   /* str */
+#define vpiLineNo               6   /* int */
+#define vpiProtected           10   /* bool */
+#define vpiTimeUnit            11   /* int: power of ten of a second */
+#define vpiTimePrecision       12   /* int: power of ten of a second */
+#define vpiConnByName          21   /* bool */
+#define vpiIteratorType        57   /* int */
+#define vpiNetType             22   /* int */
+#define vpiWire                 1
+#define vpiWand                 2
+#define vpiWor                  3
+#define vpiTri                  4
+#define vpiTri0                 5
+#define vpiTri1                 6
+#define vpiTriReg               7
+#define vpiTriAnd               8
+#define vpiTriOr                9
+#define vpiSupply1             10
+#define vpiSupply0             11
+#define vpiUwire               13
+
 /* --------------------------------------------------------------------------
  * Properties — the `prop` argument of vpi_get() and vpi_get_str().
  * -------------------------------------------------------------------------- */
