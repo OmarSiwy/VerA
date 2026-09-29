@@ -74,6 +74,15 @@ test "directives: every form, including the §2.6 suffixes" {
     try testing.expect(!d.print_residual);
 }
 
+test "§5.10.3.1 an unwritten analysis is tran under a time grid, dc without one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try testing.expectEqual(Analysis.tran, (try tb_directive.parse(a, "//! time 0, 1n\n")).analysis);
+    try testing.expectEqual(Analysis.dc, (try tb_directive.parse(a, "//! time 0\n")).analysis);
+    try testing.expectEqual(Analysis.dc, (try tb_directive.parse(a, "//! time 0, 1n\n//! analysis dc\n")).analysis);
+}
+
 test "§5.4.2 `I(...)` names the flow unknown, not the node potential" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

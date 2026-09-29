@@ -67,7 +67,7 @@ pub const Directives = struct {
     /// Swept parameters (§8.2 parametric sweep): each point gets its own model
     /// card and `derive` (§6.3.4). Varies fastest in the cartesian product.
     psweeps: []const Sweep = &.{},
-    /// §4.6.1.
+    /// §4.6.1. Unwritten, `.tran` under a `//! time` grid, else `.dc`.
     analysis: Analysis = .dc,
     /// `//! solve`: unknowns no other directive names are solved by Newton on
     /// the device's own residual (§5.6). Off by default, every unnamed unknown

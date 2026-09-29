@@ -1,6 +1,10 @@
 // §9.15 uses runtime iteration and the unknown-name fallback.
 // The first iterate seeds the limiter; each subsequent iterate advances 1 V.
+// The `//! time` points stand for the iterates of ONE static solve, so the
+// analysis is dc: `initialize_limiting` reads analysis("dc"), and a grid with
+// no `//! analysis` line would run as a transient.
 //! lrm 9.15
+//! analysis dc
 //! time 0, 1, 2, 3
 //! bias V(p) = 5
 `include "check.vh"
