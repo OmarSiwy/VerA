@@ -25,7 +25,6 @@ const diag = @import("diag");
 const ground = Lower.ground;
 const Access = Lower.Access;
 const Kind = Lower.Kind;
-const strToInt = Lower.strToInt;
 
 /// The frontend parser namespace the harness drives.
 pub const Parser = @import("frontend").Parser;
@@ -143,21 +142,6 @@ test "lower: system math aliases reject wrong arity" {
         }
         try std.testing.expect(found);
     }
-}
-
-test "lower: §2.7 a string literal is a base-256 numeral, §3.3 justified right" {
-    // §2.7's own sentence, at the natural width: most significant character
-    // first, and a plain space is a character like any other.
-    try std.testing.expectEqual(@as(i64, 10), strToInt("\n", 64));
-    try std.testing.expectEqual(@as(i64, 32), strToInt(" ", 64));
-    try std.testing.expectEqual(@as(i64, 16706), strToInt("AB", 64));
-    // §3.3 into a 32-bit `integer` (§3.2): "hello" is 40 bits and loses its
-    // leading 'h' on the LEFT, "A" is zero filled on the left, and Table 3-3's
-    // `""` -> 8'b0 is the caller's (`strLitBytes`), so `{"H", ""}` is "H\x00".
-    try std.testing.expectEqual(@as(i64, 1701604463), strToInt("hello", 32));
-    try std.testing.expectEqual(@as(i64, 65), strToInt("A", 32));
-    try std.testing.expectEqual(@as(i64, 18432), strToInt("H\x00", 32));
-    try std.testing.expectEqual(@as(i64, 0), strToInt("", 32));
 }
 
 test "lower: contribution splits into resistive and reactive parts" {

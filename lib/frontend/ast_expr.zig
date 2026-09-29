@@ -11,47 +11,13 @@ const ExprId = ast.ExprId;
 const StrId = ast.StrId;
 const SourceFile = ast.SourceFile;
 
-/// A.8.6 unary_operator. Stored in the `extra` column of a `.unary` node.
-pub const UnaryOp = enum(u8) {
-    plus, // +      §4.2.4
-    minus, // -      §4.2.4
-    logical_not, // !      §4.2.8
-    bit_not, // ~      §4.2.9
-    reduce_and, // &      §4.2.10
-    reduce_nand, // ~&     §4.2.10
-    reduce_or, // |      §4.2.10
-    reduce_nor, // ~|     §4.2.10
-    reduce_xor, // ^      §4.2.10
-    reduce_xnor, // ~^ ^~  §4.2.10
-};
+/// A.8.6 unary_operator, stored in the `extra` column of a `.unary` node:
+/// `kernels.fold.UnaryOp`, the operator the value folds take.
+pub const UnaryOp = @import("kernels").fold.UnaryOp;
 
-/// A.8.6 binary_operator. Stored in the `extra` column of a `.binary` node.
-pub const BinaryOp = enum(u8) {
-    add, // +    §4.2.4
-    sub, // -    §4.2.4
-    mul, // *    §4.2.4
-    div, // /    §4.2.4
-    mod, // %    §4.2.4
-    pow, // **   §4.2.4
-    eq, // ==   §4.2.7
-    neq, // !=   §4.2.7
-    case_eq, // ===  §4.2.6 (digital; rejected in the analog subset, annex C)
-    case_neq, // !==  §4.2.6
-    lt, // <    §4.2.5
-    le, // <=   §4.2.5
-    gt, // >    §4.2.5
-    ge, // >=   §4.2.5
-    logical_and, // &&   §4.2.8
-    logical_or, // ||   §4.2.8
-    bit_and, // &    §4.2.9
-    bit_or, // |    §4.2.9
-    bit_xor, // ^    §4.2.9
-    bit_xnor, // ~^ ^~ §4.2.9
-    shl, // <<   §4.2.11
-    shr, // >>   §4.2.11
-    ashl, // <<<  §4.2.11
-    ashr, // >>>  §4.2.11
-};
+/// A.8.6 binary_operator, stored in the `extra` column of a `.binary` node:
+/// `kernels.fold.BinaryOp`.
+pub const BinaryOp = @import("kernels").fold.BinaryOp;
 
 // ---------------------------------------------------------------------------
 // Expressions

@@ -5,9 +5,8 @@
 //! `codegen/opcode_zig.zig`: lib/ir does not know the target is Zig.
 
 const std = @import("std");
-const Ast = @import("frontend").Ast;
-const constfold = @import("frontend").constfold;
-const Const = constfold.Const;
+const value_fold = @import("kernels").fold;
+const Const = value_fold.Const;
 const Mir = @import("mir.zig");
 const Opcode = Mir.Opcode;
 
@@ -29,7 +28,7 @@ pub const Domain = enum {
 /// `lhs REL rhs` for the twelve comparison opcodes (`Info.rel`).
 const Relation = enum { lt, le, gt, ge, eq, ne };
 
-/// How the one constant kernel (`frontend/constfold.zig`) folds an opcode.
+/// How the one constant kernel (`kernels.fold`) folds an opcode.
 /// No default: a new opcode states its fold or does not compile.
 pub const Fold = union(enum) {
     /// Not a value of its operands: a latch, or a class `fold` never sees
@@ -42,9 +41,9 @@ pub const Fold = union(enum) {
     /// §4.2.1.1 real→integer, rounding, ties away from zero (`fi_cast`).
     /// Saturating and NaN→0 (`lossyCast`): the rule codegen emits.
     to_int,
-    unary: Kernel(Ast.UnaryOp),
-    binary: Kernel(Ast.BinaryOp),
-    math: Kernel(constfold.MathFn),
+    unary: Kernel(value_fold.UnaryOp),
+    binary: Kernel(value_fold.BinaryOp),
+    math: Kernel(value_fold.MathFn),
 };
 
 /// One kernel operation. The operands are first converted to the opcode's
@@ -204,11 +203,11 @@ pub fn fold(op: Opcode, args: []const Const) ?Const {
         },
         .unary => |k| blk: {
             std.debug.assert(args.len == 1);
-            break :blk wrapped(k.wrap, constfold.unary(k.f, as(k.int, args[0]) orelse return null));
+            break :blk wrapped(k.wrap, value_fold.unary(k.f, as(k.int, args[0]) orelse return null));
         },
         .binary => |k| blk: {
             std.debug.assert(args.len == 2);
-            break :blk wrapped(k.wrap, constfold.binary(
+            break :blk wrapped(k.wrap, value_fold.binary(
                 k.f,
                 as(k.int, args[0]) orelse return null,
                 as(k.int, args[1]) orelse return null,
@@ -219,7 +218,7 @@ pub fn fold(op: Opcode, args: []const Const) ?Const {
             std.debug.assert(args.len == k.f.arity());
             var buf: [2]Const = undefined;
             for (args, 0..) |a, i| buf[i] = as(k.int, a) orelse return null;
-            break :blk wrapped(k.wrap, constfold.math(k.f, buf[0..args.len]));
+            break :blk wrapped(k.wrap, value_fold.math(k.f, buf[0..args.len]));
         },
     };
 }
@@ -238,7 +237,7 @@ fn as(int: bool, c: Const) ?Const {
 
 fn wrapped(wrap: bool, r: ?Const) ?Const {
     const c = r orelse return null;
-    return if (wrap and c == .int) .{ .int = constfold.wrap32(c.int) } else c;
+    return if (wrap and c == .int) .{ .int = value_fold.wrap32(c.int) } else c;
 }
 
 test "fold: an opcode's type, not its operands', decides the kernel's rule" {

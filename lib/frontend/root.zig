@@ -1,6 +1,6 @@
 //! The frontend's public API: Verilog-AMS source text in, AST out
 //! (preprocessor, lexer, parser; LRM clauses 2 to 10 and annexes D and E).
-//! Depends on `base`, `diag`, `kernels` and `contract`; `ir/` and
+//! Depends on `base`, `diag` and `kernels`; `ir/` and
 //! `backend/` import this layer, never the reverse.
 
 /// §2.6.1 integer literals and the IEEE 1364-2005 §5 four-state operations

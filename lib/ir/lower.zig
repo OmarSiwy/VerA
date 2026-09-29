@@ -30,7 +30,6 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const constfold = @import("frontend").constfold;
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
 const Elaborate = @import("elaborate.zig");
@@ -969,27 +968,13 @@ pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
 // Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
 // ---------------------------------------------------------------------------
 
-/// Returns a §2.7 string literal's integer value. "A string literal used as an operand in expressions and assignments
-/// shall be treated as unsigned integer constants represented by a sequence of
-/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
-/// A base-256 numeral, most significant character first: "AB" is
-/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
-///
-/// `bits` is §3.3's width rule for the assignment case: "the literal is right
-/// justified and either truncated on the left or zero filled on the left".
-/// The result is the unsigned value (§2.7 "unsigned integer constants"), so a
-/// 32-bit "\377\377\377\377" is 4294967295, not -1; the first arithmetic on
-/// it wraps into range.
-pub fn strToInt(s: []const u8, bits: u8) i64 {
-    var acc: u64 = 0;
-    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
-    return @bitCast(acc);
-}
+/// §2.7 a string literal's integer value: `kernels.fold.strToInt`.
+pub const strToInt = @import("kernels").fold.strToInt;
 
 /// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
 /// defined once, in the shared constant kernel, because codegen spells them
 /// as device text and a fold must agree with the device.
-pub const wrap32 = constfold.wrap32;
+pub const wrap32 = @import("kernels").fold.wrap32;
 
 /// Returns `tv` converted to a number when it is a string with compile-time
 /// bytes (§2.7 at an operand); everything else is returned untouched, and the

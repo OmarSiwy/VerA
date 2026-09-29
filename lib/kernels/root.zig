@@ -3,9 +3,13 @@
 //! generated device that needs it (`codegen/kernel_text.zig` reads it as
 //! `text.*`, the `@embedFile`s below, since an embed cannot leave its own
 //! module's directory), and ordinary Zig compiled here for the callers that
-//! run the same numerics outside a device.
-//! LRM: §4.5, §4.5.11, §4.5.12, §4.5.15, §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3,
-//! §9.5.4.2, §9.13, §9.17.3, §9.21; IEEE 1364-2005 §17.2.4, §17.9.3.
+//! run the same numerics outside a device. Beside them sit the host-only
+//! runtime files, never spliced: `integer.zig` (judged by `ref4.zig`),
+//! `fold.zig` and `fmt.zig`, so the compiler and `sim` share one copy of
+//! each operator's semantics (ARCHITECTURE.md I6).
+//! LRM: §2.6.1, §2.7, §3.2, §4.2, §4.3, §4.5, §4.5.11, §4.5.12, §4.5.15,
+//! §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3, §9.5.4.2, §9.13, §9.17.3, §9.21;
+//! IEEE 1364-2005 §5, §17.1, §17.2.4, §17.9.3.
 //!
 //! Each kernel file is one data domain, spliced only into a device that uses
 //! it, and owns the state it declares:
@@ -72,6 +76,11 @@ pub const Integer = @import("integer.zig");
 /// IEEE 1364-2005 §17.1 value and time text over `Integer` literals, shared
 /// by the digital interpreter and a native executable (`sim`). Host Zig.
 pub const fmt = @import("fmt.zig");
+/// The §4.2 value folds (`Const`, `unary`, `binary`, `math`, `wrap32`,
+/// `ipow32`, `clog2`, `strToInt`) and the A.8.6 operator enums they take:
+/// one answer for a parameter default (`frontend.constfold`) and a folded
+/// MIR opcode (`ir.opcode`). Host Zig.
+pub const fold = @import("fold.zig");
 
 /// Each kernel file's bytes, for `codegen/kernel_text.zig` to splice into a
 /// device: `@embedFile` reaches only files under its own module's root.
@@ -93,6 +102,7 @@ test {
     _ = @import("test.zig");
     _ = Integer;
     _ = fmt;
+    _ = fold;
     // The four-state reference `Integer` is judged by.
     _ = @import("ref4.zig");
 }
