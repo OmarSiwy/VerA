@@ -764,10 +764,16 @@ pub const Builder = struct {
                 .{ .tag = vpiForIncStmt, .to = try b.stmt(s.step) },
                 .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
             }, &.{}, &.{}),
-            .while_stmt => |s| b.code(vpiWhile, &.{
-                .{ .tag = vpiCondition, .to = try b.expr(s.cond) },
-                .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
-            }, &.{}, &.{}),
+            // The parser records `forever s` as `while (1) s` with the `1`
+            // on the `forever` keyword itself; IEEE 1364-2005 §26.6.34 draws
+            // forever -> stmt alone.
+            .while_stmt => |s| if (f.exprs.tag(s.cond) == .int_literal and f.exprs.mainTok(s.cond) == f.stmtTok(id))
+                b.code(vpiForever, &.{.{ .tag = vpiStmt, .to = try b.stmt(s.body) }}, &.{}, &.{})
+            else
+                b.code(vpiWhile, &.{
+                    .{ .tag = vpiCondition, .to = try b.expr(s.cond) },
+                    .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
+                }, &.{}, &.{}),
             .repeat_stmt => |s| b.code(vpiRepeat, &.{
                 .{ .tag = vpiCondition, .to = try b.expr(s.count) },
                 .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
