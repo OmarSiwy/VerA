@@ -363,6 +363,7 @@ fn runAndCheck(
         try w.print("FAIL {s}: the device declares an `llvm.*` intrinsic; it cannot build under the self-hosted backend\n", .{f.path});
         return .unmet;
     }
+    try vera.tb.warnGridEvents(&diags, result.lowered, result.mir);
     if (!try warningsMet(&diags, f, d, w)) return .unmet;
 
     // VAMS §7: a module with a discrete half gets the mixed-signal runner.

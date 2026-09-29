@@ -9,6 +9,7 @@ const tb_runner_text = @import("runner_text.zig");
 const naming = @import("../naming.zig");
 const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
+const diag = @import("diag");
 const Io = tb.Io;
 const Allocator = tb.Allocator;
 const Error = tb.Error;
@@ -275,6 +276,23 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .reads = lowered.discrete_reads.keys(),
         .held = lowered.held_vars.items,
     };
+}
+
+/// Adds W0750 to `bag` at the first §5.10.3 `cross`, `above` or `timer`
+/// call when the module gets the fixed-grid runner (`mixedPlan` is null),
+/// which inserts no timepoint: such an event fires at the first `//! time`
+/// point past its own time.
+pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) !void {
+    if (lowered.mixed_signal) return;
+    for (0..mir.blockCount()) |bi| {
+        var insts = mir.blockInsts(@enumFromInt(bi));
+        while (insts.next()) |inst| {
+            if (mir.instOp(inst) != .call or mir.instTok(inst) == Mir.no_tok) continue;
+            const k = Mir.callee.opKind(mir.instData(inst).call.callee);
+            if (k == .cross or k == .above or k == .timer)
+                return bag.add(.codegen, .W0750, lowered.tokenSpan(mir.instTok(inst)), "the testbench inserts no timepoint at it", .{});
+        }
+    }
 }
 
 /// Emits the `//! qsite` check (`tb.Directives.qsites`), once before the

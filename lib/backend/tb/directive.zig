@@ -23,6 +23,7 @@ const AcDynWant = tb.AcDynWant;
 /// Every slice in the result is allocated in `arena`.
 pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var d: Directives = .{};
+    var analysis: ?Analysis = null;
     var params: std.ArrayList(Binding) = .empty;
     var bias: std.ArrayList(Binding) = .empty;
     var sweeps: std.ArrayList(Sweep) = .empty;
@@ -82,7 +83,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             if (rest.len != 0) return error.BadSyntax;
             d.solve_free = true;
         } else if (std.mem.eql(u8, kw, "analysis")) {
-            d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
+            analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
         } else if (std.mem.eql(u8, kw, "exit")) {
             d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
         } else if (std.mem.eql(u8, kw, "checks")) {
@@ -180,6 +181,9 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         }
     }
 
+    // §5.10.3.1 a grid that advances time is a transient analysis: run as dc,
+    // `cross` would never fire on it.
+    d.analysis = analysis orelse if (d.times.len > 1) .tran else .dc;
     d.params = params.items;
     d.bias = bias.items;
     d.sweeps = sweeps.items;
