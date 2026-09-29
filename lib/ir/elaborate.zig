@@ -766,6 +766,8 @@ pub const Flatten = struct {
             if (for (self.ctx.file.udps) |u| {
                 if (u.name == inst.module) break true;
             } else false) {
+                for (inst.params) |p| if (p.scaled_literal_tok) |tok|
+                    try self.err(tok, .E0247, "a scaled literal in `{s}`'s UDP delay", .{self.ctx.file.str(inst.module)});
                 if (inst.params.len > 2 or (inst.params.len != 0 and inst.params[0].name != .none))
                     try self.err(inst.main_tok, .E0239, "`{s} #(…) {s}`: {d} value(s)", .{ self.ctx.file.str(inst.module), self.ctx.file.str(inst.name), inst.params.len })
                 else

@@ -3,7 +3,7 @@
 //! net and branch declarations (§3.6.3, §6.5.2) -> `Ast.ParamDecl`,
 //! `Ast.FuncDecl`, `Ast.NatureDecl`, `Ast.DisciplineDecl`, and port, net and
 //! branch rows of `parse_module.Body`. IEEE 1364-2005 §6.1.4, §7.14, §10.2
-//! and §10.4 for the digital forms.
+//! and §10.4 for the digital forms; AMS §2.6.2 for digital delay literals.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -1048,6 +1048,9 @@ pub fn parseDelay2(self: *Parser) Error!Ast.Delay3 {
 }
 
 fn parseDelays(self: *Parser, three: bool) Error!Ast.Delay3 {
+    const saved_delay = self.in_digital_delay;
+    self.in_digital_delay = true;
+    defer self.in_digital_delay = saved_delay;
     _ = try self.expect(.hash);
     if (!self.eat(.lparen)) {
         const v = try parseDelayValue(self);

@@ -135,6 +135,7 @@ pub const Code = enum(u16) {
     E0244,
     E0245,
     E0246,
+    E0247,
     E0296,
     W0250,
     W0251,
@@ -1735,6 +1736,21 @@ fn infoOf(c: Code) Info {
             \\whole list to use defaults, or use a named empty value, .P(),
             \\to retain that parameter's default. An empty port list () is
             \\independent of these parameter-list requirements and is legal.
+            ,
+        },
+        .E0247 => .{
+            .title = "a scale factor in a digital delay",
+            .lrm = "2.6.2",
+            .explain =
+            \\Verilog-AMS 2.6.2 permits scaled real constants in expressions,
+            \\but forbids scale factors when defining digital delays. This
+            \\includes delay controls, net and primitive delays, continuous
+            \\assignment delays, and module path delays, whether the scaled
+            \\literal stands alone or inside a compound delay expression.
+            \\
+            \\Write digital delays in the module's `timescale units, using
+            \\an integer, decimal or scientific value. With `timescale 1ns/1ps,
+            \\a five-microsecond delay is #5000 or #5e3, never #5u.
             ,
         },
         .E0245 => .{

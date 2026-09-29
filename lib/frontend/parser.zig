@@ -64,6 +64,10 @@ pub const Parser = struct {
     /// module, so they are admitted by position, not by file extension. An
     /// `analog` block has none of them (A.6.4). See `discreteGrammar`.
     in_discrete: bool = false,
+    /// §2.6.2 forbids scale factors in digital delay expressions. Kept while
+    /// parsing delay_control, delay2/delay3 and path_delay_expression so even
+    /// a discarded min/max arm is checked before expression folding.
+    in_digital_delay: bool = false,
     /// Inside a §7.6 `connectmodule` body. `parseEventTerm` reads it: A.6.5's
     /// `driver_update` is a digital event, and §9.22 paragraph 3 puts the
     /// driver family inside a connect module.

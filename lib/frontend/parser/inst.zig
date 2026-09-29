@@ -2,7 +2,7 @@
 //! and switch instances, and A.6.2 initial/always constructs -> rows of
 //! `parse_module.Body`.
 //!
-//! LRM clauses cited: §1.1, §2.9, §6.2.2, §6.3, §6.3.6, §7.1.5, §7.2, §7.2.2,
+//! LRM clauses cited: §1.1, §2.6.2, §2.9, §6.2.2, §6.3, §6.3.6, §7.1.5, §7.2, §7.2.2,
 //! §7.6, §7.7.3, §7.8, §7.12, §7.14, §8.5.3.5, §9.18.
 
 const std = @import("std");
@@ -104,7 +104,12 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
                     _ = try self.expect(.rparen);
                     try params.append(self.arena, .{ .name = pname, .value = v, .main_tok = tok });
                 } else {
-                    try params.append(self.arena, .{ .value = try parse_expr.parseExpr(self), .main_tok = tok });
+                    const value = try parse_expr.parseExpr(self);
+                    try params.append(self.arena, .{
+                        .value = value,
+                        .main_tok = tok,
+                        .scaled_literal_tok = scaledLiteral(self, tok, self.pos),
+                    });
                 }
                 if (!self.eat(.comma)) break;
             }
@@ -116,6 +121,24 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
             return self.failAt(p.main_tok, .E0246, "instance mixes ordered and named parameter assignments", .{});
     }
     return params.items;
+}
+
+/// A.4.1 and A.5.4 share `name #(expr) instance(...)` until elaboration
+/// resolves `name`. Keep §2.6.2's lexical evidence for the UDP-delay case,
+/// including an operand expression folding discarded. Attribute values are
+/// metadata, not operands of the parameter or delay expression.
+fn scaledLiteral(self: *const Parser, start: u32, end: u32) ?u32 {
+    var in_attr = false;
+    for (start..end) |at| switch (self.tags[at]) {
+        .attr_open => in_attr = true,
+        .attr_close => in_attr = false,
+        .real_literal => if (!in_attr) {
+            const text = self.tokenText(@intCast(at));
+            if (lexer.scaleExp(text[text.len - 1]) != null) return @intCast(at);
+        },
+        else => {}, // else: only a real literal can carry a §2.6.2 scale factor
+    };
+    return null;
 }
 
 /// Reports E0205 for a module item A.1.4 derives but VerA does not support (an

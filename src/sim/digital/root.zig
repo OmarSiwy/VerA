@@ -2560,6 +2560,8 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
     if (inst.params.len != 0) {
         if (inst.params.len > 2) return r.fail(tok, "§8.6: a UDP instance takes at most two delays", .{});
         for (inst.params) |o| if (o.name != .none) return r.fail(o.main_tok, "§8.6: a UDP instance's `#( )` is a delay, not a parameter value assignment", .{});
+        for (inst.params) |o| if (o.scaled_literal_tok) |scaled_tok|
+            return r.failWith(.E0247, scaled_tok, "a scaled literal in `{s}`'s UDP delay", .{r.file.str(inst.module)});
         delay = .{ .rise = inst.params[0].value, .fall = inst.params[inst.params.len - 1].value, .off = if (inst.params.len == 1) inst.params[0].value else .none };
     }
     const out = try sink(r, e, inst.ports[0].expr, tok, .port);
