@@ -732,8 +732,8 @@ static void callbacks_and_time(void)
   vpi_get_cb_info(value_cb, &info);
   CHECK(info.reason == cbValueChange && vpi_compare_objects(info.obj, a), "26.6.39 a: vpi_get_cb_info");
   expect_no_error("the callback walk");
-  XFAIL(count(vpiCallback, a) == 1, "26.6.39", "vpi_iterate(vpiCallback, a) does not yield a's callback");
-  XFAIL(count(vpiCallback, NULL) >= 1, "26.6.39", "vpi_iterate(vpiCallback, NULL) yields no callback");
+  CHECK(count(vpiCallback, a) == 1, "26.6.39: iterate the callback on a");
+  CHECK(count(vpiCallback, NULL) >= 1, "26.6.39: iterate global callbacks");
   CHECK(vpi_get(vpiSize, value_cb) == vpiUndefined, "26.6.39: a callback has no size");
   expect_refusal("vpi_get(vpiSize, callback)");
 
