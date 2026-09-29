@@ -444,9 +444,13 @@ pub const Run = struct {
     /// Pass one's slot space while it is still growing: the view `constant`
     /// evaluates a bound or a parameter against before `values` is final.
     growing: ?*std.ArrayList(Int.Literal) = null,
-    /// IEEE 1364-2005 §12.2.1 every `defparam`, by the instance that declares
-    /// it and its path relative to that instance (`paramValue`).
-    defparams: std.AutoHashMapUnmanaged(Name, Ast.Defparam) = .empty,
+    /// IEEE 1364-2005 §12.2.1 every `defparam`, by the scope its path is
+    /// relative to and that path (`bindDefparam`, `paramValue`).
+    /// Each value is evaluated in `decl`, the scope that declares it.
+    defparams: std.HashMapUnmanaged(PathKey, struct { d: Ast.Defparam, decl: u32 }, PathKey.Ctx, 80) = .empty,
+    /// Each defparam as pass one bound it, for §12.8.2's check against the
+    /// complete hierarchy (`checkDefparams`).
+    bound_defparams: std.ArrayList(struct { decl: u32, path: []const u8, at: u32, rest: []const u8, tok: u32 }) = .empty,
     /// `Mixed.params`: the root's parameter values on the host's card.
     card: []const Param = &.{},
     /// §12.2 parameter slots: constants an expression may fold, never a
@@ -965,6 +969,9 @@ const PortBind = union(enum) {
     /// of its §12.3.9.2 structural net expression, leftmost first (§6.5.7.1
     /// joins them highest-order first).
     send: struct { operands: []const Sink, tok: u32 },
+    /// One external port of a module with port expressions (`groupPorts`),
+    /// at its first reference: the connection, made in `scope`.
+    group: struct { conn: Ast.PortConn, scope: u32 },
 };
 
 /// One operand of a structural net expression: `width` bits of net `net`
@@ -1020,6 +1027,91 @@ fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
 
 /// Is `scope` a top-level module's instance? The first is scope 0; every
 /// other is its own parent.
+/// A defparam path relative to a scope, spelled as `Ast.Defparam.path` is.
+pub const PathKey = struct {
+    scope: u32,
+    path: []const u8,
+    pub const Ctx = struct {
+        pub fn hash(_: Ctx, k: PathKey) u64 {
+            return std.hash.Wyhash.hash(k.scope, k.path);
+        }
+        pub fn eql(_: Ctx, a: PathKey, b: PathKey) bool {
+            return a.scope == b.scope and std.mem.eql(u8, a.path, b.path);
+        }
+    };
+};
+
+/// IEEE 1364-2005 §12.2.1 registers defparam `d`, declared in `decl`: its
+/// unfolded instance selects folded there, then its first segment resolved
+/// as §12.6 resolves a hierarchical name. It names a child of `decl` when
+/// one of `children` (the instances the declaring text writes) has that
+/// name, else `decl` or a scope above it by name, else a child that
+/// elaboration mints later.
+fn bindDefparam(r: *Run, decl: u32, d: Ast.Defparam, children: []const Ast.Instance) Error!void {
+    var path: []const u8 = r.file.str(d.path);
+    if (d.indices.len != 0) {
+        var out: std.ArrayList(u8) = .empty;
+        var rest = path;
+        for (d.indices) |x| {
+            const at = std.mem.indexOf(u8, rest, "[]").?; // the parser spelled one per index
+            const k = (try r.constant(x, d.main_tok)).asInt() orelse return r.exprFail(x, "§12.2.1: a defparam's instance select is x or z");
+            try out.print(r.arena, "{s}[{d}]", .{ rest[0..at], k });
+            rest = rest[at + 2 ..];
+        }
+        try out.appendSlice(r.arena, rest);
+        path = out.items;
+    }
+    const b = try defparamBase(r, decl, path, children, d.main_tok);
+    try r.defparams.put(r.arena, .{ .scope = b.at, .path = b.rest }, .{ .d = d, .decl = decl });
+    try r.bound_defparams.append(r.arena, .{ .decl = decl, .path = path, .at = b.at, .rest = b.rest, .tok = d.main_tok });
+}
+
+/// The scope defparam `path` (declared in `decl`) is relative to once its
+/// first segment is resolved, and the rest of it. `children` is pass one's
+/// static view of `decl`'s children; null reads the complete hierarchy.
+fn defparamBase(r: *Run, decl: u32, path: []const u8, children: ?[]const Ast.Instance, tok: u32) Error!struct { at: u32, rest: []const u8 } {
+    const dot = std.mem.indexOfScalar(u8, path, '.') orelse return .{ .at = decl, .rest = path };
+    const seg = path[0..dot];
+    const bracket = std.mem.indexOfScalar(u8, seg, '[');
+    const name = seg[0 .. bracket orelse seg.len];
+    const index: ?i64 = if (bracket) |at| std.fmt.parseInt(i64, seg[at + 1 .. seg.len - 1], 10) catch null else null;
+    const same = struct {
+        fn f(rr: *const Run, s: u32, n: []const u8, k: ?i64) bool {
+            const info = rr.scope_info.items[s];
+            return info.name != .none and std.mem.eql(u8, rr.file.str(info.name), n) and std.meta.eql(info.index, k);
+        }
+    }.f;
+    if (children) |list| {
+        for (list) |c| if (c.name != .none and std.mem.eql(u8, r.file.str(c.name), name)) return .{ .at = decl, .rest = path };
+    } else for (r.scope_info.items, 0..) |info, s| if (s != decl and info.parent == decl and same(r, @intCast(s), name, index)) return .{ .at = decl, .rest = path };
+    var s = decl;
+    while (true) {
+        if (same(r, s, name, index)) return .{ .at = s, .rest = path[dot + 1 ..] };
+        const info = r.scope_info.items[s];
+        // §12.2.1: "a defparam statement in a hierarchy in or under a
+        // generate block instance ... or an array of instances ... shall
+        // not change a parameter value outside that hierarchy."
+        if (index != null and info.index != null and info.name != .none and std.mem.eql(u8, r.file.str(info.name), name))
+            return r.fail(tok, "§12.2.1: a defparam inside `{s}[{d}]` cannot change a parameter outside the generate block instance or array element it is in", .{ name, info.index.? });
+        if (isRoot(r, s)) break;
+        s = info.parent;
+    }
+    for (r.roots) |t| if (same(r, t, name, index)) return .{ .at = t, .rest = path[dot + 1 ..] };
+    return .{ .at = decl, .rest = path };
+}
+
+/// IEEE 1364-2005 §12.8.2: "It shall be an error if a hierarchical name in a
+/// defparam is resolved before the hierarchy is completely elaborated and
+/// that name would resolve differently once the model is completely
+/// elaborated."
+fn checkDefparams(r: *Run) Error!void {
+    for (r.bound_defparams.items) |b| {
+        const now = try defparamBase(r, b.decl, b.path, null, b.tok);
+        if (now.at != b.at or !std.mem.eql(u8, now.rest, b.rest))
+            return r.fail(b.tok, "§12.8.2: this defparam's hierarchical name was resolved before the hierarchy was complete and would resolve differently once it is", .{});
+    }
+}
+
 pub fn isRoot(r: *const Run, scope: u32) bool {
     return scope == 0 or r.scope_info.items[scope].parent == scope;
 }
@@ -1062,7 +1154,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // default may name an earlier one. A mixed module's real, string and array
     // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
     // no parameter of those kinds, and a digital read of one is undeclared.
-    for (m.defparams) |d| try r.defparams.put(arena, .{ .scope = scope, .str = d.path }, d);
+    for (m.defparams) |d| try bindDefparam(r, scope, d, m.instances);
     // §10: the instance's tasks and functions, named before its parameters
     // so a §10.4.5 constant function call in one can find its function.
     try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
@@ -1159,7 +1251,9 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
-    for (m.ports, 0..) |p, i| {
+    const grouped = !r.mixed and expressionPorts(m);
+    if (grouped) try groupPorts(r, e, m, scope, binds);
+    for (if (grouped) m.ports[0..0] else m.ports, 0..) |p, i| {
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         if (p.external_name != .none and !p.concat_rest) for (m.ports[0..i]) |q| if (q.external_name == p.external_name)
             return r.fail(p.main_tok, "§12.3.2: a port defined twice in the list of ports: `{s}`", .{r.file.str(p.external_name)});
@@ -1185,6 +1279,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                     .tok = p.main_tok,
                 }),
                 .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
+                .group => unreachable, // `groupPorts` takes an expression-ported module's
+
             }
             continue;
         }
@@ -1234,6 +1330,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
             .collapse => {},
             .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok }),
+            .group => unreachable, // `groupPorts` takes an expression-ported module's
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
@@ -1750,7 +1847,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
-            for (b.gen.defparams) |d| try r.defparams.put(r.arena, .{ .scope = scope, .str = d.path }, d);
+            for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
@@ -1837,28 +1934,32 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?struct { v: Int.Literal, real: bool = false } {
     const Src = struct { e: Ast.ExprId, scope: u32 };
     const src: Src = blk: {
-        // A defparam's path is relative to the instance that declares it, so
-        // each enclosing scope is asked for the path from it down to `p`.
-        // ponytail: downward paths only, the §12.2.1 form every fixture writes.
+        // A defparam's path is relative to the scope `bindDefparam` bound
+        // it to, so each enclosing scope is asked for the path from it down
+        // to `p`.
         var at = scope;
         var path: []const u8 = r.file.str(p.name);
         while (true) {
-            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d| {
-                if (p.is_local) return r.fail(d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
-                break :blk .{ .e = d.value, .scope = at };
-            };
+            if (r.defparams.get(.{ .scope = at, .path = path })) |dp| {
+                if (p.is_local) return r.fail(dp.d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
+                break :blk .{ .e = dp.d.value, .scope = dp.decl };
+            }
+            const info = r.scope_info.items[at];
             if (isRoot(r, at)) {
                 // §12.2.1: a defparam in one top-level module may name a
                 // parameter under another by its full hierarchical name.
-                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
-                if (r.file.strings.find(full)) |str| for (r.roots) |t| {
+                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+                for (r.roots) |t| {
                     if (t == at) continue;
-                    if (r.defparams.get(.{ .scope = t, .str = str })) |d| break :blk .{ .e = d.value, .scope = t };
-                };
+                    if (r.defparams.get(.{ .scope = t, .path = full })) |dp| break :blk .{ .e = dp.d.value, .scope = dp.decl };
+                }
                 break;
             }
-            path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
-            at = r.scope_info.items[at].parent;
+            path = if (info.index) |k|
+                try std.fmt.allocPrint(r.arena, "{s}[{d}].{s}", .{ r.file.str(info.name), k, path })
+            else
+                try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+            at = info.parent;
         }
         if (!p.is_local) for (over, 0..) |o, i| {
             if (o.value != .none and (o.name == p.name or (o.name == .none and i == pos)))
@@ -1940,7 +2041,18 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         try checkLists(r, child, inst);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
-        for (inst.ports, 0..) |conn, i| {
+        const grouped = !r.mixed and expressionPorts(child);
+        if (grouped) {
+            if (index != null) return r.fail(inst.main_tok, "§12.1.2: an instance array of a module with port expressions is not implemented by digital execution", .{});
+            for (inst.ports, 0..) |conn, i| {
+                const at = if (conn.name != .none)
+                    groupByName(child, conn.name) orelse return r.fail(conn.main_tok, "the instantiated module has no such port", .{})
+                else
+                    nthGroup(child, i) orelse return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+                binds_out[at] = .{ .group = .{ .conn = conn, .scope = scope } };
+            }
+        }
+        for (if (grouped) inst.ports[0..0] else inst.ports, 0..) |conn, i| {
             // IEEE 1364-2005 §12.3.2/§12.3.6: a header port `.name(expr)` is
             // connected by its external name, and when its expression is a
             // concatenation of internal ports every one of them is a slice
@@ -2189,7 +2301,11 @@ pub const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
 pub const Overrides = struct {
     assign: ?PcRange = null,
     force: ?PcRange = null,
+    /// IEEE 1364-2005 §9.3.2 forces of constant selects of the net, each
+    /// holding its own bits.
+    parts: std.ArrayList(PartForce) = .empty,
 };
+pub const PartForce = struct { bits: compile.Bits, range: PcRange };
 pub const PcRange = struct { start: u32, end: u32 };
 
 /// One activation's storage: a scope, a slot per formal, the result slot of
@@ -2350,6 +2466,165 @@ fn checkUdp(r: *Run, u: *const Ast.UdpDecl) Error!void {
 /// gave it no external name.
 /// A concatenation with no external name has none (§12.3.6: it connects by
 /// position only).
+/// IEEE 1364-2005 §12.3.2: does `m` use A.1.3's port expressions beyond one
+/// whole net per port (a concatenation, a bit- or part-select, a name more
+/// than one port reference names)? Its ports are then connected one external
+/// port at a time (`groupPorts`).
+fn expressionPorts(m: *const Ast.ModuleDecl) bool {
+    for (m.ports, 0..) |p, i| {
+        if (p.select != null or p.concat_rest) return true;
+        for (m.ports[0..i]) |q| if (q.name == p.name) return true;
+    }
+    return false;
+}
+
+/// One past the last reference of the external port starting at `i`.
+fn groupEnd(m: *const Ast.ModuleDecl, i: usize) usize {
+    var end = i + 1;
+    while (end < m.ports.len and m.ports[end].concat_rest) end += 1;
+    return end;
+}
+
+/// The first reference of the `n`th external port.
+fn nthGroup(m: *const Ast.ModuleDecl, n: usize) ?usize {
+    var i: usize = 0;
+    var k: usize = 0;
+    while (i < m.ports.len) : (i = groupEnd(m, i)) {
+        if (k == n) return i;
+        k += 1;
+    }
+    return null;
+}
+
+/// The first reference of the external port named `name`: its `.name(...)`,
+/// or a lone whole-net reference's own name (§12.3.6).
+fn groupByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
+    var i: usize = 0;
+    while (i < m.ports.len) : (i = groupEnd(m, i)) {
+        const p = m.ports[i];
+        const own = if (p.external_name != .none) p.external_name else if (groupEnd(m, i) == i + 1 and p.select == null) p.name else .none;
+        if (own == name) return i;
+    }
+    return null;
+}
+
+/// IEEE 1364-2005 §12.3.2/§12.3.3 the ports of an expression-ported module:
+/// one net (or output variable) per port name, then each external port's
+/// connection split among its references, leftmost the most significant.
+fn groupPorts(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind) Error!void {
+    for (m.ports, 0..) |p, i| {
+        if (for (m.ports[0..i]) |q| {
+            if (q.name == p.name) break true;
+        } else false) continue;
+        if (p.direction == .unspecified) return r.fail(p.main_tok, "§12.3.3: port `{s}` has no direction declaration", .{r.file.str(p.name)});
+        if (r.names.contains(.{ .scope = scope, .str = p.name })) {
+            if (p.direction != .output) return r.fail(p.main_tok, "§12.3.3: only an output port may be declared as a variable", .{});
+            continue;
+        }
+        const range = p.range orelse p.type_range;
+        const width = if (range) |rg| try r.declaredWidth(rg, p.main_tok) else 1;
+        const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
+        if (range) |rg| try r.vec_ranges.put(r.arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(rg.msb, p.main_tok),
+            .lsb = try r.declaredBound(rg.lsb, p.main_tok),
+        });
+    }
+    var i: usize = 0;
+    while (i < m.ports.len) {
+        const end = groupEnd(m, i);
+        if (i < binds.len and binds[i] == .group) try connectGroup(r, e, m.ports[i..end], binds[i].group.conn, binds[i].group.scope, scope);
+        i = end;
+    }
+}
+
+/// One external port's connection `conn` (made in `parent`) split among its
+/// references `refs` (declared in `scope`). An input reference receives its
+/// bits of the connected expression, an output one drives its bits of the
+/// connected nets, and an inout one is joined to them bit by bit, as a
+/// `tran` joins two nets (§7.6).
+fn connectGroup(r: *Run, e: *Elab, refs: []const Ast.Port, conn: Ast.PortConn, parent: u32, scope: u32) Error!void {
+    if (conn.expr == .none) return;
+    const Ref = struct { slot: u32, lo: u32, width: u32, at: u32, dir: Ast.Direction };
+    const list = try r.arena.alloc(Ref, refs.len);
+    var total: u32 = 0;
+    r.scope = scope;
+    var k = refs.len;
+    while (k != 0) {
+        k -= 1;
+        const p = refs[k];
+        const slot = r.names.get(.{ .scope = scope, .str = p.name }).?; // `groupPorts` declared every name
+        var lo: u32 = 0;
+        var w = e.values.items[slot].width;
+        if (p.select) |sel| {
+            const range = r.vec_ranges.get(slot) orelse VecRange{ .msb = @as(i64, w) - 1, .lsb = 0 };
+            const a = range.position(try r.declaredBound(sel.msb, p.main_tok));
+            const b = range.position(try r.declaredBound(sel.lsb, p.main_tok));
+            if (@min(a, b) < 0 or @max(a, b) >= w) return r.fail(p.main_tok, "§12.3.2: a port reference's select is outside its net", .{});
+            lo = @intCast(@min(a, b));
+            w = @intCast(@abs(a - b) + 1);
+        }
+        list[k] = .{ .slot = slot, .lo = lo, .width = w, .at = total, .dir = p.direction };
+        total += w;
+    }
+    r.scope = parent;
+    // Inputs: the expression, as wide as the port, on a net of its own whose
+    // bits each input reference takes.
+    var fed: ?u32 = null;
+    for (list) |ref| if (ref.dir == .input) {
+        const dst = r.net_of.get(ref.slot) orelse return r.fail(conn.main_tok, "§12.3.3: an input port reference names a net", .{});
+        const h = fed orelse blk: {
+            const n = try mintNet(r, e, .wire, total, false, .none, conn.main_tok);
+            try e.wires.append(r.arena, .{ .net = n, .scope = parent, .source = .{ .expr = .{ .e = conn.expr } }, .tok = conn.main_tok });
+            fed = n;
+            break :blk n;
+        };
+        try e.wires.append(r.arena, .{ .net = dst, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[h].slot, .src_lo = ref.at, .dst_lo = ref.lo, .width = ref.width } }, .tok = conn.main_tok });
+    };
+    if (for (list) |ref| {
+        if (ref.dir != .input) break false;
+    } else true) return;
+    // Outputs and inouts: the connected nets, bit ranges from the least
+    // significant (§12.3.9.2).
+    var leaves: std.ArrayList(Ast.ExprId) = .empty;
+    try concatLeaves(r, conn.expr, &leaves);
+    const sinks = try r.arena.alloc(struct { s: Sink, at: u32 }, leaves.items.len);
+    var at: u32 = 0;
+    var j = leaves.items.len;
+    while (j != 0) {
+        j -= 1;
+        sinks[j] = .{ .s = try sink(r, e, leaves.items[j], conn.main_tok, .port), .at = at };
+        at += sinks[j].s.width;
+    }
+    for (list) |ref| for (sinks) |s| {
+        const from = @max(ref.at, s.at);
+        const to = @min(ref.at + ref.width, s.at + s.s.width);
+        if (from >= to) continue;
+        switch (ref.dir) {
+            .output => try e.wires.append(r.arena, .{ .net = s.s.net, .scope = scope, .source = .{ .bridge = .{ .src = ref.slot, .src_lo = ref.lo + from - ref.at, .dst_lo = s.s.lo + from - s.at, .width = to - from } }, .tok = conn.main_tok }),
+            .inout => {
+                const net = r.net_of.get(ref.slot) orelse return r.fail(conn.main_tok, "§12.3.3: an inout port reference names a net", .{});
+                for (from..to) |b| try e.trans.append(r.arena, .{
+                    .tran = .{
+                        .a = net,
+                        .b = s.s.net,
+                        .a_bit = @intCast(ref.lo + b - ref.at),
+                        .b_bit = @intCast(s.s.lo + b - s.at),
+                        .ctrl = .none,
+                        .on = .one,
+                        .state = .on,
+                        .target = .on,
+                        .resistive = false,
+                        .delay = try r.declaredDelay3(.{}, conn.main_tok),
+                    },
+                    .scope = scope,
+                    .tok = conn.main_tok,
+                });
+            },
+            .input, .unspecified => {},
+        }
+    };
+}
+
 fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
     for (m.ports, 0..) |p, k| {
         if (p.concat_rest or (k + 1 < m.ports.len and m.ports[k + 1].concat_rest)) continue;
@@ -2592,7 +2867,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             const t = &file.modules[d];
             s.* = try newScope(&r, t.main_tok);
             try r.scope_info.append(arena, .{ .parent = s.*, .name = t.name, .def = d });
-            for (t.defparams) |dp| try r.defparams.put(arena, .{ .scope = s.*, .str = dp.path }, dp);
+            for (t.defparams) |dp| try bindDefparam(&r, s.*, dp, t.instances);
         }
         r.roots = roots;
     }
@@ -2624,6 +2899,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, &.{}, 0);
     if (tops.len > 1) for (r.roots[1..], tops[1..]) |s, d| try declare(&r, &e, &file.modules[d], s, &.{}, &.{}, 0);
+    try checkDefparams(&r);
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;

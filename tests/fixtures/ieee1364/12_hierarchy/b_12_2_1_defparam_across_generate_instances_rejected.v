@@ -17,7 +17,6 @@
 //! inherited IEEE 1364-2005 12.2.1
 //! reject E1100
 //! reject outside the generate block
-//! xfail VerA refuses this only as unsupported (E0231 "hierarchical index is not a constant expression" on the genvar-dependent (i+1) % 8), not for targeting another generate block instance
 module flop;
   parameter xyz = 0;
 endmodule

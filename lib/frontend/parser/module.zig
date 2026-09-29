@@ -70,6 +70,18 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     if (header_params != 0) for (b.params.items[header_params..]) |*p| {
         p.is_local = true;
     };
+    // IEEE 1364-2005 §12.3.3: one declaration covers every port reference
+    // to its name (`(a, a)`, `(a[7:4], a[3:0])`), which the body folded
+    // into the first.
+    for (b.ports.items, 0..) |*p, i| for (b.ports.items[0..i]) |q| if (q.name == p.name) {
+        p.direction = q.direction;
+        p.discipline = q.discipline;
+        p.range = q.range;
+        p.type_range = q.type_range;
+        p.kind = q.kind;
+        p.is_signed = q.is_signed;
+        break;
+    };
     try parse_generate.checkGenBlockNames(self, &b);
     try parse_generate.nameGenBlocks(self, &b);
     const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
@@ -477,6 +489,15 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             const tok = self.pos;
             const name = try self.expectIdent();
             if (var_storage) |storage| try parse_decl.varPort(self, b, storage, name, range, signed, tok);
+            // A.1.3 `port_reference ::= port_identifier [ [
+            // constant_range_expression ] ]`, the list-of-ports form only.
+            var select: ?Ast.Dim = null;
+            if (self.digital and !b.ansi and self.eat(.lbracket)) {
+                const msb = try parse_expr.parseExpr(self);
+                const lsb = if (self.eat(.colon)) try parse_expr.parseExpr(self) else msb;
+                _ = try self.expect(.rbracket);
+                select = .{ .msb = msb, .lsb = lsb };
+            }
             try b.ports.append(self.arena, .{
                 .name = name,
                 .direction = dir,
@@ -485,6 +506,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
                 .external_name = external,
                 .concat_rest = b.ports.items.len != first,
                 .is_signed = signed,
+                .select = select,
                 .main_tok = tok,
             });
             if (!concat or !self.eat(.comma)) break;
@@ -625,12 +647,14 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
                 // `true`: A.9.3 admits `u[0].g`, the parameter of one
                 // element of an instance array, a flat name elaboration
                 // mints.
-                const path = try parse_decl.parseDottedName(self, true);
+                var indices: std.ArrayList(Ast.ExprId) = .empty;
+                const path = try parse_decl.parseDottedPath(self, true, if (self.digital) &indices else null);
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 try b.defparams.append(self.arena, .{
                     .path = path,
                     .value = value,
+                    .indices = indices.items,
                     .main_tok = tok,
                 });
                 if (!self.eat(.comma)) break;

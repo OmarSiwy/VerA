@@ -763,12 +763,20 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 /// write path for the active and NBA regions, so none bypasses §5.10.1
 /// resumption. A write to a slot a §9.3 override holds is dropped, unless
 /// `overriding`.
-pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
+pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     // §9.3: while a procedural continuous assignment holds the slot, its own
     // process is the only writer: an `assign` over a variable, a `force`
     // over anything, including a net's resolution.
+    var planes = planes_in;
     if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
         if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
+        // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
+        if (o.parts.items.len != 0) {
+            const cur = self.values[target];
+            const kept: Int.Literal = .{ .width = cur.width, .signed = cur.signed, .sized = cur.sized, .planes = try self.arena.dupe(u64, planes) };
+            for (o.parts.items) |p| for (p.bits.lo..p.bits.lo + p.bits.width) |i| setBit(kept, @intCast(i), cur.bit(@intCast(i)));
+            planes = kept.planes;
+        }
     };
     const dest = self.values[target];
     const before = dest.bit(0);
@@ -814,6 +822,19 @@ pub fn release(self: *Run, slot: u32, force: bool) Error!void {
     if (force) {
         if (self.net_of.get(slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
     }
+}
+
+/// §9.3.2 `release` of a forced select of net `slot`: its bits are the
+/// drivers' again, at once. Releasing what is not held is a no-op.
+fn releaseBits(self: *Run, slot: u32, bits: compile.Bits) Error!void {
+    const layers = self.overrides.getPtr(slot) orelse return;
+    for (layers.parts.items, 0..) |p, i| if (std.meta.eql(p.bits, bits)) {
+        _ = try stopRange(self, p.range.start, p.range.end);
+        _ = layers.parts.orderedRemove(i);
+        break;
+    };
+    if (layers.force == null and layers.assign == null and layers.parts.items.len == 0) _ = self.overrides.remove(slot);
+    if (self.net_of.get(slot)) |net| try resolve(self, net);
 }
 
 /// VPI §12.30 vpiForceFlag: force `slot` to a constant, "same as the
@@ -1922,6 +1943,19 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .override_on => |o| {
                 const entry = try self.overrides.getOrPut(self.arena, o.slot);
                 if (!entry.found_existing) entry.value_ptr.* = .{};
+                if (o.bits) |bits| {
+                    const parts = &entry.value_ptr.parts;
+                    const range: @import("root.zig").PcRange = .{ .start = o.start, .end = o.end };
+                    for (parts.items) |*p| {
+                        if (!std.meta.eql(p.bits, bits)) continue;
+                        _ = try stopRange(self, p.range.start, p.range.end);
+                        p.range = range;
+                        break;
+                    } else try parts.append(self.arena, .{ .bits = bits, .range = range });
+                    _ = try enqueue(self, .{ .run_process = o.start }, null, false);
+                    pc += 1;
+                    continue;
+                }
                 const layer = if (o.force) &entry.value_ptr.force else &entry.value_ptr.assign;
                 if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
                 layer.* = .{ .start = o.start, .end = o.end };
@@ -1933,18 +1967,29 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const layers = self.overrides.get(o.slot) orelse Overrides{};
                 // An assign under a force keeps tracking but does not write.
                 if (o.force or layers.force == null) {
+                    const w = if (o.bits) |b| b.width else self.values[o.slot].width;
                     const value = if (o.slice) |sl|
-                        try bitsOf(scratch, try evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, self.values[o.slot].width)
+                        try bitsOf(scratch, try evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, w)
+                    else if (o.bits != null)
+                        try evalFor(self, scratch, o.value, .{ .width = w, .signed = false })
                     else
                         try evalFor(self, scratch, o.value, self.slotType(o.slot));
                     self.overriding = true;
                     defer self.overriding = false;
-                    try store(self, o.slot, value.planes);
+                    if (o.bits) |b|
+                        try write(self, scratch, .{ .slot = o.slot, .sel = .{ .first = b.lo, .count = b.width } }, value)
+                    else
+                        try store(self, o.slot, value.planes);
                 }
                 pc += 1;
                 continue;
             },
             .override_off => |o| {
+                if (o.bits) |bits| {
+                    try releaseBits(self, o.slot, bits);
+                    pc += 1;
+                    continue;
+                }
                 try release(self, o.slot, o.force);
                 pc += 1;
                 continue;
