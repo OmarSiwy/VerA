@@ -18,7 +18,9 @@
  *     vpiInitial, vpiInitial, vpiAlways, vpiInitial.
  *   process -> stmt: main's is the named begin `main` (vpiNamedBegin, with
  *     11.6.3's vpiName "main" and vpiFullName "p04_behaviour.main"), and
- *     named begin ->> stmt yields its 19 statements in order.
+ *     named begin ->> stmt yields its 19 statements in order. main is in
+ *     the module; its statements are in main (stmt -> scope, 11.6.3's scope
+ *     class holding the named begin).
  *   11.6.18: "simple expr" is the class of nets, regs, variables, parameters,
  *     memories and their words — an identifier in an expression IS that
  *     object, so statement 0's vpiLhs compares equal to the reg `a` found by
@@ -55,16 +57,20 @@
  *   always: event control, condition a vpiPosedgeOp operation over clk,
  *     statement a NONblocking assignment (vpiBlocking FALSE) whose rhs is
  *     {2{a[1:0]}} — vpiMultiConcatOp, and by 11.6.19's NOTE its first
- *     operand is the multiplier 2; the second is what is replicated, the
- *     inner concatenation {a[1:0]} (vpiConcatOp, one operand — the braces
- *     are a concatenation of their own, A.8.1 multiple_concatenation ::=
- *     { constant_expression concatenation }), whose operand is the part
- *     select a[1:0]: vpiParent a, vpiLeftRange 1, vpiRightRange 0.
+ *     operand is the multiplier 2. The NOTE stops there; IEEE 1364-2005
+ *     §26.6.26 a), whose Annex G numbering the VPI uses, goes on: "The
+ *     remaining operands shall be the expressions within the concatenation"
+ *     (A.8.1 multiple_concatenation ::= { constant_expression concatenation
+ *     }), so the second and last operand is the part select a[1:0]:
+ *     vpiParent a, vpiLeftRange 1, vpiRightRange 0.
  *   11.6.3: module ->> task and ->> function, one each; bump ->> io decl is
  *     `input [3:0] by` (vpiInput, size 4), twice's is `input [7:0] v`
  *     (size 8); each -> stmt is its body.
  *   11.6.17: module ->> cont assign, one: vpiLhs the net w, vpiRhs a
- *     vpiBitAndOp over a and b, vpiDelay a constant.
+ *     vpiBitAndOp over a and b. 11.6.17 draws vpiDelay to an expr; IEEE
+ *     1364-2005 §26.3.4 says which: "an operation if there are more than one
+ *     delay specified ... the operation's vpiOpType shall be vpiListOp", so
+ *     #(2,3) is a vpiListOp over two operands.
  *   12.11 over `assign #(2,3)`: under `timescale 1ns/1ns the module's unit
  *     and the simulation tick are both 1 ns, so vpiScaledRealTime gives 2.0
  *     and 3.0 and vpiSimTime gives low = 2, 3. A third delay (turn-off) is
@@ -194,7 +200,7 @@ static void declarations(void)
   operation(rhs, vpiBitAndOp, 2, "a & b");
   CHECK(scan_all(vpi_iterate(vpiOperand, rhs), got, 8) == 2 && same(got[0], "p04_behaviour.a") && same(got[1], "p04_behaviour.b"),
         "whose operands are the regs a and b");
-  CHECK(vpi_get(vpiType, vpi_handle(vpiDelay, ca)) == vpiConstant, "vpiDelay is a constant");
+  operation(vpi_handle(vpiDelay, ca), vpiListOp, 2, "IEEE 1364-2005 §26.3.4: vpiDelay of #(2,3)");
   CHECK(vpi_handle(vpiCondition, ca) == NULL, "11.6.17: no vpiCondition");
   expect_error("vpi_handle(vpiCondition, cont assign)");
 
@@ -248,9 +254,12 @@ static void main_block(vpiHandle blk)
         "11.6.3: the named begin's names");
   n = scan_all(vpi_iterate(vpiStmt, blk), s, 24);
   CHECK(n == 19, "main holds 19 statements, got %d", n);
-  /* 11.6.21 stmt -> scope. Not for 18: a disable's vpiScope is the scope it
-   * disables (11.6.24), checked below. */
-  for (k = 0; k < 18; k++) CHECK(vpi_compare_objects(vpi_handle(vpiScope, s[k]), top), "stmt %d -> scope is the module", k);
+  /* 11.6.21 stmt -> scope: 11.6.3's scope class holds the named begin, so a
+   * statement of main is in main (IEEE 1364-2005 §12.5: a named begin-end
+   * block "defines a new hierarchical level, or scope"). Not for 18: a
+   * disable's vpiScope is the scope it disables (11.6.24), checked below. */
+  for (k = 0; k < 18; k++) CHECK(vpi_compare_objects(vpi_handle(vpiScope, s[k]), blk), "stmt %d -> scope is main", k);
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, blk), top), "main -> scope is the module");
 
   /* 0 */
   CHECK(vpi_get(vpiType, s[0]) == vpiAssignment && vpi_get(vpiBlocking, s[0]) == 1, "0: a blocking assignment");
@@ -366,9 +375,8 @@ static void always_block(vpiHandle ev)
   operation(rhs, vpiMultiConcatOp, 2, "{2{a[1:0]}}");
   scan_all(vpi_iterate(vpiOperand, rhs), ops, 4);
   CHECK(int_value(ops[0]) == 2, "11.6.19 NOTE: the first operand is the multiplier");
-  operation(ops[1], vpiConcatOp, 1, "then the replicated concatenation {a[1:0]}");
-  scan_all(vpi_iterate(vpiOperand, ops[1]), ops, 4);
-  CHECK(vpi_get(vpiType, ops[0]) == vpiPartSelect, "whose one operand is the part select");
+  ops[0] = ops[1];
+  CHECK(vpi_get(vpiType, ops[0]) == vpiPartSelect, "then the expression within the concatenation, the part select");
   CHECK(same(vpi_handle(vpiParent, ops[0]), "p04_behaviour.a"), "of a");
   CHECK(int_value(vpi_handle(vpiLeftRange, ops[0])) == 1 && int_value(vpi_handle(vpiRightRange, ops[0])) == 0, "[1:0]");
   CHECK(vpi_get(vpiConstType, rhs) == vpiUndefined, "11.6.19: an operation has no vpiConstType");

@@ -184,6 +184,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiNullStmt            38
 #define vpiOperation           39
 #define vpiPartSelect          42
+#define vpiIndexedPartSelect  130   /* IEEE 1364-2005 §26.6.26 base[i +: w], base[i -: w] */
 #define vpiRegBit              49
 #define vpiRelease             50
 #define vpiRepeat              51
@@ -243,6 +244,14 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiOperand             97
 #define vpiProcess             99
 #define vpiExpr               102
+#define vpiUse                101   /* one-to-many: simple expr ->> what reads or writes it (IEEE 1364-2005 §26.6.25) */
+#define vpiBaseExpr           131   /* one-to-one: indexed part select -> its base expression */
+#define vpiWidthExpr          132   /* one-to-one: indexed part select -> its width expression */
+#define vpiIndexedPartSelectType 72 /* int: vpiPosIndexed (+:) or vpiNegIndexed (-:) */
+#define vpiNetDeclAssign       43   /* bool: a cont assign that is a net declaration assignment (IEEE 1364-2005 §26.6.24) */
+#define vpiDecompile           54   /* str: an expression or task call as source text (IEEE 1364-2005 §26.6.26 b) */
+#define vpiPosIndexed           1
+#define vpiNegIndexed           2
 #define vpiStmt               104
 
 #define vpiOpType              39   /* int: §11.6.19, one of the values below */
@@ -287,6 +296,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiConcatOp            33
 #define vpiMultiConcatOp       34
 #define vpiEventOrOp           35
+#define vpiListOp              37   /* IEEE 1364-2005 §26.3.4: a vpiDelay of more than one delay */
 #define vpiPosedgeOp           39
 #define vpiNegedgeOp           40
 #define vpiArithLShiftOp       41
@@ -390,9 +400,13 @@ typedef struct t_vpi_delay {
 #define vpiNoDirection          5
 
 /* vpiConstType values — §11.6.12, over §3.4.1's parameter types; an index
- * constant is vpiDecConst. */
+ * constant is vpiDecConst, and an integer literal's is the base it was written
+ * in (IEEE 1364-2005 §26.6.26). */
 #define vpiDecConst             1
 #define vpiRealConst            2
+#define vpiBinaryConst          3
+#define vpiOctConst             4
+#define vpiHexConst             5
 #define vpiStringConst          6
 #define vpiIntConst             7
 

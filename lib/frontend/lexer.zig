@@ -466,6 +466,9 @@ pub const IntLiteral = struct {
     value: i64,
     width: u32,
     signed: bool,
+    /// §2.6.1 the radix the base format names (2, 8, 10 or 16); 10 for a
+    /// literal written without one. IEEE 1364-2005 §26.6.26's vpiConstType.
+    radix: u8 = 10,
 };
 
 /// Decodes a `.real_literal`'s text (LRM §2.6.2). Strips `_` and rewrites a
