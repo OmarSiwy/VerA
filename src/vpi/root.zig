@@ -2285,6 +2285,12 @@ fn codeProp(o: *const Obj, prop: c_int) c_int {
             const r = reg orelse return propFail(prop, o);
             return if (r.domain == .digital) r.digital.sysfunctype else r.analog.sysfunctype;
         }
+        // IEEE 1364-2005 §26.1.1: "the number of bits that the calltf
+        // routine shall provide as the return value".
+        if (prop == vpiSize and o.vtype == code.vpiSysFuncCall and !o.in_analog) if (systf.kindOf(o.name)) |k| switch (k) {
+            .func => |t| return @intCast(t.width),
+            .task => {},
+        };
     }
     for (o.props) |p| if (p.prop == prop) return p.value;
     return propFail(prop, o);
