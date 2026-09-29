@@ -368,13 +368,14 @@ pub const Parser = struct {
     ///     attr_spec          ::= attr_name [ = constant_expression ]
     ///
     /// Parses any attribute instances at the cursor and appends every spec to
-    /// `self.attrs`, which `parseModule` hands to the enclosing module. The
-    /// decorated item is not recorded: §2.9's constant_expression rule and
-    /// §2.9.2's value domains are properties of the spec alone.
+    /// `self.attrs`, which `parseModule` hands to the enclosing module for
+    /// validation. Also binds this prefix to the following declaration;
+    /// statement and expression callers refine that parsed owner below.
     ///
     /// A malformed attribute is reported and the cursor resynchronized past its
     /// `*)`, so the caller always lands past the instance. Only OOM propagates.
     pub fn skipAttributes(self: *Parser) error{OutOfMemory}!void {
+        const mark = self.attrs.items.len;
         self.parseAttributes() catch |e| {
             if (e == error.OutOfMemory) return error.OutOfMemory;
             // Already reported. Resynchronize past the closing `*)` so one bad
@@ -387,6 +388,42 @@ pub const Parser = struct {
                 },
                 else => {}, // else: any other token is inside the attribute being skipped
             };
+        };
+        if (self.attrs.items.len != mark) try self.file.attributes.append(self.arena, .{
+            .owner = .{ .kind = .declaration, .tok = self.pos },
+            .specs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items[mark..]),
+        });
+    }
+
+    /// Parse a suffix or statement prefix, retaining its actual owner.
+    pub fn ownedAttributes(self: *Parser, owner: Ast.AttributeOwner) error{OutOfMemory}!void {
+        const first = self.file.attributes.items.len;
+        try self.skipAttributes();
+        // §2.9/IEEE §3.8 prohibit attributes inside an attribute value;
+        // attr_depth diagnoses them. A successful run adds only this one
+        // prefix binding, whose specs include every adjacent instance.
+        std.debug.assert(self.file.attributes.items.len <= first + 1);
+        for (self.file.attributes.items[first..]) |*a| a.owner = owner;
+    }
+
+    /// A declaration list gives every declared name the prefix's specs.
+    pub fn copyAttributes(self: *Parser, from: u32, to: u32) error{OutOfMemory}!void {
+        if (from == to) return;
+        const count = self.file.attributes.items.len;
+        for (0..count) |i| {
+            const a = self.file.attributes.items[i];
+            if (a.owner.kind != .declaration or a.owner.tok != from) continue;
+            const exists = for (self.file.attributes.items) |b| {
+                if (b.owner.kind == .declaration and b.owner.tok == to and b.specs.ptr == a.specs.ptr) break true;
+            } else false;
+            if (!exists) try self.file.attributes.append(self.arena, .{ .owner = .{ .kind = .declaration, .tok = to }, .specs = a.specs });
+        }
+    }
+
+    /// Lookahead may have consumed a body statement's prefix already.
+    pub fn statementAttributes(self: *Parser, tok: u32) void {
+        for (self.file.attributes.items) |*a| if (a.owner.kind == .declaration and a.owner.tok == tok) {
+            a.owner.kind = .statement;
         };
     }
 

@@ -40,6 +40,7 @@ pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
 /// `parameter real a = 1, b = 2;` is one declaration but two `ParamDecl`s,
 /// so each is appended to `out`.
 pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
+    const decl_tok = self.pos;
     const is_local = self.peek() == .kw_localparam;
     self.pos += 1;
     const signed = self.eat(.kw_signed);
@@ -65,6 +66,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
         const dims = try parseDims(self);
         _ = try self.expect(.assign_eq);
         const default = try parse_expr.parseExpr(self);
+        try self.copyAttributes(decl_tok, tok);
 
         var ranges: std.ArrayList(Ast.ValueRange) = .empty;
         while (self.peek() == .kw_from or self.peek() == .kw_exclude) {
@@ -192,6 +194,7 @@ pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
     while (true) {
         const name_tok = self.pos;
         const name = try self.expectIdent();
+        try self.copyAttributes(tok, name_tok);
         // A.2.1.3 reg_declaration ends in A.2.3's
         // list_of_variable_identifiers, whose A.2.2.1 `variable_type`
         // takes dimensions and an initializer:
@@ -223,12 +226,14 @@ pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
 /// on the type keyword, up to but not including the `;`. Appends one `VarDecl`
 /// per name to `out`. Asserts the cursor is on a variable type keyword.
 pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const decl_tok = self.pos;
     const storage: @FieldType(Ast.VarDecl, "storage") = if (self.peek() == .kw_time) .time else .variable;
     const ty = varType(self.peek()).?;
     self.pos += 1;
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
+        try self.copyAttributes(decl_tok, tok);
         const dims = try parseDims(self);
         var init_expr: Ast.ExprId = .none;
         if (self.eat(.assign_eq)) init_expr = try parse_expr.parseExpr(self);
@@ -267,14 +272,18 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     if (self.eat(.lparen)) {
         var dir: Ast.Direction = .input;
         var ty: Ast.VarDecl = .{ .name = .none, .ty = .integer, .storage = .reg, .is_signed = false };
+        var attr_tok: ?u32 = null;
         while (self.peek() != .rparen and self.peek() != .eof) {
             try self.skipAttributes();
             if (parse_module.portDirection(self.peek())) |d| {
+                attr_tok = self.pos;
                 dir = d;
                 self.pos += 1;
                 ty = try tfPortType(self);
             }
-            try ports.append(self.arena, try tfFormal(self, dir, ty));
+            const formal = try tfFormal(self, dir, ty);
+            if (attr_tok) |decl| try self.copyAttributes(decl, formal.v.main_tok);
+            try ports.append(self.arena, formal);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
@@ -287,10 +296,13 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     while (true) {
         try self.skipAttributes();
         if (parse_module.portDirection(self.peek())) |d| {
+            const decl_tok = self.pos;
             self.pos += 1;
             const ty = try tfPortType(self);
             while (true) {
-                try ports.append(self.arena, try tfFormal(self, d, ty));
+                const formal = try tfFormal(self, d, ty);
+                try self.copyAttributes(decl_tok, formal.v.main_tok);
+                try ports.append(self.arena, formal);
                 if (!self.eat(.comma)) break;
             }
             _ = try self.expect(.semicolon);
@@ -304,9 +316,12 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
                 _ = try self.expect(.semicolon);
             },
             .kw_event => {
+                const decl_tok = self.pos;
                 self.pos += 1;
                 while (true) {
-                    try events.append(self.arena, try parseEventDecl(self));
+                    const event = try parseEventDecl(self);
+                    try self.copyAttributes(decl_tok, event.main_tok);
+                    try events.append(self.arena, event);
                     if (!self.eat(.comma)) break;
                 }
                 _ = try self.expect(.semicolon);
@@ -342,11 +357,13 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
 /// One A.2.8 `block_item_declaration` of variables (`reg`, `integer`,
 /// `time`, `real`, `realtime`), cursor on the keyword, through its `;`.
 pub fn parseBlockVars(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const decl_tok = self.pos;
     const ty = try tfPortType(self);
     while (true) {
         var v = ty;
         v.main_tok = self.pos;
         v.name = try self.expectIdent();
+        try self.copyAttributes(decl_tok, v.main_tok);
         v.dims = try parseDims(self);
         if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
         try out.append(self.arena, v);
@@ -753,6 +770,7 @@ pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
 /// introduce a terminal. Reports E0206 for a name that is not a header port
 /// and E0218 for a port that already has a direction.
 pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
+    const decl_tok = self.pos;
     const dir = parse_module.portDirection(self.peek()).?;
     self.pos += 1;
     // A.2.1.2's `[ net_type | wreal ]`, §7.9's resolution input (`Ast.Port.kind`).
@@ -783,6 +801,7 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         const name = try self.expectIdent();
         if (var_storage) |storage| try varPort(self, b, storage, name, range, signed, tok);
         if (findPort(b, name)) |p| {
+            try self.copyAttributes(decl_tok, p.main_tok);
             if (signed) p.is_signed = true;
             // §6.2 "Ports declared in the list of port declarations shall
             // not be redeclared within the body of the module." Only an ANSI

@@ -76,6 +76,8 @@ typedef PLI_UINT32 *vpiHandle;
  * relationship table further down.
  * -------------------------------------------------------------------------- */
 #define vpiConstant             7   /* an array element's index expression */
+#define vpiAttribute          105   /* IEEE 1364-2005 §26.6.42 */
+#define vpiDefAttribute        55   /* attribute belongs to module definition */
 #define vpiIntegerVar          25   /* §11.6.10 integer variable (or array of) */
 #define vpiIterator            27   /* §12.23 the iterator vpi_scan() drives */
 #define vpiMemory              29   /* IEEE 1364 §26.6.9 legacy iteration tag */

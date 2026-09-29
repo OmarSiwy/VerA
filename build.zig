@@ -823,7 +823,12 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
-        .xfail = "vpi_iterate: no one-to-many relationship 105 from a module",
+        .stdout = "p02: b_26_6_42_attributes checks=630\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_42_analog_attributes.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_42_analog_attributes.va",
+        .stdout = "p02: b_26_6_42_analog_attributes checks=132\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_objects.c",
@@ -864,7 +869,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 87 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=356\n",
+        .stdout = "xfail G: 85 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=358\n",
     },
 };
 

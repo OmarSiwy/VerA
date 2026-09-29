@@ -45,6 +45,7 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     defer self.depth -= 1;
     const mark = self.attrs.items.len;
     try self.skipAttributes();
+    self.statementAttributes(self.pos);
     // A.6.4 `{ attribute_instance } <statement>`: a statement keeps VerA's
     // own attributes (`Ast.SourceFile.lte_attrs`). Read before the body,
     // whose nested statements append their attributes after.
@@ -210,6 +211,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     while (true) {
         const before_attrs = self.pos;
         const attr_mark = self.attrs.items.len;
+        const binding_mark = self.file.attributes.items.len;
         try self.skipAttributes();
         // IEEE 1364-2005 A.6.3: `begin [ : block_identifier
         // { block_item_declaration } ]`, so an unnamed block declares nothing.
@@ -231,18 +233,23 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
             .kw_reg => if (self.digital and blk.name != .none) try parse_decl.parseRegDecl(self, &vars) else {
                 self.pos = before_attrs;
                 self.attrs.shrinkRetainingCapacity(attr_mark);
+                self.file.attributes.shrinkRetainingCapacity(binding_mark);
                 break;
             },
             .kw_event => if (self.digital and blk.name != .none) {
+                const decl_tok = self.pos;
                 self.pos += 1;
                 while (true) {
-                    try events.append(self.arena, try parse_decl.parseEventDecl(self));
+                    const event = try parse_decl.parseEventDecl(self);
+                    try self.copyAttributes(decl_tok, event.main_tok);
+                    try events.append(self.arena, event);
                     if (!self.eat(.comma)) break;
                 }
                 _ = try self.expect(.semicolon);
             } else {
                 self.pos = before_attrs;
                 self.attrs.shrinkRetainingCapacity(attr_mark);
+                self.file.attributes.shrinkRetainingCapacity(binding_mark);
                 break;
             },
             else => { // else: not a declaration: the block's statements start here
@@ -250,6 +257,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 // (A.6.4), so they are handed back for `parseStmt`.
                 self.pos = before_attrs;
                 self.attrs.shrinkRetainingCapacity(attr_mark);
+                self.file.attributes.shrinkRetainingCapacity(binding_mark);
                 break;
             },
         }

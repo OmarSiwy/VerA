@@ -809,7 +809,7 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     if (changed) @memcpy(dest.planes, planes);
     // A §10.4.5 constant function running during elaboration: nothing
     // watches a slot yet.
-    if (self.growing != null) return;
+    if (self.growing != null or self.folding_constant) return;
     if (!changed) return driver.stored(self, target, false);
     // Most slots have no watcher, so one test skips them all.
     const watchers = self.watch[target];
@@ -1629,7 +1629,7 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     // of the variables used either at simulation time or among multiple
     // invocations of a function at elaboration time", so it runs as an
     // automatic one does.
-    const fresh = decl.automatic or self.growing != null;
+    const fresh = decl.automatic or self.growing != null or self.folding_constant;
     if (fresh) for (f.first..f.first + f.count) |s| {
         const v = self.values[s];
         try self.saved_planes.appendSlice(self.arena, v.planes);

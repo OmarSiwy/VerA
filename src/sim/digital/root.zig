@@ -505,6 +505,10 @@ pub const Run = struct {
     /// Pass one's slot space while it is still growing: the view `constant`
     /// evaluates a bound or a parameter against before `values` is final.
     growing: ?*std.ArrayList(Int.Literal) = null,
+    /// §10.4.5: retained constant expressions (VPI attribute metadata) may
+    /// be folded after slot allocation; their calls still have no runtime
+    /// side effects and start with fresh function-local storage.
+    folding_constant: bool = false,
     /// IEEE 1364-2005 §12.2.1 every `defparam`, by the scope its path is
     /// relative to and that path (`bindDefparam`, `paramValue`).
     /// Each value is evaluated in `decl`, the scope that declares it.
@@ -857,7 +861,8 @@ pub const Run = struct {
     /// value typing is deferred until this request too. Function bodies
     /// were compiled during elaboration; `checkExpr` prepares the call and
     /// its operands without executing them. The result's storage is `a`'s.
-    pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!union(enum) { bits: Int.Literal, real: f64 } {
+    pub const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
+    pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!VpiValue {
         const saved = self.scope;
         defer self.scope = saved;
         self.scope = self.vpi_expr_scopes.get(.{ instance, @intFromEnum(e) }) orelse instance;
@@ -878,6 +883,19 @@ pub const Run = struct {
             .bits => |v| v.asInt(),
             .real => null,
         };
+    }
+
+    /// IEEE §3.8 / AMS §2.9: attribute values are constant expressions in
+    /// the decorated element's lexical scope, after parameter elaboration.
+    pub fn vpiAttributeValue(self: *Run, a: std.mem.Allocator, scope: u32, e: Ast.ExprId) Error!VpiValue {
+        const saved = self.scope;
+        defer self.scope = saved;
+        self.scope = scope;
+        if (!compile.attributeConstantExpression(self, e)) return self.exprFail(e, "§3.8: an attribute value must be a constant expression");
+        const folding = self.folding_constant;
+        self.folding_constant = true;
+        defer self.folding_constant = folding;
+        return self.vpiEval(a, scope, e);
     }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
     /// scope of the same module, never across an instance boundary.

@@ -1052,10 +1052,8 @@ pub const ModuleDecl = struct {
     /// (W0251).
     paths: []const SpecPath = &.{},
     timing_checks: []const TimingCheck = &.{},
-    /// §2.9 every `attr_spec` in this module, flattened and not attached to
-    /// the item it decorated: the §2.9 and §2.9.2 rules concern the attribute
-    /// alone, and nothing downstream reads its value. A.9.1 `attr_spec` has the
-    /// same (name, value, token) shape as a `NatureAttr`.
+    /// §2.9 every `attr_spec` in this module, for value validation. Owner
+    /// associations are retained separately in `SourceFile.attributes`.
     attrs: []const NatureAttr = &.{},
     /// A.1.2 the `module_keyword` was `connectmodule` (§7.6). Unlike `module`
     /// and `macromodule`, which §6.2 makes interchangeable, it matters twice:
@@ -1090,6 +1088,17 @@ pub const NatureAttr = struct {
     value: ExprId,
     main_tok: u32 = 0,
 };
+
+/// §2.9 / IEEE 1364-2005 §3.8: an attribute's parsed language element.
+/// Source tokens identify declarations through elaboration; the category
+/// distinguishes a statement from its leading operand and a declaration
+/// from an initializer. A declaration list attaches the same specs to each
+/// declared item. No later stage has to infer attachment from source text.
+pub const AttributeOwner = struct {
+    kind: enum { declaration, statement, expression },
+    tok: u32,
+};
+pub const AttributeBinding = struct { owner: AttributeOwner, specs: []const NatureAttr };
 
 /// Nature declaration. LRM §3.6.1 (A.1.6 nature_declaration).
 pub const NatureDecl = struct {
@@ -1531,13 +1540,16 @@ pub const SourceFile = struct {
     /// VerA's vendor attributes, `vera_lte`, `vera_interp` and `vera_nodiff`
     /// (§2.9 `attribute_instance`), where one decorates an analog statement
     /// (A.6.4) or suffixes an operator call's name (A.8.2 gives that slot only
-    /// to `analog_function_call`; VerA extends it). Every other attribute goes
-    /// to `ModuleDecl.attrs` and is read by nothing. `vera_lte` decides which
+    /// to `analog_function_call`; VerA extends it). All attributes also keep
+    /// their parsed owners below and remain in `ModuleDecl.attrs` for
+    /// constant-expression validation. `vera_lte` decides which
     /// §5.6.1.2 charge sites join the host's truncation-error check
     /// (`contract.QStamp`); `vera_interp` which `absdelay` sites interpolate
     /// quadratically; `vera_nodiff` which assignments store no derivative.
     /// Few enough that a list beats a map.
     lte_attrs: std.ArrayList(LteAttr) = .empty,
+    /// Every source attribute, including vendor attributes, with its owner.
+    attributes: std.ArrayList(AttributeBinding) = .empty,
 
     /// Returns the `kind` attribute on statement `id`, if any; the last one
     /// wins (§2.9). Linear in `lte_attrs`.
@@ -1584,6 +1596,7 @@ pub const SourceFile = struct {
         self.exprs.deinit(gpa);
         self.stmts.deinit(gpa);
         self.stmt_toks.deinit(gpa);
+        self.attributes.deinit(gpa);
         self.* = .empty;
     }
 
@@ -1613,6 +1626,9 @@ pub const SourceFile = struct {
         }
         self.stmts = try src.stmts.clone(gpa);
         self.stmt_toks = try src.stmt_toks.clone(gpa);
+        // Attribute specs are immutable borrowed declaration data; owner
+        // rows are copied because a resumed parser appends/reclassifies them.
+        self.attributes = try src.attributes.clone(gpa);
         self.modules = src.modules;
         self.disciplines = src.disciplines;
         self.natures = src.natures;

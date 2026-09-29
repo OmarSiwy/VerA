@@ -35,6 +35,8 @@ pub const vpiFunction: c_int = 20;
 pub const vpiIf: c_int = 22;
 pub const vpiIfElse: c_int = 23;
 pub const vpiInitial: c_int = 24;
+pub const vpiAttribute: c_int = 105;
+pub const vpiDefAttribute: c_int = 55;
 pub const vpiIODecl: c_int = 28;
 pub const vpiNamedBegin: c_int = 33;
 pub const vpiNamedEvent: c_int = 34;
@@ -252,6 +254,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiIf => "vpiIf",
         vpiIfElse => "vpiIfElse",
         vpiInitial => "vpiInitial",
+        vpiAttribute => "vpiAttribute",
         vpiIODecl => "vpiIODecl",
         vpiNamedBegin => "vpiNamedBegin",
         vpiNamedEvent => "vpiNamedEvent",
@@ -378,7 +381,13 @@ pub const Builder = struct {
     engine: u32 = 0,
     automatic: bool = false,
 
+    pub fn attributes(b: *Builder, at: u32, owner: Ast.AttributeOwner, definition: bool) Error!void {
+        return @import("attributes.zig").attach(b, at, owner, definition);
+    }
+
     pub const Analog = struct {
+        /// Final analog parameter types used by constant attribute values.
+        lowered: ?*const @import("ir").Lowered = null,
         /// Flat branch name -> branch object.
         branches: std.StringHashMapUnmanaged(u32) = .empty,
         /// Discipline object -> its flow access name, for telling a flow
@@ -489,6 +498,7 @@ pub const Builder = struct {
             .edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiScope, .to = b.inner }}),
         });
         try b.setName(at, try b.arena.dupe(u8, b.file.str(v.name)));
+        try b.attributes(at, .{ .kind = .declaration, .tok = v.main_tok }, false);
         try (if (kind == .reg) &vars.regs else if (kind == .real_var) &vars.reals else &vars.ints).append(b.arena, at);
         return at;
     }
@@ -511,6 +521,7 @@ pub const Builder = struct {
             try b.setName(at, try b.arena.dupe(u8, b.file.str(e.name)));
             b.objects.items[at].src_tok = e.main_tok;
             b.objects.items[at].automatic = b.automatic;
+            try b.attributes(at, .{ .kind = .declaration, .tok = e.main_tok }, false);
             if (e.dims.len == 0) {
                 b.objects.items[at].slot = if (b.automatic) null else slot;
                 try scalars.append(b.arena, at);
@@ -555,6 +566,7 @@ pub const Builder = struct {
     /// The behavioural contents of one digital module instance: its named
     /// events, tasks and functions, continuous assignments and processes.
     pub fn module(b: *Builder, m: *const Ast.ModuleDecl) Error!void {
+        try b.attributes(b.scope, .{ .kind = .declaration, .tok = m.main_tok }, true);
         const events = try b.eventDecls(m.events);
         try b.lists.events.appendSlice(b.gpa, events.scalars);
         try b.lists.event_arrays.appendSlice(b.gpa, events.arrays);
@@ -574,6 +586,9 @@ pub const Builder = struct {
         }
         for (m.tasks, 0..) |*t, k| {
             const at = (if (t.is_function) b.lists.functions.items else b.lists.tasks.items)[subIndex(m.tasks, k)];
+            // A prefix on the declaration is in the containing scope;
+            // only its formals/body see the subroutine's local parameters.
+            try b.attributes(at, .{ .kind = .declaration, .tok = t.main_tok }, false);
             var inner: std.ArrayList(u32) = .empty;
             defer inner.deinit(b.gpa);
             const saved = try b.enter(at, b.objects.items[at].name, &inner);
@@ -628,6 +643,7 @@ pub const Builder = struct {
             }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 0 }});
             b.objects.items[at].delays = try b.delays(a.delay);
             b.objects.items[at].src_tok = a.main_tok;
+            try b.attributes(at, .{ .kind = .declaration, .tok = a.main_tok }, false);
             try b.lists.cont_assigns.append(b.gpa, at);
         }
         // IEEE 1364-2005 §26.6.24: a net declaration assignment (A.2.4) is a
@@ -660,16 +676,18 @@ pub const Builder = struct {
             const delay = try b.delayExpr(g.delay);
             b.objects.items[at].delays = try b.delays(g.delay);
             b.objects.items[at].src_tok = g.main_tok;
+            try b.attributes(at, .{ .kind = .declaration, .tok = g.main_tok }, false);
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiDelay, .to = delay }});
         }
         // IEEE 1364-2005 §7.8: a pull source drives its one terminal, at its
         // strength on its own side (the other "shall be ignored").
         for (m.pulls) |p| {
             const side: c_int = if (p.one) vpiStrength1 else vpiStrength0;
-            _ = try b.primitive(vpiGate, if (p.one) vpiPullupPrim else vpiPulldownPrim, if (p.one) "pullup" else "pulldown", &.{p.out}, &.{}, &.{
+            const at = try b.primitive(vpiGate, if (p.one) vpiPullupPrim else vpiPulldownPrim, if (p.one) "pullup" else "pulldown", &.{p.out}, &.{}, &.{
                 .{ .prop = root.vpiArray, .value = 0 },
                 .{ .prop = side, .value = drive(p.strength) },
             });
+            try b.attributes(at, .{ .kind = .declaration, .tok = p.main_tok }, false);
         }
         // §7.1/§7.6's switches: a MOS or CMOS switch's output, then its input
         // and controls; a pass switch's two inouts, then its enable.
@@ -680,7 +698,8 @@ pub const Builder = struct {
             };
             var dirs: std.ArrayList(c_int) = .empty;
             for (sw.terms, 0..) |_, k| try dirs.append(b.arena, if (k == 0) (if (pass) root.vpiInout else root.vpiOutput) else if (pass and k == 1) root.vpiInout else root.vpiInput);
-            _ = try b.primitive(vpiSwitch, switchType(sw.kind), @tagName(sw.kind), sw.terms, dirs.items, &.{.{ .prop = root.vpiArray, .value = 0 }});
+            const at = try b.primitive(vpiSwitch, switchType(sw.kind), @tagName(sw.kind), sw.terms, dirs.items, &.{.{ .prop = root.vpiArray, .value = 0 }});
+            try b.attributes(at, .{ .kind = .declaration, .tok = sw.main_tok }, false);
         }
         if (b.udps) |udps| for (m.instances) |inst| {
             const defn = udps.get(inst.module) orelse continue;
@@ -696,6 +715,7 @@ pub const Builder = struct {
             const delay = try b.delayExpr(inst.delay);
             b.objects.items[at].delays = try b.delays(inst.delay);
             b.objects.items[at].src_tok = inst.main_tok;
+            try b.attributes(at, .{ .kind = .declaration, .tok = inst.main_tok }, false);
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{
                 .{ .tag = vpiUdpDefn, .to = defn },
                 .{ .tag = vpiDelay, .to = delay },
@@ -708,6 +728,7 @@ pub const Builder = struct {
         for (m.discrete) |d| {
             const body = try b.stmt(d.body);
             const at = try b.code(if (d.is_always) vpiAlways else vpiInitial, &.{.{ .tag = vpiStmt, .to = body }}, &.{}, &.{});
+            try b.attributes(at, .{ .kind = .declaration, .tok = d.main_tok }, false);
             try b.lists.processes.append(b.gpa, at);
         }
     }
@@ -719,6 +740,7 @@ pub const Builder = struct {
             if (blk.unit != b.scope) continue;
             const body = try b.stmt(blk.body);
             const at = try b.code(vpiAnalog, &.{.{ .tag = vpiStmt, .to = body }}, &.{}, &.{});
+            try b.attributes(at, .{ .kind = .declaration, .tok = blk.main_tok }, false);
             try b.lists.processes.append(b.gpa, at);
         }
     }
@@ -898,6 +920,7 @@ pub const Builder = struct {
     /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
         const at = try b.stmtObj(id);
+        if (id != .none) try b.attributes(at, .{ .kind = .statement, .tok = b.file.stmtTok(id) }, false);
         if (at != none) b.objects.items[at].stmt = id;
         // IEEE 1364-2005 §26.6.3 stmt -> vpiScope: the innermost task,
         // function or named block around it. At module level the edge is the
@@ -1130,7 +1153,7 @@ pub const Builder = struct {
 
     /// The object a name denotes from this scope: §6.7's upward search over
     /// the full names, innermost first.
-    fn lookup(b: *Builder, name: []const u8) u32 {
+    pub fn lookup(b: *Builder, name: []const u8) u32 {
         return b.lookupAs(name, .any);
     }
 
@@ -1176,6 +1199,7 @@ pub const Builder = struct {
             o.expr_scope = b.scope;
             o.in_analog = b.analog != null;
         }
+        try b.attributes(at, .{ .kind = .expression, .tok = b.file.exprs.mainTok(id) }, false);
         return at;
     }
 
