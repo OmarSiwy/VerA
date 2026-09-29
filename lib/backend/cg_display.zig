@@ -12,6 +12,7 @@ const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
 const VTy = Analysis.VTy;
+const diag = @import("diag");
 
 // -------------------------------------------------------- §9.4 display ----
 //
@@ -395,7 +396,7 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
             try g.renderVal(if (args.len > 3) args[3] else Mir.Value.zero, .int);
             return g.b(")", .{});
         },
-        else => return g.abort("VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `codegen.isFileCall` here, and every one of those has a prong above
+        else => return g.abort("VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `callee.isFileCall` here, and every one of those has a prong above
     }
 }
 /// The first two operands every synthetic reader carries: count, then fd.
@@ -840,29 +841,9 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
 // 171_display_c_format_flags.va.
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("frontend").Preprocessor;
-const Lexer = @import("frontend").Lexer;
-const Parser = @import("frontend").Parser;
-const proof = @import("ir").proof;
-const diag = @import("diag");
+const Harness = @import("codegen/test.zig").Harness;
 
-/// Runs the pipeline through `cg.generate` with display `.emit`; the result
-/// lives in `arena`.
-fn genDisplayText(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
-    var bag = diag.Bag.init(arena);
-    const text = (try Preprocessor.process(arena, src, .{ .bag = &bag })).text;
-    const toks = try Lexer.Lexer.tokenize(arena, text);
-    var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &bag);
-    var file = try p.parseSourceFile();
-    file.builtin_modules = Preprocessor.spice_module_count;
-    var mir: Mir = .{};
-    const lowered = try Lower.lower(arena, &mir, &file, text, toks.items(.start), &bag, .{});
-    const v = try proof.prove(arena, &mir, &lowered, &bag);
-    var fatal = false;
-    return (try cg.generate(arena, arena, &mir, &lowered, v, &fatal, .{ .display = .emit })).text;
-}
-
-/// One analog block body → the printing artifact's text.
+/// One analog block body → the printing artifact's text, in `arena`.
 fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
     const src = try std.fmt.allocPrint(arena,
         \\module t(p, n);
@@ -875,7 +856,9 @@ fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
         \\endmodule
         \\
     , .{body});
-    return genDisplayText(arena, src);
+    var h: Harness = undefined;
+    try Harness.run(arena, src, &h);
+    return h.genDisplay(arena);
 }
 
 fn has(text: []const u8, needle: []const u8) bool {

@@ -176,12 +176,6 @@ pub const CompileResult = struct {
         }
         return self.device;
     }
-
-    /// Returns the number of source units in the codegen/proof sense (LRM §5.6
-    /// contributions); `verdict.unit_modes` is parallel to them.
-    pub fn unitCount(self: *const CompileResult) usize {
-        return proof.unitCount(self.lowered);
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -354,7 +348,7 @@ fn compileInArena(
         if (opts.display == .drop) {
             // A §9.5 file task is kept for sequencing, not text; its answer is
             // §9.5.1's zero descriptor rather than a dropped print.
-            if (codegen.isFileCall(.fromName(d.name)))
+            if (Mir.callee.isFileCall(.fromName(d.name)))
                 try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
             else
                 try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
@@ -386,26 +380,20 @@ fn compileInArena(
 // Artifact build
 // ---------------------------------------------------------------------------
 
-/// Generates the device and builds it into a shared library. The host owns
-/// loading it and all simulation state. Fails with `error.NoArtifact` on a
-/// `.lint` result.
-///
-/// `resident` is a session-scoped incremental child (`o` is ignored: it was
-/// spawned with its own); `null` builds cold under `o`.
+/// Generates the device and builds it cold into a shared library
+/// (`orchestrator.compileRelease`). The host owns loading it and all
+/// simulation state. Fails with `error.NoArtifact` on a `.lint` result.
 pub fn buildArtifact(
     gpa: Allocator,
     io: std.Io,
     result: *CompileResult,
     o: orchestrator.Options,
     generation: u32,
-    resident: ?*orchestrator.ResidentChild,
     // Inferred error set: the orchestrator's failures are the open-ended OS
     // errors of a child process and its pipe.
 ) !orchestrator.Result {
     if (result.target == .lint) return error.NoArtifact;
-    const device = try result.generateOutput();
-    if (resident) |r| return r.rebuild(gpa, device, generation);
-    return orchestrator.compileRelease(gpa, io, o, device, generation);
+    return orchestrator.compileRelease(gpa, io, o, try result.generateOutput(), generation);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +425,7 @@ test "lint: source → MIR, arena freed clean" {
     try std.testing.expectEqualStrings("res", res.mir.name);
     try std.testing.expectEqual(@as(u16, 2), res.lowered.num_ports);
     try std.testing.expect(res.verdict.ok());
-    try std.testing.expectEqual(res.unitCount(), res.verdict.unit_modes.len);
+    try std.testing.expectEqual(proof.unitCount(res.lowered), res.verdict.unit_modes.len);
 }
 
 test "IEEE 1364 §19.1 cell membership survives the preprocessor" {

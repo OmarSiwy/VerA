@@ -22,10 +22,6 @@ const ground = Lower.ground;
 const unnamed_branch = Lower.unnamed_branch;
 const NodeKind = Lower.NodeKind;
 const VecRange = Lower.VecRange;
-const tokStart = Lower.tokStart;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
 
 /// This file's private state on `Lower` (`Lower.node_state`).
 pub const State = struct {

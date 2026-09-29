@@ -15,13 +15,6 @@ const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
-const gotoBlock = Lower.gotoBlock;
-const branchTo = Lower.branchTo;
-const toInt = Lower.toInt;
-const toBool = Lower.toBool;
 
 /// §6.6: "All expressions in generate schemes shall be constant expressions,
 /// deterministic at elaboration time." The scheme of an if-generate is its
