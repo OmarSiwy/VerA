@@ -1198,6 +1198,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             }
             continue;
         }
+        if (p.select) |sel| {
+            try selectPort(r, e, p, sel, bind, width, scope);
+            continue;
+        }
         if (bind == .collapse) {
             // VAMS §3.7: "When the two nets connected by a port are of net
             // type wreal and wire/tri, the resulting single net will be
@@ -2400,7 +2404,56 @@ fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
 /// before the child exists; the literal ranges every fixture writes are fine.
 fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
     if (p.kind == .wreal) return 64;
+    if (p.select) |sel| return @intCast(@abs(try r.declaredBound(sel.msb, p.main_tok) - try r.declaredBound(sel.lsb, p.main_tok)) + 1);
     return if (p.range orelse p.type_range) |range| r.declaredWidth(range, p.main_tok) else 1;
+}
+
+/// IEEE 1364-2005 A.1.3 a port that is a bit- or part-select of its net
+/// (`module m (q[3:0]); output [7:0] q;`): the net is the child's own, and
+/// the connection is joined to the selected bits only.
+///
+/// ponytail: the parent side is one whole net (a collapse) or the operands
+/// of a structural net expression of an output (a send); an input fed by any
+/// other expression, and an inout, are refused.
+fn selectPort(r: *Run, e: *Elab, p: Ast.Port, sel: Ast.Dim, bind: PortBind, width: u32, scope: u32) Error!void {
+    const arena = r.arena;
+    const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
+    const range: VecRange = if (p.range orelse p.type_range) |d| .{
+        .msb = try r.declaredBound(d.msb, p.main_tok),
+        .lsb = try r.declaredBound(d.lsb, p.main_tok),
+    } else .{ .msb = 0, .lsb = 0 };
+    if (p.range orelse p.type_range) |_| try r.vec_ranges.put(arena, e.nets.items[at].slot, range);
+    const a = range.position(try r.declaredBound(sel.msb, p.main_tok));
+    const b = range.position(try r.declaredBound(sel.lsb, p.main_tok));
+    if (a < 0 or b < 0 or a >= width or b >= width) return r.fail(p.main_tok, "A.1.3: the port's select is outside its net `{s}`", .{r.file.str(p.name)});
+    const lo: u32 = @intCast(@min(a, b));
+    const w: u32 = @intCast(@abs(a - b) + 1);
+    const inner = e.nets.items[at].slot;
+    switch (bind) {
+        .open => {},
+        .collapse => |outer| {
+            if (e.nets.items[outer].resolved.width != w) return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+            const outer_slot = e.nets.items[outer].slot;
+            switch (p.direction) {
+                .output => try e.wires.append(arena, .{ .net = outer, .scope = scope, .source = .{ .bridge = .{ .src = inner, .src_lo = lo, .dst_lo = 0, .width = w } }, .tok = p.main_tok }),
+                .input => try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .bridge = .{ .src = outer_slot, .src_lo = 0, .dst_lo = lo, .width = w } }, .tok = p.main_tok }),
+                .inout, .unspecified => return r.fail(p.main_tok, "a part-select port that is an inout is not implemented by digital execution", .{}),
+            }
+        },
+        .send => |c| {
+            var off: u32 = 0;
+            var k = c.operands.len;
+            while (k != 0) {
+                k -= 1;
+                const op = c.operands[k];
+                if (off + op.width > w) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+                try e.wires.append(arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = inner, .src_lo = lo + off, .dst_lo = op.lo, .width = op.width } }, .tok = c.tok });
+                off += op.width;
+            }
+            if (off != w) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+        },
+        .receive => |c| return r.fail(c.tok, "a part-select input port fed by an expression that is not one whole net is not implemented by digital execution", .{}),
+    }
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
