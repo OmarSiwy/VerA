@@ -383,18 +383,36 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     // A.5.2 puts the output port first in both header arms, so
     // `ports[0]` is the output and `ports[1..]` the inputs.
     var ports: std.ArrayList(Ast.StrId) = .empty;
+    var outputs: u8 = 0;
+    var output: Ast.StrId = .none;
+    var has_reg = false;
+    var dir: ?token.Tag = null;
+    // A.5.3 `udp_initial_statement ::= initial output_port_identifier =
+    // init_val ;`, or A.5.2's `output reg port_identifier = constant_expression`.
+    var init_val: Ast.ExprId = .none;
+    var init_target: Ast.StrId = .none;
     while (true) {
         try self.skipAttributes();
         // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
         // only the second A.5.1 arm puts inside the parentheses.
-        if (self.eat(.kw_output) or self.eat(.kw_input)) {
+        if (self.peek() == .kw_output or self.peek() == .kw_input) {
+            dir = self.peek();
+            self.pos += 1;
             _ = try parse_module.optDiscipline(self);
-            _ = self.eat(.kw_reg);
+            if (self.eat(.kw_reg)) has_reg = true;
         }
-        try ports.append(self.arena, try self.expectIdent());
+        const port = try self.expectIdent();
+        try ports.append(self.arena, port);
+        if (dir == .kw_output) {
+            outputs +|= 1;
+            output = port;
+        }
         // `udp_output_declaration ::= … output [ discipline_identifier ]
         // reg port_identifier [ = constant_expression ]`
-        if (self.eat(.assign_eq)) _ = try parse_expr.parseExpr(self);
+        if (self.eat(.assign_eq)) {
+            init_val = try parse_expr.parseExpr(self);
+            init_target = port;
+        }
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
@@ -406,21 +424,27 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     while (true) {
         try self.skipAttributes();
         if (self.peek() != .kw_output and self.peek() != .kw_input and self.peek() != .kw_reg) break;
+        const kw = self.peek();
         self.pos += 1;
         _ = try parse_module.optDiscipline(self);
-        _ = self.eat(.kw_reg);
+        if (kw == .kw_reg or self.eat(.kw_reg)) has_reg = true;
         while (true) {
-            _ = try self.expectIdent();
-            if (self.eat(.assign_eq)) _ = try parse_expr.parseExpr(self);
+            const port = try self.expectIdent();
+            if (kw == .kw_output) {
+                outputs +|= 1;
+                output = port;
+            }
+            if (self.eat(.assign_eq)) {
+                init_val = try parse_expr.parseExpr(self);
+                init_target = port;
+            }
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
     }
-    // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`, and
-    // `udp_initial_statement ::= initial output_port_identifier = init_val ;`
-    var init_val: Ast.ExprId = .none;
+    // A.5.3 `sequential_body ::= [ udp_initial_statement ] table …`.
     if (self.eat(.kw_initial)) {
-        _ = try self.expectIdent();
+        init_target = try self.expectIdent();
         _ = try self.expect(.assign_eq);
         init_val = try parse_expr.parseExpr(self);
         _ = try self.expect(.semicolon);
@@ -435,6 +459,10 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
         .ports = ports.items,
         .is_sequential = sequential,
         .init = init_val,
+        .init_target = init_target,
+        .outputs = outputs,
+        .output = output,
+        .has_reg = has_reg,
         .rows = rows.items,
         .main_tok = main_tok,
     };

@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 9.7.3
 //! reject E1100
 //! reject named event
-//! xfail an assignment to a named event is accepted
 module b_9_7_3_event_holds_no_data_rejected;
   event ev;
   initial ev = 1;

@@ -14,7 +14,6 @@
 //! inherited IEEE 1364-2005 12.2 4.10.2
 //! reject E1100
 //! reject local parameter
-//! xfail VerA accepts a defparam of a localparam
 module leaf;
   localparam LP = 1;
   initial $display("%0d", LP);

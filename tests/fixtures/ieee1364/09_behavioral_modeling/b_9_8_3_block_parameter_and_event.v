@@ -11,7 +11,6 @@
 //   #1 -> go in the other, so the waiting branch runs at t=1:
 //   total = step + twice = 15 -> "15 1"
 //! inherited IEEE 1364-2005 9.8.3
-//! xfail an event declared in a named block does not parse ("expected an expression: found `event`"), and a parameter there is refused ("block-local parameters are not implemented")
 `timescale 1ns/1ns
 module b_9_8_3_block_parameter_and_event;
   integer total;

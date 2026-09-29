@@ -11,7 +11,6 @@
 //   Entered again, it adds 1 to the kept value 9 -> 10; after the repeat the
 //   block is read by name from outside, par.v -> "10" (the only line printed).
 //! inherited IEEE 1364-2005 9.8.2 9.8.3
-//! xfail a named block is no scope of a hierarchical name: par.v is refused ("undeclared instance in a hierarchical reference")
 module b_9_8_3_named_fork_declarations;
   initial begin
     repeat (2) fork : par

@@ -12,12 +12,11 @@
 // that does not exist: every target resolves, and targeting another instance
 // of the block is the only error. Legal neighbour:
 // b_12_2_1_defparam_inside_generate_block.v (each defparam targets its own
-// block's instance; itself an xfail).
+// block's instance).
 // digital-runner: reject
 //! inherited IEEE 1364-2005 12.2.1
 //! reject E1100
 //! reject outside the generate block
-//! xfail VerA refuses this only as unsupported (E0231 "hierarchical index is not a constant expression" on the constant (i+1) % 8; a defparam in a generate block is E0235), not for targeting another generate block instance
 module flop;
   parameter xyz = 0;
 endmodule

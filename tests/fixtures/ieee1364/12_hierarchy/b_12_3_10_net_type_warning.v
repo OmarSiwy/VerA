@@ -10,7 +10,6 @@
 // not, w = a = 1.
 // digital-runner: warning net type
 //! inherited IEEE 1364-2005 12.3.10
-//! xfail no warning is issued for the Table 12-1 warn cell (internal wand, external wor)
 `timescale 1ns/1ns
 module m(a, y);
   input a;
