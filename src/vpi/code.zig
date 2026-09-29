@@ -914,9 +914,14 @@ pub const Builder = struct {
             .ternary => b.operation(vpiConditionOp, &.{ ex.lhs(id), ex.rhs(id), ex.ternaryElse(id) }),
             .concat => b.operation(vpiConcatOp, ex.args(id)),
             // §11.6.19 NOTE: "For an operator whose type is vpiMultiConcat,
-            // the first operand shall be the multiplier expression."
+            // the first operand shall be the multiplier expression." IEEE
+            // 1364-2005 §26.6.26 a): "The remaining operands shall be the
+            // expressions within the concatenation". A digital parse keeps
+            // the braces of that concatenation as a `.concat` of its own,
+            // the one element of `rhs`.
             .multi_concat => blk: {
-                const inner = ex.rhs(id);
+                var inner = ex.rhs(id);
+                if (ex.tag(inner) == .concat and ex.args(inner).len == 1 and ex.tag(ex.args(inner)[0]) == .concat) inner = ex.args(inner)[0];
                 var ops: std.ArrayList(Ast.ExprId) = .empty;
                 try ops.append(b.arena, ex.lhs(id));
                 if (ex.tag(inner) == .concat) try ops.appendSlice(b.arena, ex.args(inner)) else try ops.append(b.arena, inner);
