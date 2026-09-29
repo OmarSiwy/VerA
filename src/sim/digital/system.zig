@@ -380,8 +380,21 @@ pub fn readLine(a: std.mem.Allocator, t: contract.FileIo, d: i64, room: u32) std
 fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
     const d = (try descriptor(self, a, args[0])) orelse return -1;
     const format = try text(a, try exec.eval(self, a, args[1], 0));
+    var file = try fileScan(a, t, d, format, args.len - 2);
+    try scanAssign(self, a, &file.scan, args[2..]);
+    return finishFileScan(t, file, file.scan);
+}
+
+/// §17.2.4.3's input snapshot and original descriptor position. The native
+/// executable and interpreter use the same scanner and restore only the
+/// consumed prefix, so a failed conversion leaves the offending byte unread.
+pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0 };
+
+pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, format: ?[]const u8, outs: usize) std.mem.Allocator.Error!FileScan {
+    const no_input: FileScan = .{ .scan = .init(null, format, outs) };
+    const d = low32(descriptor_) orelse return no_input;
     const start = t.tell(d);
-    if (start < 0) return -1;
+    if (start < 0) return no_input;
     // ponytail: reads the rest of the file per call; a streaming scan when a
     // model reads large files this way.
     var rest: std.ArrayList(u8) = .empty;
@@ -390,12 +403,16 @@ fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const As
         if (c < 0) break;
         try rest.append(a, @intCast(c));
     }
-    const result = try scanInto(self, a, rest.items, format, args[2..]);
-    _ = t.seek(d, start + @as(i64, @intCast(result.used)), 0);
+    return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len };
+}
+
+pub fn finishFileScan(t: contract.FileIo, file: FileScan, scan: Scan) i64 {
+    const d = file.descriptor orelse return scan.result;
+    _ = t.seek(d, file.start + @as(i64, @intCast(scan.at)), 0);
     // A scan that ran to the end of the input met EOF (§17.2.8), which the
     // repositioning cleared.
-    if (result.used == rest.items.len) _ = t.getc(d);
-    return result.code;
+    if (scan.at == file.input_len) _ = t.getc(d);
+    return scan.result;
 }
 
 /// §17.2.4.4 `$fread(myreg, fd)` / `$fread(mem, fd, start, count)`: whole
@@ -495,6 +512,11 @@ fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i6
 /// `outs`: the call's code and the input characters the scan used.
 fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]const u8, outs: []const Ast.ExprId) Error!struct { code: i64, used: usize } {
     var sc: Scan = .init(input, format, outs.len);
+    try scanAssign(self, a, &sc, outs);
+    return .{ .code = sc.result, .used = sc.at };
+}
+
+fn scanAssign(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.ExprId) Error!void {
     while (sc.next()) |x| switch (x.value) {
         .bits => |b| {
             const v = try filled(a, 64, true, .zero);
@@ -505,7 +527,6 @@ fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]con
         .chars => |c| try exec.assign(self, a, outs[x.arg], try stringValue(a, c)),
         .real => |r| try exec.assignReal(self, a, outs[x.arg], r),
     };
-    return .{ .code = sc.result, .used = sc.at };
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters

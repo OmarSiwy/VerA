@@ -1232,6 +1232,19 @@ pub const State = struct {
         return .init(try chars(a, input, iw), try chars(a, format, fw), outs);
     }
 
+    /// §17.2.4.3 `$fscanf`: the same conversion stream as `$sscanf`, together
+    /// with the file position which `finishFileScan` advances by consumed input.
+    pub fn scanFile(self: *State, descriptor: ?i64, format: anytype, comptime fw: u32, outs: usize) Error!system.FileScan {
+        _ = self.scratch.reset(.retain_capacity);
+        const a = self.scratch.allocator();
+        return system.fileScan(a, system.own, if (self.quiet) null else descriptor, try chars(a, format, fw), outs);
+    }
+
+    pub fn finishFileScan(self: *const State, file: system.FileScan, sc: system.Scan) void {
+        if (self.quiet) return;
+        _ = system.finishFileScan(system.own, file, sc);
+    }
+
     /// Everything printed until `captured` or `fshow` goes to a buffer.
     pub fn capture(self: *State) void {
         self.cap.clearRetainingCapacity();
