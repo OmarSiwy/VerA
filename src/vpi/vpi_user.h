@@ -774,12 +774,12 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
 #define vpiPathType            37
 #define vpiPathFull             1
 #define vpiPathParallel         2
-#define vpiPolarity            38
-#define vpiDataPolarity        39
+#define vpiPolarity            34
+#define vpiDataPolarity        35
 #define vpiPositive             1
 #define vpiNegative             2
 #define vpiUnknown              3
-#define vpiTchkType            40
+#define vpiTchkType            38
 #define vpiSetup                1
 #define vpiHold                 2
 #define vpiPeriod               3
