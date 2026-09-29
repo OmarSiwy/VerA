@@ -86,7 +86,10 @@
  * (Annex G 13) and cbPLIError (28) are actions every product shall define, so
  * they register. Only vpi_register_cb() is called there (§26.2.4); the
  * handles are checked at cbStartOfSimulation, where these are REFUSED too: a
- * NULL cb_data_p, reason 9999, and a NULL cb_rtn.
+ * NULL cb_data_p, reason 9999, and a NULL cb_rtn. The refused
+ * vpi_remove_cb(module) there is "a PLI function call" with a "run-time
+ * error": cbPLIError runs once for it, reads the error inside, and the
+ * caller still reads it afterwards (§27.33.3 names no other effect).
  *
  * AT cbStartOfSimulation (t=0, before its events), each time vpiSimTime:
  *   cbAfterDelay 7        fires at 7 before the t=7 queue: s still 8'h01,
@@ -152,17 +155,12 @@
 #ifndef cbStmt
 #define cbStmt 2       /* Annex G */
 #endif
-#ifndef cbError
-#define cbError 13     /* Annex G */
-#endif
-#ifndef cbPLIError
-#define cbPLIError 28  /* Annex G */
-#endif
 
 static char ud_n[] = "n", ud_mem[] = "mem";
 static vpiHandle s, n, mem, top;
 static s_cb_data reg_n, reg_mem;
 static int order = 0, at_eoc, at_sos;
+static int n_pli = 0, pli_level = 0;
 static int n_after = 0, n_rw7 = 0, n_ro7 = 0, n_next = 0, n_ten = 0, n_change = 0, n_mem = 0;
 static PLI_UINT32 change_t[3];
 static PLI_INT32 change_v[3];
@@ -202,6 +200,7 @@ static vpiHandle err_h[2];
 
 static PLI_INT32 never(p_cb_data d) { (void)d; CHECK(0, "a refused or removed callback ran at %u", (unsigned)now()); return 0; }
 static PLI_INT32 stray(p_cb_data d) { (void)d; return 0; }
+static PLI_INT32 on_pli(p_cb_data d) { (void)d; n_pli++; pli_level = vpi_chk_error(NULL); return 0; }
 
 static PLI_INT32 on_change(p_cb_data d)
 {
@@ -239,8 +238,7 @@ static PLI_INT32 on_ro7(p_cb_data d)
   (void)d;
   n_ro7++;
   h = reg(cbReadWriteSynch, stray, 0, NULL);
-  XFAIL(h == NULL && vpi_chk_error(NULL) != 0, "27.33.2",
-        "cbReadWriteSynch of delay zero from read-only synch is not an error");
+  CHECK(h == NULL && vpi_chk_error(NULL) != 0, "27.33.2: cbReadWriteSynch of delay zero at read-only synch is an error");
   if (h) vpi_remove_cb(h);
   fflush(stdout);
   return 0;
@@ -253,8 +251,7 @@ static PLI_INT32 on_rw7(p_cb_data d)
   n_rw7++;
   CHECK(now() == 7 && int_of(s) == 0x42, "27.33.2: after the t=7 events");
   h = reg(cbAtStartOfSimTime, stray, 7, NULL);
-  XFAIL(h == NULL && vpi_chk_error(NULL) != 0, "27.33.2",
-        "cbAtStartOfSimTime of delay zero from a later region is not an error");
+  CHECK(h == NULL && vpi_chk_error(NULL) != 0, "27.33.2: cbAtStartOfSimTime of delay zero from a later region is an error");
   if (h) vpi_remove_cb(h);
   fflush(stdout);
   return 0;
@@ -348,8 +345,10 @@ static PLI_INT32 sos(p_cb_data d)
   gone = reg(cbAfterDelay, never, 12, NULL);
   CHECK(gone != NULL, "cbAfterDelay 12");
   CHECK(vpi_remove_cb(gone) == 1, "27.35: removed");
+  n_pli = 0;
   CHECK(vpi_remove_cb(top) == 0, "27.35: a module is no callback object");
   expect_refusal("vpi_remove_cb(module)");
+  CHECK(n_pli == 1 && pli_level == vpiError, "27.33.3: one cbPLIError, the error readable inside, got %d", n_pli);
 
   /* 27.33: registrations refused. Here, not at startup, which allows only the
    * two registration routines (26.2.4). */
@@ -364,7 +363,7 @@ static PLI_INT32 sos(p_cb_data d)
   bad.cb_rtn = NULL;
   CHECK(vpi_register_cb(&bad) == NULL, "27.33.3: cb_rtn is one of the fields an action needs");
   expect_refusal("cbEndOfSimulation, NULL cb_rtn");
-  XFAIL(err_h[0] != NULL && err_h[1] != NULL, "27.33.3", "cbError and cbPLIError are not defined");
+  CHECK(err_h[0] != NULL && err_h[1] != NULL, "27.33.3: cbError and cbPLIError register");
   fflush(stdout);
 
   memset(&bad, 0, sizeof bad);
@@ -402,7 +401,7 @@ static void startup(void)
   b.reason = cbStartOfSimulation; b.cb_rtn = sos;
   c.reason = cbEndOfSimulation;   c.cb_rtn = eos;
   e.reason = cbError;             e.cb_rtn = stray;
-  f.reason = cbPLIError;          f.cb_rtn = stray;
+  f.reason = cbPLIError;          f.cb_rtn = on_pli;
   (void)vpi_register_cb(&a);
   (void)vpi_register_cb(&b);
   (void)vpi_register_cb(&c);
