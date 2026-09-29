@@ -2063,6 +2063,8 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         else => null, // else: no other class but module draws a double arrow VerA holds
     };
     if (analog) |items| return if (items.len == 0) null else newIter(d, items);
+    if ((obj_type == code.vpiDriver or obj_type == code.vpiLoad) and (o.kind == .net or o.kind == .reg))
+        return driversLoads(d, o, obj_type == code.vpiDriver);
     if (o.kind != .module) {
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship {d}", .{ @tagName(o.kind), obj_type });
         return null;
@@ -2095,6 +2097,74 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     };
     if (items.len == 0) return null;
     return newIter(d, items);
+}
+
+/// IEEE 1364-2005 §26.6.22/§26.6.23: the drivers (`drivers`) or loads of net
+/// or reg `o`. A prim term drives what its output terminal names and loads
+/// what an input names; a continuous assignment, force or assign stmt drives
+/// its left side and loads what its right side reads; a port of `o`'s own
+/// module drives the net it declares when it is an input, loads it when an
+/// output, both when an inout.
+///
+/// ponytail: a scan of every object per call, and the parent's side of a
+/// port (the instance port a net connects to), delay terms and cont assign
+/// bits are not listed; each needs its own relation built at `open`.
+fn driversLoads(d: *Design, o: *const Obj, drivers: bool) vpiHandle {
+    const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+    var out: std.ArrayList(vpiHandle) = .empty;
+    for (d.objects, 0..) |*x, i| {
+        const hit = switch (x.kind) {
+            .code => switch (x.vtype) {
+                code.vpiPrimTerm => mentions(d, edgeTo(x, code.vpiExpr), target) and
+                    (codeProp(x, vpiDirection) == vpiOutput) == drivers,
+                code.vpiContAssign, code.vpiForce, code.vpiAssignStmt => mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), target),
+                else => false, // else: §26.6.22/§26.6.23 list no other behavioural class
+            },
+            .port => o.kind == .net and x.owner == o.owner and std.mem.eql(u8, x.name, o.name) and switch (x.direction) {
+                .input => drivers,
+                .output => !drivers,
+                .inout => true,
+                .unspecified => false,
+            },
+            else => false, // else: no other class drives or loads a net or reg
+        };
+        if (hit) out.append(d.gpa, handleOf(&d.objects[i])) catch {
+            out.deinit(d.gpa);
+            fail("NOMEM", "vpi_iterate: out of memory", .{});
+            return null;
+        };
+    }
+    if (out.items.len == 0) return null;
+    const handles = out.toOwnedSlice(d.gpa) catch {
+        out.deinit(d.gpa);
+        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        return null;
+    };
+    return newHandleIter(d, handles);
+}
+
+/// `x`'s single arrow `tag`, or `no_obj`.
+fn edgeTo(x: *const Obj, tag: c_int) u32 {
+    for (x.edges) |e| if (e.tag == tag) return e.to;
+    return no_obj;
+}
+
+/// Does expression `e` read object `target`: is it, or a select of it, or an
+/// operation or call with such an operand?
+fn mentions(d: *const Design, e: u32, target: u32) bool {
+    if (e == no_obj) return false;
+    if (e == target) return true;
+    const x = &d.objects[e];
+    if (x.kind != .code) return false;
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiNetBit, code.vpiRegBit => return mentions(d, edgeTo(x, vpiParent), target),
+        code.vpiOperation, code.vpiFuncCall, code.vpiSysFuncCall => for (x.lists) |l| {
+            if (l.tag != code.vpiOperand and l.tag != code.vpiArgument) continue;
+            for (l.items) |i| if (mentions(d, i, target)) return true;
+        },
+        else => {}, // else: no other class is an expression with operands
+    }
+    return false;
 }
 
 /// An iterator over `handles`, which it takes ownership of.
@@ -3467,4 +3537,49 @@ test "an analog real array and real variable are §11.6.10's classes" {
     const x = vpi_handle_by_name("ra.x", null);
     try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, x));
     try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiArray, x));
+}
+
+test "IEEE 1364-2005 §26.6.22/§26.6.23: drivers and loads of nets and regs" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m(i, o);
+        \\  input i;
+        \\  output o;
+        \\  wire w;
+        \\  reg r;
+        \\  assign w = r & i;
+        \\  not (o, w);
+        \\endmodule
+    );
+    defer h.deinit();
+    const top = vpi_handle_by_name("m", null);
+    // `i` and `o` are implicit nets (§12.3.3); by name they are the ports.
+    var nets: [4]vpiHandle = undefined;
+    var n: usize = 0;
+    const itr = vpi_iterate(vpiNet, top);
+    while (vpi_scan(itr)) |x| : (n += 1) nets[n] = x;
+    try std.testing.expectEqual(@as(usize, 3), n);
+    const Want = struct { name: []const u8, implicit: bool = false, drivers: []const c_int, loads: []const c_int };
+    // Each set as its members' types, in object order.
+    for ([_]Want{
+        .{ .name = "w", .drivers = &.{code.vpiContAssign}, .loads = &.{code.vpiPrimTerm} },
+        .{ .name = "i", .implicit = true, .drivers = &.{vpiPort}, .loads = &.{code.vpiContAssign} },
+        .{ .name = "o", .implicit = true, .drivers = &.{code.vpiPrimTerm}, .loads = &.{vpiPort} },
+        .{ .name = "r", .drivers = &.{}, .loads = &.{code.vpiContAssign} },
+    }) |want| {
+        const obj = for (nets[0..n]) |x| {
+            if (std.mem.eql(u8, std.mem.span(vpi_get_str(vpiName, x)), want.name)) break x;
+        } else vpi_handle_by_name("m.r", null);
+        if (vpi_get(vpiType, obj) == vpiNet) try std.testing.expectEqual(@as(c_int, @intFromBool(want.implicit)), vpi_get(code.vpiImplicitDecl, obj));
+        for ([_]c_int{ code.vpiDriver, code.vpiLoad }, [_][]const c_int{ want.drivers, want.loads }) |tag, types| {
+            var got: [4]c_int = undefined;
+            var k: usize = 0;
+            const it = vpi_iterate(tag, obj);
+            try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+            if (it != null) while (vpi_scan(it)) |x| : (k += 1) {
+                got[k] = vpi_get(vpiType, x);
+            };
+            try std.testing.expectEqualSlices(c_int, types, got[0..k]);
+        }
+    }
 }

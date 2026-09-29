@@ -73,14 +73,6 @@
 
 #include "b_check.h"
 
-/* Annex G numbers that src/vpi/vpi_user.h does not define. */
-#ifndef vpiDriver
-#define vpiDriver 91
-#endif
-#ifndef vpiLoad
-#define vpiLoad 93
-#endif
-
 /* Does `s`, white space removed, spell `want`? §27.14 shows the layout of a
  * decompiled entry only in an example, so spacing is not asserted. */
 static int squeezed_is(const char *s, const char *want)
@@ -159,8 +151,8 @@ static PLI_INT32 walk(p_cb_data cb_data)
   CHECK(v.value.scalar == vpi1, "26.6.13: y = a & b = 1");
   expect_no_error("the primitive walk");
   vpi_get_value(term[0], &v);
-  XFAIL(vpi_chk_error(NULL) == 0 && v.value.scalar == vpi1, "26.6.13", "vpi_get_value(prim term) is refused");
-  XFAIL(vpi_get(vpiArray, prim[0]) == 0, "26.6.13", "vpiArray of a gate outside an array is not FALSE");
+  CHECK(vpi_chk_error(NULL) == 0 && v.value.scalar == vpi1, "26.6.13: prim term -> value, y = 1");
+  CHECK(vpi_get(vpiArray, prim[0]) == 0, "26.6.13: a gate outside an array is no array member");
   v.format = vpiScalarVal;
   v.value.scalar = vpi0;
   vpi_put_value(prim[0], &v, NULL, vpiNoDelay);
@@ -195,19 +187,19 @@ static PLI_INT32 walk(p_cb_data cb_data)
       vpi_get_value(rows[k], &v);
       if (vpi_chk_error(NULL) == 0 && v.value.str != NULL && squeezed_is(v.value.str, "11:?:1")) decompiled = 1;
     }
-    XFAIL(decompiled, "26.6.14", "no table entry decompiles (vpiStringVal) as 1 1 : ? : 1");
+    CHECK(decompiled, "26.6.14 a: a table entry decompiles (vpiStringVal) as 1 1 : ? : 1");
   }
-  XFAIL(vpi_handle(vpiInitial, defn) != NULL, "26.6.14", "udp defn -> initial is NULL");
+  CHECK(vpi_handle(vpiInitial, defn) != NULL, "26.6.14: udp defn -> initial");
   v.format = vpiIntVal;
   vpi_get_value(row, &v);
   expect_refusal("26.6.14 a: vpi_get_value(table entry, vpiIntVal)");
 
   /* §26.6.22 / §26.6.23 */
-  XFAIL(yields_term(vpiDriver, y, vpiAndPrim, 0), "26.6.22", "vpi_iterate(vpiDriver, y) omits the and's output");
-  XFAIL(yields_term(vpiLoad, y, vpiNotPrim, 1), "26.6.22", "vpi_iterate(vpiLoad, y) omits the not's input");
+  CHECK(yields_term(vpiDriver, y, vpiAndPrim, 0), "26.6.22: y is driven by the and's output");
+  CHECK(yields_term(vpiLoad, y, vpiNotPrim, 1), "26.6.22: y is loaded by the not's input");
   CHECK(vpi_iterate(vpiDriver, top) == NULL, "26.6.22: a module has no drivers");
   expect_refusal("vpi_iterate(vpiDriver, module)");
-  XFAIL(yields_term(vpiLoad, a, vpiAndPrim, 1), "26.6.23", "vpi_iterate(vpiLoad, reg a) omits the and's input");
+  CHECK(yields_term(vpiLoad, a, vpiAndPrim, 1), "26.6.23: reg a is loaded by the and's input");
   CHECK(vpi_iterate(vpiLoad, defn) == NULL, "26.6.23: a UDP definition has no loads");
   expect_refusal("vpi_iterate(vpiLoad, udp defn)");
 

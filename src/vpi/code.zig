@@ -79,6 +79,9 @@ pub const vpiArgument: c_int = 89;
 pub const vpiOperand: c_int = 97;
 pub const vpiProcess: c_int = 99;
 pub const vpiExpr: c_int = 102;
+/// IEEE 1364-2005 §26.6.22/§26.6.23.
+pub const vpiDriver: c_int = 91;
+pub const vpiLoad: c_int = 93;
 // §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
 // checks and their terms, the relations between them, and their properties.
 pub const vpiModPath: c_int = 31;
@@ -442,7 +445,7 @@ pub const Builder = struct {
             var terms: std.ArrayList(Ast.ExprId) = .empty;
             try terms.append(b.arena, g.out);
             try terms.appendSlice(b.arena, g.ins);
-            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items);
+            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items, g.range != null);
             const delay = if (g.delay.any()) try b.expr(g.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(g.delay);
             b.objects.items[at].src_tok = g.main_tok;
@@ -453,7 +456,7 @@ pub const Builder = struct {
             var terms: std.ArrayList(Ast.ExprId) = .empty;
             for (inst.ports) |c| try terms.append(b.arena, c.expr);
             const d = b.objects.items[defn];
-            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items);
+            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items, inst.range != null);
             try b.setName(at, try b.arena.dupe(u8, b.file.str(inst.name)));
             const delay = if (inst.delay.any()) try b.expr(inst.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(inst.delay);
@@ -486,12 +489,17 @@ pub const Builder = struct {
     }
 
     /// A §11.6.13 primitive with its terminals: output first, then the
-    /// inputs, vpiTermIndex in that order (A.3.3's terminal lists).
-    fn primitive(b: *Builder, vtype: c_int, prim_type: c_int, def_name: []const u8, terms: []const Ast.ExprId) Error!u32 {
+    /// inputs, vpiTermIndex in that order (A.3.3's terminal lists). `array`:
+    /// declared with a range (IEEE 1364-2005 §7.1.5), its vpiArray.
+    ///
+    /// ponytail: an array of instances is this one object, not one per
+    /// index with a vpiIndex; splitting it needs §7.1.6's terminal split.
+    fn primitive(b: *Builder, vtype: c_int, prim_type: c_int, def_name: []const u8, terms: []const Ast.ExprId, array: bool) Error!u32 {
         const at = try b.code(vtype, &.{}, &.{}, &.{
             .{ .prop = vpiPrimType, .value = prim_type },
             // NOTE 1: "vpiSize shall return the number of inputs."
             .{ .prop = vpiSize, .value = @intCast(terms.len - 1) },
+            .{ .prop = root.vpiArray, .value = @intFromBool(array) },
         });
         b.objects.items[at].def_name = def_name;
         var items: std.ArrayList(u32) = .empty;
@@ -998,7 +1006,9 @@ fn gateName(k: Ast.GateKind) []const u8 {
 /// circled arrow): each with its io decls (the output, then the inputs) and
 /// its table entries, whose vpiSize is "number of symbol entries" — one per
 /// input field (an edge `(01)` is one field), one for the current state of
-/// a sequential entry, one for the output.
+/// a sequential entry, one for the output. An entry's value is its
+/// decompilation, `1 1 : ? : 1`: the fields space-separated, a colon between
+/// columns (§26.6.14 Details a).
 pub fn udpDefns(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -1020,21 +1030,39 @@ pub fn udpDefns(
         for (u.rows) |r| {
             var fields: c_int = 0;
             var in_edge = false;
+            var text: std.ArrayList(u8) = .empty;
             for (r.inputs) |c| switch (c) {
-                '(' => in_edge = true,
-                ')' => {
-                    in_edge = false;
-                    fields += 1;
-                },
                 ' ', '\t' => {},
-                else => if (!in_edge) {
-                    fields += 1;
+                else => {
+                    if (!in_edge and text.items.len != 0) try text.append(arena, ' ');
+                    try text.append(arena, c);
+                    if (c == '(') in_edge = true;
+                    if (c == ')') in_edge = false;
+                    if (!in_edge) fields += 1;
                 },
             };
+            if (u.is_sequential) try text.print(arena, " : {c}", .{r.state});
+            try text.print(arena, " : {c}", .{r.output});
             try rows.append(arena, @intCast(objects.items.len));
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiTableEntry, .props = try arena.dupe(Prop, &.{
+            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiTableEntry, .value = .{ .str = text.items }, .props = try arena.dupe(Prop, &.{
                 .{ .prop = vpiSize, .value = fields + @intFromBool(u.is_sequential) + 1 },
             }) });
+        }
+        // A.5.3's `initial output = init_val`: an initial process whose
+        // statement assigns the output its io decl names.
+        var init = none;
+        if (u.init != .none) {
+            var no_names: std.StringHashMapUnmanaged(u32) = .empty;
+            var no_lists: ScopeLists = .{};
+            var b: Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = file, .names = &no_names, .top_name = "", .scope = 0, .path = "", .lists = &no_lists };
+            const rhs = try b.expr(u.init);
+            const assign: u32 = @intCast(objects.items.len);
+            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiAssignment, .edges = try arena.dupe(Edge, &.{
+                .{ .tag = vpiLhs, .to = ios.items[0] },
+                .{ .tag = vpiRhs, .to = rhs },
+            }), .props = try arena.dupe(Prop, &.{.{ .prop = vpiBlocking, .value = 1 }}) });
+            init = @intCast(objects.items.len);
+            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiInitial, .edges = try arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = assign }}) });
         }
         at.* = @intCast(objects.items.len);
         try objects.append(gpa, .{
@@ -1048,6 +1076,7 @@ pub fn udpDefns(
                 .{ .prop = vpiSize, .value = @intCast(u.ports.len - 1) },
                 .{ .prop = vpiPrimType, .value = if (u.is_sequential) vpiSeqPrim else vpiCombPrim },
             }),
+            .edges = try arena.dupe(Edge, &.{.{ .tag = vpiInitial, .to = init }}),
             .lists = try arena.dupe(List, &.{
                 .{ .tag = vpiIODecl, .items = ios.items },
                 .{ .tag = vpiTableEntry, .items = rows.items },

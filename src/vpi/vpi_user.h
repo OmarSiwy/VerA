@@ -199,6 +199,8 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiUdp                 65   /* §11.6.13 a UDP instance */
 #define vpiUdpDefn             66   /* §11.6.14; vpi_iterate(vpiUdpDefn, NULL) */
 #define vpiPrimitive          103   /* module ->> primitive; term -> primitive */
+#define vpiDriver              91   /* IEEE 1364-2005 §26.6.22/§26.6.23 net or reg ->> */
+#define vpiLoad                93   /* ...drivers and loads: prim terms, assignments, ports */
 #define vpiPrimType            33   /* int: §11.6.13/§11.6.14, one of below */
 #define vpiTermIndex           30   /* int: §11.6.13, 0 for the output */
 #define vpiAndPrim              1

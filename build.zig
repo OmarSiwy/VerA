@@ -710,7 +710,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
         .design = "tests/fixtures/ch11_vpi/p04_prims.v",
-        .stdout = "xfail 26.6.13: vpi_get_value(prim term) is refused\nxfail 26.6.13: vpiArray of a gate outside an array is not FALSE\nxfail 26.6.14: no table entry decompiles (vpiStringVal) as 1 1 : ? : 1\nxfail 26.6.14: udp defn -> initial is NULL\nxfail 26.6.22: vpi_iterate(vpiDriver, y) omits the and's output\nxfail 26.6.22: vpi_iterate(vpiLoad, y) omits the not's input\nxfail 26.6.23: vpi_iterate(vpiLoad, reg a) omits the and's input\np02: b_26_6_primitives checks=65\n",
+        .stdout = "p02: b_26_6_primitives checks=65\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
@@ -772,7 +772,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 167 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=276\n",
+        .stdout = "xfail G: 165 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=278\n",
     },
 };
 
