@@ -69,6 +69,9 @@ pub const ops_kernels = @import("ops_kernels.zig");
 /// on them: the one reference every engine's operators are judged by
 /// (`ref4.zig` checks it). Host Zig, not device text.
 pub const Integer = @import("integer.zig");
+/// IEEE 1364-2005 §17.1 value and time text over `Integer` literals, shared
+/// by the digital interpreter and a native executable (`sim`). Host Zig.
+pub const fmt = @import("fmt.zig");
 
 /// Each kernel file's bytes, for `codegen/kernel_text.zig` to splice into a
 /// device: `@embedFile` reaches only files under its own module's root.
@@ -89,6 +92,7 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("test.zig");
     _ = Integer;
+    _ = fmt;
     // The four-state reference `Integer` is judged by.
     _ = @import("ref4.zig");
 }

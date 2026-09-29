@@ -7,8 +7,8 @@
 //! Clauses: VAMS §9.4.3 Table 9-22; IEEE 1364-2005 §17.1.1.2, §17.1.1.3,
 //! §17.1.1.4, §17.1.1.7, §17.3, §19.8.
 const std = @import("std");
-const Int = @import("frontend").Integer;
-const str_k = @import("kernels").str_kernels;
+const Int = @import("integer.zig");
+const str_k = @import("str_kernels.zig");
 
 /// §9.4.3 Table 9-22's four conversions. The value is the base, so a digit is
 /// `@ctz(base)` bits wide for the three power-of-two members and decimal is the

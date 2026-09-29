@@ -24,7 +24,7 @@ const netPull = @import("net.zig").netPull;
 const str_k = @import("kernels").str_kernels;
 const zCReal = str_k.zCReal;
 const system = @import("system.zig");
-const fmt = @import("../fmt.zig");
+const fmt = @import("kernels").fmt;
 
 // ---- memory files (IEEE 1364 §17.2.9) ---------------------------------------
 

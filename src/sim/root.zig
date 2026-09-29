@@ -18,8 +18,9 @@ pub const time = @import("time.zig");
 pub const scheduler = @import("scheduler.zig");
 /// The VAMS §8 coordinator that steps a digital `Run` beside an analog solver.
 pub const mixed = @import("mixed.zig");
-/// IEEE 1364-2005 §17.1 value and time text, shared by both engines.
-pub const fmt = @import("fmt.zig");
+/// IEEE 1364-2005 §17.1 value and time text, shared by both engines:
+/// `kernels.fmt`, whose tests run with the `kernels` module.
+pub const fmt = @import("kernels").fmt;
 /// The runtime an `--emit-exe` executable links: native designs and devices.
 pub const rt = @import("rt/root.zig");
 /// The SPICE deck runner's op, `.tran` and `.noise` over one device.
@@ -30,7 +31,6 @@ test {
     _ = time;
     _ = digital;
     _ = mixed;
-    _ = fmt;
     _ = rt;
     _ = spice;
 }

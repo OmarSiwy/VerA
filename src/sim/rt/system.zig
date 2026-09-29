@@ -9,7 +9,7 @@ const root = @import("root.zig");
 const State = root.State;
 const Error = root.Error;
 const logic = @import("logic.zig");
-const fmt = @import("../fmt.zig");
+const fmt = @import("kernels").fmt;
 const system = @import("../digital/system.zig");
 const display = @import("../digital/display.zig");
 
