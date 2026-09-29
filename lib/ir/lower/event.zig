@@ -3,7 +3,7 @@
 //! In: event-controlled statements. Out: event-guarded MIR and the event side tables codegen
 //! turns into updateState.
 //!
-//! LRM clauses this file's code cites: §5.10, §5.10.2, §5.10.3, §5.10.3.1, §9.4.1, §9.4.3, §9.5, §9.5.2, §9.5.4.2, §9.7.3, §9.13.1, §9.13.2.
+//! LRM clauses this file's code cites: §5.10, §5.10.2, §5.10.3, §5.10.3.1, §5.10.3.4, §9.4.1, §9.4.3, §9.5, §9.5.2, §9.5.4.2, §9.7.3, §9.13.1, §9.13.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -189,15 +189,33 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     }
 }
 
-/// Checks the §5.10.3.1/§5.10.3.2 argument rules for the monitored events
-/// (E0517): a non-integer direction, a negative tolerance, and a tolerance with
-/// no direction. `timer` gets only the tolerance rule, which §5.10.3.3 repeats
-/// for its third argument. Syntax 5-16 types every argument `analog_expression`,
-/// so only what folds is judged.
+/// Checks §5.10.3's monitored-event arguments (E0517), in both analog and
+/// digital event controls. Numeric bounds apply only to folded operands;
+/// cross()'s dependencies between omitted slots are structural.
 pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
+    const args = self.file.exprs.args(e);
+    if (std.mem.eql(u8, name, "absdelta")) {
+        // §5.10.3.4: delta and both tolerances "shall be non-negative";
+        // enable "shall evaluate to an integer". These are analog_expression
+        // slots: a model card or a runtime value can make them valid, so a
+        // declared parameter default is not sufficient to reject the source.
+        const bounds = [_][]const u8{ "delta", "time_tol", "expr_tol" };
+        for (bounds, 1..) |arg_name, i| {
+            if (i >= args.len or args[i] == .none) continue;
+            const c = lower_constfold.foldExpr(self, args[i], false) orelse continue;
+            if (c == .str or c.asReal() >= 0) continue;
+            try self.err(self.file.exprs.mainTok(args[i]), .E0517, "`absdelta()` {s} shall be non-negative, got {d}", .{ arg_name, c.asReal() });
+        }
+        if (args.len > 4 and args[4] != .none) {
+            if (lower_constfold.foldExpr(self, args[4], false)) |c| {
+                if (c != .str and c.asReal() != @round(c.asReal()))
+                    try self.err(self.file.exprs.mainTok(args[4]), .E0517, "`absdelta()` enable shall evaluate to an integer, got {d}", .{c.asReal()});
+            }
+        }
+        return;
+    }
     const is_cross = std.mem.eql(u8, name, "cross");
     if (std.mem.eql(u8, name, "timer")) {
-        const args = self.file.exprs.args(e);
         if (args.len < 3 or args[2] == .none) return;
         const c = lower_constfold.constEval(self, args[2]) orelse return;
         if (c == .str or c.asReal() >= 0) return;
@@ -205,7 +223,6 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
         return;
     }
     if (!is_cross and !std.mem.eql(u8, name, "above")) return;
-    const args = self.file.exprs.args(e);
     // §5.10.3.2 above() has no direction: its tolerances start one slot earlier.
     const dir: ?usize = if (is_cross) 1 else null;
     const tol_first: usize = if (is_cross) 2 else 1;
@@ -247,6 +264,15 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
             try b.emit();
         }
     };
+    // §5.10.3.1: "If expr_tol is specified, time_tol shall also be
+    // specified". Omission of BOTH tolerances remains legal, including the
+    // `sh` example above with a fifth-slot enable.
+    if (is_cross and args.len > 3 and args[3] != .none and args[2] == .none) {
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0517);
+        b.msg("`cross()` expr_tol is given but the time_tol slot is empty", .{});
+        b.help("specify time_tol before expr_tol, or omit both tolerances", .{});
+        try b.emit();
+    }
 }
 
 // ---- ch9 system tasks (statement position) ---------------------------------

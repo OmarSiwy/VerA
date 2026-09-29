@@ -17,9 +17,9 @@
 // load-bearing and not stylistic.
 //
 // The companion rule in the same paragraph — "If expr_tol is specified, time_tol
-// shall also be specified" — is the same shape and is NOT given a separate file:
-// one refusal per clause is the coverage this row needs, and a second reject
-// would buy no positive evidence.
+// shall also be specified" — is pinned separately by
+// event_bounds_cross_expr_tol_without_time_tol_rejected.va. Clause coverage
+// alone does not establish that both independent prohibitions are enforced.
 //
 // A reject, so there is nothing to run and no `want` to write. The substring is
 // the word the diagnostic has to contain for a reader to know which of cross()'s
