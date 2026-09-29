@@ -8,8 +8,8 @@ does not close the unmarked implementation gaps in that list.
 
 | Req | State |
 |---|---|
-| A | AMS strict and digital fixture gates pass at `c0e9b469`; the original digital XFAIL name list is retired. VPI `vpi_runs` still carries known gaps, partly implemented on the queued `wave23/vpi-*` branches. Unmarked AMS defects in ROADMAP §5 remain open. |
-| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `c0e9b469`. This is a static inventory; VPI runtime obligations remain. |
+| A | AMS strict and digital fixture gates pass at `9c97b205`; the original digital XFAIL name list is retired. VPI `vpi_runs` still carries known gaps, partly implemented on the queued `wave23/vpi-*` branches. Unmarked AMS defects in ROADMAP §5 remain open. |
+| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `9c97b205`. This is a static inventory; VPI runtime obligations remain. |
 | C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
 | D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
 | E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
@@ -35,8 +35,8 @@ the AGENTS.md §9 gates passed at the commit named in that row.
 | 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. | Merged by `cecf3118`, fully gated through `2cc078b1`. Generated `.log`/`.dat` files were excluded. The reviewed CLI fix stops denied W0750 before execution, and the latch fixture now asserts literal expectations derived from its sample times. TinyTapeout integration hash: `2cc078b1`. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Merged by `1f3a9358`, fully gated through `e13f339f`. Review fixes evaluate retained function arguments on request and observe callbacks registered during an already-running process. Strict and digital FAIL/XFAIL name lists are unchanged. |
 | 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. | Merged through `434e7906` by `777b5e18`, then integrated reviewed `288a11c2` as `c0e9b469`; fully gated there. Superseded engine/parser changes from the original final WIP were excluded. The structural fixture runs generated scalar/vector nets, bit relationships and enclosing scopes. |
-| 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. | Not gated. Merge through `d61a0e82`; final WIP `62875a50` adds useful function/IO metadata, with result/local/formal name resolution under separate review. |
-| 8 | `wave23/vpi-prim` | 53693967 | Primitives, UDP tables, path and timing-check terms, values and strengths. Annex G numbering of `vpiPolarity`=34, `vpiDataPolarity`=35, `vpiTchkType`=38 (were 38, 39, 40): a C ABI change for VPI apps. | Not gated. |
+| 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. | Merged by `cc55db17`, reviewed through `9c97b205`, and fully gated there. Subroutine storage, recursive/forward calls, callback traversal and the active time-format call now run in host fixtures. Statement callback traversal preserves the integrated engine's associations. Both FAIL/XFAIL name lists are unchanged. |
+| 8 | `wave23/vpi-prim` | 53693967 | Primitives, UDP tables, path and timing-check terms, values and strengths. Annex G numbering of `vpiPolarity`=34, `vpiDataPolarity`=35, `vpiTchkType`=38 (were 38, 39, 40): a C ABI change for VPI apps. | Review `cdb2d5ca` fixes active procedural driver identity and UDP ASCII vectors. Focused host checks pass; integration and full gates remain. |
 
 The four VPI branches all edit `src/vpi` and `build.zig`'s `vpi_runs`; merge one
 at a time and re-run `zig build test` (which runs `vpi_runs`) after each.
@@ -59,18 +59,20 @@ Additional reviewed work waiting for its queue position:
 - `f291b258` preserves the unsigned source width of analog `$clog2` operands
   and the zero extension of packed regs read in analog code. Focused tests
   pass; nested narrow arithmetic is a separate follow-up.
-- `2f3fe4e3`, following `62875a50`, resolves VPI subroutine formals, locals,
-  results, recursive calls and forward declarations. Focused host tests pass.
-  `3758e073` adds callback traversal by object and time queue; its statement
-  callback associations need the integrated engine's site metadata.
 - `922268bb` corrects the array diagnostics' clause references and scope of
   their constant-index restrictions, and the analog conversion explanation.
   `7ffb7aa8` corrects stale fixture explanations; `57b9de27` adds an emitted
   host test distinguishing null nodesets from explicit zero.
 - `e6e4598d` replaces repeated addition in emitted periodic timers and
   preserves representable future breakpoints for tiny periods. Focused host
-  and timer fixtures pass. Between-event control changes and the mixed timer
-  monitor remain a separate follow-up.
+  tests pass. A follow-up implements between-event control changes and mixed
+  timer monitors; its fresh embedded-suite capture supersedes the earlier
+  raw after-list, which reused an older suite binary. Integrated gates remain.
+
+The node-tolerance draft is under review on `v1/node-abstol-review`.
+It reproduces the missing AMS §7.2.4 minimum across connected continuous
+segments; its strengthened fixture also checks each segment's §5.5.3 local
+nature attributes. Neither is counted as gated yet.
 
 The second merge passed the same gate matrix, including the generated
 Newton-verdict and host-tolerance fixtures, and was measured by
@@ -97,6 +99,13 @@ The sixth merge passed the same gate matrix and was measured by
 regenerated by running the fixture against the combined header. Both final
 FAIL/XFAIL name lists match the fifth merge.
 
+The seventh merge passed the same gate matrix and was measured by
+`tools/conformance.sh` at `9c97b205`. The integration tests distinguish
+module-wide and direct statement callbacks, retain iterator metadata, and
+perform new VPI design walks after end-of-compilation. Annex G's expected
+output was regenerated from the combined header. Both final FAIL/XFAIL
+name lists match the sixth merge.
+
 Each merge: `git merge --no-ff`, then the AGENTS.md §9 gates (`zig build`,
 `test`, `test-devices`, `test-vpi-fixtures`, `test-1364` in the interpreter
 and `--native`, `=static`, `=four`, `--fuzz 1000`, the strict-suite name list),
@@ -119,11 +128,10 @@ Two older user worktrees remain untouched after read-only review:
 - **VPI gaps in `vpi_runs`** (`build.zig`): the rows not closed by the
   `wave23/vpi-*` branches. Causes and estimates per row are in each branch's
   report and in the area table below.
-  - behavioural object model (`b_26_6_behaviour`): internal scopes, uses,
-    decompile, cont-assign values, function sizes, callback iteration, active
-    time format;
-  - Annex G constant names: 131 of 441 still undefined, each waiting on the
-    object it names;
+  - `b_26_6_behaviour` now passes its host assertions at `9c97b205`;
+    subroutine arrays and time variables still need complete object metadata;
+  - Annex G constant names: the executable `b_G_vpi_user` fixture still
+    reports undefined names, each waiting on the object it names;
   - whole-design rows: `b_26_6_11_event_array` (`event e[0:1]`),
     `b_26_6_42_attributes` (stops at vpiAttribute);
   - nested/conditional generate metadata and generated net arrays; ordinary
