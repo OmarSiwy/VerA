@@ -9,6 +9,7 @@
 //! lrm 12.31.4
 //! lrm 12.33
 //! lrm 12.35
+//! inherited IEEE 1364-2005 26.6.19
 
 #include "vpi_user.h"
 #include <stdio.h>
@@ -43,7 +44,9 @@ static PLI_INT32 invoke(PLI_BYTE8 *unused)
     require(++calls <= 2, "extra invocation");
     if (calls == 2) {
         value.format = vpiIntVal;
+        value.value.integer = -1;
         vpi_get_value(lazy, &value);
+        require(vpi_chk_error(NULL) == 0, "function value request failed");
         require(value.value.integer == 1, "function not evaluated at value request");
     }
     return 0;

@@ -45,10 +45,10 @@ other probes, missing production APIs block compilation/execution today.
 application. Load before elaboration; compare HDL stdout to its
 `.expected.txt`, stderr to `.expected.stderr.txt`, and require exit0.
 The first unread side-effect function argument must not execute; the second
-is evaluated when the plugin requests its value. The task's registration
-and calltf run, but `vpi_get_value` of the `bump(0)` argument does not execute
-the call (`read=0`), so it is not in `vpi_runs`. This is not an
-expected-rejection fixture.
+is evaluated when the plugin requests its value. It runs in `vpi_runs`;
+`b_26_6_19_lazy_arguments` additionally checks repeated reads, a retained
+handle's lexical scope, real and wide returns, nested user function calls,
+and refusal of a NULL value pointer without evaluating the argument.
 
 ## Routine probes and compile-only visibility
 

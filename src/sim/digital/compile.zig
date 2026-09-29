@@ -383,6 +383,21 @@ pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
     _ = try inferValue(self, e, 0);
 }
 
+/// IEEE 1364-2005 §26.6.19(e): an application's argument may be read after
+/// its calltf returns. Remember its lexical context without evaluating or
+/// requiring a value from scope/array/event arguments.
+fn rememberVpiScope(self: *Run, e: Ast.ExprId) Error!void {
+    try self.vpi_expr_scopes.put(self.arena, .{ self.instanceOf(self.scope), @intFromEnum(e) }, self.scope);
+}
+
+fn rememberVpiArgument(self: *Run, e: Ast.ExprId, depth: u16) Error!void {
+    if (e == .none) return;
+    if (depth >= 256) return self.exprFail(e, "digital expressions deeper than 256 AST levels are not implemented");
+    try rememberVpiScope(self, e);
+    var buf: [3]Ast.ExprId = undefined;
+    for (self.file.exprs.children(e, &buf)) |arg| try rememberVpiArgument(self, arg, depth + 1);
+}
+
 fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     const ty = try infer(self, e, depth);
     if (ty.width == 0) return self.exprFail(e, "zero replication requires an immediately enclosing concatenation with a positive-width operand");
@@ -530,6 +545,7 @@ fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
 fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     if (e == .none) return self.fail(0, "omitted expressions are not implemented", .{});
     if (depth == 256) return self.exprFail(e, "digital expressions deeper than 256 AST levels are not implemented");
+    if (self.systf != null) try rememberVpiScope(self, e);
     const key: SpecExpr = .{ .spec = self.specOf(self.scope), .e = e };
     if (self.spec_types.get(key)) |ty| return ty;
     const ex = &self.file.exprs;
@@ -637,6 +653,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             // the host to refuse (§20.3).
             if (self.systf) |u| if (u.kind(name)) |k| switch (k) {
                 .func => |t| {
+                    for (ex.args(e)) |arg| try rememberVpiArgument(self, arg, depth + 1);
                     self.sys_calls[@intFromEnum(e)] = .user;
                     break :blk t;
                 },
@@ -1100,6 +1117,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
             // IEEE 1364-2005 §20.4, as for a function (`infer`).
             if (self.systf) |u| if (u.kind(name)) |k| if (k == .task) {
+                for (s.args) |arg| try rememberVpiArgument(self, arg, 0);
                 _ = try append(self, .{ .task = .{ .task = .user, .args = s.args, .tok = tok } });
                 return;
             };
