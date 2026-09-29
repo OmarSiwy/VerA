@@ -37,6 +37,11 @@ const module_specs = [_]ModuleSpec{
     .{ .name = "contract", .path = "tools/contract.zig", .role = .runtime },
     // `deep_stack`, the string interner and `BigArena`: any tier may take them.
     .{ .name = "base", .path = "lib/base/root.zig", .role = .leaf },
+    // The runtime numerics, which ship as source: the device kernels (also
+    // spliced into devices as text, `kernels.text`), the four-state `Integer`
+    // and its `ref4` judge, the value folds, and the §17.1 value text.
+    // `contract`: the folds use the devices' exp/log/pow.
+    .{ .name = "kernels", .path = "lib/kernels/root.zig", .role = .runtime, .imports = &.{"contract"} },
 
     // lib/ — the compiler. `vera` is its facade and what an embedder takes.
     .{ .name = "diag", .path = "lib/diag.zig", .role = .compiler },
@@ -45,8 +50,7 @@ const module_specs = [_]ModuleSpec{
     // `contract`: the compile-time folds and the prover's bounds use the
     // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
     // the device would compute (§9.14: `$exp` and `exp` are one function).
-    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "contract" } },
-    .{ .name = "kernels", .path = "lib/kernels/root.zig", .role = .runtime, .imports = &.{"contract"} },
+    .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels", "contract" } },
     .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels", "contract" } },
     .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
     .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "ir", "backend", "kernels" } },

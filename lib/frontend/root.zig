@@ -1,11 +1,12 @@
 //! The frontend's public API: Verilog-AMS source text in, AST out
 //! (preprocessor, lexer, parser; LRM clauses 2 to 10 and annexes D and E).
-//! Depends only on `diag`; `ir/` and `backend/` import this layer, never the
-//! reverse.
+//! Depends on `base`, `diag`, `kernels` and `contract`; `ir/` and
+//! `backend/` import this layer, never the reverse.
 
 /// §2.6.1 integer literals and the IEEE 1364-2005 §5 four-state operations
-/// on them.
-pub const Integer = @import("integer.zig");
+/// on them: `kernels.Integer`, re-exported for callers that reach it
+/// through `frontend`.
+pub const Integer = @import("kernels").Integer;
 /// Token tags, the annex B keyword table and the §10.6 keyword sets.
 pub const token = @import("token.zig");
 /// Clause 10 directives and comment stripping: source files in, one text out.
@@ -40,6 +41,4 @@ pub const deep_stack = @import("base").deep_stack;
 
 test {
     @import("std").testing.refAllDecls(@This());
-    // The four-state reference `Integer` is judged by.
-    _ = @import("ref4.zig");
 }

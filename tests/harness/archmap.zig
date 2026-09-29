@@ -336,9 +336,9 @@ const groups = [_]struct { title: []const u8, prefixes: []const []const u8 }{
     .{ .title = "Leaf tables (`base` module)", .prefixes = &.{"lib/base/"} },
     .{ .title = "Diagnostics (`diag` module)", .prefixes = &.{ "lib/diag", "lib/diag_code.zig" } },
     .{ .title = "Frontend: tokens, AST, folding (`frontend` module)", .prefixes = &.{
-        "lib/frontend/token.zig",  "lib/frontend/lexer.zig",     "lib/frontend/integer.zig",
-        "lib/frontend/ast",        "lib/frontend/constfold.zig", "lib/frontend/wreal.zig",
-        "lib/frontend/libmap.zig", "lib/frontend/root.zig",
+        "lib/frontend/token.zig",     "lib/frontend/lexer.zig", "lib/frontend/ast",
+        "lib/frontend/constfold.zig", "lib/frontend/wreal.zig", "lib/frontend/libmap.zig",
+        "lib/frontend/root.zig",
     } },
     .{ .title = "Frontend: preprocessor", .prefixes = &.{ "lib/frontend/preprocessor.zig", "lib/frontend/pp/", "lib/frontend/spice_cards.zig" } },
     .{ .title = "Frontend: parser", .prefixes = &.{"lib/frontend/parser"} },

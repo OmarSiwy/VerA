@@ -65,6 +65,11 @@ pub const wide_kernels = @import("wide_kernels.zig");
 /// §4.5 the analog operator kernels (`zIdt`, `zSlew`, `zTransition`, ...): device text only.
 pub const ops_kernels = @import("ops_kernels.zig");
 
+/// §2.6.1 integer literals and the IEEE 1364-2005 §5 four-state operations
+/// on them: the one reference every engine's operators are judged by
+/// (`ref4.zig` checks it). Host Zig, not device text.
+pub const Integer = @import("integer.zig");
+
 /// Each kernel file's bytes, for `codegen/kernel_text.zig` to splice into a
 /// device: `@embedFile` reaches only files under its own module's root.
 pub const text = struct {
@@ -83,4 +88,7 @@ pub const text = struct {
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("test.zig");
+    _ = Integer;
+    // The four-state reference `Integer` is judged by.
+    _ = @import("ref4.zig");
 }

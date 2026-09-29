@@ -4,7 +4,7 @@
 //! parser appends rows; every later stage reads them through `ExprStore`.
 
 const std = @import("std");
-const Integer = @import("integer.zig");
+const Integer = @import("kernels").Integer;
 const IntLiteral = @import("lexer.zig").IntLiteral;
 const ast = @import("ast.zig");
 const ExprId = ast.ExprId;

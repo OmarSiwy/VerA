@@ -21,7 +21,7 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
 
     if (self.tags[tok] == .int_literal) {
         const text = gluedNumberText(self, tok);
-        const integer = @import("../integer.zig");
+        const integer = @import("kernels").Integer;
         const lit = integer.parse(self.arena, text) catch |e| return switch (e) {
             error.OutOfMemory => error.OutOfMemory,
             error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),

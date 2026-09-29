@@ -246,8 +246,8 @@ fn emitDevice(
             .{ .name = "sim", .root = try at.path(arena, tree, "src/sim/root.zig"), .deps = &.{ "contract", "base", "diag", "frontend", "kernels" } },
             .{ .name = "base", .root = try at.path(arena, tree, "lib/base/root.zig") },
             .{ .name = "diag", .root = try at.path(arena, tree, "lib/diag.zig") },
-            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{ "base", "diag", "contract" } },
-            .{ .name = "kernels", .root = try at.path(arena, tree, "lib/kernels/root.zig") },
+            .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{ "base", "diag", "kernels", "contract" } },
+            .{ .name = "kernels", .root = try at.path(arena, tree, "lib/kernels/root.zig"), .deps = &.{"contract"} },
         };
         var o: vera.orchestrator.Options = .{
             .work_dir = wd,
