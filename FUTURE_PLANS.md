@@ -31,7 +31,7 @@ the AGENTS.md §9 gates passed at the commit named in that row.
 |---|---|---|---|---|
 | 1 | `wave18/bvpi` | 33a64b20 | Generate-block nets scoped per iteration; null and select ports; instance-array split (§7.1.6); hierarchical task enable; `-incdir`; task/function parameters and events. | Merged by `f8501782`, integrated and fully gated through `4e90fcdd`. Review fixes preserve automatic subroutine constants, validate combined null-port forms and array-width products, parse PATHPULSE mintypmax limits, and copy recursive task outputs into the restored caller. |
 | 2 | `wave22/iter` | 18ea1499 | ARPice: `$discontinuity(-1)` becomes `limit`'s `converged` verdict (device stays GPU-eligible); `$simparam("reltol"/"abstol"/"vntol")` as optional host-written Model fields. | Merged and fully gated at `78c53446`; strict and digital FAIL/XFAIL name lists are unchanged. Consumer integration point: write `reltol__`, `abstol__`, `vntol__` in `builder.zig` `deriveModel` next to `nom_temp__`, guarded by `@hasField`. |
-| 3 | `wave22/vdev2` | 91138be4 | `.v` devices: locate only A2D crossings some process wakes on; default A2D ttol `min(trise, tfall)/50`; up to 256 pins. | Not gated (stopped mid-gate). |
+| 3 | `wave22/vdev2` | 91138be4 | `.v` devices: locate only A2D crossings some process wakes on; default A2D ttol `min(trise, tfall)/50`; up to 256 pins. | Merged and fully gated at `15bb97ca`; strict and digital FAIL/XFAIL name lists are unchanged. The host tests run the wide counter across packed-plane word boundaries and refuse the first pin count above the limit. |
 | 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. Last commit includes useful README/CLI changes and generated `.log`/`.dat` files in `ch09_system_tasks` (exclude the generated files). | Not integrated. Add reviewed fix `989ea88f`: denied W0750 must stop before building or running the testbench. Tell the TinyTapeout session the integrated hash. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Not gated as a whole. |
 | 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. Last commit is WIP (a generate-net attempt that `wave18/bvpi` supersedes: drop it). | Not gated. |
@@ -64,6 +64,10 @@ Additional reviewed work waiting for its queue position:
 The second merge passed the same gate matrix, including the generated
 Newton-verdict and host-tolerance fixtures, and was measured by
 `tools/conformance.sh` at `78c53446`.
+
+The third merge passed the same gate matrix and was measured by
+`tools/conformance.sh` at `15bb97ca`. The `.v` contract-device extension is
+implemented; additional consumer requests remain in §4.
 
 Each merge: `git merge --no-ff`, then the AGENTS.md §9 gates (`zig build`,
 `test`, `test-devices`, `test-vpi-fixtures`, `test-1364` in the interpreter

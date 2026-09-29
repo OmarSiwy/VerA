@@ -63,7 +63,7 @@ truncation rule, so a shorter answer would be a wrong one.
 | analog-context array or assignment pattern | 2^20 elements | E1016 | `lib/ir/lower/param.zig` `max_cells` | `ch03_data_types/array_over_2_20_elements_rejected.va` |
 | loop generate unrolling | 4096 iterations | E0420 | `lib/ir/lower/control.zig:536` | `ch06_hierarchy/generate_nonterminating_rejected.va` |
 | solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig:308` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
-| `.v` contract device pins (one per top-module port bit) | 256 | E1103, "more than 256 pins" | `src/sim/digital/emit.zig` `deviceRoot` | `build.zig`: `vera --emit-zig tests/vdev/v_pins.v` (257 pins) under `zig build test`; `tests/vdev_host.zig` runs 65 (`v_wide`) |
+| `.v` contract device pins (one per top-module port bit) | 256 | E1103, "more than 256 pins" | `src/sim/digital/emit.zig` `deviceRoot` | `build.zig`: `vera --emit-zig tests/vdev/v_pins.v` (257 pins) under `zig build test`; `tests/vdev_host.zig` runs the wide counter (`v_wide`) across packed-plane word boundaries |
 | conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig:137` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
 | text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
 | number literal size | 2^24 bits | E1019 | `lib/frontend/integer.zig` `max_width` | `ieee1364/03_lexical_conventions/b_3_5_1_literal_size_65536.v`, `b_3_5_1_literal_size_over_2_24_rejected.v` |
