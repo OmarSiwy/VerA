@@ -1075,6 +1075,8 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 // three name lists — `NATIVE`, `FALLBACK <reason>` (the executable embeds the
 // interpreter, `rt.interpret`) or `FAIL` — so native coverage is diffed by
 // name, and a fallback that hides a regression shows up as a moved name.
+// A `// native-required` fixture makes that fallback a FAIL in native modes.
+// The forced two-state report keeps its separate x/z refusal policy below.
 //
 //   zig build test-1364 -- --native            # all of IEEE 1364
 //   zig build test-1364 -- --native=static     # combinational logic levelized
@@ -1243,6 +1245,10 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
         try w.print("FAIL {s}: vera --emit-exe exited {d}\n{s}\n", .{ case, built.exit, built.stderr });
         return .{ .pass = false, .fallback = fallback };
     }
+    if (!two_state and nativeRequired(source)) if (fallback) |why| {
+        try w.print("FAIL {s}: `// native-required` forbids interpreter fallback: {s}\n", .{ case, why });
+        return .{ .pass = false, .fallback = fallback };
+    };
     const bin = try Io.Dir.cwd().realPathFileAlloc(io, std.mem.trimEnd(u8, built.stdout, "\n"), arena);
     var ran = try captureIn(arena, io, if (snapshot) &.{ bin, "--vera-state", "--vera-snapshot" } else &.{ bin, "--vera-state" }, work);
     if (std.mem.indexOf(u8, ran.stderr, "vera-snapshot: ")) |at| {
@@ -1279,6 +1285,15 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
     const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
     if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
     return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
+}
+
+/// A compiled-runtime regression may require native emission as well as its
+/// transcript. This promise applies to normal native modes, not the separate
+/// `--two-state` report which deliberately changes x/z semantics.
+fn nativeRequired(source: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| if (std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r"), "// native-required")) return true;
+    return false;
 }
 
 /// A fixture's `// native-state:` line, if it has one.

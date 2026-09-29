@@ -172,6 +172,8 @@ Two older user worktrees remain untouched after read-only review:
   `zig build test` also executes generated `.v` contract devices in host
   tests. Keep these as runtime gates and inspect each `FALLBACK` entry:
   an embedded interpreter result does not establish native code generation.
+  Mark native regression fixtures `// native-required` so a fallback fails
+  the native gate; the forced two-state report retains its separate policy.
   The `b033ac35` native run still falls back for indexed part-selects and
   selects of array elements, real arrays/expressions, recursive timed tasks,
   indexed named events, string/memory file-read destinations, variable
