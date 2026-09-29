@@ -10,6 +10,7 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_control = @import("control.zig");
 const lower_expr = @import("expr.zig");
+const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
@@ -33,7 +34,14 @@ pub const State = struct {
     /// is the key its registration (`$monitor$arm`) and its end-of-step report
     /// share — see `lower_event.armMonitor`.
     monitor_sites: u32 = 0,
+    /// Preserve the implementation's omitted-seed sequence numbering across
+    /// constant/parameter sites, which now keep their own source-seeded state.
+    rng_site_ordinal: u32 = 0,
+    /// One hidden seed and first-call flag per source site and elaborated scope.
+    rng_internal: std.StringHashMapUnmanaged(InternalSeed) = .empty,
 };
+
+const InternalSeed = struct { seed: VarSlot, ready: VarSlot };
 
 /// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
 /// every unconditional display-family statement takes this route (see
@@ -1008,24 +1016,27 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         };
     }
     if (write_back == null) {
-        // The seedless and constant-seed forms. §9.13.1: "an internal seed is
-        // created which is assigned the initial value of the parameter or
-        // constant ... this internal seed gets updated every time the call ... is
-        // made", and with no source variable there is nowhere in the model to put
-        // it. So it is a latch in `Instance`, advanced by `updateState` on the
-        // accepted step and only read here, so the residual stays a pure
-        // function of x.
-        const site = self.out.rng_auto_sites;
-        self.out.rng_auto_sites += 1;
-        const latch = try self.call("$rng$auto", &.{try self.mir.addIntConst(self.arena, site)});
-        seed = if (given.items.len > 0)
-            // The declared constant/parameter still SEEDS the stream, so it is
-            // mixed in rather than dropped: two call sites with the same literal
-            // seed are two streams (the "every time the call is made" sentence),
-            // and two sites with different literals differ from the first draw.
-            try self.emit(.iadd, &.{ seed, try self.toInt(.{ .v = latch, .ty = .real }) })
-        else
-            try self.toInt(.{ .v = latch, .ty = .real });
+        const ordinal = self.event_state.rng_site_ordinal;
+        self.event_state.rng_site_ordinal += 1;
+        if (given.items.len > 0) {
+            // §9.13.1/§9.13.2 assign the supplied initial value, then update
+            // the hidden seed only when THIS source call executes. The held
+            // SSA places give it the same sequencing and rollback as an
+            // explicit seed variable, including a skipped branch or loop.
+            const state = try internalSeed(self, tok);
+            const ready = try self.builder.readVariable(state.ready.place, self.cur);
+            const previous = try self.builder.readVariable(state.seed.place, self.cur);
+            seed = try self.emit(.select, &.{ try self.toBool(.{ .v = ready, .ty = .integer }), previous, seed });
+            try self.builder.writeVariable(state.ready.place, self.cur, .one);
+            write_back = state.seed;
+        } else {
+            // Omitted seeds retain their existing implementation-defined
+            // starting values and accepted-point progression.
+            const site = self.out.rng_auto_seeds.items.len;
+            try self.out.rng_auto_seeds.append(self.arena, 1 + 7919 * @as(i64, ordinal));
+            const latch = try self.call("$rng$auto", &.{try self.mir.addIntConst(self.arena, @intCast(site))});
+            seed = try self.toInt(.{ .v = latch, .ty = .real });
+        }
     }
 
     // ---- the parameters, and the rules §9.13.2 states about them ------------
@@ -1110,6 +1121,23 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         .real => .real,
         .integer => .integer,
     } };
+}
+
+/// Repeated execution of one source site shares its hidden seed. A first-call
+/// flag defers a model-card parameter's initialization until the call runs;
+/// neither an unevaluated branch nor a discarded Newton iterate consumes it.
+fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
+    const scope = if (self.inlining.items.len != 0) self.inlining.items[self.inlining.items.len - 1] else self.scope_path;
+    const key = try std.fmt.allocPrint(self.arena, "{d}:{s}:{d}", .{ self.cur_unit, scope, tok });
+    const entry = try self.event_state.rng_internal.getOrPut(self.arena, key);
+    if (!entry.found_existing) {
+        const name = try std.fmt.allocPrint(self.arena, "$rng.{d}", .{self.event_state.rng_internal.count() - 1});
+        entry.value_ptr.* = .{
+            .seed = try lower_param.hiddenHeldInt(self, try std.fmt.allocPrint(self.arena, "{s}.seed", .{name})),
+            .ready = try lower_param.hiddenHeldInt(self, try std.fmt.allocPrint(self.arena, "{s}.ready", .{name})),
+        };
+    }
+    return entry.value_ptr.*;
 }
 
 /// §9.5.4.2's conversion codes, and nothing else. True when the format was

@@ -4,6 +4,7 @@
 //! ranges for proof.zig, and the variable slots the statement lowering assigns.
 //!
 //! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.1, §3.4.2, §3.4.4, §5.3.2, §5.10, §6.3.4, §6.6.1.
+//! §9.13.1/§9.13.2 hidden seed storage uses the same retained SSA mechanism.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -970,6 +971,18 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     });
     try self.held_places.append(self.arena, place);
     return seed;
+}
+
+/// A compiler-owned retained integer discovered during expression lowering.
+/// Seed it in entry so even a branch that skips its first use has a value.
+pub fn hiddenHeldInt(self: *Lower, name: []const u8) Oom!VarSlot {
+    const place = self.builder.newPlace();
+    const at = self.cur;
+    self.cur = .entry;
+    defer self.cur = at;
+    const seed = try holdSlot(self, name, .integer, .zero, place, .retained);
+    try self.builder.writeVariable(place, .entry, seed);
+    return .{ .place = place, .ty = .integer };
 }
 
 /// §5.10 `holdSlot` for a memory-backed array: ONE held row whose seed is the

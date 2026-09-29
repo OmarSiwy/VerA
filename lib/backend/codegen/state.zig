@@ -170,7 +170,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
 /// `.history` otherwise.
 fn emitStateClass(self: *Gen) Error!void {
     const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
-        self.lowered.rng_auto_sites == 0;
+        self.lowered.rng_auto_seeds.items.len == 0;
     try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
         if (latch_only) "path_latch" else "history",
     });
@@ -243,7 +243,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     , .{});
     // §9.13.1 the internal seed advances only here, once per accepted point,
     // so the residual it feeds is fixed across the Newton loop.
-    if (self.lowered.rng_auto_sites != 0) try self.w(
+    if (self.lowered.rng_auto_seeds.items.len != 0) try self.w(
         \\    // §9.13.1 "this internal seed gets updated every time the call
         \\    // to $arandom is made" — once per ACCEPTED point, per call site.
         \\    for (&inst.rng_auto) |*rs| rs.* = @intFromFloat(zRngNext(rs.*));

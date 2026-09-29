@@ -67,12 +67,12 @@
 // reproduced if the write-back walks exactly as far as the variate did. Each
 // `zRng*Next` therefore replays its own routine and returns the final seed.
 //
-// The seedless forms (`$random`, `$arandom` with the seed omitted, and a
-// constant/parameter seed, whose §9.13.1 "internal seed" is not visible from the
-// source) have no such variable. Their state is a latch in `Instance`, drawn in
-// the per-point sampling phase (`updateState`, the accepted-step boundary) and
-// only READ by the residual — same discipline, different owner. `zRngNext`
-// (one plain `uniform()` step) is that latch's advance.
+// Constant/parameter seeds use compiler-owned held variables plus first-call
+// flags: §9.13.1/§9.13.2 assign the supplied initial value, then the executed
+// source call writes this distribution's `_next` result. They share the
+// explicit variable's source ordering and accepted-step rollback discipline.
+// Omitted seeds retain implementation-chosen Instance latches, advanced by
+// `updateState` through `zRngNext` (one plain `uniform()` step).
 //
 // Supported counts follow the listing's positive signed-32 integer domain,
 // without a substitute count. AMS §9.13.2 also permits real df/stages; the
