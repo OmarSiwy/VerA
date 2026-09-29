@@ -700,7 +700,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
-        .stdout = "xfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=270\n",
+        .stdout = "xfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=291\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",

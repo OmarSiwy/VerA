@@ -357,7 +357,8 @@ pub const Obj = struct {
     nets: []const u32 = &.{},
     children: []const u32 = &.{},
     users: []const u32 = &.{},
-    /// `.code` only: the object type and the diagram's edges, as data.
+    /// `.code`: the object type and the diagram's edges, as data. Any other
+    /// class may carry `edges` and `props` too, answered after its own.
     vtype: c_int = 0,
     edges: []const code.Edge = &.{},
     lists: []const code.List = &.{},
@@ -1552,11 +1553,88 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     for (scopes.items, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps };
         try b.module(s.decl);
+        try addConnections(&b, scopes.items, r);
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
     d.finest = @intCast(r.finest);
     return d;
+}
+
+/// IEEE 1364-2005 §26.6.2/§26.6.5/§26.6.12, built in scope `b.scope`, whose
+/// expressions the connections are: each parameter's declared range
+/// (vpiLeftRange/vpiRightRange, NULL without one, Details c), and for each
+/// child instance its ports' vpiHighConn and vpiConnByName and one param
+/// assign per `#(...)` entry; an instance array's range and its connection
+/// list as one vpiListOp operation.
+///
+/// ponytail: only instances written directly in the module body; one inside
+/// a generate block has none of these (its `Ast.Instance` is the block's).
+fn addConnections(b: *code.Builder, scopes: []Building, r: *const sim.digital.Run) Error!void {
+    const s = &scopes[b.scope];
+    const m = s.decl;
+    const file = b.file;
+    for (s.params.items) |at| {
+        const p = for (m.params) |p| {
+            if (std.mem.eql(u8, file.str(p.name), b.objects.items[at].name)) break p;
+        } else continue;
+        const range = p.packed_range orelse Ast.Dim{ .msb = .none, .lsb = .none };
+        const l = try b.expr(range.msb);
+        const rr = try b.expr(range.lsb);
+        b.objects.items[at].edges = try b.arena.dupe(code.Edge, &.{ .{ .tag = code.vpiLeftRange, .to = l }, .{ .tag = code.vpiRightRange, .to = rr } });
+    }
+    for (m.instances) |*inst| {
+        if (inst.range) |range| for (s.module_arrays.items) |at| {
+            if (!std.mem.eql(u8, b.objects.items[at].name, file.str(inst.name))) continue;
+            var conns: std.ArrayList(Ast.ExprId) = .empty;
+            for (inst.ports) |c| try conns.append(b.arena, c.expr);
+            const l = try b.expr(range.msb);
+            const rr = try b.expr(range.lsb);
+            const list = try b.operation(code.vpiListOp, conns.items);
+            b.objects.items[at].edges = try b.arena.dupe(code.Edge, &.{
+                .{ .tag = code.vpiLeftRange, .to = l },
+                .{ .tag = code.vpiRightRange, .to = rr },
+                .{ .tag = code.vpiExpr, .to = list },
+            });
+        };
+        for (s.children.items) |c| {
+            if (r.scope_info.items[scopes[c].engine].name != inst.name) continue;
+            const child = scopes[c].decl;
+            const named = inst.ports.len != 0 and inst.ports[0].name != .none;
+            for (scopes[c].ports.items) |pt| b.objects.items[pt].props = try b.arena.dupe(code.Prop, &.{.{ .prop = code.vpiConnByName, .value = @intFromBool(named) }});
+            for (inst.ports, 0..) |conn, k| {
+                // §12.3.6: by name, the port whose external name it is; in
+                // order, the k-th port (a concatenation's pieces are one).
+                var ordinal: usize = 0;
+                const j = for (child.ports, 0..) |p, j| {
+                    if (named) {
+                        if ((if (p.external_name != .none) p.external_name else p.name) == conn.name) break j;
+                    } else if (!p.concat_rest) {
+                        if (ordinal == k) break j;
+                        ordinal += 1;
+                    }
+                } else continue;
+                const high = try b.expr(conn.expr);
+                b.objects.items[scopes[c].ports.items[j]].edges = try b.arena.dupe(code.Edge, &.{.{ .tag = code.vpiHighConn, .to = high }});
+            }
+            for (inst.params, 0..) |o, k| {
+                // §12.2.2.1: in order, the k-th parameter that is not local.
+                var ordinal: usize = 0;
+                const name = for (child.params) |p| {
+                    if (p.is_local) continue;
+                    if (if (o.name != .none) p.name == o.name else ordinal == k) break p.name;
+                    ordinal += 1;
+                } else continue;
+                const lhs = for (scopes[c].params.items) |at| {
+                    if (std.mem.eql(u8, b.objects.items[at].name, file.str(name))) break at;
+                } else code.none;
+                const rhs = try b.expr(o.value);
+                const at = try b.code(code.vpiParamAssign, &.{ .{ .tag = code.vpiLhs, .to = lhs }, .{ .tag = code.vpiRhs, .to = rhs } }, &.{}, &.{.{ .prop = code.vpiConnByName, .value = @intFromBool(o.name != .none) }});
+                b.objects.items[at].owner = c;
+                try scopes[c].code.param_assigns.append(b.gpa, at);
+            }
+        }
+    }
 }
 
 /// §6.7 full name -> object, for resolving the identifiers of the
@@ -1838,9 +1916,11 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // from the classes whose diagram draws it; from any other class it is
     // NOTRAVERSE, like every relationship a diagram does not draw.
     // §11.6.3/§11.6.16–§11.6.24: a behavioural object's single arrows are
-    // its own `edges` rows (code.zig). A tag it does not carry falls through
-    // to the containing-scope edge, and past that is NOTRAVERSE.
-    if (o.kind == .code) for (o.edges) |e| if (e.tag == obj_type) {
+    // its own `edges` rows (code.zig), as are the few a declared object
+    // carries (a port's vpiHighConn, a range's bounds). A tag it does not
+    // carry falls through to the containing-scope edge, and past that is
+    // NOTRAVERSE.
+    for (o.edges) |e| if (e.tag == obj_type) {
         if (e.to == no_obj) return null;
         return handleOf(&d.objects[e.to]);
     };
@@ -2412,6 +2492,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             return at.line;
         },
         else => {
+            for (o.props) |p| if (p.prop == prop) return p.value;
             fail("NOPROP", "vpi_get: property {d} is not answered for a {s}", .{ prop, @tagName(o.kind) });
             return vpiUndefined;
         },
