@@ -262,6 +262,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         return;
     }
     if (try lower_sysfunc.checkArity(self, tok, name, args)) return;
+    if (c == .@"$clog2") {
+        _ = try lower_sysfunc.lowerClog2(self, tok, args[0]);
+        return;
+    }
     // §9.13 Table 9-10 in statement position. They are FUNCTIONS, so a bare
     // `$random(s);` is only ever written for the seed's inout side effect — which
     // is exactly what `lowerRandom` performs; the variate is dropped.

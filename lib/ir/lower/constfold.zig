@@ -81,17 +81,13 @@ const Env = struct {
             return .{ .int = @intFromFloat(t) };
         }
         if (std.mem.eql(u8, name, "$itor")) return .{ .real = @floatFromInt(a.asIntExact() orelse return null) };
-        // §9.14 / IEEE 1364-2005 §17.11.1, one of the "mathematical system
-        // functions listed in 17.11": "the ceiling of the log base 2 of the
-        // argument (the log rounded up to an integer value)". A non-negative
-        // integer argument only (0 and 1 both give 0); the
-        // unsigned reading of a negative argument stays a run-time question.
+        // §9.14 / IEEE 1364-2005 §17.11.1: interpret the argument unsigned
+        // at its source width, not at the i64 carrier's width.
         if (std.mem.eql(u8, name, "$clog2")) {
-            const n = a.asIntExact() orelse return null;
-            if (n < 0) return null;
-            if (n <= 1) return .{ .int = 0 };
-            const u: u64 = @intCast(n - 1);
-            return .{ .int = 64 - @as(i64, @clz(u)) };
+            if (a != .int) return null;
+            const bits = clog2Width(self, args[0]) orelse return null;
+            if (bits > 64 and !clog2WideCarrier(self, args[0], 0)) return null;
+            return .{ .int = constfold.clog2(a.int, bits) };
         }
         return null;
     }
@@ -109,21 +105,31 @@ const Env = struct {
 /// variable or typed parameter, an untyped local parameter's default's
 /// (IEEE 1364-2005 §12.2, "the type and range of the final value assigned"),
 /// and null for one the host may override, or anything not an integer.
+/// `$clog2` additionally reads an inferred parameter's final elaborated HDL
+/// default: numeric host bindings carry a value, never new width metadata.
 fn nameWidth(self: *const Lower, e: Ast.ExprId, depth: u32) ?u32 {
+    return nameWidthFor(self, e, depth, false);
+}
+
+fn nameWidthFor(self: *const Lower, e: Ast.ExprId, depth: u32, comptime self_determined: bool) ?u32 {
     if (depth > 32) return null;
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
+    // §7.3.1 maps a discrete reg read to a zero-extended 32-bit integer.
+    // Its declared packed width affects the value, not the analog expression.
     if (self.vars.get(name)) |v| return if (v.ty == .integer) 32 else null;
     if (self.arrays.get(name)) |a| return if (a.ty == .integer) 32 else null;
-    const deeper = WidthEnv{ .self = self, .depth = depth + 1 };
+    const deeper = WidthEnv(self_determined){ .self = self, .depth = depth + 1 };
     for (self.func_params) |p| {
         if (!self.file.strings.eql(p.name, name)) continue;
-        return if (p.ty == .integer) 32 else if (p.ty == .unspecified) constfold.operandWidth(self.file, p.default, deeper) else null;
+        if (self_determined) if (p.packed_range) |range| return packedWidth(self, range);
+        return if (p.ty == .integer) 32 else if (p.ty == .unspecified) (if (self_determined) constfold.clog2Width(self.file, p.default, deeper) else constfold.operandWidth(self.file, p.default, deeper)) else null;
     }
     const pi = self.param_index.get(name) orelse return null;
     const p = self.out.params.items[pi];
     if (p.ty != .integer) return null;
     if (p.integer32) return 32;
+    if (self_determined) return p.source_width;
     if (!p.is_local) return null;
     const module = self.out.module orelse return null;
     for (module.params) |decl| {
@@ -132,14 +138,62 @@ fn nameWidth(self: *const Lower, e: Ast.ExprId, depth: u32) ?u32 {
     return null;
 }
 
+/// A packed declaration's inclusive bit count, before arithmetic erases it.
+/// Resolve in declaration scope so a later local cannot shadow either bound.
+pub fn packedWidth(self: *const Lower, range: Ast.Dim) ?u32 {
+    const left = (constEval(self, range.msb) orelse return null).asIntExact() orelse return null;
+    const right = (constEval(self, range.lsb) orelse return null).asIntExact() orelse return null;
+    return std.math.cast(u32, @abs(@as(i128, left) - right) + 1);
+}
+
 /// `nameWidth` one level down, as `constfold.operandWidth`'s `env`.
-const WidthEnv = struct {
-    self: *const Lower,
-    depth: u32,
-    pub fn width(env: WidthEnv, e: Ast.ExprId) ?u32 {
-        return nameWidth(env.self, e, env.depth);
+fn WidthEnv(comptime self_determined: bool) type {
+    return struct {
+        self: *const Lower,
+        depth: u32,
+        pub fn width(env: @This(), e: Ast.ExprId) ?u32 {
+            return nameWidthFor(env.self, e, env.depth, self_determined);
+        }
+    };
+}
+
+/// `$clog2`'s IEEE self-determined source width, before integer MIR erases it.
+pub fn clog2Width(self: *const Lower, e: Ast.ExprId) ?u32 {
+    return constfold.clog2Width(self.file, e, WidthEnv(true){ .self = self, .depth = 0 });
+}
+
+/// Above 64 bits, an i64 sign bit describes the source high bits only when
+/// `asExactInt` proved their extension. Parameter aliases preserve that proof
+/// at the same width; a wider declaration or arithmetic needs actual planes.
+pub fn clog2WideCarrier(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
+    if (depth > 32) return false;
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .logic_literal => return ex.logicValue(e).asExactInt() != null,
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            for (self.func_params) |p| {
+                if (self.file.strings.eql(p.name, name)) return wideParamCarrier(self, p, depth + 1);
+            }
+            const pi = self.param_index.get(name) orelse return false;
+            const p = self.out.params.items[pi];
+            const module = self.out.module orelse return false;
+            for (module.params) |decl| {
+                if (std.mem.eql(u8, self.file.str(decl.name), p.name)) return wideParamCarrier(self, decl, depth + 1);
+            }
+            return false;
+        },
+        else => return false, // else: no proof that the carrier retains every high bit
     }
-};
+}
+
+fn wideParamCarrier(self: *const Lower, p: Ast.ParamDecl, depth: u32) bool {
+    if (p.packed_range) |range| {
+        const width = packedWidth(self, range) orelse return false;
+        if (width != (clog2Width(self, p.default) orelse return false)) return false;
+    }
+    return clog2WideCarrier(self, p.default, depth);
+}
 
 /// The signedness of an INTEGER expression, from what the source states: a
 /// literal's base, a declaration's type, and IEEE 1364-2005 §5.5.1's rules for

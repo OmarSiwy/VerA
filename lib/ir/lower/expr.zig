@@ -357,7 +357,7 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
     var key_buf: [lower_param.elem_key_len]u8 = undefined;
     const key = try lower_param.elemKey(self, &key_buf, name, idx);
     if (self.vars.get(key)) |slot|
-        return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
+        return .{ .v = try lower_param.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.read_mask), .ty = slot.ty };
     if (self.param_index.get(key)) |pi|
         return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
     return null;
@@ -418,7 +418,7 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.out.params.items[idx].ty) };
     }
     if (self.vars.get(name)) |slot|
-        return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
+        return .{ .v = try lower_param.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.read_mask), .ty = slot.ty };
     // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
     // same name shadows the module's, so `param_index` is masked and the local
     // value is found in `consts` (where `inlineUserFuncPre` folded it).

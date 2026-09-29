@@ -135,6 +135,20 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
 
     try addParam(self, name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
+    self.out.params.items[self.out.params.items.len - 1].source_width = if (decl.packed_range) |range|
+        packedShapeWidth(self, range)
+    else if (decl.ty == .integer)
+        32
+    else
+        lower_constfold.clog2Width(self, decl.default);
+}
+
+/// Packed bounds are source shape: a numeric model card cannot resize them.
+/// Resolve and retain the width before entering any later procedural scope.
+fn packedShapeWidth(self: *Lower, range: Ast.Dim) ?u32 {
+    _ = lower_constfold.shapeEval(self, range.msb);
+    _ = lower_constfold.shapeEval(self, range.lsb);
+    return lower_constfold.packedWidth(self, range);
 }
 
 /// §3.4/A.2.4: the spelling of the first simulation-state or module-variable
@@ -801,6 +815,19 @@ pub const VarScope = enum { module, local };
 pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!void {
     const name = self.file.str(decl.name);
     const ty = astTy(decl.ty);
+    const read_mask: ?u32 = if (decl.storage == .reg) blk: {
+        const width = if (decl.packed_range) |range| packedShapeWidth(self, range) orelse {
+            try self.err(decl.main_tok, .E0352, "the packed range of `{s}` is not a constant integer range", .{name});
+            return;
+        } else 1;
+        if (width > 31) {
+            try self.err(decl.main_tok, .E0222, "`{s}` has {d} bits", .{ name, width });
+            return;
+        }
+        // §7.3.1 Table 7-1 clears every bit above the source grouping and
+        // always clears bit 31. Keep this mask in declaration scope.
+        break :blk (@as(u32, 1) << @intCast(width)) - 1;
+    } else null;
     // §5.3.2: "All named block variables are static — that is, an unique
     // location exists for all variables and leaving or entering the block do
     // not affect the values stored in them." The location is (scope, name), so
@@ -823,6 +850,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
         if (isMemArray(self, decl.name, ty)) {
             const place = try declareMemArray(self, name, dims, ty, !hold);
+            self.arrays.getPtr(name).?.mem.?.read_mask = read_mask;
             const elems = try flattenPattern(self, decl.init, dims);
             if (hold) {
                 // §5.10 the initializer is the `Instance` field's default and
@@ -860,6 +888,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
             // element takes a slot, since the index may be a runtime `case`.
             const en = try elemName(self, name, idx);
             const slot = try declareVar(self, en, ty);
+            self.vars.getPtr(en).?.read_mask = read_mask;
             // §3.2 an element the pattern does not reach keeps the zero start.
             const init_val: Mir.Value = if (elem != .none)
                 try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem))
@@ -874,6 +903,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     }
 
     const slot = try declareVar(self, name, ty);
+    self.vars.getPtr(name).?.read_mask = read_mask;
     const init_val: Mir.Value = if (decl.init == .none)
         zeroOf(ty)
     else
@@ -982,7 +1012,14 @@ pub fn storeElem(self: *Lower, place: Ssa.Place, index: Mir.Value, v: Mir.Value)
 /// §3.2.2 element `index` of a memory-backed array's current version.
 pub fn loadElem(self: *Lower, mem: ArrayInfo.Mem, ty: Ty, index: Mir.Value) Oom!Mir.Value {
     const cur = try self.builder.readVariable(mem.place, self.cur);
-    return self.emit(if (ty == .integer) .iload else .fload, &.{ cur, index });
+    const value = try self.emit(if (ty == .integer) .iload else .fload, &.{ cur, index });
+    return analogRead(self, value, mem.read_mask);
+}
+
+/// §7.3.1: the analog value of a discrete bit grouping is a nonnegative
+/// 32-bit integer. The source width controls zero extension, not arithmetic.
+pub fn analogRead(self: *Lower, value: Mir.Value, mask: ?u32) Oom!Mir.Value {
+    return if (mask) |bits| self.emit(.bitand, &.{ value, try self.mir.addIntConst(self.arena, bits) }) else value;
 }
 
 /// The flat element index of an in-range subscript tuple: row-major, each

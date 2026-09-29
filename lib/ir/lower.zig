@@ -39,6 +39,9 @@ pub const ParamInfo = struct {
     /// An explicit `integer` declaration converts to signed 32 bits; an
     /// inferred integral parameter retains its initializer's bit pattern.
     integer32: bool = true,
+    /// Final HDL declaration width, retained for self-determined operands.
+    /// Numeric model bindings change the value, not this source metadata.
+    source_width: ?u32 = null,
     default: Mir.Value,
     /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`; proof.zig uses them as
     /// bound evidence.
@@ -652,7 +655,12 @@ pub const Display = struct {
 };
 
 /// A visible variable: its SSA place and declared type.
-pub const VarSlot = struct { place: Ssa.Place, ty: Ty };
+pub const VarSlot = struct {
+    place: Ssa.Place,
+    ty: Ty,
+    /// §7.3.1: a packed reg read becomes a zero-extended analog integer.
+    read_mask: ?u32 = null,
+};
 /// Absent-index sentinel for the `u32` index fields here.
 pub const none_u32 = std.math.maxInt(u32);
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
@@ -667,7 +675,7 @@ pub const ArrayInfo = struct {
     /// element under `elemName`. See `lower_param.declareVarDecl`.
     mem: ?Mem = null,
     /// A memory-backed array's SSA place and `out.mem_arrays` row.
-    pub const Mem = struct { place: Ssa.Place, id: u32 };
+    pub const Mem = struct { place: Ssa.Place, id: u32, read_mask: ?u32 = null };
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };

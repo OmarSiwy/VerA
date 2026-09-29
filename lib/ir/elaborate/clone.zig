@@ -33,6 +33,7 @@ pub inline fn cloneParams(
         out.name = elab_names.flat(self, p.name);
         out.ranges = try cloneRanges(self, p.ranges);
         out.dims = try cloneDims(self, p.dims);
+        out.packed_range = try cloneDim(self, p.packed_range);
         if (over.get(p.name)) |v| {
             out.default = v; // already in the parent's flat namespace
             out.is_override = true;
@@ -126,6 +127,7 @@ pub fn cloneVar(self: *Flatten, v: Ast.VarDecl) Error!Ast.VarDecl {
     var out = v;
     out.name = elab_names.flat(self, v.name);
     out.dims = try cloneDims(self, v.dims);
+    out.packed_range = try cloneDim(self, v.packed_range);
     out.init = try cloneExpr(self, v.init);
     return out;
 }
@@ -183,6 +185,7 @@ fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const Ast
         o.* = p;
         o.default = try cloneExpr(self, p.default);
         o.dims = try cloneDims(self, p.dims);
+        o.packed_range = try cloneDim(self, p.packed_range);
         o.ranges = try cloneRanges(self, p.ranges);
     }
     return out;
@@ -194,6 +197,7 @@ fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.Var
     for (vs, out) |v, *o| {
         o.* = v;
         o.dims = try cloneDims(self, v.dims);
+        o.packed_range = try cloneDim(self, v.packed_range);
         o.init = try cloneExpr(self, v.init);
     }
     return out;

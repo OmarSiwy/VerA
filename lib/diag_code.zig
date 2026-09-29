@@ -419,6 +419,10 @@ pub const Code = enum(u16) {
     E0890,
     /// §9.17.3 a `$limit` argument that is not the form Syntax 9-12 spells.
     E0891,
+    /// §9.14 / IEEE 1364-2005 §17.11.1 `$clog2` takes an integral operand.
+    E0892,
+    /// §9.14 an analog wide operand whose high bits the carrier erased.
+    E0893,
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
@@ -1354,12 +1358,8 @@ fn infoOf(c: Code) Info {
             \\nowhere left to land. 31 bits is the widest legal grouping, and it
             \\reads as at most +2147483647.
             \\
-            \\Why a class-2 (parser) number for a chapter-7 semantic rule: the
-            \\declared RANGE is the only evidence of a width, and nothing below
-            \\the parser keeps it — a `reg` becomes one integer variable, which
-            \\is Table 7-1's own mapping. It follows that the bounds have to be
-            \\literals here; the check moves down to lowering, and gains the
-            \\constant folder, the day a `reg` keeps its bits.
+            \\The parser checks literal ranges; analog lowering also checks
+            \\ranges resolved from parameters before forming the read mask.
             ,
         },
 
@@ -4667,6 +4667,16 @@ fn infoOf(c: Code) Info {
             \\missing descriptor is not descriptor 0. Supply exactly the list
             \\the clause prints.
             ,
+        },
+        .E0892 => .{
+            .title = "$clog2 requires an integer or vector argument",
+            .lrm = "9.14",
+            .explain = "IEEE 1364-2005 §17.11.1 permits an integer or an arbitrary sized vector, interpreted as unsigned. A real operand has no integral bit width; convert it explicitly with $rtoi if truncation is intended.",
+        },
+        .E0893 => .{
+            .title = "analog $clog2 cannot recover this wide operand's high bits",
+            .lrm = "9.14",
+            .explain = "Above 64 bits the analog backend supports an exact wide literal and parameter aliases preserving its width. Widening a narrower initializer or evaluating wide arithmetic requires bit planes this carrier does not retain. The compiler refuses that case rather than treating bit 63 as an unproven sign extension; digital execution preserves arbitrary vector widths.",
         },
         .E0888 => .{
             .title = "descriptor argument is not an integer",

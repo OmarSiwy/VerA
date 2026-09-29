@@ -232,6 +232,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
     if (try checkArity(self, ex.mainTok(e), name, sys_args)) return poison;
+    if (Mir.Callee.fromName(name) == .@"$clog2") return lowerClog2(self, ex.mainTok(e), sys_args[0]);
     if (Mir.Callee.fromName(name) == .@"$fopen" and try checkFopenType(self, sys_args)) return poison;
     // §9.20 the two alias functions: checked and applied in lowering
     // (`checkAliasCall`), returning a constant; the call never reaches codegen.
@@ -323,6 +324,24 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // observes, so it is sequenced into the I/O phase like the tasks.
     if (Mir.callee.family(.fromName(name)) == .file_func) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
+}
+
+/// §9.14 / IEEE 1364-2005 §17.11.1's integral argument and its source width,
+/// shared by expression and statement calls (the latter discard the result).
+pub fn lowerClog2(self: *Lower, tok: u32, arg: Ast.ExprId) Oom!TypedValue {
+    const tv = try lower_expr.lowerExpr(self, arg);
+    if (tv.ty != .integer or arg == .none) {
+        try self.err(tok, .E0892, "got {s}", .{@tagName(tv.ty)});
+        return poison;
+    }
+    const width = lower_constfold.clog2Width(self, arg) orelse 64;
+    if (width > 64 and !lower_constfold.clog2WideCarrier(self, arg, 0)) {
+        try self.err(tok, .E0893, "the {d}-bit operand has no exact wide carrier", .{width});
+        return poison;
+    }
+    // The second MIR operand is source metadata, not a second source
+    // argument. The unsigned conversion needs it after lowering.
+    return .{ .v = try self.call("$clog2", &.{ tv.v, try self.mir.addIntConst(self.arena, width) }), .ty = .integer };
 }
 
 /// Checks a system call's argument count against `callee.Info.args` and returns

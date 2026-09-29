@@ -242,10 +242,11 @@ pub const math_txt =
     \\    const bits: u32 = @bitCast(@as(i32, @truncate(a)));
     \\    return if (n < 0) 0 else std.math.shr(u32, bits, n);
     \\}
-    \\fn zClog2(a: i64) i64 { // §9.11 $clog2
-    \\    if (a <= 1) return 0;
-    \\    const m: u64 = @intCast(a - 1);
-    \\    return 64 - @as(i64, @clz(m));
+    \\fn zClog2(a: i64, width: i64) i64 { // §9.14 / IEEE 1364-2005 §17.11.1
+    \\    if (width > 64 and a < 0) return width;
+    \\    const mask: u64 = if (width >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(width)) - 1;
+    \\    const bits = @as(u64, @bitCast(a)) & mask;
+    \\    return if (bits <= 1) 0 else 64 - @as(i64, @clz(bits - 1));
     \\}
     \\fn zStrCmp(a: []const u8, b: []const u8) i64 { // §3.3.1 string relations
     \\    return switch (std.mem.order(u8, a, b)) { .lt => -1, .eq => 0, .gt => 1 };
