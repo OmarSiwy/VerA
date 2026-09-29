@@ -234,8 +234,9 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiRange              115
 /* IEEE 1364-2005 §26.6.44: module ->> gen scope array (vpiSize, vpiName) ->>
  * gen scope (vpiArray, vpiImplicitDecl, -> vpiIndex), one array per loop
- * generate directly inside an instance; the objects an iteration declares
- * are not reached from its gen scope. */
+ * generate directly inside an instance. A gen scope ->> vpiNet reaches its
+ * scalar and vector nets; each net's vpiScope reaches that gen scope. Other
+ * declarations within a gen scope are not reached yet. */
 #define vpiGenScopeArray      133
 #define vpiGenScope           134
 #define vpiImplicitDecl        26
@@ -587,10 +588,9 @@ typedef struct t_cb_data {
  *   vpi_iterate(vpiNet,           module)  §11.6.8
  *   vpi_iterate(vpiReg,           module)  §11.6.9
  *   vpi_iterate(vpiParameter,     module)  §11.6.12
- *   vpi_handle(vpiScope,  obj)             the containing module, NULL at top
- *   vpi_handle(vpiModule, obj)             the same edge, read as §11.6.4's
- *                                          "one-to-one relationship back to
- *                                          module"
+ *   vpi_handle(vpiScope,  obj)             the containing scope, NULL at top
+ *   vpi_handle(vpiModule, obj)             the containing module (§11.6.4),
+ *                                          even through a lexical scope
  *
  * Anything else is a request VerA does not answer: the routine returns its
  * documented failure value (NULL, or vpiUndefined for vpi_get) and records an

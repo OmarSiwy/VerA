@@ -287,10 +287,10 @@ fn typeName(t: c_int) []const u8 {
 /// owner.
 pub const Obj = struct {
     kind: Kind,
-    /// §11.6's "one-to-one relationship back to module": the SCOPE INDEX this
-    /// object is declared in. For a `.module` this is its PARENT scope, so the
-    /// edge is the same edge for every class and `vpi_handle(vpiScope, …)` has
-    /// one arm. `null` on the top module only.
+    /// §11.6's "one-to-one relationship back to module": the containing
+    /// module's SCOPE INDEX. For a `.module` this is its parent module.
+    /// A lexical containing scope, such as a gen scope, is a separate
+    /// vpiScope edge; runtime time-scale/storage lookup keeps this owner.
     owner: ?u32,
     /// `.module` only: which `Design.scopes` row is this module's own scope.
     scope: u32 = 0,
@@ -1261,10 +1261,19 @@ fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Array
     const range = r.vecRange(slot);
     const bits = try arena.alloc(u32, vec.size);
     const step: i64 = if (range.msb >= range.lsb) -1 else 1;
+    // A generated vector's module owner is not its enclosing gen scope.
+    // §26.6.6/§26.6.44: each bit retains the vector's containing scope.
+    const scope: ?code.Edge = for (vec.edges) |edge| {
+        if (edge.tag == vpiScope) break edge;
+    } else null;
     for (bits, 0..) |*bit, k| {
         const i = range.msb + step * @as(i64, @intCast(k));
         const c: u32 = @intCast(objects.items.len);
         try objects.append(gpa, .{ .kind = .constant, .owner = vec.owner, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
+        const edges = try arena.alloc(code.Edge, if (scope != null) 3 else 2);
+        edges[0] = .{ .tag = vpiParent, .to = v };
+        edges[1] = .{ .tag = vpiIndex, .to = c };
+        if (scope) |edge| edges[2] = edge;
         bit.* = @intCast(objects.items.len);
         try objects.append(gpa, .{
             .kind = .code,
@@ -1273,7 +1282,7 @@ fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Array
             .name = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.name, i }),
             .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.full, i }),
             .src_tok = vec.src_tok,
-            .edges = try arena.dupe(code.Edge, &.{ .{ .tag = vpiParent, .to = v }, .{ .tag = vpiIndex, .to = c } }),
+            .edges = edges,
             .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
         });
     }
@@ -1298,12 +1307,13 @@ fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Arra
 
 /// IEEE 1364-2005 §26.6.44: each §12.4.1 loop generate directly inside an
 /// instance is a gen scope array over its iterations, each a gen scope named
-/// `name[i]` whose vpiIndex is `i`. The objects each iteration declares are
-/// not modelled; a gen scope is found by name and counted, not walked into.
+/// `name[i]` whose vpiIndex is `i`. Each scope exposes its scalar and vector
+/// nets, which link back through vpiScope while keeping their module owner.
 ///
 /// ponytail: a loop generate nested in another generate block, and a
 /// conditional generate's scope, have no gen scope yet; both are rows of
-/// `Run.scope_info` whose parent is itself lexical.
+/// `Run.scope_info` whose parent is itself lexical. Net arrays and other
+/// declarations within a gen scope are not modelled yet.
 fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), scopes: []Building, r: *sim.digital.Run, vpi_of: []const u32) Error!void {
     const Key = struct { scope: u32, name: Ast.StrId };
     var groups: std.AutoArrayHashMapUnmanaged(Key, std.ArrayList(u32)) = .empty;
@@ -1327,13 +1337,14 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
             const c: u32 = @intCast(objects.items.len);
             try objects.append(gpa, .{ .kind = .constant, .owner = k.scope, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
             const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, i });
+            const full = try joinPath(arena, module_full, local);
             m.* = @intCast(objects.items.len);
             try objects.append(gpa, .{
                 .kind = .code,
                 .vtype = code.vpiGenScope,
                 .owner = k.scope,
                 .name = local,
-                .full = try joinPath(arena, module_full, local),
+                .full = full,
                 .edges = try arena.dupe(code.Edge, &.{.{ .tag = code.vpiIndex, .to = c }}),
                 .props = try arena.dupe(code.Prop, &.{
                     .{ .prop = vpiArray, .value = 1 },
@@ -1341,6 +1352,26 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
                     .{ .prop = code.vpiImplicitDecl, .value = @intFromBool(r.scope_info.items[e].implicit) },
                 }),
             });
+            var nets: std.ArrayList(u32) = .empty;
+            for (r.gen_nets.get(e) orelse &.{}) |n| {
+                const slot = r.names.get(.{ .scope = e, .str = n.name }) orelse continue;
+                if (r.arrays.contains(slot)) continue;
+                const net_name = try arena.dupe(u8, r.file.str(n.name));
+                try nets.append(arena, @intCast(objects.items.len));
+                try objects.append(gpa, .{
+                    .kind = .net,
+                    .owner = k.scope,
+                    .name = net_name,
+                    .full = try joinPath(arena, full, net_name),
+                    .size = r.values[slot].width,
+                    .slot = slot,
+                    .net_type = n.kind,
+                    .src_tok = n.main_tok,
+                    .edges = try arena.dupe(code.Edge, &.{.{ .tag = vpiScope, .to = m.* }}),
+                });
+                try addBits(gpa, arena, objects, r, code.vpiNetBit);
+            }
+            objects.items[m.*].lists = try arena.dupe(code.List, &.{.{ .tag = vpiNet, .items = nets.items }});
         }
         const at: u32 = @intCast(objects.items.len);
         try objects.append(gpa, .{
@@ -1953,12 +1984,13 @@ inline fn object(comptime who: []const u8, h: vpiHandle) ?*Obj {
 
 /// "Return the object of type `type` associated with object `ref`."
 ///
-/// Two tags are answered and they name the same edge read from two diagrams:
+/// Two tags default to the module owner read from two diagrams:
 /// `vpiScope` is §11.6.12's "scope has a double-headed relationship with the
 /// parameter object", `vpiModule` is §11.6.4's "ports has a one-to-one
 /// relationship back to module". A module's own containing scope is its parent
 /// instance, and the top module has none — NULL, and NOT an error: "no such
 /// object" is this routine's ordinary answer at the root of the hierarchy.
+/// An explicit vpiScope edge takes precedence for a lexical containing scope.
 pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // §11.6.16 NOTE 1: the call whose compiletf/sizetf/derivtf is running
     // (systf.buildCalls). Outside one the answer is "no such object", which

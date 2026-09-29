@@ -15,7 +15,7 @@
 //     w4 = b26_leaf #(.W(4)), ordered    a = r,   y = s2
 //     c1 = b26_buf, ordered              i = s,   o = s3
 //     arr[1:0] = b26_cell, ordered       i = s in each instance (module array)
-//     gen[0], gen[1]                     loop generate, one net gw each
+//     gen[0], gen[1]                     loop generate, nets gw and gv each
 //
 // Time 0 leaves r = 9, i = 5, x = 2.5, t = 7, mem[1] = 8'h11, ia[2] = 3, so
 // bus = 8'h09, s = bus[0] = 1 and s3 = s = 1.
@@ -25,7 +25,7 @@ module b26_leaf(a, y);
   parameter W = 8;
   input [W-1:0] a;
   output y;
-  wire inner;
+  wire [W-1:0] inner;
   assign y = a[0];
 endmodule
 
@@ -62,7 +62,8 @@ module b26_structure;
 
   genvar g;
   generate for (g = 0; g < 2; g = g + 1) begin : gen
-    wire gw;
+    wire gw = g;
+    wire [g+1:0] gv = g + 1;
   end endgenerate
 
   initial begin

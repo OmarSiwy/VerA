@@ -95,8 +95,10 @@
  *   vpi_handle(vpiUse, iterator_handle) shall return NULL."
  * §26.6.44, p. 417: gen scope array -> size (vpiSize), -> name; gen scope
  *   -> array member (vpiArray), -> name, -> protected, -> is implicitly
- *   declared, and -> vpiIndex expr. Details: "a) The size for a genscope
- *   array is the number of elements in the array."
+ *   declared, -> vpiIndex expr, and ->> net. Details: "a) The size for a
+ *   genscope array is the number of elements in the array." §12.4.1 makes
+ *   each instantiated generate block a separate scope; Annex G defines
+ *   vpiScope as the containing scope object.
  *
  * ------------------------------------------------------------------ DERIVATION
  *
@@ -144,7 +146,9 @@
  *   (Details a), bus[3] a vpiNetBit whose vpiParent is bus and whose
  *   vpiIndex reads 3 (Details h) and which vpi_handle_by_index(bus, 3)
  *   returns (the diagram's "access by index"), the scalar s none; value
- *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). na is a net ARRAY of
+ *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). The child instance's
+ *   u.inner[7] is a net bit whose containing vpiScope and vpiModule are both u.
+ *   na is a net ARRAY of
  *   two nets: vpiNetArray, vpiSize 2, the module's one net array, walked
  *   as na[0] and na[1]; na[1] is a 4-bit net with vpiArray TRUE (the
  *   diagram's "array member"). bus is no array member: vpiArray FALSE, and
@@ -185,7 +189,13 @@
  *   its vpiUse is NULL (Details b).
  * §26.6.44 gen is a genscope array of 2 (Details a) whose gen scopes are
  *   gen[0] and gen[1]; gen[1] is an array member, explicitly named, and its
- *   vpiIndex reads 1; gen[0].gw is gen[0]'s net.
+ *   vpiIndex reads 1. Each has two distinct nets: scalar gw = g (0 or 1)
+ *   and vector [g+1:0] gv = g + 1 (2 bits holding 1 or 3 bits holding 2).
+ *   Their vpiScope is the corresponding gen scope; vpiModule still reaches
+ *   b26_structure. Each vector's bits retain that scope and their vector
+ *   parent. The generated-net subsection has eleven CHECKs and one error
+ *   check; with the 298 other structural checks and three child-bit checks,
+ *   the total is 313.
  *
  * REFUSALS, each NULL / vpiUndefined with vpi_chk_error() nonzero:
  *   §26.2.2  "b26_leaf.a": a definition's port, which is no one object.
@@ -517,6 +527,13 @@ static void nets_regs_variables(void)
     CHECK(vpi_compare_objects(vpi_handle_by_index(bus, 3), b3), "26.6.6: net -> access by index reaches bus[3]");
     CHECK(vpi_iterate(vpiBit, p02_by_name("b26_structure.s")) == NULL, "26.6.6: a scalar net has no bits");
   }
+  {
+    vpiHandle child = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.u", NULL);
+    vpiHandle bit = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.u.inner[7]", NULL);
+    CHECK(child != NULL && bit != NULL && vpi_get(vpiType, bit) == vpiNetBit, "26.6.6: u.inner[7] is the child's net bit");
+    CHECK(vpi_compare_objects(vpi_handle(vpiScope, bit), child), "26.6.6: u.inner[7]'s containing scope is u");
+    CHECK(vpi_compare_objects(vpi_handle(vpiModule, bit), child), "26.6.6: u.inner[7]'s containing module is u");
+  }
   expect_no_error("the net bits");
   CHECK(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6 s: na is a vpiNetArray of 2 nets");
   CHECK(count(vpiNetArray, top) == 1 && count(vpiNet, na) == 2 && yields(vpiNet, na, "b26_structure.na[1]"),
@@ -660,8 +677,39 @@ static void parameters_and_generates(void)
   CHECK(int_value(P) == 5, "26.6.12: P still reads 5");
 
   /* §26.6.44 */
-  XFAIL(vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0].gw", NULL) != NULL, "26.6.44",
-        "gen[0].gw names no object");
+  {
+    vpiHandle g0 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0]", NULL);
+    vpiHandle g1 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[1]", NULL);
+    vpiHandle gw0 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0].gw", NULL);
+    vpiHandle gw1 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[1].gw", NULL);
+    vpiHandle gv0 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0].gv", NULL);
+    vpiHandle gv1 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[1].gv", NULL);
+    vpiHandle bit0, bit1;
+    CHECK(gw0 != NULL && gw1 != NULL && vpi_get(vpiType, gw0) == vpiNet && vpi_get(vpiType, gw1) == vpiNet &&
+          !vpi_compare_objects(gw0, gw1), "26.6.44: each gen scope declares a distinct gw net");
+    CHECK(vpi_get(vpiSize, gw0) == 1 && vpi_get(vpiSize, gw1) == 1 && int_value(gw0) == 0 && int_value(gw1) == 1,
+          "26.6.44: each scalar gw reads its own iteration's g");
+    CHECK(count(vpiNet, g0) == 2 && yields(vpiNet, g0, "b26_structure.gen[0].gw") && yields(vpiNet, g0, "b26_structure.gen[0].gv"),
+          "26.6.44: gen[0] ->> only its own two nets");
+    CHECK(count(vpiNet, g1) == 2 && yields(vpiNet, g1, "b26_structure.gen[1].gw") && yields(vpiNet, g1, "b26_structure.gen[1].gv"),
+          "26.6.44: gen[1] ->> only its own two nets");
+    CHECK(vpi_compare_objects(vpi_handle(vpiScope, gw0), g0) && vpi_compare_objects(vpi_handle(vpiScope, gw1), g1),
+          "26.6.44: each gw's enclosing vpiScope is its gen scope");
+    CHECK(vpi_compare_objects(vpi_handle(vpiModule, gw0), top) && vpi_compare_objects(vpi_handle(vpiModule, gw1), top),
+          "26.6.6: a generated net's vpiModule is the containing module");
+    CHECK(gv0 != NULL && gv1 != NULL && vpi_get(vpiType, gv0) == vpiNet && vpi_get(vpiType, gv1) == vpiNet &&
+          vpi_get(vpiSize, gv0) == 2 && vpi_get(vpiSize, gv1) == 3, "26.6.44: gv has the width elaborated in its own scope");
+    CHECK(int_value(gv0) == 1 && int_value(gv1) == 2, "26.6.44: each gv reads its own iteration's g + 1");
+    CHECK(vpi_compare_objects(vpi_handle(vpiScope, gv0), g0) && vpi_compare_objects(vpi_handle(vpiScope, gv1), g1),
+          "26.6.44: each gv's enclosing vpiScope is its gen scope");
+    CHECK(count(vpiBit, gv0) == 2 && count(vpiBit, gv1) == 3, "26.6.6: each generated vector exposes every net bit");
+    bit0 = vpi_handle_by_index(gv0, 1);
+    bit1 = vpi_handle_by_index(gv1, 2);
+    CHECK(bit0 != NULL && bit1 != NULL && vpi_compare_objects(vpi_handle(vpiScope, bit0), g0) &&
+          vpi_compare_objects(vpi_handle(vpiScope, bit1), g1) && vpi_compare_objects(vpi_handle(vpiParent, bit0), gv0) &&
+          vpi_compare_objects(vpi_handle(vpiParent, bit1), gv1), "26.6.6/26.6.44: generated vector bits retain their scope and parent");
+    expect_no_error("the generated nets and their scope relationships");
+  }
   {
     vpiHandle itr = vpi_iterate(vpiGenScopeArray, top);
     vpiHandle ga = itr ? vpi_scan(itr) : NULL;
