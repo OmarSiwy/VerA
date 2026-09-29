@@ -7,9 +7,11 @@
 //
 // Legal neighbour: b_12_2_2_parameter_assignment_forms.v (#(10,15) and
 // #(.size(10),.delay(15)) on separate instances).
+// The shared parser now reports E0246 for this A.4.1 violation before the
+// digital engine's former E1100 check; the required refusal is unchanged.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 12.2.2 12.2.2.2
-//! reject E1100
+//! reject E0246
 //! reject mixes ordered and named parameter assignments
 module vdff;
   parameter size=5, delay=1;

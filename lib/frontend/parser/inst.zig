@@ -84,12 +84,13 @@ pub fn parseInstantiation(self: *Parser, b: *parse_module.Body) Error!void {
 
 /// Parses an optional §6.3 / A.4.1 parameter_value_assignment,
 /// `#( list_of_parameter_assignments )`: an empty slice when the cursor is not
-/// on `#`. A leading `.` marks the named arm; mixing arms is not diagnosed
-/// here. Shared by module instantiation and the §7.7.3 connect statement.
+/// on `#`. A leading `.` marks the named arm; A.4.1 requires a nonempty
+/// list entirely in one arm. Shared by instantiation and §7.7.3 connect.
 pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride {
     var params: std.ArrayList(Ast.ParamOverride) = .empty;
     if (self.eat(.hash)) {
         _ = try self.expect(.lparen);
+        const first = self.pos;
         if (!self.eat(.rparen)) {
             while (true) {
                 const tok = self.pos;
@@ -109,6 +110,10 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
             }
             _ = try self.expect(.rparen);
         }
+        if (params.items.len == 0) return self.failAt(first, .E0246, "an empty parameter value assignment has no expression or named assignment", .{});
+        const named = params.items[0].name != .none;
+        for (params.items[1..]) |p| if ((p.name != .none) != named)
+            return self.failAt(p.main_tok, .E0246, "instance mixes ordered and named parameter assignments", .{});
     }
     return params.items;
 }

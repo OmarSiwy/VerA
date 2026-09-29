@@ -52,11 +52,16 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     if (self.peek() == .hash) {
         self.pos += 1;
         _ = try self.expect(.lparen);
+        const first = self.pos;
+        var local: ?u32 = null;
         while (self.peek() == .kw_parameter or self.peek() == .kw_localparam) {
+            if (self.peek() == .kw_localparam and local == null) local = self.pos;
             try parse_decl.parseParamDecl(self, &b.params);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
+        if (local) |tok| return self.failAt(tok, .E0246, "a module parameter header requires `parameter`, not `localparam`", .{});
+        if (b.params.items.len == 0) return self.failAt(first, .E0246, "an empty module parameter header has no parameter declaration", .{});
     }
     const header_params = b.params.items.len;
     if (self.peek() == .lparen) try parsePortList(self, &b);
