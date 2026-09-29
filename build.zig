@@ -295,7 +295,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "contract", .module = contract }},
     });
-    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d" }) |name| {
+    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any" }) |name| {
         const gen = b.addRunArtifact(exe);
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));

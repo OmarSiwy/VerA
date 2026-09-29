@@ -1099,6 +1099,20 @@ pub const State = struct {
         }
     }
 
+    /// What a change of `slot` would wake now: `.any` when a continuous
+    /// driver, a node or an any-change term reads it, and the edge of each
+    /// edge term waiting on it (§9.7.2: of its least significant bit). The
+    /// monitor and the dump are left out.
+    pub fn wakes(self: *const State, slot: u32) std.EnumSet(Edge) {
+        var e: std.EnumSet(Edge) = .initEmpty();
+        if (self.sensed(slot) or (slot + 1 < self.fan_start.len and self.fan_start[slot] != self.fan_start[slot + 1])) e.insert(.any);
+        for (self.terms[slot].items) |t| if (self.susps.items[t.susp].gen == t.gen) e.insert(t.edge);
+        if (slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+            if (self.waiting[w.proc] != 0) e.insert(w.edge);
+        };
+        return e;
+    }
+
     /// The next suspension's order among all of them: `vera --run` wakes
     /// the processes waiting on a change in this order (`wakeTerms`).
     pub inline fn stamp(self: *State) u64 {
