@@ -514,6 +514,11 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         root.fail("BADHANDLE", "vpi_put_value: that handle is not an object", .{});
         return null;
     };
+    // IEEE 1364-2005 §26.6.20 Details b.
+    if (o.automatic and (mode == vpiInertialDelay or mode == vpiTransportDelay or mode == vpiPureTransportDelay)) {
+        root.fail("AUTOMATIC", "vpi_put_value: `{s}` is an automatic variable, and a put with a delay onto one is illegal", .{o.full});
+        return null;
+    }
     // §12.30 "The routine can be applied to nets, regs, variables, memory
     // words, system function calls, sequential UDPs, and schedule events" —
     // a parameter is none of those. §11.6.12 NOTE 1 makes its value the

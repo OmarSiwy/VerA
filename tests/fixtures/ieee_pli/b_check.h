@@ -30,4 +30,17 @@ static P02_UNUSED void expect_refusal(const char *what)
   }
 }
 
+/* A refusal whose vpi_chk_error() message contains `needle`: for a call
+ * that could be refused for another reason too, so the check pins which. The
+ * wording is VerA's; the standard fixes none. */
+static P02_UNUSED void expect_refusal_saying(const char *what, const char *needle)
+{
+  s_vpi_error_info info;
+  p02_checks++;
+  if (vpi_chk_error(&info) == 0 || info.message == NULL || strstr(info.message, needle) == NULL) {
+    fprintf(stderr, "b: %s should have been refused for `%s`\n", what, needle);
+    exit(1);
+  }
+}
+
 #endif /* B_CHECK_H */
