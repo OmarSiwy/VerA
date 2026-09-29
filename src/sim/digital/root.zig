@@ -461,8 +461,9 @@ pub const Run = struct {
     /// Every statement's sites in compile order, outer before inner, while
     /// `Options.stmt_sites`; null otherwise.
     stmt_sites: ?std.ArrayList(StmtSite) = null,
-    /// Set while a host has statement callbacks; `exec.execute` reads it once
-    /// per process run.
+    /// Set while a host has statement callbacks. A run recording statement
+    /// sites checks it before each instruction, including after a calltf
+    /// registers the first callback during a process run.
     stmt_hook: ?StmtHook = null,
     /// Some digital expression probes the analog solution (`probe`).
     has_probes: bool = false,

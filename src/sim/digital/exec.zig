@@ -1706,7 +1706,10 @@ fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Erro
 /// Runs the process at `start` until it suspends, stops or finishes;
 /// `scratch_arena` is reset before each instruction.
 pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) Error!void {
-    return if (self.stmt_hook != null) run(self, scratch_arena, start, true) else run(self, scratch_arena, start, false);
+    // A VPI calltf may register the first cbStmt while this process is
+    // running. Recorded sites therefore keep dispatch available before a
+    // hook exists; ordinary runs still use the branch without callbacks.
+    return if (self.stmt_sites != null or self.stmt_hook != null) run(self, scratch_arena, start, true) else run(self, scratch_arena, start, false);
 }
 
 /// `execute`, which with `hooked` calls `Run.stmt_hook` before each
