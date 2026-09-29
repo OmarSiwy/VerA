@@ -34,7 +34,7 @@ the AGENTS.md §9 gates passed on the branch itself.
 | 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; `--contract` defaults to the installed `share/vera/contract.zig`. Last commit is WIP: the README `--emit-so` example fix and untracked `.log` files in `ch09_system_tasks` (drop those). | Not gated. Tell the TinyTapeout session the hash. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Not gated as a whole. |
 | 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. Last commit is WIP (a generate-net attempt that `wave18/bvpi` supersedes: drop it). | Not gated. |
-| 7 | `wave23/vpi-behav` | d61a0e82 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. | Not gated. |
+| 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. Last commit is WIP (uncommitted edits in `src/vpi` and `b_26_6_behaviour.c` when stopped). | Not gated. |
 | 8 | `wave23/vpi-prim` | 53693967 | Primitives, UDP tables, path and timing-check terms, values and strengths. Annex G numbering of `vpiPolarity`=34, `vpiDataPolarity`=35, `vpiTchkType`=38 (were 38, 39, 40): a C ABI change for VPI apps. | Not gated. |
 
 The four VPI branches all edit `src/vpi` and `build.zig`'s `vpi_runs`; merge one
