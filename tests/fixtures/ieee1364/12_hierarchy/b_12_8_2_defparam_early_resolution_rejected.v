@@ -14,7 +14,6 @@
 //! inherited IEEE 1364-2005 12.8.2
 //! reject E1100
 //! reject would resolve differently
-//! xfail VerA accepts the design with no error, and its $display(m.n.p) prints 2
 module m;
   m1 n();
 endmodule
