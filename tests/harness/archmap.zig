@@ -345,7 +345,7 @@ const groups = [_]struct { title: []const u8, prefixes: []const []const u8 }{
     .{ .title = "IR: elaboration (`ir` module)", .prefixes = &.{"lib/ir/elaborate"} },
     .{ .title = "IR: lowering", .prefixes = &.{"lib/ir/lower"} },
     .{ .title = "IR: MIR, SSA, analysis, proof", .prefixes = &.{"lib/ir/"} },
-    .{ .title = "Runtime kernels (`kernels` module, embedded in devices)", .prefixes = &.{"lib/backend/kernels"} },
+    .{ .title = "Runtime kernels (`kernels` module, embedded in devices)", .prefixes = &.{"lib/kernels/"} },
     .{ .title = "Backend: codegen (`backend` module)", .prefixes = &.{ "lib/backend/codegen", "lib/backend/cg_" } },
     .{ .title = "Backend: naming, orchestrator, testbench", .prefixes = &.{"lib/backend/"} },
     .{ .title = "Compiler facade (`vera` module)", .prefixes = &.{"lib/root.zig"} },

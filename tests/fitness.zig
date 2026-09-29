@@ -431,8 +431,8 @@ test "R5: each name-spelling literal has one owner" {
 
 // ---------------------------------------------------------------------------
 // R6: no emitted `std.debug.print`/`process.exit` in device-emitting files
-// (codegen.zig, codegen/**, cg_*.zig, and the kernels, whose source is device
-// text). Matched as `debug.print(` and `process.exit(`, since a kernel names
+// (codegen.zig, codegen/**, cg_*.zig, and lib/kernels/*_kernels.zig, whose
+// source is device text; the module's other files are host Zig). Matched as `debug.print(` and `process.exit(`, since a kernel names
 // `std` through its own alias (`zstd`, `zhs`, ...).
 // ---------------------------------------------------------------------------
 
@@ -440,11 +440,11 @@ const r6_rows = [_]Row{
     .{ .path = "lib/backend/cg_display.zig", .n = 3, .phase = "B2" },
     .{ .path = "lib/backend/codegen/kernel_text.zig", .n = 5, .phase = "B2" },
     .{ .path = "lib/backend/codegen/render.zig", .n = 1, .phase = "B2" },
-    .{ .path = "lib/backend/kernels/file_kernels.zig", .n = 4, .phase = "B2" },
-    .{ .path = "lib/backend/kernels/hist_kernels.zig", .n = 1, .phase = "B2" },
-    .{ .path = "lib/backend/kernels/rng_kernels.zig", .n = 2, .phase = "B2" },
-    .{ .path = "lib/backend/kernels/str_kernels.zig", .n = 5, .phase = "B2" },
-    .{ .path = "lib/backend/kernels/table_kernels.zig", .n = 6, .phase = "B2" },
+    .{ .path = "lib/kernels/file_kernels.zig", .n = 4, .phase = "B2" },
+    .{ .path = "lib/kernels/hist_kernels.zig", .n = 1, .phase = "B2" },
+    .{ .path = "lib/kernels/rng_kernels.zig", .n = 2, .phase = "B2" },
+    .{ .path = "lib/kernels/str_kernels.zig", .n = 5, .phase = "B2" },
+    .{ .path = "lib/kernels/table_kernels.zig", .n = 6, .phase = "B2" },
 };
 
 const PrintsOrExits = struct {
@@ -454,7 +454,7 @@ const PrintsOrExits = struct {
 };
 
 fn emitsDevice(p: []const u8) bool {
-    return isCodegen(p) or std.mem.startsWith(u8, p, "lib/backend/kernels");
+    return isCodegen(p) or (std.mem.startsWith(u8, p, "lib/kernels/") and std.mem.endsWith(u8, p, "_kernels.zig"));
 }
 
 test "R6: no emitted print or exit in device-emitting files" {

@@ -1,4 +1,4 @@
-//! The kernel files' own tests: kernels.zig's `test` block pulls this file in,
+//! The kernel files' own tests: root.zig's `test` block pulls this file in,
 //! so `zig build test-kernels` (and `zig build test`) run it. They sit here and
 //! not beside the kernels because a kernel file's bytes are spliced verbatim
 //! into every device that uses it (`codegen/kernel_text.zig`), and a test block

@@ -8,6 +8,7 @@
 const std = @import("std");
 const codegen = @import("../codegen.zig");
 const naming = @import("../naming.zig");
+const kernels = @import("kernels");
 
 // ===========================================================================
 // Fixed emitted text
@@ -502,7 +503,7 @@ pub const family_dev_txt =
 /// accepted state, so the companion model's Jacobian is analytic. Embedded
 /// whole from `ops_kernels.zig`: its banner is its first line, and its final
 /// newline ends the text, so it needs neither a prefix nor a cut.
-pub const ops_txt = @embedFile("../kernels/ops_kernels.zig");
+pub const ops_txt = kernels.text.ops;
 
 /// VerA's `vera_timepoint` cache key. Emitted only for a device with one
 /// (`Lowered.timepoints`).
@@ -528,23 +529,23 @@ pub const tp_txt =
 pub const timer_txt = "// ---- §5.10.3.3 timer schedule ----\n\n" ++
     timer_src[std.mem.find(u8, timer_src, "\n\n").? + 2 ..];
 // A file-level //! header cannot be spliced into the middle of device.zig.
-const timer_src = @embedFile("../kernels/timer_kernels.zig");
+const timer_src = kernels.text.timer;
 
 /// §9.5.3/§9.5.4.2 the string formatter's scratch and the scanner, embedded
 /// verbatim from `str_kernels.zig` so codegen's tests exercise the device's
 /// own bytes. Carried by devices that format strings or print.
 pub const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (lib/backend/kernels/str_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/str_kernels.zig");
+    kernels.text.str;
 
 /// §9.13 the probabilistic distribution kernels, embedded verbatim from
 /// `rng_kernels.zig`. Carried only by devices that call a Table 9-10 function.
 pub const rng_txt = "// ---- §9.13 probabilistic distribution kernels (lib/backend/kernels/rng_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/rng_kernels.zig");
+    kernels.text.rng;
 
 /// §9.21 the table-model interpolator, embedded verbatim from
 /// `table_kernels.zig`. Carried only by devices that call `$table_model`.
 pub const table_txt = "// ---- §9.21 table model kernels (lib/backend/kernels/table_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/table_kernels.zig");
+    kernels.text.table;
 
 /// §9.5 the file-descriptor table and its operations, embedded verbatim from
 /// `file_kernels.zig`. Carried only by a device that calls the family and is
@@ -552,24 +553,24 @@ pub const table_txt = "// ---- §9.21 table model kernels (lib/backend/kernels/t
 /// solver device has no table, so §9.5.1's "a zero is returned for the mcd or
 /// fd" is its answer to `$fopen`.
 pub const file_txt = "// ---- §9.5 file descriptor I/O kernels (lib/backend/kernels/file_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/file_kernels.zig");
+    kernels.text.file;
 
 /// IEEE 1364-2005 §5.4 integers wider than 32 bits, embedded verbatim from
 /// `wide_kernels.zig`. Carried only by a device whose analog context
 /// computes a `reg` wider than 32 bits (`Lowered.wide_nodes`).
 pub const wide_txt = "// ---- IEEE 1364 §5.4 wide integer kernels (lib/backend/kernels/wide_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/wide_kernels.zig");
+    kernels.text.wide;
 
 /// §4.5.15 the SPICE limiters, embedded verbatim from `limit_kernels.zig`.
 /// Carried only by a device with an honoured `$limit` call; no unit body
 /// reaches them, since `$limit` renders as its probe there (`cg_limit.zig`).
 pub const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/kernels/limit_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/limit_kernels.zig");
+    kernels.text.limit;
 
 /// §4.5.11/§4.5.12 the filter kernels, embedded verbatim from
 /// `filter_kernels.zig`. Carried only by devices that use a filter.
 pub const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (lib/backend/kernels/filter_kernels.zig) ----\n\n" ++
-    @embedFile("../kernels/filter_kernels.zig");
+    kernels.text.filter;
 
 /// The small-signal side of the operators whose response depends on frequency
 /// (`ir.op.acDynamic`): §4.5.7 `absdelay`, §4.5.11 `laplace_*`, §4.5.12
@@ -916,7 +917,7 @@ pub const arr_txt =
 pub const hist_txt = "// ---- §4.5.7 absdelay history (lib/backend/kernels/hist_kernels.zig) ----\n\n" ++
     hist_src[std.mem.find(u8, hist_src, "\n\n").? + 2 ..];
 // A file-level //! header cannot be spliced into the middle of device.zig.
-const hist_src = @embedFile("../kernels/hist_kernels.zig");
+const hist_src = kernels.text.hist;
 
 /// `zAbsdelay` and `zHistAt` under VerA's `(* vera_interp = 2 *)`: 3-point
 /// Lagrange instead of §4.5.7's linear reading, as SPICE's lossless

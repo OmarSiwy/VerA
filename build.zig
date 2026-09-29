@@ -46,7 +46,7 @@ const module_specs = [_]ModuleSpec{
     // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
     // the device would compute (§9.14: `$exp` and `exp` are one function).
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "contract" } },
-    .{ .name = "kernels", .path = "lib/backend/kernels.zig", .role = .runtime, .imports = &.{"contract"} },
+    .{ .name = "kernels", .path = "lib/kernels/root.zig", .role = .runtime, .imports = &.{"contract"} },
     .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels", "contract" } },
     .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
     .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "ir", "backend", "kernels" } },

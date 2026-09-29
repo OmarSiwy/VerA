@@ -119,7 +119,7 @@ pub fn buildExe(
         try argv.append(arena, try src.m(arena, root, "base", "lib/base/root.zig"));
         try argv.append(arena, try src.m(arena, root, "diag", "lib/diag.zig"));
         try argv.appendSlice(arena, &.{ "--dep", "base", "--dep", "diag", "--dep", "contract", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
-        try argv.appendSlice(arena, &.{ "--dep", "contract", try src.m(arena, root, "kernels", "lib/backend/kernels.zig") });
+        try argv.appendSlice(arena, &.{ "--dep", "contract", try src.m(arena, root, "kernels", "lib/kernels/root.zig") });
     }
     return runZig(gpa, io, argv.items, bin);
 }

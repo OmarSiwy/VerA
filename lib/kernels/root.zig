@@ -1,8 +1,9 @@
 //! Module root for the device-runtime kernel files. Kernel source -> two
 //! consumers of the same bytes: device text, spliced verbatim into every
-//! generated device that needs it (`codegen/kernel_text.zig` `@embedFile`s
-//! it), and ordinary Zig compiled here for the callers that run the same
-//! numerics outside a device.
+//! generated device that needs it (`codegen/kernel_text.zig` reads it as
+//! `text.*`, the `@embedFile`s below, since an embed cannot leave its own
+//! module's directory), and ordinary Zig compiled here for the callers that
+//! run the same numerics outside a device.
 //! LRM: §4.5, §4.5.11, §4.5.12, §4.5.15, §5.10.3.3, §9.4.1, §9.4.3, §9.5, §9.5.3,
 //! §9.5.4.2, §9.13, §9.17.3, §9.21; IEEE 1364-2005 §17.2.4, §17.9.3.
 //!
@@ -31,7 +32,7 @@
 //! `kernel_text.timer_txt` and `kernel_text.hist_txt` cut off at the first
 //! blank line. Its bytes are device text, so editing one moves every golden that
 //! embeds it, comments included, and a kernel file holds no `test` block: its
-//! tests are `kernels/test.zig`, which this root's `test` block pulls in. No
+//! tests are `test.zig`, which this root's `test` block pulls in. No
 //! device imports this root. `zig build test-kernels` runs them.
 
 /// `tools/contract.zig`'s `abi_version`, re-exported for `backend`, which
@@ -39,32 +40,47 @@
 pub const abi_version = @import("contract").abi_version;
 /// §9.5.3/§9.5.4.2 string formatting and scanning; the digital engine's
 /// `%e/%f/%g` formatter (`zCReal`).
-pub const str_kernels = @import("kernels/str_kernels.zig");
+pub const str_kernels = @import("str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
-pub const table_kernels = @import("kernels/table_kernels.zig");
+pub const table_kernels = @import("table_kernels.zig");
 /// §9.13 probabilistic distribution functions; also elaboration's literal
 /// folds (`ir/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
 /// `$dist_*`, so every path draws the same sequence from a seed.
-pub const rng_kernels = @import("kernels/rng_kernels.zig");
+pub const rng_kernels = @import("rng_kernels.zig");
 /// §4.5.11/§4.5.12 filter numerics.
-pub const filter_kernels = @import("kernels/filter_kernels.zig");
+pub const filter_kernels = @import("filter_kernels.zig");
 /// §9.5 file-descriptor I/O; also the digital engine's IEEE 1364 §17.2
 /// descriptor table when no host shares one (`sim/digital/system.zig` `own`).
 /// The table is process-global: every caller in one process shares its
 /// thirty channels.
-pub const file_kernels = @import("kernels/file_kernels.zig");
+pub const file_kernels = @import("file_kernels.zig");
 /// §4.5.15 SPICE limiting functions.
-pub const limit_kernels = @import("kernels/limit_kernels.zig");
+pub const limit_kernels = @import("limit_kernels.zig");
 /// §5.10.3.3 absolute timer scheduling, also used by the mixed coordinator.
-pub const timer_kernels = @import("kernels/timer_kernels.zig");
+pub const timer_kernels = @import("timer_kernels.zig");
 /// §4.5.7 the absdelay ring and its thinning.
-pub const hist_kernels = @import("kernels/hist_kernels.zig");
+pub const hist_kernels = @import("hist_kernels.zig");
 /// IEEE 1364 §5.4 integers of any width (`lower/wide.zig`'s trees).
-pub const wide_kernels = @import("kernels/wide_kernels.zig");
+pub const wide_kernels = @import("wide_kernels.zig");
 /// §4.5 the analog operator kernels (`zIdt`, `zSlew`, `zTransition`, ...): device text only.
-pub const ops_kernels = @import("kernels/ops_kernels.zig");
+pub const ops_kernels = @import("ops_kernels.zig");
+
+/// Each kernel file's bytes, for `codegen/kernel_text.zig` to splice into a
+/// device: `@embedFile` reaches only files under its own module's root.
+pub const text = struct {
+    pub const str = @embedFile("str_kernels.zig");
+    pub const table = @embedFile("table_kernels.zig");
+    pub const rng = @embedFile("rng_kernels.zig");
+    pub const filter = @embedFile("filter_kernels.zig");
+    pub const file = @embedFile("file_kernels.zig");
+    pub const limit = @embedFile("limit_kernels.zig");
+    pub const timer = @embedFile("timer_kernels.zig");
+    pub const hist = @embedFile("hist_kernels.zig");
+    pub const wide = @embedFile("wide_kernels.zig");
+    pub const ops = @embedFile("ops_kernels.zig");
+};
 
 test {
     @import("std").testing.refAllDecls(@This());
-    _ = @import("kernels/test.zig");
+    _ = @import("test.zig");
 }
