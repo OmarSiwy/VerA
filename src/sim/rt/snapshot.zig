@@ -2,8 +2,9 @@
 //! back (`restore`); `twice`, the run that proves the two lossless.
 //! A boundary is where IEEE 1364-2005 §11.4 has emptied the active, NBA and
 //! monitor regions of a time step, so nothing mid-step (rows, a settle, a
-//! subroutine frame) is in it. The one pointer the bytes carry is the §17.3.2
-//! `$timeformat` suffix, into the executable's constant strings. Outside them,
+//! subroutine frame) is in it. Pointers in the bytes name immutable parts of
+//! the executable: the §17.3.2 `$timeformat` suffix and indexed event selector
+//! functions (§9.7.3). Outside them,
 //! and dropped by a `quiet` run: the transcript, the §17.2 file table and
 //! positions, and the §18 dump.
 const std = @import("std");
