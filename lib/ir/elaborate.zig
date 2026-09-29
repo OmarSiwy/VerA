@@ -104,6 +104,19 @@ pub const Design = struct {
     /// available for instances using the paramset." The flat names of those
     /// variables, for §9.16's `$simprobe` to treat as unresolvable.
     ps_hidden: []const []const u8 = &.{},
+    /// §6.3.1/§6.4 defparams encountered below a paramset instance, with the
+    /// generate condition that decides whether that hierarchy exists. Lowering
+    /// judges them after the final parameter values (including --param) exist.
+    paramset_defparams: []const ParamsetDefparam = &.{},
+};
+
+/// A defparam is forbidden only in an instantiated paramset hierarchy:
+/// §6.6.2 leaves an unselected generate arm out of the model. Flattening keeps
+/// both arms, so the flattened gate travels with the source diagnostic site.
+pub const ParamsetDefparam = struct {
+    main_tok: u32,
+    instance: []const u8,
+    gate: Ast.ExprId,
 };
 
 /// One `Design.port_widths` row: a port bound to a flat net, for the §6.5.7.1
@@ -371,6 +384,8 @@ pub const Flatten = struct {
     unit_paths: std.ArrayList(UnitPath) = .empty,
     /// `Design.ps_hidden`, as the walk finds them.
     ps_hidden: std.ArrayList([]const u8) = .empty,
+    /// `Design.paramset_defparams`, before generate schemes have final values.
+    paramset_defparams: std.ArrayList(ParamsetDefparam) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -512,6 +527,9 @@ pub const Flatten = struct {
         /// into existence, in the flat namespace; `.none` when nothing does.
         /// Every analog block of the unit is lowered under it.
         gate: Ast.ExprId = .none,
+        /// §6.3.1 the nearest paramset instance above or at this unit. A
+        /// descendant module inherits it even when instantiated by module name.
+        paramset_instance: ?[]const u8 = null,
     };
 
     /// One §6.6 generate-block instance and the scheme it exists under.
@@ -521,9 +539,9 @@ pub const Flatten = struct {
     /// brings it into existence, cloned into this unit's flat namespace.
     /// "At most one generate block instantiated from a set of alternatives":
     /// an if-generate's arms are gated `c` and `!c`, and `inlineInstance`
-    /// lowers each child's analog blocks under its gate, as `checkGenScheme`
-    /// does for an arm's analog items, so a model card overriding the
-    /// scheme's parameter selects the arm it names.
+    /// lowers each child's analog blocks under its gate. `checkGenScheme`
+    /// marks the parameters as shape parameters, so a host card cannot change
+    /// the arm selected by their final compile-time values.
     /// ponytail: if-generate only. A loop or case generate's instance is
     /// E0235 (`refuseGen`): the loop needs one renamed instance per
     /// iteration, the case an equality chain per arm.
@@ -678,6 +696,7 @@ pub const Flatten = struct {
             .signal_disciplines = self.signal_disciplines.items,
             .attribute_disciplines = self.attribute_disciplines,
             .ps_hidden = self.ps_hidden.items,
+            .paramset_defparams = self.paramset_defparams.items,
         };
     }
 
@@ -693,6 +712,16 @@ pub const Flatten = struct {
         // §6.3.1 before the children: a defparam applies downward, and the
         // parameters it overrides are created as those instances are inlined.
         for (module.defparams) |dp| {
+            if (self.unit.paramset_instance) |instance| {
+                try self.paramset_defparams.append(self.ctx.arena, .{
+                    .main_tok = dp.main_tok,
+                    .instance = instance,
+                    .gate = self.unit.gate,
+                });
+                // An active site is illegal; an inactive site's hierarchy
+                // does not exist. Neither may override a child parameter.
+                continue;
+            }
             const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(dp.path) });
             try self.defparams.put(self.ctx.arena, key, .{
                 .value = try elab_clone.cloneExpr(self, dp.value),
@@ -863,6 +892,7 @@ pub const Flatten = struct {
             .path = path,
             .primitive = elab_names.isPrimitive(self, child),
             .gate = if (gate == .none) parent.gate else try self.conj(parent.gate, gate, false),
+            .paramset_instance = if (ps != null) path[0 .. path.len - 1] else parent.paramset_instance,
         };
 
         // ---- §6.2.2 port connections ---------------------------------------

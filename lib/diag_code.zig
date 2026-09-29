@@ -412,6 +412,7 @@ pub const Code = enum(u16) {
     E0923,
     E0924,
     E0925,
+    E0926,
     E0960,
     E0982,
     E0482,
@@ -5775,6 +5776,22 @@ fn infoOf(c: Code) Info {
             \\
             \\Connect a net of the port's width, or a concatenation of that many
             \\scalar nets.
+            ,
+        },
+        .E0926 => .{
+            .title = "defparam in a paramset instance hierarchy",
+            .lrm = "6.4",
+            .explain =
+            \\LRM 6.4 forbids a defparam statement in or under the hierarchy of
+            \\the module associated with a paramset. Section 6.3.1 states the
+            \\same restriction for the hierarchy of a paramset instance, and
+            \\6.9.4 relies on it when ordering parameter and generate elaboration.
+            \\
+            \\The restriction includes descendants and paramset chains. An
+            \\unselected conditional-generate arm is not instantiated (6.6.2).
+            \\
+            \\Pass values through parameter overrides instead, or place the
+            \\defparam outside the paramset instance's hierarchy.
             ,
         },
         .E0960 => .{

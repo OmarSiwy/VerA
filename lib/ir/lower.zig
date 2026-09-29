@@ -515,6 +515,8 @@ gen_iter: ?i64 = null,
 /// §6.4.3 `Elaborate.Design.ps_hidden`: module output variables a paramset
 /// makes unavailable, by flat name. Read by `lowerSimprobe`.
 ps_hidden: []const []const u8 = &.{},
+/// §6.3.1/§6.4 forbidden defparams, awaiting final generate-scheme values.
+paramset_defparams: []const Elaborate.ParamsetDefparam = &.{},
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected before the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -1044,6 +1046,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     self.ps_hidden = design.ps_hidden; // §6.4.3
+    self.paramset_defparams = design.paramset_defparams;
     self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
@@ -1113,6 +1116,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         _ = try lower_param.aliasSystemParam(self, alias, self.file.str(a.target));
     }
     for (module.params) |*p| try lower_param.lowerParamDecl(self, p);
+    try lower_control.checkParamsetDefparams(self);
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
     try lower_context.declareDiscreteInputs(self, module);
