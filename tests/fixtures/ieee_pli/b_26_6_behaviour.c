@@ -590,7 +590,8 @@ static void statements(void)
 
   /* §26.6.38 */
   CHECK(vpi_get(vpiType, st[20]) == vpiDisable, "26.6.38: disable main");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiExpr, st[20]), mainb), "26.6.38", "disable -> vpiExpr is not main");
+  CHECK(vpi_compare_objects(vpi_handle(vpiExpr, st[20]), mainb), "26.6.38: disable -> vpiExpr is main");
+  expect_no_error("the disable");
   CHECK(vpi_handle(vpiCondition, st[20]) == NULL, "26.6.38: disable has no condition");
   expect_refusal("vpi_handle(vpiCondition, disable)");
 }
