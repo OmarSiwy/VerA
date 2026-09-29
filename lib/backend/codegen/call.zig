@@ -196,7 +196,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 // i65 holds minInt(i64)/-1 before the wrap. A zero divisor
                 // yields 0, as `renderOp`'s `.idiv` does (W0653).
                 .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @as(i64, 0) else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
-                .imod => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @intCast(@rem(@as(i65, {s}), @as(i65, {s})))))", .{ rhs, a, rhs }),
+                .imod => try std.fmt.allocPrint(self.arena, "{s}({s}, {s})", .{ gen_render.imodFn(self), a, rhs }),
                 .logand, .logor => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
                 .shl => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
                 .shr => try std.fmt.allocPrint(self.arena, "zShr({s}, {s})", .{ a, rhs }),

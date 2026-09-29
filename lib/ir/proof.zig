@@ -118,6 +118,7 @@ pub fn proveOpts(
     };
 
     p.an = try Analysis.buildStructure(p.arena, mir, lowered);
+    try p.an.buildLiteralFolds(); // §4.2.3 excludes provably untaken runtime errors
 
     try p.seedValues(); // §3.4.2 param ranges, §4.2 constants, §4.4 probes
     try p.buildClasses(); // structural congruence, so guards reach every copy

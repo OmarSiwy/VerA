@@ -311,7 +311,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .kind = .table_effect,
         .target = self.an.rv(self.lowered.table_effect),
         .mode = .strict,
-        .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
+        .comment = "§9.21.1 captures and §4.2.4/§9.13 runtime checks in source order",
     });
     // §9.4 the display tasks, as one unit. Queued last, so no existing job
     // (and so no declaration name) moves when a model gains or loses a

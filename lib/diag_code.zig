@@ -4303,21 +4303,20 @@ fn infoOf(c: Code) Info {
 
         // ------------------------------------------------------------ class 6
         .E0601 => .{
-            .title = "divisor cannot be proven non-zero",
+            .title = "zero divisor",
             .lrm = "4.2.4",
             .explain =
             \\LRM 4.2.4: "It shall be an error to pass zero (0) as the second
-            \\argument to the modulus operator." VerA reports it in two cases:
+            \\argument to the modulus operator." VerA rejects a provably-zero
+            \\divisor for `%` of either type and for integer `/`.
             \\
-            \\  - a divisor that is PROVABLY zero, for `%` of either type and
-            \\    for integer `/`;
-            \\  - an integer `%` whose divisor cannot be proven non-zero. The
-            \\    device has no defined value for it, so a proof is required.
-            \\
-            \\A divisor that merely MIGHT be zero is otherwise accepted, as every
+            \\A divisor that merely MIGHT be zero is accepted, as every
             \\other domain rule is (provably outside -> error, unprovable ->
             \\accept):
             \\
+            \\  - integer `%`: the executable reports E0601 and exits 1 when
+            \\    the divisor is zero. A solver device traps without host I/O,
+            \\    including on GPU targets. An unexecuted operand does not fail;
             \\  - real `%`: x % 0.0 is NaN, IEEE-defined; the unit forfeits its
             \\    finiteness proof (W0650);
             \\  - integer `/`: LRM 4.2.4 gives `/` no zero rule. The device yields
@@ -4325,8 +4324,7 @@ fn infoOf(c: Code) Info {
             \\  - real `/`: x/0.0 is a well-defined IEEE infinity, which is what
             \\    lets `I <+ V/r` compile for an unranged parameter r (W0650).
             \\
-            \\To satisfy this code for an integer `%`, give the divisor a range
-            \\that excludes zero (LRM 3.4.2):
+            \\A range excluding zero (LRM 3.4.2) can prove a divisor valid:
             \\
             \\    parameter integer n = 1 from [1:inf);
             \\    parameter integer m = 1 exclude 0;

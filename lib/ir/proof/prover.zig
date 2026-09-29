@@ -65,6 +65,9 @@ pub const Prover = struct {
     an: Analysis = undefined,
     /// Blocks `walk` has reached; `[]bool` for the same reason as `finite`.
     visited_block: []bool = &.{},
+    /// §4.2.3 suppresses runtime domain errors on a provably untaken edge.
+    /// Transfers still run conservatively; source typing happened in lowering.
+    domain_active: bool = true,
 
     /// Where every finiteness diagnostic goes. Shared with the other stages.
     bag: *diag.Bag,
@@ -548,7 +551,8 @@ pub const Prover = struct {
 
     /// Evaluates every instruction in dominator-tree preorder, so a guard applied on the edge
     /// into a block holds for the subtree it dominates and is undone on the way out. Checks
-    /// every domain, including in blocks unreachable from entry. Reports into the bag.
+    /// every evaluated domain. Untaken constant edges suppress runtime errors
+    /// (§4.2.3), while transfer still visits every source instruction.
     ///
     /// SSA puts every non-phi operand before its use. A phi operand from an unprocessed
     /// predecessor (a loop back edge, §5.9) is still top and not finite, so loops widen to
@@ -565,14 +569,18 @@ pub const Prover = struct {
 
         try self.walkDom(0);
 
-        // Blocks unreachable from entry still contain user-written operations;
-        // check them with no guard evidence rather than silently skipping.
+        // Unreachable source has already been parsed and type checked; its
+        // runtime domains are not evaluated (§4.2.3).
+        self.domain_active = false;
         for (0..nb) |b| if (!self.visited_block[b]) try self.walkBlock(@intCast(b));
+        self.domain_active = true;
     }
 
     fn walkDom(self: *Prover, b: u32) !void {
         const mark = self.saved.items.len;
         defer self.popFacts(mark);
+        const active = self.domain_active;
+        defer self.domain_active = active;
 
         // Evidence from the edge idom(b) → b. Requiring b's ONLY predecessor to
         // be the branching block is what makes "dominated by b" imply "the
@@ -586,6 +594,9 @@ pub const Prover = struct {
                     if (d != .branch) continue;
                     const taken = @intFromEnum(d.branch.then_block) == b;
                     if (!taken and @intFromEnum(d.branch.else_block) != b) continue;
+                    if (self.an.foldConst(d.branch.cond, false)) |c| {
+                        if ((c.f != 0) != taken) self.domain_active = false;
+                    }
                     var raw: [2]Fact = undefined;
                     try self.pushFacts(self.condFacts(d.branch.cond, taken, &raw));
                 }
@@ -617,7 +628,7 @@ pub const Prover = struct {
         // An unprovable domain is not an error (LRM §4.3.2, see checkDomain);
         // it costs the result its finiteness fact, which drops the enclosing
         // unit to `@setFloatMode(.strict)` where NaN/inf are IEEE-defined.
-        const domain_proven = try self.checkDomain(inst);
+        const domain_proven = if (self.domain_active) try self.checkDomain(inst) else false;
         if (result == .undef) return; // terminator
 
         const out = self.transfer(inst);
@@ -903,8 +914,8 @@ pub const Prover = struct {
             //   - integer `/`: codegen guards it (`render.zig`'s `.idiv`), since
             //     `@divTrunc(i64, 0)` is illegal behavior in Zig, and a zero
             //     divisor yields 0, which W0653 announces.
-            // Integer `%` stays an error unless proven non-zero: its device
-            // form (`@rem`) has no guard to fall back on.
+            //   - integer `%`: codegen reports E0601 at execution (or traps
+            //     in a solver device), without evaluating Zig's `%` by zero.
             .nonzero_divisor => {
                 const d = self.mir.instData(inst).binary;
                 const y = self.ivOf(d.rhs);
@@ -912,8 +923,6 @@ pub const Prover = struct {
                 const what = if (op == .fmod or op == .imod) "`%` divisor" else "`/` divisor";
                 if (y.lo == 0 and y.hi == 0)
                     return self.violated(inst, .E0601, what, d.rhs, y, "is provably zero", "a zero divisor is an error (§4.2.4); check the expression or the parameter's range");
-                if (op == .imod)
-                    return self.violated(inst, .E0601, what, d.rhs, y, "cannot be proven non-zero", "constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division");
                 // Legal, but not silent: the guarded device division yields
                 // 0 for a zero divisor, a value the LRM does not give.
                 if (op == .idiv) try self.warnIntDivisor(inst, d.rhs, y);

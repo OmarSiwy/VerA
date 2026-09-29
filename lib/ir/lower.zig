@@ -407,7 +407,10 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
-/// Guard-aware source-order chain for table captures and distribution checks;
+/// Retain evaluated runtime errors even when their arithmetic result is
+/// unused, in the phase which executes them. Defaults have their own derive.
+runtime_error_phase: enum { none, core, display } = .none,
+/// Guard-aware source-order chain for captures and required runtime checks;
 /// its final value is a core live-out.
 table_effect_place: ?Ssa.Place = null,
 /// Where a §9.21.1 `$table_model` data file is looked for, in order: the
@@ -1500,6 +1503,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     try lower_node.applyUnconnectedDrive(self);
 
     // §5.2 analog blocks, concatenated (§6.9.1).
+    self.runtime_error_phase = .core;
     for (module.analog) |blk| {
         self.cur_unit = blk.unit;
         if (blk.is_initial) {
@@ -1523,6 +1527,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             try lower_stmt.lowerStmt(self, blk.body);
         }
     }
+    self.runtime_error_phase = .none;
 
     try lower_event.finishTimers(self);
 
