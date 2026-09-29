@@ -17,6 +17,7 @@
 //     what the unfilled byte of s3 holds -> "2"
 //   $fgets(s3, fd) at EOF: no character is read -> 0 either way -> "0"
 //! inherited IEEE 1364-2005 17.2.4.2
+// native-required
 module b_17_2_4_2_fgets;
   integer fd, code;
   reg [8*3:1] s3;

@@ -3,7 +3,7 @@
 //! `evalContext`'s arm for arm, so operand sizing and signedness match it, and
 //! `evalContext` itself folds every constant. IEEE 1364-2005 §5.5.1 Table
 //! 5-22, §5.5.2, §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
-//! concatenation, §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
+//! concatenation, §17.2 file input, §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
@@ -394,6 +394,25 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     }
                     try self.print("))))), 0), 32, {d}, {})", .{ w, sg });
                 },
+                .fgets => {
+                    self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
+                    const lb = self.label();
+                    const target = try emit.targetType(self, args[0]);
+                    try self.print("L.rs(fl{d}: {{\n            const t{d} = try s.fileLine(", .{ lb, lb });
+                    try emit.int64(self, args[1]);
+                    try self.print(", {d});\n            if (t{d}.len != 0) {{\n", .{ target.width, lb });
+                    try emit.assignChars(self, args[0], try std.fmt.allocPrint(self.arena, "t{d}", .{lb}));
+                    try self.print("            }}\n            break :fl{d} L.k(@as(u32, @truncate(t{d}.len)), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
+                },
+                .ferror => {
+                    self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
+                    const lb = self.label();
+                    try self.print("L.rs(fe{d}: {{\n            const f{d} = s.fileError(", .{ lb, lb });
+                    try emit.int64(self, args[0]);
+                    try self.print(");\n", .{});
+                    try emit.assignChars(self, args[1], try std.fmt.allocPrint(self.arena, "f{d}.text", .{lb}));
+                    try self.print("            break :fe{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(f{d}.code)))), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
+                },
                 // §17.2.4.3: each output argument as the scan reaches it.
                 .sscanf => {
                     try self.xMeaning("`$sscanf`, which answers EOF for an x or z in its input or format", ex.mainTok(e));
@@ -439,7 +458,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     const t = try selfDetermined(self, args[0]);
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
-                .fgets, .fscanf, .fread, .ferror => return self.refuse("a §17.2 read into a string or memory argument"),
+                .fscanf, .fread => return self.refuse("a §17.2 read into a string or memory argument"),
                 .user => return self.refuse(user_fn),
                 else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }

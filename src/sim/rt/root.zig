@@ -1202,6 +1202,22 @@ pub const State = struct {
         return system.fileOp(system.own, f, x, y, z);
     }
 
+    /// §17.2.4.2 `$fgets`: the bytes read into a `w`-bit destination, valid
+    /// until the next scratch-using call. No bytes means no assignment.
+    pub fn fileLine(self: *State, d: ?i64, comptime w: u32) Error![]const u8 {
+        if (self.quiet) return "";
+        const fd = (d orelse return "") & 0xffff_ffff;
+        _ = self.scratch.reset(.retain_capacity);
+        return system.readLine(self.scratch.allocator(), system.own, fd, w / 8);
+    }
+
+    /// §17.2.7 `$ferror`: the descriptor's error and the corresponding text.
+    /// Descriptor zero also reports a failed open, as on the interpreter path.
+    pub fn fileError(self: *const State, d: ?i64) struct { code: i64, text: []const u8 } {
+        const code = if (self.quiet) 0 else system.own.err.?((d orelse 0) & 0xffff_ffff);
+        return .{ .code = code, .text = @import("kernels").file_kernels.zFErrorStr(code, 0) };
+    }
+
     /// §17.2.7 `$fclose`.
     pub fn fclose(self: *const State, d: ?i64) void {
         if (self.quiet) return;
