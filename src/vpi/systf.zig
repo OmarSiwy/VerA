@@ -1,11 +1,14 @@
 //! The user system task/function registry: §12.33 vpi_register_systf, §12.32
 //! vpi_register_analog_systf, §12.14/§12.13 their info routines, and §12.22
 //! vpi_handle_multi. Registrations -> vpiUserSystf handles, build-time
-//! compiletf/sizetf/derivtf calls (`buildCalls`), and the lookup `analog.zig`
-//! uses to run an analog calltf per device evaluation. A digital calltf never
-//! runs: the digital engine refuses a user `$name` call at elaboration.
+//! compiletf/sizetf/derivtf calls (`buildCalls`), the lookup `analog.zig`
+//! uses to run an analog calltf per device evaluation, and `hook`, through
+//! which the digital engine runs a digital calltf (IEEE 1364-2005 §20.3,
+//! §26.1.3).
 
 const std = @import("std");
+const digital = @import("sim").digital;
+const Int = @import("frontend").Integer;
 const root = @import("root.zig");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
@@ -86,7 +89,64 @@ pub const Systf = struct {
     digital: SystfData = std.mem.zeroes(SystfData),
     analog: AnalogSystfData = std.mem.zeroes(AnalogSystfData),
     name: [:0]u8,
+    /// A sized function's width, once its sizetf answered (`width`).
+    size: ?u32 = null,
 };
+
+/// The return width of a digital function registration, calling its sizetf
+/// the first time: IEEE 1364-2005 §26.1.1 "Each sizetf routine shall be
+/// called at most once", and "If no sizetf routine is specified, a
+/// user-defined system function shall return 32 bits". Only vpiSizedFunc and
+/// vpiSizedSignedFunc have one (§27.34.1).
+fn width(s: *Systf) u32 {
+    if (s.size) |w| return w;
+    const w: u32 = if (s.digital.sizetf) |f| @intCast(@max(f(s.digital.user_data), 1)) else 32;
+    s.size = w;
+    return w;
+}
+
+/// The digital engine's view of the registrations (`digital.Options.systf`).
+pub const hook: digital.UserSystf = .{ .kind = kindOf, .call = callDigital };
+
+/// What the digital registration of `name` is, if one was made.
+pub fn kindOf(name: []const u8) ?digital.UserKind {
+    const s = find(name, .digital) orelse return null;
+    if (s.digital.type == vpiSysTask) return .task;
+    return .{
+        .func = switch (s.digital.sysfunctype) {
+            vpiIntFunc => .{ .width = 32, .signed = true },
+            vpiRealFunc => .{ .width = 64, .signed = true, .real = true },
+            vpiTimeFunc => .{ .width = 64, .signed = false },
+            vpiSizedFunc, vpiSizedSignedFunc => .{ .width = width(s), .signed = s.digital.sysfunctype == vpiSizedSignedFunc },
+            else => unreachable, // else: `vpi_register_systf` admitted only the five function types
+        },
+    };
+}
+
+/// The value the running digital function call returns, which a
+/// `vpi_put_value` onto the call writes (§12.30 "system function calls").
+pub var result: ?Int.Literal = null;
+
+/// Each digital call site, by (engine instance scope, main token).
+var sites: std.AutoHashMapUnmanaged([2]u32, u32) = .empty;
+
+fn callDigital(_: *digital.Run, scope: u32, tok: u32, returned: ?Int.Literal) digital.Error!void {
+    const d = &(root.design orelse return);
+    if (sites.count() == 0) for (d.objects, 0..) |o, i| {
+        if (o.kind != .code or o.in_analog or (o.vtype != code.vpiSysTaskCall and o.vtype != code.vpiSysFuncCall)) continue;
+        sites.put(gpa, .{ d.scopes[o.owner.?].engine, o.src_tok }, @intCast(i)) catch return error.OutOfMemory;
+    };
+    const at = sites.get(.{ scope, tok }) orelse return;
+    const s = find(d.objects[at].name, .digital) orelse return;
+    const f = s.digital.calltf orelse return;
+    const outer = .{ active, result };
+    defer {
+        active, result = outer;
+    }
+    active = at;
+    result = returned;
+    _ = f(s.digital.user_data);
+}
 
 const gpa = std.heap.smp_allocator;
 var regs: std.ArrayList(*Systf) = .empty;
@@ -110,11 +170,12 @@ pub var misuse: ?[]const u8 = null;
 pub var active: ?u32 = null;
 
 /// Runs the build-time callbacks: for each call site of a registered name, in
-/// source order, compiletf, then sizetf (digital vpiSizedFunc only, §12.33.1),
-/// then derivtf (analog, §12.32.2), each with the registration's user_data.
-/// A host calls this once, after the startup routines and before
-/// cbEndOfCompile. calltf is not called here; `analog.zig` runs it per
-/// evaluation.
+/// source order, compiletf, then derivtf (analog, §12.32.2), each with the
+/// registration's user_data; and each sized function's sizetf, if the
+/// engine did not already ask for its width (`width`). A host calls this
+/// once, after the startup routines and before cbEndOfCompile. calltf is not
+/// called here; `analog.zig` runs it per evaluation, the digital engine per
+/// execution (`hook`).
 pub fn buildCalls() void {
     const d = &(root.design orelse return);
     for (d.objects, 0..) |o, i| {
@@ -132,9 +193,7 @@ pub fn buildCalls() void {
             .digital => {
                 const ud = reg.digital.user_data;
                 if (reg.digital.compiletf) |f| _ = f(ud);
-                if (reg.digital.type == vpiSysFunc and reg.digital.sysfunctype == vpiSizedFunc) if (reg.digital.sizetf) |f| {
-                    _ = f(ud);
-                };
+                if (reg.digital.type == vpiSysFunc and (reg.digital.sysfunctype == vpiSizedFunc or reg.digital.sysfunctype == vpiSizedSignedFunc)) _ = width(reg);
             },
             .analog => {
                 var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(&d.objects[i]), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
@@ -168,7 +227,9 @@ pub fn partialsOf(call: u32) []const Pair {
 /// Frees every registration and declared partial; handles become invalid.
 pub fn reset() void {
     active = null;
+    result = null;
     misuse = null;
+    sites.clearAndFree(gpa);
     userdata.clearAndFree(gpa);
     var dit = declared.valueIterator();
     while (dit.next()) |v| gpa.free(v.*);

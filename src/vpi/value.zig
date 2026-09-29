@@ -10,6 +10,7 @@ const std = @import("std");
 const sim = @import("sim");
 const Int = @import("frontend").Integer;
 const root = @import("root.zig");
+const systf = @import("systf.zig");
 const callback = @import("callback.zig");
 const run = @import("run.zig");
 
@@ -533,6 +534,24 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         root.fail("NOPUT", "vpi_put_value: `{s}` is a parameter, which vpi_put_value does not apply to", .{o.full});
         return null;
     }
+    // IEEE 1364-2005 §20.3: the value the digital call whose calltf is
+    // running returns.
+    if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (systf.result) |res| if (systf.active) |at| if (&root.design.?.objects[at] == o) {
+        const v = value_p orelse {
+            root.fail("BADVALUE", "vpi_put_value: value_p is NULL", .{});
+            return null;
+        };
+        toPlanes(v, res.width, res.planes) catch |e| {
+            if (e == error.OutOfMemory) return oom();
+            return null;
+        };
+        if (systf.find(o.name, .digital).?.digital.sysfunctype == systf.vpiRealFunc) {
+            const f: f64 = if (v.format == vpiRealVal) v.value.real else @floatFromInt(@as(i64, @bitCast(res.planes[0])));
+            @memset(res.planes, 0);
+            res.planes[0] = @bitCast(f);
+        }
+        return null;
+    };
     // §12.30 "system function calls": the returned value of the analog call
     // calltf is running for (§12.32.3 "Set returned value to held value").
     if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal) {

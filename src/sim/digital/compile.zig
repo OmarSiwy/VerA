@@ -202,6 +202,8 @@ pub const SysFn = enum {
     dist_chi_square,
     dist_t,
     dist_erlang,
+    /// IEEE 1364-2005 §20.3 a PLI application's function (`Run.systf`).
+    user,
 
     /// Is a call a constant expression when its arguments are? A replication
     /// count and a case label depend on this. A clock query, a file or queue
@@ -211,6 +213,7 @@ pub const SysFn = enum {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
+            .user => false,
             else => true, // else: a pure function of its arguments
         };
     }
@@ -231,6 +234,8 @@ pub const SysFn = enum {
         return switch (self) {
             .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ferror, .fseek, .rewind => true,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => true,
+            // §20.7: its application may write any argument.
+            .user => true,
             else => false, // else: a function of its arguments, the clock or the design alone
         };
     }
@@ -626,7 +631,18 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             break :blk common(yes, no);
         },
         .sys_call => blk: {
-            const f = sys_fns.get(self.file.str(ex.strOf(e))) orelse
+            const name = self.file.str(ex.strOf(e));
+            // IEEE 1364-2005 §20.4: an application's function replaces the
+            // built-in of its name. A task called here keeps the built-in, for
+            // the host to refuse (§20.3).
+            if (self.systf) |u| if (u.kind(name)) |k| switch (k) {
+                .func => |t| {
+                    self.sys_calls[@intFromEnum(e)] = .user;
+                    break :blk t;
+                },
+                .task => {},
+            };
+            const f = sys_fns.get(name) orelse
                 return self.exprFail(e, "this digital expression form is not implemented");
             self.sys_calls[@intFromEnum(e)] = f;
             const args = ex.args(e);
@@ -843,6 +859,13 @@ fn position(self: *Run) u32 {
     return @intCast(self.code.items.len);
 }
 
+/// Records that statement `id` is reached at the next instruction
+/// (`Run.stmt_sites`).
+fn site(self: *Run, id: Ast.StmtId) Error!void {
+    const sites = &(self.stmt_sites orelse return);
+    try sites.append(self.arena, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = position(self) });
+}
+
 pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     if (self.code.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital instructions", .{});
     const at = position(self);
@@ -854,6 +877,7 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
 pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     const tok = self.file.stmtTok(id);
     if (depth == 256) return self.fail(tok, "digital statements deeper than 256 AST levels are not implemented", .{});
+    try site(self, id);
     switch (self.file.stmt(id)) {
         .empty => {},
         .block => |b| {
@@ -915,6 +939,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             try checkExpr(self, s.cond);
             const test_pc = try append(self, .{ .branch = .{ .condition = s.cond, .otherwise = 0 } });
             try compileStmt(self, s.body, depth + 1);
+            try site(self, id);
             try compileStmt(self, s.step, depth + 1);
             _ = try append(self, .{ .jump = test_pc });
             self.code.items[test_pc].branch.otherwise = position(self);
@@ -928,6 +953,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             const test_pc = try append(self, .{ .repeat_start = .{ .count = s.count, .counter = counter, .end = 0 } });
             const body_pc = position(self);
             try compileStmt(self, s.body, depth + 1);
+            try site(self, id);
             _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
             self.code.items[test_pc].repeat_start.end = position(self);
         },
@@ -1072,6 +1098,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         .sys_task => |s| {
             const name = self.file.str(s.name);
             if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
+            // IEEE 1364-2005 §20.4, as for a function (`infer`).
+            if (self.systf) |u| if (u.kind(name)) |k| if (k == .task) {
+                _ = try append(self, .{ .task = .{ .task = .user, .args = s.args, .tok = tok } });
+                return;
+            };
             if (std.mem.eql(u8, name, "$sdf_annotate")) return self.failWith(.E1102, tok, "", .{});
             // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
             // below either way.
@@ -1200,6 +1231,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     try checkExpr(self, s.args[0]);
                 },
                 // §17.2.6 `$fflush ( mcd )`, `( fd )` or `( )`.
+                // `tasks` names no application's task; `Run.systf` did above.
+                .user => unreachable,
                 .fflush => {
                     if (s.args.len > 1) return self.fail(tok, "$fflush takes at most one descriptor", .{});
                     for (s.args) |a| if (a != .none) try checkExpr(self, a);

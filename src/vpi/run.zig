@@ -33,6 +33,7 @@ pub fn attach(r: *digital.Run) void {
 pub fn detach() void {
     engine = null;
     clock = 0;
+    started = false;
     var it = queues.valueIterator();
     while (it.next()) |q| gpa.destroy(q.*);
     queues.clearAndFree(gpa);
@@ -62,6 +63,7 @@ pub fn simulate() digital.Error!void {
     const r = engine orelse return;
     if (@import("systf.zig").misuse != null) return error.DigitalFailed;
     callback.startOfSimulation();
+    started = false;
     while (!stopped(r)) {
         const ev = r.scheduler.peekTime();
         const due = callback.nextDue(clock, true);
@@ -73,18 +75,20 @@ pub fn simulate() digital.Error!void {
             // start-of-time callback counts from `t`, not from the last queue.
             clock = t;
             r.scheduler.now = t;
+            started = false;
             callback.fireNext(t);
         }
         callback.fireDue(callback.cbAtStartOfSimTime, t);
+        started = true;
         callback.fireDue(callback.cbAfterDelay, t);
         if (stopped(r)) break;
-        _ = try r.runUntil(t);
+        try runUntil(r, t);
         // A read-write callback may schedule more work at `t`; it runs before
         // the time is left, and a second read-write pass sees its effect.
         while (!stopped(r)) {
             callback.fireDue(callback.cbReadWriteSynch, t);
             if (r.scheduler.peekTime() != t) break;
-            _ = try r.runUntil(t);
+            try runUntil(r, t);
         }
         if (stopped(r)) break;
         read_only = true;
@@ -97,6 +101,19 @@ pub fn simulate() digital.Error!void {
 /// True inside a cbReadOnlySynch dispatch, where §12.31.2 forbids "writing
 /// values or scheduling events".
 pub var read_only: bool = false;
+
+/// True once the current time slice has passed its cbAtStartOfSimTime
+/// callbacks (IEEE 1364-2005 §27.33.2 "progressed into a time slice").
+pub var started: bool = false;
+
+/// The engine's events at `t`; a failure fires cbError first (IEEE 1364-2005
+/// §27.33.3 "Simulation run-time error occurred").
+fn runUntil(r: *digital.Run, t: u64) digital.Error!void {
+    _ = r.runUntil(t) catch |e| {
+        callback.runError();
+        return e;
+    };
+}
 
 fn stopped(r: *digital.Run) bool {
     return r.scheduler.phase == .stopped;
@@ -455,6 +472,30 @@ test "§12.15/§11.6.25: vpi_get_time scales by the object, and the time queues 
     t.type = callback.vpiSimTime;
     vpi_get_time(@ptrCast(&junk), &t);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+var run_errors: u32 = 0;
+
+fn onRunError(d: *callback.CbData) callconv(.c) c_int {
+    if (d.reason == callback.cbError) run_errors += 1;
+    return 0;
+}
+
+test "IEEE 1364-2005 §27.33.3: a run that stops on an error fires cbError once" {
+    var h: Harness = undefined;
+    h.arena = .init(std.testing.allocator);
+    defer h.arena.deinit();
+    h.bag = .init(h.arena.allocator());
+    h.out = .init(h.arena.allocator());
+    // A zero-delay loop past a budget of 100 events is a run-time error.
+    h.run = try digital.elaborate(h.arena.allocator(), "module z; reg r; initial r = 0; always #0 r = ~r; endmodule", .{ .event_budget = 100 }, &h.bag, &h.out.writer);
+    try root.openDigital(std.testing.allocator, &h.run);
+    defer root.close();
+    const on: callback.CbData = .{ .reason = callback.cbError, .cb_rtn = onRunError, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&on) != null);
+    run_errors = 0;
+    try std.testing.expectError(error.DigitalFailed, simulate());
+    try std.testing.expectEqual(@as(u32, 1), run_errors);
 }
 
 var finish_seen: u64 = 0;

@@ -372,8 +372,13 @@ pub const Obj = struct {
     flow_neg: bool = false,
     /// `.code` of the digital model: the main token of the statement it is —
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
-    /// names the engine driver §12.29's vpi_put_delays rewrites.
+    /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
+    /// task or function call, the token the engine runs its calltf by
+    /// (`systf.hook`).
     src_tok: u32 = 0,
+    /// `.code` statement: its AST statement, which with `owner` names the
+    /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
+    stmt: Ast.StmtId = .none,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -406,6 +411,8 @@ const Scope = struct {
     branches: []const u32 = &.{},
     /// §11.6.1's behavioural double arrows (code.zig), as tagged rows.
     lists: []const code.List = &.{},
+    /// A digital model's `digital.Run` scope id for this instance.
+    engine: u32 = 0,
 };
 
 /// §12.23's iterator. Individually allocated; a handle is a live iterator iff
@@ -1078,6 +1085,7 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .nodes = try arena.dupe(u32, s.nodes.items),
         .branches = try arena.dupe(u32, s.branches.items),
         .lists = try s.code.freeze(arena),
+        .engine = s.engine,
     };
     d.top_modules = try arena.dupe(u32, &[_]u32{0});
     // A constant and a quantity have no name to be found by (§11.6.7 lists
@@ -1306,6 +1314,7 @@ pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     if (design != null) close();
     design = try buildDigital(gpa, r);
     run.attach(r);
+    print.share(r);
 }
 
 fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
@@ -1624,6 +1633,11 @@ pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
         err_buf[0 .. err_buf.len - 1];
     err_len = written.len;
     err_buf[err_len] = 0;
+    // A cbPLIError routine may call other routines, each clearing the status;
+    // the failing routine's caller still reads this error afterwards.
+    const saved = .{ err_level, err_code, err_buf, err_len };
+    callback.pliError();
+    err_level, err_code, err_buf, err_len = saved;
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,6 +2286,12 @@ fn codeProp(o: *const Obj, prop: c_int) c_int {
             const r = reg orelse return propFail(prop, o);
             return if (r.domain == .digital) r.digital.sysfunctype else r.analog.sysfunctype;
         }
+        // IEEE 1364-2005 §26.1.1: "the number of bits that the calltf
+        // routine shall provide as the return value".
+        if (prop == vpiSize and o.vtype == code.vpiSysFuncCall and !o.in_analog) if (systf.kindOf(o.name)) |k| switch (k) {
+            .func => |t| return @intCast(t.width),
+            .task => {},
+        };
     }
     for (o.props) |p| if (p.prop == prop) return p.value;
     return propFail(prop, o);
