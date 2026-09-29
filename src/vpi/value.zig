@@ -106,6 +106,7 @@ const Source = union(enum) {
 };
 
 fn source(o: *const Obj) ?Source {
+    if (o.kind == .code and o.vtype == root.code.vpiContAssign) return driven(o);
     if (o.slot) |at| {
         const r = run.attached() orelse return null;
         const lit = r.values[at];
@@ -119,6 +120,21 @@ fn source(o: *const Obj) ?Source {
         .str => |s| .{ .str = s },
     };
     return null;
+}
+
+/// IEEE 1364-2005 §26.6.24 cont assign -> value: what its one engine driver
+/// drives now. Null when no run holds it, or when its left-hand side is a
+/// concatenation, whose drivers each hold a part.
+fn driven(o: *const Obj) ?Source {
+    const r = run.attached() orelse return null;
+    const scope = root.design.?.scopes[o.owner.?].engine;
+    var found: ?usize = null;
+    for (r.drivers, 0..) |drv, k| if (drv.tok == o.src_tok and drv.scope == scope) {
+        if (found != null) return null;
+        found = k;
+    };
+    const lit = r.drivers[found orelse return null].current;
+    return .{ .bits = .{ .width = lit.width, .val = lit.values(), .unk = lit.unknowns(), .signed = lit.signed } };
 }
 
 var const_word: [2]u64 = undefined;

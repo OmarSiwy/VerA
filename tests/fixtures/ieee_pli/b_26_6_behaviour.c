@@ -103,8 +103,11 @@
  *   §26.3.4  w1's `assign #4` has one delay: vpiDelay is a constant reading
  *            4. w's `assign #(2,3)` has two: an operation of vpiListOp.
  *   §26.6.24 three continuous assignments: w's, w1's and nd's net
- *            declaration assignment (vpiNetDeclAssign TRUE). w's lhs is the
- *            net w and its rhs a vpiBitAndOp.
+ *            declaration assignment (vpiNetDeclAssign TRUE; FALSE for the
+ *            other two). w's lhs is the net w and its rhs a vpiBitAndOp. A
+ *            cont assign has a value: nd's drives 4'd3 with no delay, so at
+ *            time 0's read-write synch it reads "0011"; w's reads whatever
+ *            its delayed driver holds, and reading it is no error.
  *   §26.6.28 statement 0: vpiLhs is the reg a, vpiBlocking TRUE, rhs 4'd9 a
  *            constant, vpiConstType vpiDecConst. The always's statement is an
  *            event control whose statement is the nonblocking p <= a:
@@ -438,13 +441,23 @@ static void cont_assigns(void)
   expect_no_error("the list of delays");
   CHECK(vpi_handle(vpiDelay, a) == NULL, "26.3.4: a reg has no delay");
   expect_refusal("vpi_handle(vpiDelay, reg)");
-  XFAIL(count(vpiContAssign, top) == 3, "26.6.24", "the net declaration assignment of nd is no cont assign");
-  XFAIL(vpi_get(vpiNetDeclAssign, ca_w) == 0, "26.6.24", "vpiNetDeclAssign of an assign statement is not FALSE");
   {
+    vpiHandle itr = vpi_iterate(vpiContAssign, top), ca, ca_nd = NULL;
     s_vpi_value v;
+    int n = 0;
+    while ((ca = vpi_scan(itr)) != NULL) {
+      n++;
+      if (vpi_compare_objects(vpi_handle(vpiLhs, ca), p02_by_name("b26_behaviour.nd"))) ca_nd = ca;
+    }
+    CHECK(n == 3 && ca_nd != NULL, "26.6.24: three continuous assignments, nd's net declaration assignment among them");
+    CHECK(vpi_get(vpiNetDeclAssign, ca_nd) == 1 && vpi_get(vpiNetDeclAssign, ca_w) == 0 &&
+          vpi_get(vpiNetDeclAssign, ca_w1) == 0, "26.6.24: vpiNetDeclAssign is TRUE for nd's alone");
+    v.format = vpiBinStrVal;
+    vpi_get_value(ca_nd, &v);
+    CHECK(strcmp(v.value.str, "0011") == 0, "26.6.24: nd's assignment drives 4'd3, got %s", v.value.str);
     v.format = vpiBinStrVal;
     vpi_get_value(ca_w, &v);
-    XFAIL(vpi_chk_error(NULL) == 0, "26.6.24", "vpi_get_value(cont assign) is refused");
+    expect_no_error("the continuous assignments' values");
   }
   CHECK(vpi_handle(vpiCondition, ca_w) == NULL, "26.6.24: a cont assign has no condition");
   expect_refusal("vpi_handle(vpiCondition, cont assign)");
