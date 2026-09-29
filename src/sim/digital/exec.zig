@@ -1559,8 +1559,13 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     self.scope = caller_scope;
     self.pc = caller_pc;
     const result = if (decl.is_function) try copyLiteral(a, self.values[f.result]) else try filled(a, 1, false, .x);
+    // §10.2.2, §10.2.3: capture the callee's outputs before restoring the
+    // caller's automatic frame. A recursive actual may name a local in
+    // that frame, including a select whose index belongs to the caller.
+    // Reuse the input copies, which are no longer needed after the body.
     // §10.3: a disabled task's outputs are not copied back.
-    if (self.unwind == null) for (decl.ports, args, f.ports) |p, arg, slot| if (p.direction != .input) try copyOut(self, a, arg, slot);
+    for (decl.ports, inputs, f.ports) |p, *out, slot|
+        out.* = if (p.direction != .input and self.unwind == null) try copyLiteral(a, self.values[slot]) else null;
     if (fresh) {
         var at = saved_len;
         for (f.first..f.first + f.count) |s| {
@@ -1570,6 +1575,8 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
         }
         self.saved_planes.shrinkRetainingCapacity(saved_len);
     }
+    for (args, inputs, f.ports) |arg, out, slot| if (out) |v|
+        try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
     if (self.unwind == idx and sub.active == 0) self.unwind = null;
     return result;
 }

@@ -324,32 +324,53 @@ fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.writeAll(" }");
 }
 
-/// A right-hand side: an expression, or a value already stored at word `off`
-/// with type `ty` (a formal being copied out, §10.2.2, or a parked
-/// intra-assignment value, §9.7.7).
+/// A right-hand side: an expression, a value already stored at word `off`
+/// with type `ty` (§9.7.7), or a formal captured before restoring its
+/// caller's automatic frame (§10.2.2, §10.2.3).
 /// `part` is bits `lo` up of the `total`-bit local `cat<label>`, one operand's
 /// share of a concatenation lvalue's value.
-pub const Rhs = union(enum) { expr: Ast.ExprId, stored: struct { off: u32, ty: Type }, part: struct { label: u32, lo: u32, total: u32 } };
+pub const Rhs = union(enum) {
+    expr: Ast.ExprId,
+    stored: struct { off: u32, ty: Type },
+    captured: struct { call: u32, port: usize, ty: Type },
+    part: struct { label: u32, lo: u32, total: u32 },
+};
+
+/// An already evaluated right-hand side, before assignment conversion.
+fn rhsValue(self: *Emitter, rhs: Rhs) Error!void {
+    switch (rhs) {
+        .expr, .part => unreachable, // `rhsFor` emits expressions and concatenation slices directly.
+        .stored => |v| if (v.ty.width <= 64)
+            try self.print("M.get(s, {d})", .{v.off})
+        else
+            try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) }),
+        .captured => |v| try self.print("o{d}_{d}", .{ v.call, v.port }),
+    }
+}
 
 /// `rhs` in the type `target` gives it (`exec.evalFor`, `exec.convertSlot`).
 fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
-    switch (rhs) {
-        .expr => |e| try expr.assigned(self, e, target),
-        // `exec.convertValue`, §4.8.2 between a real and an integer.
-        .stored => |v| {
-            if (v.ty.real and target.real) return self.print("M.get(s, {d})", .{v.off});
-            if (target.real) {
-                try self.print("L.realBits(L.toReal(", .{});
-                if (v.ty.width <= 64) try self.print("M.get(s, {d})", .{v.off}) else try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) });
-                return self.print(", {d}, {}))", .{ v.ty.width, v.ty.signed });
-            }
-            if (v.ty.real) return self.print("L.rs(L.ofReal(L.real(M.get(s, {d}))), 64, {d}, true)", .{ v.off, target.width });
-            try self.print("L.rs(", .{});
-            if (v.ty.width <= 64) try self.print("M.get(s, {d})", .{v.off}) else try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) });
-            try self.print(", {d}, {d}, {})", .{ v.ty.width, target.width, v.ty.signed });
-        },
-        .part => |p| try self.print("L.part(cat{d}, {d}, {d}, {d})", .{ p.label, p.lo, target.width, p.total }),
+    const ty = switch (rhs) {
+        .expr => |e| return expr.assigned(self, e, target),
+        .stored => |v| v.ty,
+        .captured => |v| v.ty,
+        .part => |p| return self.print("L.part(cat{d}, {d}, {d}, {d})", .{ p.label, p.lo, target.width, p.total }),
+    };
+    // `exec.convertValue`, §4.8.2 between a real and an integer.
+    if (ty.real and target.real) return rhsValue(self, rhs);
+    if (target.real) {
+        try self.print("L.realBits(L.toReal(", .{});
+        try rhsValue(self, rhs);
+        return self.print(", {d}, {}))", .{ ty.width, ty.signed });
     }
+    if (ty.real) {
+        try self.print("L.rs(L.ofReal(L.real(", .{});
+        try rhsValue(self, rhs);
+        return self.print(")), 64, {d}, true)", .{target.width});
+    }
+    try self.print("L.rs(", .{});
+    try rhsValue(self, rhs);
+    try self.print(", {d}, {d}, {})", .{ ty.width, target.width, ty.signed });
 }
 
 /// `exec.callSync` of subroutine `idx` with `args`, as statements in the
@@ -384,12 +405,22 @@ pub fn call(self: *Emitter, idx: u32, args: []const Ast.ExprId, lb: u32) Error!v
     var outs = false;
     for (sub.decl.ports) |p| outs = outs or p.direction != .input;
     if (outs) {
-        try self.print("            if (s.unwind == null) {{\n", .{});
-        for (sub.decl.ports, args, f.ports) |p, arg, at| if (p.direction != .input)
-            try assignment(self, arg, .{ .stored = .{ .off = self.off[at], .ty = try slotType(self, at) } }, .blocking);
-        try self.print("            }}\n", .{});
+        // `leave` restores recursive caller locals and can finish a disable;
+        // preserve both the output values and whether they may be copied.
+        try self.print("            const copy{d} = s.unwind == null;\n", .{lb});
+        for (sub.decl.ports, f.ports, 0..) |p, at, i| if (p.direction != .input) {
+            try self.print("            const o{d}_{d} = ", .{ lb, i });
+            try self.get(at);
+            try self.print(";\n", .{});
+        };
     }
     try self.print("            s.leave({d}, {d}, {d});\n", .{ idx, lo, if (sub.decl.automatic) self.slotOff(f.first + f.count) - lo else 0 });
+    if (outs) {
+        try self.print("            if (copy{d}) {{\n", .{lb});
+        for (sub.decl.ports, args, f.ports, 0..) |p, arg, at, i| if (p.direction != .input)
+            try assignment(self, arg, .{ .captured = .{ .call = lb, .port = i, .ty = try slotType(self, at) } }, .blocking);
+        try self.print("            }}\n", .{});
+    }
 }
 
 pub fn words(w: u32) u32 {
