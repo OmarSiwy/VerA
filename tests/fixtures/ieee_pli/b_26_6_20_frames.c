@@ -24,22 +24,18 @@
  * vpiInertialDelay | vpiReturnEvent), which returns its scheduled event
  * (§27.32) and never matures, the design finishing at t=2.
  *
- * The two refusals need x's handle, so they run only once at ->> vpiReg
- * yields it, and neither is tagged until then. §27.33 and §27.32 name no
- * failure value for them, so only vpi_chk_error() is read:
+ * The two refusals, on x. §27.33 and §27.32 name no failure value for them,
+ * so only vpi_chk_error() is read, and its message must say "automatic": x
+ * has no static storage, so a refusal for that alone would pass too.
  *   Details a) the same cbValueChange registration on x: nonzero.
  *   Details b) the same delayed put onto x: nonzero.
  */
 
 //! inherited IEEE 1364-2005 26.6.20
+//! inherited-reject IEEE 1364-2005 26.6.20
 //! inherited IEEE 1364-2005 26.5.1
 
 #include "b_check.h"
-
-/* Annex G's number, which src/vpi/vpi_user.h does not define. */
-#ifndef vpiAutomatic
-#define vpiAutomatic 50
-#endif
 
 static PLI_INT32 never(p_cb_data d) { (void)d; return 0; }
 
@@ -89,14 +85,12 @@ static PLI_INT32 eoc(p_cb_data d)
       n++;
       x = r;
     }
-  XFAIL(n == 1 && strcmp(vpi_get_str(vpiName, x), "x") == 0 && vpi_get(vpiAutomatic, x) == 1, "26.6.20",
-        "the automatic task at ->> vpiReg does not yield x with vpiAutomatic TRUE");
-  if (n == 1) {
-    (void)on_change(x);
-    expect_refusal("a) cbValueChange on the automatic x");
-    (void)put_later(x);
-    expect_refusal("b) a delayed put onto the automatic x");
-  }
+  CHECK(n == 1 && strcmp(vpi_get_str(vpiName, x), "x") == 0 && vpi_get(vpiAutomatic, x) == 1,
+        "26.6.20: the automatic task at ->> vpiReg yields x, vpiAutomatic TRUE");
+  (void)on_change(x);
+  expect_refusal_saying("a) cbValueChange on the automatic x", "automatic");
+  (void)put_later(x);
+  expect_refusal_saying("b) a delayed put onto the automatic x", "automatic");
   p02_done("b_26_6_20_frames");
   return 0;
 }

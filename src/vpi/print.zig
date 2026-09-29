@@ -18,9 +18,11 @@ fn io() Io {
 // The channels
 // ---------------------------------------------------------------------------
 
-/// Channels 4..32: the 29 an mcd has room for above the three predefined ones.
+/// Channels 4..31: the 28 an mcd has room for above the three predefined ones
+/// and below bit 31, which IEEE 1364-2005 §27.26 reserves to mark "a file
+/// descriptor instead of an mcd".
 const first_user = 3; // index of channel 4
-const channel_count = 32;
+const channel_count = 31;
 
 const Channel = struct {
     file: Io.File,
@@ -51,7 +53,7 @@ pub export fn vpi_mcd_open(file: [*c]const u8) c_uint {
     const free = for (channels[first_user..], first_user..) |c, i| {
         if (c == null) break i;
     } else {
-        root.fail("NOCHANNEL", "vpi_mcd_open: all 29 user channels are open", .{});
+        root.fail("NOCHANNEL", "vpi_mcd_open: all 28 user channels are open", .{});
         return 0;
     };
     const f = Io.Dir.cwd().createFile(io(), want, .{}) catch |e| {
@@ -109,7 +111,7 @@ pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
         0 => "stdout",
         1 => "stderr",
         2 => "log",
-        else => if (channels[i]) |ch| ch.name else {
+        else => if (i < channel_count and channels[i] != null) channels[i].?.name else {
             root.fail("BADMCD", "vpi_mcd_name: channel {d} is not open", .{i + 1});
             return null;
         },
@@ -140,9 +142,57 @@ pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c
     return emit(mcd, format, &ap);
 }
 
+/// IEEE 1364-2005 §27.37: vpi_printf "except that varargs have already been
+/// started".
+///
+/// ponytail: `va_list` is taken as a pointer, which is how the SysV x86-64
+/// and AAPCS64 ABIs pass one; a target that passes it by value needs its own
+/// entry point.
+pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    root.clearError();
+    return emit(1, format, ap);
+}
+
+/// IEEE 1364-2005 §27.27: vpi_mcd_printf over a started `va_list`.
+pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    root.clearError();
+    return emit(mcd, format, ap);
+}
+
+/// IEEE 1364-2005 §27.4: "0 if successful; nonzero if unsuccessful". Every
+/// write here is unbuffered, so there is nothing to flush.
+pub export fn vpi_flush() c_int {
+    root.clearError();
+    return 0;
+}
+
+/// IEEE 1364-2005 §27.23: 0 when every channel `mcd` names is open (writes
+/// are unbuffered, so an open channel is already flushed); nonzero and an
+/// error when a user channel it names is not open.
+pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
+    root.clearError();
+    if (mcd & 0x8000_0000 != 0) {
+        root.fail("BADMCD", "vpi_mcd_flush: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
+        return 1;
+    }
+    for (first_user..channel_count) |i| {
+        if (mcd & bit(i) != 0 and channels[i] == null) {
+            root.fail("BADMCD", "vpi_mcd_flush: channel {d} is not open", .{i + 1});
+            return 1;
+        }
+    }
+    return 0;
+}
+
 const EOF: c_int = -1;
 
 fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    // IEEE 1364-2005 §27.26: the most significant bit marks "a file descriptor
+    // instead of an mcd", and vpi_mcd_printf "shall not write to" one.
+    if (mcd & 0x8000_0000 != 0) {
+        root.fail("BADMCD", "vpi_mcd_printf: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
+        return EOF;
+    }
     if (format == null) {
         root.fail("BADFORMAT", "vpi_printf: the format is NULL", .{});
         return EOF;
@@ -414,7 +464,7 @@ fn real(w: *Io.Writer, s: Spec, v: f64, conv: u8) Io.Writer.Error!void {
     const a = @abs(v);
     const p: usize = s.prec orelse 6;
     var buf: [512]u8 = undefined;
-    const body: []const u8 = switch (conv | 0x20) {
+    const body: Body = switch (conv | 0x20) {
         'f' => fixed(&buf, a, p, s.alt),
         'e' => sci(&buf, a, p, upper, s.alt),
         else => blk: {
@@ -423,62 +473,81 @@ fn real(w: *Io.Writer, s: Spec, v: f64, conv: u8) Io.Writer.Error!void {
             // then trailing zeros go unless '#'.
             const pg: usize = if (p == 0) 1 else p;
             const x = exponentAfterRounding(a, pg - 1);
-            const out = if (x >= -4 and x < @as(i32, @intCast(pg)))
-                fixed(&buf, a, @intCast(@as(i32, @intCast(pg)) - 1 - x), s.alt)
+            const out = if (x >= -4 and x < std.math.cast(i32, pg) orelse std.math.maxInt(i32))
+                fixed(&buf, a, @intCast(@as(i64, @intCast(pg)) - 1 - x), s.alt)
             else
                 sci(&buf, a, pg - 1, upper, s.alt);
-            break :blk if (s.alt) out else stripZeros(out);
+            // The padding zeros are all fractional, so stripping takes them.
+            break :blk if (s.alt) out else .{ .head = stripZeros(out.head), .tail = out.tail };
         },
     };
-    try field(w, s, sign, 0, body, true);
+    const len = sign.len + body.head.len + body.zeros + body.tail.len;
+    const pad = s.width -| len;
+    const zero_fill = s.zero and !s.left;
+    if (!s.left and !zero_fill) try w.splatByteAll(' ', pad);
+    try w.writeAll(sign);
+    if (zero_fill) try w.splatByteAll('0', pad);
+    try w.writeAll(body.head);
+    try w.splatByteAll('0', body.zeros);
+    try w.writeAll(body.tail);
+    if (s.left) try w.splatByteAll(' ', pad);
 }
+
+/// A real conversion's digits: `head`, then `zeros` more zeros, then `tail`
+/// (an exponent). Zig renders the shortest round-trip digits and pads the rest
+/// with zeros, so past `max_digits` a precision only adds zeros, and those are
+/// written rather than rendered: no precision is clamped.
+const Body = struct { head: []const u8, zeros: usize = 0, tail: []const u8 = "" };
+
+/// Fraction digits past which %f's rendering is only zeros: the shortest
+/// digits of an f64 end within 17 significant places of 4.9e-324.
+const max_fixed = 341;
+/// Mantissa digits past which %e's rendering is only zeros.
+const max_sci = 17;
 
 /// The decimal exponent of `a` printed as %e with `p` fraction digits — which
 /// can be one more than `a`'s own when rounding carries (9.99 at p=1 is 1.0e1).
 fn exponentAfterRounding(a: f64, p: usize) i32 {
     var buf: [64]u8 = undefined;
-    const r = std.fmt.float.render(&buf, a, .{ .mode = .scientific, .precision = p }) catch return 0;
+    const r = std.fmt.float.render(&buf, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return 0;
     const e = std.mem.indexOfScalar(u8, r, 'e') orelse return 0;
     return std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
 }
 
-fn fixed(buf: []u8, a: f64, p: usize, alt: bool) []const u8 {
-    const r = std.fmt.float.render(buf, a, .{ .mode = .decimal, .precision = @min(p, 300) }) catch return "?";
+fn fixed(buf: []u8, a: f64, p: usize, alt: bool) Body {
+    const r = std.fmt.float.render(buf, a, .{ .mode = .decimal, .precision = @min(p, max_fixed) }) catch return .{ .head = "?" };
     if (p == 0 and alt) {
         buf[r.len] = '.';
-        return buf[0 .. r.len + 1];
+        return .{ .head = buf[0 .. r.len + 1] };
     }
-    return r;
+    return .{ .head = r, .zeros = p -| max_fixed };
 }
 
 /// Zig renders `1.5e3`; C wants `1.500000e+03` — at least two exponent digits
 /// and an explicit sign.
-fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) []const u8 {
+fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
     var tmp: [64]u8 = undefined;
-    const r = std.fmt.float.render(&tmp, a, .{ .mode = .scientific, .precision = @min(p, 40) }) catch return "?";
-    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return "?";
+    const r = std.fmt.float.render(&tmp, a, .{ .mode = .scientific, .precision = @min(p, max_sci) }) catch return .{ .head = "?" };
+    const e = std.mem.indexOfScalar(u8, r, 'e') orelse return .{ .head = "?" };
     const x = std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
     const mant = r[0..e];
     const dot = if (p == 0 and alt) "." else "";
-    return std.fmt.bufPrint(buf, "{s}{s}{c}{c}{d:0>2}", .{
-        mant, dot, @as(u8, if (upper) 'E' else 'e'), @as(u8, if (x < 0) '-' else '+'), @abs(x),
-    }) catch "?";
+    const head = std.fmt.bufPrint(buf, "{s}{s}", .{ mant, dot }) catch return .{ .head = "?" };
+    const tail = std.fmt.bufPrint(buf[head.len..], "{c}{c}{d:0>2}", .{
+        @as(u8, if (upper) 'E' else 'e'), @as(u8, if (x < 0) '-' else '+'), @abs(x),
+    }) catch return .{ .head = "?" };
+    return .{ .head = head, .zeros = p -| max_sci, .tail = tail };
 }
 
 /// %g's "trailing zeros are removed from the fractional portion of the result
 /// and the decimal-point character is removed if there is no fractional
-/// portion remaining", applied to the mantissa of an e-style result too.
+/// portion remaining", on a fixed result or an e-style mantissa.
 fn stripZeros(s: []const u8) []const u8 {
-    const e = std.mem.indexOfAny(u8, s, "eE") orelse s.len;
-    if (std.mem.indexOfScalar(u8, s[0..e], '.') == null) return s;
-    var end = e;
+    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    var end = s.len;
     while (end > 0 and s[end - 1] == '0') end -= 1;
     if (end > 0 and s[end - 1] == '.') end -= 1;
-    if (e == s.len) return s[0..end];
-    // Close the gap in place: the exponent follows the kept mantissa.
-    const m = @constCast(s);
-    std.mem.copyForwards(u8, m[end..], s[e..]);
-    return s[0 .. end + (s.len - e)];
+    return s[0..end];
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +560,7 @@ fn stripZeros(s: []const u8) []const u8 {
 fn formatted(buf: [*]u8, fmt: [*:0]const u8, ...) callconv(.c) usize {
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
-    var w: Io.Writer = .fixed(buf[0..128]);
+    var w: Io.Writer = .fixed(buf[0..512]);
     if (!cformat(&w, fmt, &ap)) return 0;
     return w.end;
 }
@@ -501,7 +570,7 @@ fn expectFormat(want: []const u8, got_len: usize, buf: []const u8) !void {
 }
 
 test "C conversions: integers, flags, widths and precisions" {
-    var b: [128]u8 = undefined;
+    var b: [512]u8 = undefined;
     try expectFormat("p02 printf 7 ok\n", formatted(&b, "p02 printf %d %s\n", @as(c_int, 7), @as([*:0]const u8, "ok")), &b);
     try expectFormat("[   -42][-42   ][-0042][+42]", formatted(&b, "[%6d][%-6d][%05d][%+d]", @as(c_int, -42), @as(c_int, -42), @as(c_int, -42), @as(c_int, 42)), &b);
     try expectFormat("ff 0XFF 017 0x1f", formatted(&b, "%x %#X %#o %#x", @as(c_uint, 255), @as(c_uint, 255), @as(c_uint, 15), @as(c_uint, 31)), &b);
@@ -511,12 +580,23 @@ test "C conversions: integers, flags, widths and precisions" {
 }
 
 test "C conversions: reals" {
-    var b: [128]u8 = undefined;
+    var b: [512]u8 = undefined;
     try expectFormat("3.500000 1.500000e+03 2.5E-07", formatted(&b, "%f %e %.1E", @as(f64, 3.5), @as(f64, 1500.0), @as(f64, 2.5e-7)), &b);
     // %g: style f inside [1e-4, 1e6), style e outside, trailing zeros stripped.
     try expectFormat("0.0001 100000 1e+06 1e-05 0.5", formatted(&b, "%g %g %g %g %g", @as(f64, 1e-4), @as(f64, 1e5), @as(f64, 1e6), @as(f64, 1e-5), @as(f64, 0.5)), &b);
     try expectFormat("[  -1.25][-001.25][inf]", formatted(&b, "[%7.2f][%07.2f][%f]", @as(f64, -1.25), @as(f64, -1.25), std.math.inf(f64)), &b);
     try expectFormat("3.14159", formatted(&b, "%g", @as(f64, 3.14159265)), &b);
+}
+
+test "C conversions: a real's precision is never clamped" {
+    var b: [512]u8 = undefined;
+    // 0.5 exactly, 100 fraction digits: "0.5" then 99 zeros.
+    try expectFormat("0.5" ++ "0" ** 99, formatted(&b, "%.100f", @as(f64, 0.5)), &b);
+    // 60 mantissa digits: "1." and 60 zeros, then the exponent.
+    try expectFormat("1." ++ "0" ** 60 ++ "e+00", formatted(&b, "%.60e", @as(f64, 1.0)), &b);
+    // The smallest subnormal's one shortest digit (see `real`) sits at the
+    // 324th place, past where the old 300-digit clamp cut it off.
+    try expectFormat("0." ++ "0" ** 323 ++ "5000000", formatted(&b, "%.330f", @as(f64, 5e-324)), &b);
 }
 
 test "§12.24–§12.26: channel numbering, reopen, and the three predefined channels" {

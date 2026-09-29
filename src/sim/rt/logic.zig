@@ -782,7 +782,9 @@ fn bitOf(b: Int.Bit) Bit {
 }
 
 fn check(comptime w: u32, comptime signed: bool, a: T(w), b: T(w)) !void {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    // Not `std.testing.allocator`: the arena frees everything anyway, and its
+    // per-allocation stack capture is most of these tests' run time.
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena.deinit();
     const al = arena.allocator();
     const la = try lit(al, a, w, signed);

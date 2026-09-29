@@ -246,9 +246,10 @@ pub fn build(b: *std.Build) void {
         // Channels a fixture opens (§12.26) land in the cwd, which is the
         // cache and not the source tree.
         r.setCwd(b.path(".zig-cache"));
-        if (f.xfail) |m| {
+        if (f.xfail orelse f.refuse) |m| {
             r.expectExitCode(1);
             r.expectStdErrMatch(m);
+            if (f.refuse != null) r.expectStdOutEqual(f.stdout);
         } else {
             r.expectExitCode(0);
             r.expectStdOutEqual(f.stdout);
@@ -323,6 +324,19 @@ pub fn build(b: *std.Build) void {
         run.addCheck(.{ .expect_stderr_match = r.says });
         test_step.dependOn(&run.step);
     }
+    // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero
+    // never ends, so no file that size is committed or written.
+    if (b.graph.host.result.os.tag != .windows) for ([_][]const []const u8{
+        &.{ "--lint", "/dev/zero" },
+        &.{ "--lint", "--spice", "/dev/zero", "tests/fixtures/ch02_lexical/28_identifier_1024_chars.va" },
+    }) |args| {
+        const run = b.addRunArtifact(exe);
+        run.setCwd(b.path("."));
+        run.addArgs(args);
+        run.expectExitCode(2);
+        run.addCheck(.{ .expect_stderr_match = "error[E1013]: `/dev/zero` is larger than 67108864 bytes" });
+        test_step.dependOn(&run.step);
+    };
 }
 
 /// A host driver and the `.va` its `device` import is emitted from: device
@@ -420,13 +434,16 @@ fn vpiApp(
 /// the exact output it must produce. The `checks=N` count catches a run that
 /// returns early and still exits 0. `xfail` is a known VerA gap instead: the
 /// run exits 1 with this text in its stderr, so the run that stops failing
-/// fails the step until the marker is removed.
+/// fails the step until the marker is removed. `refuse` is the same check
+/// for a design the host must refuse (a rejection the application itself
+/// cannot observe).
 const VpiRun = struct {
     c: []const u8,
     design: []const u8,
     stdout: []const u8 = "",
     stderr: ?[]const u8 = null,
     xfail: ?[]const u8 = null,
+    refuse: ?[]const u8 = null,
 };
 
 /// Not here, each for a reason outside the routine it exercises:
@@ -533,7 +550,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=27\np02_design: t=20 reached\n",
+        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=29\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_06_cb_value_change.c",
@@ -671,14 +688,19 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p02: b_20_4_timing_checks checks=7\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/b_20_3_task_as_function.c",
+        .design = "tests/fixtures/ieee_pli/b_20_3_task_as_function.v",
+        .refuse = "vpi_host: `$random` is registered as a system task and called as a function (IEEE 1364-2005 §20.3)",
+    },
+    .{
         .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
         .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
-        .stdout = "xfail 27.31: no user data can be stored on a system function call\nxfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=40\n",
+        .stdout = "xfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=42\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
-        .stdout = "xfail 26.6.1: vpiTimeUnit of a `timescale 1ns module is not -9\nxfail 26.6.1: vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12\nxfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.3.2: vpi_get_str(vpiType, iterator) is not \"vpiIterator\"\nxfail 26.3.2: vpiNetType of a wire is not vpiWire\nxfail 26.3.3: vpiLineNo of a net is not its source line\nxfail 26.3.3: vpiFile of a net is not its source file\nxfail 26.6.43: vpi_handle(vpiUse, iterator) is not its reference handle\nxfail 26.6.43: vpiIteratorType is not the iterated type\nxfail 26.6.1: vpiProtected of an unprotected module is not FALSE\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.6: a net array is not a vpiNetArray of vpiSize 2\nxfail 26.6.7: vpiArray of a reg array member is not TRUE\nxfail 26.6.7: vpiSize of a 2x3 reg array is not its 6 regs\nxfail 26.6.8: a time variable is not a vpiTimeVar\nxfail 26.6.8: module ->> variables does not yield i, ia, x, t\nxfail 26.6.10: reg array ->> range yields no range of size 4\nxfail 26.6.11: vpiArray of a scalar named event is not FALSE\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\nxfail 26.6.44: module ->> gen scope array yields no gen of size 2\np02: b_26_6_structure checks=249\n",
+        .stdout = "xfail 26.6.1: vpiTimeUnit of a `timescale 1ns module is not -9\nxfail 26.6.1: vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12\nxfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.3.2: vpi_get_str(vpiType, iterator) is not \"vpiIterator\"\nxfail 26.3.2: vpiNetType of a wire is not vpiWire\nxfail 26.3.3: vpiLineNo of a net is not its source line\nxfail 26.3.3: vpiFile of a net is not its source file\nxfail 26.6.43: vpi_handle(vpiUse, iterator) is not its reference handle\nxfail 26.6.43: vpiIteratorType is not the iterated type\nxfail 26.6.1: vpiProtected of an unprotected module is not FALSE\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.6: a net array is not a vpiNetArray of vpiSize 2\nxfail 26.6.7: vpiArray of a reg array member is not TRUE\nxfail 26.6.7: vpiSize of a 2x3 reg array is not its 6 regs\nxfail 26.6.8: a time variable is not a vpiTimeVar\nxfail 26.6.8: module ->> variables does not yield i, ia, x, t\nxfail 26.6.11: vpiArray of a scalar named event is not FALSE\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=261\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
@@ -698,7 +720,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_20_frames.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_20_frames.v",
-        .stdout = "xfail 26.6.20: the automatic task at ->> vpiReg does not yield x with vpiAutomatic TRUE\np02: b_26_6_20_frames checks=12\n",
+        .stdout = "p02: b_26_6_20_frames checks=14\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_11_event_array.c",
@@ -743,14 +765,14 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p02: b_27_delays checks=25\n",
     },
     .{
-        .c = "tests/fixtures/ieee_pli/b_27_unprovided.c",
+        .c = "tests/fixtures/ieee_pli/b_27_utilities.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail 27.4: vpi_flush is not provided\nxfail 27.23: vpi_mcd_flush is not provided\nxfail 27.37: vpi_vprintf is not provided\nxfail 27.27: vpi_mcd_vprintf is not provided\nxfail 27.18: vpi_handle_by_multi_index is not provided\nxfail 27.31: vpi_put_userdata/vpi_get_userdata are not provided\nxfail 27.29: vpi_put_data/vpi_get_data are not provided\nxfail 27.3: vpi_control is not provided\np02: b_27_unprovided checks=17\n",
+        .stdout = "b27v 5\np02: b_27_utilities checks=33\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 175 of Annex G's 441 constant names are not defined\nxfail G: 10 of Annex G's routines are not provided\np02: b_G_vpi_user checks=268\n",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 170 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=273\n",
     },
 };
 
