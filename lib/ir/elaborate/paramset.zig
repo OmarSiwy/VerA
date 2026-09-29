@@ -42,14 +42,9 @@ const connectionFor = Flatten.connectionFor;
 ///   3. "The paramset with the fewest ports not connected in the instance
 ///      line shall be selected", over the target module's port list, since
 ///      same-named paramsets "may refer to different modules".
-pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const Ast.ParamsetDecl {
-    var candidates: usize = 0;
+pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance, path: []const u8) Error!?*const Ast.ParamsetDecl {
     var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
-    for (self.ctx.file.paramsets) |*ps| {
-        if (ps.name != inst.module) continue;
-        candidates += 1;
-        if (paramsetAdmits(self, inst, ps)) try live.append(self.ctx.arena, ps);
-    }
+    const candidates = try matchingParamsets(self, inst, path, &live);
     if (live.items.len == 0) {
         if (candidates == 0) {
             try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
@@ -60,10 +55,6 @@ pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const A
         }
         return null;
     }
-    // "applied in order until a unique paramset has been selected".
-    if (live.items.len > 1) try tieBreak(self, inst, &live, .un_overridden);
-    if (live.items.len > 1) try tieBreak(self, inst, &live, .ranged_locals);
-    if (live.items.len > 1) try tieBreak(self, inst, &live, .unconnected_ports);
     if (live.items.len > 1) {
         try self.err(inst.main_tok, .E0914, "`{s}`: {d} paramsets named `{s}` are still applicable after §6.4.2's tie-breaking rules", .{
             self.ctx.file.str(inst.name), live.items.len, self.ctx.file.str(inst.module),
@@ -71,6 +62,29 @@ pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const A
         return null;
     }
     return live.items[0];
+}
+
+/// Shared by actual instantiation and §6.9.3 connect insertion. Both must see
+/// the same effective overrides at the external instance path, before storage
+/// is renamed to the internal `instance.paramset.parameter` namespace.
+pub fn matchingParamsets(self: *Flatten, inst: *const Ast.Instance, path: []const u8, live: *std.ArrayList(*const Ast.ParamsetDecl)) Error!usize {
+    var count: usize = 0;
+    for (self.ctx.file.paramsets) |ps| if (ps.name == inst.module) {
+        count += 1;
+    };
+    const reads = if (count > 1) try self.ctx.arena.alloc(bool, self.params.items.len) else null;
+    if (reads) |r| @memset(r, false);
+    for (self.ctx.file.paramsets) |*ps| {
+        if (ps.name == inst.module and try paramsetAdmits(self, inst, ps, path, reads))
+            try live.append(self.ctx.arena, ps);
+    }
+    if (reads) |r| for (r, self.params.items) |read, p| {
+        if (read) try self.selection_params.append(self.ctx.arena, p.name);
+    };
+    // "applied in order until a unique paramset has been selected".
+    for ([_]TieRule{ .un_overridden, .ranged_locals, .unconnected_ports }) |rule|
+        if (live.items.len > 1) try tieBreak(self, inst, path, live, rule);
+    return count;
 }
 
 /// The three §6.4.2 tie-breaking rules, in the clause's order.
@@ -81,6 +95,7 @@ pub const TieRule = enum { un_overridden, ranged_locals, unconnected_ports };
 pub fn tieBreak(
     self: *Flatten,
     inst: *const Ast.Instance,
+    path: []const u8,
     live: *std.ArrayList(*const Ast.ParamsetDecl),
     rule: TieRule,
 ) Error!void {
@@ -91,17 +106,10 @@ pub fn tieBreak(
         // localparam is not overridable (§3.4.5), and §6.4.2's neighbouring
         // rules count "parameters" and "local parameters" separately.
         .un_overridden => blk: {
-            const overridable: i64 = @intCast(overridableCount(ps.params));
-            const named = inst.params.len != 0 and inst.params[0].name != .none;
-            if (!named) {
-                // §6.3 ordered values land on the first inst.params.len
-                // overridable parameters, so the remainder is the count.
-                break :blk @max(0, overridable - @as(i64, @intCast(inst.params.len)));
-            }
             var n: i64 = 0;
-            for (ps.params) |p| {
+            for (ps.params, 0..) |p, i| {
                 if (p.is_local) continue;
-                n += @intFromBool(!overridesParam(inst, ps, p.name));
+                n += @intFromBool(try parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false) == null);
             }
             break :blk n;
         },
@@ -154,6 +162,72 @@ pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, na
     return false;
 }
 
+/// One effective §6.3 override. A defparam value was cloned in its DECLARING
+/// module; an inline value is still in the instantiating module's namespace.
+pub const ParamBinding = struct {
+    value: Ast.ExprId,
+    spelling: Ast.StrId,
+    flat: bool,
+};
+
+/// The same binding feeds overload selection and final parameter assignment.
+/// §6.3 lets a defparam replace an inline value under the same name. §3.4.7
+/// forbids different original/alias spellings even across the two mechanisms.
+/// Inspection never consumes an override: only the selected instance does.
+pub fn parameterBinding(self: *Flatten, inst: *const Ast.Instance, params: []const Ast.ParamDecl, aliases: []const Ast.AliasParam, index: usize, path: []const u8, consume: bool) Error!?ParamBinding {
+    const p = params[index];
+    if (p.is_local) return null;
+    var found: ?ParamBinding = null;
+    const named = inst.params.len != 0 and inst.params[0].name != .none;
+    if (named) {
+        for (inst.params) |o| {
+            if (o.value == .none) continue;
+            var target = o.name;
+            for (aliases) |al| if (al.alias == o.name) {
+                target = al.target;
+                break;
+            };
+            if (target == p.name) found = .{ .value = o.value, .spelling = o.name, .flat = false };
+        }
+    } else {
+        var ordinal: usize = 0;
+        for (params[0..index]) |before| if (!before.is_local) {
+            ordinal += 1;
+        };
+        if (ordinal < inst.params.len and inst.params[ordinal].value != .none)
+            found = .{ .value = inst.params[ordinal].value, .spelling = .none, .flat = false };
+    }
+    try parameterDefparam(self, path, p.name, p.name, consume, &found);
+    for (aliases) |al| if (al.target == p.name)
+        try parameterDefparam(self, path, p.name, al.alias, consume, &found);
+    return found;
+}
+
+fn parameterDefparam(self: *Flatten, path: []const u8, original: Ast.StrId, spelling: Ast.StrId, consume: bool, found: *?ParamBinding) Error!void {
+    const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(spelling) });
+    const dp = self.defparams.getPtr(key) orelse return;
+    if (consume) {
+        dp.used = true;
+        if (found.*) |before| if (before.spelling != .none and before.spelling != spelling)
+            try self.err(dp.tok, .E0908, "`{s}` and its alias are both given a value", .{self.ctx.file.str(original)});
+    }
+    found.* = .{ .value = dp.value, .spelling = spelling, .flat = true };
+}
+
+/// Whether an external override names a public parameter of this candidate.
+/// §6.4 hides unexposed parameters of the underlying module; §3.4.5 excludes
+/// localparams. System parameters (and their aliases) keep §9.18's binding.
+fn exposes(self: *Flatten, ps: *const Ast.ParamsetDecl, name: []const u8) bool {
+    if (hier_param.Kind.fromName(name) != null) return true;
+    for (ps.params) |p| if (!p.is_local and std.mem.eql(u8, self.ctx.file.str(p.name), name)) return true;
+    for (ps.aliasparams) |al| {
+        if (!std.mem.eql(u8, self.ctx.file.str(al.alias), name)) continue;
+        if (hier_param.Kind.fromName(self.ctx.file.str(al.target)) != null) return true;
+        for (ps.params) |p| if (!p.is_local and p.name == al.target) return true;
+    }
+    return false;
+}
+
 /// Returns whether `ps` passes §6.4.2's selection rules for `inst` ("When
 /// choosing an appropriate paramset, the following rules shall be
 /// enforced"), as far as each is decidable here. Reports nothing.
@@ -171,38 +245,28 @@ pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, na
 ///   4. "The underlying module shall have a port declared for each port
 ///      connected in the instance line." An undeclared target module cannot
 ///      fail it; that is E0904 at the use site.
-pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl) bool {
+pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, path: []const u8, reads: ?[]bool) Error!bool {
     const named = inst.params.len != 0 and inst.params[0].name != .none;
     if (!named and inst.params.len > overridableCount(ps.params)) return false;
-    var ord: usize = 0;
-    for (ps.params) |p| {
-        // §6.4.2 "with overrides and defaults": the value this paramset would
-        // give the parameter, whichever supplied it. An `is_local` entry
-        // takes no override in either spelling (§3.4.5), so its default is
-        // the value judged (criterion 3).
-        var value = p.default;
-        if (p.is_local) {
-            // keep the default
-        } else if (named) {
-            for (inst.params) |o| {
-                if (o.name == p.name and o.value != .none) value = o.value;
-            }
-        } else {
-            if (ord < inst.params.len) value = inst.params[ord].value;
-            ord += 1;
-        }
-        if (!inRanges(self, value, p.ranges)) return false;
-    }
     if (named) for (inst.params) |o| {
-        // §9.18's system parameters are not the paramset's to declare.
-        if (hier_param.Kind.fromName(self.ctx.file.str(o.name)) != null) continue;
-        const found = for (ps.params) |p| {
-            if (!p.is_local and p.name == o.name) break true;
-        } else for (ps.aliasparams) |al| {
-            if (al.alias == o.name) break true;
-        } else false;
-        if (!found) return false;
+        if (!exposes(self, ps, self.ctx.file.str(o.name))) return false;
     };
+    var it = self.defparams.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (!std.mem.startsWith(u8, key, path)) continue;
+        const name = key[path.len..];
+        // A path into a descendant names that descendant's own parameters,
+        // not an additional parameter of the paramset instance.
+        if (std.mem.indexOfScalar(u8, name, sep) != null) continue;
+        if (!exposes(self, ps, name)) return false;
+    }
+    const bindings = try self.ctx.arena.alloc(?ParamBinding, ps.params.len);
+    for (bindings, 0..) |*b, i| b.* = try parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false);
+    const env: ParamsetEnv = .{ .self = self, .ps = ps, .bindings = bindings, .reads = reads };
+    for (ps.params, 0..) |p, i| {
+        if (p.ranges.len != 0 and !inRanges(self, env.value(i), p.ranges, env)) return false;
+    }
     // Criterion 4, both connection spellings. A mixed or malformed list is
     // E0906 after selection (`checkConnectionShape`).
     if (elab_names.findModule(self, ps.target)) |child| {
@@ -225,7 +289,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
 /// ponytail: a value or a bound this cannot fold counts as admissible, so a
 /// missing folder never becomes a selection error; `Lower` still judges the
 /// value it ends up with (E0361).
-fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) bool {
+fn inRanges(self: *Flatten, value: ?constfold.Const, ranges: []const Ast.ValueRange, env: ParamsetEnv) bool {
     if (ranges.len == 0) return true;
     // §3.4.2: "Valid values of string parameters are indicated differently.
     // The `from` keyword may be used with a list of valid string values, or
@@ -233,15 +297,15 @@ fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) b
     // values." A.2.5's `value_range_type '{ string {, string} }`, parsed
     // into `ValueRange.strings`. Without this arm a binned set keyed on a
     // string (§3.4.6's `ebersmoll` mapping) admits every bin.
-    if (value != .none and self.ctx.file.exprs.tag(value) == .str_literal)
-        return strInRanges(self, self.ctx.file.str(self.ctx.file.exprs.strOf(value)), ranges);
-    const v = constReal(self, value) orelse return true;
+    const c = value orelse return true;
+    if (c == .str) return strInRanges(self, c.str, ranges);
+    const v = c.asReal();
     var has_from = false;
     var in_from = false;
     for (ranges) |r| {
         if (r.strings != null) continue;
-        const lo = constReal(self, r.lo) orelse return true;
-        const hi = if (r.hi == .none) lo else constReal(self, r.hi) orelse return true;
+        const lo = (constfold.fold(self.ctx.file, r.lo, env) orelse return true).asReal();
+        const hi = if (r.hi == .none) lo else (constfold.fold(self.ctx.file, r.hi, env) orelse return true).asReal();
         const above = if (r.lo_inclusive) v >= lo else v > lo;
         const below = if (r.hi_inclusive) v <= hi else v < hi;
         switch (r.kind) {
@@ -254,6 +318,44 @@ fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) b
     }
     return !has_from or in_from;
 }
+
+/// §6.4.2 defaults and localparams see the candidate's effective parameters,
+/// while an inline override and a defparam retain their respective scopes.
+const ParamsetEnv = struct {
+    self: *Flatten,
+    ps: *const Ast.ParamsetDecl,
+    bindings: []const ?ParamBinding,
+    reads: ?[]bool,
+    depth: usize = 0,
+
+    fn value(env: ParamsetEnv, i: usize) ?constfold.Const {
+        // Acyclic parameter defaults visit at most one declaration per level.
+        // A cycle remains lowering's diagnostic, not infinite recursion here.
+        if (env.depth >= env.ps.params.len) return null;
+        const p = env.ps.params[i];
+        const raw = if (env.bindings[i]) |b|
+            elab_names.constValue(env.self, b.value, !b.flat, env.reads)
+        else blk: {
+            var next = env;
+            next.depth += 1;
+            break :blk constfold.fold(env.self.ctx.file, p.default, next);
+        };
+        return constfold.parameterValue(p.ty, raw orelse return null);
+    }
+
+    pub fn leaf(env: ParamsetEnv, e: Ast.ExprId) ?constfold.Const {
+        const ex = &env.self.ctx.file.exprs;
+        if (ex.tag(e) != .ident) return null;
+        for (env.ps.params, 0..) |p, i| if (p.name == ex.strOf(e)) return env.value(i);
+        return null;
+    }
+    pub fn signed(_: ParamsetEnv, _: Ast.ExprId) ?bool {
+        return null;
+    }
+    pub fn width(_: ParamsetEnv, _: Ast.ExprId) ?u32 {
+        return null;
+    }
+};
 
 /// The string half of `inRanges`: membership in a `'{ ... }` set, union over
 /// the `from` clauses, any `exclude` hit fatal, as lowering's
@@ -280,8 +382,8 @@ fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bo
 
 /// Folds `e` to a real, or null: §2.6 literals, the A.2.5 infinities, and
 /// every operator over them, through the shared constant kernel, so `1/2` is
-/// §4.2.4's integer division as in lowering. Parameter reads do not fold;
-/// §6.4.2's printed ranges are all literals.
+/// §4.2.4's integer division as in lowering. This literal-only helper checks
+/// §9.18 domains without freezing host inputs; selection uses ParamsetEnv.
 pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
     const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
     return if (c == .str) null else c.asReal();

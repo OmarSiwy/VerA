@@ -115,6 +115,22 @@ truncation rule, so a shorter answer would be a wrong one.
 | VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223` | none |
 | VPI: automatic named events and dynamic event references in automatic tasks | declaration metadata is available; triggering through VPI requires unimplemented §26.6.20 frame handles | `AUTOMATIC`, naming the activation frame | `src/vpi/value.zig` `put` | `ieee_pli/b_26_6_11_event_array.c`; static-task event references are the legal neighbor |
 
+### Host changes to paramset selection inputs
+
+AMS §§6.3 and 6.4.2 require overload selection to use the effective parameter
+values, including outer `defparam` bindings. VerA selects the module during
+elaboration, after applying compile-time card overrides. Parameters read to
+admit or exclude members of an overloaded paramset name are shape inputs:
+the emitted `checkShape` returns the name of a changed input and the host
+must recompile before evaluating that card. This includes numeric and string
+inputs, and conservatively includes changes that remain within the same bin.
+It is a host execution limit, not an AMS restriction on parameter values.
+
+Parameters used only to supply values through a single-member paramset remain
+live through `derive`. `lib/ir/elaborate/paramset.zig` records the selection
+dependencies; `tests/paramset_host.zig` executes both kinds of host changes
+against `ch06_hierarchy/paramset_outer_defparam_shape.va`.
+
 ### Timer controls with effects
 
 AMS §5.10.3.3 requires the next event to use the final `start_time` and
@@ -148,7 +164,16 @@ cite no clause. The `$ferror` fixtures assert only a nonzero code.
 
 ## 4. Open defects
 
-None. Every limit above fails loudly, and these are gone rather than named:
+**Direct reads of host-written integer parameters.** The generated Model uses
+an i64 carrier for a declared `integer`. Writing `4294967297` to a parameter
+declared `integer word=1` still makes a direct `word` expression read that raw
+carrier, rather than the required low-32-bit value 1. Compile-time card
+conversion, paramset selection, `checkShape`, and width-aware `$clog2` use 1;
+the direct emitted read remains an independent gap. The wide-card paramset
+fixture uses a representable integer control and does not claim this read is
+fixed. `tests/paramset_host.zig` checks the effective integer selection only.
+
+The earlier limit defects below are gone rather than named:
 the `absdelay` history counts steps in a u64; unit names count collisions in
 a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
 reals and the testbench's noise, AC-stimulus, charge-site and mixed-signal

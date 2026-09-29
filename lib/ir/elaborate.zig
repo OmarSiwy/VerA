@@ -108,6 +108,9 @@ pub const Design = struct {
     /// generate condition that decides whether that hierarchy exists. Lowering
     /// judges them after the final parameter values (including --param) exist.
     paramset_defparams: []const ParamsetDefparam = &.{},
+    /// §6.4.2 values read while choosing an overloaded paramset. The host must
+    /// re-elaborate when these shape parameters change, as for generate schemes.
+    selection_params: []const Ast.StrId = &.{},
 };
 
 /// A defparam is forbidden only in an instantiated paramset hierarchy:
@@ -187,7 +190,12 @@ pub const Ctx = struct {
     src: []const u8,
     tok_starts: []const u32,
     bag: *diag.Bag,
+    param_overrides: []const ParamOverride = &.{},
 };
+
+/// §3.4 compile-time overrides, shared with Lower.Options. Elaboration needs
+/// their final values when a §6.4.2 overload choice depends on a top parameter.
+pub const ParamOverride = struct { name: []const u8, value: f64 };
 
 /// Elaborates `ctx.file` into the design lowering walks. Every pointer in the
 /// result points into `ctx.arena`. A top with no instances, defparams or
@@ -387,6 +395,7 @@ pub const Flatten = struct {
     ps_hidden: std.ArrayList([]const u8) = .empty,
     /// `Design.paramset_defparams`, before generate schemes have final values.
     paramset_defparams: std.ArrayList(ParamsetDefparam) = .empty,
+    selection_params: std.ArrayList(Ast.StrId) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -698,6 +707,7 @@ pub const Flatten = struct {
             .attribute_disciplines = self.attribute_disciplines,
             .ps_hidden = self.ps_hidden.items,
             .paramset_defparams = self.paramset_defparams.items,
+            .selection_params = self.selection_params.items,
         };
     }
 
@@ -705,11 +715,44 @@ pub const Flatten = struct {
     /// is the unit's own hierarchical prefix ("" at the top).
     fn walkInstances(
         self: *Flatten,
-        module: *const Ast.ModuleDecl,
+        source_module: *const Ast.ModuleDecl,
         path: []const u8,
         stack: *std.ArrayList(Ast.StrId),
         depth: u32,
     ) Error!void {
+        // §6.3/§6.4.2 an indexed defparam can select a different paramset for
+        // each array element. Expand before §6.9.3 connect planning, so both
+        // passes use the same external instance paths and selected modules.
+        // Preserve early named errors before allocating an array's rows.
+        for (source_module.instances) |inst| {
+            if (inst.range == null) continue;
+            if (for (self.ctx.file.udps) |u| {
+                if (u.name == inst.module) break true;
+            } else false) continue;
+            if (elab_names.findModule(self, inst.module)) |child| {
+                for (stack.items) |on_stack| if (on_stack == child.name) {
+                    try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
+                        self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
+                    });
+                    return;
+                };
+            } else {
+                const known = for (self.ctx.file.paramsets) |ps| {
+                    if (ps.name == inst.module) break true;
+                } else false;
+                if (!known) {
+                    try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
+                    return;
+                }
+            }
+            if (depth >= max_depth) {
+                try self.err(inst.main_tok, .E1018, "at `{s}{s}`", .{ path, self.ctx.file.str(inst.name) });
+                return;
+            }
+        }
+        var expanded = source_module.*;
+        expanded.instances = try self.expandInstanceArrays(source_module.instances);
+        const module = &expanded;
         // §6.3.1 before the children: a defparam applies downward, and the
         // parameters it overrides are created as those instances are inlined.
         for (module.defparams) |dp| {
@@ -815,29 +858,6 @@ pub const Flatten = struct {
                     try self.ctx.bag.add(.lower, .W0252, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, inst.main_tok), "`{s}` primitive", .{self.ctx.file.str(inst.module)});
                 continue;
             }
-            var ps: ?*const Ast.ParamsetDecl = null;
-            const child = elab_names.findModule(self, inst.module) orelse blk: {
-                ps = try elab_paramset.selectParamset(self, &inst) orelse continue;
-                break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
-            };
-            if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
-            // §7.1: connect modules "can be manually inserted (by the user) or
-            // automatically inserted (by the simulator)", so one named here is
-            // inlined like any child: its digital half runs on the mixed
-            // runner, which elaborates the same hierarchy.
-            for (stack.items) |on_stack| if (on_stack == child.name) {
-                try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
-                    self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
-                });
-                return;
-            };
-            if (depth >= max_depth) {
-                try self.err(inst.main_tok, .E1018, "at `{s}{s}`", .{
-                    path, self.ctx.file.str(inst.name),
-                });
-                return;
-            }
-
             // §6.2.2 `name_of_module_instance ::= module_instance_identifier
             // [ range ]`: one instance per element, each addressable as §6.7's
             // `adder1[5].sum`.
@@ -858,16 +878,73 @@ pub const Flatten = struct {
                 is_array = true;
             }
 
-            var k = lo;
+            // The end may be maxInt(i64). Keep the loop's one-past-end
+            // value in a wider carrier; `continue` must advance safely too.
+            var k: i128 = lo;
             while (k <= hi) : (k += 1) {
                 const leaf = if (is_array)
                     try std.fmt.allocPrint(self.ctx.arena, "{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
                 else
                     self.ctx.file.str(inst.name);
                 const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, leaf, sep });
+                var ps: ?*const Ast.ParamsetDecl = null;
+                const child = elab_names.findModule(self, inst.module) orelse blk: {
+                    ps = try elab_paramset.selectParamset(self, &inst, child_path) orelse continue;
+                    break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
+                };
+                if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
+                // §7.1 manually and automatically inserted connect modules
+                // follow this same instance walk.
+                for (stack.items) |on_stack| if (on_stack == child.name) {
+                    try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}`", .{ self.ctx.file.str(child.name), child_path });
+                    return;
+                };
+                if (depth >= max_depth) {
+                    try self.err(inst.main_tok, .E1018, "at `{s}`", .{child_path});
+                    return;
+                }
                 try self.inlineInstance(&inst, child, ps, child_path, stack, depth, gate);
             }
         }
+    }
+
+    /// Scalarize §6.2.2 module arrays before per-instance decisions. The source
+    /// AST remains unchanged for the mixed runner's independent digital walk.
+    fn expandInstanceArrays(self: *Flatten, insts: []const Ast.Instance) Error![]const Ast.Instance {
+        for (insts) |inst| {
+            if (inst.range != null) break;
+        } else return insts;
+        var out: std.ArrayList(Ast.Instance) = .empty;
+        for (insts) |inst| {
+            // UDP instances belong to the digital walk. The analog path
+            // reports W0252 once at the source site, as for a scalar UDP.
+            if (for (self.ctx.file.udps) |u| {
+                if (u.name == inst.module) break true;
+            } else false) {
+                try out.append(self.ctx.arena, inst);
+                continue;
+            }
+            const range = inst.range orelse {
+                try out.append(self.ctx.arena, inst);
+                continue;
+            };
+            const msb = elab_names.constInt(self, range.msb);
+            const lsb = elab_names.constInt(self, range.lsb);
+            if (msb == null or lsb == null) {
+                try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
+                continue;
+            }
+            // A singleton at maxInt(i64) is legal and must not overflow
+            // when advancing past its final element. No range subtraction.
+            var k: i128 = @min(msb.?, lsb.?);
+            while (k <= @max(msb.?, lsb.?)) : (k += 1) {
+                var scalar = inst;
+                scalar.name = try self.ctx.file.intern(self.ctx.arena, try std.fmt.allocPrint(self.ctx.arena, "{s}[{d}]", .{ self.ctx.file.str(inst.name), k }));
+                scalar.range = null;
+                try out.append(self.ctx.arena, scalar);
+            }
+        }
+        return out.items;
     }
 
     /// Inline ONE instance: bind its ports, apply its §6.3 overrides, rename its
@@ -1346,12 +1423,9 @@ pub const Flatten = struct {
         // instance parameter, the parameter in the module shall take the value
         // specified by the defparam." It overwrites `#(...)` whatever the text
         // order. §3.4.5 still holds: only overridable parameters are looked up.
-        for (child.params) |p| {
-            if (p.is_local) continue;
-            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) });
-            const dp = self.defparams.getPtr(key) orelse continue;
-            dp.used = true;
-            try over.put(self.ctx.arena, p.name, dp.value);
+        for (child.params, 0..) |p, i| {
+            const binding = try elab_paramset.parameterBinding(self, inst, child.params, child.aliasparams, i, path, true) orelse continue;
+            if (binding.flat) try over.put(self.ctx.arena, p.name, binding.value);
         }
 
         try elab_paramset.markGiven(self, child, over, unit);
@@ -1631,6 +1705,49 @@ test "§6.3.1 a defparam beats the instance's own override, and an unmatched one
     try std.testing.expectEqual(diag.Code.E0907, g.bag.at(0).code);
 }
 
+test "§3.4.7 defparam aliases share binding and reject conflicting spellings across mechanisms" {
+    const Case = struct { inline_name: []const u8, defparams: []const u8, conflict: bool };
+    const cases = [_]Case{
+        .{ .inline_name = "ag", .defparams = "u.ag=5.0", .conflict = false },
+        .{ .inline_name = "g", .defparams = "u.ag=2.0", .conflict = true },
+        .{ .inline_name = "ag", .defparams = "u.g=2.0", .conflict = true },
+        .{ .inline_name = "ag", .defparams = "u.bg=2.0", .conflict = true },
+        .{ .inline_name = "ag", .defparams = "u.ag=2.0, u.bg=2.0", .conflict = true },
+    };
+    for ([_]bool{ false, true }) |paramset| for (cases) |case| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        const declarations = if (paramset)
+            \\paramset card kid;
+            \\parameter real g=1.0; aliasparam ag=g; aliasparam bg=g; .k=g;
+            \\endparamset
+            \\module kid(p); inout p; electrical p;
+            \\parameter real k=1.0; analog I(p)<+k*V(p); endmodule
+        else
+            \\module card(p); inout p; electrical p;
+            \\parameter real g=1.0; aliasparam ag=g; aliasparam bg=g;
+            \\analog I(p)<+g*V(p); endmodule
+        ;
+        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+            \\module top(p); inout p; electrical p;
+            \\card #(.{s}(2.0)) u(p); defparam {s}; endmodule
+            \\{s}
+        , .{ case.inline_name, case.defparams, declarations }));
+        if (case.conflict) {
+            try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
+            try std.testing.expectEqual(diag.Code.E0908, f.bag.at(0).code);
+        } else {
+            const design = try elaborate(f.ctx());
+            const target = if (paramset) "u.card.g" else "u.g";
+            const p = for (design.top.params) |p| {
+                if (std.mem.eql(u8, f.file.str(p.name), target)) break p;
+            } else unreachable;
+            try std.testing.expect(p.is_override);
+            try std.testing.expectEqual(@as(f64, 5.0), f.file.exprs.realValue(p.default));
+        }
+    };
+}
+
 test "empty named associations retain defaults and do not mark param_given" {
     for ([_][]const u8{ "g", "ag" }) |name| {
         var f: Fixture = .{ .arena = .init(std.testing.allocator) };
@@ -1697,6 +1814,32 @@ test "empty named associations leave the inherited mfactor product unchanged" {
     const design = try elaborate(f.ctx());
     const contribution = f.file.stmt(design.top.analog[0].body).contribute;
     try std.testing.expectEqual(@as(f64, 4.0), f.file.exprs.realValue(contribution.rhs));
+}
+
+test "compile-time selection overrides replace default dependencies in host shape inputs" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module top(p); inout p; electrical p;
+        \\parameter real unrelated=2.0, base=unrelated;
+        \\bin #(.w(2.0)) u(p); defparam u.w=base; endmodule
+        \\paramset bin kid;
+        \\parameter real w=1.0 from [0:4); .g=2.0; endparamset
+        \\paramset bin kid;
+        \\parameter real w=0.0 from [4:10]; .g=3.0; endparamset
+        \\module kid(p); inout p; electrical p;
+        \\parameter real g=0.0; analog I(p)<+g*V(p); endmodule
+    );
+    var ctx = f.ctx();
+    ctx.param_overrides = &.{.{ .name = "base", .value = 7.0 }};
+    const design = try elaborate(ctx);
+    try std.testing.expect(design.selection_params.len != 0);
+    for (design.selection_params) |name|
+        try std.testing.expectEqualStrings("base", f.file.str(name));
+    const gain = for (design.top.params) |p| {
+        if (std.mem.eql(u8, f.file.str(p.name), "u.g")) break p;
+    } else unreachable;
+    try std.testing.expectEqual(@as(f64, 3.0), f.file.exprs.realValue(gain.default));
 }
 
 test "empty named associations use paramset defaults in admission and tie scores" {
