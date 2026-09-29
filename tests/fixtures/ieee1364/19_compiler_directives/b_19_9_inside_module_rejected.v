@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 19.9
 //! reject E0202
 //! reject unconnected_drive
-//! xfail VerA accepts `unconnected_drive and `nounconnected_drive inside a module declaration
 module b_19_9_inside_module_rejected(input i);
 `unconnected_drive pull1
   initial $display("accepted");

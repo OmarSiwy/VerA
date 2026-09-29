@@ -14,7 +14,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.7 14.2.3
 //! reject polarity
-//! xfail VerA accepts a polarity operator before => on an edge-sensitive path (W0251 only); Syntax 14-4 puts it after the destination
 `timescale 1ns/1ns
 module b_14_2_7_edge_path_polarity_placement_rejected(clock, in, out);
   input clock, in;

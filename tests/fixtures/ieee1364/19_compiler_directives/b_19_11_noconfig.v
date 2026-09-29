@@ -11,7 +11,6 @@
 // config, cell and design as reg names under "1364-2001-noconfig":
 // config = 1, cell = 1, design = 0 -> "110".
 //! inherited IEEE 1364-2005 19.11
-//! xfail VerA refuses the standard version_specifier "1364-2001-noconfig" (E0135 unsupported keyword set)
 `begin_keywords "1364-2001-noconfig"
 module b_19_11_noconfig;
   reg config, cell, design;

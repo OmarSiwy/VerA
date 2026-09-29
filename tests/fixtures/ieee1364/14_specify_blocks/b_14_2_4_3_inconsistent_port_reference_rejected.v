@@ -19,7 +19,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.3
 //! reject referenced in the same way
-//! xfail VerA accepts the clause's illegal Example 4 (W0251 only): it does not compare how the declarations of one edge-sensitive path reference the port
 `timescale 1ns/1ns
 module b_14_2_4_3_inconsistent_port_reference_rejected(clk, reset, data, q);
   input clk, reset, data;

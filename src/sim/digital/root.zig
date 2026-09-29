@@ -1142,7 +1142,7 @@ pub fn defOf(r: *const Run, m: *const Ast.ModuleDecl) u32 {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
+    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.functions.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     // A digital parse makes each generate construct an `analog` block over
     // an `if`; anything else there is a genuine analog block.
@@ -1544,38 +1544,21 @@ pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
 fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
-        // §6.1.1 a net, a net array element, a constant select of a vector
-        // net, or a concatenation of them. Anything short of one whole net
-        // is driven through a hidden net as wide as the target, bridged into
-        // each operand's bits as a §12.3.9.2 output port's value is.
-        var leaves: std.ArrayList(Ast.ExprId) = .empty;
-        try concatLeaves(r, a.target, &leaves);
-        const args = leaves.items;
-        const operands = try r.arena.alloc(Sink, args.len);
-        var width: u32 = 0;
-        for (args, operands) |arg, *out| {
-            out.* = try sink(r, e, arg, a.main_tok, .assign);
-            width += out.width;
-        }
-        r.scope = scope;
-        const whole = operands.len == 1 and operands[0].lo == 0 and operands[0].width == e.nets.items[operands[0].net].resolved.width;
-        const net = if (whole) operands[0].net else try mintNet(r, e, .wire, width, false, .none, a.main_tok);
+        const net = try drivenNet(r, e, scope, a.target, a.main_tok, .assign);
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
-        if (whole) continue;
-        var lo: u32 = 0;
-        var k = operands.len;
-        while (k != 0) {
-            k -= 1;
-            const op = operands[k];
-            try e.wires.append(r.arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[net].slot, .src_lo = lo, .dst_lo = op.lo, .width = op.width } }, .tok = a.main_tok });
-            lo += op.width;
-        }
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
+    var gate_names: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
     for (items.gates) |g| {
-        const target = try netSlot(r, g.out, g.main_tok);
-        const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
+        // A `buf`/`not` with several outputs is one instance of several rows.
+        if (g.name != .none) {
+            const seen = try gate_names.getOrPut(r.arena, g.name);
+            if (seen.found_existing and seen.value_ptr.* != g.main_tok)
+                return r.fail(g.main_tok, "§7.1.5: `{s}` names two instances; one instance identifier has one range", .{r.file.str(g.name)});
+            seen.value_ptr.* = g.main_tok;
+        }
+        const net = try drivenNet(r, e, scope, g.out, g.main_tok, .gate);
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
         // index, and a terminal as wide as the array gives each gate one bit
@@ -1737,6 +1720,32 @@ fn switchTerminal(r: *Run, e: *Elab, t: Ast.ExprId, tok: u32) Error!struct { net
     const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
     if (pos < 0 or pos >= width) return r.fail(tok, "a pass switch terminal selects a bit outside its net", .{});
     return .{ .net = net, .bit = @intCast(pos) };
+}
+
+/// The net a driver of the net lvalue `target` drives: that net when
+/// `target` names one whole net, else a hidden net as wide as `target`,
+/// bridged into each operand's bits as a §12.3.9.2 output port's value is.
+fn drivenNet(r: *Run, e: *Elab, scope: u32, target: Ast.ExprId, tok: u32, comptime who: SinkOf) Error!u32 {
+    var leaves: std.ArrayList(Ast.ExprId) = .empty;
+    try concatLeaves(r, target, &leaves);
+    const operands = try r.arena.alloc(Sink, leaves.items.len);
+    var width: u32 = 0;
+    for (leaves.items, operands) |arg, *out| {
+        out.* = try sink(r, e, arg, tok, who);
+        width += out.width;
+    }
+    r.scope = scope;
+    if (operands.len == 1 and operands[0].lo == 0 and operands[0].width == e.nets.items[operands[0].net].resolved.width) return operands[0].net;
+    const net = try mintNet(r, e, .wire, width, false, .none, tok);
+    var lo: u32 = 0;
+    var k = operands.len;
+    while (k != 0) {
+        k -= 1;
+        const op = operands[k];
+        try e.wires.append(r.arena, .{ .net = op.net, .scope = scope, .source = .{ .bridge = .{ .src = e.nets.items[net].slot, .src_lo = lo, .dst_lo = op.lo, .width = op.width } }, .tok = tok });
+        lo += op.width;
+    }
+    return net;
 }
 
 /// IEEE 1364-2005 §12.4 a generate construct as a digital parse leaves it:
@@ -2684,22 +2693,27 @@ fn concatLeaves(r: *Run, e: Ast.ExprId, out: *std.ArrayList(Ast.ExprId)) Error!v
     for (ex.args(e)) |x| try concatLeaves(r, x, out);
 }
 
+/// What drives a structural net expression: an output port, a continuous
+/// assignment (§6.1.1) or a gate's output terminal (A.3.3), which admit the
+/// same forms.
+const SinkOf = enum { port, assign, gate };
+
 /// IEEE 1364-2005 §12.3.9.2 one operand of a structural net expression: a
 /// net, a net array element, or a constant bit-select or part-select of a
-/// vector net. `who` is what drives it: an output port, or a continuous
-/// assignment (§6.1.1 admits the same left-hand sides).
-fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: enum { port, assign }) Error!Sink {
+/// vector net.
+fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: SinkOf) Error!Sink {
     const ex = &r.file.exprs;
     r.values = e.values.items;
-    const name = switch (who) {
-        .port => "an output port",
-        .assign => "a continuous assignment",
+    const lvalue = " a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
+    const not_net, const refused = switch (who) {
+        .port => .{ "an output port can only drive a net", "§12.3.9.2: an output port connects to" ++ lvalue },
+        .assign => .{ "a continuous assignment can only drive a net", "§6.1.1: a continuous assignment connects to" ++ lvalue },
+        .gate => .{ "a gate's output terminal must be a net", "A.3.3: a gate's output terminal is a net_lvalue:" ++ lvalue },
     };
     if (ex.tag(arg) == .ident or try r.indexedArray(arg) != null) {
-        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, name ++ " can only drive a net");
+        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, not_net);
         return .{ .net = net, .lo = 0, .width = e.nets.items[net].resolved.width };
     }
-    const refused = (if (who == .port) "§12.3.9.2: " else "§6.1.1: ") ++ name ++ " connects to a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
     if (ex.tag(arg) != .index or ex.tag(ex.lhs(arg)) != .ident) return r.exprFail(arg, refused);
     const rg = ex.rhs(arg);
     const index = switch (ex.tag(rg)) {

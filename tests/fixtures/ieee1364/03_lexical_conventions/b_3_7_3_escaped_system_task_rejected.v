@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 3.7.3
 //! reject E1100
 //! reject undeclared task
-//! xfail VerA runs the escaped identifier \$display as the system task $display and prints x
 module b_3_7_3_escaped_system_task_rejected;
   initial \$display ("x");
 endmodule

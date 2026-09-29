@@ -12,7 +12,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 3.8.2
 //! reject attribute instance prefixes nothing
-//! xfail VerA accepts an attribute instance that prefixes nothing at the end of the file, and runs the module
 module b_3_8_2_dangling_attribute_rejected;
   initial $display("ran");
 endmodule

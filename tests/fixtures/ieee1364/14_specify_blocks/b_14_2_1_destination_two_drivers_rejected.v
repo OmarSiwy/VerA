@@ -7,7 +7,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.1
 //! reject one driver
-//! xfail VerA does not check a module path's destination: one with two drivers inside the module is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_2_1_destination_two_drivers_rejected(a, b, q);
   input a, b;

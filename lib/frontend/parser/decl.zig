@@ -268,6 +268,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         var dir: Ast.Direction = .input;
         var ty: Ast.VarDecl = .{ .name = .none, .ty = .integer, .storage = .reg, .is_signed = false };
         while (self.peek() != .rparen and self.peek() != .eof) {
+            try self.skipAttributes();
             if (parse_module.portDirection(self.peek())) |d| {
                 dir = d;
                 self.pos += 1;
@@ -294,19 +295,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
             continue;
         }
         switch (self.peek()) {
-            .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => {
-                const ty = try tfPortType(self);
-                while (true) {
-                    var v = ty;
-                    v.main_tok = self.pos;
-                    v.name = try self.expectIdent();
-                    v.dims = try parseDims(self);
-                    if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
-                    try vars.append(self.arena, v);
-                    if (!self.eat(.comma)) break;
-                }
-                _ = try self.expect(.semicolon);
-            },
+            .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => try parseBlockVars(self, &vars),
             else => break, // else: the first token that declares nothing begins the body
         }
     }
@@ -331,6 +320,22 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         .body = body_id,
         .main_tok = main_tok,
     });
+}
+
+/// One A.2.8 `block_item_declaration` of variables (`reg`, `integer`,
+/// `time`, `real`, `realtime`), cursor on the keyword, through its `;`.
+pub fn parseBlockVars(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const ty = try tfPortType(self);
+    while (true) {
+        var v = ty;
+        v.main_tok = self.pos;
+        v.name = try self.expectIdent();
+        v.dims = try parseDims(self);
+        if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
+        try out.append(self.arena, v);
+        if (!self.eat(.comma)) break;
+    }
+    _ = try self.expect(.semicolon);
 }
 
 fn tfFormal(self: *Parser, dir: Ast.Direction, ty: Ast.VarDecl) Error!Ast.TfPort {
@@ -453,6 +458,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     // stray `input` as one more argument, and the LRM names no diagnostic.
     if (self.eat(.lparen)) {
         while (self.peek() != .rparen and self.peek() != .eof) {
+            try self.skipAttributes();
             const dir = switch (self.peek()) {
                 .kw_input, .kw_output, .kw_inout => blk: {
                     const d = parse_module.portDirection(self.peek()).?;
@@ -1001,24 +1007,33 @@ pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength 
 
 /// A.2.2.3 `delay3 ::= # delay_value | # ( mintypmax_expression [ ,
 /// mintypmax_expression [ , mintypmax_expression ] ] )`. Cursor on the `#`.
-/// Each value is parsed as a plain expression; the `min:typ:max` form is not.
 ///
 /// One value is all three transitions (IEEE 1364-2005 §7.14). Two leave
 /// `off` unset, because the clause derives it as the smaller of the two and
 /// that is arithmetic on the evaluated values, not a syntax node.
 pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
+    return parseDelays(self, true);
+}
+
+/// A.2.2.3 `delay2`: a `delay3` with no turn-off value, so a third value is
+/// E0210.
+pub fn parseDelay2(self: *Parser) Error!Ast.Delay3 {
+    return parseDelays(self, false);
+}
+
+fn parseDelays(self: *Parser, three: bool) Error!Ast.Delay3 {
     _ = try self.expect(.hash);
     if (!self.eat(.lparen)) {
         const v = try parseDelayValue(self);
         return .{ .rise = v, .fall = v, .off = v };
     }
     var out: Ast.Delay3 = .{};
-    out.rise = try parseDelayValue(self);
+    out.rise = try parse_expr.parseMinTypMax(self);
     out.fall = out.rise;
     out.off = out.rise;
     if (self.eat(.comma)) {
-        out.fall = try parseDelayValue(self);
-        out.off = if (self.eat(.comma)) try parseDelayValue(self) else .none;
+        out.fall = try parse_expr.parseMinTypMax(self);
+        out.off = if (three and self.eat(.comma)) try parse_expr.parseMinTypMax(self) else .none;
     }
     // After the third value the production admits only `)`. E0210 names the
     // missing parenthesis; E0207 would send the reader to the previous
@@ -1028,8 +1043,7 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
     return out;
 }
 
-/// One delay value, parsed as an expression. A `min:typ:max` value is not
-/// admitted here, though A.2.2.3's parenthesized arm allows one.
+/// A.2.2.3 `delay_value`, the unparenthesized arm, parsed as an expression.
 fn parseDelayValue(self: *Parser) Error!Ast.ExprId {
     return parse_expr.parseExpr(self);
 }

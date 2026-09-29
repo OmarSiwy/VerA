@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 19.2
 //! reject E0202
 //! reject default_nettype
-//! xfail VerA accepts `default_nettype inside a module definition
 module b_19_2_inside_module_rejected;
 `default_nettype wire
   initial $display("accepted");

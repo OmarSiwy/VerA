@@ -12,6 +12,7 @@ const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
+const parse_specify = @import("specify.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
 
@@ -430,6 +431,9 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
 /// keeps its `$` so lowering reports it as written.
 fn parseSysTask(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
+    // IEEE 1364-2005 §15.1: "no timing check can appear in procedural code".
+    if (parse_specify.timing_checks.has(self.tokenText(tok)))
+        return self.failAt(tok, .E0207, "`{s}` is a timing check, which only a specify block holds (§15.1)", .{self.tokenText(tok)});
     const name = try self.internTok(tok);
     self.pos += 1;
     var args: []const Ast.ExprId = &.{};

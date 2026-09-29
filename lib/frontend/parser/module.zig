@@ -63,6 +63,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
     _ = try self.expect(.semicolon);
     try parseModuleItems(self, &b, .kw_endmodule);
     _ = try self.expect(.kw_endmodule);
+    try parse_specify.checkPaths(self, &b);
     // IEEE 1364-2005 §4.10.1, inherited by §1.1: "If any param_assignments
     // appear in a module_parameter_port_list, then any param_assignments that
     // appear in the module become local parameters and shall not be
@@ -597,6 +598,10 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
         // to be specified within a module or UDP declaration."
         .dir_resetall => return self.failAt(self.pos, .E0236, "", .{}),
+        // IEEE 1364 §19.2 `default_nettype "can be used only outside of module
+        // definitions"; §19.9's pair "shall be specified ... outside of the
+        // module declarations".
+        .dir_outside_module => return self.failAt(self.pos, .E0202, "`{s} inside a module", .{self.tokenText(self.pos)[1..]}),
         // A.4.2 loop_generate_construct / conditional_generate_construct.
         // §6.6: "Use of generate regions is optional. There is no semantic
         // difference in the module when a generate region is used", and the

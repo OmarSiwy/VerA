@@ -14,7 +14,6 @@
 // The bufif1 carries three triples (rise, fall, turn-off), each unordered.
 // Line: "ok=1 ok=1 ok=1 ok=1".
 //! inherited IEEE 1364-2005 7.14.1
-//! xfail a min:typ:max triple as a delay3 element (#(5:3:1)) does not parse (E0210 "expected ')': found `:`"); only #((5:3:1)) is accepted
 `timescale 1ns/1ns
 module b_7_14_1_unordered_delay_triples;
   reg a, en;

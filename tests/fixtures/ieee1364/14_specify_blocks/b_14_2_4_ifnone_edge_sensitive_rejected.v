@@ -12,7 +12,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4 14.2.4.4
 //! reject ifnone
-//! xfail VerA accepts ifnone before an edge-sensitive path (W0251 only); Syntax 14-5 gives ifnone a simple path alone
 `timescale 1ns/1ns
 module b_14_2_4_ifnone_edge_sensitive_rejected(CLK, D, Q);
   input CLK, D;

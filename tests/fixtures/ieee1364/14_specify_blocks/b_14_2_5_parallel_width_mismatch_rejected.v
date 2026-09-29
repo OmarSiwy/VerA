@@ -9,7 +9,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.5
 //! reject same number of bits
-//! xfail VerA does not compare the widths of a parallel (=>) path's terminals: 8 bits to 4 is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_2_5_parallel_width_mismatch_rejected(in1, nib);
   input [7:0] in1;

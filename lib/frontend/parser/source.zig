@@ -47,11 +47,16 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     try configs.appendSlice(self.arena, self.file.configs);
 
     while (true) {
+        const attr_at = self.pos;
         try self.skipAttributes();
         const before = self.pos;
         try self.refuseAms();
         switch (self.peek()) {
-            .eof => break,
+            // §3.8: an attribute instance is "a prefix attached to" what follows it.
+            .eof => {
+                if (before != attr_at) try self.report(attr_at, .E0207, "found end of file: an attribute instance prefixes nothing", .{});
+                break;
+            },
             // §10.6: legal only here, "outside of a design element".
             .dir_begin_keywords, .dir_end_keywords => keywordsDirective(self) catch |e| {
                 if (e == error.OutOfMemory) return e;
@@ -59,7 +64,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             },
             // IEEE 1364 §19.6: between design elements is where `resetall
             // belongs; the preprocessor has already applied it.
-            .dir_resetall => self.pos += 1,
+            .dir_resetall, .dir_outside_module => self.pos += 1,
             // A.1.2 `module_keyword ::= module | macromodule`. §6.2: "The
             // keyword macromodule can be used interchangeably with the
             // keyword module to define a module. An implementation may
@@ -89,6 +94,9 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                     parseConfigDecl(self, &configs)
                 else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
                     parseLibraryDecl(self)
+                else if (std.mem.eql(u8, w, "specify"))
+                    // IEEE 1364-2005 §14.1: "it shall appear inside a module declaration".
+                    self.failAt(self.pos, .E0245, "a specify block outside a module (§14.1)", .{})
                 else
                     self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
                 r catch |e| {
@@ -384,6 +392,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     var init_val: Ast.ExprId = .none;
     var init_target: Ast.StrId = .none;
     while (true) {
+        try self.skipAttributes();
         // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
         // only the second A.5.1 arm puts inside the parentheses.
         if (self.peek() == .kw_output or self.peek() == .kw_input) {
@@ -412,7 +421,9 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
         return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), ports.items.len - 1 });
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
-    while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
+    while (true) {
+        try self.skipAttributes();
+        if (self.peek() != .kw_output and self.peek() != .kw_input and self.peek() != .kw_reg) break;
         const kw = self.peek();
         self.pos += 1;
         _ = try parse_module.optDiscipline(self);

@@ -12,7 +12,6 @@
 //! inherited IEEE 1364-2005 19.4
 //! reject E0138
 //! reject a string literal may not span lines
-//! xfail VerA skips an ignored `ifdef group without lexing it, so the unterminated string there is accepted
 `ifdef never_defined
   initial $display("unterminated);
 `endif

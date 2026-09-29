@@ -10,7 +10,6 @@
 // s0 = 1: y[2] = 1, y[1] = 0, y[0] and y[3] undriven (z), s[3] = 1.
 // Output: "y=z10z s3=1".
 //! inherited IEEE 1364-2005 A.3.3
-//! xfail VerA's digital execution implements only whole-variable lvalues, so a bit-select gate or switch terminal is refused (E1100)
 `timescale 1ns/1ns
 module b_A_3_3_bit_select_terminals;
   reg a;

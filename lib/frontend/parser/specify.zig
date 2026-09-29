@@ -172,6 +172,12 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     const dst_tok = self.pos;
     var data: Ast.ExprId = .none;
     var data_polarity: Ast.SpecPolarity = .none;
+    if (self.peek() == .lparen) {
+        if (ifnone) try self.report(main_tok, .E0245, "ifnone takes a simple path (Syntax 14-5), not an edge-sensitive one", .{});
+        if (polarity != .none) try self.report(main_tok, .E0245, "an edge-sensitive path writes its polarity after the destination (Syntax 14-4), not before the arrow", .{});
+    }
+    if (cond != .none) if (badOperator(self, cond)) |at|
+        try self.report(self.file.exprs.mainTok(at), .E0245, "a state-dependent path's condition uses only Table 14-1's operators (§14.2.4.1)", .{});
     const outputs = if (self.eat(.lparen)) edge: {
         // The edge-sensitive arms: the outputs, a polarity and the
         // `data_source_expression` the path's value comes from.
@@ -197,7 +203,7 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     const delay_tok = self.pos;
     var delays: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
-        try delays.append(self.arena, try parse_expr.parseExpr(self));
+        try delays.append(self.arena, try parse_expr.parseMinTypMax(self));
         if (!self.eat(.comma)) break;
     }
     // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
@@ -226,6 +232,139 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
         .delays = delays.items,
         .main_tok = main_tok,
     });
+}
+
+/// The first operation in `e` that IEEE 1364-2005 Table 14-1 does not list,
+/// or null.
+fn badOperator(self: *const Parser, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus => return e,
+            .logical_not, .bit_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => {},
+        },
+        .binary => switch (ex.binOp(e)) {
+            .eq, .neq, .logical_and, .logical_or, .bit_and, .bit_or, .bit_xor, .bit_xnor => {},
+            .add, .sub, .mul, .div, .mod, .pow, .case_eq, .case_neq, .lt, .le, .gt, .ge, .shl, .shr, .ashl, .ashr => return e,
+        },
+        else => {}, // else: an operand, a select, a concatenation or `?:`, whose children are checked below
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (badOperator(self, c)) |at| return at;
+    return null;
+}
+
+/// How a path terminal names its port (§14.2.4.3).
+const Reference = enum { whole, bit, part };
+
+fn reference(self: *const Parser, t: Ast.ExprId) Reference {
+    const ex = &self.file.exprs;
+    if (ex.tag(t) != .index) return .whole;
+    return switch (ex.tag(ex.rhs(t))) {
+        .range, .indexed_range => .part,
+        else => .bit, // else: any other index is a bit-select's
+    };
+}
+
+/// The port a path terminal names, as A.7.3 writes it: a name with an
+/// optional select.
+fn terminalName(self: *const Parser, t: Ast.ExprId) Ast.StrId {
+    const ex = &self.file.exprs;
+    return ex.strOf(if (ex.tag(t) == .index) ex.lhs(t) else t);
+}
+
+fn portNamed(b: *const parse_module.Body, name: Ast.StrId) ?Ast.Port {
+    for (b.ports.items) |p| if (p.name == name) return p;
+    return null;
+}
+
+/// A terminal's width when its port's range and its select are literal.
+fn terminalWidth(self: *const Parser, b: *const parse_module.Body, t: Ast.ExprId) ?u64 {
+    const ex = &self.file.exprs;
+    if (ex.tag(t) == .index) {
+        const rg = ex.rhs(t);
+        return switch (ex.tag(rg)) {
+            .range => parse_decl.literalWidth(self, .{ .msb = ex.lhs(rg), .lsb = ex.rhs(rg) }),
+            .indexed_range => if (ex.tag(ex.rhs(rg)) == .int_literal) @intCast(ex.intValue(ex.rhs(rg))) else null,
+            else => 1, // else: a bit-select
+        };
+    }
+    const p = portNamed(b, terminalName(self, t)) orelse return null;
+    return if (p.range orelse p.type_range) |d| parse_decl.literalWidth(self, d) else 1;
+}
+
+/// Whether the delay expression `e` reads a variable, net or port.
+fn readsSignal(self: *const Parser, b: *const parse_module.Body, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .ident) {
+        const name = ex.strOf(e);
+        for (b.vars.items) |v| if (v.name == name) return e;
+        for (b.nets.items) |n| if (n.name == name) return e;
+        return if (portNamed(b, name) != null) e else null;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (readsSignal(self, b, c)) |at| return at;
+    return null;
+}
+
+/// IEEE 1364-2005 §14.2-§14.3's rules on the module's paths that need its
+/// ports and drivers, so run once the whole module is parsed. Each broken
+/// rule is reported (E0243) and the parse goes on.
+pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
+    const ex = &self.file.exprs;
+    for (b.paths.items, 0..) |p, i| {
+        for (p.ins) |t| {
+            const port = portNamed(b, terminalName(self, t));
+            if (port == null or (port.?.direction != .input and port.?.direction != .inout))
+                try self.report(ex.mainTok(t), .E0245, "module path source `{s}` is not an input or inout port (§14.2.1)", .{self.file.str(terminalName(self, t))});
+        }
+        for (p.outs) |t| {
+            const name = terminalName(self, t);
+            const port = portNamed(b, name);
+            if (port == null or (port.?.direction != .output and port.?.direction != .inout))
+                try self.report(ex.mainTok(t), .E0245, "module path destination `{s}` is not an output or inout port (§14.2.1)", .{self.file.str(name)});
+            var drivers: usize = 0;
+            for (b.assigns.items) |a| {
+                if (terminalName(self, a.target) == name) drivers += 1;
+            }
+            for (b.gates.items) |g| {
+                if (terminalName(self, g.out) == name) drivers += 1;
+            }
+            if (drivers > 1) try self.report(ex.mainTok(t), .E0245, "module path destination `{s}` has {d} drivers; §14.2.1 allows only one driver inside the module", .{ self.file.str(name), drivers });
+        }
+        if (!p.full) {
+            const src = p.ins[0];
+            const dst = p.outs[0];
+            if (p.data != .none) {
+                if (reference(self, dst) != .bit and (terminalWidth(self, b, dst) orelse 1) != 1)
+                    try self.report(ex.mainTok(dst), .E0245, "the destination of a parallel edge-sensitive path is a scalar port or a bit-select (§14.2.3)", .{});
+            } else if (terminalWidth(self, b, src)) |ws| if (terminalWidth(self, b, dst)) |wd| if (ws != wd)
+                try self.report(p.main_tok, .E0245, "a parallel path joins terminals of the same number of bits (§14.2.5), not {d} and {d}", .{ ws, wd });
+        }
+        for (p.delays) |d| if (readsSignal(self, b, d)) |at|
+            try self.report(ex.mainTok(at), .E0245, "a module path delay is a constant expression (§14.3); `{s}` is a signal", .{self.file.str(ex.strOf(at))});
+        for (b.paths.items[0..i]) |q| {
+            // §14.2.4.3: the declarations of one edge-sensitive path name
+            // each port the same way.
+            if (p.data != .none and q.data != .none and p.ins.len == 1 and q.ins.len == 1 and p.outs.len == 1 and q.outs.len == 1 and
+                terminalName(self, p.ins[0]) == terminalName(self, q.ins[0]) and terminalName(self, p.outs[0]) == terminalName(self, q.outs[0]) and
+                (reference(self, p.ins[0]) != reference(self, q.ins[0]) or reference(self, p.outs[0]) != reference(self, q.outs[0])))
+                try self.report(p.main_tok, .E0245, "a port is referenced in the same way in all declarations of one edge-sensitive path (§14.2.4.3)", .{});
+            // §14.2.4.4: not both `ifnone` and an unconditional simple path.
+            if (p.ifnone != q.ifnone and p.data == .none and q.data == .none and samePath(self, p, q) and
+                (if (p.ifnone) q.cond == .none else p.cond == .none))
+                try self.report(p.main_tok, .E0245, "an ifnone path and an unconditional path for the same module path (§14.2.4.4)", .{});
+        }
+    }
+}
+
+fn samePath(self: *const Parser, p: Ast.SpecPath, q: Ast.SpecPath) bool {
+    if (p.full != q.full or p.ins.len != q.ins.len or p.outs.len != q.outs.len) return false;
+    for (p.ins, q.ins) |a, c| if (terminalName(self, a) != terminalName(self, c)) return false;
+    for (p.outs, q.outs) |a, c| if (terminalName(self, a) != terminalName(self, c)) return false;
+    return true;
 }
 
 fn eatPolarity(self: *Parser) Ast.SpecPolarity {
@@ -340,14 +479,23 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
         // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
         // { , edge_descriptor } ]`. The descriptors are two-character
         // symbols (`01`, `z1`, `0x`) that lex as numbers or identifiers
-        // depending on their characters, so the bracket is skipped as a
-        // balanced run.
-        // ponytail: an unchecked descriptor set. A table of the ten
-        // spellings A.7.5.3 admits is the upgrade; no fixture asks.
+        // depending on their characters, so each is read as the characters
+        // of its tokens up to the next `,` or `]`.
         self.pos += 1;
-        if (self.eat(.lbracket)) while (!self.eat(.rbracket)) {
-            if (self.peek() == .eof) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
-            self.pos += 1;
+        if (self.eat(.lbracket)) while (true) {
+            const at = self.pos;
+            var d: [3]u8 = undefined;
+            var n: usize = 0;
+            while (self.peek() != .comma and self.peek() != .rbracket) : (self.pos += 1) {
+                if (self.peek() == .eof) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
+                for (self.tokenText(self.pos)) |c| {
+                    if (n < d.len) d[n] = std.ascii.toLower(c);
+                    n += 1;
+                }
+            }
+            if (n != 2 or !edgeDescriptor(d[0], d[1])) return self.failAt(at, .E0207, "found {s}, not an A.7.5.3 edge descriptor (01, 10, or 0 or 1 paired with x or z)", .{self.found(at)});
+            if (self.eat(.rbracket)) break;
+            self.pos += 1; // `,`
         };
     }
     slot.* = try parse_expr.parseExpr(self);
@@ -355,6 +503,22 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
     // has no tag for it.
     if (self.eatSymbol("&&&")) _ = try parse_expr.parseExpr(self);
     return controlled;
+}
+
+/// A.7.5.3 `edge_descriptor ::= 01 | 10 | z_or_x zero_or_one | zero_or_one
+/// z_or_x`, its two characters lower-cased.
+fn edgeDescriptor(a: u8, b: u8) bool {
+    const bit = struct {
+        fn f(c: u8) bool {
+            return c == '0' or c == '1';
+        }
+    }.f;
+    const xz = struct {
+        fn f(c: u8) bool {
+            return c == 'x' or c == 'z';
+        }
+    }.f;
+    return (bit(a) and bit(b) and a != b) or (xz(a) and bit(b)) or (bit(a) and xz(b));
 }
 
 /// Parses one A.2.1.1 `specparam_declaration ::= specparam [ range ]
@@ -382,7 +546,7 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
         const tok = self.pos;
         const name = try self.expectIdent();
         _ = try self.expect(.assign_eq);
-        const default = try parse_expr.parseExpr(self);
+        const default = try parse_expr.parseMinTypMax(self);
         if (out) |o| try o.append(self.arena, .{
             .name = name,
             .ty = .unspecified, // §3.4.1: derived from the default, as for `parameter`

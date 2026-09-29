@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 7.3
 //! reject E0210
 //! reject expected ')'
-//! xfail VerA accepts a three-value delay on a buf (buf #(1,2,3)); delay2 allows at most two
 module b_7_3_three_delays_rejected;
   reg a;
   wire o;

@@ -11,7 +11,6 @@
 // buffer: y = 1. Output: "y=1".
 // digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.7.4
-//! xfail VerA's specify parser refuses a min:typ:max path delay (E0207 at `:`)
 `timescale 1ns/1ns
 module b_A_7_4_mtm_cell (a, y);
   input a;

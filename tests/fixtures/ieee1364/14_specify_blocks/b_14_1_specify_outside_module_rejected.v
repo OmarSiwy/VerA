@@ -9,7 +9,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.1
 //! reject outside a module
-//! xfail VerA refuses it as E0201 "not in the supported subset" (a construct of full Verilog it does not implement), not as a specify block outside a module
 specify
   specparam tpd = 1;
 endspecify
