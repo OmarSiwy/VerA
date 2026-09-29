@@ -80,8 +80,7 @@ pub fn emitCore(self: *Gen) Error!void {
 }
 
 /// Emits `<core>__iter`, the core's slice computing only the §9.17.3
-/// limiter values `advanceIteration` stores and the §9.17.1 request
-/// `checkConvergence` tests: both run once per Newton iterate.
+/// limiter values `advanceIteration` stores once per Newton iterate.
 pub fn emitIterCore(self: *Gen) Error!void {
     const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
     @memset(keep, false);
@@ -90,10 +89,6 @@ pub fn emitIterCore(self: *Gen) Error!void {
         keep[k] = true;
         any = true;
     };
-    if (self.lowered.uses.contains(.reject_iteration)) {
-        keep[gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).?] = true;
-        any = true;
-    }
     if (!any) return;
     self.iter_core = try gen_unit.sliceCore(self, "iter", keep,
         \\/// §9.17 what the per-iterate hooks read off the core, and only what
@@ -442,9 +437,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
 }
 
 /// Writes `advanceIteration` (the host calls it after each Newton iterate,
-/// with that iterate's x) and, for `$reject_iteration`, `checkConvergence`.
+/// with that iterate's x).
 fn emitAdvanceIteration(self: *Gen) Error!void {
-    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.reject_iteration)) return;
+    if (self.lowered.limit_slots.items.len == 0) return;
     const full = self.core;
     defer self.core = full;
     if (self.iter_core.lo_vals.len != 0) self.core = self.iter_core;
@@ -466,11 +461,6 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
             try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
     }
     try self.w("}}\n\n", .{});
-    if (self.lowered.uses.contains(.reject_iteration)) {
-        try self.w("pub fn checkConvergence(comptime S: type, model: *const Model, inst: *const Instance, x: [n_u]f64, sim: contract.SimState) bool {{\n", .{});
-        const probe_inst = try gen_setup.probeInstance(self);
-        try self.w("    return {s}(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ self.core.name, probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
-    }
 }
 
 /// Writes `collapse` and `collapse_full` (§5.6.5). `collapse` runs the core

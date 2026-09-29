@@ -246,11 +246,10 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 }
 
 /// Returns whether the model needs the §4.5.2 accepted-step machinery: a
-/// stateful operator, a §5.10 held variable, a `$limit` slot or a §9.17.1
-/// `$discontinuity(-1)` iteration rejection. Each keeps state in `Instance`
-/// that only `updateState` may advance.
+/// stateful operator, a §5.10 held variable or a `$limit` slot. Each keeps
+/// state in `Instance` that only `updateState` may advance.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op != .none) return true;
     }

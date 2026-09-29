@@ -799,9 +799,10 @@ fn acDynError(comptime D: type) ?[]const u8 {
     return null;
 }
 
-/// What `limit` returns: the limited unknowns, and `converged`, false when a
-/// clamp was large enough that the host must run another Newton iteration
-/// (pnjlim's clamp is; a small fetlim/limvds one is not).
+/// What `limit` returns: the limited unknowns, and `converged`, false when the
+/// host must run another Newton iteration: a clamp was large enough (pnjlim's
+/// clamp is; a small fetlim/limvds one is not), or the model evaluated at
+/// `old` executed §9.17.1 `$discontinuity(-1)`.
 pub fn LimitResult(comptime n: usize) type {
     return struct {
         x: [n]f64,

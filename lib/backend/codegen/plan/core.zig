@@ -203,7 +203,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
 fn evalRoot(k: Job.Kind) bool {
     return switch (k) {
         .resist, .react, .retained, .table_effect => true,
-        // `updateState`/`acceptQ`, `limit`, `seed`, `checkConvergence`,
+        // `updateState`/`acceptQ`, `limit`, `seed`, `advanceIteration`,
         // `noisePsd`, `acStim`, the schedule and §9.4 display read these.
         .op_input, .ctrl, .held, .limit_arg, .limit_old, .reject_iteration, .noise, .ac_stim, .timer_period, .display => false,
     };
