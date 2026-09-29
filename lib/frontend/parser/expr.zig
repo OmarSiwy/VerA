@@ -597,7 +597,8 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
 
     if (self.tags[tok] == .int_literal) {
         const text = gluedNumberText(self, tok);
-        const lit = @import("../integer.zig").parse(self.arena, text) catch |e| return switch (e) {
+        const integer = @import("../integer.zig");
+        const lit = integer.parse(self.arena, text) catch |e| return switch (e) {
             error.OutOfMemory => error.OutOfMemory,
             error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),
             error.MissingDigits => self.failAt(tok, .E0132, "`{s}`", .{text}),
@@ -610,6 +611,7 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
                 .value = value,
                 .width = if (lit.sized) lit.width else 0,
                 .signed = lit.signed,
+                .radix = integer.radixOf(text),
             });
         }
         return self.file.exprs.addLogic(self.arena, tok, lit);
