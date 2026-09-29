@@ -467,7 +467,12 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     const t = try selfDetermined(self, args[0]);
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
-                .fread => return self.refuse("a §17.2 read into a string or memory argument"),
+                .fread => {
+                    self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
+                    try self.print("L.rs(", .{});
+                    try emit.fread(self, args);
+                    try self.print(", 32, {d}, {})", .{ w, sg });
+                },
                 .user => return self.refuse(user_fn),
                 else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }
