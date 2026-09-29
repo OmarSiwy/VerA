@@ -83,9 +83,9 @@ pub fn Device(comptime spec: Spec) type {
         pub const U = spec.U;
 
         /// The bridge parameters, one card for every instance (§1.3 of the
-        /// design). A NaN `vth` is (vdd + vss)/2 and a NaN `ttol` is
-        /// min(1 ps, tick/2). A ramp time <= 0 is 1 ps: an ideal step would
-        /// need the solve at the event time repeated after the events.
+        /// design). A NaN `vth` is (vdd + vss)/2. A ramp time <= 0 is 1 ps:
+        /// an ideal step would need the solve at the event time repeated
+        /// after the events.
         pub const Model = struct {
             vdd: f64 = 5,
             vss: f64 = 0,
@@ -97,6 +97,12 @@ pub fn Device(comptime spec: Spec) type {
             /// The conductance of a released (z) output: 0 would leave a net
             /// only it drives with no path, and the host's matrix singular.
             gz: f64 = 1e-12,
+            /// How late after an A2D crossing the host may accept a point
+            /// (the `time_tol` VAMS §5.10.3.1 leaves to the tool). NaN is
+            /// min(trise, tfall)/50: the response starts at the accepted
+            /// point, so an output ramp it arms runs at most 2% of its
+            /// length late. The digital event's tick comes from the secant,
+            /// not from this.
             ttol: f64 = nan,
         };
 
@@ -439,7 +445,7 @@ pub fn Device(comptime spec: Spec) type {
         }
 
         fn ttol(m: *const Model) f64 {
-            return if (std.math.isNan(m.ttol)) @min(1e-12, tick / 2) else m.ttol;
+            return if (std.math.isNan(m.ttol)) @min(rise(m), fall(m)) / 50 else m.ttol;
         }
 
         /// A static read of `v`: 1 above the band, 0 below, x inside it.

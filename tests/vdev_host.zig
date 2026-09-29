@@ -38,6 +38,9 @@
 //! which crosses 2.5 V rising at 5.5 ns and falling at 10.5 ns. v_edge waits
 //! on posedge clk only: the falling crossing wakes nothing (IEEE 1364-2005
 //! §9.7.2), so the step over it is never shrunk, and q is 1 after both.
+//! The default ttol is min(trise, tfall)/50 = 20 ps, so q[0]'s ramp arms at
+//! most 20 ps after 5.5 ns (15.6 ps on this host's quarter steps, which a
+//! 0.5 ps tolerance would have shrunk further).
 //! v_any waits on any change of clk: both crossings are located and each
 //! adds 1 to q.
 const std = @import("std");
@@ -356,6 +359,7 @@ test "v_edge and v_any: a crossing no process waits for is not located" {
     try expectEqual([3]u2{ 0, 1, 1 }, re.q);
     try expect(re.shrunk[0] > 0);
     try expectEqual(@as(u32, 0), re.shrunk[1]);
+    try expect(e.inst.lvl_t0[1] - 5.5e-9 > 0.5e-12 and e.inst.lvl_t0[1] - 5.5e-9 <= 20e-12);
     // v_any waits on any change: both crossings are located and each counts.
     // (Where it starts depends on time 0, where clk goes z -> x -> 0.)
     const A = Circuit(@import("v_any"));
