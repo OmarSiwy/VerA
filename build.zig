@@ -382,6 +382,8 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_reg_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_clog2_controls.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_array_controls.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_index_controls.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_function_controls.va" },

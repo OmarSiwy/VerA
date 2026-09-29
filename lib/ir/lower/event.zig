@@ -142,7 +142,10 @@ pub fn finishTimers(self: *Lower) Oom!void {
 fn replayTimerExpr(self: *Lower, e: Ast.ExprId, captured: *const TimerCapture, replay: *std.AutoHashMapUnmanaged(Ast.ExprId, TypedValue), changed: *bool) Oom!void {
     const before = captured.exprs.get(e) orelse return;
     if (before.variable) |slot| {
-        const after = try self.builder.readVariable(slot.place, self.cur);
+        const stored = try self.builder.readVariable(slot.place, self.cur);
+        // §7.3.1 applies to this later read too: a packed reg's analog value
+        // is zero-extended from its declaration width, not its raw SSA slot.
+        const after = try lower_param.analogRead(self, stored, slot.reg_width);
         changed.* = changed.* or self.mir.resolveAlias(after) != self.mir.resolveAlias(before.value.v);
         return replay.put(self.arena, e, .{ .v = after, .ty = slot.ty });
     }

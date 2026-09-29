@@ -35,18 +35,7 @@ const astTy = Lower.astTy;
 /// Lowers an expression, returning its value and its LRM type; every
 /// operator's opcode family depends on the type (LRM §4, §4.2.1.1–§4.2.1.3).
 pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    if (self.event_state.timer_replay) |replay| if (replay.get(e)) |value| return value;
-    const value = try lowerExprRaw(self, e, null, false);
-    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.exprs.put(self.arena, e, .{
-        .value = value,
-        .variable = switch (self.file.exprs.tag(e)) {
-            .ident => self.vars.get(self.file.str(self.file.exprs.strOf(e))),
-            .hier_ident => self.vars.get(try flatName(self, e)),
-            else => null, // else: only a resolved name directly reads one variable
-        },
-        .effects = try lower_event.captureTimerEffects(self, e),
-    });
-    return value;
+    return lowerExprRaw(self, e, null, false);
 }
 
 /// IEEE §§5.4–5.5 inside a self-determined `$clog2` argument. Function
@@ -85,7 +74,24 @@ fn resizeInt(self: *Lower, v: Mir.Value, context: constfold.IntContext) Oom!Mir.
     return self.emit(.select, &.{ try self.toBool(.{ .v = sign, .ty = .integer }), negative, bits });
 }
 
+// Timer capture belongs on both ordinary and width-aware expression paths.
+// A $clog2 operand must retain its dependency when its timer is rescheduled.
 fn lowerExprRaw(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
+    if (self.event_state.timer_replay) |replay| if (replay.get(e)) |value| return value;
+    const value = try lowerExprInner(self, e, plan, sized);
+    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.exprs.put(self.arena, e, .{
+        .value = value,
+        .variable = switch (self.file.exprs.tag(e)) {
+            .ident => self.vars.get(self.file.str(self.file.exprs.strOf(e))),
+            .hier_ident => self.vars.get(try flatName(self, e)),
+            else => null, // else: only a resolved name directly reads one variable
+        },
+        .effects = try lower_event.captureTimerEffects(self, e),
+    });
+    return value;
+}
+
+fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     if (e == .none) return poison;
     const ex = &self.file.exprs;
     // Provenance: every MIR instruction emitted while this node is being
