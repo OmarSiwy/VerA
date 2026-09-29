@@ -14,6 +14,8 @@
 // = 0, so the rising-edge block sets hp = 0: hp reads 1 at 0 and 5 ns and 0
 // at 7 and 9 ns, and n counts exactly one event. Two checks per point. That
 // the event fires at a grid point and not at its own time is W0750.
+// Expectations are literal values selected by the declared sample times,
+// independent of the clock expression used to detect the crossing.
 //
 //! lrm 5.10.3.1
 //! warn W0750
@@ -33,8 +35,13 @@ module ch5_cross_on_time_grid(vinp, vinn, outp, clk, vdd);
       hp = (V(vinp, vinn) > voff) ? 0.0 : 1.0;
       n = n + 1;
     end
-    `CHECKX("hp is precharged before the clk edge and latched low after it", hp, (V(clk) > 0.9) ? 0.0 : 1.0);
-    `CHECKI("one rising clk edge is one event", n, (V(clk) > 0.9) ? 1 : 0);
+    if ($abstime < 6n) begin
+      `CHECKX("hp is precharged at 0 and 5 ns", hp, 1.0);
+      `CHECKI("no clk edge before 7 ns", n, 0);
+    end else begin
+      `CHECKX("hp is latched low at 7 and 9 ns", hp, 0.0);
+      `CHECKI("one rising clk edge is one event", n, 1);
+    end
     I(outp) <+ (V(outp) - hp * V(vdd)) / 1e3;
   end
 endmodule
