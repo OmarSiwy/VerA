@@ -930,7 +930,16 @@ pub const Run = struct {
         const c = self.chainBase(e);
         if (ex.tag(c.base) != .ident) return null;
         const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
-        return if (c.depth == 1 + arr.rest.len) arr else null;
+        if (c.depth != 1 + arr.rest.len) return null;
+        // IEEE 1364-2005 §5.2.2: "the desired word shall first be selected by
+        // supplying an address for each dimension"; a range there would
+        // select several elements, which §4.9 never assigns or reads.
+        var at = e;
+        while (ex.tag(at) == .index) : (at = ex.lhs(at)) switch (ex.tag(ex.rhs(at))) {
+            .range, .indexed_range => return self.exprFail(ex.rhs(at), "§5.2.2: each array dimension takes an index, not a part-select"),
+            else => {}, // else: an element index
+        };
+        return arr;
     }
 };
 
@@ -1212,48 +1221,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try blockScopes(r, sub.frame.scope, sub.decl.body);
     }
     for (m.discrete) |d| try blockScopes(r, scope, d.body);
-    for (m.nets) |n| {
-        // §7.2.1: a disciplined net is continuous, the analog solver's.
-        if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
-        if (!r.mixed and (n.discipline != .none or n.is_ground))
-            return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
-        const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        // A.2.4 `net_decl_assignment` names no dimension.
-        if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
-        // §4.9.1 a net array is one net per element, on consecutive slots,
-        // the layout a variable array's elements have.
-        const base: u32 = @intCast(e.values.items.len);
-        const count = try declareArray(r, base, n.dims, n.main_tok);
-        for (0..count) |k| {
-            const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
-            if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-                .msb = try r.declaredBound(range.msb, n.main_tok),
-                .lsb = try r.declaredBound(range.lsb, n.main_tok),
-            });
-            var net = &e.nets.items[at];
-            net.delay = try r.declaredDelay3(n.delay, n.main_tok);
-            // A.2.1.3 gives `trireg` its own alternatives, and in them the third
-            // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-            // a trireg in the capacitive state does not turn off, it holds, so the
-            // net's own turn-off falls back to §7.14's "smallest of the delays".
-            if (n.kind == .trireg and n.delay.off != .none) {
-                net.decay = net.delay.off;
-                net.delay.off = @min(net.delay.rise, net.delay.fall);
-            }
-            net.charge = n.charge;
-            // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-            // declaration: one more driver of that net. Its delay is the net's
-            // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
-            // not on the `=`), so the row it contributes carries none.
-            if (n.init != .none)
-                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
-        }
-    }
+    for (m.nets) |n| try declareNet(r, e, scope, n);
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
     const grouped = !r.mixed and expressionPorts(m);
     if (grouped) try groupPorts(r, e, m, scope, binds);
     for (if (grouped) m.ports[0..0] else m.ports, 0..) |p, i| {
+        if (p.name == .none) continue; // IEEE 1364-2005 A.1.3 a null port connects nothing inside
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         if (p.external_name != .none and !p.concat_rest) for (m.ports[0..i]) |q| if (q.external_name == p.external_name)
             return r.fail(p.main_tok, "§12.3.2: a port defined twice in the list of ports: `{s}`", .{r.file.str(p.external_name)});
@@ -1608,7 +1582,9 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
                 const gated = sw.kind != .tran and sw.kind != .rtran;
                 // §7.6: the controlled ones take "zero, one, or two delays"
                 // (the grammar already refuses any on tran and rtran).
-                if (sw.delay.off != .none) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
+                // One value fills all three fields (`parseDelay3`), so only a
+                // third value of its own is a third delay.
+                if (sw.delay.off != .none and sw.delay.off != sw.delay.rise) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
                 const ta = try switchTerminal(r, e, sw.terms[0], sw.main_tok);
                 const tb = try switchTerminal(r, e, sw.terms[1], sw.main_tok);
                 try e.trans.append(r.arena, .{
@@ -1856,6 +1832,9 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
+            // §12.4: a generate block's nets are its scope's, one set per
+            // loop iteration.
+            for (b.gen.nets) |n| try declareNet(r, e, scope, n);
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
@@ -1867,6 +1846,47 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             for (b.body) |inner| if (!r.mixed or isGenerate(r.file, m, inner)) try generate(r, e, m, scope, inner, depth);
         },
         else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
+    }
+}
+
+/// One A.2.1.3 net declaration of `scope`: the net, or a §4.9.1 net
+/// array's elements, and a net_decl_assignment's driver.
+fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
+    const arena = r.arena;
+    // §7.2.1: a disciplined net is continuous, the analog solver's.
+    if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) return;
+    if (!r.mixed and (n.discipline != .none or n.is_ground))
+        return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
+    const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
+    // A.2.4 `net_decl_assignment` names no dimension.
+    if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
+    // §4.9.1 a net array is one net per element, on consecutive slots,
+    // the layout a variable array's elements have.
+    const base: u32 = @intCast(e.values.items.len);
+    const count = try declareArray(r, base, n.dims, n.main_tok);
+    for (0..count) |k| {
+        const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
+        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(range.msb, n.main_tok),
+            .lsb = try r.declaredBound(range.lsb, n.main_tok),
+        });
+        var net = &e.nets.items[at];
+        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+        // a trireg in the capacitive state does not turn off, it holds, so the
+        // net's own turn-off falls back to §7.14's "smallest of the delays".
+        if (n.kind == .trireg and n.delay.off != .none) {
+            net.decay = net.delay.off;
+            net.delay.off = @min(net.delay.rise, net.delay.fall);
+        }
+        net.charge = n.charge;
+        // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+        // declaration: one more driver of that net. Its delay is the net's
+        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
+        // not on the `=`), so the row it contributes carries none.
+        if (n.init != .none)
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
     }
 }
 
@@ -2031,13 +2051,33 @@ fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: 
 }
 
 /// §12.1.2: "If the bit length of a port expression is the same as the
-/// port's, the expression is connected to each instance". A wider one is
-/// split across the elements, which is refused rather than truncated.
-// ponytail: only a whole identifier is sized here; splitting and general
+/// port's, the expression is connected to each instance" (null: bind it
+/// whole). One as wide as the port times the element count is split: IEEE
+/// 1364-2005 §7.1.6, "each instance shall get a part-select of the port
+/// expression as specified in the range, starting with the right-hand index".
+// ponytail: only a whole identifier is sized and split here; general
 // expressions wait for a design that needs them.
-fn arrayConn(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn) Error!void {
-    if (r.file.exprs.tag(conn.expr) == .ident and e.values.items[try r.scalarSlot(conn.expr)].width == try portWidth(r, port)) return;
-    return r.fail(conn.main_tok, "§12.1.2: only a whole net or variable as wide as the port is connected across an instance array by digital execution", .{});
+fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn: Ast.PortConn, k: i64) Error!?PortBind {
+    const refused = "§12.1.2: only a whole net or variable, as wide as the port or as the port times the array size, is connected across an instance array by digital execution";
+    if (r.file.exprs.tag(conn.expr) != .ident) return r.fail(conn.main_tok, refused, .{});
+    const whole = e.values.items[try r.scalarSlot(conn.expr)].width;
+    const w = try portWidth(r, port);
+    if (whole == w) return null;
+    const range = inst.range.?;
+    const left = try r.declaredBound(range.msb, inst.main_tok);
+    const right = try r.declaredBound(range.lsb, inst.main_tok);
+    const count: u32 = @intCast(@abs(left - right) + 1);
+    if (whole != w * count) return r.fail(conn.main_tok, refused, .{});
+    const lo: u32 = @intCast(@abs(k - right) * w);
+    return switch (port.direction) {
+        .input => .{ .receive = .{ .expr = conn.expr, .scope = r.scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = whole } } },
+        .output => blk: {
+            const s = try sink(r, e, conn.expr, conn.main_tok, .port);
+            const operands = try r.arena.dupe(Sink, &.{.{ .net = s.net, .lo = s.lo + lo, .width = w }});
+            break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
+        },
+        .inout, .unspecified => r.fail(conn.main_tok, refused, .{}),
+    };
 }
 
 fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16, index: ?i64) Error!void {
@@ -2092,7 +2132,10 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             // so a mixed design's digital half connects nothing through it,
             // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
-            if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
+            if (index) |k| if (conn.expr != .none) if (try arrayConn(r, e, inst, child.ports[at], conn, k)) |split| {
+                binds_out[at] = split;
+                continue;
+            };
             binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
@@ -2340,6 +2383,8 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const ports = try r.arena.alloc(u32, t.ports.len);
     for (t.ports, ports) |p, *slot| slot.* = try mintVar(r, p.v);
     const result = if (t.is_function) try mintVar(r, t.result) else 0;
+    try declareParams(r, scope, t.params, &.{});
+    try declareEvents(r, t.events, &.{}, t.main_tok);
     for (t.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
         _ = try mintVar(r, v);
@@ -2410,7 +2455,6 @@ fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
 fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
     const net_mod = @import("net.zig");
     const tok = inst.main_tok;
-    try checkUdp(r, u);
     if (inst.ports.len != u.ports.len) return r.fail(tok, "§8: a UDP instance connects its output and every input, in order", .{});
     for (inst.ports) |c| if (c.name != .none or c.expr == .none)
         return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
@@ -2811,6 +2855,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget };
     try binding.libraries(&r, file, opts, pp.more_starts);
+    // IEEE 1364-2005 §8.1's rules hold for every UDP declaration, whether or
+    // not an instance uses it.
+    for (file.udps) |*u| try checkUdp(&r, u);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
@@ -3255,7 +3302,8 @@ test "§12.4 a hierarchical path descends one instance per part" {
 
 // IEEE 1364 §12.1.2: `u[1:0]` is two instances, each named with its index,
 // and a port expression as wide as the port reaches every one of them. One
-// twice as wide would be split across them, which is refused, not truncated.
+// twice as wide is split across them, the right-hand index taking the low
+// bits (§7.1.6); any other width is refused, not truncated.
 test "§12.1.2 an instance array is one instance per element, each connected" {
     try expectRun(
         \\`timescale 1ns/1ps
@@ -3270,12 +3318,24 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
         \\initial r = 1'b1;
         \\endmodule
     , "top.u[0] 1\ntop.u[1] 1\n");
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module leaf(a);
+        \\input a;
+        \\initial #1 $display("%m %b", a);
+        \\endmodule
+        \\module top;
+        \\reg [1:0] r;
+        \\leaf u[1:0](r);
+        \\initial r = 2'b10;
+        \\endmodule
+    , "top.u[0] 0\ntop.u[1] 1\n");
     try expectRejected(
         \\module leaf(a);
         \\input a;
         \\endmodule
         \\module top;
-        \\reg [1:0] r;
+        \\reg [2:0] r;
         \\leaf u[1:0](r);
         \\endmodule
     , "across an instance array");

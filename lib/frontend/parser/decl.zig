@@ -281,6 +281,8 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     }
     _ = try self.expect(.semicolon);
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
+    var params: std.ArrayList(Ast.ParamDecl) = .empty;
+    var events: std.ArrayList(Ast.StrId) = .empty;
     const end_word = if (is_function) "endfunction" else "endtask";
     while (true) {
         try self.skipAttributes();
@@ -296,6 +298,19 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         }
         switch (self.peek()) {
             .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => try parseBlockVars(self, &vars),
+            // A.2.8 block_item_declaration's constant and event arms.
+            .kw_parameter, .kw_localparam => {
+                try parseParamDecl(self, &params);
+                _ = try self.expect(.semicolon);
+            },
+            .kw_event => {
+                self.pos += 1;
+                while (true) {
+                    try events.append(self.arena, try self.expectIdent());
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            },
             else => break, // else: the first token that declares nothing begins the body
         }
     }
@@ -317,6 +332,8 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         .result = result,
         .ports = ports.items,
         .vars = vars.items,
+        .params = params.items,
+        .events = events.items,
         .body = body_id,
         .main_tok = main_tok,
     });

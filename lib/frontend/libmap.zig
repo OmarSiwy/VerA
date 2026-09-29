@@ -33,6 +33,9 @@ pub const Map = struct {
     /// In declaration order, map files in the order given; a name declared
     /// twice is one library holding both declarations' specifications.
     libraries: []const Library = &.{},
+    /// A.1.1's `-incdir` lists, every library's, in declaration order, each
+    /// resolved against its map file's directory.
+    incdirs: []const []const u8 = &.{},
 
     /// §13.2.1.1 the library `file` (absolute) maps into: the one whose
     /// specification matches it most specifically, else `work` (§13.2.1).
@@ -83,7 +86,7 @@ pub fn load(arena: std.mem.Allocator, io: Io, bag: *diag.Bag, paths: []const []c
     for (paths) |p| try l.read(p, null, 0);
     const out = try arena.alloc(Library, l.libs.items.len);
     for (l.libs.items, out) |b, *o| o.* = .{ .name = b.name, .specs = b.specs.items };
-    return .{ .libraries = out };
+    return .{ .libraries = out, .incdirs = l.incdirs.items };
 }
 
 const Loader = struct {
@@ -91,6 +94,7 @@ const Loader = struct {
     io: Io,
     bag: *diag.Bag,
     libs: std.ArrayList(struct { name: []const u8, specs: std.ArrayList(Spec) = .empty }) = .empty,
+    incdirs: std.ArrayList([]const u8) = .empty,
 
     /// `at` is the `include` that names `path`, for the diagnostic when the
     /// file cannot be read.
@@ -110,6 +114,7 @@ const Loader = struct {
                 // path is "relative to the location of the file that contains
                 // the file path".
                 const spec = t.next() orelse return l.fail(here, "`include` names no file_path_spec", .{});
+                if (isPunct(spec.text)) return l.fail(.{ .file = file, .tok = spec }, "`include` names no file_path_spec", .{});
                 try l.expectSemicolon(&t, file, spec);
                 if (depth == 32) return l.fail(here, "library map `include` nested deeper than 32", .{});
                 try l.read(try std.fs.path.resolvePosix(l.arena, &.{ dir, unquote(spec.text) }), .{ .file = file, .tok = spec }, depth + 1);
@@ -129,7 +134,20 @@ const Loader = struct {
                     try lib.specs.append(l.arena, try resolveSpec(l.arena, dir, unquote(spec.text)));
                     const sep = t.next() orelse return l.fail(.{ .file = file, .tok = spec }, "a library declaration ends with `;`", .{});
                     if (std.mem.eql(u8, sep.text, ";")) break;
-                    if (std.mem.eql(u8, sep.text, "-incdir")) return l.fail(.{ .file = file, .tok = sep }, "`-incdir` is not implemented", .{});
+                    // A.1.1 `[ -incdir file_path_spec { , file_path_spec } ] ;`
+                    if (std.mem.eql(u8, sep.text, "-incdir")) {
+                        var prev_tok = sep;
+                        while (true) {
+                            const d = t.next() orelse return l.fail(.{ .file = file, .tok = prev_tok }, "a library declaration ends with `;`", .{});
+                            if (isPunct(d.text)) return l.fail(.{ .file = file, .tok = d }, "`-incdir` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{d.text});
+                            try l.incdirs.append(l.arena, try std.fs.path.resolvePosix(l.arena, &.{ dir, unquote(d.text) }));
+                            const next = t.next() orelse return l.fail(.{ .file = file, .tok = d }, "a library declaration ends with `;`", .{});
+                            if (std.mem.eql(u8, next.text, ";")) break;
+                            if (!std.mem.eql(u8, next.text, ",")) return l.fail(.{ .file = file, .tok = next }, "found `{s}`: -incdir file_path_specs are separated by `,` and end with `;`", .{next.text});
+                            prev_tok = next;
+                        }
+                        break;
+                    }
                     if (!std.mem.eql(u8, sep.text, ",")) return l.fail(.{ .file = file, .tok = sep }, "found `{s}`: file_path_specs are separated by `,` and end with `;`", .{sep.text});
                     prev = sep;
                 }

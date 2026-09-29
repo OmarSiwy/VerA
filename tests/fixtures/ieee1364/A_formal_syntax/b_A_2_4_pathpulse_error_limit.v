@@ -9,7 +9,6 @@
 // "y=1".
 // digital-runner: warning W0251
 //! inherited IEEE 1364-2005 A.2.4
-//! xfail VerA's parser refuses a pulse_control_specparam's error_limit_value (E0207 at `,`)
 `timescale 1ns/1ns
 module b_A_2_4_pp (a, y);
   input a;

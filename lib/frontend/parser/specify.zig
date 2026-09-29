@@ -534,8 +534,10 @@ fn edgeDescriptor(a: u8, b: u8) bool {
 /// `out` is null for an A.7.1 `specify_item`, whose specparams are scoped to
 /// a block this compiler does not elaborate.
 ///
-/// A.2.4's `pulse_control_specparam` (`PATHPULSE$ = ( … )`) is not read: §2.8
-/// admits no `$` in an identifier, so the lexer cannot produce its name.
+/// A.2.4's `pulse_control_specparam`, `PATHPULSE$[input$output] = (
+/// reject_limit_value [ , error_limit_value ] )`, is parsed and dropped: it
+/// declares no constant, and the pulse limits it sets are §14.6's simulation,
+/// which VerA does not run (W0251).
 pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
     // ponytail: 1364's specparams are what SDF back-annotation overrides,
     // and a `localparam` cannot be overridden. VerA reads no SDF; reading
@@ -546,6 +548,14 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
         const tok = self.pos;
         const name = try self.expectIdent();
         _ = try self.expect(.assign_eq);
+        if (std.mem.startsWith(u8, self.file.str(name), "PATHPULSE$")) {
+            _ = try self.expect(.lparen);
+            _ = try parse_expr.parseExpr(self);
+            if (self.eat(.comma)) _ = try parse_expr.parseExpr(self);
+            _ = try self.expect(.rparen);
+            if (!self.eat(.comma)) break;
+            continue;
+        }
         const default = try parse_expr.parseMinTypMax(self);
         if (out) |o| try o.append(self.arena, .{
             .name = name,

@@ -9,7 +9,6 @@
 // b_A_1_3_np copies a to y; the top connects all three positions by order,
 // the second to nothing: y = a = 1 -> "y=1".
 //! inherited IEEE 1364-2005 A.1.3
-//! xfail VerA's port list parser requires an identifier where a null port stands (E0208)
 `timescale 1ns/1ns
 module b_A_1_3_np (a, , y);
   input a;

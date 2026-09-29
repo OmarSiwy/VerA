@@ -9,7 +9,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.6.3
 //! reject E0209
-//! xfail VerA accepts a declaration in an unnamed begin block
 module b_A_6_3_unnamed_block_declaration_rejected;
   initial begin
     integer k;

@@ -452,9 +452,13 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
     var range: ?Ast.Dim = null;
     var signed = false;
     var var_storage: ?@FieldType(Ast.VarDecl, "storage") = null;
+    // A list_of_ports entry has been read: the list is not A.1.3's
+    // list_of_port_declarations, so no port_declaration may follow.
+    var plain = false;
     while (true) {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
+            if (plain) return self.failAt(self.pos, .E0207, "found {s}: a port_declaration cannot follow a list_of_ports port (A.1.3)", .{self.found(self.pos)});
             dir = d;
             b.ansi = true;
             self.pos += 1;
@@ -469,6 +473,15 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             // the range belongs to the declaration (§6.5.2
             // "electrical [3:0] a, b" declares two 4-bit ports).
             range = try parse_decl.optDim(self);
+        }
+        // A.1.3 `port ::= [ port_expression ] | ...`: an empty port_expression
+        // is a null port, a header position nothing inside connects to (a
+        // digital parse only; the analog pipeline has no such terminal).
+        if (self.digital and dir == .unspecified and (self.peek() == .comma or self.peek() == .rparen)) {
+            try b.ports.append(self.arena, .{ .name = .none, .main_tok = self.pos });
+            plain = true;
+            if (!self.eat(.comma)) break;
+            continue;
         }
         // A.1.3 `port ::= [ port_expression ] | . port_identifier (
         // [ port_expression ] )`. The second alternative gives the port an
@@ -514,6 +527,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         }
         if (concat) _ = try self.expect(.rbrace);
         if (close_named) _ = try self.expect(.rparen);
+        if (dir == .unspecified) plain = true;
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
@@ -611,14 +625,10 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // they do not go through `parseStmt`.
         .kw_for => try parse_generate.parseGenerate(self, b, .kw_for),
         .kw_if => try parse_generate.parseGenerate(self, b, .kw_if),
-        // Syntax 6-8 case_generate_construct. Gated on being inside a
-        // generate region or block because `case` is also A.6.7's statement
-        // keyword; at module scope with no generate above it neither
-        // production applies, and it stays E0205.
-        .kw_case => if (self.gen_depth > 0)
-            try parse_generate.parseGenerate(self, b, .kw_case)
-        else
-            return parse_inst.unsupportedItem(self),
+        // Syntax 6-8 case_generate_construct, like `for` and `if` above: a
+        // statement is no module item, so a `case` here is a generate
+        // construct inside a generate region or not (IEEE 1364-2005 A.1.4).
+        .kw_case => try parse_generate.parseGenerate(self, b, .kw_case),
         // Not an item: a generate_block is only ever the body of the two
         // above (E0221). Kept as its own arm so the diagnostic can cite
         // Syntax 6-8 rather than blaming the analog subset.

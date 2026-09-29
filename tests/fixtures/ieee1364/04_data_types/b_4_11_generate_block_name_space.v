@@ -12,7 +12,6 @@
 // locally, then the local item shall be used").
 // Output: "1" then "g 3".
 //! inherited IEEE 1364-2005 4.11
-//! xfail VerA puts a generate block's declarations in its module's name space (E1100 duplicate digital variable on g's x)
 `timescale 1ns/1ns
 module b_4_11_generate_block_name_space;
   reg [3:0] x;
