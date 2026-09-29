@@ -7,11 +7,13 @@
 // UDPs."
 //
 // `#(1, 2, 3)` is a delay3 on a UDP instance. Legal neighbour:
-// b_A_5_4_udp_instances.v (`#(2, 3)`).
+// b_A_5_4_udp_instances.v (`#(2, 3)`). A UDP instance and a module instance
+// share their syntax until the name is bound, so the refusal comes at
+// elaboration (E1100), naming §8.6's rule.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.5.4
-//! reject E0207
-//! xfail VerA accepts a three-value delay on a UDP instance
+//! reject E1100
+//! reject at most two delays
 primitive b_A_5_4_buf (y, a);
   output y;
   input a;
