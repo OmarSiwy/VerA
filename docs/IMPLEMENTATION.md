@@ -99,9 +99,11 @@ truncation rule, so a shorter answer would be a wrong one.
 | digital: loop generate | 65536 iterations | E1100 | `src/sim/digital/root.zig:1465` | `ieee1364/12_hierarchy/b_12_generate_past_65536_iterations_rejected.v` |
 | digital: nested task and function activations | 1024, or 4 MiB of stack | E1100 | `src/sim/digital/exec.zig:1433` (`max_sync_stack`) | `ieee1364/10_tasks_functions/b_10_4_recursion_past_the_stack_bound_rejected.v` |
 | digital: array dimensions | 16 | E1100 | `src/sim/digital/root.zig:1766` (`declareArray`) | `ieee1364/04_data_types/b_4_9_net_array_17_dimensions_rejected.v` |
+| analog device: named event arrays | not yet executed; scalar analog events and digital event arrays are supported | E0235, naming AMS §5.10.4 | `lib/ir/lower.zig` `lowerModule` | `ch05_analog_behavior/event_array_device_limit_rejected.va`; legal neighbors `ch05_analog_behavior/named_event_unsupported.va`, `ieee1364/09_behavioral_modeling/b_9_7_3_event_arrays.v` |
 | digital: events in one time step | 10,000,000, or `--event-budget=N` | E1100 | `src/sim/digital/root.zig:186` | `ieee1364/11_scheduling/b_11_zero_delay_loop_rejected.v` (at a budget of 1000: the default takes minutes to reach) |
 | testbench `//! sweep` product | 4096 points | a `//!` directive error | `lib/backend/tb.zig:259` | none (harness input, not source) |
 | VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223` | none |
+| VPI: automatic named events and dynamic event references in automatic tasks | declaration metadata is available; triggering through VPI requires unimplemented §26.6.20 frame handles | `AUTOMATIC`, naming the activation frame | `src/vpi/value.zig` `put` | `ieee_pli/b_26_6_11_event_array.c`; static-task event references are the legal neighbor |
 
 ### Timer controls with effects
 

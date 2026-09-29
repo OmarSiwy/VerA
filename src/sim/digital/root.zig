@@ -179,7 +179,8 @@ pub const TyState = enum(u8) { untyped, one, many };
 /// `left`/`right`: the first dimension's bounds as declared, `[left:right]`
 /// (IEEE 1364-2005 §26.6.10's vpiLeftRange/vpiRightRange).
 pub const Array = struct { count: u32, low: i64, high: i64, left: i64, right: i64, rest: []const Span = &.{} };
-pub const Span = struct { low: i64, high: i64 };
+/// Sorted bounds for addressing, plus the declared direction for VPI ranges.
+pub const Span = struct { low: i64, high: i64, descending: bool = false };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
 pub const VecRange = struct {
@@ -340,9 +341,9 @@ pub const Run = struct {
     gen_nets: std.AutoHashMapUnmanaged(u32, []const Ast.NetDecl) = .empty,
     /// The slots that are §5.10.4 named events. They occupy a slot only so that
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
-    /// there, because §5.10's events "do not hold any data". Each to its
-    /// declaration's token, or 0 where no use can precede it (a named block's).
-    events: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    /// there, because §5.10's events "do not hold any data". Each scalar or
+    /// array element maps to its declaration's token and lexical scope.
+    events: std.AutoHashMapUnmanaged(u32, struct { tok: u32, scope: u32 }) = .empty,
     /// Natural types (§5.5.1), indexed by AST ExprId. An ExprId is shared by
     /// every instance of its module, and IEEE 1364-2005 §12.2 gives each
     /// instance its own parameter values, so the truth is `spec_types`, keyed
@@ -622,8 +623,8 @@ pub const Run = struct {
                             else => &.{c.body}, // else: a single statement is its own body
                         };
                         for (body) |t| switch (f.stmt(t)) {
-                            .event_trigger => |tr| if (w.named.contains(tr.name)) {
-                                const at = w.r.lookup(w.r.scope, tr.name) orelse continue;
+                            .event_trigger => |tr| if (f.exprs.tag(tr.target) == .ident and w.named.contains(f.exprs.strOf(tr.target))) {
+                                const at = w.r.lookup(w.r.scope, f.exprs.strOf(tr.target)) orelse continue;
                                 if (w.r.events.contains(at)) try w.r.addMonitor(c.event, at);
                             },
                             else => {}, // else: only a trigger crosses to the digital context
@@ -864,6 +865,20 @@ pub const Run = struct {
         if (compile.typeOf(self, e).real) return .{ .real = try exec.evalReal(self, a, e) };
         return .{ .bits = try exec.eval(self, a, e, 0) };
     }
+
+    /// §26.6.11: a constant event select denotes the persistent declared
+    /// element. Canonicalizing it must never evaluate a variable index or an
+    /// application's function (whose value is only requested at run time).
+    pub fn vpiConstantIndex(self: *Run, a: std.mem.Allocator, scope: u32, e: Ast.ExprId) Error!?i64 {
+        const saved = self.scope;
+        defer self.scope = saved;
+        self.scope = scope;
+        if (!compile.constantExpression(self, e)) return null;
+        return switch (try self.vpiEval(a, scope, e)) {
+            .bits => |v| v.asInt(),
+            .real => null,
+        };
+    }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
     /// scope of the same module, never across an instance boundary.
     pub fn lookup(self: *const Run, scope: u32, str: Ast.StrId) ?u32 {
@@ -1005,7 +1020,7 @@ pub const Run = struct {
         const ex = &self.file.exprs;
         if (ex.tag(e) != .index) return null;
         const c = self.chainBase(e);
-        if (ex.tag(c.base) != .ident) return null;
+        if (ex.tag(c.base) != .ident and ex.tag(c.base) != .hier_ident) return null;
         const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
         if (c.depth != 1 + arr.rest.len) return null;
         // IEEE 1364-2005 §5.2.2: "the desired word shall first be selected by
@@ -1254,7 +1269,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
     }
     try declareParams(r, scope, m.params, over);
-    try declareEvents(r, m.events, m.event_toks, m.main_tok);
+    try declareEvents(r, m.events);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
         // VAMS §7.3.6.4: an analog variable a digital expression reads is
@@ -1519,16 +1534,19 @@ fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
 /// point on the waiter list; the stored value is never read or written.
-fn declareEvents(r: *Run, names: []const Ast.StrId, toks: []const u32, tok: u32) Error!void {
+fn declareEvents(r: *Run, events: []const Ast.EventDecl) Error!void {
     const g = r.growing.?;
-    for (names, 0..) |name, i| {
-        if (g.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
+    for (events) |event| {
         const at: u32 = @intCast(g.items.len);
-        try r.bind(name, at, tok);
-        try g.append(r.arena, try filled(r.arena, 1, false, .x));
-        try r.events.put(r.arena, at, if (i < toks.len) toks[i] else 0);
+        try r.bind(event.name, at, event.main_tok);
+        const count = try declareArray(r, at, event.dims, event.main_tok);
+        if (count > std.math.maxInt(u32) - g.items.len) return r.fail(event.main_tok, "too many digital storage slots", .{});
+        for (0..count) |i| {
+            try g.append(r.arena, try filled(r.arena, 1, false, .x));
+            try r.events.put(r.arena, at + @as(u32, @intCast(i)), .{ .tok = event.main_tok, .scope = r.scope });
+        }
+        r.values = g.items;
     }
-    r.values = g.items;
 }
 
 /// Does statement `s` hold a named block with declarations of its own?
@@ -1588,7 +1606,7 @@ pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
     defer r.scope = saved;
     r.scope = at;
     try declareParams(r, at, b.params, &.{});
-    try declareEvents(r, b.events, &.{}, tok);
+    try declareEvents(r, b.events);
     for (b.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized block-local variable is not implemented", .{});
         _ = try mintVar(r, v);
@@ -1921,7 +1939,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             for (b.gen.nets) |n| try declareNet(r, e, scope, n);
             if (b.gen.nets.len != 0) try r.gen_nets.put(r.arena, scope, b.gen.nets);
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
-            try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
+            try declareEvents(r, b.gen.events);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
             for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
@@ -2379,7 +2397,7 @@ fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
             left = hi;
             right = lo;
         }
-        s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
+        s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi), .descending = hi > lo };
         const size = std.math.cast(u32, @as(i128, s.high) - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
         count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
     }
@@ -2480,7 +2498,7 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const ports = try r.arena.alloc(u32, t.ports.len);
     for (t.ports, ports) |p, *slot| slot.* = try mintVar(r, p.v);
     const result = if (t.is_function) try mintVar(r, t.result) else 0;
-    try declareEvents(r, t.events, &.{}, t.main_tok);
+    try declareEvents(r, t.events);
     for (t.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
         _ = try mintVar(r, v);

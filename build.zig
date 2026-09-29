@@ -813,7 +813,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_11_event_array.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_11_event_array.v",
-        .xfail = "error[E0207]: unexpected token: found `[`",
+        .stdout = "p02: b_26_6_11_event_array checks=271\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
@@ -864,7 +864,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 88 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=355\n",
+        .stdout = "xfail G: 87 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=356\n",
     },
 };
 

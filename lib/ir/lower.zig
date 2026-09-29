@@ -1466,9 +1466,10 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // never runs. Closing that needs a scheduler queue; §5.10.4's own example
     // triggers first.
     for (module.events) |ev| {
+        if (ev.dims.len != 0) return self.err(ev.main_tok, .E0235, "§5.10.4: a named event array in an analog device", .{});
         const place = self.builder.newPlace();
         try self.builder.writeVariable(place, self.cur, .zero);
-        try self.events.put(self.arena, self.file.str(ev), place);
+        try self.events.put(self.arena, self.file.str(ev.name), place);
     }
 
     // §4.7.3, checked on the declarations before any call site sees them.

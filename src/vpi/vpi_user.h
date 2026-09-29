@@ -184,6 +184,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiIODecl              28
 #define vpiNamedBegin          33
 #define vpiNamedEvent          34
+#define vpiNamedEventArray    129
 #define vpiNamedFork           35
 #define vpiNetBit              37
 #define vpiNullStmt            38

@@ -1098,7 +1098,10 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             for (x.slots) |at| try self.print("            try s.watch(id, {d}, .any);\n", .{at});
             try self.print("            return;\n", .{});
         },
-        .trigger => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
+        .trigger => |event| switch (event) {
+            .slot => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
+            .indexed => return self.refuse("an indexed named event trigger"),
+        },
         .restart => |x| try self.print(
             \\            if (restarted) return s.fail("this always process completed an iteration without suspending; it needs a delay or event control", .{{}});
             \\            restarted = true;

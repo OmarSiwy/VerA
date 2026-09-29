@@ -123,6 +123,10 @@ pub fn cloneDelay(self: *Flatten, d: Ast.Delay3) Error!Ast.Delay3 {
     return .{ .rise = try cloneExpr(self, d.rise), .fall = try cloneExpr(self, d.fall), .off = try cloneExpr(self, d.off) };
 }
 
+pub fn cloneEvent(self: *Flatten, e: Ast.EventDecl) Error!Ast.EventDecl {
+    return .{ .name = elab_names.flat(self, e.name), .dims = try cloneDims(self, e.dims), .main_tok = e.main_tok };
+}
+
 fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
     if (dims.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.Dim, dims.len);
@@ -622,7 +626,7 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
                 .kind = v.kind, // `#`/`wait` are not `@`
             },
         },
-        .event_trigger => |v| .{ .event_trigger = .{ .name = elab_names.flat(self, v.name) } },
+        .event_trigger => |v| .{ .event_trigger = .{ .target = try cloneExpr(self, v.target) } },
         .disable => |v| .{ .disable = .{ .name = elab_names.flat(self, v.name) } },
         .sys_task => |v| blk: {
             // `name` is a system task (`$strobe`, ...), never a name of this unit.

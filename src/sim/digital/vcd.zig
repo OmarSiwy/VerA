@@ -478,7 +478,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         var_start[s] = @intCast(vars.items.len);
         var decls: std.ArrayList(Ast.VarDecl) = .empty;
         var names: std.ArrayList(Ast.StrId) = .empty;
-        var events: []const Ast.StrId = &.{};
+        var events: []const Ast.EventDecl = &.{};
         if (sub) |t| {
             for (t.ports) |p| try decls.append(a, p.v);
             try decls.appendSlice(a, t.vars);
@@ -491,7 +491,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
             events = m.events;
         }
         for (decls.items) |d| try names.append(a, d.name);
-        try names.appendSlice(a, events);
+        for (events) |event| try names.append(a, event.name);
         for (names.items, 0..) |name, i| {
             if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;

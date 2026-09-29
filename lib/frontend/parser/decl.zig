@@ -282,7 +282,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
     _ = try self.expect(.semicolon);
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
-    var events: std.ArrayList(Ast.StrId) = .empty;
+    var events: std.ArrayList(Ast.EventDecl) = .empty;
     const end_word = if (is_function) "endfunction" else "endtask";
     while (true) {
         try self.skipAttributes();
@@ -306,7 +306,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
             .kw_event => {
                 self.pos += 1;
                 while (true) {
-                    try events.append(self.arena, try self.expectIdent());
+                    try events.append(self.arena, try parseEventDecl(self));
                     if (!self.eat(.comma)) break;
                 }
                 _ = try self.expect(.semicolon);
@@ -401,6 +401,13 @@ pub fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
     const ex = &self.file.exprs;
     if (ex.tag(d.msb) != .int_literal or ex.tag(d.lsb) != .int_literal) return null;
     return @abs(ex.intValue(d.msb) - ex.intValue(d.lsb)) + 1;
+}
+
+/// §9.7.3 / AMS §5.10.4: dimensions belong to each event identifier.
+pub fn parseEventDecl(self: *Parser) Error!Ast.EventDecl {
+    const tok = self.pos;
+    const name = try self.expectIdent();
+    return .{ .name = name, .dims = try parseDims(self), .main_tok = tok };
 }
 
 /// Parses zero or more A.2.5 dimensions after a declared name: A.2.2.1

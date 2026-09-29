@@ -684,21 +684,38 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal) {
         if (@import("analog.zig").putResult(o, pv.value.real)) return null;
     };
-    const at = o.slot orelse {
-        root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
-        return null;
-    };
     // IEEE 1364-2005 §27.32: "Calling vpi_put_value() on an object of type
     // vpiNamedEvent shall cause the named event to toggle", and value_p may
     // be NULL.
     if (o.kind == .code and o.vtype == root.code.vpiNamedEvent) {
+        // §26.6.20: automatic objects require an activation's frame, not
+        // the lexical declaration's reusable engine storage. Until VPI
+        // frame handles exist, refuse rather than choosing an activation.
+        if (o.automatic) {
+            root.fail("AUTOMATIC", "vpi_put_value: an automatic event reference requires an activation frame, which is not implemented", .{});
+            return null;
+        }
         if (mode != vpiNoDelay) {
             root.fail("NOPUT", "vpi_put_value: `{s}` is a named event, toggled now (vpiNoDelay) and not scheduled", .{o.full});
             return null;
         }
-        exec.trigger(run.attached().?, at) catch return engineFail();
+        const r = run.attached() orelse return engineFail();
+        var selected = o.slot;
+        if (o.event_ref) |ref| {
+            var scratch = std.heap.ArenaAllocator.init(gpa);
+            defer scratch.deinit();
+            const scope = r.scope;
+            defer r.scope = scope;
+            r.scope = ref.scope;
+            selected = exec.address(r, scratch.allocator(), ref.expr) catch return engineFail();
+        }
+        if (selected) |at| exec.trigger(r, at) catch return engineFail();
         return null;
     }
+    const at = o.slot orelse {
+        root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
+        return null;
+    };
     // vpiReleaseFlag: "The value_p shall contain the current value of the
     // object" — written back, after the release (IEEE 1364 §9.3.2 puts a
     // net back under its drivers at once).

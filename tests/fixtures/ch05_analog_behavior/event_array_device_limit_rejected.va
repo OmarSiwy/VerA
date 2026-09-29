@@ -1,0 +1,15 @@
+// VerA implementation limit, not an invalid AMS §5.10.4 construct: analog
+// devices do not yet execute event arrays. The declaration must be parsed
+// and refused with E0235, rather than accepted with a dead event control.
+// Legal implemented neighbor: named_event_unsupported.va uses scalar events;
+// digital array execution is pinned by b_9_7_3_event_arrays.v and the VPI
+// b_26_6_11_event_array application. No conformance clause is claimed here.
+//! reject E0235
+//! reject a named event array in an analog device
+module event_array_device_limit_rejected;
+  event ev [0:1];
+  analog begin
+    @(initial_step) -> ev[0];
+    @(ev[0]) $strobe("an event occurred");
+  end
+endmodule
