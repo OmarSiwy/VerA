@@ -264,6 +264,7 @@ pub fn build(b: *std.Build) void {
     // Only the AMS `vera` emits devices.
     if (language != .ams) return;
     const contract = byName(mods, "contract");
+    const test_timers = b.step("test-timers", "Run emitted-device timer scheduling tests");
     for (host_tests) |h| {
         const gen = b.addRunArtifact(exe);
         gen.addArgs(&.{ "--emit-zig", "-I" });
@@ -286,7 +287,9 @@ pub fn build(b: *std.Build) void {
                 }) },
             },
         });
-        test_step.dependOn(testRun(b, std.fs.path.stem(h.host), host, runner));
+        const run_host = testRun(b, std.fs.path.stem(h.host), host, runner);
+        test_step.dependOn(run_host);
+        if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
     }
 
     // `.v` contract devices (`rt.Device`) under a mock analog host, each
@@ -375,6 +378,8 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
     .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },

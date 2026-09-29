@@ -339,14 +339,22 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // the event through. "the next event will be scheduled based on
             // the latest value": a changed start_time replaces the schedule,
             // earlier or later, and re-arms a spent one-shot. A changed
-            // period takes effect at the next fire.
+            // period takes effect at the next fire, rebasing the count there.
+            // Use base + k*period, never next + period: accumulated rounding
+            // makes the live schedule drift from the static breakpoint hook.
             .timer => try self.w(
                 \\        const period = {1s};
                 \\        if (inst.{0s}__start != in) {{
                 \\            inst.{0s}__start = in;
+                \\            inst.{0s}__base = in;
+                \\            inst.{0s}__per = period;
                 \\            inst.{0s}__next = zNextTimer(in, period, sim.t) orelse z_inf;
                 \\        }} else if (sim.t >= inst.{0s}__next) {{
-                \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else z_inf;
+                \\            if (period != inst.{0s}__per) {{
+                \\                inst.{0s}__base = inst.{0s}__next;
+                \\                inst.{0s}__per = period;
+                \\            }}
+                \\            inst.{0s}__next = zNextTimer(inst.{0s}__base, period, sim.t) orelse z_inf;
                 \\        }}
                 \\
             , .{ n, try gen_call.timerPeriod(self, args) }),
