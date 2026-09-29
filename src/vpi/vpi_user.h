@@ -248,6 +248,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiBaseExpr           131   /* one-to-one: indexed part select -> its base expression */
 #define vpiWidthExpr          132   /* one-to-one: indexed part select -> its width expression */
 #define vpiIndexedPartSelectType 72 /* int: vpiPosIndexed (+:) or vpiNegIndexed (-:) */
+#define vpiFuncType            44   /* int: a function's or function call's vpiIntFunc ... vpiSizedSignedFunc (IEEE 1364-2005 §26.6.18) */
 #define vpiNetDeclAssign       43   /* bool: a cont assign that is a net declaration assignment (IEEE 1364-2005 §26.6.24) */
 #define vpiDecompile           54   /* str: an expression or task call as source text (IEEE 1364-2005 §26.6.26 b) */
 #define vpiPosIndexed           1

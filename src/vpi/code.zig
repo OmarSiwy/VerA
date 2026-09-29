@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
+const sim = @import("sim");
 const root = @import("root.zig");
 
 const Obj = root.Obj;
@@ -126,6 +127,13 @@ pub const vpiOpType: c_int = 39;
 pub const vpiBlocking: c_int = 41;
 pub const vpiCaseType: c_int = 42;
 pub const vpiNetDeclAssign: c_int = 43;
+pub const vpiFuncType: c_int = 44;
+// vpiFuncType values (Annex G).
+pub const vpiIntFunc: c_int = 1;
+pub const vpiRealFunc: c_int = 2;
+pub const vpiTimeFunc: c_int = 3;
+pub const vpiSizedFunc: c_int = 4;
+pub const vpiSizedSignedFunc: c_int = 5;
 pub const vpiDirection: c_int = 20;
 pub const vpiSize: c_int = 4;
 pub const vpiConnByName: c_int = 21;
@@ -346,6 +354,10 @@ pub const Builder = struct {
     analog: ?*const Analog = null,
     /// §11.6.14 UDP definition name -> its `vpiUdpDefn` object.
     udps: ?*const std.AutoHashMapUnmanaged(Ast.StrId, u32) = null,
+    /// A digital model's engine run and the instance scope in it, where a
+    /// static subroutine's variables have their slots.
+    run: ?*const sim.digital.Run = null,
+    engine: u32 = 0,
 
     pub const Analog = struct {
         /// Flat branch name -> branch object.
@@ -445,30 +457,43 @@ pub const Builder = struct {
                     .name = local,
                     .full = "",
                     .vtype = vpiIODecl,
-                    .props = try b.arena.dupe(Prop, &.{
-                        .{ .prop = vpiDirection, .value = direction(p.direction) },
-                        .{ .prop = vpiSize, .value = packedWidth(b.file, p.v) },
-                    }),
+                    .props = try ioProps(b.arena, direction(p.direction), packedWidth(b.file, p.v), p.v.is_signed),
                 }));
             }
-            // IEEE 1364-2005 §26.6.20: an automatic subroutine's variables,
-            // vpiAutomatic TRUE. They have no static storage, so no slot: a
-            // value lives only in an activation's frame.
-            var autos: std.ArrayList(u32) = .empty;
-            if (t.automatic) for (t.vars) |v| {
-                // ponytail: a reg array of an automatic subroutine is not
-                // modelled yet.
-                if (v.storage != .reg or v.dims.len != 0) continue;
+            // IEEE 1364-2005 §26.6.18: "A Verilog HDL function shall contain
+            // an object with the same name, size, and type as the function",
+            // and its size, sign and vpiFuncType are the function's own.
+            if (t.is_function) b.objects.items[at].props = try b.arena.dupe(Prop, &.{
+                .{ .prop = vpiSize, .value = packedWidth(b.file, t.result) },
+                .{ .prop = root.vpiSigned, .value = @intFromBool(t.result.is_signed) },
+                .{ .prop = vpiFuncType, .value = funcType(t.result) },
+            });
+            // A static subroutine's variables are the engine's frame slots
+            // (`digital.Sub.frame`); an automatic one's live only in an
+            // activation (IEEE 1364-2005 §26.6.20, vpiAutomatic TRUE), so
+            // they get none.
+            const frame = if (b.run) |r| if (t.automatic) null else if (r.sub_by_name.get(.{ .scope = b.engine, .str = t.name })) |i| r.subs.items[i].frame else null else null;
+            var regs: std.ArrayList(u32) = .empty;
+            var ints: std.ArrayList(u32) = .empty;
+            var reals: std.ArrayList(u32) = .empty;
+            const result: []const Ast.VarDecl = if (t.is_function) (&t.result)[0..1] else &.{};
+            for ([_][]const Ast.VarDecl{ result, t.vars }, 0..) |vars, local_vars| for (vars) |v| {
+                // ponytail: a subroutine's arrays and time variables (no
+                // vpiTimeVar here) are not modelled yet.
+                if (v.dims.len != 0 or v.storage == .time) continue;
+                const kind: @FieldType(Obj, "kind") = if (v.ty == .real) .real_var else if (v.storage == .reg) .reg else .integer;
                 const local = try b.arena.dupe(u8, b.file.str(v.name));
-                try autos.append(b.arena, try b.add(.{
-                    .kind = .reg,
+                const slot: ?u32 = if (frame) |fr| (if (local_vars == 0) fr.result else b.run.?.names.get(.{ .scope = fr.scope, .str = v.name })) else null;
+                try (if (kind == .reg) &regs else if (kind == .real_var) &reals else &ints).append(b.arena, try b.add(.{
+                    .kind = kind,
                     .owner = b.scope,
                     .name = local,
                     .full = try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.objects.items[at].full, local }),
                     // 0: a range that did not fold (`packedWidth`'s vpiUndefined).
-                    .size = std.math.cast(u32, packedWidth(b.file, v)) orelse 0,
+                    .size = if (slot) |sl| b.run.?.values[sl].width else std.math.cast(u32, packedWidth(b.file, v)) orelse 0,
                     .is_signed = v.is_signed,
-                    .automatic = true,
+                    .automatic = t.automatic,
+                    .slot = slot,
                 }));
             };
             var inner: std.ArrayList(u32) = .empty;
@@ -476,12 +501,14 @@ pub const Builder = struct {
             const saved = try b.enter(at, b.objects.items[at].name, &inner);
             const body = try b.stmt(t.body);
             b.leave(saved);
-            const scopes: List = .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) };
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = body }});
-            b.objects.items[at].lists = if (t.automatic)
-                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items }, scopes })
-            else
-                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, scopes });
+            b.objects.items[at].lists = try b.arena.dupe(List, &.{
+                .{ .tag = vpiIODecl, .items = ios.items },
+                .{ .tag = root.vpiReg, .items = regs.items },
+                .{ .tag = root.vpiIntegerVar, .items = ints.items },
+                .{ .tag = root.vpiRealVar, .items = reals.items },
+                .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) },
+            });
         }
         // §11.6.17.
         for (m.assigns) |a| {
@@ -1014,7 +1041,14 @@ pub const Builder = struct {
                 for (ex.args(id)) |a| try args.append(b.arena, try b.expr(a));
                 const name = b.file.str(ex.strOf(id));
                 const sys = ex.tag(id) == .sys_call;
-                const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = b.lookup(name) }}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
+                const func = if (sys) none else b.lookup(name);
+                // IEEE 1364-2005 §26.6.19 func call -> type int: vpiFuncType,
+                // the function's (a system function's is computed in root.zig).
+                var ftype: ?Prop = null;
+                if (func != none) for (b.objects.items[func].props) |p| {
+                    if (p.prop == vpiFuncType) ftype = p;
+                };
+                const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = func }}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, if (ftype) |p| &.{p} else &.{});
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
                 b.objects.items[at].src_tok = ex.mainTok(id);
@@ -1153,10 +1187,7 @@ pub fn udpDefns(
         var ios: std.ArrayList(u32) = .empty;
         for (u.ports, 0..) |p, k| {
             try ios.append(arena, @intCast(objects.items.len));
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = try arena.dupe(u8, file.str(p)), .full = "", .vtype = vpiIODecl, .props = try arena.dupe(Prop, &.{
-                .{ .prop = vpiDirection, .value = if (k == 0) root.vpiOutput else root.vpiInput },
-                .{ .prop = vpiSize, .value = 1 },
-            }) });
+            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = try arena.dupe(u8, file.str(p)), .full = "", .vtype = vpiIODecl, .props = try ioProps(arena, if (k == 0) root.vpiOutput else root.vpiInput, 1, false) });
         }
         var rows: std.ArrayList(u32) = .empty;
         for (u.rows) |r| {
@@ -1209,7 +1240,33 @@ fn direction(d: Ast.Direction) c_int {
     };
 }
 
+/// IEEE 1364-2005 §26.6.4 io decl: direction, size, and whether it is a
+/// scalar, a vector and signed. `size` is vpiUndefined when the range did not
+/// fold, and then scalar and vector are not answered either.
+fn ioProps(arena: std.mem.Allocator, dir: c_int, size: c_int, signed: bool) Error![]const Prop {
+    if (size < 0) return arena.dupe(Prop, &.{ .{ .prop = vpiDirection, .value = dir }, .{ .prop = vpiSize, .value = size }, .{ .prop = root.vpiSigned, .value = @intFromBool(signed) } });
+    return arena.dupe(Prop, &.{
+        .{ .prop = vpiDirection, .value = dir },
+        .{ .prop = vpiSize, .value = size },
+        .{ .prop = root.vpiScalar, .value = @intFromBool(size == 1) },
+        .{ .prop = root.vpiVector, .value = @intFromBool(size > 1) },
+        .{ .prop = root.vpiSigned, .value = @intFromBool(signed) },
+    });
+}
+
+/// Annex G's vpiFuncType of a function whose result is `v` (A.2.6
+/// function_range_or_type).
+fn funcType(v: Ast.VarDecl) c_int {
+    if (v.ty == .real) return vpiRealFunc;
+    return switch (v.storage) {
+        .variable => vpiIntFunc,
+        .time => vpiTimeFunc,
+        .reg => if (v.is_signed) vpiSizedSignedFunc else vpiSizedFunc,
+    };
+}
+
 fn packedWidth(file: *const Ast.SourceFile, v: Ast.VarDecl) c_int {
+    if (v.storage == .time) return 64;
     if (v.ty == .integer and v.storage != .reg) return 32;
     if (v.ty == .real) return 64;
     const range = v.packed_range orelse return 1;

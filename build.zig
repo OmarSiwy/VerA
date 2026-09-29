@@ -755,7 +755,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
-        .stdout = "xfail 26.6.4: vpiVector/vpiScalar of an io decl\nxfail 26.6.18: vpiSize of function [7:0] twice is not 8\nxfail 26.6.18: vpiFuncType of function [7:0] is not vpiSizedFunc\nxfail 26.6.18: the function holds no 8-bit reg named twice\nxfail 26.6.19: vpiFuncType of the call twice(d)\nxfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=297\nd=12 c=1 q=9 p2=0101\n",
+        .stdout = "xfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=298\nd=12 c=1 q=9 p2=0101\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
