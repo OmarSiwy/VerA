@@ -194,6 +194,17 @@ pub fn all(a: std.mem.Allocator, ref: vpiHandle) ![]vpiHandle {
             if (cb.reason == cbNextSimTime)
                 break :blk next != null and q.time == next.? and q.time > cb.since;
             break :blk q.time == cb.due;
+        } else if (cb.reason == cbStmt) blk: {
+            // §27.33.1.3's module registration is one callback placed on
+            // every covered statement. §26.6.39 reaches that same handle
+            // from each statement, once even if it has several engine pcs.
+            if (ref == null or queue != null) break :blk false;
+            if (cb.reference == ref) break :blk true;
+            for (cb.sites) |site| {
+                if (@as(vpiHandle, @ptrCast(&root.design.?.objects[site.obj])) == ref)
+                    break :blk true;
+            }
+            break :blk false;
         } else queue == null and cb.reference == ref;
         if (matches) try out.append(a, @ptrCast(cb));
     }
@@ -262,7 +273,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // IEEE 1364-2005 §27.33.1.1 a statement Table 27-6 lists, or
         // §27.33.1.3 a module: "every statement that can have a callback
         // placed on it".
-        cbStmt => cb.sites = stmtSites(d.obj) orelse return null,
+        cbStmt => {
+            cb.sites = stmtSites(d.obj) orelse return null;
+            cb.reference = d.obj;
+        },
         cbAtStartOfSimTime, cbReadWriteSynch, cbReadOnlySynch, cbAfterDelay, cbNextSimTime => {
             // IEEE 1364-2005 27.33.2, which §12.31 defers to for the header:
             // a time callback needs a time it can deliver in. cbNextSimTime is
@@ -631,7 +645,7 @@ fn stmtSites(obj: vpiHandle) ?[]const Site {
         root.fail("NOENGINE", "vpi_register_cb: no digital run executes statements", .{});
         return null;
     };
-    const all = r.stmt_sites orelse {
+    const engine_sites = r.stmt_sites orelse {
         root.fail("NOSITES", "vpi_register_cb: this run records no statement sites", .{});
         return null;
     };
@@ -648,7 +662,7 @@ fn stmtSites(obj: vpiHandle) ?[]const Site {
     }
     var out: std.ArrayList(Site) = .empty;
     const eng = d.scopes[scope].engine;
-    for (all.items) |st| {
+    for (engine_sites.items) |st| {
         if (st.scope != eng) continue;
         const at = covered.get(st.stmt) orelse continue;
         out.append(gpa, .{ .pc = st.pc, .obj = at }) catch {

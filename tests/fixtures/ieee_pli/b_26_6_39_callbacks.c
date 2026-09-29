@@ -12,6 +12,8 @@
  * has exactly the global force and end-of-simulation callbacks. A timed
  * callback's obj supplies timescale context (§27.33.2), not a traversal
  * parent; the action callback's obj is ignored (§27.33.3).
+ * The setup's end-of-compilation callback removes its own registration
+ * before these runtime sets are inspected.
  *
  * At time 0, the HDL's next queue is 2 ns. Its only callback is
  * cbNextSimTime; queues 3 and 5 hold the corresponding time callbacks.
@@ -39,7 +41,7 @@
 #include "b_check.h"
 #include <stdint.h>
 
-static vpiHandle q, r, q_cb, end_cb;
+static vpiHandle q, r, q_cb, end_cb, compile_cb;
 static int changes, next_fired, three_fired, five_fired;
 
 static int int_value(vpiHandle h)
@@ -230,12 +232,21 @@ static PLI_INT32 finished(p_cb_data cb)
   return 0;
 }
 
-static void register_app(void)
+static PLI_INT32 compiled(p_cb_data ignored)
 {
+  (void)ignored;
   q = p02_by_name("b26_callbacks.q");
   r = p02_by_name("b26_callbacks.r");
   end_cb = add(cbEndOfSimulation, q, finished, vpiSuppressTime, 0, "end");
   (void)add(cbReadOnlySynch, NULL, setup, vpiSimTime, 0, "setup");
+  CHECK(vpi_remove_cb(compile_cb) == 1, "remove compile setup callback");
+  return 0;
+}
+
+static void register_app(void)
+{
+  /* §26.2.4: startup registers; the design walk waits for compilation. */
+  compile_cb = add(cbEndOfCompile, NULL, compiled, vpiSuppressTime, 0, "compiled");
 }
 
 void (*vlog_startup_routines[])(void) = { register_app, NULL };
