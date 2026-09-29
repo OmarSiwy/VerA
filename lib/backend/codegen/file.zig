@@ -161,19 +161,21 @@ pub fn emitFile(self: *Gen) Error!void {
 fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, kt.prelude_head_txt);
-    try p.appendSlice(self.arena, kt.prelude_math_txt);
-    try p.appendSlice(self.arena, kt.prelude_family_txt);
-    if (f.timer) try p.appendSlice(self.arena, kt.prelude_timer_txt);
-    if (f.hist) try p.appendSlice(self.arena, kt.prelude_hist_txt);
-    if (f.hist_quad) try p.appendSlice(self.arena, kt.prelude_hist_quad_txt);
-    if (f.arrs) try p.appendSlice(self.arena, kt.prelude_arr_txt);
-    if (f.filt) try p.appendSlice(self.arena, kt.prelude_filt_txt);
-    if (f.ac) try p.appendSlice(self.arena, kt.prelude_ac_txt);
-    if (self.display == .emit or f.strs) try p.appendSlice(self.arena, kt.prelude_display_txt);
-    if (f.strs) try p.appendSlice(self.arena, kt.prelude_str_txt);
-    if (f.files) try p.appendSlice(self.arena, kt.prelude_file_txt);
-    if (f.tbl) try p.appendSlice(self.arena, kt.prelude_table_txt);
-    if (f.rng) try p.appendSlice(self.arena, kt.prelude_rng_txt);
+    const alias = kt.appendAliases;
+    try alias(&p, self.arena, kt.math_txt);
+    try alias(&p, self.arena, kt.ops_txt);
+    try alias(&p, self.arena, kt.family_txt);
+    if (f.timer) try alias(&p, self.arena, kt.timer_txt);
+    if (f.hist) try alias(&p, self.arena, kt.hist_txt);
+    if (f.hist_quad) try alias(&p, self.arena, kt.hist_quad_txt);
+    if (f.arrs) try alias(&p, self.arena, kt.arr_txt);
+    if (f.filt) try alias(&p, self.arena, kt.filt_txt);
+    if (f.ac) try alias(&p, self.arena, kt.ac_txt);
+    if (self.display == .emit or f.strs) try alias(&p, self.arena, kt.display_txt);
+    if (f.strs) try alias(&p, self.arena, kt.str_txt);
+    if (f.files) try alias(&p, self.arena, kt.file_txt);
+    if (f.tbl) try alias(&p, self.arena, kt.table_txt);
+    if (f.rng) try alias(&p, self.arena, kt.rng_txt);
     // The shared core is a unit file beside the units that call it, and
     // device.zig's alias for it is private. Spelled `core`, not the structural
     // key, so the core's own file (same prologue) does not redeclare its name;
@@ -762,7 +764,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try self.w(
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
                         "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
-                        "    {s}__head: u32 = 0,\n",
+                        "    {s}__head: u64 = 0,\n",
                     .{ n, hist_len, n, hist_len, n },
                 );
                 // The ring itself is not copied: `stateCtl` keeps the one
@@ -970,7 +972,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     for (self.hist.items) |h| try self.w("        state.{s} = inst.{s};\n", .{ h, h });
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        state.{0s}__t__acc = inst.{0s}__t[inst.{0s}__head % {1d}];\n        state.{0s}__v__acc = inst.{0s}__v[inst.{0s}__head % {1d}];\n",
+            "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n",
             .{ self.names.unit_names[i], hist_len },
         );
     }
@@ -984,7 +986,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     // After `__head` is back: the slot the rejected push overwrote.
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
-            "        inst.{0s}__t[inst.{0s}__head % {1d}] = state.{0s}__t__acc;\n        inst.{0s}__v[inst.{0s}__head % {1d}] = state.{0s}__v__acc;\n",
+            "        inst.{0s}__t[@intCast(inst.{0s}__head % {1d})] = state.{0s}__t__acc;\n        inst.{0s}__v[@intCast(inst.{0s}__head % {1d})] = state.{0s}__v__acc;\n",
             .{ self.names.unit_names[i], hist_len },
         );
     }

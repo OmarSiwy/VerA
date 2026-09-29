@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 12.3.2 12.3.6
 //! reject E1100
 //! reject no such port
-//! xfail VerA accepts a named connection to one identifier of an implicit concatenation port
 module complex_ports ({c,d}, .e(f));
   input [1:0] c, d;
   output [3:0] f;

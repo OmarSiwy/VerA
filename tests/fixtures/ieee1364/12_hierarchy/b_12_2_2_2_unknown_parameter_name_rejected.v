@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 12.2.2.2
 //! reject E1100
 //! reject no such parameter
-//! xfail VerA ignores a named parameter assignment that names no parameter of the module
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

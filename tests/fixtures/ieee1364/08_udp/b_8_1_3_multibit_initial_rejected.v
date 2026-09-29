@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 8.1.3
 //! reject E1100
 //! reject single-bit literal
-//! xfail a UDP initial statement accepts a multi-bit literal
 `timescale 1ns/1ns
 primitive wide_init(q, g, d);
   output q;

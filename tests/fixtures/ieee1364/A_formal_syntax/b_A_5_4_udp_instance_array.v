@@ -10,7 +10,6 @@
 // 2'b11)` makes ua[1] (ya[1], 1, 1) and ua[0] (ya[0], 0, 1): ya = 2'b10 at
 // t=5. Output: "ya=10".
 //! inherited IEEE 1364-2005 A.5.4
-//! xfail VerA's digital execution does not implement arrays of UDP instances (E1100)
 `timescale 1ns/1ns
 primitive b_A_5_4_and3 (y, a, b);
   output y;

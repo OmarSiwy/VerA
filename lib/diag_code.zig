@@ -374,6 +374,7 @@ pub const Code = enum(u16) {
     E1016,
     E1017,
     E1018,
+    E1019,
     E1100,
     E1101,
     E1102,
@@ -388,6 +389,7 @@ pub const Code = enum(u16) {
     W1154,
     /// A `.v` device whose digital tick is 1 s.
     W1155,
+    W1160,
     W1050,
     W0950,
     E0820,
@@ -5924,6 +5926,19 @@ fn infoOf(c: Code) Info {
             .lrm = "IEEE 1364-2005 19.8",
             .explain = "A design with no `timescale directive runs at the simulator's default time unit and precision, which for VerA is 1 s. A contract device built from it delivers every analog-to-digital event at a whole second and schedules every delay in seconds, which an analog host rarely means. Add a `timescale directive (for example `timescale 1ns/1ps) to the design.",
         },
+        .W1160 => .{
+            .title = "dissimilar net types joined through a port",
+            .lrm = "IEEE 1364-2005 12.3.10",
+            .explain =
+            \\IEEE 1364-2005 Table 12-1 gives, for each pair of internal (the
+            \\module's) and external (the instantiation's) net types joined by a
+            \\port, the net type that dominates, and marks some pairs "warn = A
+            \\warning shall be issued": two wired-logic types that disagree
+            \\(wand with wor), a pull or charge-storage net meeting another, a
+            \\uwire meeting a resolved net, supply0 meeting supply1. VerA joins
+            \\the two into the external net and issues this warning.
+            ,
+        },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",
             .lrm = "6.3.4",
@@ -5963,8 +5978,9 @@ fn infoOf(c: Code) Info {
             \\descriptor reads through one: `$fgets` returns at most one
             \\4096-byte line, and one `$fscanf` sees at most 4096 bytes ahead.
             \\
-            \\A field width or precision above 4096 written in a format string
-            \\is refused when the model compiles. Text that only grows past
+            \\A field width or precision above 4096 written in a format string,
+            \\or a string replication (LRM 3.3 Table 3-3) whose count and text
+            \\fold to more than 4096 bytes, is refused when the model compiles. Text that only grows past
             \\4096 bytes while the model runs (a long `%s` operand, a
             \\concatenation of long strings, a longer line in a file read by
             \\`$fgets` or `$fscanf`) ends the run with this code and exit
@@ -6077,6 +6093,20 @@ fn infoOf(c: Code) Info {
             \\
             \\Flatten a level: a module that only passes its ports to one child
             \\can be replaced by that child.
+            ,
+        },
+        .E1019 => .{
+            .title = "a number literal's size exceeds 16777216 bits",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 2.6.1 lets a based
+            \\number give its size in bits and bounds nothing about it, and
+            \\IEEE 1364-2005 4.3.1 asks a tool for vectors of at least 65536
+            \\bits. VerA takes a size up to 2^24 = 16777216 bits and refuses a
+            \\larger one here, before it allocates the value.
+            \\
+            \\A literal that size has nothing to be assigned to: split it, or
+            \\build the value with a replication.
             ,
         },
         .W1050 => .{

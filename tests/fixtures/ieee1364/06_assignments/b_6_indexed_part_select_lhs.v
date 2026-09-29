@@ -13,7 +13,6 @@
 //   iv = 0; iv[31 -: 8] = 8'hAB       -> iv[31:24] = ab -> ab000000
 //   tv = 0; tv[k*8 +: 8] = 8'hCD      -> tv[23:16] = cd -> 0000000000cd0000
 //! inherited IEEE 1364-2005 6
-//! xfail indexed part-selects `+:` and `-:` do not parse (E0209 "expected an expression: found `:`")
 module b_6_indexed_part_select_lhs;
   reg [3:0] a4;
   wire [7:0] w8;

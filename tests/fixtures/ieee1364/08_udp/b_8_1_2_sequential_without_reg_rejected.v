@@ -14,7 +14,6 @@
 //! inherited IEEE 1364-2005 8.1.2 8.3
 //! reject E1100
 //! reject reg declaration
-//! xfail a sequential table under an output without a reg declaration is accepted
 `timescale 1ns/1ns
 primitive latch_no_reg(q, clock, data);
   output q;

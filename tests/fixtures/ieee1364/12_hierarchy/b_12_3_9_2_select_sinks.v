@@ -8,7 +8,6 @@
 // u2's 1-bit output drives the constant bit-select w[1] with 1; u3 drives
 // w[0] with 0. -> w = 4'b1010.
 //! inherited IEEE 1364-2005 12.3.9.2 12.3.8
-//! xfail an output port connected to a part-select or a constant bit-select of a vector net is refused ("an output port connects to a net, a net array element or a concatenation of them")
 `timescale 1ns/1ns
 module two(output [1:0] y);
   assign y = 2'b10;

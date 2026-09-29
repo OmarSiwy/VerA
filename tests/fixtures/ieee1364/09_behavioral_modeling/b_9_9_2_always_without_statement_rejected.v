@@ -14,7 +14,6 @@
 //! inherited IEEE 1364-2005 9.9.2
 //! reject E0209
 //! reject statement
-//! xfail `always ;` parses; it is refused only at run time as a process that never suspends
 module b_9_9_2_always_without_statement_rejected;
   always ;
 endmodule

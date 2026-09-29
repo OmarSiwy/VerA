@@ -5,7 +5,6 @@
 //
 // A named block declaring reg [3:0] r: r = 4'd12 -> "r=12".
 //! inherited IEEE 1364-2005 A.6.3
-//! xfail VerA refuses a reg declaration in a named begin block (E0209 expected an expression at `reg`); integer, real and time are accepted
 module b_A_6_3_named_block_reg;
   initial begin : blk
     reg [3:0] r;

@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 9.7.3
 //! reject E1100
 //! reject named event
-//! xfail an event used before its declaration is accepted
 module b_9_7_3_event_used_before_declaration_rejected;
   initial @ev $display("fired");
   event ev;

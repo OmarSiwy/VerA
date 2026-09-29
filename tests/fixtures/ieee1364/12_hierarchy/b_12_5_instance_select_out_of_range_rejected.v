@@ -3,12 +3,11 @@
 // shall evaluate to one of the legal index values of the array."
 //
 // arr is declared [1:0]; arr[5] selects no instance. Legal neighbour:
-// b_12_5_instance_select.v (arr[0], arr[1]; itself an xfail).
+// b_12_5_instance_select.v (arr[0], arr[1]).
 // digital-runner: reject
 //! inherited IEEE 1364-2005 12.5
 //! reject E1100
 //! reject instance select out of range
-//! xfail VerA does not parse an instance select in a hierarchical name at all ("unexpected token: found `.`"), so it never checks the index
 module leaf;
   integer x;
   initial x = 1;

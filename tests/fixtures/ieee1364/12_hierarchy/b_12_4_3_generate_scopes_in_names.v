@@ -22,7 +22,6 @@
 //     -> top.genblk4.nb4
 // with top = b_12_4_3_generate_scopes_in_names; each prints at its own time.
 //! inherited IEEE 1364-2005 12.4.3 12.4.2 12.5
-//! xfail %m leaves generate block scopes out of hierarchical names (prints b_12_4_3_generate_scopes_in_names.nb1, not ...genblk1.nb1)
 `timescale 1ns/1ns
 module leaf;
   initial #3 $display("%m");

@@ -323,6 +323,19 @@ pub fn build(b: *std.Build) void {
         run.addCheck(.{ .expect_stderr_match = r.says });
         test_step.dependOn(&run.step);
     }
+    // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero
+    // never ends, so no file that size is committed or written.
+    if (b.graph.host.result.os.tag != .windows) for ([_][]const []const u8{
+        &.{ "--lint", "/dev/zero" },
+        &.{ "--lint", "--spice", "/dev/zero", "tests/fixtures/ch02_lexical/28_identifier_1024_chars.va" },
+    }) |args| {
+        const run = b.addRunArtifact(exe);
+        run.setCwd(b.path("."));
+        run.addArgs(args);
+        run.expectExitCode(2);
+        run.addCheck(.{ .expect_stderr_match = "error[E1013]: `/dev/zero` is larger than 67108864 bytes" });
+        test_step.dependOn(&run.step);
+    };
 }
 
 /// A host driver and the `.va` its `device` import is emitted from: device
@@ -533,7 +546,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=27\np02_design: t=20 reached\n",
+        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=29\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_06_cb_value_change.c",
@@ -708,7 +721,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.v",
-        .xfail = "error[E0209]: expected an expression: found `repeat`",
+        .stdout = "p02: b_26_6_31_repeat_control checks=13\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",

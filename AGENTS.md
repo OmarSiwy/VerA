@@ -133,6 +133,8 @@ until v1.0.0, not a pass/fail.
 
 ## 4. Working on the code
 
+**The edit loop is `zig build --watch -fincremental`** (only what changed is re-analysed; never `-fincremental` without `--watch`, which rebuilds everything, nor with a tmpfs `.zig-cache`, which leaves `zig-out/bin/vera` stale).
+
 **Where a file goes** is decided by what it must *import*, not by what it is
 about. That rule was learned the expensive way: `ARCHITECTURE.md §8` records a
 planned `support/contract.zig` that could not exist, because the assertion it

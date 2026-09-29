@@ -931,7 +931,7 @@ pub const hist_txt =
     \\/// unknowns, so it is injected as a constant (derivative 0) — the correct
     \\/// companion model for a pure transport delay. The f ≤ 1 clamp covers a
     \\/// runtime-negative td, which lowering rejects where it can fold.
-    \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
+    \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u64, now: f64, dt: f64, td: f64) S {
     \\    if (dt <= 0.0) return vin;
     \\    // §4.5.15 "no state history prior to time t == 0": nothing has been
     \\    // accepted yet, so the input IS the output. The ring used to be SEEDED
@@ -939,7 +939,7 @@ pub const hist_txt =
     \\    // count now, so the empty ring has to answer for itself.
     \\    if (head == 0) return vin;
     \\    const t = now - td;
-    \\    const newest = (head + ts.len - 1) % ts.len;
+    \\    const newest: usize = @intCast((head + ts.len - 1) % ts.len);
     \\    if (t > ts[newest]) {
     \\        const span = now - ts[newest];
     \\        if (span <= 0.0) return vin;
@@ -956,10 +956,10 @@ pub const hist_txt =
     \\/// operators are considered to have no state history prior to time t == 0")
     \\/// and `Output(t) = Input(max(t − td, 0))` answers with Input(0); and a
     \\/// query the ring has FORGOTTEN, which the clause settles not at all.
-    \\fn zHistAt(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
-    \\    const n: u32 = @intCast(ts.len);
+    \\fn zHistAt(ts: []const f64, vs: []const f64, head: u64, t: f64) f64 {
+    \\    const n = ts.len;
     \\    const wrapped = head > n;
-    \\    const oldest: usize = if (wrapped) head % n else 0;
+    \\    const oldest: usize = if (wrapped) @intCast(head % n) else 0;
     \\    // O(1) for a query at or before the oldest sample — the scan would walk
     \\    // all n entries to reach the same answer.
     \\    if (t <= ts[oldest]) {
@@ -975,8 +975,9 @@ pub const hist_txt =
     \\            "{d}-sample history holds; see `vera --explain E1012`\n", .{n});
     \\        std.process.exit(1);
     \\    }
-    \\    var i: u32 = 0;
-    \\    var newer: usize = (head + n - 1) % n;
+    \\    var i: usize = 0;
+    \\    const last: usize = @intCast((head + n - 1) % n);
+    \\    var newer = last;
     \\    while (i < n) : (i += 1) {
     \\        const older = (newer + n - 1) % n;
     \\        if (ts[older] <= t and t <= ts[newer]) {
@@ -989,16 +990,15 @@ pub const hist_txt =
     \\    }
     \\    // Unreachable for a monotone ring: the clamp above covers t ≤ oldest and
     \\    // `zAbsdelay` covers t > newest, so every remaining t is bracketed.
-    \\    return vs[(head + n - 1) % n];
+    \\    return vs[last];
     \\}
-    \\fn zHistPush(ts: []f64, vs: []f64, head: *u32, t: f64, v: f64) void {
-    \\    const n: u32 = @intCast(ts.len);
-    \\    ts[head.* % n] = t;
-    \\    vs[head.* % n] = v;
-    \\    // Saturating, not wrapping: `head` is a COUNT and zHistAt reads
-    \\    // `head > n` as "the ring has overwritten its oldest sample". Letting it
-    \\    // wrap at 2^32 accepted steps would read as an empty history.
-    \\    if (head.* != ~@as(u32, 0)) head.* += 1;
+    \\fn zHistPush(ts: []f64, vs: []f64, head: *u64, t: f64, v: f64) void {
+    \\    const at: usize = @intCast(head.* % ts.len);
+    \\    ts[at] = t;
+    \\    vs[at] = v;
+    \\    // `head` is a COUNT, and zHistAt reads `head > n` as "the ring has
+    \\    // overwritten its oldest sample"; a u64 of accepted steps never wraps.
+    \\    head.* += 1;
     \\}
 ;
 
@@ -1015,11 +1015,11 @@ pub const hist_quad_txt =
     \\/// Past the newest sample the parabola runs through the last two samples
     \\/// and the in-flight (now, vin), so the output carries ∂/∂vin, the
     \\/// Lagrange weight of `now`.
-    \\fn zAbsdelayQ(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
+    \\fn zAbsdelayQ(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u64, now: f64, dt: f64, td: f64) S {
     \\    const t = now - td;
     \\    if (dt <= 0.0 or head < 2 or !(t < now)) return zAbsdelay(S, vin, ts, vs, head, now, dt, td);
-    \\    const b = (head + ts.len - 1) % ts.len;
-    \\    const a = (head + ts.len - 2) % ts.len;
+    \\    const b: usize = @intCast((head + ts.len - 1) % ts.len);
+    \\    const a: usize = @intCast((head + ts.len - 2) % ts.len);
     \\    if (t <= ts[b]) return S.con(zHistAtQ(ts, vs, head, t));
     \\    const dab = ts[b] - ts[a];
     \\    const dan = now - ts[a];
@@ -1034,15 +1034,15 @@ pub const hist_quad_txt =
     \\/// bracketing `t` and the one before them (the first three, in the first
     \\/// interval). Fewer than three samples, a query at or before the oldest,
     \\/// or two samples at one time is `zHistAt`'s linear answer.
-    \\fn zHistAtQ(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
-    \\    const n: u32 = @intCast(ts.len);
-    \\    const count = @min(head, n);
-    \\    const oldest: u32 = if (head > n) head % n else 0;
+    \\fn zHistAtQ(ts: []const f64, vs: []const f64, head: u64, t: f64) f64 {
+    \\    const n = ts.len;
+    \\    const count: usize = @intCast(@min(head, n));
+    \\    const oldest: usize = if (head > n) @intCast(head % n) else 0;
     \\    if (count < 3 or t <= ts[oldest]) return zHistAt(ts, vs, head, t);
     \\    // The ring is monotone in time and its live slots are `ts[0..count]`,
     \\    // so the samples at or before `t` count out the older end of its
     \\    // interval: no data-dependent exit.
-    \\    var m: u32 = 0;
+    \\    var m: usize = 0;
     \\    for (ts[0..count]) |s| m += @intFromBool(s <= t);
     \\    const w = oldest + @min(m - 1 -| 1, count - 3);
     \\    const i_0 = w % n;
@@ -1061,7 +1061,7 @@ pub const hist_quad_txt =
 // ---- the `u/<key>.zig` file-scope prologue (see `Output.prelude`) ----------
 //
 // A unit file is a separate Zig file with none of device.zig's helpers in
-// scope, so these blocks alias them from `h.zig` (derived by `aliasesOf`).
+// scope, so these blocks alias them from `h.zig` (derived by `appendAliases`).
 // `..` is the work_dir: `u/<key>.zig` sits one level under `device.zig`.
 
 /// The `h.zig` header: banner and imports ahead of the public helper text.
@@ -1092,71 +1092,30 @@ pub const prelude_head_txt =
     \\
 ;
 
-/// Returns, at comptime, a `const zFoo = zh.zFoo;` alias for each top-level
-/// `z*` helper `src` declares, so a helper that is emitted is aliased by
-/// construction. A line is a declaration by `publish`'s predicate (`fn ` or
-/// `const `, optionally `pub `), and the name must be `z` plus an uppercase
-/// letter: the spelling of every helper an emitted body calls, which keeps a
-/// kernel's internals (`zstd`, `zfIo`, `zf_max`, `ZScan`) out.
-pub fn aliasesOf(comptime src: []const u8) []const u8 {
-    comptime {
-        // ponytail: a ceiling, two orders above the longest kernel block.
-        @setEvalBranchQuota(100_000);
-        var out: []const u8 = "";
-        var it = std.mem.splitScalar(u8, src, '\n');
-        while (it.next()) |line| {
-            const decl = if (std.mem.startsWith(u8, line, "pub ")) line[4..] else line;
-            const at: usize = if (std.mem.startsWith(u8, decl, "fn "))
-                "fn ".len
-            else if (std.mem.startsWith(u8, decl, "const "))
-                "const ".len
-            else
-                continue;
-            const rest = decl[at..];
-            var n: usize = 0;
-            while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
-            const name = rest[0..n];
-            if (name.len < 2 or name[0] != 'z' or !std.ascii.isUpper(name[1])) continue;
-            out = out ++ "const " ++ name ++ " = zh." ++ name ++ ";\n";
-        }
-        return out;
+/// Appends a `const zFoo = zh.zFoo;` alias for each top-level `z*` helper
+/// `src` declares, so a helper that is emitted is aliased by construction. A
+/// line is a declaration by `publish`'s predicate (`fn ` or `const `,
+/// optionally `pub `), and the name must be `z` plus an uppercase letter: the
+/// spelling of every helper an emitted body calls, which keeps a kernel's
+/// internals (`zstd`, `zfIo`, `zf_max`, `ZScan`) out.
+pub fn appendAliases(out: *std.ArrayList(u8), gpa: std.mem.Allocator, src: []const u8) std.mem.Allocator.Error!void {
+    var it = std.mem.splitScalar(u8, src, '\n');
+    while (it.next()) |line| {
+        const decl = if (std.mem.startsWith(u8, line, "pub ")) line[4..] else line;
+        const at: usize = if (std.mem.startsWith(u8, decl, "fn "))
+            "fn ".len
+        else if (std.mem.startsWith(u8, decl, "const "))
+            "const ".len
+        else
+            continue;
+        const rest = decl[at..];
+        var n: usize = 0;
+        while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
+        const name = rest[0..n];
+        if (name.len < 2 or name[0] != 'z' or !std.ascii.isUpper(name[1])) continue;
+        try out.print(gpa, "const {0s} = zh.{0s};\n", .{name});
     }
 }
-
-// Each `prelude_*_txt` aliases one helper block for the unit files, gated on
-// the same condition that emits the block (`buildPrelude`).
-
-/// Aliases of `math_txt` and `ops_txt`.
-pub const prelude_math_txt = aliasesOf(math_txt ++ ops_txt);
-/// Aliases of `timer_txt`.
-pub const prelude_timer_txt = aliasesOf(timer_txt);
-/// Aliases of `family_txt`.
-pub const prelude_family_txt = aliasesOf(family_txt);
-/// Aliases of `hist_txt`.
-pub const prelude_hist_txt = aliasesOf(hist_txt);
-/// Aliases of `hist_quad_txt`.
-pub const prelude_hist_quad_txt = aliasesOf(hist_quad_txt);
-/// Aliases of `arr_txt`.
-pub const prelude_arr_txt = aliasesOf(arr_txt);
-/// Aliases of `filt_txt`.
-pub const prelude_filt_txt = aliasesOf(filt_txt);
-/// Aliases of `ac_txt`.
-pub const prelude_ac_txt = aliasesOf(ac_txt);
-
-/// Aliases of `display_txt` (§9.4.3 `%<width>d`), for a printing artifact or
-/// any device that formats into a string: §9.5.3 runs the same formatter,
-/// from any unit.
-pub const prelude_display_txt = aliasesOf(display_txt);
-
-/// Aliases of `table_txt` (§9.21). `zTabRes` is a type function, aliased like
-/// a function because the recursion's return type names it.
-pub const prelude_table_txt = aliasesOf(table_txt);
-/// Aliases of `rng_txt`.
-pub const prelude_rng_txt = aliasesOf(rng_txt);
-/// Aliases of `file_txt`.
-pub const prelude_file_txt = aliasesOf(file_txt);
-/// Aliases of `str_txt`.
-pub const prelude_str_txt = aliasesOf(str_txt);
 
 /// §9.4.3 integer padding, for a printing artifact or a device that formats
 /// into a string. `std.fmt` writes `+42` for `{d:>5}`; §9.4.3 (like C's
