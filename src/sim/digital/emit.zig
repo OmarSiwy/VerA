@@ -84,8 +84,8 @@ pub fn device(arena: std.mem.Allocator, r: *Run, file_name: []const u8, schedule
 
 /// The contract decls of a device root (`rt.Device`), after the design: its
 /// top module's ports in declaration order, each bit a pin, a vector's from
-/// its left index to its right. A device is at most 64 pins, so every port
-/// sits in one plane word.
+/// its left index to its right. A device is at most 256 pins (`U` is an
+/// `enum(u8)`); above 64 the mask decls are omitted (`contract.derivReads`).
 fn deviceRoot(self: *Emitter) Error!void {
     const r = self.r;
     const m = &r.file.modules[r.scope_info.items[0].def];
@@ -106,7 +106,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         const scalar = w == 1 and !r.vec_ranges.contains(at);
         var i = vr.msb;
         while (true) : (i = if (vr.msb >= vr.lsb) i - 1 else i + 1) {
-            if (n == 64) return self.refuse("more than 64 pins");
+            if (n == 256) return self.refuse("more than 256 pins");
             const name = if (scalar) r.file.str(p.name) else try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ r.file.str(p.name), i });
             names.writer.print(" {f},", .{std.zig.fmtId(name)}) catch return error.OutOfMemory;
             pins.writer.print("\n        .{{ .out = {}, .slot = {d}, .off = {d}, .bit = {d} }},", .{ out, at, self.off[at], @abs(i - vr.lsb) }) catch return error.OutOfMemory;
@@ -114,6 +114,12 @@ fn deviceRoot(self: *Emitter) Error!void {
             if (i == vr.lsb) break;
         }
     }
+    const masks = if (n > 64) "" else
+        \\pub const deriv_reads = Dev.deriv_reads;
+        \\pub const ddx_reads = Dev.ddx_reads;
+        \\pub const jac_pattern = Dev.jac_pattern;
+        \\
+    ;
     try self.print(
         \\/// The contract ABI this device was generated for (`contract.abi_version`).
         \\pub const contract_abi: u32 = 5;
@@ -125,10 +131,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\pub const Instance = Dev.Instance;
         \\pub const State = Dev.State;
         \\pub const state_class = Dev.state_class;
-        \\pub const deriv_reads = Dev.deriv_reads;
-        \\pub const ddx_reads = Dev.ddx_reads;
-        \\pub const jac_pattern = Dev.jac_pattern;
-        \\pub const eval = Dev.eval;
+        \\{s}pub const eval = Dev.eval;
         \\pub const initState = Dev.initState;
         \\pub const updateState = Dev.updateState;
         \\pub const stateCtl = Dev.stateCtl;
@@ -138,7 +141,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\    @import("contract").validate(@This());
         \\}}
         \\
-    , .{ names.written(), n, r.finest, pins.written() });
+    , .{ names.written(), n, r.finest, pins.written(), masks });
 }
 
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {

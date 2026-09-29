@@ -24,6 +24,7 @@ differently also conforms.
 | AMS 4.5.7 | interpolation between stored points of `absdelay` | linear by default; `(* vera_interp = 2 *)` gives quadratic | `lib/backend/codegen/kernel_text.zig:685,769` | `ch04_expressions/absdelay_vera_interp_linear.va`, `absdelay_vera_interp_quadratic.va` |
 | AMS 4.6.1 | analysis names beyond Table 4-21 | none: any other name is false | `lib/backend/codegen/call.zig` `analysis` | `ch04_expressions/143_analysis_transient.va` |
 | AMS 4.6.3 | the small-signal analysis name | `"ac"` | `lib/ir/lower/contrib.zig:1320` | `ch04_expressions/a06_ac_stim_ac_analysis.va` |
+| AMS 5.10.3.1 | the `time_tol` of a `.v` contract device's A2D bridge (7.8 supplies no connect module) | card `ttol`, by default min(trise, tfall)/50; only a step where some process wakes is held to it | `src/sim/rt/device.zig` `ttol` | `tests/vdev_host.zig`, "v_edge and v_any" |
 | AMS 7.4.4.2 | discipline resolution mode | basic only | `lib/ir/elaborate/resolve.zig:128` | `ch07_mixed_signal/lrm_7_4_4_1.va` |
 | AMS 9.5.7, 1364 17.2.7 | `$ferror` codes | C errno values (2, 5, 9, 13, 21, 22, 24, 28); fixtures assert only nonzero | `lib/backend/file_kernels.zig:216` | `ch09_system_tasks/053_ferror.va`, `write_mode_path_65_fails_open.va` |
 | AMS 9.7.2 | what `$stop` does in a batch run | prints and exits 0 | `lib/backend/cg_display.zig:247` | `ch09_system_tasks/174_stop_terminates.va` |
@@ -62,6 +63,7 @@ truncation rule, so a shorter answer would be a wrong one.
 | analog-context array or assignment pattern | 2^20 elements | E1016 | `lib/ir/lower/param.zig` `max_cells` | `ch03_data_types/array_over_2_20_elements_rejected.va` |
 | loop generate unrolling | 4096 iterations | E0420 | `lib/ir/lower/control.zig:536` | `ch06_hierarchy/generate_nonterminating_rejected.va` |
 | solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig:308` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
+| `.v` contract device pins (one per top-module port bit) | 256 | E1103, "more than 256 pins" | `src/sim/digital/emit.zig` `deviceRoot` | `build.zig`: `vera --emit-zig tests/vdev/v_pins.v` (257 pins) under `zig build test`; `tests/vdev_host.zig` runs 65 (`v_wide`) |
 | conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig:137` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
 | text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
 | number literal size | 2^24 bits | E1019 | `lib/frontend/integer.zig` `max_width` | `ieee1364/03_lexical_conventions/b_3_5_1_literal_size_65536.v`, `b_3_5_1_literal_size_over_2_24_rejected.v` |

@@ -15,7 +15,7 @@
 //! holds two boundaries, the accepted one and the one this step made.
 //! Clauses: VAMS §7.3.6 (synchronization), §7.8, §8.4.3.3 (an A2D event at
 //! the nearest tick), §4.5.8 (the ramps), §5.10.3.1 (`cross`); IEEE 1364-2005
-//! §11.4 (a tick boundary).
+//! §9.7.2 (which edges wake a process), §11.4 (a tick boundary).
 const std = @import("std");
 const contract = @import("contract");
 const root = @import("root.zig");
@@ -23,10 +23,10 @@ const snapshot = @import("snapshot.zig");
 const logic = @import("logic.zig");
 const time = @import("../time.zig");
 
-/// One pin: bit `bit` of the top module's port slot `slot`, whose value is
-/// word `off` of the planes. A port is at most 64 bits wide, since a device
-/// has at most 64 pins.
-pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u6 };
+/// One pin: bit `bit` of the top module's port slot `slot`, whose first word
+/// is word `off` of the planes. A device has at most 256 pins, so no port is
+/// wider.
+pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u8 };
 
 pub const Spec = struct {
     /// The pins' enum, `U` of the device.
@@ -42,7 +42,7 @@ pub const Spec = struct {
 
 pub fn Device(comptime spec: Spec) type {
     const n_u = spec.pins.len;
-    comptime std.debug.assert(n_u <= 64);
+    comptime std.debug.assert(n_u <= 256);
     const n_out = blk: {
         var n: usize = 0;
         for (spec.pins) |p| n += @intFromBool(p.out);
@@ -63,7 +63,9 @@ pub fn Device(comptime spec: Spec) type {
         };
         break :blk ix;
     };
-    const out_mask: u64 = comptime blk: {
+    // Above 64 pins no u64 mask can name a pin, and every mask is all ones
+    // (the contract's dense default; the root omits the mask decls).
+    const out_mask: u64 = if (n_u > 64) ~@as(u64, 0) else comptime blk: {
         var m: u64 = 0;
         for (spec.pins, 0..) |p, u| if (p.out) {
             m |= @as(u64, 1) << u;
@@ -83,9 +85,9 @@ pub fn Device(comptime spec: Spec) type {
         pub const U = spec.U;
 
         /// The bridge parameters, one card for every instance (§1.3 of the
-        /// design). A NaN `vth` is (vdd + vss)/2 and a NaN `ttol` is
-        /// min(1 ps, tick/2). A ramp time <= 0 is 1 ps: an ideal step would
-        /// need the solve at the event time repeated after the events.
+        /// design). A NaN `vth` is (vdd + vss)/2. A ramp time <= 0 is 1 ps:
+        /// an ideal step would need the solve at the event time repeated
+        /// after the events.
         pub const Model = struct {
             vdd: f64 = 5,
             vss: f64 = 0,
@@ -97,6 +99,12 @@ pub fn Device(comptime spec: Spec) type {
             /// The conductance of a released (z) output: 0 would leave a net
             /// only it drives with no path, and the host's matrix singular.
             gz: f64 = 1e-12,
+            /// How late after an A2D crossing the host may accept a point
+            /// (the `time_tol` VAMS §5.10.3.1 leaves to the tool). NaN is
+            /// min(trise, tfall)/50: the response starts at the accepted
+            /// point, so an output ramp it arms runs at most 2% of its
+            /// length late. The digital event's tick comes from the secant,
+            /// not from this.
             ttol: f64 = nan,
         };
 
@@ -122,9 +130,13 @@ pub fn Device(comptime spec: Spec) type {
             /// which is then the reference and never a crossing.
             a2d_v: [n_in]f64 = @splat(nan),
             a2d_t: f64 = 0,
+            /// Per input, which of its crossings would wake a process at the
+            /// accepted boundary: bit 0 a rising one, bit 1 a falling one.
+            wakes: [n_in]u2 = @splat(3),
             /// The next digital event, in seconds.
             next_ev: f64 = inf,
-            /// A crossing this step took more than `ttol` before its end.
+            /// A crossing this step took more than `ttol` before its end, in
+            /// a step where some process woke.
             late_cross: bool = false,
             /// `$finish` or `$stop` ran: the outputs hold from then on.
             stopped: bool = false,
@@ -145,8 +157,10 @@ pub fn Device(comptime spec: Spec) type {
         pub const deriv_reads: u64 = out_mask;
         pub const ddx_reads: u64 = 0;
         pub const jac_pattern: [n_u]u64 = blk: {
-            var p: [n_u]u64 = @splat(0);
-            for (0..n_u) |u| p[u] = out_mask & (@as(u64, 1) << u);
+            var p: [n_u]u64 = @splat(out_mask);
+            if (n_u <= 64) for (0..n_u) |u| {
+                p[u] = out_mask & (@as(u64, 1) << u);
+            };
             break :blk p;
         };
 
@@ -234,6 +248,10 @@ pub fn Device(comptime spec: Spec) type {
             const lo = vth(m) - m.vhys / 2;
             var edges: [2 * n_in]Edge = undefined;
             var n: usize = 0;
+            // A crossing's time matters only if the step wakes a process: one
+            // that wakes nothing runs at its secant tick, unlocated.
+            var late = false;
+            var woke = false;
             inline for (spec.pins, 0..) |p, u| if (!p.out) {
                 const i = index[u];
                 const v0 = inst.a2d_v[i];
@@ -243,11 +261,12 @@ pub fn Device(comptime spec: Spec) type {
                     // at the engine's own tick.
                     edges[n] = .{ .tick = 0, .pin = u, .bit = threshold(m, v1) };
                     n += 1;
-                } else for ([2]f64{ hi, lo }, [2]f64{ 1, -1 }, [2]logic.Bit{ .one, .zero }) |th, dir, bit| {
+                } else for ([2]f64{ hi, lo }, [2]f64{ 1, -1 }, [2]logic.Bit{ .one, .zero }, [2]u2{ 1, 2 }) |th, dir, bit, wake| {
                     if (!time.crosses(dir, v0 - th, v1 - th)) continue;
                     // The secant between the two samples, as `cross` finds it.
                     const tc = inst.a2d_t + (t - inst.a2d_t) * (th - v0) / (v1 - v0);
-                    if (t - tc > ttol(m)) inst.late_cross = true;
+                    late = late or t - tc > ttol(m);
+                    woke = woke or inst.wakes[i] & wake != 0;
                     // ponytail: a crossing that rounds past `horizon` runs at it,
                     // a tick early, rather than holding an event past `t`.
                     edges[n] = .{ .tick = @min(@as(u64, @intFromFloat(@max(@round(ticks(tc)), 0))), horizon), .pin = u, .bit = bit };
@@ -257,6 +276,7 @@ pub fn Device(comptime spec: Spec) type {
             };
             inst.a2d_t = t;
             const due = inst.next_ev != inf and time.tickAtOrBefore(inst.next_ev, tick) <= horizon;
+            if (late and (woke or due)) inst.late_cross = true;
             if (n == 0 and !due) return;
             std.mem.sort(Edge, edges[0..n], {}, struct {
                 fn lt(_: void, l: Edge, r: Edge) bool {
@@ -298,12 +318,12 @@ pub fn Device(comptime spec: Spec) type {
 
         /// The A2D store of `bit` into pin `p`, with every wake it causes.
         fn drive(s: *root.State, comptime p: Pin, bit: logic.Bit) !void {
-            const one = @as(u64, 1) << p.bit;
+            const one = @as(u64, 1) << @intCast(p.bit % 64);
             const b: u2 = @intFromEnum(bit);
             // (v, x) planes: 0 = 00, 1 = 10, z = 01, x = 11.
             const v: u64 = if (b == 1 or b == 3) one else 0;
             const xb: u64 = if (b >= 2) one else 0;
-            try s.store(p.slot, p.off, &.{v}, &.{xb}, &.{one});
+            try s.putWordAs(false, .all, p.slot, p.off, p.bit / 64, .{ .v = v, .x = xb }, one);
         }
 
         /// Each output's level and conductance from the engine: the static
@@ -311,8 +331,9 @@ pub fn Device(comptime spec: Spec) type {
         fn outputs(m: *const Model, inst: *Instance, s: *const root.State, t: f64, static_: bool) void {
             inline for (spec.pins, 0..) |p, u| if (p.out) {
                 const k = index[u];
-                const w = s.get(p.off);
-                const b: u2 = @intCast(((w.v >> p.bit) & 1) | (((w.x >> p.bit) & 1) << 1));
+                const w = s.get(p.off + p.bit / 64);
+                const at: u6 = p.bit % 64;
+                const b: u2 = @intCast(((w.v >> at) & 1) | (((w.x >> at) & 1) << 1));
                 const lvl = switch (b) {
                     0 => m.vss,
                     1 => m.vdd,
@@ -333,11 +354,20 @@ pub fn Device(comptime spec: Spec) type {
             };
         }
 
-        /// The engine's next event, whether it stopped, and its boundary as
-        /// this step's work; a boundary longer than `cap` fails.
+        /// The engine's next event, whether it stopped, which input edges
+        /// wake it, and its boundary as this step's work; a boundary longer
+        /// than `cap` fails.
         fn keep(inst: *Instance, st: *State, s: *root.State) !void {
             inst.stopped = s.sched.phase == .stopped;
             inst.next_ev = if (s.sched.peekTime()) |k| seconds(k) else inf;
+            inline for (spec.pins, 0..) |p, u| if (!p.out) {
+                const e = s.wakes(p.slot);
+                // An edge term sees only the slot's least significant bit.
+                const lsb = p.bit == 0;
+                const up = e.contains(.any) or lsb and e.contains(.posedge);
+                const down = e.contains(.any) or lsb and e.contains(.negedge);
+                inst.wakes[index[u]] = @as(u2, @intFromBool(up)) | @as(u2, @intFromBool(down)) << 1;
+            };
             // A stopped engine is never run again, so its state is not kept.
             if (inst.stopped) return;
             const into = st.cur ^ 1;
@@ -420,7 +450,7 @@ pub fn Device(comptime spec: Spec) type {
         }
 
         fn ttol(m: *const Model) f64 {
-            return if (std.math.isNan(m.ttol)) @min(1e-12, tick / 2) else m.ttol;
+            return if (std.math.isNan(m.ttol)) @min(rise(m), fall(m)) / 50 else m.ttol;
         }
 
         /// A static read of `v`: 1 above the band, 0 below, x inside it.

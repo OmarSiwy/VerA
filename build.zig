@@ -295,7 +295,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "contract", .module = contract }},
     });
-    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d" }) |name| {
+    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide" }) |name| {
         const gen = b.addRunArtifact(exe);
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
@@ -312,6 +312,7 @@ pub fn build(b: *std.Build) void {
     for ([_]struct { args: []const []const u8, file: []const u8, exit: u8, says: []const u8 }{
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_pins.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_pins`: more than 256 pins" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_tran.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_tran`: a §7.6 pass switch" },
         .{ .args = &.{ "--emit-zig", "--state=auto" }, .file = "tests/vdev/v_inv.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: a contract device is 4-state: --state=auto" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_sv.sv", .exit = 2, .says = "error[E1104]: a SystemVerilog source is not supported" },

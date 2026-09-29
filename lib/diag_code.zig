@@ -5906,7 +5906,7 @@ fn infoOf(c: Code) Info {
             \\
             \\The message names what the device cannot hold: an `inout` port (the
             \\analog side would be a driver of a resolved net), a real, integer or
-            \\time port, more than 64 pins, a construct the native code generator
+            \\time port, more than 256 pins, a construct the native code generator
             \\does not compile, a file a device would read, a procedural continuous
             \\assignment, or a logic mode other than 4-state (`--state=4`, the
             \\default for a device; `--state=auto` reruns a design from time 0,
