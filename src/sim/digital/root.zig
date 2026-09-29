@@ -2066,9 +2066,12 @@ fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn:
     const range = inst.range.?;
     const left = try r.declaredBound(range.msb, inst.main_tok);
     const right = try r.declaredBound(range.lsb, inst.main_tok);
-    const count: u32 = @intCast(@abs(left - right) + 1);
-    if (whole != w * count) return r.fail(conn.main_tok, refused, .{});
-    const lo: u32 = @intCast(@abs(k - right) * w);
+    // Two i64 bounds can span 2^64 elements, and each port is up to u32
+    // bits wide. Size in u128 before comparing: a mismatch is the same
+    // §7.1.6 error even when the product would not fit a storage-slot width.
+    const count = @abs(@as(i128, left) - right) + 1;
+    if (whole != @as(u128, w) * count) return r.fail(conn.main_tok, refused, .{});
+    const lo: u32 = @intCast(@abs(@as(i128, k) - right) * w);
     return switch (port.direction) {
         .input => .{ .receive = .{ .expr = conn.expr, .scope = r.scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = whole } } },
         .output => blk: {
@@ -2127,6 +2130,9 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             }
             const at = if (conn.name == .none) i else portByName(child, conn.name).?;
             if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+            // A.1.3: a null port keeps its header position but connects
+            // nothing inside, including across an array of instances.
+            if (child.ports[at].name == .none) continue;
             r.scope = scope;
             // A continuous port is the analog solver's on both sides (§7.2.1),
             // so a mixed design's digital half connects nothing through it,
@@ -2379,11 +2385,14 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const saved = r.scope;
     r.scope = scope;
     defer r.scope = saved;
+    // §4.10: parameters are constants, not automatic variables. Keep their
+    // slots outside the activation's saved/reset range on both execution
+    // paths. Declaring them first also lets formal ranges read them.
+    try declareParams(r, scope, t.params, &.{});
     const first: u32 = @intCast(g.items.len);
     const ports = try r.arena.alloc(u32, t.ports.len);
     for (t.ports, ports) |p, *slot| slot.* = try mintVar(r, p.v);
     const result = if (t.is_function) try mintVar(r, t.result) else 0;
-    try declareParams(r, scope, t.params, &.{});
     try declareEvents(r, t.events, &.{}, t.main_tok);
     for (t.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
@@ -2525,6 +2534,7 @@ fn checkUdp(r: *Run, u: *const Ast.UdpDecl) Error!void {
 /// port at a time (`groupPorts`).
 fn expressionPorts(m: *const Ast.ModuleDecl) bool {
     for (m.ports, 0..) |p, i| {
+        if (p.name == .none) continue; // A.1.3: null ports name no shared internal net
         if (p.select != null or p.concat_rest) return true;
         for (m.ports[0..i]) |q| if (q.name == p.name) return true;
     }
@@ -2566,6 +2576,7 @@ fn groupByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
 /// connection split among its references, leftmost the most significant.
 fn groupPorts(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind) Error!void {
     for (m.ports, 0..) |p, i| {
+        if (p.name == .none) continue; // A.1.3: a null port declares no internal net
         if (for (m.ports[0..i]) |q| {
             if (q.name == p.name) break true;
         } else false) continue;
@@ -2585,7 +2596,8 @@ fn groupPorts(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []
     var i: usize = 0;
     while (i < m.ports.len) {
         const end = groupEnd(m, i);
-        if (i < binds.len and binds[i] == .group) try connectGroup(r, e, m.ports[i..end], binds[i].group.conn, binds[i].group.scope, scope);
+        if (m.ports[i].name != .none and i < binds.len and binds[i] == .group)
+            try connectGroup(r, e, m.ports[i..end], binds[i].group.conn, binds[i].group.scope, scope);
         i = end;
     }
 }
