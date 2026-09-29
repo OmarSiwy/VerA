@@ -473,6 +473,11 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
                 .atan2 => std.math.atan2(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .hypot => std.math.hypot(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .driver_delay => try driver.evalReal(self, a, e),
+                .user => blk2: {
+                    const v = try filled(a, 64, true, .zero);
+                    try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
+                    break :blk2 @bitCast(v.values()[0]);
+                },
                 else => unreachable, // else: the integral system functions are not real-typed
             };
         },
@@ -722,6 +727,12 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
                 return normalize(a, value, ty);
             },
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_next_state, .driver_next_strength, .driver_type => |f| return normalize(a, try driver.eval(self, a, e, driver.of(f).?), ty),
+            .user => {
+                const natural = compile.typeOf(self, e);
+                const v = try filled(a, natural.width, natural.signed, .x);
+                try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
+                return normalize(a, v, ty);
+            },
             else => unreachable, // else: the real-valued functions left through the real path above
         },
         .concat => {
@@ -1767,6 +1778,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
                     .fflush => {},
+                    .user => try self.systf.?.call(self, self.instanceOf(self.scope), s.tok, null),
                     .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .sshow => |sh| try @import("system.zig").sformat(self, scratch, s.args, sh),
                     .sformat => try @import("system.zig").sformat(self, scratch, s.args, null),

@@ -136,7 +136,7 @@ static PLI_INT32 census(p_cb_data cb_data)
   return 0;
 }
 
-static void setup(void)
+static PLI_INT32 at_compile(p_cb_data d)
 {
   static s_vpi_time t = { vpiSimTime, 0, 0, 0.0 };
   static s_cb_data cb, bad;
@@ -181,6 +181,18 @@ static void setup(void)
   bad.cb_rtn = at_end;
   held = vpi_register_cb(&bad);
   CHECK(held != NULL, "cbEndOfSimulation registration failed");
+  (void)d;
+  return 0;
+}
+
+/* The design is read at cbEndOfCompile: a startup routine runs "just after
+ * the simulator is invoked" (§12.33.2), before the design is built. */
+static void setup(void)
+{
+  static s_cb_data built;
+  built.reason = cbEndOfCompile;
+  built.cb_rtn = at_compile;
+  (void)vpi_register_cb(&built);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

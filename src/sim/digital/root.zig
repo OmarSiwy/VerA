@@ -72,7 +72,24 @@ pub const Options = struct {
     /// Events at one time step before a zero-delay loop is refused
     /// (`vera --event-budget=`).
     event_budget: u64 = max_events_per_tick,
+    /// A PLI application's system tasks and functions, which the design's
+    /// `$name` calls reach before any built-in of that name.
+    systf: ?UserSystf = null,
 };
+
+/// A PLI application's system tasks and functions (IEEE 1364-2005 §20.3):
+/// "the user-provided C application shall override the built-in system
+/// task/function" of its name (§20.4).
+pub const UserSystf = struct {
+    /// What `name` is registered as, or null when it is not.
+    kind: *const fn (name: []const u8) ?UserKind,
+    /// Runs the application behind the call whose main token is `tok`, in
+    /// instance `scope`. A function's value is written into `result`, which
+    /// arrives x (0.0 for a real) and as wide as its `UserKind` says.
+    call: *const fn (r: *Run, scope: u32, tok: u32, result: ?Int.Literal) Error!void,
+};
+
+pub const UserKind = union(enum) { task, func: Type };
 
 /// One more source file and the library it maps into (`vera --libmap`).
 pub const Unit = struct { name: []const u8, text: []const u8, lib: []const u8 };
@@ -419,6 +436,8 @@ pub const Run = struct {
     /// a digital process that probes without it fails.
     probe: ?*const fn (ctx: *anyopaque, a: []const u8, b: ?[]const u8) Error!f64 = null,
     probe_ctx: *anyopaque = undefined,
+    /// `Options.systf`.
+    systf: ?UserSystf = null,
     /// Some digital expression probes the analog solution (`probe`).
     has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
@@ -2811,7 +2830,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget, .systf = opts.systf };
     try binding.libraries(&r, file, opts, pp.more_starts);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {

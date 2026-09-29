@@ -372,7 +372,9 @@ pub const Obj = struct {
     flow_neg: bool = false,
     /// `.code` of the digital model: the main token of the statement it is —
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
-    /// names the engine driver §12.29's vpi_put_delays rewrites.
+    /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
+    /// task or function call, the token the engine runs its calltf by
+    /// (`systf.hook`).
     src_tok: u32 = 0,
 };
 
@@ -406,6 +408,8 @@ const Scope = struct {
     branches: []const u32 = &.{},
     /// §11.6.1's behavioural double arrows (code.zig), as tagged rows.
     lists: []const code.List = &.{},
+    /// A digital model's `digital.Run` scope id for this instance.
+    engine: u32 = 0,
 };
 
 /// §12.23's iterator. Individually allocated; a handle is a live iterator iff
@@ -1078,6 +1082,7 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .nodes = try arena.dupe(u32, s.nodes.items),
         .branches = try arena.dupe(u32, s.branches.items),
         .lists = try s.code.freeze(arena),
+        .engine = s.engine,
     };
     d.top_modules = try arena.dupe(u32, &[_]u32{0});
     // A constant and a quantity have no name to be found by (§11.6.7 lists
