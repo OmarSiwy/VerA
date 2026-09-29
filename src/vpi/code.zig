@@ -81,6 +81,7 @@ pub const vpiArgument: c_int = 89;
 pub const vpiOperand: c_int = 97;
 pub const vpiProcess: c_int = 99;
 pub const vpiExpr: c_int = 102;
+pub const vpiUse: c_int = 101;
 pub const vpiBaseExpr: c_int = 131;
 pub const vpiWidthExpr: c_int = 132;
 // §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
