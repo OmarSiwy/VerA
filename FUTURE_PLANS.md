@@ -8,8 +8,8 @@ does not close the unmarked implementation gaps in that list.
 
 | Req | State |
 |---|---|
-| A | AMS strict and digital fixture gates pass at `8bfbc528`; the original digital XFAIL name list is retired. The original branch queue is integrated. VPI `vpi_runs` still carries event-array and attribute gaps, and unmarked AMS defects in ROADMAP §5 remain open. |
-| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `8bfbc528`. This is a static inventory; VPI runtime obligations remain. |
+| A | AMS strict and digital fixture gates pass at `6dca90a7`; the original digital XFAIL name list is retired. The original branch queue is integrated. VPI `vpi_runs` still carries event-array and attribute gaps, and unmarked AMS defects in ROADMAP §5 remain open. |
+| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `6dca90a7`. This is a static inventory; VPI runtime obligations remain. |
 | C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
 | D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
 | E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
@@ -48,34 +48,41 @@ modes, and `--fuzz 1000`. Direct suite captures show no new FAIL/XFAIL names.
 citation inventories unchanged. The mintypmax delay fixture now samples after
 the update time, avoiding an IEEE §11.4.2 active-region race.
 
-Additional reviewed work waiting for its queue position:
+Additional analog and parser work is integrated and fully gated through
+`6dca90a7` (2026-09-29), measured by `tools/conformance.sh`. The raw strict and
+digital FAIL/XFAIL name lists are unchanged from the preceding numeric gate
+at `c76b158f`.
 
-- `e96792cb` validates AMS `cross`/`absdelta` arguments; `3171287e` implements
-  the mixed runner's `absdelta` enable, tolerances, direction changes and
-  dynamic controls. `9a98b0d2` transports effective real parameters to mixed
-  event expressions, including instance overrides and parameter sweeps.
-  Focused emitted-host and simulator checks pass; integrated gates remain.
-  Interpolated A2D-to-D2A rollback remains open.
-- `f291b258` preserves the unsigned source width of analog `$clog2` operands
-  and the zero extension of packed regs read in analog code. Focused tests
-  pass; `1b4ed4db` adds nested arithmetic width/signedness contexts and named
-  refusals beyond the supported expression carrier. `c62072d1` fixes builtin
-  constants in cached display expressions, exposed by the random-stream work.
-- `922268bb` corrects the array diagnostics' clause references and scope of
-  their constant-index restrictions, and the analog conversion explanation.
-  `7ffb7aa8` corrects stale fixture explanations; `57b9de27` adds an emitted
-  host test distinguishing null nodesets from explicit zero.
-- `e6e4598d` replaces repeated addition in emitted periodic timers and
-  preserves representable future breakpoints for tiny periods. Focused host
-  tests pass. `bac28d46` implements between-event control changes and mixed
-  timer monitors; its fresh embedded-suite capture supersedes the earlier
-  raw after-list, which reused an older suite binary. Array/function controls
-  are a further follow-up. Integrated gates remain.
+- `c76b158f` includes unsigned and nested `$clog2` operand contexts, packed-reg
+  analog conversion, source-seeded hidden random streams and the cached
+  builtin-constant rendering fix. Integration moved the packed-width limit
+  to actual analog reads, preserving digital-only wide registers, and
+  remeasured every generated-device size golden.
+- `86843c23`, `14113145` and `06657d25` validate `cross`/`absdelta` arguments,
+  implement mixed `absdelta` controls and transport effective real parameters
+  to mixed event expressions. Interpolated A2D-to-D2A rollback remains open.
+- `157f843d` through `26cc41d5` use absolute periodic schedules and final timer
+  controls, including arrays and pure functions. `274a322d` preserves packed
+  widths and `$clog2` dependencies when those controls change. Emitted-host
+  checks cover deadlines, one body execution and rollback/retry. E0528 and
+  `docs/IMPLEMENTATION.md` document effectful calls whose changed inputs cannot be
+  recomputed safely; precomputing the call remains supported.
+- `8bf8b5ff` and `0ac482f7` correct diagnostic and fixture explanations;
+  `0ed50b1a` checks null versus explicit-zero nodesets through an emitted host.
+  `92fa96d5` publishes the smallest node potential tolerance across continuous
+  segments, including intermediate resolution results, while retaining each
+  segment's local nature attributes.
+- `eff0e2ac` enforces nonempty parameter headers and override lists, excludes
+  header `localparam`, and rejects mixed named/ordered overrides in both
+  languages. Legal defaults and named empty values run in neighboring tests.
+- `6dca90a7` composes all hierarchical geometry controls through named values,
+  aliases, defparams and paramsets. Host-dependent domain checks retain the
+  documented implementation boundary.
 
-`3f9b93fb` implements the AMS §7.2.4 minimum across connected continuous
-segments, including intermediate `resolveto` results. Its emitted fixtures
-also check each segment's §5.5.3 local nature attributes. Focused tests pass;
-integrated gates remain.
+Next integration work: the E0247 scaled-digital-delay fix is reviewed as
+`f959eea4`; alias equation restrictions, paramset/defparam hierarchy and VPI
+event arrays are being checked in isolated worktrees. They remain open until
+their combined gates pass.
 
 The second merge passed the same gate matrix, including the generated
 Newton-verdict and host-tolerance fixtures, and was measured by
@@ -122,11 +129,10 @@ then retire any XPASS marker after re-checking its derivation.
 
 Two older user worktrees remain untouched after read-only review:
 
-- `timerfix`: adapt `65e39ac8`'s base/count periodic scheduling with a runtime
-  drift/changed-period regression. Do not merge `9a9023db` unchanged: its
-  widened due window can make `zNextTimer(1, epsilon, 1)` report no future
-  breakpoint even though later representable fires exist. Neither saved
-  commit adds fixtures.
+- `timerfix`: its base/count periodic-scheduling idea is implemented and
+  tested by `157f843d` and the timer follow-ups above. The original worktree
+  remains untouched. Its `9a9023db` widened due window is excluded: that
+  version can lose representable future breakpoints for tiny periods.
 - `agent-ab4223a4613f06e12`: leave its uncommitted held-array optimization
   pending. It has no tests, still contains a `VDBG` debug print, and needs
   adaptation to the current setup/scalar-family code. This optimization is
