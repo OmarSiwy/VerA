@@ -386,7 +386,9 @@ Test data, not compiler work. Each header claims something false or stale.
   fixture 09; §10.5's required macro in fixture 14; IEEE §19.3's preservation
   of user macros across `resetall` in `d10_07`; and the solved P03 and nodeset
   fixtures' obsolete failure descriptions. The compact-modeling completeness
-  claim and null-nodeset metadata claim remain in §5.7 below.
+  claim remains in §5.7. `nodeset_metadata_host.zig` now runs the emitted
+  device with a nonzero host fallback, distinguishing a null nodeset from
+  explicit zero and checking the resulting residuals.
 - Reject substrings that pin wording, not behaviour: `d03_13` and
   `d08_reject_udp_z_output.v:49`. (`MANIFEST.md:533-539`.)
 
@@ -466,9 +468,6 @@ No fixture pins these. Each is measure B or C work.
 - AMS 3.2.1, 3.4.3, 3.6.3.1: `(* desc, units *)` on a module variable,
   parameter or net; host-visible export of output variables. (`ch03_data_types/COVERAGE.md:227`; `conformance-types.md:35-36`.)
 - AMS 3.11.1: the Domain, Domainless and Natureless rules (E0355 exists). (`ch03_data_types/COVERAGE.md:214`.)
-- AMS 3.6.3.2: distinguish a null bus nodeset from an explicit zero in the
-  published metadata. The final-root check in `a08_nodeset_02` cannot do so
-  with this runner's zero cold start.
 - AMS 4.3.1: the derivative of `abs` at 0 is -1. (`conformance-minmax-derivative-fix.md:89`.)
 - AMS 4.5.14: the other dynamic-argument slots and analysis restarts. (`ch04_expressions/COVERAGE.md:99`.)
 - AMS 4.6.4.6: anti-correlation. `//! noise` has no `coeff=` field. (`a06_SPEC.md:253-255`.)
