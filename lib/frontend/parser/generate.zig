@@ -125,17 +125,18 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 ///
 /// The items are collected into a scratch `Body` and split by scope. §6.6
 /// gives the block its own scope, so its parameters and variables become the
-/// `SeqBlock`'s; nets, branches, genvars and analog functions are hoisted to
-/// the module. Instances, and in a digital parse events, processes and
-/// drivers, stay on the block (`Ast.GenItems`). Defparams and tasks, whose
+/// `SeqBlock`'s; branches, genvars and analog functions are hoisted to the
+/// module. Instances, and in a digital parse nets, events, processes and
+/// drivers, stay on the block (`Ast.GenItems`). Analog nets are hoisted.
+/// Defparams and tasks, whose
 /// existence the scheme decides but that have no home yet, are E0235.
 ///
-/// ponytail: hoisting is right for a conditional generate, which elaborates
-/// at most once, and short of the LRM for a loop generate, which should get
+/// ponytail: analog-net hoisting is right for a conditional generate, which
+/// elaborates at most once, and short of the LRM for a loop generate, which should get
 /// one renamed copy of each declaration per iteration (§6.6.1 names them
-/// `blk[0].n`). No fixture declares a net inside a loop; the day one does,
-/// the copies have to be made in `Lower.tryUnrollFor` where the trip count
-/// is known, not here where it is not.
+/// `blk[0].n`). The analog copies have to be made in `Lower.tryUnrollFor`
+/// where the trip count is known, not here where it is not. Digital execution
+/// declares each iteration's own nets from `Ast.GenItems` in its block scope.
 pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId {
     try self.enter();
     defer self.depth -= 1;
