@@ -108,7 +108,8 @@
  *   child instances include u, w4 and c1;
  *   u is b26_leaf, not top, not an array member, so vpiIndex(u) is NULL
  *   (Details d), and vpiIndex(top) likewise. `timescale 1ns/1ps: vpiTimeUnit
- *   of the module is -9, and NULL's vpiTimePrecision -12 (Details b; §27.6's
+ *   of the module is -9 and its vpiTimePrecision -12; a NULL object's
+ *   vpiTimePrecision and vpiTimeUnit are both -12 (Details b; §27.6's
  *   "simulation time unit" for a NULL object is also -12, since §19.8 makes
  *   the smallest time_precision the simulation's precision). §26/§27 never
  *   state the integer encoding; -9 and -12 are §17.3.2 Table 17-10's
@@ -362,8 +363,11 @@ static void module_and_arrays(void)
   CHECK(vpi_get(vpiArray, u) == 0, "26.6.1: u is no array member");
   CHECK(vpi_handle(vpiIndex, u) == NULL, "26.6.1 d: u has no index");
   expect_no_error("the module walk");
-  XFAIL(vpi_get(vpiTimeUnit, top) == -9, "26.6.1", "vpiTimeUnit of a `timescale 1ns module is not -9");
-  XFAIL(vpi_get(vpiTimePrecision, NULL) == -12, "26.6.1", "vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12");
+  CHECK(vpi_get(vpiTimeUnit, top) == -9, "26.6.1: vpiTimeUnit of a `timescale 1ns module is -9");
+  CHECK(vpi_get(vpiTimePrecision, top) == -12, "26.6.1: vpiTimePrecision of a `timescale 1ns/1ps module is -12");
+  CHECK(vpi_get(vpiTimePrecision, NULL) == -12, "26.6.1 b: vpi_get(vpiTimePrecision, NULL) is the smallest precision, -12");
+  CHECK(vpi_get(vpiTimeUnit, NULL) == -12, "26.6.1 b: so is vpi_get(vpiTimeUnit, NULL)");
+  expect_no_error("the time scale");
   CHECK(vpi_get(vpiSize, top) == vpiUndefined, "26.6.1: a module has no vpiSize");
   expect_refusal("vpi_get(vpiSize, module)");
 
@@ -438,18 +442,18 @@ static void instances_and_access(void)
   itr = vpi_iterate(vpiNet, top);
   {
     const char *s = vpi_get_str(vpiType, itr);
-    XFAIL(s != NULL && strcmp(s, "vpiIterator") == 0, "26.3.2", "vpi_get_str(vpiType, iterator) is not \"vpiIterator\"");
+    CHECK(s != NULL && strcmp(s, "vpiIterator") == 0, "26.3.2: vpi_get_str(vpiType, iterator) is \"vpiIterator\"");
   }
-  XFAIL(vpi_get(vpiNetType, bus) == vpiWire, "26.3.2", "vpiNetType of a wire is not vpiWire");
+  CHECK(vpi_get(vpiNetType, bus) == vpiWire, "26.3.2: vpiNetType of a wire is vpiWire");
   CHECK(vpi_get(vpiType, NULL) == vpiUndefined, "26.3.2: NULL is no object");
   expect_refusal("vpi_get(vpiType, NULL)");
 
   /* §26.3.3 */
-  XFAIL(vpi_get(vpiLineNo, inner) == 28, "26.3.3", "vpiLineNo of a net is not its source line");
+  CHECK(vpi_get(vpiLineNo, inner) == 28, "26.3.3: vpiLineNo of a net is its source line, got %d", (int)vpi_get(vpiLineNo, inner));
   {
     const char *f = vpi_get_str(vpiFile, inner);
     size_t n = f ? strlen(f) : 0;
-    XFAIL(n >= 18 && strcmp(f + n - 18, "b_26_6_structure.v") == 0, "26.3.3", "vpiFile of a net is not its source file");
+    CHECK(n >= 18 && strcmp(f + n - 18, "b_26_6_structure.v") == 0, "26.3.3: vpiFile of a net is its source file");
   }
   CHECK(vpi_get(vpiLineNo, itr) == vpiUndefined, "26.3.3: an iterator has no location");
   expect_refusal("vpi_get(vpiLineNo, iterator)");
@@ -457,8 +461,8 @@ static void instances_and_access(void)
   /* §26.6.43 */
   CHECK(vpi_get(vpiType, itr) == vpiIterator, "26.6.43: an iterator object");
   expect_no_error("iterator type");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiUse, itr), top), "26.6.43", "vpi_handle(vpiUse, iterator) is not its reference handle");
-  XFAIL(vpi_get(vpiIteratorType, itr) == vpiNet, "26.6.43", "vpiIteratorType is not the iterated type");
+  CHECK(vpi_compare_objects(vpi_handle(vpiUse, itr), top), "26.6.43 a: vpiUse is the reference handle");
+  CHECK(vpi_get(vpiIteratorType, itr) == vpiNet, "26.6.43: vpiIteratorType is the iterated type");
   CHECK(vpi_get(vpiSize, itr) == vpiUndefined, "26.6.43: an iterator has no size");
   expect_refusal("vpi_get(vpiSize, iterator)");
   vpi_free_object(itr);
@@ -467,7 +471,7 @@ static void instances_and_access(void)
   vpi_free_object(itr);
 
   /* §26.6.1 */
-  XFAIL(vpi_get(vpiProtected, top) == 0, "26.6.1", "vpiProtected of an unprotected module is not FALSE");
+  CHECK(vpi_get(vpiProtected, top) == 0, "26.6.1: vpiProtected of an unprotected module is FALSE");
 
   /* §26.5.2 / §26.5.3 */
   CHECK(vpi_get(vpiSize, bus) == 8, "26.5.2: an int property through vpi_get()");
