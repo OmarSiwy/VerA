@@ -1537,7 +1537,9 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
                 const gated = sw.kind != .tran and sw.kind != .rtran;
                 // §7.6: the controlled ones take "zero, one, or two delays"
                 // (the grammar already refuses any on tran and rtran).
-                if (sw.delay.off != .none) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
+                // One value fills all three fields (`parseDelay3`), so only a
+                // third value of its own is a third delay.
+                if (sw.delay.off != .none and sw.delay.off != sw.delay.rise) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
                 const ta = try switchTerminal(r, e, sw.terms[0], sw.main_tok);
                 const tb = try switchTerminal(r, e, sw.terms[1], sw.main_tok);
                 try e.trans.append(r.arena, .{
