@@ -715,7 +715,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
         .design = "tests/fixtures/ch11_vpi/p06_specify.v",
-        .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
+        .stdout = "p02: b_26_6_specify checks=58\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_20_frames.c",
@@ -772,7 +772,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 170 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=273\n",
+        .stdout = "xfail G: 167 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=276\n",
     },
 };
 

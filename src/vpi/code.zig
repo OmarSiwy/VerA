@@ -90,6 +90,8 @@ pub const vpiTchkNotifier: c_int = 87;
 pub const vpiTchkRefTerm: c_int = 88;
 pub const vpiModPathIn: c_int = 95;
 pub const vpiModPathOut: c_int = 96;
+pub const vpiModDataPathIn: c_int = 94;
+pub const vpiModPathHasIfNone: c_int = 71;
 pub const vpiEdge: c_int = 36;
 pub const vpiPathType: c_int = 37;
 pub const vpiPolarity: c_int = 34;
@@ -162,6 +164,7 @@ pub const vpiConditionOp: c_int = 32;
 pub const vpiConcatOp: c_int = 33;
 pub const vpiMultiConcatOp: c_int = 34;
 pub const vpiEventOrOp: c_int = 35;
+pub const vpiListOp: c_int = 37;
 pub const vpiPosedgeOp: c_int = 39;
 pub const vpiNegedgeOp: c_int = 40;
 pub const vpiArithLShiftOp: c_int = 41;
@@ -525,8 +528,11 @@ pub const Builder = struct {
         var outs: std.ArrayList(u32) = .empty;
         for (p.outs) |e| try outs.append(b.arena, try b.term(vpiPathTerm, e, root.vpiOutput, .none));
         const cond = if (p.cond != .none) try b.expr(p.cond) else none;
+        const data = try b.term(vpiPathTerm, p.data, root.vpiInput, .none);
         const at = try b.code(vpiModPath, &.{
             .{ .tag = vpiCondition, .to = cond },
+            .{ .tag = vpiDelay, .to = try b.delayExpr(p.delays) },
+            .{ .tag = vpiModDataPathIn, .to = data },
         }, &.{
             .{ .tag = vpiModPathIn, .items = ins.items },
             .{ .tag = vpiModPathOut, .items = outs.items },
@@ -534,6 +540,7 @@ pub const Builder = struct {
             .{ .prop = vpiPathType, .value = if (p.full) vpiPathFull else vpiPathParallel },
             .{ .prop = vpiPolarity, .value = polarity(p.polarity) },
             .{ .prop = vpiDataPolarity, .value = polarity(p.data_polarity) },
+            .{ .prop = vpiModPathHasIfNone, .value = @intFromBool(p.ifnone) },
         });
         b.objects.items[at].delays = try b.foldAll(p.delays);
         b.objects.items[at].src_tok = p.main_tok;
@@ -560,13 +567,18 @@ pub const Builder = struct {
         const ref = try b.term(vpiTchkTerm, arg(t, r), 0, if (t.edges.len > r) t.edges[r] else .none);
         const data = if (kind.data) try b.term(vpiTchkTerm, arg(t, dt), 0, if (t.edges.len > dt) t.edges[dt] else .none) else none;
         const notifier = if (arg(t, kind.notifier) != .none) try b.expr(arg(t, kind.notifier)) else none;
+        // Details b: every argument written, in order, the events as their
+        // tchk terms.
+        var args: std.ArrayList(u32) = .empty;
+        for (t.args, 0..) |a, k| try args.append(b.arena, if (k == r) ref else if (kind.data and k == dt) data else if (k == kind.notifier) notifier else try b.expr(a));
+        var limits: std.ArrayList(Ast.ExprId) = .empty;
+        for (kind.limits[0..kind.n_limits]) |k| try limits.append(b.arena, arg(t, k));
         const at = try b.code(vpiTchk, &.{
             .{ .tag = vpiTchkRefTerm, .to = ref },
             .{ .tag = vpiTchkDataTerm, .to = data },
             .{ .tag = vpiTchkNotifier, .to = notifier },
-        }, &.{}, &.{.{ .prop = vpiTchkType, .value = kind.type }});
-        var limits: std.ArrayList(Ast.ExprId) = .empty;
-        for (kind.limits[0..kind.n_limits]) |k| try limits.append(b.arena, arg(t, k));
+            .{ .tag = vpiDelay, .to = try b.delayExpr(limits.items) },
+        }, &.{.{ .tag = vpiExpr, .items = try b.many(args.items) }}, &.{.{ .prop = vpiTchkType, .value = kind.type }});
         b.objects.items[at].delays = try b.foldAll(limits.items);
         b.objects.items[at].src_tok = t.main_tok;
         try b.lists.tchks.append(b.gpa, at);
@@ -585,6 +597,16 @@ pub const Builder = struct {
             .edge => vpiAnyEdge,
         } });
         return b.code(vtype, &.{.{ .tag = vpiExpr, .to = x }}, &.{}, props.items);
+    }
+
+    /// IEEE 1364-2005 §26.3.4 vpiDelay: the one delay expression, or a
+    /// vpiListOp operation over several; `none` when none is written.
+    fn delayExpr(b: *Builder, es: []const Ast.ExprId) Error!u32 {
+        return switch (es.len) {
+            0 => none,
+            1 => b.expr(es[0]),
+            else => b.operation(vpiListOp, es),
+        };
     }
 
     /// Every expression folded to a literal, or none of them when one does
