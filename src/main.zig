@@ -565,6 +565,7 @@ pub fn main(init: std.process.Init) !u8 {
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
+        try vera.tb.warnGridEvents(&bag, result.lowered, result.mir);
         const runner = vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm) catch |e| switch (e) {
             error.TooManyPoints => {
                 try err.print("error: {s}: `//!` directive: the sweeps expand to more than {d} points\n", .{ in_path, vera.tb.max_points });
