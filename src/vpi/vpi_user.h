@@ -199,12 +199,17 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiTaskCall            60
 #define vpiWait                69
 #define vpiWhile               70
-#define vpiGate                21   /* §11.6.13 a gate primitive */
+#define vpiGate                21   /* §11.6.13 a gate primitive, pullup, pulldown */
+#define vpiSwitch              55   /* IEEE 1364-2005 §26.6.13 a MOS or pass switch */
 #define vpiPrimTerm            46   /* §11.6.13 a primitive's terminal */
 #define vpiTableEntry          58   /* §11.6.14 a UDP table entry */
 #define vpiUdp                 65   /* §11.6.13 a UDP instance */
 #define vpiUdpDefn             66   /* §11.6.14; vpi_iterate(vpiUdpDefn, NULL) */
 #define vpiPrimitive          103   /* module ->> primitive; term -> primitive */
+#define vpiDriver              91   /* IEEE 1364-2005 §26.6.22/§26.6.23 net or reg ->> */
+#define vpiLoad                93   /* ...drivers and loads: prim terms, assignments, ports */
+#define vpiLocalDriver        122   /* the same, contained by the net's own module */
+#define vpiLocalLoad          123
 #define vpiPrimType            33   /* int: §11.6.13/§11.6.14, one of below */
 #define vpiTermIndex           30   /* int: §11.6.13, 0 for the output */
 #define vpiAndPrim              1
@@ -219,8 +224,24 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiBufif1Prim          10
 #define vpiNotif0Prim          11
 #define vpiNotif1Prim          12
+#define vpiNmosPrim            13
+#define vpiPmosPrim            14
+#define vpiCmosPrim            15
+#define vpiRnmosPrim           16
+#define vpiRpmosPrim           17
+#define vpiRcmosPrim           18
+#define vpiRtranPrim           19
+#define vpiRtranif0Prim        20
+#define vpiRtranif1Prim        21
+#define vpiTranPrim            22
+#define vpiTranif0Prim         23
+#define vpiTranif1Prim         24
+#define vpiPullupPrim          25
+#define vpiPulldownPrim        26
 #define vpiSeqPrim             27
 #define vpiCombPrim            28
+#define vpiStrength0           31   /* int: a gate's or UDP's drive strengths, */
+#define vpiStrength1           32   /* ...vpiSupplyDrive .. vpiHiZ below */
 #define vpiAnalog             733   /* §11.6.21 the analog process */
 #define vpiContrib            734   /* §11.6.20 a contribution */
 #define vpiDirect             735   /* bool: §11.6.20, `<+` rather than indirect */
@@ -478,8 +499,9 @@ typedef struct t_vpi_vecval {
 } s_vpi_vecval, *p_vpi_vecval;
 #endif
 
-/* Figure 12-11. Declared because it is a member of s_vpi_value's union; no
- * routine here reads or writes a strength (vpiStrengthVal is absent). */
+/* Figure 12-11. vpi_get_value fills one per bit (vpiStrengthVal) of a reg
+ * or variable, always strong (IEEE 1364-2005 §27.14); a net's strength is
+ * refused, and vpi_put_value takes no strength. */
 typedef struct t_vpi_strengthval {
   PLI_INT32 logic;              /* vpi[0,1,X,Z] */
   PLI_INT32 s0, s1;
@@ -513,6 +535,7 @@ typedef struct t_vpi_value {
 #define vpiRealVal              7
 #define vpiStringVal            8
 #define vpiVectorVal            9
+#define vpiStrengthVal         10
 #define vpiTimeVal             11
 #define vpiObjTypeVal          12
 #define vpiSuppressVal         13
@@ -524,6 +547,16 @@ typedef struct t_vpi_value {
 #define vpiX                    3
 #define vpiH                    4
 #define vpiL                    5
+
+/* s_vpi_strengthval.s0/s1, IEEE 1364-2005 Annex G. */
+#define vpiSupplyDrive       0x80
+#define vpiStrongDrive       0x40
+#define vpiPullDrive         0x20
+#define vpiWeakDrive         0x08
+#define vpiLargeCharge       0x10
+#define vpiMediumCharge      0x04
+#define vpiSmallCharge       0x02
+#define vpiHiZ               0x01
 
 /* §12.30 vpi_put_value flags. vpiForceFlag and vpiReleaseFlag perform
  * IEEE 1364 §9.3.2's force and release, and fire cbForce/cbRelease. */
@@ -836,20 +869,28 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
 #define vpiTchkRefTerm         88
 #define vpiModPathIn           95
 #define vpiModPathOut          96
+#define vpiModDataPathIn       94
+#define vpiModPathHasIfNone    71
 #define vpiEdge                36
 #define vpiNoEdge              0x00
+#define vpiEdge01              0x01
+#define vpiEdge10              0x02
+#define vpiEdge0x              0x04
+#define vpiEdgex1              0x08
+#define vpiEdge1x              0x10
+#define vpiEdgex0              0x20
 #define vpiPosedge             0x0D
 #define vpiNegedge             0x32
 #define vpiAnyEdge             0x3F
 #define vpiPathType            37
 #define vpiPathFull             1
 #define vpiPathParallel         2
-#define vpiPolarity            38
-#define vpiDataPolarity        39
+#define vpiPolarity            34
+#define vpiDataPolarity        35
 #define vpiPositive             1
 #define vpiNegative             2
 #define vpiUnknown              3
-#define vpiTchkType            40
+#define vpiTchkType            38
 #define vpiSetup                1
 #define vpiHold                 2
 #define vpiPeriod               3

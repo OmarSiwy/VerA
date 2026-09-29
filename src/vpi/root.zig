@@ -317,6 +317,9 @@ pub const Obj = struct {
     /// `.reg` only: declared in an automatic task or function (IEEE
     /// 1364-2005 §26.6.20's vpiAutomatic), so it has no static storage.
     automatic: bool = false,
+    /// `.net` only: IEEE 1364-2005 §26.6.6's vpiImplicitDecl, a net no
+    /// declaration wrote (§4.5, §12.3.3).
+    implicit: bool = false,
     /// The digital engine's storage slot for this object's value, when the
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values come from analog.zig's solution.
@@ -1192,7 +1195,10 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         // A named block, task, function or named event has a full name; a
         // statement or expression does not.
         .code => if (o.full.len != 0) try d.by_name.put(gpa, o.full, @intCast(i)),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
+        // An implicit net shares its name with the port that made it; the
+        // name keeps denoting what the source declared.
+        .net => if (!o.implicit or !d.by_name.contains(o.full)) try d.by_name.put(gpa, o.full, @intCast(i)),
+        .module, .port, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
     };
 }
 
@@ -1606,6 +1612,21 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try objects.append(gpa, o);
             try addBits(gpa, arena, &objects, r, code.vpiNetBit);
         }
+        // The implicit nets: a port declared with no net type (IEEE 1364-2005
+        // §12.3.3), then §4.5's undeclared terminals and assignment targets,
+        // in the order the engine declared them.
+        for (m.ports) |p| try implicitNet(gpa, arena, r, &objects, s, scope, top_name, p.name);
+        const ex = &file.exprs;
+        var terms: std.ArrayList(Ast.ExprId) = .empty;
+        for (m.instances) |inst| for (inst.ports) |c| try terms.append(arena, c.expr);
+        for (m.gates) |g| {
+            try terms.append(arena, g.out);
+            try terms.appendSlice(arena, g.ins);
+        }
+        for (m.switches) |sw| try terms.appendSlice(arena, sw.terms);
+        for (m.pulls) |p| try terms.append(arena, p.out);
+        for (m.assigns) |a| try terms.append(arena, a.target);
+        for (terms.items) |x| if (x != .none and ex.tag(x) == .ident) try implicitNet(gpa, arena, r, &objects, s, scope, top_name, ex.strOf(x));
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
             // §3.9 arrays: §11.6.11's classes, over the engine's own element
@@ -1663,6 +1684,9 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps, .run = r, .engine = s.engine };
         try b.module(s.decl);
         try addConnections(&b, scopes.items, r);
+        // A named event's slot is the engine's rendezvous for it, which a
+        // put toggles (IEEE 1364-2005 §27.32).
+        for (s.decl.events, s.code.events.items) |e, at| objects.items[at].slot = r.names.get(.{ .scope = s.engine, .str = e });
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
@@ -1790,6 +1814,27 @@ fn addAnalogCode(
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
         try b.analogBlocks(flat.analog);
     }
+}
+
+/// `name`, when it denotes a net of the engine that no net object of `s`
+/// holds yet: that net, added to `s`'s nets.
+fn implicitNet(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    r: *const sim.digital.Run,
+    objects: *std.ArrayList(Obj),
+    s: *Building,
+    scope: u32,
+    top_name: []const u8,
+    name: Ast.StrId,
+) Error!void {
+    const at = r.names.get(.{ .scope = s.engine, .str = name }) orelse return;
+    if (!r.net_of.contains(at)) return;
+    for (s.nets.items) |n| if (objects.items[n].slot == at) return;
+    try s.nets.append(gpa, @intCast(objects.items.len));
+    var o = try digitalObj(r, arena, top_name, s.path, scope, name, .net, at);
+    o.implicit = true;
+    try objects.append(gpa, o);
 }
 
 /// One declared name of `scope`, bound to the slot `at` that stores it.
@@ -2395,6 +2440,11 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         else => null, // else: no other class but module draws a double arrow VerA holds
     };
     if (analog) |items| return if (items.len == 0) null else newIter(d, items);
+    switch (obj_type) {
+        code.vpiDriver, code.vpiLoad, code.vpiLocalDriver, code.vpiLocalLoad => if (o.kind == .net or o.kind == .reg)
+            return driversLoads(d, o, obj_type == code.vpiDriver or obj_type == code.vpiLocalDriver, obj_type == code.vpiLocalDriver or obj_type == code.vpiLocalLoad),
+        else => {},
+    }
     if (o.kind != .module) {
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship {d}", .{ @tagName(o.kind), obj_type });
         return null;
@@ -2489,6 +2539,90 @@ fn reaches(d: *const Design, at: u32, target: u32) bool {
 fn useFail(o: *const Obj) vpiHandle {
     fail("NOTRAVERSE", "vpi_iterate: a {s} is no simple expression, so it has no vpiUse", .{typeName(typeOf(o))});
     return null;
+}
+
+/// IEEE 1364-2005 §26.6.22/§26.6.23: the drivers (`drivers`) or loads of net
+/// or reg `o`. A prim term drives what its output terminal names, loads what
+/// an input names, and does both through an inout; a continuous assignment
+/// drives its left side and loads what its right side reads; a force or
+/// assign stmt does too while one is active (§26.6.6 Details i, j). A net
+/// collapsed across a port is one simulated net (§12.3.10), so what drives
+/// or loads it in another instance is listed too (Details b). `local`
+/// (vpiLocalDriver/vpiLocalLoad, Details l) keeps what `o`'s own module
+/// contains, "including any ports connected to the net (output and inout
+/// ports are loads, input and inout ports are drivers)"; the module's ports
+/// are listed for vpiDriver and vpiLoad as well.
+///
+/// ponytail: a scan of every object per call; an active force is told by
+/// its target alone, so every force of that target is listed while one
+/// holds it; the parent's instance ports, delay terms and cont assign bits
+/// are not listed. Each needs its own relation built at `open`.
+fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle {
+    const overrides = if (o.slot) |at| if (run.attached()) |r| r.overrides.get(at) else null else null;
+    var out: std.ArrayList(vpiHandle) = .empty;
+    for (d.objects, 0..) |*x, i| {
+        if (local and x.owner != o.owner) continue;
+        const hit = switch (x.kind) {
+            .code => switch (x.vtype) {
+                code.vpiPrimTerm => mentions(d, edgeTo(x, code.vpiExpr), o) and switch (codeProp(x, vpiDirection)) {
+                    vpiOutput => drivers,
+                    vpiInout => true,
+                    else => !drivers,
+                },
+                code.vpiContAssign => mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o),
+                code.vpiForce, code.vpiAssignStmt => blk: {
+                    const layers = overrides orelse break :blk false;
+                    const active = if (x.vtype == code.vpiForce) layers.force != null else layers.assign != null;
+                    break :blk active and mentions(d, edgeTo(x, if (drivers) code.vpiLhs else code.vpiRhs), o);
+                },
+                else => false, // else: §26.6.22/§26.6.23 list no other behavioural class
+            },
+            .port => o.kind == .net and x.owner == o.owner and std.mem.eql(u8, x.name, o.name) and switch (x.direction) {
+                .input => drivers,
+                .output => !drivers,
+                .inout => true,
+                .unspecified => false,
+            },
+            else => false, // else: no other class drives or loads a net or reg
+        };
+        if (hit) out.append(d.gpa, handleOf(&d.objects[i])) catch {
+            out.deinit(d.gpa);
+            fail("NOMEM", "vpi_iterate: out of memory", .{});
+            return null;
+        };
+    }
+    if (out.items.len == 0) return null;
+    const handles = out.toOwnedSlice(d.gpa) catch {
+        out.deinit(d.gpa);
+        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        return null;
+    };
+    return newHandleIter(d, handles);
+}
+
+/// `x`'s single arrow `tag`, or `no_obj`.
+fn edgeTo(x: *const Obj, tag: c_int) u32 {
+    for (x.edges) |e| if (e.tag == tag) return e.to;
+    return no_obj;
+}
+
+/// Does expression `e` read `target`'s storage: is it the same slot (or the
+/// same object), a select of it, or an operation or call with such an
+/// operand?
+fn mentions(d: *const Design, e: u32, target: *const Obj) bool {
+    if (e == no_obj) return false;
+    const x = &d.objects[e];
+    if (x == target or (x.slot != null and x.slot == target.slot and x.kind != .code)) return true;
+    if (x.kind != .code) return false;
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiNetBit, code.vpiRegBit => return mentions(d, edgeTo(x, vpiParent), target),
+        code.vpiOperation, code.vpiFuncCall, code.vpiSysFuncCall => for (x.lists) |l| {
+            if (l.tag != code.vpiOperand and l.tag != code.vpiArgument) continue;
+            for (l.items) |i| if (mentions(d, i, target)) return true;
+        },
+        else => {}, // else: no other class is an expression with operands
+    }
+    return false;
 }
 
 /// An iterator over `handles`, which it takes ownership of.
@@ -2608,6 +2742,10 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             .reg_array, .var_array, .net_array, .word => 1,
             .module, .net => @intFromBool(o.parent != null),
             .reg, .integer, .real_var, .time_var, .var_select => 0,
+            else => propFail(prop, o),
+        },
+        code.vpiImplicitDecl => return switch (o.kind) {
+            .net => @intFromBool(o.implicit),
             else => propFail(prop, o),
         },
         vpiAutomatic => return switch (o.kind) {
@@ -3958,4 +4096,112 @@ test "an analog real array and real variable are §11.6.10's classes" {
     const x = vpi_handle_by_name("ra.x", null);
     try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, x));
     try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiArray, x));
+}
+
+test "IEEE 1364-2005 §26.6.22/§26.6.23: drivers and loads of nets and regs" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m(i, o);
+        \\  input i;
+        \\  output o;
+        \\  wire w;
+        \\  reg r;
+        \\  assign w = r & i;
+        \\  not (o, w);
+        \\endmodule
+    );
+    defer h.deinit();
+    const top = vpi_handle_by_name("m", null);
+    // `i` and `o` are implicit nets (§12.3.3); by name they are the ports.
+    var nets: [4]vpiHandle = undefined;
+    var n: usize = 0;
+    const itr = vpi_iterate(vpiNet, top);
+    while (vpi_scan(itr)) |x| : (n += 1) nets[n] = x;
+    try std.testing.expectEqual(@as(usize, 3), n);
+    const Want = struct { name: []const u8, implicit: bool = false, drivers: []const c_int, loads: []const c_int };
+    // Each set as its members' types, in object order.
+    for ([_]Want{
+        .{ .name = "w", .drivers = &.{code.vpiContAssign}, .loads = &.{code.vpiPrimTerm} },
+        .{ .name = "i", .implicit = true, .drivers = &.{vpiPort}, .loads = &.{code.vpiContAssign} },
+        .{ .name = "o", .implicit = true, .drivers = &.{code.vpiPrimTerm}, .loads = &.{vpiPort} },
+        .{ .name = "r", .drivers = &.{}, .loads = &.{code.vpiContAssign} },
+    }) |want| {
+        const obj = for (nets[0..n]) |x| {
+            if (std.mem.eql(u8, std.mem.span(vpi_get_str(vpiName, x)), want.name)) break x;
+        } else vpi_handle_by_name("m.r", null);
+        if (vpi_get(vpiType, obj) == vpiNet) try std.testing.expectEqual(@as(c_int, @intFromBool(want.implicit)), vpi_get(code.vpiImplicitDecl, obj));
+        for ([_]c_int{ code.vpiDriver, code.vpiLoad }, [_][]const c_int{ want.drivers, want.loads }) |tag, types| {
+            var got: [4]c_int = undefined;
+            var k: usize = 0;
+            const it = vpi_iterate(tag, obj);
+            try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+            if (it != null) while (vpi_scan(it)) |x| : (k += 1) {
+                got[k] = vpi_get(vpiType, x);
+            };
+            try std.testing.expectEqualSlices(c_int, types, got[0..k]);
+        }
+    }
+}
+
+test "IEEE 1364-2005 §26.6.13 switches, pull sources and strengths; §26.6.6 l local drivers across a port" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m;
+        \\  wire w, z;
+        \\  reg a, c;
+        \\  pullup (w);
+        \\  nmos (w, a, c);
+        \\  and (strong0, pull1) g1 (z, a, c);
+        \\  leaf u(.x(w));
+        \\endmodule
+        \\module leaf(x);
+        \\  input x;
+        \\  wire y;
+        \\  buf (y, x);
+        \\endmodule
+    );
+    defer h.deinit();
+    const top = vpi_handle_by_name("m", null);
+    var prims: [3]vpiHandle = undefined;
+    var n: usize = 0;
+    const itr = vpi_iterate(code.vpiPrimitive, top);
+    while (vpi_scan(itr)) |x| : (n += 1) prims[n] = x;
+    try std.testing.expectEqual(@as(usize, 3), n);
+    // Gates, then pull sources, then switches.
+    try std.testing.expectEqualStrings("g1", std.mem.span(vpi_get_str(vpiName, prims[0])));
+    try std.testing.expectEqual(@as(c_int, 0x40), vpi_get(code.vpiStrength0, prims[0]));
+    try std.testing.expectEqual(@as(c_int, 0x20), vpi_get(code.vpiStrength1, prims[0]));
+    try std.testing.expectEqual(code.vpiGate, vpi_get(vpiType, prims[1]));
+    try std.testing.expectEqual(code.vpiPullupPrim, vpi_get(code.vpiPrimType, prims[1]));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiSize, prims[1]));
+    try std.testing.expectEqual(@as(c_int, 0x20), vpi_get(code.vpiStrength1, prims[1]));
+    try std.testing.expectEqual(code.vpiSwitch, vpi_get(vpiType, prims[2]));
+    try std.testing.expectEqual(@as(c_int, 13), vpi_get(code.vpiPrimType, prims[2]));
+    try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, prims[2]));
+
+    const count = struct {
+        fn f(tag: c_int, obj: vpiHandle) usize {
+            var k: usize = 0;
+            const it = vpi_iterate(tag, obj);
+            if (it != null) while (vpi_scan(it)) |_| {
+                k += 1;
+            };
+            return k;
+        }
+    }.f;
+    const w = vpi_handle_by_name("m.w", null);
+    // The pullup's and the switch's output terms; the buf in u reads w
+    // through the collapsed port, a load of w but not a local one.
+    try std.testing.expectEqual(@as(usize, 2), count(code.vpiLocalDriver, w));
+    try std.testing.expectEqual(@as(usize, 0), count(code.vpiLocalLoad, w));
+    try std.testing.expectEqual(@as(usize, 1), count(code.vpiLoad, w));
+    var ux: vpiHandle = null;
+    const nets = vpi_iterate(vpiNet, vpi_handle_by_name("m.u", null));
+    while (vpi_scan(nets)) |x| if (std.mem.eql(u8, std.mem.span(vpi_get_str(vpiName, x)), "x")) {
+        ux = x;
+    };
+    // Details l: an input port drives its net locally; across the port the
+    // pullup and the switch drive it too.
+    try std.testing.expectEqual(@as(usize, 1), count(code.vpiLocalDriver, ux));
+    try std.testing.expectEqual(@as(usize, 3), count(code.vpiDriver, ux));
 }
