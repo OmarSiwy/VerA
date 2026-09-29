@@ -96,6 +96,10 @@
  *            `a[i +: 2]` is an indexed part select of vpiIndexedPartSelectType
  *            vpiPosIndexed: vpiParent a, vpiBaseExpr the reg i, vpiWidthExpr
  *            the constant 2.
+ *            §26.6.26 b) decompiles `a + b` as "a + b" (operator and operands
+ *            one space apart, no parentheses: none are needed for
+ *            precedence), the concatenation as "{2{a[1:0]}}", the indexed
+ *            part select as "a[i +: 2]" and statement 0's rhs as "4'd9".
  *   §26.3.4  w1's `assign #4` has one delay: vpiDelay is a constant reading
  *            4. w's `assign #(2,3)` has two: an operation of vpiListOp.
  *   §26.6.24 three continuous assignments: w's, w1's and nd's net
@@ -138,7 +142,10 @@
  *            constant 1); statement 16's rhs: func call -> function twice,
  *            one argument, the reg d; statement 19: sys task call "$display",
  *            vpiUserDefn FALSE, five arguments (the format and d, c, q, p2),
- *            and (§26.6.19 g) a vpiDecompile string, a "$display(" call.
+ *            and (§26.6.19 g) a vpiDecompile string: the call as written,
+ *            `$display("d=%0d c=%0d q=%0d p2=%b", d, c, q, p2)`, the
+ *            arguments decompiled as expressions and separated as the source
+ *            separates them.
  *            No application is running a calltf, so
  *            vpi_handle(vpiSysTfCall, NULL) is NULL.
  *   §26.6.25 statement 0's lhs IS the reg a; statement 9's rhs mem[1] IS
@@ -366,7 +373,14 @@ static void expressions(void)
   }
   {
     const char *s = vpi_get_str(vpiDecompile, sum);
-    XFAIL(s != NULL && strcmp(s, "a + b") == 0, "26.6.26", "vpiDecompile of a + b is not \"a + b\"");
+    CHECK(s != NULL && strcmp(s, "a + b") == 0, "26.6.26 b: vpiDecompile of a + b is \"a + b\"");
+    s = vpi_get_str(vpiDecompile, rep);
+    CHECK(s != NULL && strcmp(s, "{2{a[1:0]}}") == 0, "26.6.26 b: vpiDecompile of {2{a[1:0]}}");
+    s = vpi_get_str(vpiDecompile, vpi_handle(vpiRhs, fk0));
+    CHECK(s != NULL && strcmp(s, "a[i +: 2]") == 0, "26.6.26 b: vpiDecompile of a[i +: 2]");
+    s = vpi_get_str(vpiDecompile, vpi_handle(vpiRhs, st[0]));
+    CHECK(s != NULL && strcmp(s, "4'd9") == 0, "26.6.26 b: vpiDecompile of 4'd9");
+    expect_no_error("the decompiled expressions");
   }
   CHECK(vpi_get(vpiConstType, sum) == vpiUndefined, "26.6.26: an operation has no vpiConstType");
   expect_refusal("vpi_get(vpiConstType, operation)");
@@ -650,7 +664,8 @@ static void tasks_and_calls(void)
   XFAIL(vpi_get(vpiFuncType, fc) == vpiSizedFunc, "26.6.19", "vpiFuncType of the call twice(d)");
   {
     const char *s = vpi_get_str(vpiDecompile, st[19]);
-    XFAIL(s != NULL && strncmp(s, "$display(", 9) == 0, "26.6.19", "vpiDecompile of the $display call is refused");
+    CHECK(s != NULL && strcmp(s, "$display(\"d=%0d c=%0d q=%0d p2=%b\", d, c, q, p2)") == 0,
+          "26.6.19 g: vpiDecompile of the $display call");
   }
   CHECK(vpi_iterate(vpiOperand, st[15]) == NULL, "26.6.19: a call draws arguments, not operands");
   expect_refusal("vpi_iterate(vpiOperand, task call)");
