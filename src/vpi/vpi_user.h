@@ -233,9 +233,9 @@ typedef PLI_UINT32 *vpiHandle;
  * (decimal constants, as declared), vpiSize. */
 #define vpiRange              115
 /* IEEE 1364-2005 §26.6.44: module ->> gen scope array (vpiSize, vpiName) ->>
- * gen scope (vpiArray, vpiImplicitDecl, -> vpiIndex), one array per loop
- * generate directly inside an instance; the objects an iteration declares
- * are not reached from its gen scope. */
+ * gen scope (vpiArray, vpiImplicitDecl, -> vpiIndex, ->> vpiNet), one array
+ * per loop generate directly inside an instance; of the objects an
+ * iteration declares, only its nets are reached from its gen scope. */
 #define vpiGenScopeArray      133
 #define vpiGenScope           134
 #define vpiImplicitDecl        26

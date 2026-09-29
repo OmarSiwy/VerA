@@ -1284,12 +1284,13 @@ fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Arra
 
 /// IEEE 1364-2005 §26.6.44: each §12.4.1 loop generate directly inside an
 /// instance is a gen scope array over its iterations, each a gen scope named
-/// `name[i]` whose vpiIndex is `i`. The objects each iteration declares are
-/// not modelled; a gen scope is found by name and counted, not walked into.
+/// `name[i]` whose vpiIndex is `i`, and gen scope ->> net walks the nets the
+/// iteration declares (`Run.gen_nets`), each named under it.
 ///
 /// ponytail: a loop generate nested in another generate block, and a
 /// conditional generate's scope, have no gen scope yet; both are rows of
-/// `Run.scope_info` whose parent is itself lexical.
+/// `Run.scope_info` whose parent is itself lexical. Of an iteration's
+/// declarations only its scalar and vector nets are modelled.
 fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), scopes: []Building, r: *sim.digital.Run, vpi_of: []const u32) Error!void {
     const Key = struct { scope: u32, name: Ast.StrId };
     var groups: std.AutoArrayHashMapUnmanaged(Key, std.ArrayList(u32)) = .empty;
@@ -1313,13 +1314,24 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
             const c: u32 = @intCast(objects.items.len);
             try objects.append(gpa, .{ .kind = .constant, .owner = k.scope, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
             const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, i });
+            const full = try joinPath(arena, module_full, local);
+            var nets: std.ArrayList(u32) = .empty;
+            for (r.gen_nets.get(@intCast(e)) orelse &.{}) |n| {
+                const slot = r.names.get(.{ .scope = @intCast(e), .str = n.name }) orelse continue;
+                if (r.arrays.contains(slot)) continue;
+                const net_name = try arena.dupe(u8, r.file.str(n.name));
+                try nets.append(arena, @intCast(objects.items.len));
+                try objects.append(gpa, .{ .kind = .net, .owner = k.scope, .name = net_name, .full = try joinPath(arena, full, net_name), .size = r.values[slot].width, .slot = slot, .net_type = n.kind, .src_tok = n.main_tok });
+                try addBits(gpa, arena, objects, r, code.vpiNetBit);
+            }
             m.* = @intCast(objects.items.len);
             try objects.append(gpa, .{
                 .kind = .code,
                 .vtype = code.vpiGenScope,
                 .owner = k.scope,
                 .name = local,
-                .full = try joinPath(arena, module_full, local),
+                .full = full,
+                .lists = try arena.dupe(code.List, &.{.{ .tag = vpiNet, .items = nets.items }}),
                 .edges = try arena.dupe(code.Edge, &.{.{ .tag = code.vpiIndex, .to = c }}),
                 .props = try arena.dupe(code.Prop, &.{
                     .{ .prop = vpiArray, .value = 1 },

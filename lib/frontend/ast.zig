@@ -1342,6 +1342,9 @@ pub const CaseArm = struct {
 /// with it: its named events, processes and drivers, as `ModuleDecl` holds
 /// a module's. The digital engine elaborates them in the block's scope.
 pub const GenItems = struct {
+    /// IEEE 1364-2005 §12.4 the block's net declarations, which are its own
+    /// scope's: each iteration of a loop generate declares its own.
+    nets: []const NetDecl = &.{},
     events: []const StrId = &.{},
     /// As `ModuleDecl.event_toks`.
     event_toks: []const u32 = &.{},

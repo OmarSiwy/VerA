@@ -700,7 +700,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
-        .stdout = "xfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=299\n",
+        .stdout = "p02: b_26_6_structure checks=301\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",

@@ -474,7 +474,8 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         try line.writer.print("$scope {s} {s}", .{ kind, r.file.str(info.name) });
         if (info.index) |i| try line.writer.print("[{d}]", .{i});
         try line.writer.writeAll(" $end\n");
-        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = sub != null or !(info.lexical and info.index == null) };
+        const gen_nets = r.gen_nets.get(@intCast(s)) orelse &.{};
+        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = sub != null or !(info.lexical and info.index == null) or gen_nets.len != 0 };
         var_start[s] = @intCast(vars.items.len);
         var decls: std.ArrayList(Ast.VarDecl) = .empty;
         var names: std.ArrayList(Ast.StrId) = .empty;
@@ -483,12 +484,15 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
             for (t.ports) |p| try decls.append(a, p.v);
             try decls.appendSlice(a, t.vars);
         } else {
-            if (info.lexical) continue;
-            const m = &r.file.modules[info.def];
-            for (m.ports) |p| try names.append(a, p.name);
-            for (m.nets) |n| try names.append(a, n.name);
-            try decls.appendSlice(a, m.vars);
-            events = m.events;
+            // §12.4 a generate block's nets are its scope's.
+            for (gen_nets) |n| try names.append(a, n.name);
+            if (!info.lexical) {
+                const m = &r.file.modules[info.def];
+                for (m.ports) |p| try names.append(a, p.name);
+                for (m.nets) |n| try names.append(a, n.name);
+                try decls.appendSlice(a, m.vars);
+                events = m.events;
+            }
         }
         for (decls.items) |d| try names.append(a, d.name);
         try names.appendSlice(a, events);

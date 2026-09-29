@@ -185,7 +185,10 @@
  *   its vpiUse is NULL (Details b).
  * §26.6.44 gen is a genscope array of 2 (Details a) whose gen scopes are
  *   gen[0] and gen[1]; gen[1] is an array member, explicitly named, and its
- *   vpiIndex reads 1; gen[0].gw is gen[0]'s net.
+ *   vpiIndex reads 1; gen[0].gw is gen[0]'s one net (gen scope ->> net),
+ *   and gen[1].gw a different one (§12.4.1: a generate block "comprises a
+ *   separate scope and a new level of hierarchy when it is instantiated",
+ *   once per genvar value).
  *
  * REFUSALS, each NULL / vpiUndefined with vpi_chk_error() nonzero:
  *   §26.2.2  "b26_leaf.a": a definition's port, which is no one object.
@@ -660,8 +663,15 @@ static void parameters_and_generates(void)
   CHECK(int_value(P) == 5, "26.6.12: P still reads 5");
 
   /* §26.6.44 */
-  XFAIL(vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0].gw", NULL) != NULL, "26.6.44",
-        "gen[0].gw names no object");
+  {
+    vpiHandle gw0 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0].gw", NULL);
+    vpiHandle gw1 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[1].gw", NULL);
+    vpiHandle g0 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[0]", NULL);
+    CHECK(gw0 != NULL && gw1 != NULL && !vpi_compare_objects(gw0, gw1) && vpi_get(vpiType, gw0) == vpiNet,
+          "26.6.44: gen[0].gw and gen[1].gw are two nets");
+    CHECK(count(vpiNet, g0) == 1 && yields(vpiNet, g0, "b26_structure.gen[0].gw"), "26.6.44: gen scope ->> net");
+    expect_no_error("the generated nets");
+  }
   {
     vpiHandle itr = vpi_iterate(vpiGenScopeArray, top);
     vpiHandle ga = itr ? vpi_scan(itr) : NULL;
