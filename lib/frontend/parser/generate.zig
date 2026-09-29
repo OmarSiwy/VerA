@@ -197,7 +197,9 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
 
     try b.ports.appendSlice(self.arena, gb.ports.items);
     try b.aliasparams.appendSlice(self.arena, gb.aliasparams.items);
-    try b.nets.appendSlice(self.arena, gb.nets.items);
+    // A digital parse keeps the block's nets on the block (§12.4: one set per
+    // loop iteration, in the block's scope); the analog pipeline hoists them.
+    if (!self.digital) try b.nets.appendSlice(self.arena, gb.nets.items);
     try b.branches.appendSlice(self.arena, gb.branches.items);
     // §6.6: a generate block "brings the objects, behavioral constructs, and
     // module instances within the block into existence" only as its scheme
@@ -228,6 +230,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
             .pulls = gb.pulls.items,
             .switches = gb.switches.items,
             .defparams = gb.defparams.items,
+            .nets = gb.nets.items,
         };
         blk.gen = items;
     } else {

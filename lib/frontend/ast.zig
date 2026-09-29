@@ -1350,6 +1350,8 @@ pub const GenItems = struct {
     switches: []const SwitchInst = &.{},
     /// IEEE 1364-2005 §12.2.1 defparams, relative to the block instance.
     defparams: []const Defparam = &.{},
+    /// IEEE 1364-2005 §12.4 the block's own nets, declared in its scope.
+    nets: []const NetDecl = &.{},
 };
 
 /// §5.3.2 sequential block body plus its local declarations
