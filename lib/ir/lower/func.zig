@@ -223,6 +223,13 @@ pub fn inlineUserFuncPre(
         }}));
     }
 
+    // Timer scheduling captures caller dependencies, not this call's private
+    // locals. Pure functions are recomputed with new actuals; effectful ones
+    // keep their original result and never execute a second time.
+    const timer_capture = self.event_state.timer_capture;
+    self.event_state.timer_capture = null;
+    defer self.event_state.timer_capture = timer_capture;
+
     // ---- enter the function scope (§4.7.1) ----
     const saved_vars = self.vars;
     const saved_arrays = self.arrays;

@@ -12,6 +12,7 @@ const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_control = @import("control.zig");
 const lower_func = @import("func.zig");
+const lower_event = @import("event.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
@@ -36,9 +37,14 @@ const astTy = Lower.astTy;
 pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.event_state.timer_replay) |replay| if (replay.get(e)) |value| return value;
     const value = try lowerExprRaw(self, e, null, false);
-    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.put(self.arena, e, .{
+    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.exprs.put(self.arena, e, .{
         .value = value,
-        .variable = if (self.file.exprs.tag(e) == .ident) self.vars.get(self.file.str(self.file.exprs.strOf(e))) else null,
+        .variable = switch (self.file.exprs.tag(e)) {
+            .ident => self.vars.get(self.file.str(self.file.exprs.strOf(e))),
+            .hier_ident => self.vars.get(try flatName(self, e)),
+            else => null, // else: only a resolved name directly reads one variable
+        },
+        .effects = try lower_event.captureTimerEffects(self, e),
     });
     return value;
 }
@@ -219,6 +225,7 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     };
 
+    try lower_event.captureTimerArray(self, name);
     var idx: [lower_param.max_stack_dims]i64 = undefined;
     const at = try lower_param.subscriptBuf(self, &idx, chain.subs.len);
     var all_const = true;
@@ -398,6 +405,7 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The Value of one scalarized element — a variable array (§3.2.2) or a
 /// parameter array (§3.4.4).
 pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?TypedValue {
+    try lower_event.captureTimerArray(self, name);
     if (self.arrays.get(name)) |info| if (info.mem) |m| return .{
         .v = try lower_param.loadElem(self, m, info.ty, try self.mir.addIntConst(self.arena, lower_param.flatIndex(info.dims, idx))),
         .ty = info.ty,
