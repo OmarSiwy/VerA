@@ -713,7 +713,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
-        .xfail = "error[E1100]: digital source execution failed: digital execution currently requires a module with only variables, nets, events, instances and processes",
+        .xfail = "vpi_iterate: no one-to-many relationship 105 from a module",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_objects.c",
