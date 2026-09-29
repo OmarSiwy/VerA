@@ -1,8 +1,8 @@
 //! Annex F.2 discipline resolution across the hierarchy: the flattened nets
 //! with their declared and inherited disciplines → one discipline per net, or
 //! a diagnostic for an incompatible connection. Also checks `connectrules`
-//! names and every net's declared discipline. LRM §3.10, §3.11, §7.4,
-//! §7.4.4.1, §7.6, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3, §7.8, Annex F.2.1.
+//! names and every net's declared discipline. LRM §3.10, §3.11, §5.5.3, §7.2.4, §7.4,
+//! §7.4.4.1, §7.4.4.3, §7.6, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3, §7.8, Annex F.2.1.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -101,6 +101,7 @@ pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?
 /// no declaration to judge.
 pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId, at: ?u32) Error!void {
     const disc = (try oocDiscipline(self, path, p.name)) orelse p.discipline;
+    try noteSignalDiscipline(self, bound, disc);
     // F.2 step 4.b's input: this port's lower connection is a child segment
     // of `bound` declaring `disc`. Recorded unconditionally; the post-pass
     // decides which nets still have a question (`port_resolved`). An
@@ -151,12 +152,21 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
     });
 }
 
-/// Applies Annex F.2.1 step 4 once, after the walk, to every net that got its
-/// discipline from a bound port rather than a declaration. The flatten joined
-/// every level of the hierarchy into one net, so §7.4.1's per-level question
-/// is re-asked bottom-up by `resolveLevel`; `levelAnswer` is 4.a/4.b for one
-/// level. Where at most one candidate arrived per level, the walk's answer
-/// already stands. Reports E0903 and E0917.
+/// §7.2.4 keeps a segment's tolerance separate from the single discipline
+/// chosen for a flattened net by §7.4. Lowering owns nature-attribute folding.
+pub fn noteSignalDiscipline(self: *Flatten, net: Ast.StrId, disc: Ast.StrId) Error!void {
+    if (disc == .none) return;
+    try self.signal_disciplines.append(self.ctx.arena, .{
+        .net = self.ctx.file.str(net),
+        .discipline = self.ctx.file.str(disc),
+    });
+}
+
+/// Applies Annex F.2.1 step 4 after the walk to undeclared segments, retaining
+/// their local answers for tolerances and nature attributes. The flattened
+/// root changes only if its discipline came from a bound port rather than
+/// a declaration. `resolveLevel` asks §7.4.1's question bottom-up;
+/// `levelAnswer` is 4.a/4.b for one level. Reports E0903 and E0917.
 ///
 /// The other 4.a sentence (a net "used in digital behavioral code" is
 /// digital) has no input here: a net's domain comes from its segments.
@@ -164,6 +174,12 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
     var it = self.segs.iterator();
     while (it.next()) |entry| {
         const net = entry.key_ptr.*;
+        // A declared upper segment does not declare every segment below it
+        // (§7.4.4.3 Figure 7-5, Case 2). Their local resolution answers still
+        // supply §7.2.4 tolerances and §5.5.3 nature attributes.
+        for (entry.value_ptr.discs.items, 0..) |disc, i| {
+            if (disc == .none) _ = try resolveLevel(self, net, entry.value_ptr, i);
+        }
         // A net the source declared was decided by §3.10 precedence
         // (steps 2/3); step 4 is only for undeclared interconnect.
         if (!self.port_resolved.contains(net)) continue;
@@ -177,6 +193,18 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
         for (self.nets.items) |*n| {
             if (n.name == net) n.discipline = r;
         }
+    }
+    for (self.pending_attributes.items) |a| {
+        var local: ?Ast.StrId = null;
+        if (self.segs.getPtr(a.net)) |s| {
+            for (s.paths.items, 0..) |path, i| {
+                if (!std.mem.eql(u8, path, a.path)) continue;
+                local = s.resolved.get(i) orelse null;
+                break;
+            }
+        }
+        if (local orelse self.disc_of.get(a.net)) |disc|
+            try self.attribute_disciplines.put(self.ctx.arena, a.expr, disc);
     }
 }
 
@@ -200,6 +228,7 @@ fn levelOf(paths: []const []const u8, i: usize) ?usize {
 /// 7-2's NetA sees "the resulting cmos3 from module twoblks", not twoblks'
 /// children.
 fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error!?Ast.StrId {
+    if (group) |g| if (s.resolved.get(g)) |cached| return cached;
     var discs: std.ArrayList(Ast.StrId) = .empty;
     for (s.discs.items, 0..) |d, i| {
         const lvl = levelOf(s.paths.items, i);
@@ -208,7 +237,10 @@ fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error
         const v = if (d != .none) d else (try resolveLevel(self, net, s, i)) orelse continue;
         try discs.append(self.ctx.arena, v);
     }
-    return levelAnswer(self, net, s.tok, discs.items);
+    const answer = try levelAnswer(self, net, s.tok, discs.items);
+    if (group) |g| try s.resolved.put(self.ctx.arena, g, answer);
+    if (answer) |disc| try noteSignalDiscipline(self, net, disc);
+    return answer;
 }
 
 /// Annex F.2.1 step 4 over one level's candidate disciplines.

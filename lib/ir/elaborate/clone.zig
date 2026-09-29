@@ -1,6 +1,6 @@
 //! The clone: one child instance's declarations, statements and expressions →
 //! new AST rows in the flat namespace, with ports bound and parameters
-//! overridden. LRM §3.4.4, §4.4, §4.7.1, §5.3.2, §6.2.1, §6.3, §6.3.6 ($mfactor
+//! overridden. LRM §3.4.4, §4.4, §4.7.1, §5.3.2, §5.5.3, §6.2.1, §6.3, §6.3.6 ($mfactor
 //! scaling), §6.4.1, §6.7, §9.13.1/§9.13.2 (paramset distribution calls),
 //! §9.18, §9.19.
 
@@ -320,7 +320,27 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             n.extra = try cloneArgs(self, x.args(e));
         },
     }
-    return self.ctx.file.exprs.add(self.ctx.arena, n);
+    const out = try self.ctx.file.exprs.add(self.ctx.arena, n);
+    // §5.5.3 reads the nature of the local net segment. Renaming a bound
+    // port to its parent must not replace that segment's nature attributes.
+    if (n.tag == .hier_ident) {
+        const parts = x.nameParts(e);
+        if (parts.len == 3) {
+            const half = self.ctx.file.str(parts[1]);
+            if (std.mem.eql(u8, half, "potential") or std.mem.eql(u8, half, "flow")) {
+                if (self.unit.port_disc.get(parts[0])) |disc| {
+                    try self.attribute_disciplines.put(self.ctx.arena, out, disc);
+                } else if (self.unit.connected.contains(parts[0])) {
+                    try self.pending_attributes.append(self.ctx.arena, .{
+                        .expr = out,
+                        .net = elab_names.flat(self, parts[0]),
+                        .path = self.unit.path,
+                    });
+                }
+            }
+        }
+    }
+    return out;
 }
 
 inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {

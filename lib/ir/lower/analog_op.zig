@@ -363,10 +363,12 @@ pub fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
     const is_potential = std.mem.eql(u8, half, "potential");
     if (!is_potential and !std.mem.eql(u8, half, "flow")) return null;
 
-    const net = self.file.str(parts[0]);
-    const idx = self.node_voltages.get(net) orelse return null;
-    if (idx == ground) return null;
-    const dname = self.out.nodes.items(.disc)[idx];
+    const dname = if (self.attribute_disciplines.get(e)) |disc| self.file.str(disc) else blk: {
+        const net = self.file.str(parts[0]);
+        const idx = self.node_voltages.get(net) orelse return null;
+        if (idx == ground) return null;
+        break :blk self.out.nodes.items(.disc)[idx];
+    };
     const attr = self.file.str(parts[2]);
 
     if (std.mem.eql(u8, attr, "abstol")) {
