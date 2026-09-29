@@ -4756,11 +4756,11 @@ fn infoOf(c: Code) Info {
             .explain =
             \\§9.18 Table 9-29's "Allowed Values" column: `$mfactor > 0`,
             \\`$hflip = +1 or -1`, `$vflip = +1 or -1`, `0 <= $angle < 360`.
-            \\The resolved value is the product (or sum) of the values specified
-            \\down the hierarchy, so one out-of-range factor makes every value
-            \\below it out of range: a zero `$mfactor` would divide every branch
-            \\flow probe by zero under §6.3.6's automatic scaling rules, and a
-            \\negative one is not a count of parallel devices.
+            \\Each specified value must satisfy its domain before it is
+            \\combined with the parent's value. Valid angles can sum past
+            \\360 degrees: the resolved angle is reduced modulo 360. Flips
+            \\and multiplicities multiply; position offsets add. A zero
+            \\`$mfactor` would divide branch-flow probes by zero under §6.3.6.
             \\
             \\Only a value that folds without the model card is judged here.
             ,

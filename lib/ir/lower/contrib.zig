@@ -244,7 +244,7 @@ fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .sys_call => std.mem.eql(u8, self.file.str(ex.strOf(e)), "$mfactor"),
-        .ident => if (self.mfactor_param) |pi|
+        .ident => if (self.hier_params.get(.mfactor)) |pi|
             self.param_index.get(self.file.str(ex.strOf(e))) == pi
         else
             false,

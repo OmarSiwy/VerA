@@ -47,6 +47,17 @@ differently also conforms.
 | 1364 19.8 | time unit and precision with no `` `timescale `` | 1 s / 1 s | `src/sim/digital/root.zig:2002` | `ieee1364/19_compiler_directives/b_19_8_no_timescale_is_1s_1s.v` |
 | none (CLI) | `--state=auto` | runs 4-state until a time step starts with no live x or z, then 2-state; an x or z stored later reruns the design 4-state | `src/sim/rt/root.zig:106-130` | `ieee1364/11_scheduling/auto_state_two.v`, `auto_state_rerun.v`, `auto_state_never_written.v` |
 | none (host ABI) | numeric parameter bindings carry a value without HDL type/width metadata | `$clog2` retains the final elaborated declaration's operand width and signedness for host bindings; HDL instance overrides supply their own before code generation; declared `integer` remains signed 32 bits | `lib/ir/lower/constfold.zig` `clog2Width`, `clog2Signed` | `ch09_system_tasks/clog2_inferred_parameter_width.va`, `clog2_nested_contexts.va` |
+| none (host ABI) | how a host supplies top-level geometric system parameters | a declared §3.4.7 alias supplies a real model-card slot, shared by additional aliases of the same system parameter; defaults are Table 9-29's identities and descendants retain the host dependency | `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam` | `ch09_system_tasks/geometry_top_alias_host.va` |
+
+For AMS §9.18, E0890 diagnoses specified values that fold over literals
+outside Table 9-29's domains. As with the existing `$mfactor` path, expressions
+depending on model-card parameters are composed at runtime; the host must
+keep their values within those domains. Generated devices currently do not
+validate these dynamic domains. `geometry_parameter_sweep.va` exercises valid
+host-dependent values, and `geometry_*_rejected.va` isolates literal domain
+errors. The top-level `$mfactor` alias retains its existing ABI: a host using
+it must also keep `Instance.mfactor`, which controls automatic scaling,
+consistent with the alias's model-card value.
 
 ## 2. Resource limits
 

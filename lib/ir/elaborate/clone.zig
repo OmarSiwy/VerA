@@ -5,6 +5,7 @@
 //! §9.18, §9.19.
 
 const std = @import("std");
+const hier_param = @import("../hier_param.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
@@ -44,10 +45,23 @@ pub inline fn cloneParams(
         try self.params.append(self.ctx.arena, out);
         if (out.dims.len != 0) try checkArraySize(self, out, over.contains(p.name));
     }
-    for (aliases) |al| try self.aliasparams.append(self.ctx.arena, .{
-        .alias = elab_names.flat(self, al.alias),
-        .target = elab_names.flat(self, al.target),
-    });
+    for (aliases) |al| {
+        if (hier_param.Kind.fromName(self.ctx.file.str(al.target))) |kind| {
+            // An inlined alias denotes THIS instance's resolved value. It
+            // must not declare another top-level model-card system alias.
+            const value = self.unit.hier.get(kind);
+            try self.params.append(self.ctx.arena, .{
+                .name = elab_names.flat(self, al.alias),
+                .ty = .real,
+                .default = if (value == .none) try self.ctx.file.exprs.addReal(self.ctx.arena, 0, kind.initial()) else value,
+                .is_local = true,
+                .main_tok = 0,
+            });
+        } else try self.aliasparams.append(self.ctx.arena, .{
+            .alias = elab_names.flat(self, al.alias),
+            .target = elab_names.flat(self, al.target),
+        });
+    }
 }
 
 /// §3.4.4: "An array assigned to an instance of a module to override the
@@ -241,7 +255,7 @@ fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
         return null;
     }
     const saved = self.unit;
-    self.unit = .{ .mfactor = saved.mfactor };
+    self.unit = .{ .hier = saved.hier };
     defer self.unit = saved;
     return try cloneExpr(self, p.default);
 }
@@ -349,18 +363,17 @@ inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
     return self.ctx.file.exprs.addExprList(self.ctx.arena, out);
 }
 
-/// The three ch9 functions whose answer is a property of the instantiation,
-/// known here rather than at run time. §9.19 `$port_connected` and
+/// Ch9 functions whose answer is a property of the instantiation. §9.19 `$port_connected` and
 /// `$param_given` must be answered here: after the flatten a connected port
 /// is the parent's net and nothing downstream can tell the two apart. §9.18
-/// `$mfactor` is the running product `collectOverrides` built.
+/// hierarchical values are the expressions `collectOverrides` composed.
 fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     const x = &self.ctx.file.exprs;
     const name = x.strOf(e);
     const tok = x.mainTok(e);
-    if (self.ctx.file.strings.eql(name, "$mfactor")) {
-        if (self.unit.mfactor == .none) return null; // the top: Table 9-29's 1.0
-        return self.unit.mfactor;
+    if (hier_param.Kind.fromName(self.ctx.file.str(name))) |kind| {
+        const value = self.unit.hier.get(kind);
+        return if (value == .none) null else value;
     }
     const is_pc = self.ctx.file.strings.eql(name, "$port_connected");
     const is_pg = self.ctx.file.strings.eql(name, "$param_given");

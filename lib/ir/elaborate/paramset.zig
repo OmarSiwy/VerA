@@ -4,6 +4,7 @@
 //! §3.4.7, §6.3, §6.4, §6.4.1, §6.4.2, §6.4.3, §9.18, §9.19.
 
 const std = @import("std");
+const hier_param = @import("../hier_param.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_clone = @import("clone.zig");
@@ -194,7 +195,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
     }
     if (named) for (inst.params) |o| {
         // §9.18's system parameters are not the paramset's to declare.
-        if (self.ctx.file.strings.eql(o.name, "$mfactor")) continue;
+        if (hier_param.Kind.fromName(self.ctx.file.str(o.name)) != null) continue;
         const found = for (ps.params) |p| {
             if (!p.is_local and p.name == o.name) break true;
         } else for (ps.aliasparams) |al| {
@@ -286,13 +287,17 @@ pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
     return if (c == .str) null else c.asReal();
 }
 
-/// Reports E0890 and returns true when `e` folds to a `$mfactor` that is not
-/// positive (§9.18 Table 9-29). Only a factor that folds over literals is
-/// judged (`constReal`).
-pub fn checkMfactor(self: *Flatten, tok: u32, e: Ast.ExprId) Error!bool {
+/// §9.18/Table 9-29 domains, checked when the specified expression folds
+/// without the model card. Every override mechanism uses this same check.
+/// Host-dependent values retain the existing `$mfactor` validation boundary.
+pub fn checkSystemParam(self: *Flatten, kind: hier_param.Kind, tok: u32, e: Ast.ExprId) Error!bool {
+    if (constfold.firstStateRead(self.ctx.file, e, self.vars.items)) |what| {
+        try self.err(tok, .E0363, "`{s}` override reads `{s}`", .{ kind.name(), what });
+        return true;
+    }
     const v = constReal(self, e) orelse return false;
-    if (v > 0) return false;
-    try self.err(tok, .E0890, "`$mfactor` is {d}, and Table 9-29 allows only $mfactor > 0", .{v});
+    if (kind.allows(v)) return false;
+    try self.err(tok, .E0890, "`{s}` is {d}, and Table 9-29 allows only {s}", .{ kind.name(), v, kind.domain() });
     return true;
 }
 
@@ -313,17 +318,6 @@ pub fn checkOverridable(self: *Flatten, child: *const Ast.ModuleDecl, target: As
     return true;
 }
 
-/// §9.18 `mfactor` times `v`, where `.none` is the unit factor.
-pub fn mulMfactor(self: *Flatten, mfactor: Ast.ExprId, v: Ast.ExprId, tok: u32) Error!Ast.ExprId {
-    return if (mfactor == .none) v else self.ctx.file.exprs.add(self.ctx.arena, .{
-        .tag = .binary,
-        .main_tok = tok,
-        .lhs = mfactor,
-        .rhs = v,
-        .extra = @intFromEnum(Ast.BinaryOp.mul),
-    });
-}
-
 /// §9.19 `$param_given` is a fact about the instantiation, one answer per
 /// flattened parameter (an alias shares its target's), so the clone can
 /// substitute a literal.
@@ -334,7 +328,7 @@ pub fn markGiven(self: *Flatten, child: *const Ast.ModuleDecl, over: *const std.
 }
 
 /// Computes the module parameter values a paramset instance gives `child`
-/// into `over`, and sets `unit`'s §9.18 `$mfactor` and §9.19 `$param_given`
+/// into `over`, and sets `unit`'s §9.18 hierarchical values and §9.19 `$param_given`
 /// (§6.4). Two levels: the instance overrides the paramset's own parameters,
 /// then the paramset's statements compute the module's from those, so
 /// `.k = 2.0 * gain;` with `#(.gain(3.0))` gives `k` = 6.0.
@@ -360,11 +354,11 @@ pub fn paramsetOverrides(
     _ = try elab_names.paramsetChain(self, ps, &chain);
 
     // ---- level 1: the paramset's own parameters, overridden by the instance
-    var ps_unit: Unit = .{ .mfactor = parent.mfactor };
+    var ps_unit: Unit = .{ .hier = parent.hier };
     var ps_over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
     // A synthesized instance of the paramset-as-unit: same overrides, no
     // ports, so `collectOverrides` handles §6.3's ordered/named arms,
-    // §3.4.7's aliases and §9.18's `.$mfactor` for it.
+    // §3.4.7's aliases and §9.18's system overrides for it.
     const as_module: Ast.ModuleDecl = .{
         .name = ps.name,
         .ports = &.{},
@@ -372,7 +366,7 @@ pub fn paramsetOverrides(
         .aliasparams = ps.aliasparams,
         .main_tok = ps.main_tok,
     };
-    try self.collectOverrides(inst, &as_module, parent, &ps_over, &ps_unit, ps_path);
+    try self.collectOverrides(inst, &as_module, parent, &ps_over, &ps_unit, path);
     for (ps.params) |p| try elab_names.bind(self, &ps_unit, ps_path, p.name);
     for (ps.aliasparams) |al| try elab_names.bind(self, &ps_unit, ps_path, al.alias);
 
@@ -397,13 +391,19 @@ pub fn paramsetOverrides(
     // and no fixture writes a far link that reads one. The upgrade path is a
     // per-link `Unit` + `cloneParams` under `path ++ link.name ++ sep`,
     // built in the same loop.
-    var mfactor = ps_unit.mfactor;
+    var hier = ps_unit.hier;
     var i = chain.items.len;
     while (i > 0) {
         i -= 1;
         for (chain.items[i].overrides) |o| switch (o.kind) {
             .module_param => {
-                if (!try checkOverridable(self, child, o.name, o.name, o.main_tok)) continue;
+                var target = o.name;
+                for (child.aliasparams) |al| if (al.alias == o.name) {
+                    target = al.target;
+                    break;
+                };
+                const system = hier_param.Kind.fromName(self.ctx.file.str(target));
+                if (system == null and !try checkOverridable(self, child, target, o.name, o.main_tok)) continue;
                 // §6.4.1 "these variables shall not be used to assign values
                 // to the module's parameters". Named here, where the paramset
                 // is still in hand: once cloned, `t` is only an unknown name.
@@ -413,19 +413,28 @@ pub fn paramsetOverrides(
                     });
                     continue;
                 }
-                try over.put(self.ctx.arena, o.name, try elab_clone.cloneExpr(self, o.value));
+                const value = try elab_clone.cloneExpr(self, o.value);
+                if (system) |kind| {
+                    if (try checkSystemParam(self, kind, o.main_tok, value)) continue;
+                    hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
+                } else try over.put(self.ctx.arena, target, value);
             },
-            // §9.18 `.$mfactor = expr;` in a paramset is the same override the
-            // instance's `.$mfactor(expr)` is, so it multiplies the same way.
+            // §6.3.6/§9.18: a paramset's system assignment composes with
+            // the value inherited by this paramset instance, just as #(...).
             .system_param => {
-                if (!self.ctx.file.strings.eql(o.name, "$mfactor")) {
-                    try self.err(o.main_tok, .E0907, "`{s}` is not a system parameter this paramset can set", .{
-                        self.ctx.file.str(o.name),
+                const kind = hier_param.Kind.fromName(self.ctx.file.str(o.name)) orelse {
+                    try self.err(o.main_tok, .E0907, "`{s}` is not a hierarchical system parameter", .{self.ctx.file.str(o.name)});
+                    continue;
+                };
+                if (readsVar(self.ctx.file, chain.items[i], o.value)) |v| {
+                    try self.err(self.ctx.file.exprs.mainTok(v), .E0237, "`.{s} = ...` reads the paramset variable `{s}`", .{
+                        self.ctx.file.str(o.name), self.ctx.file.str(self.ctx.file.exprs.strOf(v)),
                     });
                     continue;
                 }
-                if (try checkMfactor(self, o.main_tok, o.value)) continue;
-                mfactor = try mulMfactor(self, mfactor, try elab_clone.cloneExpr(self, o.value), o.main_tok);
+                const value = try elab_clone.cloneExpr(self, o.value);
+                if (try checkSystemParam(self, kind, o.main_tok, value)) continue;
+                hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
             },
             .output_var => {}, // §6.4.3, dropped in the parser
         };
@@ -433,7 +442,7 @@ pub fn paramsetOverrides(
     self.in_paramset = false;
     self.unit = saved;
 
-    unit.mfactor = mfactor;
+    unit.hier = hier;
     try markGiven(self, child, over, unit);
 }
 

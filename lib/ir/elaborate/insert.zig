@@ -5,6 +5,7 @@
 //! §7.8.1 to §7.8.5.
 
 const std = @import("std");
+const hier_param = @import("../hier_param.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
@@ -333,12 +334,12 @@ pub fn paramsDeclared(self: *Flatten, ins: *const Ast.ConnectInsertion, m: *cons
     }
     var ok = true;
     for (ins.params) |o| {
-        if (file.strings.eql(o.name, "$mfactor")) continue;
         var target = o.name;
         for (m.aliasparams) |al| if (al.alias == o.name) {
             target = al.target;
             break;
         };
+        if (hier_param.Kind.fromName(file.str(target)) != null) continue;
         const decl = for (m.params) |*p| {
             if (p.name == target) break p;
         } else null;
