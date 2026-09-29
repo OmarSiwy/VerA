@@ -1458,6 +1458,9 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     for (scopes.items, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps };
         try b.module(s.decl);
+        // A named event's slot is the engine's rendezvous for it, which a
+        // put toggles (IEEE 1364-2005 §27.32).
+        for (s.decl.events, s.code.events.items) |e, at| objects.items[at].slot = r.names.get(.{ .scope = s.engine, .str = e });
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;

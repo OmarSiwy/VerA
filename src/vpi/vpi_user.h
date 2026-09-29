@@ -420,8 +420,9 @@ typedef struct t_vpi_vecval {
 } s_vpi_vecval, *p_vpi_vecval;
 #endif
 
-/* Figure 12-11. Declared because it is a member of s_vpi_value's union; no
- * routine here reads or writes a strength (vpiStrengthVal is absent). */
+/* Figure 12-11. vpi_get_value fills one per bit (vpiStrengthVal) of a reg
+ * or variable, always strong (IEEE 1364-2005 §27.14); a net's strength is
+ * refused, and vpi_put_value takes no strength. */
 typedef struct t_vpi_strengthval {
   PLI_INT32 logic;              /* vpi[0,1,X,Z] */
   PLI_INT32 s0, s1;
@@ -455,6 +456,7 @@ typedef struct t_vpi_value {
 #define vpiRealVal              7
 #define vpiStringVal            8
 #define vpiVectorVal            9
+#define vpiStrengthVal         10
 #define vpiTimeVal             11
 #define vpiObjTypeVal          12
 #define vpiSuppressVal         13
@@ -466,6 +468,16 @@ typedef struct t_vpi_value {
 #define vpiX                    3
 #define vpiH                    4
 #define vpiL                    5
+
+/* s_vpi_strengthval.s0/s1, IEEE 1364-2005 Annex G. */
+#define vpiSupplyDrive       0x80
+#define vpiStrongDrive       0x40
+#define vpiPullDrive         0x20
+#define vpiWeakDrive         0x08
+#define vpiLargeCharge       0x10
+#define vpiMediumCharge      0x04
+#define vpiSmallCharge       0x02
+#define vpiHiZ               0x01
 
 /* §12.30 vpi_put_value flags. vpiForceFlag and vpiReleaseFlag perform
  * IEEE 1364 §9.3.2's force and release, and fire cbForce/cbRelease. */

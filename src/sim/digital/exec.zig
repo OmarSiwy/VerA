@@ -807,6 +807,16 @@ pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     try driver.stored(self, target, true);
 }
 
+/// §5.10.4 `-> e`: named event `at` occurs, resuming what waits on it.
+pub fn trigger(self: *Run, at: u32) Error!void {
+    if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
+    if (self.watch[at].contains(.vcd)) {
+        self.vcd.fire(&self.vcd_catalog.?, at);
+        try requestVcd(self);
+    }
+    try wake(self, at, .x, .x);
+}
+
 /// §9.3 `deassign` (`force` false) or `release` (`force` true) of `slot`.
 /// Releasing what is not held is a no-op.
 pub fn release(self: *Run, slot: u32, force: bool) Error!void {
@@ -1862,12 +1872,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // are scheduled in the active region of this same timestep, and
             // execution of the triggering process continues meanwhile.
             .trigger => |at| {
-                if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
-                if (self.watch[at].contains(.vcd)) {
-                    self.vcd.fire(&self.vcd_catalog.?, at);
-                    try requestVcd(self);
-                }
-                try wake(self, at, .x, .x);
+                try trigger(self, at);
                 pc += 1;
                 continue;
             },

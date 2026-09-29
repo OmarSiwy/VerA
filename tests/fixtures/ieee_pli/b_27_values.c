@@ -112,13 +112,6 @@
 
 #include "b_check.h"
 
-#ifndef vpiStrengthVal
-#define vpiStrengthVal 10   /* Annex G */
-#endif
-#ifndef vpiStrongDrive
-#define vpiStrongDrive 0x40 /* Annex G */
-#endif
-
 static vpiHandle top, q, p, c, wn, rq;
 
 static PLI_INT32 int_of(vpiHandle h)
@@ -212,8 +205,8 @@ static void get_values(void)
   v.value.strength = &st;
   memset(&st, 0, sizeof st);
   vpi_get_value(p02_by_name("b_27_values.one"), &v);
-  XFAIL(vpi_chk_error(NULL) == 0 && st.logic == vpi1 && st.s1 == vpiStrongDrive,
-        "27.14", "vpiStrengthVal of a reg is not logic 1 at strong strength");
+  CHECK(vpi_chk_error(NULL) == 0 && st.logic == vpi1 && st.s1 == vpiStrongDrive,
+        "27.14: vpiStrengthVal of a reg is logic 1 at strong strength");
 
   v.format = 9999;
   vpi_get_value(p02_by_name("b_27_values.known"), &v);
@@ -250,7 +243,7 @@ static PLI_INT32 at(p_cb_data d)
   case 6500: CHECK(int_of(p) == 0x66, "27.32: the later 8'h55 at 6 us was removed"); break;
   case 7500:
     CHECK(int_of(c) == 0, "27.32: the cancelled 8'h77 never lands");
-    XFAIL(int_of(wn) == 0xAA, "27.32", "the net does not hold the put value until its driver changes");
+    CHECK(int_of(wn) == 0xAA, "27.32: the net holds the put value until its driver changes");
     break;
   case 8500:
     CHECK(int_of(wn) == 0x02, "27.32: the driver changed at 8 us, the net resolves again");
@@ -301,11 +294,11 @@ static PLI_INT32 rw0(p_cb_data d)
   expect_no_error("vpi_put_value(e2, vpiCancelEvent)");
 
   vpi_put_value(ev, NULL, NULL, vpiNoDelay);
-  XFAIL(vpi_chk_error(NULL) == 0, "27.32", "a put onto a named event is refused");
+  CHECK(vpi_chk_error(NULL) == 0, "27.32: a put onto a named event, value_p NULL");
   v.format = vpiIntVal;
   v.value.integer = 0xAA;
   vpi_put_value(wn, &v, NULL, vpiNoDelay);
-  XFAIL(vpi_chk_error(NULL) == 0 && int_of(wn) == 0xAA, "27.32", "a vpiNoDelay put onto a net is refused");
+  CHECK(vpi_chk_error(NULL) == 0 && int_of(wn) == 0xAA, "27.32: a vpiNoDelay put overrides the net");
 
   /* The refusals. */
   v.format = vpiStringVal;
@@ -314,14 +307,13 @@ static PLI_INT32 rw0(p_cb_data d)
   k = vpi_chk_error(NULL);
   v.format = vpiRealVal;
   vpi_get_value(rq, &v);
-  XFAIL(k != 0 && v.value.real == 1.25, "27.32", "vpiStringVal onto a real variable is not refused");
+  CHECK(k != 0 && v.value.real == 1.25, "27.32: vpiStringVal onto a real variable is refused");
   v.format = vpiStrengthVal;
   st.logic = vpi1;
   st.s0 = st.s1 = vpiStrongDrive;
   v.value.strength = &st;
   vpi_put_value(q, &v, NULL, vpiNoDelay);
-  XFAIL(vpi_chk_error(NULL) != 0 && int_of(q) == 0x0A, "27.32",
-        "vpiStrengthVal onto a vector is not refused");
+  CHECK(vpi_chk_error(NULL) != 0 && int_of(q) == 0x0A, "27.32: vpiStrengthVal onto a vector is refused");
   v.format = vpiIntVal;
   v.value.integer = 9;
   vpi_put_value(p02_by_name("b_27_values.P"), &v, NULL, vpiNoDelay);
@@ -345,7 +337,7 @@ static PLI_INT32 end(p_cb_data d)
 {
   (void)d;
   CHECK(stage == 8, "all eight readings ran, got %d", stage);
-  XFAIL(int_of(p02_by_name("b_27_values.hits")) == 1, "27.32", "the named event put did not toggle it");
+  CHECK(int_of(p02_by_name("b_27_values.hits")) == 1, "27.32: the named event put toggled it once");
   p02_done("b_27_values");
   return 0;
 }
