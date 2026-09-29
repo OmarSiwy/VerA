@@ -328,6 +328,7 @@ typedef struct t_vpi_delay {
  * -------------------------------------------------------------------------- */
 #define vpiScope               84   /* one-to-one: the containing scope */
 #define vpiInternalScope       92   /* one-to-many: §11.6.1 scopes in a module */
+#define vpiActiveTimeFormat   119   /* IEEE 1364-2005 §26.6.41: NULL -> active $timeformat call */
 #define vpiIndex               78   /* one-to-one: element -> its vpiConstant
                                        index; NULL, no error, for a module
                                        that is not in an array */

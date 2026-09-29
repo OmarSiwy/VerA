@@ -420,6 +420,10 @@ pub const Run = struct {
     /// `file.modules` row. Read through `timeOf`.
     module_times: []const ModuleTime = &.{},
     time_format: TimeFormat = .{},
+    /// IEEE 1364-2005 §26.6.41: the call that selected `time_format`, absent
+    /// before execution of any $timeformat. The instance disambiguates the
+    /// same source token executed in two instantiations of one definition.
+    active_timeformat: ?struct { scope: u32, tok: u32 } = null,
     /// §17.3.2 Table 17-11's default `units_number`: "the smallest time
     /// precision argument of all the `timescale compiler directives".
     finest: i32 = 0,

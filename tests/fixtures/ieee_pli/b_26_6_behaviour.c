@@ -263,9 +263,6 @@
 #ifndef vpiUse
 #define vpiUse 101
 #endif
-#ifndef vpiActiveTimeFormat
-#define vpiActiveTimeFormat 119
-#endif
 #ifndef vpiIndexedPartSelect
 #define vpiIndexedPartSelect 130
 #endif
@@ -760,8 +757,8 @@ static void callbacks_and_time(void)
   /* §26.6.41 */
   CHECK(atf_at_compile == 1, "26.6.41: NULL before $timeformat runs");
   atf = vpi_handle(vpiActiveTimeFormat, NULL);
-  XFAIL(atf != NULL && vpi_get(vpiType, atf) == vpiSysTaskCall, "26.6.41",
-        "vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL");
+  CHECK(atf != NULL && vpi_get(vpiType, atf) == vpiSysTaskCall,
+        "26.6.41: the executed $timeformat is the active task call");
   CHECK(vpi_iterate(vpiActiveTimeFormat, NULL) == NULL, "26.6.41: a single arrow, not a double");
   expect_refusal("vpi_iterate(vpiActiveTimeFormat, NULL)");
 }
@@ -782,7 +779,7 @@ static PLI_INT32 walk(p_cb_data cb_data)
 static PLI_INT32 end_of_compile(p_cb_data cb_data)
 {
   (void)cb_data;
-  atf_at_compile = vpi_handle(vpiActiveTimeFormat, NULL) == NULL;
+  atf_at_compile = vpi_handle(vpiActiveTimeFormat, NULL) == NULL && vpi_chk_error(NULL) == 0;
   return 0;
 }
 

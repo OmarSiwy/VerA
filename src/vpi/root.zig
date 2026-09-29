@@ -105,6 +105,7 @@ pub const vpiBit: c_int = 90;
 /// IEEE 1364-2005 §26.6.43 (Annex G).
 pub const vpiUse: c_int = 101;
 pub const vpiIteratorType: c_int = 57;
+pub const vpiActiveTimeFormat: c_int = 119;
 
 // Properties.
 pub const vpiUndefined: c_int = -1;
@@ -2025,6 +2026,20 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     if (asIter(ref)) |it| {
         if (obj_type == vpiUse) return it.use;
         fail("NOTRAVERSE", "vpi_handle: an iterator has no relationship {d}", .{obj_type});
+        return null;
+    }
+    // IEEE 1364-2005 §26.6.41's circled single arrow. Before any invocation
+    // there is no active call, even though its source object already exists.
+    if (obj_type == vpiActiveTimeFormat and ref == null) {
+        const r = run.attached() orelse return null;
+        const active = r.active_timeformat orelse return null;
+        for (d.objects) |*call| {
+            if (call.vtype != code.vpiSysTaskCall or call.src_stmt == .none) continue;
+            const owner = call.owner orelse continue;
+            if (d.scopes[owner].engine == active.scope and r.file.stmtTok(call.src_stmt) == active.tok)
+                return handleOf(call);
+        }
+        fail("NOCALL", "vpi_handle: the active $timeformat call has no VPI source object", .{});
         return null;
     }
     const o = object("vpi_handle", ref) orelse return null;

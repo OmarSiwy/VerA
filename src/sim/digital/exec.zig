@@ -1778,19 +1778,24 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                         self.monitor_on = on;
                         if (on) try display.monitorPrint(self, scratch);
                     },
-                    .timeformat => if (s.args.len == 0) {
-                        self.time_format = .{ .units = self.finest };
-                    } else {
-                        const ex = &self.file.exprs;
-                        const units = try eval(self, scratch, s.args[0], 0);
-                        const precision = try eval(self, scratch, s.args[1], 0);
-                        const width = try eval(self, scratch, s.args[3], 0);
-                        self.time_format = .{
-                            .units = std.math.lossyCast(i32, units.asInt() orelse 0),
-                            .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
-                            .suffix = self.file.str(ex.strOf(s.args[2])),
-                            .width = std.math.lossyCast(u32, width.asInt() orelse 0),
-                        };
+                    .timeformat => {
+                        if (s.args.len == 0) {
+                            self.time_format = .{ .units = self.finest };
+                        } else {
+                            const ex = &self.file.exprs;
+                            const units = try eval(self, scratch, s.args[0], 0);
+                            const precision = try eval(self, scratch, s.args[1], 0);
+                            const width = try eval(self, scratch, s.args[3], 0);
+                            self.time_format = .{
+                                .units = std.math.lossyCast(i32, units.asInt() orelse 0),
+                                .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
+                                .suffix = self.file.str(ex.strOf(s.args[2])),
+                                .width = std.math.lossyCast(u32, width.asInt() orelse 0),
+                            };
+                        }
+                        // §26.6.41 follows execution, including a no-argument
+                        // reset. A task's lexical frame is in this instance.
+                        self.active_timeformat = .{ .scope = self.instanceOf(self.scope), .tok = s.tok };
                     },
                     .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
                     .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
