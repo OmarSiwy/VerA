@@ -448,13 +448,14 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 .sscanf, .fscanf => |f| {
                     try self.xMeaning("`$sscanf`/`$fscanf`, which answer EOF for an x or z in the input or format", ex.mainTok(e));
                     const lb = self.label();
+                    try self.print("L.rs(sc{d}: {{\n            var arena{d} = std.heap.ArenaAllocator.init(s.gpa);\n            defer arena{d}.deinit();\n", .{ lb, lb, lb });
                     if (f == .fscanf) {
                         self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
-                        try self.print("L.rs(sc{d}: {{\n            const file{d} = try s.scanFile(", .{ lb, lb });
+                        try self.print("            const file{d} = try s.scanFile(arena{d}.allocator(), ", .{ lb, lb });
                         try emit.int64(self, args[0]);
                         try self.print(", ", .{});
                     } else {
-                        try self.print("L.rs(sc{d}: {{\n            var c{d} = try s.scan(", .{ lb, lb });
+                        try self.print("            var c{d} = try s.scan(arena{d}.allocator(), ", .{ lb, lb });
                         const in = try selfDetermined(self, args[0]);
                         try self.print(", {d}, ", .{in.width});
                     }
