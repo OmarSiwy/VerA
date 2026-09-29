@@ -1,6 +1,6 @@
 // pnjlim, by hand. LRM 9.17.3 names "pnjlim" but leaves its algorithm to the
 // simulator; VerA's is ngspice's DEVpnjlim (src/spicelib/devices/devsup.c,
-// transcribed in lib/backend/kernels/limit_kernels.zig), not SPICE3f5's
+// transcribed in lib/kernels/limit_kernels.zig), not SPICE3f5's
 // older vold + vte * ln(1 + (vnew - vold) / vte).
 // vte = 25 mV and vcrit = 0.6 V. From an old junction voltage of 0.65 V,
 // Newton proposes 1.0 V. That is above vcrit and moves more than 2*vte, and

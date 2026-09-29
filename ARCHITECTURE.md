@@ -68,11 +68,11 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 
 **I1. A runtime never imports the compiler.**
 - `build.zig:42`: `sim` imports `diag` and `frontend`.
-- Through `Integer`: `src/sim/rt/logic.zig:8`, `src/sim/fmt.zig:8`.
+- ~~Through `Integer`: `src/sim/rt/logic.zig:8`, `src/sim/fmt.zig:8`.~~ Phase 3: `fmt.zig` moved to `kernels`, and every `src/sim` file reads `kernels.Integer`.
 - ~~Through `deep_stack`: `rt/root.zig:24`, `digital/compile.zig:15`, `exec.zig:17`, `digital/root.zig:22`, `emit.zig:79`.~~ Phase 2: these and `digital/elab.zig:29` read `base`.
 - The whole interpreter (`digital/*.zig`).
 - Emitted text: `emit.zig:181`, `runner_text.zig:1432-1433`.
-- **Fix:** Phases 2–3 remove the `Integer`/`fmt`/`deep_stack` edges, Phase 9 removes the emitter, and B4 removes the rest. `vpi` is reclassified as a tool rather than fixed (§5.3).
+- **Fix:** Phases 2–3 removed the `Integer`/`fmt`/`deep_stack` edges, Phase 9 removes the emitter, and B4 removes the rest. `vpi` is reclassified as a tool rather than fixed (§5.3).
 
 **I2. Backend import closures are disjoint.** There is one `backend` row (`build.zig:35`), so the build cannot see this rule. The file-level violations are:
 - `tb/exe.zig:6` → `orchestrator.zig:19` → `codegen.zig`.
@@ -85,7 +85,7 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 **I3. `ir` holds types only.**
 - `lib/ir/root.zig:16-27` exports logic: `Elaborate`, `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.
 - ~~`mir.zig:9,47,311` takes `StrId` and the interner from the Ast.~~ Phase 2: it reads `base`.
-- `opcode.zig:8-9,45-47,194` takes the Ast operator enums and `constfold`.
+- ~~`opcode.zig:8-9,45-47,194` takes the Ast operator enums and `constfold`.~~ Phase 3: it reads `kernels.fold` and no longer imports `frontend`.
 - `lower/tables.zig:23-30` imports Lexer, Preprocessor, Elaborate and `sysfunc`; `:878-889` is logic.
 - Downstream code calls lowering logic: `codegen/call.zig:35,269,697,704`, `host_expr.zig:337`, `plan/setup.zig:245`, `file.zig:542`, `render.zig:105`, `analysis.zig:1097`.
 - **Fix:** Phases 3, 4, 5, 6 and 11.
@@ -106,13 +106,13 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 - **Fix:** B2. `contract.Say` carries only `f64` arguments today (`contract.zig:165`), so B2 extends the ABI first.
 
 **I6. Operator semantics live once, in `rt`.** There are five copies:
-1. `frontend/integer.zig`
-2. `frontend/constfold.zig:241,263,393` (via `opcode.zig:194`)
+1. ~~`frontend/integer.zig`~~ Phase 3: `kernels/integer.zig`
+2. ~~`frontend/constfold.zig:241,263,393` (via `opcode.zig:194`)~~ Phase 3: `kernels/fold.zig`, which `constfold` and `opcode.zig` both call
 3. `src/sim/rt/logic.zig:288`
 4. `kernels/wide_kernels.zig:349-403` (device text)
 5. `src/sim/digital/evaluate.zig:393`, plus the emitted operator text (`codegen/op_zig.zig`, `opcode_zig.zig`)
 
-**Fix:** Phase 3 moves copies 1 and 2 into `kernels`. Copies 3–5: see §5.5.
+**Fix:** Phase 3 moved copies 1 and 2 into `kernels`. Copies 3–5: see §5.5.
 
 **I7. No pass recurses on input depth.** `deep_stack.run`/`runGuarded` sit at `parser.zig:728,739`, `preprocessor.zig:688`, `libmap.zig:150`, `lib/root.zig:226,377`, and the `sim` sites listed under I1. This one is not copied (§5.4).
 
@@ -215,4 +215,5 @@ line numbers had moved.
 | 0 | landed 2026-10-17 (e0c92073): `golden` also snapshots the runner text (`.runner.txt`), the `--emit-so` tree (`.so/`) and the `.v` program text (`.program.txt`), root-free on disk; gate: wave 5 |
 | 1 | written 2026-10-17 on branch `phase1-fitness` (`ModuleSpec.role`, `tests/import_graph.zig`, `tests/fitness.zig`); awaits its gate, `zig build test` |
 | 2 | written 2026-10-17 on branch `phase2-base` (`lib/base/`: `deep_stack`, `interner`, `big_arena`; `sim`'s six `deep_stack` sites and `mir.zig`'s interner read `base`); awaits its gate, G |
-| 3–12, B1–B4 | not started (2026-10-17) |
+| 3 | written 2026-10-17 on branch `phase3-kernels` (`lib/kernels/`: the kernel files byte for byte, `root.zig`, `text.*`; `integer`/`ref4`, `fold` with `strToInt`, `fmt`; `frontend` imports `kernels` and drops `contract`; `opcode.zig` and `src/sim` read `kernels`); awaits its gate, G+T, `test-rng-reference`, `test-printf-reference` |
+| 4–12, B1–B4 | not started (2026-10-17) |

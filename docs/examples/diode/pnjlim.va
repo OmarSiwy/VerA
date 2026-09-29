@@ -1,7 +1,7 @@
 // $limit with "pnjlim" (LRM 9.17.3). The device publishes the clamp and the
 // host applies it between Newton iterations; `//! limit` asks the device
 // what it would return. VerA's "pnjlim" is ngspice's DEVpnjlim
-// (src/spicelib/devices/devsup.c; lib/backend/kernels/limit_kernels.zig). With
+// (src/spicelib/devices/devsup.c; lib/kernels/limit_kernels.zig). With
 // vte = 25 mV and vcrit = 0.6 V, Newton proposes V(ai) = 0.9 V:
 //
 //  from 0.7 V: 0.9 > vcrit and |0.9 - 0.7| > 2 * vte, the old value is
