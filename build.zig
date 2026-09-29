@@ -755,9 +755,8 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
         .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
-        .stdout = "b27 printf 7 ok\nxfail 27.25: a file the HDL opened with $fopen does not return the HDL's mcd\nb27 mcd1\nxfail 27.24: the name of an fd from $fopen is not returned\nxfail 27.22: an mcd from the HDL's $fopen is not closed\nxfail 27.26: text for an mcd from the HDL's $fopen goes to the output channel, not the file\np02: b_27_mcd checks=32\n",
-        // The 27.26 xfail: text for the HDL's mcd lands on stderr.
-        .stderr = "hdl\n",
+        .stdout = "b27 printf 7 ok\nb27 mcd1\np02: b_27_mcd checks=34\n",
+        .stderr = "",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_delays.c",
