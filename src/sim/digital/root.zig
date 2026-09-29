@@ -190,7 +190,9 @@ pub const VecRange = struct {
     /// The bit position, counted from the least significant, that declared
     /// index `index` names; outside `[0, width)` it names no bit.
     pub fn position(r: VecRange, index: i64) i64 {
-        return if (r.msb >= r.lsb) index - r.lsb else r.lsb - index;
+        // A distant legal integer index names no bit; it cannot overflow
+        // the host while deciding that (§5.2.1).
+        return if (r.msb >= r.lsb) index -| r.lsb else r.lsb -| index;
     }
 };
 

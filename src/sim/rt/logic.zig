@@ -3,7 +3,7 @@
 //! compile time by §5.5) in; the value `Integer.Literal`'s operator of the
 //! same name computes out. Under `--two-state` an x or z an operator would
 //! make is 0. Clauses: §5.1.5 to §5.1.14 with Tables 5-12 to 5-21, §5.5.2
-//! extension, §9.5.1 casez/casex.
+//! extension, §5.2.1 packed selects, §9.5.1 casez/casex.
 const std = @import("std");
 const Int = @import("frontend").Integer;
 
@@ -618,6 +618,13 @@ pub inline fn asInt(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
     return @bitCast(if (signed) sext(a.v, w) else a.v);
 }
 
+/// An address into the engine's signed-index range. An unsigned 64-bit
+/// value above maxInt(i64) is outside that range, never a negative index.
+pub inline fn asIndex(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
+    if (w == 64 and !signed and a.v > std.math.maxInt(i64)) return null;
+    return asInt(a, w, signed);
+}
+
 /// `exec.position` then `readSelect` of one bit: bit `index` of a vector
 /// declared `[msb:lsb]`, x when the index is x/z or outside it (§5.2.1).
 pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
@@ -627,10 +634,25 @@ pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i6
     return .{ .v = (s.v[p / 64] >> n) & 1, .x = (s.x[p / 64] >> n) & 1 };
 }
 
-/// A constant part-select (`emit_expr.partPlace`) of an `sw`-bit vector:
+/// The least-significant storage position of an indexed part-select.
+/// `+:` ascends declared indices and `-:` descends them (§5.2.1); the
+/// declaration determines which selected end is least significant.
+pub inline fn selectShift(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime count: u32, comptime ascending: bool) ?i64 {
+    const i = index orelse return null;
+    const p = if (msb >= lsb) i -| lsb else lsb -| i;
+    return if ((msb >= lsb) == ascending) p else p -| (count - 1);
+}
+
+/// A runtime part-select, all x for an x/z base (§5.2.1).
+pub inline fn partAt(a: anytype, shift_: ?i64, comptime count: u32, comptime sw: u32) T(count) {
+    return part(a, shift_ orelse return xs(count), count, sw);
+}
+
+/// A constant or runtime part-select of an `sw`-bit vector:
 /// bit i of the `count`-bit result is bit `i + shift` of `a` where that bit
 /// exists, else x (§5.2.1).
-pub inline fn part(a: anytype, comptime shift_: i64, comptime count: u32, comptime sw: u32) T(count) {
+pub inline fn part(a: anytype, shift_: i64, comptime count: u32, comptime sw: u32) T(count) {
+    if (shift_ >= sw or shift_ <= -@as(i64, count)) return xs(count);
     const lo: i64 = @max(0, -shift_);
     const hi: i64 = @min(count, @as(i64, sw) - shift_);
     if (count > 64 or sw > 64) {
@@ -645,16 +667,17 @@ pub inline fn part(a: anytype, comptime shift_: i64, comptime count: u32, compti
         }
         return narrow(count, o);
     }
-    const valid = comptime span(0, lo, hi);
+    const valid = span(0, lo, hi);
     const v = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.v >> @intCast(shift_) else a.v << @intCast(-shift_);
     const x = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.x >> @intCast(shift_) else a.x << @intCast(-shift_);
     const holes = if (two) 0 else ~valid & mask(count);
     return .{ .v = (v & valid) | holes, .x = (x & valid) | holes };
 }
 
-/// The slot bits a constant part-select of `count` bits at `shift` names
+/// The slot bits a part-select of `count` bits at `shift` names
 /// in an `sw`-bit vector: the mask `place`'s value is stored under.
-pub fn field(comptime shift_: i64, comptime count: u32, comptime sw: u32) M(sw) {
+pub fn field(shift_: i64, comptime count: u32, comptime sw: u32) M(sw) {
+    if (shift_ >= sw or shift_ <= -@as(i64, count)) return std.mem.zeroes(M(sw));
     const lo: i64 = @max(0, shift_);
     const hi: i64 = @min(sw, shift_ + count);
     if (sw <= 64) return span(0, lo, hi);
@@ -665,8 +688,9 @@ pub fn field(comptime shift_: i64, comptime count: u32, comptime sw: u32) M(sw) 
 
 /// The inverse of `part` for an assignment: `a`'s `count` bits placed at
 /// `shift` in an `sw`-bit vector, zero outside `field`.
-pub inline fn place(a: anytype, comptime shift_: i64, comptime count: u32, comptime sw: u32) T(sw) {
-    const m = comptime field(shift_, count, sw);
+pub inline fn place(a: anytype, shift_: i64, comptime count: u32, comptime sw: u32) T(sw) {
+    if (shift_ >= sw or shift_ <= -@as(i64, count)) return std.mem.zeroes(T(sw));
+    const m = field(shift_, count, sw);
     if (count > 64 or sw > 64) {
         const s = wide(a);
         var o: Wide(words(sw)) = undefined;
@@ -704,7 +728,7 @@ pub inline fn bit(p: u32, comptime sw: u32) M(sw) {
 /// The bit position a runtime bit-select names, or null (`exec.position`).
 pub inline fn pos(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) ?u32 {
     const i = index orelse return null;
-    const p = if (msb >= lsb) i - lsb else lsb - i;
+    const p = if (msb >= lsb) i -| lsb else lsb -| i;
     return if (p < 0 or p >= w) null else @intCast(p);
 }
 
@@ -903,7 +927,7 @@ test "part, place, up and bitAt move the bits the per-bit rule names" {
     const rand = prng.random();
     inline for (.{ .{ 130, -3, 70 }, .{ 130, 60, 10 }, .{ 130, 120, 16 }, .{ 70, 0, 70 }, .{ 20, -4, 8 }, .{ 20, 16, 8 }, .{ 200, 64, 65 } }) |c| for (0..200) |_| {
         const sw = c[0];
-        const sh = c[1];
+        const sh = c[1] + rand.intRangeAtMost(i64, -3, 3);
         const count = c[2];
         const a = wide(randomW(rand, sw));
         const got = wide(part(narrow(sw, a), sh, count, sw));
@@ -938,6 +962,20 @@ test "part, place, up and bitAt move the bits the per-bit rule names" {
         try std.testing.expectEqual((a.v[p / 64] >> @intCast(p % 64)) & 1, b.v);
         try std.testing.expectEqual((a.x[p / 64] >> @intCast(p % 64)) & 1, b.x);
     };
+}
+
+test "indexed part-select shifts preserve declaration direction and distant indices" {
+    try std.testing.expectEqual(@as(?i64, 0), selectShift(4, 11, 4, 4, true));
+    try std.testing.expectEqual(@as(?i64, 4), selectShift(11, 11, 4, 4, false));
+    try std.testing.expectEqual(@as(?i64, 4), selectShift(4, 4, 11, 4, true));
+    try std.testing.expectEqual(@as(?i64, 0), selectShift(11, 4, 11, 4, false));
+    try std.testing.expectEqual(@as(?i64, null), selectShift(null, 7, 0, 4, true));
+    for ([_]i64{ std.math.minInt(i64), std.math.maxInt(i64) }) |sh| {
+        try std.testing.expectEqual(xs(4), part(W{ .v = 0xa5, .x = 0 }, sh, 4, 8));
+        try std.testing.expectEqual(@as(u64, 0), field(sh, 4, 8));
+        try std.testing.expectEqual(W{ .v = 0, .x = 0 }, place(W{ .v = 0xf, .x = 0 }, sh, 4, 8));
+    }
+    try std.testing.expectEqual(@as(?u32, null), pos(std.math.minInt(i64), 11, 4, 8));
 }
 
 test "casez/casex agree with the per-bit wildcard rule" {

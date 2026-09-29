@@ -336,6 +336,9 @@ pub const Rhs = union(enum) {
     expr: Ast.ExprId,
     stored: struct { off: u32, ty: Type },
     captured: struct { call: u32, port: usize, ty: Type },
+    /// A procedural RHS evaluated before resolving an indexed target,
+    /// including when that target ultimately names no storage (§9.2).
+    evaluated: struct { label: u32, ty: Type },
     part: struct { label: u32, lo: u32, total: u32 },
 };
 
@@ -348,6 +351,7 @@ fn rhsValue(self: *Emitter, rhs: Rhs) Error!void {
         else
             try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) }),
         .captured => |v| try self.print("o{d}_{d}", .{ v.call, v.port }),
+        .evaluated => |v| try self.print("v{d}", .{v.label}),
     }
 }
 
@@ -357,6 +361,7 @@ fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
         .expr => |e| return expr.assigned(self, e, target),
         .stored => |v| v.ty,
         .captured => |v| v.ty,
+        .evaluated => |v| v.ty,
         .part => |p| return self.print("L.part(cat{d}, {d}, {d}, {d})", .{ p.label, p.lo, target.width, p.total }),
     };
     // `exec.convertValue`, §4.8.2 between a real and an integer.
@@ -1233,11 +1238,7 @@ pub fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     }
     if (ex.tag(target) != .index) return slotType(self, try self.slot(target));
     if (try self.element(target)) return slotType(self, try self.slot(r.chainBase(target).base));
-    try expr.nativeSelect(self, target);
-    const rg = ex.rhs(target);
-    if (ex.tag(rg) != .range) return .{ .width = 1, .signed = false };
-    const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = target }).?;
-    return .{ .width = @intCast(@abs(b.msb - b.lsb) + 1), .signed = false };
+    return .{ .width = compile.typeOf(r, target).width, .signed = false };
 }
 
 /// A.6.2 `lvalue = value` or `lvalue <= value`: `exec.place`, then
@@ -1260,6 +1261,18 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         }
         return self.print("            }}\n", .{});
     }
+    if (ex.tag(target) == .index and val == .expr) {
+        // §9.2 evaluates the RHS even when §5.2's index names no storage.
+        // Capture once before any address/unknown guard. This also keeps
+        // function effects from being duplicated across a packed write.
+        const lb = self.label();
+        const ty = try targetType(self, target);
+        try self.print("            {{\n            const v{d} = ", .{lb});
+        try rhsFor(self, val, ty);
+        try self.print(";\n", .{});
+        try assignment(self, target, .{ .evaluated = .{ .label = lb, .ty = ty } }, how);
+        return self.print("            }}\n", .{});
+    }
     if (ex.tag(target) != .index) {
         const at = try self.slot(target);
         try self.print("            ", .{});
@@ -1278,24 +1291,49 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         return self.print(", {f});\n", .{full(try self.slotWidth(base))});
     }
     // §5.2.1 a select of a vector: unsigned, as wide as it selects.
-    try expr.nativeSelect(self, target);
-    const at = try self.slot(ex.lhs(target));
+    const vector = ex.lhs(target);
+    const at = try self.slot(r.chainBase(vector).base);
+    const element_label: ?u32 = if (ex.tag(vector) == .index) self.label() else null;
+    if (element_label) |lb| {
+        try self.print("            if (", .{});
+        try expr.address(self, vector, lb);
+        try self.print(") |a{d}| {{\n", .{lb});
+    }
+    try assignSelect(self, target, at, element_label, val, how);
+    if (element_label != null) try self.print("            }}\n", .{});
+}
+
+/// The masked write of a packed select, after an optional array address
+/// has been captured. Its slot and mask are captured now even for an NBA.
+fn assignSelect(self: *Emitter, target: Ast.ExprId, at: u32, element_label: ?u32, val: Rhs, how: How) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
     const sw = try self.slotWidth(at);
     const range = expr.vecRange(r, at, sw);
     const rg = ex.rhs(target);
     if (ex.tag(rg) == .range) {
         const p = try expr.partPlace(self, target, range);
         try self.print("            ", .{});
-        try self.store(at, how);
+        try storeSelected(self, at, element_label, how);
         try self.print("L.place(", .{});
         try rhsFor(self, val, .{ .width = p.count, .signed = false });
         return self.print(", {d}, {d}, {d}), L.field({d}, {d}, {d}));\n", .{ p.shift, p.count, sw, p.shift, p.count, sw });
     }
     const lb = self.label();
-    try self.print("            if (L.pos(L.asInt(", .{});
+    if (ex.tag(rg) == .indexed_range) {
+        const count = compile.typeOf(r, target).width;
+        try self.print("            if (", .{});
+        try expr.indexedShift(self, target, range);
+        try self.print(") |q{d}| ", .{lb});
+        try storeSelected(self, at, element_label, how);
+        try self.print("L.place(", .{});
+        try rhsFor(self, val, .{ .width = count, .signed = false });
+        return self.print(", q{d}, {d}, {d}), L.field(q{d}, {d}, {d}));\n", .{ lb, count, sw, lb, count, sw });
+    }
+    try self.print("            if (L.pos(L.asIndex(", .{});
     const t = try expr.selfDetermined(self, rg);
     try self.print(", {d}, {}), {d}, {d}, {d})) |q{d}| ", .{ t.width, t.signed, range.msb, range.lsb, sw, lb });
-    if (sw > 64 and how == .blocking) {
+    if (sw > 64 and how == .blocking and element_label == null) {
         // One bit of a wide vector: the store touches only its word.
         if (self.watched[at])
             try self.print("try M.putWord(s, {f}, {d}, {d}, q{d} / 64, ", .{ fmtReach(self.reach[at]), at, self.off[at], lb })
@@ -1305,10 +1343,15 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         try rhsFor(self, val, .{ .width = 1, .signed = false });
         return self.print(", q{d} % 64, 64), L.bit(q{d} % 64, 64));\n", .{ lb, lb });
     }
-    try self.store(at, how);
+    try storeSelected(self, at, element_label, how);
     try self.print("L.up(", .{});
     try rhsFor(self, val, .{ .width = 1, .signed = false });
     try self.print(", q{d}, {d}), L.bit(q{d}, {d}));\n", .{ lb, sw, lb, sw });
+}
+
+fn storeSelected(self: *Emitter, at: u32, element_label: ?u32, how: How) Error!void {
+    if (element_label) |lb| return self.storeElement(at, lb, how);
+    return self.store(at, how);
 }
 
 /// `exec.delayOf` of an integral delay, in ticks: folded when constant.

@@ -595,42 +595,57 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             try self.print(") |a{d}| M.getw(s, {d} + (a{d} - {d}) * {d}, {d})", .{lb} ++ at ++ .{nw});
         return self.print(" else L.xs({d}), {d}, {d}, {})", .{ n.width, n.width, w, sg });
     }
-    try nativeSelect(self, e);
-    const at = try self.slot(ex.lhs(e));
+    const operand = ex.lhs(e);
+    const at = try self.slot(r.chainBase(operand).base);
     const sw = try self.slotWidth(at);
     const range = vecRange(r, at, sw);
     const rg = ex.rhs(e);
     if (ex.tag(rg) == .range) {
         const p = try partPlace(self, e, range);
         try self.print("L.rs(L.part(", .{});
-        try self.get(at);
+        try selectValue(self, operand, at);
         try self.print(", {d}, {d}, {d}), {d}, {d}, {})", .{ p.shift, p.count, sw, n.width, w, sg });
         return;
     }
+    if (ex.tag(rg) == .indexed_range) {
+        try self.print("L.rs(L.partAt(", .{});
+        try selectValue(self, operand, at);
+        try self.print(", ", .{});
+        try indexedShift(self, e, range);
+        return self.print(", {d}, {d}), {d}, {d}, {})", .{ n.width, sw, n.width, w, sg });
+    }
     // A known constant index inside the range reads its one plane word, not
     // the whole vector.
-    if (sw > 64 and compile.constantExpression(r, rg)) {
+    if (sw > 64 and ex.tag(operand) != .index and compile.constantExpression(r, rg)) {
         const v = exec.eval(r, self.arena, rg, 0) catch return self.refuse("a constant the engine does not fold");
-        if (v.asInt()) |i| {
-            const p = if (range.msb >= range.lsb) i - range.lsb else range.lsb - i;
+        if (exec.indexInt(v)) |i| {
+            const p = range.position(i);
             if (p >= 0 and p < sw) return self.print("L.rs(L.bitAt(M.get(s, {d}), {d}, 63, 0, 64), 1, {d}, {})", .{ self.off[at] + @as(u32, @intCast(p)) / 64, @mod(p, 64), w, sg });
         }
     }
     try self.print("L.rs(L.bitAt(", .{});
-    try self.get(at);
-    try self.print(", L.asInt(", .{});
+    try selectValue(self, operand, at);
+    try self.print(", L.asIndex(", .{});
     const t = try selfDetermined(self, rg);
     try self.print(", {d}, {}), {d}, {d}, {d}), 1, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, sw, w, sg });
 }
 
-/// Refuses the vector selects the executable leaves to the embedded
-/// interpreter.
-/// ponytail: a §5.2.2 select of an array element and a §5.2.1 indexed
-/// part-select are not native; emit them when a design needs the speed.
-pub fn nativeSelect(self: *Emitter, e: Ast.ExprId) Error!void {
-    const ex = &self.r.file.exprs;
-    if (ex.tag(ex.lhs(e)) == .index) return self.refuse("a select of an array element");
-    if (ex.tag(ex.rhs(e)) == .indexed_range) return self.refuse("an indexed part-select");
+/// The packed value a select reads, including an addressed array element.
+fn selectValue(self: *Emitter, operand: Ast.ExprId, base: u32) Error!void {
+    if (self.r.file.exprs.tag(operand) != .index) return self.get(base);
+    return value(self, operand, .{ .width = try self.slotWidth(base), .signed = false });
+}
+
+/// The optional storage shift of an indexed part-select (§5.2.1). Its
+/// width is constant; only the self-determined base is evaluated here.
+pub fn indexedShift(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    const rg = ex.rhs(e);
+    const count = compile.typeOf(r, e).width;
+    try self.print("L.selectShift(L.asIndex(", .{});
+    const t = try selfDetermined(self, ex.lhs(rg));
+    try self.print(", {d}, {}), {d}, {d}, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, count, ex.extraOf(rg) == 0 });
 }
 
 /// `exec.address` as a Zig `?u32`: the element's slot, or null. `label`
@@ -649,7 +664,7 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     try self.print(" var o{d}: u64 = 0;", .{label});
     for (selects.items, 0..) |sel, d| {
         const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
-        try self.print(" const i{d}_{d} = L.asInt(", .{ label, d });
+        try self.print(" const i{d}_{d} = L.asIndex(", .{ label, d });
         const t = try selfDetermined(self, sel);
         try self.print(", {d}, {}) orelse break :b{d} null;", .{ t.width, t.signed, label });
         try self.print(" if (i{d}_{d} < {d} or i{d}_{d} > {d}) break :b{d} null;", .{ label, d, span.low, label, d, span.high, label });

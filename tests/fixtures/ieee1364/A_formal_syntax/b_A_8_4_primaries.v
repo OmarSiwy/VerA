@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 A.8.4, p. 505-506:
 //   constant_primary ::= number | parameter_identifier [ [ constant_range_expression ] ]
 //     | specparam_identifier [ [ constant_range_expression ] ] | constant_concatenation

@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 §9.7.2, p. 133: "An implicit event shall be detected on any
 // change in the value of the expression. An edge event shall be detected only
 // on the least significant bit of the expression. A change of value in any

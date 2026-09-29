@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 §6, p. 68, Table 6-1 "Legal left-hand forms in assignment
 // statements": for a continuous assignment "Constant indexed part-select of a
 // vector net"; for a procedural assignment "Indexed part-select of a vector

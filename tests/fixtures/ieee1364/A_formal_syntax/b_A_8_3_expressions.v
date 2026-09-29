@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 A.8.3, p. 504-505:
 //   base_expression ::= expression
 //   conditional_expression ::= expression1 ? { attribute_instance } expression2 : expression3
