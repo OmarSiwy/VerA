@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §§18.1–18.2: four-state VCD artifact witness.
 // The retained golden is an implementation-specific snapshot, not a portable
 // byte-for-byte conformance oracle. See VCD-ORACLE-001 in
-// docs/conformance-vcd-review.md at 8b1514d4 and tools/vcd_semantics.py.
+// docs/conformance-vcd-review.md at 8b1514d4 and tools/vcd_semantics.py at d28ed595.
 //
 // The tasks used here:
 //   $dumpfile(name)       names the dump file.
@@ -82,7 +82,7 @@
 //! inherited IEEE 1364-2005 18.1 ($dumpfile, $dumpvars)
 //! inherited IEEE 1364-2005 18.2 (VCD format, identifier codes, value changes)
 // The golden lives in ch09_system_tasks/ (4250899 moved it there from
-// tests/pending/D09/, next to tools/test_vcd_semantics.py's GOLDENS); the old
+// tests/pending/D09/, next to tools/test_vcd_semantics.py's GOLDENS at d28ed595); the old
 // operand named a file that no longer existed under that name.
 //! expect vcd d09_vcd.vcd == d09_11_vcd_dumpvars.expected.vcd
 `timescale 1ns/1ns

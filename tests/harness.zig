@@ -2,8 +2,8 @@
 //! `Compiler` -> one verdict per fixture and a report. Everything that is not
 //! about a particular compiler lives here: the fixture format, the assertion
 //! lint, the verdict algebra (`judge`), the parallel walk and `--coverage`.
-//! Plugs: `torture.zig` (VerA, runs the model) and `external.zig` (any
-//! compiler, accept/refuse only). `bench.zig` owns `main`.
+//! Plugs: `torture.zig`'s full compiler (runs the model) and its
+//! accept/refuse-only one. `bench.zig` owns `main`.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -12,6 +12,11 @@ const vera = @import("vera");
 const options = @import("suite_options");
 
 const Io = std.Io;
+
+/// `std.mem.sort` order for strings: bytewise.
+pub fn strLess(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
 
 /// Everything one fixture needs, all with the same lifetime.
 pub const Fixture = struct {
@@ -51,7 +56,7 @@ pub const Result = union(enum) {
 
 /// One compiler, plugged in.
 pub const Compiler = struct {
-    /// Names the compiler in the report — `vera`, `openvaf-r`.
+    /// Names the compiler in the report.
     name: []const u8,
     /// Whether this compiler runs a fixture or only accepts or refuses it. When
     /// false, an unasserted fixture is not held against it and the summary says
@@ -623,11 +628,7 @@ fn readClassifications(
         if (std.mem.startsWith(u8, e.path, "ieee1364" ++ std.fs.path.sep_str)) continue;
         try files.append(arena, try std.fs.path.join(arena, &.{ root, e.path }));
     }
-    std.mem.sort([]const u8, files.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, files.items, {}, strLess);
     for (files.items) |path| {
         const text = try Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -804,11 +805,7 @@ fn lrmClauses(
     }
     // `walk` order is explicitly undefined and first-wins below, so a clause
     // number occurring in two files would otherwise be attributed at random.
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, names.items, {}, strLess);
 
     for (names.items) |name| {
         const prefix = clausePrefix(std.fs.path.basename(name)) orelse continue;
@@ -845,19 +842,9 @@ fn clausePrefix(basename: []const u8) ?[]const u8 {
         const letter = std.ascii.toUpper(basename[6]);
         if (letter < 'A' or letter > 'H') return null;
         if (basename[7] != '-') return null;
-        // Uppercased, so the slice cannot be into `basename`. The set is small
-        // and fixed, so it is a table rather than an allocation.
-        return switch (letter) {
-            'A' => "A",
-            'B' => "B",
-            'C' => "C",
-            'D' => "D",
-            'E' => "E",
-            'F' => "F",
-            'G' => "G",
-            'H' => "H",
-            else => unreachable,
-        };
+        // Uppercased, so the slice cannot be into `basename`: it is into a
+        // static table instead of an allocation.
+        return "ABCDEFGH"[letter - 'A' ..][0..1];
     }
     return null;
 }

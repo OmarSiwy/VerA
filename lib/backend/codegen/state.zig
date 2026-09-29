@@ -14,16 +14,12 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
-const Mir = @import("ir").Mir;
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
-const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
-const opHasState = codegen.opHasState;
-const enableArgIdx = codegen.enableArgIdx;
+const plan_args = @import("plan/args.zig");
 
 /// What the accepted-step body needs, decided once for `updateState` and
 /// `acceptQ` alike.
@@ -46,7 +42,7 @@ fn scanAccept(self: *Gen) Error!Accept {
         a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
         if (k == .absdelay and (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i)) or
             try gen_call.absdelayMaxdSampled(self, self.names.opArgs(self.mir, i)))) a.reads_t_prev = true;
-        if (!opHasState(k)) continue;
+        if (k == .none) continue;
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
     for (self.core.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
@@ -69,7 +65,7 @@ pub fn emitCore(self: *Gen) Error!void {
         keep[k] = true;
     };
     for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op or !opHasState(u.op)) continue;
+        if (u.role != .analog_op or u.op == .none) continue;
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         for (self.mir.instData(inst).call.args) |a| {
             const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
@@ -260,7 +256,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     , .{});
     for (self.names.units, 0..) |u, i| {
         const k = u.op;
-        if (u.role != .analog_op or !opHasState(k)) continue;
+        if (u.role != .analog_op or k == .none) continue;
         const n = self.names.unit_names[i];
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
@@ -689,7 +685,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         // §5.10.3.3 "if enable is specified and it is zero, then timer() is
         // inactive": such a timer adds no breakpoint and vetoes no other.
         var guard: ?[]const u8 = null;
-        if (enableArgIdx(.timer)) |ei| {
+        if (plan_args.enableArgIdx(.timer)) |ei| {
             if (ei < args.len) {
                 if (self.an.foldConst(args[ei], false)) |c| {
                     if (c.f == 0.0) continue;

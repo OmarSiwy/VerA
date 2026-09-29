@@ -21,18 +21,7 @@ const diag = @import("diag");
 const Oom = Lower.Oom;
 const NoiseSrc = Lower.NoiseSrc;
 const TypedValue = Lower.TypedValue;
-const VarSlot = Lower.VarSlot;
 const ArrayInfo = Lower.ArrayInfo;
-const init = Lower.init;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
-const call = Lower.call;
-const gotoBlock = Lower.gotoBlock;
-const startUnreachable = Lower.startUnreachable;
-const toReal = Lower.toReal;
-const toInt = Lower.toInt;
-const coerceTo = Lower.coerceTo;
 
 /// This file's private state on `Lower` (`Lower.stmt_state`).
 pub const State = struct {

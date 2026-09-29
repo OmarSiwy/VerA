@@ -490,24 +490,6 @@ pub fn blockCount(self: *const Mir) u32 {
     return @intCast(self.blocks.len);
 }
 
-/// Iterator over block handles `0..count`.
-pub const BlockIterator = struct {
-    count: u32,
-    i: u32 = 0,
-
-    /// Returns the next block, or null past the last.
-    pub fn next(it: *BlockIterator) ?Block {
-        if (it.i >= it.count) return null;
-        defer it.i += 1;
-        return @enumFromInt(it.i);
-    }
-};
-
-/// Returns the blocks in creation order, the deterministic codegen walk order.
-pub fn blockIter(self: *const Mir) BlockIterator {
-    return .{ .count = self.blockCount() };
-}
-
 /// Iterator over one block's instruction chain.
 pub const InstIterator = struct {
     /// Borrowed `next` column. Adding instructions invalidates it: iterate only
@@ -626,6 +608,16 @@ fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst
     return inst;
 }
 
+/// Appends `row` to `block` with a fresh result Value, and returns it.
+fn addResultInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Value {
+    const result = try self.addValue(gpa, .inst_result, 0);
+    var r = row;
+    r.result = result;
+    const inst = try self.addInst(gpa, block, r);
+    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
+    return result;
+}
+
 /// Appends a value-producing instruction to `block` and returns its result.
 /// Asserts that `ops` matches `op`'s class (see `InstRow`'s encoding table);
 /// phi, branch, jump, call and anew have their own builders.
@@ -638,24 +630,17 @@ pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: [
         .load => ops.len == 2,
         .phi, .branch, .jump, .call, .anew => false, // dedicated builders
     });
-    const result = try self.addValue(gpa, .inst_result, 0);
-    const inst = try self.addInst(gpa, block, .{
+    return self.addResultInst(gpa, block, .{
         .op = op,
         .a = @intFromEnum(ops[0]),
         .b = if (ops.len > 1) @intFromEnum(ops[1]) else 0,
         .c = if (ops.len > 2) @intFromEnum(ops[2]) else 0,
-        .result = result,
     });
-    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
-    return result;
 }
 
 /// Returns a fresh version of §3.2.2 memory-backed array `array` (see `Opcode.anew`).
 pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !Value {
-    const result = try self.addValue(gpa, .inst_result, 0);
-    const inst = try self.addInst(gpa, block, .{ .op = .anew, .a = array, .result = result });
-    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
-    return result;
+    return self.addResultInst(gpa, block, .{ .op = .anew, .a = array });
 }
 
 /// Appends a §5.8 two-way branch, the block's terminator.
@@ -679,31 +664,19 @@ pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block)
 pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, name: StrId, args: []const Value) !Value {
     const start = try self.addExtra(gpa, &.{@intFromEnum(name)});
     _ = try self.addExtra(gpa, @ptrCast(args));
-    const result = try self.addValue(gpa, .inst_result, 0);
-    const inst = try self.addInst(gpa, block, .{
+    return self.addResultInst(gpa, block, .{
         .op = .call,
         .a = @intFromEnum(Callee.fromName(self.strings.get(name))),
         .b = start,
         .c = @intCast(args.len),
-        .result = result,
     });
-    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
-    return result;
 }
 
 /// Appends a phi and returns its result. `pairs` may be empty for an
 /// incomplete phi (Braun et al.); fill it later with `setPhiPairs`.
 pub fn emitPhi(self: *Mir, gpa: std.mem.Allocator, block: Block, pairs: []const PhiPair) !Value {
     const start = try self.addExtraPairs(gpa, pairs);
-    const result = try self.addValue(gpa, .inst_result, 0);
-    const inst = try self.addInst(gpa, block, .{
-        .op = .phi,
-        .b = start,
-        .c = @intCast(pairs.len),
-        .result = result,
-    });
-    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
-    return result;
+    return self.addResultInst(gpa, block, .{ .op = .phi, .b = start, .c = @intCast(pairs.len) });
 }
 
 /// Replaces a phi's operand list (`sealBlock` fills incomplete phis).
@@ -883,8 +856,5 @@ test "mir: const dedup, block chain, phi pairs, alias" {
     try std.testing.expectEqual(e, mir.resolveAlias(p));
     try std.testing.expectEqual(id, mir.resolveAlias(id));
 
-    var bi = mir.blockIter();
-    try std.testing.expectEqual(Block.entry, bi.next().?);
-    try std.testing.expectEqual(join, bi.next().?);
-    try std.testing.expect(bi.next() == null);
+    try std.testing.expectEqual(@as(u32, 2), mir.blockCount());
 }

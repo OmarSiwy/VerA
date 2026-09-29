@@ -18,8 +18,6 @@ const opcode_zig = codegen.opcode_zig;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
-const proof = @import("ir").proof;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -803,11 +801,6 @@ pub fn emitScan(self: *Gen, fn_name: []const u8, args: []const Mir.Value, want: 
     if (want == .real) try self.b(")", .{});
 }
 
-/// A family has no `S.val`; the value is read through `zV`.
-fn valFn(_: *const Gen) []const u8 {
-    return "zV";
-}
-
 /// Writes one §9.13 probabilistic draw. `$rng$auto` reads the seedless
 /// form's `Instance` field; every other name is a `rng_kernels.zig` call on
 /// the i64 seed and its real parameters. Always pins lanes.
@@ -824,7 +817,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
         },
         .@"$rng$check" => {
             if (args.len != 4) return gen_call.abort(self, "malformed RNG validation effect", .{});
-            const val = valFn(self);
+            const val = "zV"; // a family has no `S.val`
             try self.b("S.con(zRngCheck({s}(", .{val});
             try renderVal(self, args[0], .real);
             try self.b("), {d}, {s}(", .{ intArg(self, args, 1) orelse return gen_call.abort(self, "missing RNG validation rules", .{}), val });
@@ -885,7 +878,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     // The lookup runs at the union of its points' masks.
     var m: u64 = 0;
     for (args[7..head]) |v| m |= family.mask(self, v);
-    const val = valFn(self);
+    const val = "zV"; // a family has no `S.val`
     const pt = try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{m});
     if (site != 0) {
         self.uses_inst = true;

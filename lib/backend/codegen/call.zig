@@ -21,7 +21,6 @@ const Analysis = @import("ir").Analysis;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
 const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -30,9 +29,7 @@ const mathOpByName = codegen.mathOpByName;
 const isAnalysisName = codegen.isAnalysisName;
 const devSafe = codegen.devSafe;
 const opcode_zig = codegen.opcode_zig;
-const OpKind = codegen.OpKind;
-const opNeedsInput = codegen.opNeedsInput;
-const enableArgIdx = codegen.enableArgIdx;
+const OpKind = @import("ir").op.OpKind;
 
 /// Returns `inst` as a ternary: the optimizer's select, or a pure two-way CFG
 /// merge rebuilt from its phi. Null for loop-carried or multiway phis and
@@ -520,7 +517,7 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
 /// `true` when absent. The enable is a live expression; `UnitPlan` gives it
 /// a slot via `enableArgIdx`.
 fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const u8 {
-    const i = enableArgIdx(k) orelse return "true";
+    const i = plan_args.enableArgIdx(k) orelse return "true";
     if (i >= args.len) return "true";
     const at = self.out.items.len;
     try gen_cfg.renderCond(self, args[i]);
@@ -954,7 +951,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$hflip", .@"$vflip" => return self.b("S.con(1.0)", .{}), // +1
         // §9.15 $simparam(name [, fallback]): the known value first, the
         // fallback only "if param_name is not known". The known set is
-        // `Lower.simparamValue`, the same one E0811 checks.
+        // `Lowered.simparamValue`, the same one E0811 checks.
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
@@ -1308,7 +1305,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     const n = self.names.unit_names[unit];
     // Render the input only when the kernel reads it, or `uses_x` would keep
     // an unreferenced parameter named.
-    const needs_in = opNeedsInput(k);
+    const needs_in = plan_args.opNeedsInput(k);
     // Every operator input is a core field, so this renders a local in the
     // core and a cache read in the display unit.
     const in0 = if (needs_in)
