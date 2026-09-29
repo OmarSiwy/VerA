@@ -23,10 +23,10 @@ const snapshot = @import("snapshot.zig");
 const logic = @import("logic.zig");
 const time = @import("../time.zig");
 
-/// One pin: bit `bit` of the top module's port slot `slot`, whose value is
-/// word `off` of the planes. A port is at most 64 bits wide, since a device
-/// has at most 64 pins.
-pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u6 };
+/// One pin: bit `bit` of the top module's port slot `slot`, whose first word
+/// is word `off` of the planes. A device has at most 256 pins, so no port is
+/// wider.
+pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u8 };
 
 pub const Spec = struct {
     /// The pins' enum, `U` of the device.
@@ -42,7 +42,7 @@ pub const Spec = struct {
 
 pub fn Device(comptime spec: Spec) type {
     const n_u = spec.pins.len;
-    comptime std.debug.assert(n_u <= 64);
+    comptime std.debug.assert(n_u <= 256);
     const n_out = blk: {
         var n: usize = 0;
         for (spec.pins) |p| n += @intFromBool(p.out);
@@ -63,7 +63,9 @@ pub fn Device(comptime spec: Spec) type {
         };
         break :blk ix;
     };
-    const out_mask: u64 = comptime blk: {
+    // Above 64 pins no u64 mask can name a pin, and every mask is all ones
+    // (the contract's dense default; the root omits the mask decls).
+    const out_mask: u64 = if (n_u > 64) ~@as(u64, 0) else comptime blk: {
         var m: u64 = 0;
         for (spec.pins, 0..) |p, u| if (p.out) {
             m |= @as(u64, 1) << u;
@@ -155,8 +157,10 @@ pub fn Device(comptime spec: Spec) type {
         pub const deriv_reads: u64 = out_mask;
         pub const ddx_reads: u64 = 0;
         pub const jac_pattern: [n_u]u64 = blk: {
-            var p: [n_u]u64 = @splat(0);
-            for (0..n_u) |u| p[u] = out_mask & (@as(u64, 1) << u);
+            var p: [n_u]u64 = @splat(out_mask);
+            if (n_u <= 64) for (0..n_u) |u| {
+                p[u] = out_mask & (@as(u64, 1) << u);
+            };
             break :blk p;
         };
 
@@ -314,12 +318,12 @@ pub fn Device(comptime spec: Spec) type {
 
         /// The A2D store of `bit` into pin `p`, with every wake it causes.
         fn drive(s: *root.State, comptime p: Pin, bit: logic.Bit) !void {
-            const one = @as(u64, 1) << p.bit;
+            const one = @as(u64, 1) << @intCast(p.bit % 64);
             const b: u2 = @intFromEnum(bit);
             // (v, x) planes: 0 = 00, 1 = 10, z = 01, x = 11.
             const v: u64 = if (b == 1 or b == 3) one else 0;
             const xb: u64 = if (b >= 2) one else 0;
-            try s.store(p.slot, p.off, &.{v}, &.{xb}, &.{one});
+            try s.putWordAs(false, .all, p.slot, p.off, p.bit / 64, .{ .v = v, .x = xb }, one);
         }
 
         /// Each output's level and conductance from the engine: the static
@@ -327,8 +331,9 @@ pub fn Device(comptime spec: Spec) type {
         fn outputs(m: *const Model, inst: *Instance, s: *const root.State, t: f64, static_: bool) void {
             inline for (spec.pins, 0..) |p, u| if (p.out) {
                 const k = index[u];
-                const w = s.get(p.off);
-                const b: u2 = @intCast(((w.v >> p.bit) & 1) | (((w.x >> p.bit) & 1) << 1));
+                const w = s.get(p.off + p.bit / 64);
+                const at: u6 = p.bit % 64;
+                const b: u2 = @intCast(((w.v >> at) & 1) | (((w.x >> at) & 1) << 1));
                 const lvl = switch (b) {
                     0 => m.vss,
                     1 => m.vdd,
