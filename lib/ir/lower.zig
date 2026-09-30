@@ -32,7 +32,7 @@ const std = @import("std");
 const Ast = @import("frontend").Ast;
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
-const Elaborate = @import("elaborate.zig");
+const Elaborate = @import("elab").Elaborate;
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
@@ -278,7 +278,7 @@ consts: std.StringHashMapUnmanaged(Const) = .empty,
 param_index: std.StringHashMapUnmanaged(u32) = .empty,
 /// §3.4.7/§9.18 top-level aliases share one model-card slot per system
 /// parameter. Child aliases have already become instance-local values.
-hier_params: @import("hier_param.zig").Aliases = .initFill(null),
+hier_params: @import("elab").hier_param.Aliases = .initFill(null),
 /// Scalarized array bounds (§3.2.2 variables, §3.4.4 parameters).
 arrays: std.StringHashMapUnmanaged(ArrayInfo) = .empty,
 /// §4.6.4 the noise sources a variable holds, by name, for §4.6.4.6's

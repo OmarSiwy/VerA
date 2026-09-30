@@ -31,7 +31,7 @@ pub const Dist = struct {
 };
 
 /// Table 9-10, all 16 names. `$simprobe` is §9.16 and stays out.
-const dists = [_]Dist{
+pub const dists = [_]Dist{
     // §9.13.1. `kernel` is the same for both: "$arandom is upwardly compatible
     // with $random ... and has the same behavior."
     .{ .name = "$random", .kernel = "$rng$rand", .nparam = 0, .ty = .integer },
@@ -114,7 +114,6 @@ test of {
 }
 
 test "dist: §9.13 argument rules, and the integer twins match (IEEE 1364 §17.9.2)" {
-    const Callee = @import("callee.zig").Callee;
     // §9.13.2 Syntax: parameters after the seed, and which "shall be greater
     // than zero": mean, degree_of_freedom and k_stage.
     const want = [_]struct { []const u8, u8, u8, bool, bool }{
@@ -143,11 +142,6 @@ test "dist: §9.13 argument rules, and the integer twins match (IEEE 1364 §17.9
     // §9.13.1: `$arandom` "has the same behavior" as `$random`.
     try std.testing.expectEqualStrings(of("$random").?.kernel, of("$arandom").?.kernel);
     try std.testing.expectEqual(@as(u8, 0), of("$random").?.nparam);
-    // Every kernel is one of lowering's own reserved callees.
-    for (&dists) |*d| {
-        const c = Callee.fromName(d.kernel);
-        try std.testing.expect(c != .systf and c.synthetic());
-    }
 }
 
 test paramName {

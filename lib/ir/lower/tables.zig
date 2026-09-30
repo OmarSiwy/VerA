@@ -25,7 +25,7 @@ const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
 const Mir = @import("../mir.zig");
-const Elaborate = @import("../elaborate.zig");
+const Elaborate = @import("elab").Elaborate;
 const constfold = @import("frontend").constfold;
 const lower_sysfunc = @import("sysfunc.zig");
 
@@ -146,7 +146,7 @@ pub const DeclMeta = struct {
 
 /// One `Lowered.system_checks` row: a §9.18 system parameter's name and kind,
 /// and its value lowered over the parameters.
-pub const SystemCheck = struct { kind: @import("../hier_param.zig").Kind, name: []const u8, v: Mir.Value };
+pub const SystemCheck = struct { kind: @import("elab").hier_param.Kind, name: []const u8, v: Mir.Value };
 
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example

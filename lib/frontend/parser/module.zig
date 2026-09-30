@@ -420,7 +420,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         // Nothing is resolved here: the path names a parameter of an
         // instance, which does not exist until elaboration, and §6.3.1's
         // "shall be a constant expression" is over the declaring module's
-        // parameters. `ir/elaborate.zig` checks both, and reports a path
+        // parameters. `elab/elaborate.zig` checks both, and reports a path
         // that names nothing (E0907).
         .kw_defparam => {
             self.pos += 1;

@@ -17,8 +17,8 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
-const discipline_rules = @import("../discipline_rules.zig");
-const Elaborate = @import("../elaborate.zig");
+const discipline_rules = @import("elab").discipline_rules;
+const Elaborate = @import("elab").Elaborate;
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
@@ -580,7 +580,7 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u3
 /// §7.2.4: the node's potential tolerance is the smallest among the
 /// continuous segments sharing it. Preserve the net's resolved discipline:
 /// §5.5.3 still reads that net's local nature attributes, not this minimum.
-pub fn collectSignalAbstols(self: *Lower, segments: []const @import("../elaborate.zig").SignalDiscipline) Oom!void {
+pub fn collectSignalAbstols(self: *Lower, segments: []const @import("elab").Elaborate.SignalDiscipline) Oom!void {
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (segments) |s| {
         const info = self.out.disciplines.get(s.discipline) orelse continue;

@@ -9,6 +9,7 @@ const std = @import("std");
 pub const contract = @import("contract");
 pub const diag = @import("diag");
 pub const frontend = @import("frontend");
+pub const elab = @import("elab");
 pub const kernels = @import("kernels");
 pub const ir = @import("ir");
 pub const backend = @import("backend");

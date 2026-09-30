@@ -1,10 +1,8 @@
-//! IR: AST → elaborated design (§6.2.2) → SSA MIR → analysis, if-conversion
+//! IR: elaborated design (`elab`, §6.2.2) → SSA MIR → analysis, if-conversion
 //! and the finiteness proof. Re-exports only; the files import each other
-//! directly. Elaboration imports no lowering file (its closure is `elaborate/`,
-//! `dist.zig`, `discipline_rules.zig`, `hier_param.zig`), so it could be its
-//! own module; it stays here because that split would add a `module_specs`
-//! row for an edge nothing crosses. `kernels` is a dependency so §9.13 folds
-//! use the device's rng.
+//! directly. `Elaborate` is `elab`'s, re-exported so `ir.Elaborate` keeps its
+//! name (ARCHITECTURE.md Phase 4); §1 marks the `elab` edge [A] until
+//! Phase 11. `kernels` holds the value folds and kernel tables it reads.
 
 /// SSA instruction set every stage after lowering reads.
 pub const Mir = @import("mir.zig");
@@ -15,7 +13,7 @@ pub const Analysis = @import("analysis.zig");
 /// SSA construction used while lowering.
 pub const Ssa = @import("ssa.zig");
 /// Hierarchy flattening, AST → one flat module (§6).
-pub const Elaborate = @import("elaborate.zig");
+pub const Elaborate = @import("elab").Elaborate;
 /// AST → MIR lowering.
 pub const Lower = @import("lower.zig");
 /// What lowering hands every later stage (lower/tables.zig).

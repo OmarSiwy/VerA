@@ -1448,7 +1448,7 @@ fn digitalWrites(r: *Run, m: *const Ast.ModuleDecl) Error!std.AutoHashMapUnmanag
 /// VAMS §3.6.2.2: is `name` a continuous discipline (the analog solver's)
 /// rather than a discrete one such as Annex D's `ddiscrete`, whose nets are
 /// §7.2's digital nets and this engine's? The discipline only says which
-/// kernel resolves a net. `lib/ir/discipline_rules.zig`'s `isContinuous`
+/// kernel resolves a net. `lib/elab/discipline_rules.zig`'s `isContinuous`
 /// restated, since `sim` cannot import `ir`: the last declaration wins, and
 /// an undeclared domain is continuous when a nature is bound.
 fn continuous(file: *const Ast.SourceFile, name: Ast.StrId) bool {

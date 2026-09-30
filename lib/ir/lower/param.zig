@@ -11,9 +11,9 @@
 //! §3.4.7, §4.2.1.1, §4.2.13, §5.5.3, §6.3, §6.3.4, §6.6.1, §6.7.1, §9.18.
 
 const std = @import("std");
-const hier_param = @import("../hier_param.zig");
+const hier_param = @import("elab").hier_param;
 const Lower = @import("../lower.zig");
-const Elaborate = @import("../elaborate.zig");
+const Elaborate = @import("elab").Elaborate;
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");

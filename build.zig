@@ -50,9 +50,12 @@ const module_specs = [_]ModuleSpec{
     // Opening an `--emit-so` artifact: the one OS-bound file (its header).
     .{ .name = "dynlib", .path = "lib/dynlib.zig", .role = .leaf },
     .{ .name = "frontend", .path = "lib/frontend/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "kernels" } },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "kernels", "contract" } },
+    // Elaboration (§6.2.2) and the rule tables lowering shares with it.
+    // `kernels`: the §9.13 folds use the device's rng.
+    .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "kernels" } },
+    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "kernels", "contract" } },
     .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "ir", "backend", "kernels" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "backend", "kernels" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the

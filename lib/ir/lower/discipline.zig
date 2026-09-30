@@ -4,7 +4,7 @@
 //! per-node disciplines. Out: `Lowered.disciplines`, the §3.6.1.4 access-name
 //! map (`Lower.access_kind`), the declaration diagnostics, and the §3.11
 //! compatibility diagnostics. The AST-only rules live in
-//! `ir/discipline_rules.zig`.
+//! `elab/discipline_rules.zig`.
 //!
 //! Spine: `collectDisciplines`, then `checkNatureTable`, once per module;
 //! `checkNetCompat` per access function, branch and port connection.
@@ -20,7 +20,7 @@ const lower_contrib = @import("contrib.zig");
 const lower_node = @import("node.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
-const rules = @import("../discipline_rules.zig");
+const rules = @import("elab").discipline_rules;
 const diag = @import("diag");
 const Oom = Lower.Oom;
 const ground = Lower.ground;

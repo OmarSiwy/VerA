@@ -85,11 +85,11 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             .kw_discipline => try element(self, before, &disciplines, parse_discipline.parseDiscipline(self)),
             .kw_nature => try element(self, before, &natures, parse_discipline.parseNature(self)),
             // §6.4 / A.1.9 paramset_declaration. §6.4 makes a paramset
-            // instantiable "exactly like a module"; `ir/elaborate.zig`
+            // instantiable "exactly like a module"; `elab/elaborate.zig`
             // applies it.
             .kw_paramset => try element(self, before, &paramsets, parse_paramset.parseParamset(self)),
             // §7.7 / A.1.8 connectrules_declaration, read by annex F.2
-            // discipline resolution (`ir/elaborate.zig`).
+            // discipline resolution (`elab/elaborate.zig`).
             .kw_connectrules => try element(self, before, &connectrules, parse_connectrules.parseConnectRules(self)),
             // Annex B reserves `primitive`, `config`, `library` and
             // `include` without a tag of their own, so the spelling is the

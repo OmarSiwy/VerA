@@ -29,7 +29,7 @@ pub const libmap = @import("frontend").libmap;
 /// A `--param name=value` compile-time override (`Options.param_overrides`, LRM §3.4).
 pub const ParamOverride = Lower.ParamOverride;
 /// §7.4.4 resolution mode, `Options.discipline_resolution`.
-pub const DisciplineResolution = @import("ir").Elaborate.DisciplineResolution;
+pub const DisciplineResolution = @import("elab").Elaborate.DisciplineResolution;
 /// The keyword set a `--std=` selects (`Options.language`).
 pub const KeywordSet = token.KeywordSet;
 /// Diagnostic codes, the `Bag` every stage reports into, and rendering.
@@ -51,7 +51,7 @@ const deep_stack = @import("base").deep_stack;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Ssa = @import("ir").Ssa;
-const Elaborate = @import("ir").Elaborate;
+const Elaborate = @import("elab").Elaborate;
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const ifconv = @import("ir").ifconv;

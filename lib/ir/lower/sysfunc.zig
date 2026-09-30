@@ -15,7 +15,7 @@
 //! IEEE 1364-2005 clauses cited: §17.1.1.1, §17.10, §17.11.1.
 
 const std = @import("std");
-const hier_param = @import("../hier_param.zig");
+const hier_param = @import("elab").hier_param;
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
@@ -27,7 +27,7 @@ const lower_systask = @import("systask.zig");
 const lower_table_model = @import("table_model.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
-const Elaborate = @import("../elaborate.zig");
+const Elaborate = @import("elab").Elaborate;
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const Oom = Lower.Oom;

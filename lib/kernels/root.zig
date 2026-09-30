@@ -48,7 +48,7 @@ pub const str_kernels = @import("str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
 pub const table_kernels = @import("table_kernels.zig");
 /// §9.13 probabilistic distribution functions; also elaboration's literal
-/// folds (`ir/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
+/// folds (`elab/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
 /// `$dist_*`, so every path draws the same sequence from a seed.
 pub const rng_kernels = @import("rng_kernels.zig");
 /// §4.5.11/§4.5.12 filter numerics.
