@@ -77,3 +77,12 @@ P1: −10 net lines over 119 files (152 `pub` made private, 116 std renames, dea
 | `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
 
 Issues closed by these waves: #35–#48 (bugs found by the pass, each with a fixture and, where a limit was added, a `Vague_Decisions.md` row).
+
+### Wave 5 — ARCHITECTURE.md Phase 0 and Phase 1, #49, empty path flags (gate a8d9b32f against base 1518183f)
+
+| Check | Result |
+|---|---|
+| `zig build check`; `zig build test` Debug / ReleaseSafe | exit 0; exit 0 / exit 0 (the new `tests/fitness.zig` passes on the tree: R1–R7 allowlists hold) |
+| golden diff | 1 file differs in both snapshots: #48's end-of-file fixture's `.stderr` gains #49's third E0207 (still `reject-only E0207`); 13580 files are only in the new snapshot: Phase 0's runner, `.so/` and program kinds, and #49's new fixture |
+| fixture suite | 2615/2615 → 2616/2616, FAIL list empty |
+| `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
