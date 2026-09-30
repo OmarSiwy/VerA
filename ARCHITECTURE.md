@@ -83,7 +83,7 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 - **Fix:** Phases 7–8.
 
 **I3. `ir` holds types only.**
-- `lib/ir/root.zig:16-27` exports logic: `Elaborate`, `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.
+- `lib/ir/root.zig:16-27` exports logic: ~~`Elaborate`~~ (Phase 4: a re-export of `elab`, whose files left `ir`), `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.
 - ~~`mir.zig:9,47,311` takes `StrId` and the interner from the Ast.~~ Phase 2: it reads `base`.
 - ~~`opcode.zig:8-9,45-47,194` takes the Ast operator enums and `constfold`.~~ Phase 3: it reads `kernels.fold` and no longer imports `frontend`.
 - `lower/tables.zig:23-30` imports Lexer, Preprocessor, Elaborate and `sysfunc`; `:878-889` is logic.
@@ -91,7 +91,7 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 - **Fix:** Phases 3, 4, 5, 6 and 11.
 
 **I4. `elab` never writes the Ast.**
-- Elaboration writes it: `elaborate/clone.zig:61,450,495,516,519,546,569,680`, `insert.zig:447`, `names.zig:618,774`, `instance.zig:170,360`, `elaborate.zig:788`, `hier_param.zig:113`, `discipline_rules.zig:186,189`.
+- Elaboration writes it (Phase 4 moved these files to `lib/elab/`, line numbers unchanged): `elaborate/clone.zig:61,450,495,516,519,546,569,680`, `insert.zig:447`, `names.zig:618,774`, `instance.zig:170,360`, `elaborate.zig:788`, `hier_param.zig:113`, `discipline_rules.zig:186,189`.
 - `src/sim/digital/root.zig:1571-1575` writes it too.
 - There are 16 mutable `*Ast.SourceFile` signatures and 434 `exprs.` reader sites.
 - Interning is allowed: the interner becomes a `base` table that several stages write.
@@ -216,4 +216,5 @@ line numbers had moved.
 | 1 | written 2026-10-17 on branch `phase1-fitness` (`ModuleSpec.role`, `tests/import_graph.zig`, `tests/fitness.zig`); awaits its gate, `zig build test` |
 | 2 | written 2026-10-17 on branch `phase2-base` (`lib/base/`: `deep_stack`, `interner`, `big_arena`; `sim`'s six `deep_stack` sites and `mir.zig`'s interner read `base`); awaits its gate, G |
 | 3 | written 2026-10-17 on branch `phase3-kernels` (`lib/kernels/`: the kernel files byte for byte, `root.zig`, `text.*`; `integer`/`ref4`, `fold` with `strToInt`, `fmt`; `frontend` imports `kernels` and drops `contract`; `opcode.zig` and `src/sim` read `kernels`); awaits its gate, G+T, `test-rng-reference`, `test-printf-reference` |
-| 4–12, B1–B4 | not started (2026-10-17) |
+| 4 | written 2026-10-17 on branch `phase4-elab` (`lib/elab/`: `elaborate.zig` + `elaborate/`, `dist`, `discipline_rules`, `hier_param`, byte for byte but `dist.zig`, whose callee test moved to `callee.zig`; the row imports `diag`, `frontend`, `kernels`, since no file needs `base` yet; `ir` re-exports `Elaborate`, and `lower/` and `vera` read `elab`); awaits its gate, G |
+| 5–12, B1–B4 | not started (2026-10-17) |
