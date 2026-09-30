@@ -11,8 +11,7 @@
 
 const std = @import("std");
 const Mir = @import("mir.zig");
-const Lower = @import("lower.zig");
-const Lowered = Lower.Lowered;
+const Lowered = @import("lowered.zig");
 const Analysis = @import("analysis.zig");
 const diag = @import("diag");
 const proof_lattice = @import("proof/lattice.zig");

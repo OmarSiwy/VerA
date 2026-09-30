@@ -8,7 +8,10 @@
 //!
 //! Cross-table references are indices: every row is a `u32` (`none_u32` is
 //! "absent"; for a `nodes` row `ground` is the sentinel past the last row).
-//! The row types are also reachable as `Lower.<Name>`, the spelling most callers use.
+//! The row types are also reachable as `Lower.<Name>`, the spelling most callers use:
+//! code after lowering binds this file as `Lower` (`const Lower = @import("ir").Lowered`),
+//! so it reads the rows, `ParamOverride` and the §9.15 `simparam` rows from `ir` and
+//! never imports lowering (ARCHITECTURE.md Phase 5).
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
 //! §2.7, §2.8.1, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4, §3.4.2, §3.4.5, §3.4.7,
@@ -24,10 +27,10 @@ const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
-const Mir = @import("../mir.zig");
+const Mir = @import("mir.zig");
 const Elaborate = @import("elab").Elaborate;
 const constfold = @import("frontend").constfold;
-const lower_sysfunc = @import("sysfunc.zig");
+const simparam = @import("simparam.zig");
 
 /// Lowering's output; later stages read it through `*const Lowered`.
 pub const Lowered = @This();
@@ -673,6 +676,19 @@ pub const DiscreteEvent = struct {
 /// §7.8.4 one port an automatic connect module was inserted on (`inserts`).
 pub const Inserted = Elaborate.Inserted;
 
+// ---- what code after lowering reads beside the tables -------------------------
+
+/// §3.4 a `--param name=value` override of the top module's parameter
+/// `name`; the testbench and `vera` pass it to lowering.
+pub const ParamOverride = Elaborate.ParamOverride;
+/// Reports whether a §9.15 simulation parameter is answered at run time.
+pub const simparamIsRuntime = simparam.simparamIsRuntime;
+/// Returns the `Model` field that answers a §9.15 simulation parameter the
+/// card supplies (`tnom`), or null.
+pub const simparamHostField = simparam.simparamHostField;
+/// The §9.15 simulation parameters a host supplies, in `Model` field order.
+pub const host_simparams = simparam.host_simparams;
+
 // Row budgets on a 64-bit host. Every table here is per module and short
 // (psp103: 847 params, 12 nodes, 18 contributions), so these pin today's
 // sizes against a silent bloat rather than claim a tight layout;
@@ -888,7 +904,7 @@ pub fn nodeName(self: *const Lowered, idx: u32) []const u8 {
 
 /// Returns the compile-time value of `$simparam(name)`, or null (LRM §9.15 Table 9-27).
 pub fn simparamValue(self: *const Lowered, name: []const u8) ?f64 {
-    return lower_sysfunc.simparamValueIn(&self.directives, name);
+    return simparam.simparamValueIn(&self.directives, name);
 }
 
 /// Where a §9.15 `$simparam(name [, expression])` gets its value. One owner,
@@ -912,9 +928,9 @@ pub const SimparamAnswer = union(enum) {
 /// Classifies `$simparam(name)` per §9.15: known names first (run-time,
 /// host field, VerA's constant), then the fallback when the call has one.
 pub fn simparamAnswer(self: *const Lowered, name: []const u8, has_fallback: bool) SimparamAnswer {
-    if (lower_sysfunc.simparamIsRuntime(name)) return .runtime;
+    if (simparam.simparamIsRuntime(name)) return .runtime;
     const v = self.simparamValue(name);
-    if (lower_sysfunc.simparamHostField(name)) |f| return .{ .host = .{ .field = f, .default = v.? } };
+    if (simparam.simparamHostField(name)) |f| return .{ .host = .{ .field = f, .default = v.? } };
     if (v) |x| return .{ .value = x };
     return if (has_fallback) .fallback else .unknown;
 }

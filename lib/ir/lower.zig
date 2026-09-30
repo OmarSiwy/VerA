@@ -40,8 +40,8 @@ const assert = std.debug.assert;
 
 /// This file's struct, so `Lower.Lower` also resolves.
 pub const Lower = @This();
-/// What lowering produces (lower/tables.zig).
-pub const Lowered = @import("lower/tables.zig");
+/// What lowering produces (lowered.zig).
+pub const Lowered = @import("lowered.zig");
 
 /// Only OOM unwinds during lowering; everything else goes in the shared
 /// `diag.Bag` and lowering continues with a poison value, so one run reports
@@ -50,7 +50,7 @@ pub const Oom = std.mem.Allocator.Error;
 /// `lowerFile`'s errors: OOM, "diagnostics were reported", or no module to lower.
 pub const Error = Oom || error{ DiagnosticsReported, NoModule };
 
-// `Lowered`'s row types (lower/tables.zig), under the `Lower.X` names later
+// `Lowered`'s row types (lowered.zig), under the `Lower.X` names later
 // stages and the sub-files use.
 pub const ParamInfo = Lowered.ParamInfo;
 pub const unnamed_branch = Lowered.unnamed_branch;
@@ -172,7 +172,7 @@ comptime {
 arena: std.mem.Allocator,
 mir: *Mir,
 /// Everything a later stage reads, built in place and returned by `lowerFile`
-/// (lower/tables.zig). The fields below it are lowering's own.
+/// (lowered.zig). The fields below it are lowering's own.
 out: Lowered,
 /// Mutable only because `Elaborate.elaborate` appends to its stores (§6.7 flat
 /// names, cloned rows) as the first step of `lowerFile`, before anything
@@ -1417,9 +1417,9 @@ const lower_analog_op = @import("lower/analog_op.zig");
 // Clause 9 system functions in analog context, and their arguments, lower/sysfunc.zig
 const lower_sysfunc = @import("lower/sysfunc.zig");
 /// Reports whether a §9.15 simulation parameter is answered at run time.
-pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
+pub const simparamIsRuntime = Lowered.simparamIsRuntime;
 /// The §9.15 simulation parameters a host supplies, in `Model` field order.
-pub const host_simparams = lower_sysfunc.host_simparams;
+pub const host_simparams = Lowered.host_simparams;
 
 // Clause 9 system tasks: §9.4 display, §9.5 I/O, §9.7 status, §9.17 kernel control, lower/systask.zig
 const lower_systask = @import("lower/systask.zig");

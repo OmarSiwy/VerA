@@ -1054,7 +1054,7 @@ test "ssa: every read agrees with a concrete run of a random structured program"
     // loops whose header is sealed only after the back edge.
     const gpa = std.testing.allocator;
     const Ast = @import("frontend").Ast;
-    const Lowered = @import("lower.zig").Lowered;
+    const Lowered = @import("lowered.zig");
     const verify = @import("verify.zig");
     var prng = std.Random.DefaultPrng.init(0x55a_b4a1);
     const r = prng.random();

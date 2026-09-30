@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const OpKind = @import("ir").op.OpKind;
 const naming = @import("../../naming.zig");

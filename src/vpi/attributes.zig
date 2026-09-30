@@ -188,7 +188,7 @@ const AnalogEnv = struct {
         if (at == code.none or env.b.objects.hot.items[at].kind != .parameter) return null;
         return env.b.objects.hot.items[at].value;
     }
-    fn parameter(env: AnalogEnv, e: Ast.ExprId) ?@import("ir").Lower.ParamInfo {
+    fn parameter(env: AnalogEnv, e: Ast.ExprId) ?@import("ir").Lowered.ParamInfo {
         if (env.b.file.exprs.tag(e) != .ident) return null;
         const at = env.b.lookup(env.b.file.str(env.b.file.exprs.strOf(e)));
         if (at == code.none) return null;

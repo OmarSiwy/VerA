@@ -14,7 +14,7 @@ const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
 const naming = @import("../naming.zig");
 const Lowered = @import("ir").Lowered;
-const HeldVar = @import("ir").Lower.HeldVar;
+const HeldVar = @import("ir").Lowered.HeldVar;
 const Mir = @import("ir").Mir;
 const diag = @import("diag");
 const Io = std.Io;
@@ -34,8 +34,8 @@ comptime {
 /// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
 /// at compile time, so a non-empty result means the caller must compile again
 /// with it as `Options.param_overrides`, as `--param` would.
-pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lower.ParamOverride {
-    var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
+pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lowered.ParamOverride {
+    var out: std.ArrayList(@import("ir").Lowered.ParamOverride) = .empty;
     for (d.params) |card| for (lowered.params.items) |p| {
         if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
     };

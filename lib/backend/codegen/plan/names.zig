@@ -194,7 +194,7 @@ fn uNameTaken(lowered: *const Lowered, nm: []const u8, extra: []const []const u8
 }
 
 const Fixture = @import("fixture.zig").Fixture;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 
 test "a potential source gets a branch current; two on one branch get two" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };

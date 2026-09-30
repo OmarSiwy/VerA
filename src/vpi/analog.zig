@@ -373,7 +373,7 @@ fn refreshRows(l: Lib) void {
 // ---------------------------------------------------------------------------
 
 fn unknownAt(x: [*]const f64, row: u32) f64 {
-    return if (row == @import("ir").Lower.ground) 0 else x[row];
+    return if (row == @import("ir").Lowered.ground) 0 else x[row];
 }
 
 /// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the

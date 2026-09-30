@@ -16,8 +16,10 @@ pub const Ssa = @import("ssa.zig");
 pub const Elaborate = @import("elab").Elaborate;
 /// AST → MIR lowering.
 pub const Lower = @import("lower.zig");
-/// What lowering hands every later stage (lower/tables.zig).
-pub const Lowered = Lower.Lowered;
+/// What lowering hands every later stage, and the row types of its tables.
+pub const Lowered = @import("lowered.zig");
+/// §9.15 simulation parameters: compile-time value, host field, run-time rows.
+pub const simparam = @import("simparam.zig");
 /// Branch → `select` conversion over MIR.
 pub const ifconv = @import("ifconv.zig");
 /// Per-unit float-mode verdict from the finiteness proof.

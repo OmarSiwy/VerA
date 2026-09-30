@@ -25,7 +25,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
 const sim = @import("sim");
 

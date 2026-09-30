@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
 const assert = std.debug.assert;

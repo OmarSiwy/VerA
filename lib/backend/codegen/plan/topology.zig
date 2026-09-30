@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const Input = @import("input.zig").Input;
 
 /// Every fallible call here fails only on allocation.

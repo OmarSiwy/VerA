@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const Mir = @import("mir.zig");
-const Lower = @import("lower.zig");
+const Lower = @import("lowered.zig");
 const Lowered = Lower.Lowered;
 const Ast = @import("frontend").Ast;
 const Const = @import("frontend").constfold.Const;

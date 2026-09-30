@@ -20,7 +20,7 @@ const family = @import("family.zig");
 const opcode_zig = codegen.opcode_zig;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -106,7 +106,7 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
             // 10). Lowering converts every numeric context it can see; a
             // format operand is paired with its specifier only here.
             if (self.an.tyOf(v) == .str) return switch (def) {
-                .str_const => |s| self.b("@as(i64, {d})", .{Lower.strToInt(s, 64)}),
+                .str_const => |s| self.b("@as(i64, {d})", .{@import("kernels").fold.strToInt(s, 64)}),
                 // Not a literal, so §3.3 leaves it with no numeric value.
                 .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => self.b("@as(i64, 0)", .{}),
             };

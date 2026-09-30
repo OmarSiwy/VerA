@@ -22,7 +22,7 @@ const gen_family = @import("family.zig");
 const gen_setup = @import("setup.zig");
 const Analysis = @import("ir").Analysis;
 const cg_limit = @import("../cg_limit.zig");
-const Lower = @import("ir").Lower;
+const Lower = @import("ir").Lowered;
 const assert = std.debug.assert;
 const Error = codegen.Error;
 
@@ -802,7 +802,7 @@ fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
         // keeps its low 32 bits, a real one saturates at the 32-bit bounds
         // (as the 64-bit carrier saturates for an inferred one).
         const value = switch (k) {
-            .int => |v| if (p.integer32) Lower.wrap32(v) else v,
+            .int => |v| if (p.integer32) @import("kernels").fold.wrap32(v) else v,
             .real => |v| if (p.integer32) std.math.lossyCast(i32, @round(v)) else std.math.lossyCast(i64, @round(v)),
             .str => 0,
         };

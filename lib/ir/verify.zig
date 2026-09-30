@@ -20,7 +20,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Mir = @import("mir.zig");
-const Lowered = @import("lower.zig").Lowered;
+const Lowered = @import("lowered.zig");
 const Analysis = @import("analysis.zig");
 
 const none = std.math.maxInt(u32);

@@ -559,7 +559,7 @@ test "if-conversion preserves what the module computes (differential)" {
     // also still pass `verify`.
     const a = std.testing.allocator;
     const Ast = @import("frontend").Ast;
-    const Lowered = @import("lower.zig").Lowered;
+    const Lowered = @import("lowered.zig");
     const verify = @import("verify.zig");
     const T = struct {
         fn build(m: *Mir, shape: u32) !Mir.Value {

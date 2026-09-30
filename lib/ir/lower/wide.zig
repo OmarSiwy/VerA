@@ -35,7 +35,7 @@
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
-const Lowered = @import("tables.zig");
+const Lowered = @import("../lowered.zig");
 const lower_expr = @import("expr.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
