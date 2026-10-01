@@ -1226,11 +1226,16 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .override_on => |o| if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)") else try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
         .override_eval => |o| {
-            if (o.slice != null) return self.refuse("a concatenation assigned or forced (§9.3)");
             if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
             try self.store(o.slot, .blocking);
-            try expr.assigned(self, o.value, try slotType(self, o.slot));
+            // An operand of a §9.3 concatenation target takes its window of
+            // the value, evaluated as wide as the whole target.
+            if (o.slice) |sl| {
+                try self.print("L.part(", .{});
+                try expr.assigned(self, o.value, .{ .width = sl.of, .signed = false });
+                try self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(o.slot), sl.of });
+            } else try expr.assigned(self, o.value, try slotType(self, o.slot));
             try self.print(", {f});\n            }}\n            continue :sw {d};\n", .{ full(try self.slotWidth(o.slot)), next });
         },
         // §9.3.2: a released net is its driver's again, at once.
