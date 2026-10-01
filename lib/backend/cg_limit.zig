@@ -9,7 +9,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const cg = @import("codegen.zig");
 const gen_unit = @import("codegen/unit.zig");
 const Gen = cg.Gen;

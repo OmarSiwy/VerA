@@ -320,7 +320,7 @@ pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
         }
         return true;
     }
-    // The same join after if-conversion (ir/ifconv.zig): a diamond's phi
+    // The same join after if-conversion (prove/ifconv.zig): a diamond's phi
     // becomes `select(c, then, else)`, zero on every path exactly when both
     // arms are, so a collapse does not depend on whether ifconv converted
     // the diamond.

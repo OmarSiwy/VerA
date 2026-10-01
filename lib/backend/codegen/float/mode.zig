@@ -4,7 +4,7 @@
 //! LRM clauses cited: §4.3.
 
 const std = @import("std");
-const proof = @import("ir").proof;
+const proof = @import("prove").proof;
 const Job = @import("../plan/jobs.zig").Job;
 
 /// The float state `Gen` carries while it writes.

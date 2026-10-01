@@ -7,12 +7,12 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const UnitPlan = @import("codegen/plan/unit.zig");
 const cg_filters = @import("cg_filters.zig");
 const cg_display = @import("cg_display.zig");
 const Lowered = @import("ir").Lowered;
-const proof = @import("ir").proof;
+const proof = @import("prove").proof;
 const diag = @import("diag");
 /// The pure planners (codegen/plan/): inputs in, a plan value out, no writer.
 const plan_input = @import("codegen/plan/input.zig");
@@ -219,7 +219,7 @@ pub const Gen = struct {
     lowered: *const Lowered,
     /// The derived facts this emitter reads and never writes: CFG, dominators,
     /// loops, block pools, instruction columns, value types, aliases
-    /// (ir/analysis.zig). Policy (naming, hoisting, inlining) stays below.
+    /// (prove/analysis.zig). Policy (naming, hoisting, inlining) stays below.
     an: *const Analysis,
     verdict: proof.Verdict,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.

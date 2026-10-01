@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const Lowered = @import("ir").Lowered;
 
 /// The lowered module and the analysis over it, borrowed for one compilation.

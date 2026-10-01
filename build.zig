@@ -53,9 +53,17 @@ const module_specs = [_]ModuleSpec{
     // Elaboration (§6.2.2) and the rule tables lowering shares with it.
     // `kernels`: the §9.13 folds use the device's rng.
     .{ .name = "elab", .path = "lib/elab/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "kernels" } },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "kernels", "contract" } },
-    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "kernels" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "backend", "kernels" } },
+    // The MIR and the `Lowered` tables: types every stage after lowering reads.
+    .{ .name = "ir", .path = "lib/ir/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "kernels" } },
+    // Lowering (AST → MIR + `Lowered`) and SSA construction.
+    .{ .name = "analog", .path = "lib/analog/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "elab", "ir", "kernels" } },
+    // The passes over the MIR: analysis, if-conversion, the proof, `verify`.
+    // `analog`: only the tests that lower source. `contract`: the proof's
+    // transfer functions use the devices' `exp`/`log`/`pow`.
+    .{ .name = "prove", .path = "lib/prove/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
+    // `analog`: only codegen's tests, which lower source.
+    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "backend", "kernels" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the

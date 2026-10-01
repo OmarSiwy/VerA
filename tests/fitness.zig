@@ -282,7 +282,7 @@ const r3_rows = [_]Row{
     .{ .path = "lib/elab/elaborate/names.zig", .n = 3, .phase = "Phase 12" },
     .{ .path = "lib/elab/hier_param.zig", .n = 1, .phase = "Phase 12" },
     // The lowering test harness's `builtin_modules`.
-    .{ .path = "lib/ir/lower.zig", .n = 1, .phase = "Phase 12" },
+    .{ .path = "lib/analog/lower.zig", .n = 1, .phase = "Phase 12" },
     // The spine sets the five fields the parser leaves to its caller.
     .{ .path = "lib/root.zig", .n = 5, .phase = "Phase 12" },
     .{ .path = "src/sim/digital/root.zig", .n = 1, .phase = "Phase 12" },
@@ -319,7 +319,7 @@ test "R3: no Ast writes outside lib/frontend" {
 }
 
 // ---------------------------------------------------------------------------
-// R4: no `*Lowered` mutated outside lowering (lib/ir/lower.zig, lib/ir/lower/).
+// R4: no `*Lowered` mutated outside lowering (lib/analog/lower.zig, lib/analog/lower/).
 // A mutation needs a mutable `*Lowered` across an interface: a `pub`
 // declaration line or a struct field typed `*Lowered`. A private helper
 // handed its own local (verify.zig's self-test sample) is not one.
@@ -346,7 +346,7 @@ const LoweredMut = struct {
 };
 
 fn outsideLowering(p: []const u8) bool {
-    return !std.mem.eql(u8, p, "lib/ir/lower.zig") and !std.mem.startsWith(u8, p, "lib/ir/lower/");
+    return !std.mem.eql(u8, p, "lib/analog/lower.zig") and !std.mem.startsWith(u8, p, "lib/analog/lower/");
 }
 
 test "R4: no *Lowered mutated outside lowering" {
@@ -365,17 +365,17 @@ test "R4: no *Lowered mutated outside lowering" {
 // ---------------------------------------------------------------------------
 
 const r5_owners = [_]struct { lit: []const u8, owner: []const u8 }{
-    .{ .lit = "__xz", .owner = "lib/ir/lower/context.zig" },
-    .{ .lit = "__w{", .owner = "lib/ir/lower/context.zig" },
-    .{ .lit = "__1b", .owner = "lib/ir/lower/context.zig" },
+    .{ .lit = "__xz", .owner = "lib/analog/lower/context.zig" },
+    .{ .lit = "__w{", .owner = "lib/analog/lower/context.zig" },
+    .{ .lit = "__1b", .owner = "lib/analog/lower/context.zig" },
     .{ .lit = "__held__", .owner = "lib/backend/codegen/plan/names.zig" },
 };
 
 /// The second spellers, which Phase 8 replaces with calls to one speller each.
 const r5_allow = [_]struct { lit: []const u8, path: []const u8, phase: []const u8 }{
-    .{ .lit = "__xz", .path = "lib/ir/lower/expr.zig", .phase = "Phase 8" },
-    .{ .lit = "__w{", .path = "lib/ir/lower/expr.zig", .phase = "Phase 8" },
-    .{ .lit = "__1b", .path = "lib/ir/lower/expr.zig", .phase = "Phase 8" },
+    .{ .lit = "__xz", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
+    .{ .lit = "__w{", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
+    .{ .lit = "__1b", .path = "lib/analog/lower/expr.zig", .phase = "Phase 8" },
     .{ .lit = "__xz", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
     .{ .lit = "__w{", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
     .{ .lit = "__1b", .path = "lib/backend/tb/runner.zig", .phase = "Phase 8" },
@@ -475,6 +475,23 @@ test "R6: no emitted print or exit in device-emitting files" {
 // ---------------------------------------------------------------------------
 
 const r7_rows = [_]Row{
+    .{ .path = "lib/analog/lower/analog_op.zig", .n = 27 },
+    .{ .path = "lib/analog/lower/constfold.zig", .n = 7 },
+    .{ .path = "lib/analog/lower/context.zig", .n = 7 },
+    .{ .path = "lib/analog/lower/contrib.zig", .n = 12 },
+    .{ .path = "lib/analog/lower/control.zig", .n = 5 },
+    .{ .path = "lib/analog/lower/discipline.zig", .n = 10 },
+    .{ .path = "lib/analog/lower/event.zig", .n = 12 },
+    .{ .path = "lib/analog/lower/expr.zig", .n = 5 },
+    .{ .path = "lib/analog/lower/func.zig", .n = 4 },
+    .{ .path = "lib/analog/lower/hier_name.zig", .n = 4 },
+    .{ .path = "lib/analog/lower/limit.zig", .n = 1 },
+    .{ .path = "lib/analog/lower/param.zig", .n = 10 },
+    .{ .path = "lib/analog/lower/stmt.zig", .n = 3 },
+    .{ .path = "lib/analog/lower/sysfunc.zig", .n = 38 },
+    .{ .path = "lib/analog/lower/systask.zig", .n = 10 },
+    .{ .path = "lib/analog/lower/var.zig", .n = 5 },
+    .{ .path = "lib/analog/lower/wide.zig", .n = 1 },
     .{ .path = "lib/backend/beh_verilog.zig", .n = 4 },
     .{ .path = "lib/backend/cg_filters.zig", .n = 1 },
     .{ .path = "lib/backend/codegen/call.zig", .n = 12 },
@@ -519,23 +536,6 @@ const r7_rows = [_]Row{
     .{ .path = "lib/frontend/spice_cards.zig", .n = 31 },
     .{ .path = "lib/frontend/token.zig", .n = 3 },
     .{ .path = "lib/ir/callee.zig", .n = 1 },
-    .{ .path = "lib/ir/lower/analog_op.zig", .n = 27 },
-    .{ .path = "lib/ir/lower/constfold.zig", .n = 7 },
-    .{ .path = "lib/ir/lower/context.zig", .n = 7 },
-    .{ .path = "lib/ir/lower/contrib.zig", .n = 12 },
-    .{ .path = "lib/ir/lower/control.zig", .n = 5 },
-    .{ .path = "lib/ir/lower/discipline.zig", .n = 10 },
-    .{ .path = "lib/ir/lower/event.zig", .n = 12 },
-    .{ .path = "lib/ir/lower/expr.zig", .n = 5 },
-    .{ .path = "lib/ir/lower/func.zig", .n = 4 },
-    .{ .path = "lib/ir/lower/hier_name.zig", .n = 4 },
-    .{ .path = "lib/ir/lower/limit.zig", .n = 1 },
-    .{ .path = "lib/ir/lower/param.zig", .n = 10 },
-    .{ .path = "lib/ir/lower/stmt.zig", .n = 3 },
-    .{ .path = "lib/ir/lower/sysfunc.zig", .n = 38 },
-    .{ .path = "lib/ir/lower/systask.zig", .n = 10 },
-    .{ .path = "lib/ir/lower/var.zig", .n = 5 },
-    .{ .path = "lib/ir/lower/wide.zig", .n = 1 },
     .{ .path = "lib/ir/simparam.zig", .n = 2 },
     .{ .path = "src/cli/args.zig", .n = 38 },
     .{ .path = "src/cli/digital.zig", .n = 1 },

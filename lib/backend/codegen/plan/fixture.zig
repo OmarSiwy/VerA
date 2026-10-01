@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const Lowered = @import("ir").Lowered;
 const Ast = @import("frontend").Ast;
 

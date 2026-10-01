@@ -7,9 +7,9 @@ const std = @import("std");
 const codegen = @import("../codegen.zig");
 const gen_kernel_text = @import("kernel_text.zig");
 const Mir = @import("ir").Mir;
-const Lower = @import("ir").Lower;
+const Lower = @import("analog").Lower;
 const Lowered = @import("ir").Lowered;
-const proof = @import("ir").proof;
+const proof = @import("prove").proof;
 const diag = @import("diag");
 const assert = std.debug.assert;
 const Output = codegen.Output;
@@ -75,7 +75,7 @@ pub const Lexer = @import("frontend").Lexer;
 /// Builds `Harness.file` from the token stream.
 pub const Parser = @import("frontend").Parser;
 /// If-conversion, for tests that run it between lowering and codegen.
-pub const ifconv = @import("ir").ifconv;
+pub const ifconv = @import("prove").ifconv;
 
 /// One source lowered into MIR, owning everything in `arena_state`; `gen*`
 /// runs proof and codegen over it. Call `deinit` when done.

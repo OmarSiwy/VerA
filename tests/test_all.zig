@@ -7,11 +7,14 @@ const std = @import("std");
 
 /// Every module, `pub` so the `refAllDecls` test below reaches each one.
 pub const contract = @import("contract");
+pub const base = @import("base");
 pub const diag = @import("diag");
 pub const frontend = @import("frontend");
 pub const elab = @import("elab");
 pub const kernels = @import("kernels");
 pub const ir = @import("ir");
+pub const analog = @import("analog");
+pub const prove = @import("prove");
 pub const backend = @import("backend");
 pub const sim = @import("sim");
 pub const vera = @import("vera");

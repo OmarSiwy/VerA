@@ -42,6 +42,21 @@ pub const beh_verilog = @import("backend").beh_verilog;
 pub const orchestrator = @import("backend").orchestrator;
 /// The fixture testbench: `//!` directives, runner text and its build.
 pub const tb = @import("backend").tb;
+// What `ir` exported until ARCHITECTURE.md Phase 5 moved lowering to `analog`
+// and the MIR passes to `prove`; `ir` cannot re-export either, since both
+// import it.
+/// AST → MIR lowering (`analog`).
+pub const Lower = @import("analog").Lower;
+/// SSA construction used while lowering (`analog`).
+pub const Ssa = @import("analog").Ssa;
+/// Dependency and freedom lattices over a finished MIR (`prove`).
+pub const Analysis = @import("prove").Analysis;
+/// Branch → `select` conversion over MIR (`prove`).
+pub const ifconv = @import("prove").ifconv;
+/// Per-unit float-mode verdict from the finiteness proof (`prove`).
+pub const proof = @import("prove").proof;
+/// The MIR's postcondition, checked after lowering and each MIR pass (`prove`).
+pub const verify = @import("prove").verify;
 
 const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
@@ -49,14 +64,8 @@ const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
 const deep_stack = @import("base").deep_stack;
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
-const Ssa = @import("ir").Ssa;
 const Elaborate = @import("elab").Elaborate;
-const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
-const ifconv = @import("ir").ifconv;
-const proof = @import("ir").proof;
-const verify = @import("ir").verify;
 const naming = @import("backend").naming;
 const cg_display = @import("backend").cg_display;
 const cg_filters = @import("backend").cg_filters;

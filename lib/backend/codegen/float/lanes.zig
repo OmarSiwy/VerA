@@ -14,7 +14,7 @@ const codegen = @import("../../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("../render.zig");
 const Mir = @import("ir").Mir;
-const proof = @import("ir").proof;
+const proof = @import("prove").proof;
 
 /// Returns whether evaluating `v`'s inline subtree eagerly would run a libm
 /// call the branch would have skipped. `eagerSafe` says whether both arms

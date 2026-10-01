@@ -9,7 +9,7 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const Input = @import("input.zig").Input;
 const plan_args = @import("args.zig");
 

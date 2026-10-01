@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const proof = @import("ir").proof;
+const proof = @import("prove").proof;
 const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
 const Job = @import("jobs.zig").Job;

@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Analysis = @import("ir").Analysis;
+const Analysis = @import("prove").Analysis;
 const Lowered = @import("ir").Lowered;
 const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
