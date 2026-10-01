@@ -424,7 +424,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // cache read. Without this the §9.4 display unit, the one unit not
         // folded into the core, emits `c.f1` with no `c`.
         const d = self.mir.instData(def.inst_result);
-        if (d == .call and cg.opNeedsInput(Mir.callee.opKind(d.call.callee)) and d.call.args.len != 0 and
+        if (d == .call and @import("ir").op.needsInput(Mir.callee.opKind(d.call.callee)) and d.call.args.len != 0 and
             self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
         // §4.6.3 the same for `ac_stim`'s magnitude and phase (A.8.2
         // `analog_expression`s that `emitCall` renders through `ctrlEval`).

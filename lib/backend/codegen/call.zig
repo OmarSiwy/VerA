@@ -1229,7 +1229,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     const n = self.names.unit_names[unit];
     // Render the input only when the kernel reads it, or `uses.x` would keep
     // an unreferenced parameter named.
-    const needs_in = plan_args.opNeedsInput(k);
+    const needs_in = @import("ir").op.needsInput(k);
     // Every operator input is a core field, so this renders a local in the
     // core and a cache read in the display unit.
     const in0 = if (needs_in)

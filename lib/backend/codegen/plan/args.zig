@@ -5,8 +5,8 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const opdb = @import("../op_zig.zig");
-const OpKind = @import("ir").op.OpKind;
+const op = @import("ir").op;
+const OpKind = op.OpKind;
 const Input = @import("input.zig").Input;
 
 /// What to do with the §9.4 display tasks a model contains.
@@ -236,9 +236,9 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
 /// has to keep it live (see `callArgIsValue`) while every other control
 /// argument is folded at codegen time.
 pub fn enableArgIdx(k: OpKind) ?usize {
-    // The table stores it as `?u8`, the narrowest type the range allows;
+    // `ir.op` stores it as `?u8`, the narrowest type the range allows;
     // widened here, at the one boundary that indexes with it.
-    return opdb.get(k).enable_arg orelse return null;
+    return op.enableArg(k) orelse return null;
 }
 
 /// The literal string at argument `i`, or null when it is not one (or `i` is
@@ -247,15 +247,6 @@ pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
     if (i >= args.len) return null;
     const def = in.mir.valueDef(in.an.rv(args[i]));
     return if (def == .str_const) def.str_const else null;
-}
-
-/// Does this operator's kernel read the current input? The pure-history ones
-/// answer from `Instance` alone, and rendering an input they never emit would
-/// leave the unit claiming a parameter (or a cache) nothing references.
-/// `emitOperator` renders `in` exactly for these and `UnitPlan.analyze` must
-/// agree, which is why the set lives in the op table and not in either.
-pub fn opNeedsInput(k: OpKind) bool {
-    return opdb.get(k).needs_input;
 }
 
 test "callArgIsValue: the display-gated prongs are the printing and §9.5 families" {
@@ -326,14 +317,6 @@ test strArg {
     // A number is not a string, and a position past the end is not either.
     try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 0));
     try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 2));
-}
-
-test opNeedsInput {
-    // §4.5.10 `last_crossing` answers from the crossing it latched; §5.10.3.1
-    // `cross` compares the current input against the previous one.
-    try std.testing.expect(!opNeedsInput(.last_crossing));
-    try std.testing.expect(opNeedsInput(.cross));
-    try std.testing.expect(opNeedsInput(.absdelay));
 }
 
 const Fixture = @import("fixture.zig").Fixture;

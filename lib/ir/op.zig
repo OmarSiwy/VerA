@@ -1,7 +1,9 @@
 //! §4.5 analog operators, §5.10.3 monitored events and §9.17 kernel control:
-//! the operator set. The callee → `OpKind` mapping is `callee.opKind`; the
-//! backend's per-operator rows (`Instance` fields, `dt`, `enable`) are
-//! `backend/codegen/op_zig.zig`, a table total over this enum.
+//! the operator set and the facts every stage reads about it (`acDynamic`,
+//! `needsInput`, `enableArg`), one exhaustive switch each. The callee →
+//! `OpKind` mapping is `callee.opKind`; the backend's per-operator rows
+//! (`Instance` fields, `dt`) are `backend/codegen/op_zig.zig`, a table total
+//! over this enum.
 
 const std = @import("std");
 
@@ -37,6 +39,54 @@ pub fn acDynamic(k: OpKind) bool {
         .absdelay, .laplace, .zi => true,
         .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => false,
     };
+}
+
+/// Returns whether the operator's kernel reads the current input rather than
+/// answering from `Instance` alone. `emitOperator` and `UnitPlan.analyze`
+/// both read this, so they agree.
+///
+/// `cross` and `timer` compare the current input (`timer`: its `start_time`)
+/// against `__prev` in `eval` (§5.10.3). `zi` needs it for the §4.5.12 static
+/// branch. `absdelay` needs it for the §4.5.7 DC pass-through and for a delay
+/// shorter than the accepted step. §4.5.10 `last_crossing` answers from the
+/// crossing it latched, and the §9.17 requests evaluate their own argument.
+pub fn needsInput(k: OpKind) bool {
+    return switch (k) {
+        .idt_hold, .idtmod, .absdelay, .transition, .slew, .laplace, .zi, .cross, .above, .timer => true,
+        .none, .last_crossing, .bound_step, .discontinuity => false,
+    };
+}
+
+/// Returns the index of the §5.10.3 `enable` argument, or null: the one
+/// control argument that stays a runtime expression, so `UnitPlan` keeps it
+/// live while every other control argument folds at codegen time. `?u8`, the
+/// narrowest type the range allows.
+pub fn enableArg(k: OpKind) ?u8 {
+    return switch (k) {
+        .cross => 4, // cross(expr, dir, time_tol, expr_tol, enable)
+        .above => 3, // above(expr, time_tol, expr_tol, enable)
+        .timer => 3, // timer(start, period, time_tol, enable)
+        .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .bound_step, .discontinuity => null,
+    };
+}
+
+test needsInput {
+    // §4.5.10 `last_crossing` answers from the crossing it latched; §5.10.3.1
+    // `cross` compares the current input against the previous one.
+    try std.testing.expect(!needsInput(.last_crossing));
+    try std.testing.expect(needsInput(.cross));
+    try std.testing.expect(needsInput(.absdelay));
+}
+
+test enableArg {
+    // An `enable` is the LAST argument of the three §5.10.3 forms; nothing
+    // else has one.
+    try std.testing.expectEqual(@as(?u8, 4), enableArg(.cross));
+    try std.testing.expectEqual(@as(?u8, 3), enableArg(.above));
+    try std.testing.expectEqual(@as(?u8, 3), enableArg(.timer));
+    for (std.enums.values(OpKind)) |k| {
+        if (enableArg(k) != null) try std.testing.expect(k == .cross or k == .above or k == .timer);
+    }
 }
 
 test acDynamic {
