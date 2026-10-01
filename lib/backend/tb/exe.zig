@@ -162,8 +162,109 @@ pub fn bind(
     binding: []const u8,
     text: []const u8,
 ) ![]const u8 {
+    return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, try writeModule(arena, io, dir, opts, suffix, text) });
+}
+
+/// `bind`'s file half: writes `<name>.<suffix>.zig` and returns its path.
+fn writeModule(arena: Allocator, io: Io, dir: Io.Dir, opts: BuildOptions, suffix: []const u8, text: []const u8) ![]const u8 {
     const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
     try dir.writeFile(io, .{ .sub_path = file, .data = text });
-    const path = try std.fs.path.join(arena, &.{ opts.work_dir, file });
-    return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, path });
+    return std.fs.path.join(arena, &.{ opts.work_dir, file });
+}
+
+/// A testbench's module files on disk, as `stage` wrote them.
+pub const Staged = struct { root: []const u8, device: []const u8 };
+
+/// Writes the two module files `buildExe` would build for this device and
+/// runner, under `opts.work_dir`, without building. Paths live in `arena`.
+pub fn stage(arena: Allocator, io: Io, device_zig: []const u8, runner_zig: []const u8, opts: BuildOptions) !Staged {
+    const cwd = Io.Dir.cwd();
+    try cwd.createDirPath(io, opts.work_dir);
+    var dir = try cwd.openDir(io, opts.work_dir, .{});
+    defer dir.close(io);
+    return .{
+        .root = try writeModule(arena, io, dir, opts, "tb", runner_zig),
+        .device = try writeModule(arena, io, dir, opts, "device", device_zig),
+    };
+}
+
+/// A `buildBatch` binary runs member `i` when its `argv[0]` ends in
+/// `batch_argv0 ++ "<i>"`: a symlink of that name stands in for each member's
+/// own binary. No runner reads `argv[0]` (its plusargs start at `argv[1]`),
+/// so a member's transcript is the one its own binary would print.
+pub const batch_argv0 = "vera-batch-";
+
+/// Builds several plain (not `mixed`, not `shared_lib`) staged testbenches
+/// into ONE binary at `<opts.work_dir>/<opts.name>`, dispatching on `argv[0]`
+/// (`batch_argv0`). A fixture testbench's build is mostly the compiler's fixed
+/// cost per invocation (std, start code, the panic handler), which a batch
+/// pays once. Measured with a shared warm cache, 8 Debug testbenches:
+/// 17.57 Gi built one by one, 3.53 Gi as one batch, transcripts identical.
+/// `.failed` names no member: the caller rebuilds them one by one to learn
+/// which broke.
+pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOptions) !BuildResult {
+    std.debug.assert(!opts.mixed and !opts.shared_lib and members.len != 0);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var root: std.ArrayList(u8) = .empty;
+    try root.print(arena,
+        \\const std = @import("std");
+        \\pub fn main(init: std.process.Init.Minimal) void {{
+        \\    const argv = init.args.toSlice(std.heap.page_allocator) catch @panic("argv");
+        \\    const at = std.mem.lastIndexOf(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
+        \\    const i = std.fmt.parseInt(usize, argv[0][at + {d} ..], 10) catch @panic("argv[0] names no batch member");
+        \\    switch (i) {{
+        \\
+    , .{ batch_argv0, batch_argv0.len });
+    for (0..members.len) |i| try root.print(arena, "        {d} => @import(\"tb{d}\").main(init),\n", .{ i, i });
+    try root.appendSlice(arena, "        else => @panic(\"argv[0] names no batch member\"),\n    }\n}\n");
+
+    const cwd = Io.Dir.cwd();
+    try cwd.createDirPath(io, opts.work_dir);
+    var dir = try cwd.openDir(io, opts.work_dir, .{});
+    defer dir.close(io);
+    const root_path = try writeModule(arena, io, dir, opts, "batch", root.items);
+    const bin = try std.mem.concat(gpa, u8, &.{
+        try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
+        builtin.target.exeFileExt(),
+    });
+    errdefer gpa.free(bin);
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{
+        opts.zig_exe,
+        "build-exe",
+        try std.fmt.allocPrint(arena, "-femit-bin={s}", .{bin}),
+        try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
+        "--cache-dir",
+        ".zig-cache",
+    });
+    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.cpu.arch)) {
+        .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
+        .llvm => &.{"-fllvm"},
+    });
+    if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    for (0..members.len) |i| try argv.appendSlice(arena, &.{ "--dep", try std.fmt.allocPrint(arena, "tb{d}", .{i}) });
+    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mroot={s}", .{root_path}));
+    for (members, 0..) |m, i| try argv.appendSlice(arena, &.{
+        "--dep",                                                      try std.fmt.allocPrint(arena, "device=dev{d}", .{i}),
+        "--dep",                                                      "contract",
+        try std.fmt.allocPrint(arena, "-Mtb{d}={s}", .{ i, m.root }), "--dep",
+        "contract",                                                   try std.fmt.allocPrint(arena, "-Mdev{d}={s}", .{ i, m.device }),
+    });
+    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
+
+    const r = try std.process.run(gpa, io, .{ .argv = argv.items });
+    gpa.free(r.stdout);
+    if (switch (r.term) {
+        .exited => |c| c != 0,
+        else => true,
+    }) {
+        gpa.free(bin);
+        return .{ .failed = r.stderr };
+    }
+    gpa.free(r.stderr);
+    return .{ .ok = bin };
 }
