@@ -877,6 +877,29 @@ pub const arr_txt =
     \\    if (k < a.len) a[@intCast(k)] = v;
     \\}
     \\
+    \\/// Store `v` at `i` in an in-place held array and widen `d`, the index
+    \\/// range written since the last `stateCtl` (`zArrSync`).
+    \\fn zArrStD(comptime T: type, a: []T, d: *[2]i64, i: i64, v: T) void {
+    \\    const k: u64 = @bitCast(i);
+    \\    if (k < a.len) {
+    \\        a[@intCast(k)] = v;
+    \\        d.* = .{ @min(d[0], i), @max(d[1], i) };
+    \\    }
+    \\}
+    \\
+    \\/// §5.10 `stateCtl` for an in-place held array: copy the elements written
+    \\/// since the last commit or revert (`d`, inclusive; empty when d[0] >
+    \\/// d[1]) from `src` to `dst`; then the two agree everywhere and `d` is
+    \\/// empty. A step appending one sample to a 2048-deep history copies one.
+    \\fn zArrSync(comptime T: type, dst: anytype, src: anytype, d: *[2]i64) void {
+    \\    if (d[0] <= d[1]) {
+    \\        const lo: usize = @intCast(d[0]);
+    \\        const hi: usize = @intCast(d[1] + 1);
+    \\        @memcpy(@as([]T, dst[lo..hi]), @as([]const T, src[lo..hi]));
+    \\    }
+    \\    d.* = .{ std.math.maxInt(i64), -1 };
+    \\}
+    \\
     \\/// §5.10 the storage a held array's store writes: `a`, holding what `p`
     \\/// read until now — the `Instance` field, copied in by the first store.
     \\fn zArrW(comptime T: type, comptime n: usize, a: *[n]T, p: **const [n]T) *[n]T {

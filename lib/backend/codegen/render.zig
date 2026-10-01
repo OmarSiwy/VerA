@@ -415,7 +415,9 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 .inst_result => |di| self.mir.instOp(di) == .store,
                 else => false, // else: an array version is an instruction result
             };
-            if (inPlace(self, id))
+            if (inPlace(self, id) and gen_file.dirtyTracked(self, id))
+                try self.b("zArrStD({s}, p{d}, &inst.{s}__dirty, ", .{ ty, id, self.names.held_names[m.held] })
+            else if (inPlace(self, id))
                 try self.b("zArrSt({s}, p{d}, ", .{ ty, id })
             else if (cow(self, id) and !after_store)
                 try self.b("zArrSt({s}, zArrW({s}, {d}, &a{d}, &p{d}), ", .{ ty, ty, m.len, id, id })
