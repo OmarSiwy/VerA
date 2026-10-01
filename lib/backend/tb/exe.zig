@@ -30,6 +30,8 @@ pub const BuildOptions = struct {
     /// Build `renderVpiLib`'s runner as a shared library for a Clause 12
     /// analog host to load, instead of an executable.
     shared_lib: bool = false,
+    /// Keep DWARF in a ReleaseFast/ReleaseSmall build (`orchestrator.strip`).
+    debug_info: bool = false,
 };
 
 /// Outcome of `buildExe`. Either payload is owned by the `gpa` passed to
@@ -103,7 +105,7 @@ pub fn buildExe(
     });
     // No debug info where there are no safety checks to trace: emitting it
     // is most of an unsafe build's LLVM time.
-    if (opts.optimize == .ReleaseFast or opts.optimize == .ReleaseSmall) try argv.append(arena, "-fstrip");
+    if (orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
     if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
