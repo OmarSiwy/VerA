@@ -256,7 +256,7 @@ modules call; that alias list IS the module's API. Every file opens with a
 `//!` header: its transformation (in → out) and the LRM clauses its code cites.
 
 **Stage outputs are narrow values.** Lowering returns `Lowered`
-(`lib/ir/lower/tables.zig`); everything downstream takes `*const Lowered` and
+(`lib/ir/lowered.zig`); everything downstream takes `*const Lowered` and
 cannot reach lowering's symbol tables. Calls carry a `Mir.Callee` enum
 (`lib/ir/callee.zig`); per-opcode facts are columns of `lib/ir/opcode.zig` and
 `lib/backend/codegen/opcode_zig.zig`. Add a variant and the compiler names every
@@ -317,7 +317,7 @@ shell; each folder's manifest pins the suite's URL, commit and license.
 
 **The compiler is not a SIMD target and you are not to make it one.**
 Every backend walk is a chain: a dominator-tree walk, a data-dependent output
-length, recursive SSA construction. `lib/ir/proof/lattice.zig` carries a measurement
+length, recursive SSA construction. `lib/prove/proof/lattice.zig` carries a measurement
 table where a `@Vector` attempt **loses** at every size up to 24578.
 `ARCHITECTURE.md §7` lists adding SIMD to the compiler as
 deliberately-not-doing.
