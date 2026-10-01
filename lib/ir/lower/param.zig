@@ -795,17 +795,26 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     // the initializer below. Only a value an `analog initial` or `@(...)` body
     // leaves for a later evaluation's read needs one anyway (E0536).
     var scratch = try scratchOn(self, decl.main_tok);
-    if (scratch and why != null and self.param_state.carried.contains(held_key)) {
+    if (scratch != .off and why != null and self.param_state.carried.contains(held_key)) {
         try self.err(decl.main_tok, .E0536, "`{s}`", .{name});
-        scratch = false;
+        scratch = .off;
     }
-    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null and !scratch;
+    // `"uninit"` starts the variable with no value; an initializer gives it one.
+    if (scratch == .uninit and decl.init != .none) {
+        try self.err(decl.main_tok, .E0539, "`{s}`", .{name});
+        scratch = .zero;
+    }
+    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null and scratch == .off;
 
     if (decl.dims.len != 0) {
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
         if (isMemArray(self, decl.name, ty)) {
             const place = try declareMemArray(self, name, dims, ty, !hold);
             self.arrays.getPtr(name).?.mem.?.reg_width = reg_width;
+            // Only memory-backed storage has a start to skip: a scalar or a
+            // scalarized element is an SSA value whose zero costs nothing,
+            // and a zero is one of the values an unwritten read may see.
+            self.out.mem_arrays.items[self.arrays.get(name).?.mem.?.id].uninit = scratch == .uninit;
             const elems = try flattenPattern(self, decl.init, dims);
             if (hold) {
                 // §5.10 the initializer is the `Instance` field's default and
@@ -1092,14 +1101,29 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// last spec wins; §2.9's default 1 when it has no value, otherwise a
 /// constant that folds without the model card, since it decides whether the
 /// device keeps a slot (E0534, and the variable is held where observable).
-fn scratchOn(self: *Lower, tok: u32) Oom!bool {
-    const a = scratchSpec(self, tok) orelse return false;
-    if (a.value == .none) return true;
+/// The string `"uninit"` drops the zero start too; any other string is E0538.
+fn scratchOn(self: *Lower, tok: u32) Oom!Scratch {
+    const a = scratchSpec(self, tok) orelse return .off;
+    if (a.value == .none) return .zero;
     const c = lower_constfold.foldExpr(self, a.value, false) orelse {
         try self.err(a.main_tok, .E0534, "", .{});
-        return false;
+        return .off;
     };
-    return c.isTrue();
+    return scratchMode(c) orelse {
+        try self.err(a.main_tok, .E0538, "`\"{s}\"`", .{c.str});
+        return .off;
+    };
+}
+
+const Scratch = enum { off, zero, uninit };
+
+/// The mode a folded `vera_scratch` value names; null for a string other than
+/// `"uninit"` (E0538).
+fn scratchMode(c: Const) ?Scratch {
+    return switch (c) {
+        .str => |s| if (std.mem.eql(u8, s, "uninit")) .uninit else null,
+        .int, .real => if (c.isTrue()) .zero else .off,
+    };
 }
 
 /// §2.9 E0535: every `vera_scratch` in `module` decorates a variable
@@ -1143,13 +1167,14 @@ pub fn checkScratchOwners(self: *Lower, module: *const Ast.ModuleDecl) Oom!void 
 }
 
 /// `vera_scratch` on `v`, when on, and a discrete process writes `v` (E0537).
-/// A value that does not fold is E0534's, reported at the declaration.
+/// A value that does not fold (E0534) or names no mode (E0538) is reported at
+/// the declaration.
 fn refuseDigitalScratch(self: *Lower, digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void), v: Ast.VarDecl) Oom!void {
     if (!digital.contains(v.name)) return;
     const a = scratchSpec(self, v.main_tok) orelse return;
     if (a.value != .none) {
         const c = lower_constfold.foldExpr(self, a.value, false) orelse return;
-        if (!c.isTrue()) return;
+        if ((scratchMode(c) orelse return) == .off) return;
     }
     try self.err(a.main_tok, .E0537, "`{s}`", .{self.file.str(v.name)});
 }

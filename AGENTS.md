@@ -307,6 +307,17 @@ off; the value folds without the card (E0534). On anything but a variable
 (parameter, net, genvar, statement) it is E0535; on a variable an `analog
 initial` or `@(...)` body assigns and a later read may see, E0536; on one
 an `initial`/`always` block or a task assigns (§7.2.2 digital-owned), E0537.
+`(* vera_scratch = "uninit" *)` also drops that start: a runtime-indexed
+(memory-backed) array gets no initialising store at all, which is what a
+64-deep stack of 8-lane duals spends most of its eval on (measured: 233 →
+116 Ir/eval on a 4-op tape). The author promises every element is written
+before it is read in the same evaluation; **a read-before-write is the
+author's bug**. Debug/ReleaseSafe devices fill the array with NaN, value and
+every derivative lane (minInt for an integer array), so the bug shows as NaN
+in the outputs; ReleaseFast/ReleaseSmall store nothing and the value read is
+unspecified (Zig `undefined` storage, so not even guaranteed to be a stable
+stale number). A scalar or a scalarized array keeps the zero start (free in
+SSA). Any other string is E0538; an initializer with `"uninit"` is E0539.
 
 **`$vera_reject_step(t_retry)`.** A VerA system task in an analog block:
 on a transient step's accepted solution, `updateState` returns
