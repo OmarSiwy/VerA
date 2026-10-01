@@ -330,10 +330,10 @@ pub const Run = struct {
     /// Variables, array elements and nets share one slot space, so one `store`
     /// wakes event waiters for all three.
     values: []Int.Literal,
-    /// Which of `nets` a slot is, for the slots that are nets at all. A map and
-    /// not a `net_base` boundary because §6.2.2 elaboration interleaves one
+    /// Which of `nets` a slot is, for the slots that are nets at all. Per slot
+    /// and not a `net_base` boundary because §6.2.2 elaboration interleaves one
     /// instance's variables with the next one's nets.
-    net_of: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    net_of: SlotNets = .{},
     nets: []Net = &.{},
     /// The cold rows `Net.cold` indexes.
     net_cold: std.ArrayList(NetCold) = .empty,
@@ -3333,6 +3333,34 @@ fn netRuns(
     };
     return .{ .start = start, .items = items };
 }
+
+/// `Run.net_of`: the net a slot is, as one `u32` a slot up to the last net's
+/// slot (`none` for a variable's). Dense rather than a hash map: one net per
+/// element of an unpacked net array makes nets the common slot, and a map
+/// row costs twice an entry here plus the rehash garbage, for a lookup that
+/// is a load instead of a probe.
+pub const SlotNets = struct {
+    of: std.ArrayList(u32) = .empty,
+
+    const none = std.math.maxInt(u32);
+
+    pub fn get(self: *const SlotNets, slot: u32) ?u32 {
+        if (slot >= self.of.items.len) return null;
+        const net = self.of.items[slot];
+        return if (net == none) null else net;
+    }
+
+    pub fn contains(self: *const SlotNets, slot: u32) bool {
+        return self.get(slot) != null;
+    }
+
+    pub fn put(self: *SlotNets, arena: std.mem.Allocator, slot: u32, net: u32) Error!void {
+        std.debug.assert(net != none);
+        const len = self.of.items.len;
+        if (slot >= len) try self.of.appendNTimes(arena, none, slot + 1 - len);
+        self.of.items[slot] = net;
+    }
+};
 
 /// Compiles each of `blocks` in `r.scope` and queues it at time 0.
 fn processes(r: *Run, blocks: []const Ast.DiscreteBlock) Error!void {
