@@ -562,8 +562,10 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     // --check: type-check the generated Zig here, where the .va that
-    // produced it can still be named.
-    if (check or emit_so) {
+    // produced it can still be named. --emit-so runs the same check only
+    // after its build fails: the build reports the same errors, and a
+    // separate pass before it is pure wall time.
+    if (check) {
         if (try typeCheck(gpa, io, err, zig_exe, contract_path.?, device, in_path)) |code| return code;
     }
 
@@ -655,6 +657,9 @@ pub fn main(init: std.process.Init) !u8 {
         switch (r) {
             .ok => |a| try out.print("{s}\n", .{a.so_path}),
             .failed => |bundle| {
+                // An error typeCheck can see is the device's own (an engine
+                // bug), reported against the .va as a check would have.
+                if (try typeCheck(gpa, io, err, zig_exe, contract_path.?, device, in_path)) |code| return code;
                 try err.print("error: {s}: the generated device did not compile:\n", .{in_path});
                 try bundle.renderToWriter(.{}, err);
                 return 1;

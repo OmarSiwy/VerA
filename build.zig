@@ -364,6 +364,25 @@ pub fn build(b: *std.Build) void {
         }
         grid_events.dependOn(&run.step);
     };
+    // --emit-so skips the preflight type check and runs it only after a failed
+    // build, so a device that does not compile is still reported against its
+    // .va. A contract that refuses to compile stands in for an engine bug.
+    {
+        const wf = b.addWriteFiles();
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ "--emit-so", "--allow=W0650", "--contract" });
+        run.addFileArg(wf.add("contract.zig", "comptime {\n    @compileError(\"broken contract\");\n}\n"));
+        run.addArg("--dyn");
+        run.addFileArg(wf.add("dyn.zig", "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"));
+        run.addArg("--work-dir");
+        _ = run.addOutputDirectoryArg("so");
+        run.addFileArg(b.path("tests/vpi_design.va"));
+        run.expectExitCode(1);
+        run.expectStdOutEqual("");
+        run.addCheck(.{ .expect_stderr_match = "vpi_design.va: codegen produced Zig that does not compile" });
+        run.addCheck(.{ .expect_stderr_match = "broken contract" });
+        test_step.dependOn(&run.step);
+    }
     // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero
     // never ends, so no file that size is committed or written.
     if (b.graph.host.result.os.tag != .windows) for ([_][]const []const u8{
