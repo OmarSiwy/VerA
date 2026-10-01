@@ -274,9 +274,15 @@ pub const show_base: u32 = 1 << 30;
 /// `late_base + k`: delayed nonblocking update `late[k]` (§9.2.2 `<= #d`).
 const late_base: u32 = 3 << 30;
 
-/// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
-const Layers = struct { assign: ?Range = null, force: ?Range = null };
+/// `root.Overrides`: the process ranges of a slot's `assign` and `force`,
+/// and of the forces of constant selects of a net (§9.3.2), each holding
+/// bits [lo, lo + width); `emit` numbers a net's distinct selects.
+/// ponytail: at most `max_parts` forced selects per net (`emit` refuses
+/// more); a list per slot if a design forces more of one net.
+const Layers = struct { assign: ?Range = null, force: ?Range = null, parts: [max_parts]Part = @splat(.{}) };
 const Range = struct { start: u32, end: u32 };
+const Part = struct { lo: u32 = 0, width: u32 = 0, range: ?Range = null };
+pub const max_parts = 4;
 
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
 /// declares `vera_overrides`.
@@ -871,7 +877,9 @@ pub const State = struct {
         const before = logic.low(W{ .v = sv[0], .x = sx[0] });
         const sense = self.sensed(slot);
         var changed: u64 = 0;
-        for (sv, sx, v, x, m, 0..) |*ov, *ox, av, ax, am, i| {
+        for (sv, sx, v, x, m, 0..) |*ov, *ox, av, ax, am_, i| {
+            // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
+            const am = am_ & ~self.forcedBits(slot, i);
             const nv = (ov.* & ~am) | (av & am);
             const nx = (ox.* & ~am) | (ax & am);
             const d = (nv ^ ov.*) | (nx ^ ox.*);
@@ -971,6 +979,58 @@ pub const State = struct {
         if (layer.*) |old| _ = try self.stop(old.start, old.end);
         layer.* = .{ .start = start, .end = end };
         try self.run(start, null);
+    }
+
+    /// The bits of word `j` of `slot` that a forced select holds against
+    /// every writer but the force's own process.
+    inline fn forcedBits(self: *const State, slot: u32, j: usize) u64 {
+        if (!overrides or self.overriding) return 0;
+        var m: u64 = 0;
+        for (self.layers[slot].parts) |p| if (p.range != null) {
+            const lo: i64 = @as(i64, p.lo) - 64 * @as(i64, @intCast(j));
+            const hi = lo + p.width;
+            if (hi <= 0 or lo >= 64) continue;
+            const a: u7 = @intCast(@max(lo, 0));
+            const b: u7 = @intCast(@min(hi, 64));
+            m |= (if (b == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(b)) - 1) & ~((@as(u64, 1) << @intCast(a)) - 1);
+        };
+        return m;
+    }
+
+    /// `exec` `.override_on` of a forced select: part `k` of `slot`, bits
+    /// [lo, lo + width), is held by the force whose process is pcs
+    /// [start, end), replacing the force of the same select before it.
+    pub fn overrideBits(self: *State, slot: u32, k: u32, lo: u32, width: u32, start: u32, end: u32) Error!void {
+        const p = &self.layers[slot].parts[k];
+        if (p.range) |old| _ = try self.stop(old.start, old.end);
+        p.* = .{ .lo = lo, .width = width, .range = .{ .start = start, .end = end } };
+        try self.run(start, null);
+    }
+
+    /// `exec.releaseBits`: part `k` of `slot` is its drivers' again; the
+    /// design re-resolves the net.
+    pub fn releaseBits(self: *State, slot: u32, k: u32) Error!void {
+        const p = &self.layers[slot].parts[k];
+        if (p.range) |old| _ = try self.stop(old.start, old.end);
+        p.range = null;
+    }
+
+    /// A forced select's own write: bits [lo, lo + bw) of the `sw`-bit
+    /// `slot` at word `off` become `a`.
+    pub fn putBits(self: *State, slot: u32, off: u32, comptime lo: u32, comptime bw: u32, comptime sw: u32, a: anytype) Error!void {
+        const n = comptime logic.words(sw);
+        var v: [n]u64 = @splat(0);
+        var x: [n]u64 = @splat(0);
+        var m: [n]u64 = @splat(0);
+        const src = logic.wide(a);
+        for (0..bw) |i| {
+            const at = lo + i;
+            const bit = @as(u64, 1) << @intCast(at % 64);
+            if (src.v[i / 64] >> @intCast(i % 64) & 1 != 0) v[at / 64] |= bit;
+            if (src.x[i / 64] >> @intCast(i % 64) & 1 != 0) x[at / 64] |= bit;
+            m[at / 64] |= bit;
+        }
+        try self.store(slot, off, &v, &x, &m);
     }
 
     /// Is `slot` forced? An `assign` under a force keeps tracking but does
