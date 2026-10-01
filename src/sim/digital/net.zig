@@ -81,6 +81,12 @@ pub const Bridge = struct { src: u32, src_lo: u32, dst_lo: u32, width: u32 };
 /// §7.9 one net: its resolution function, its storage, and the drivers whose
 /// wired-logic combination is its value. `resolved` is the scratch the fold
 /// writes before publishing through `store`, sized once at setup.
+///
+/// The hot row every resolution reads; what only a delayed net, a `trireg`
+/// or a pass-switch terminal has is its `NetCold` row. Most nets have none,
+/// and an unpacked net array is one `Net` per element (§4.9.1), so the split
+/// is what keeps a large array's footprint at this row's 72 bytes an element
+/// instead of 184.
 pub const Net = struct {
     kind: Ast.NetKind,
     slot: u32,
@@ -88,11 +94,31 @@ pub const Net = struct {
     /// The declaring token, for a verdict reached after elaboration (§7.9's
     /// `uwire` driver count).
     tok: u32 = 0,
+    /// This net's row in `Run.net_cold`, or `no_cold` when every field there
+    /// would be its default.
+    cold: u32 = no_cold,
     drivers: []const u32 = &.{},
     /// A.2.1.3 `charge_strength`, the level the stored charge of a `trireg` in
     /// the capacitive state asserts. `medium` is §3.8's default and is ignored
     /// outright by every other net type.
     charge: Ast.Strength = .medium,
+    /// Whether the last resolution found no driver asserting anything, which is
+    /// §3.8's capacitive state. The decay countdown restarts on each entry into
+    /// it, so the transition is what is watched, not the state.
+    capacitive: bool = false,
+    /// A MOS switch's data terminal is this net, so `signal` is read.
+    strength_read: bool = false,
+    /// Per bit, the §7.10 signal the last resolution found, whose strength a
+    /// MOS switch reading this net passes on (§7.12). Kept current only
+    /// where `strength_read` or the net resolves through a fold.
+    signal: []Signal = &.{},
+};
+
+/// `Net.cold` of a net with no cold row.
+pub const no_cold = std.math.maxInt(u32);
+
+/// A net's cold fields, for the nets that have any (`Net.cold`).
+pub const NetCold = struct {
     /// A.2.1.3 `[ delay3 ]` on the declaration, applied to the resolved value.
     delay: Delay = .{},
     transition: Inertial = .{},
@@ -100,20 +126,13 @@ pub const Net = struct {
     /// state may last before the charge is worth nothing. `null` (a `trireg`
     /// with no `delay3`) is §3.8's indefinite hold.
     decay: ?u64 = null,
-    /// Whether the last resolution found no driver asserting anything, which is
-    /// §3.8's capacitive state. The decay countdown restarts on each entry into
-    /// it, so the transition is what is watched, not the state.
-    capacitive: bool = false,
     /// The §3.8 decay countdown in flight, cancelled on leaving the state.
     decay_event: ?Handle = null,
-    /// Per bit, the §7.10 signal the last resolution found, whose strength a
-    /// MOS switch reading this net passes on (§7.12). Kept current only
-    /// where `strength_read` or the net resolves through a fold.
-    signal: []Signal = &.{},
-    /// A MOS switch's data terminal is this net, so `signal` is read.
-    strength_read: bool = false,
     /// The §7.6 pass switches with this net as a terminal.
     trans: []const u32 = &.{},
+
+    /// Every field at its default: the row of a net with none.
+    pub const none: NetCold = .{};
 };
 
 /// §7.6 one MOS switch (half of a CMOS one, §7.7): it passes `data`, value

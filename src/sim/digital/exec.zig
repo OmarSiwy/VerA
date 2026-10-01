@@ -15,6 +15,7 @@ const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
 const Type = compile.Type;
 const Inertial = @import("net.zig").Inertial;
+const no_cold = @import("net.zig").no_cold;
 const Handle = @import("../scheduler.zig").Handle;
 const Bridge = @import("net.zig").Bridge;
 const Gate = @import("net.zig").Gate;
@@ -1062,7 +1063,7 @@ fn selectedEvent(self: *Run, t: Term, target: u32) Error!bool {
 }
 
 fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
-    return if (slot < self.terms.len) &self.terms[slot] else self.far_terms.getPtr(slot);
+    return if (slot < self.terms.len) self.terms[slot] else self.far_terms.getPtr(slot);
 }
 
 /// Suspend the executing process at `pc` (§9.7). Its terms are filed with
@@ -1083,7 +1084,13 @@ fn park(self: *Run, pc: u32) Error!u32 {
 
 /// File one term of suspension `id` under `slot`.
 fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
-    const list = termsOf(self, slot) orelse blk: {
+    const list = termsOf(self, slot) orelse if (slot < self.terms.len) blk: {
+        // Made on the slot's first wait, at an address that stays put.
+        const l = try self.arena.create(std.ArrayList(Term));
+        l.* = .empty;
+        self.terms[slot] = l;
+        break :blk l;
+    } else blk: {
         const g = try self.far_terms.getOrPut(self.arena, slot);
         g.value_ptr.* = .empty;
         break :blk g.value_ptr;
@@ -1131,12 +1138,13 @@ pub fn buildFanout(r: *Run) Error!void {
         fan[fill[at]] = @intCast(pc);
         fill[at] += 1;
     };
+    r.arena.free(fill); // the cursor is spent; a large one goes back now
     r.fan_start = start;
     r.fan = fan;
     r.armed = try r.arena.alloc(bool, r.code.items.len);
     @memset(r.armed, false);
-    r.terms = try r.arena.alloc(std.ArrayList(Term), n);
-    @memset(r.terms, .empty);
+    r.terms = try r.arena.alloc(?*std.ArrayList(Term), n);
+    @memset(r.terms, null);
 }
 
 fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
@@ -1155,7 +1163,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
     // A §18.4 port's state can change with its drivers' strengths alone.
     if (self.watch[n.slot].contains(.ports)) try requestVcd(self);
-    if (n.trans.len != 0) return resolveJoined(self, net);
+    if (self.netCold(n).trans.len != 0) return resolveJoined(self, net);
     // VAMS §3.7: a wreal has at most one driver and is that driver's value
     // (no four-state resolution, no strength), and 0.0 with none.
     if (n.kind == .wreal) {
@@ -1202,10 +1210,11 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
     // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it applies
     // between the resolution and the publish, after every driver is folded in.
-    if (n.delay.present) {
-        const st = &self.nets[net].transition;
+    if (self.netCold(n).delay.present) {
+        const c = try self.netColdMut(net);
+        const st = &c.transition;
         if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
-            st.in_flight = try enqueue(self, .{ .net_update = net }, n.delay.to(st.target.bit(0)), false);
+            st.in_flight = try enqueue(self, .{ .net_update = net }, c.delay.to(st.target.bit(0)), false);
         return;
     }
     try store(self, n.slot, n.resolved.planes);
@@ -1293,7 +1302,7 @@ fn reach(self: *Run, a: std.mem.Allocator, from: Node) Error![]const Node {
     var i: usize = 0;
     while (i < seen.items.len) : (i += 1) {
         const u = seen.items[i];
-        for (self.nets[u.net].trans) |ti| {
+        for (self.netCold(self.nets[u.net]).trans) |ti| {
             const t = self.trans[ti];
             if (t.state == .off) continue;
             const v = across(t, u) orelse continue;
@@ -1320,7 +1329,7 @@ fn switchPaths(self: *Run, a: std.mem.Allocator, y: Node, group: []const Node) E
         changed = false;
         for (group, 0..) |u, iu| {
             if (p[iu].res == std.math.maxInt(u32)) continue;
-            for (self.nets[u.net].trans) |ti| {
+            for (self.netCold(self.nets[u.net]).trans) |ti| {
                 const t = self.trans[ti];
                 if (t.state == .off) continue;
                 const v = across(t, u) orelse continue;
@@ -1434,11 +1443,14 @@ fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
     // Leaving the state, or entering one that never decays, only has to
     // cancel whatever countdown was running.
     if (was == floating) return;
-    if (n.decay_event) |h| try cancel(self, h);
-    n.decay_event = null;
+    // A trireg without a cold row has no decay and no countdown to cancel.
+    if (n.cold == no_cold) return;
+    const c = &self.net_cold.items[n.cold];
+    if (c.decay_event) |h| try cancel(self, h);
+    c.decay_event = null;
     if (!floating) return;
-    const after = n.decay orelse return;
-    n.decay_event = try enqueue(self, .{ .decay = net }, after, false);
+    const after = c.decay orelse return;
+    c.decay_event = try enqueue(self, .{ .decay = net }, after, false);
 }
 
 /// What a gate driver contributes: §7.8.5's one output bit, and whether it is

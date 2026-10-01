@@ -5,6 +5,7 @@
 //! A construct that is not native refuses by name; the executable then embeds
 //! the source and runs the interpreter (`rt.interpret`, `Program.fallback`).
 const std = @import("std");
+const no_cold = @import("net.zig").no_cold;
 const Front = @import("frontend");
 const Ast = Front.Ast;
 const root = @import("root.zig");
@@ -721,7 +722,7 @@ fn actEvents(self: *Emitter) Error!void {
 fn advances(r: *const Run) bool {
     for (r.code.items) |ins| if (ins == .delay or ins == .sample) return true;
     for (r.drivers) |d| if (d.delay.present) return true;
-    for (r.nets) |n| if (n.delay.present) return true;
+    for (r.net_cold.items) |c| if (c.delay.present) return true;
     return false;
 }
 
@@ -1611,8 +1612,8 @@ pub fn plainDriver(r: *const Run, i: u32) bool {
         },
         .bridge, .udp, .mos, .pull => false,
     };
-    return plain and source and n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and !selectForced(r, n.slot) and
-        d.s0 == .strong and d.s1 == .strong and !d.delay.present and !n.delay.present;
+    return plain and source and n.drivers.len == 1 and !n.strength_read and n.cold == no_cold and !selectForced(r, n.slot) and
+        d.s0 == .strong and d.s1 == .strong and !d.delay.present;
 }
 
 /// `net_ix`/`drv_ix`: a row for every net some driver of which is not
@@ -1625,7 +1626,7 @@ fn resolvedNets(self: *Emitter) Error!void {
     @memset(self.drv_ix, null);
     for (r.nets, 0..) |n, k| {
         // §7.6 a switch terminal resolves with the nets it is joined to.
-        const resolved = n.strength_read or n.trans.len != 0 or selectForced(r, n.slot) or for (n.drivers) |di| {
+        const resolved = n.strength_read or r.netCold(n).trans.len != 0 or selectForced(r, n.slot) or for (n.drivers) |di| {
             if (!plainDriver(r, di)) break true;
         } else false;
         if (!resolved) continue;
@@ -1788,7 +1789,8 @@ fn netTables(self: *Emitter) Error!void {
     try self.print("    .nets = &.{{", .{});
     for (self.rt_nets.items) |k| {
         const n = r.nets[k];
-        var strong = !n.strength_read and n.trans.len == 0;
+        const c = r.netCold(n);
+        var strong = !n.strength_read and c.trans.len == 0;
         for (n.drivers) |di| {
             const d = r.drivers[di];
             const or_z = switch (d.source) {
@@ -1803,7 +1805,7 @@ fn netTables(self: *Emitter) Error!void {
         }
         try self.print("\n        .{{ .kind = .{t}, .slot = {d}, .off = {d}, .width = {d}, .drivers = &.{{", .{ n.kind, n.slot, self.off[n.slot], r.values[n.slot].width });
         for (n.drivers) |di| try self.print(" {d},", .{self.drv_ix[di].?});
-        try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(n.delay), n.charge, n.decay });
+        try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
     }
     try self.print("\n    }},\n    .drivers = &.{{", .{});
     var udps: std.ArrayList(*const @import("net.zig").Udp) = .empty;
@@ -1899,7 +1901,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
         // or z meaning. Strength, several drivers, three states do.
         if (self.caresX()) {
             const two_ok = switch (n.kind) {
-                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and d.s0 == .strong and d.s1 == .strong,
+                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and r.netCold(n).trans.len == 0 and d.s0 == .strong and d.s1 == .strong,
                 .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
             } and switch (d.source) {
                 .expr => true,
@@ -1912,7 +1914,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
             if (!two_ok) try self.xMeaning("a §7.9 net resolved from strengths or several drivers, or a three-state, switch, UDP, port-window or pull driver", null);
             // §7.14 picks the delay by the value transitioned to: with
             // three different ones, an x or z decides when a value lands.
-            for ([_]@import("net.zig").Delay{ d.delay, n.delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
+            for ([_]@import("net.zig").Delay{ d.delay, r.netCold(n).delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
                 try self.xMeaning("a `delay3` whose rise, fall and turn-off differ, chosen by an x or z", null);
         }
         switch (d.source) {
