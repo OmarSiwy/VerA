@@ -83,11 +83,11 @@ These stay outside `module_specs`, as today: `src/main.zig` + `src/cli/`,
 - **Fix:** Phases 7–8.
 
 **I3. `ir` holds types only.**
-- `lib/ir/root.zig:16-27` exports logic: ~~`Elaborate`~~ (Phase 4: a re-export of `elab`, whose files left `ir`), `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.
+- ~~`lib/ir/root.zig:16-27` exports logic: `Elaborate`, `Lower`, `Ssa`, `Analysis`, `ifconv`, `proof`.~~ Phase 4: `Elaborate` is a re-export of `elab`. Phase 5: lowering and SSA are `analog`'s, the passes `prove`'s, and `vera` re-exports them.
 - ~~`mir.zig:9,47,311` takes `StrId` and the interner from the Ast.~~ Phase 2: it reads `base`.
 - ~~`opcode.zig:8-9,45-47,194` takes the Ast operator enums and `constfold`.~~ Phase 3: it reads `kernels.fold` and no longer imports `frontend`.
-- `lower/tables.zig:23-30` imports Lexer, Preprocessor, Elaborate and `sysfunc`; `:878-889` is logic.
-- Downstream code calls lowering logic: `codegen/call.zig:35,269,697,704`, `host_expr.zig:337`, `plan/setup.zig:245`, `file.zig:542`, `render.zig:105`, `analysis.zig:1097`.
+- `lower/tables.zig:23-30` imports Lexer, Preprocessor, Elaborate and ~~`sysfunc`~~; `:878-889` is logic. Phase 5: it is `ir/lowered.zig`, and the §9.15 rows it read from `sysfunc` are `ir/simparam.zig`. Lexer, Preprocessor and Elaborate stay until Phase 11.
+- ~~Downstream code calls lowering logic: `codegen/call.zig:35,269,697,704`, `host_expr.zig:337`, `plan/setup.zig:245`, `file.zig:542`, `render.zig:105`, `analysis.zig:1097`.~~ Phase 5: `call.zig:35` (`unaryMathOp`) was gone already; the `simparam` calls read `ir.Lowered`'s aliases of `ir/simparam.zig`, and `render.zig:109`/`file.zig:805` call `kernels.fold`. Every file after lowering binds `const Lower = @import("ir").Lowered`; only `codegen/test.zig` and `prove/proof/test.zig` import `analog`, to lower source in tests.
 - **Fix:** Phases 3, 4, 5, 6 and 11.
 
 **I4. `elab` never writes the Ast.**
@@ -156,7 +156,7 @@ the commit that removes the violation. R3–R7 read production lines: outside to
 - **R1:** a runtime row's closure contains no compiler row. Allowlist: `sim` → {`diag`, `frontend`} until B4.
 - **R2:** backend closures are pairwise disjoint. Until Phase 8 this is checked at file level: the closure of `lib/backend/tb/**` must not reach `codegen.zig` ∪ `codegen/**` ∪ `cg_*`. An allowlisted edge is cut from the walk. Allowlist: `tb/exe.zig` → `orchestrator.zig` until Phase 7, and `naming.zig` → `codegen/plan/fixture.zig` until Phase 8.
 - **R3:** no Ast writes outside `lib/frontend`. A write is a call to an Ast appender (`exprs.add*`, `addStmt`, `seqBlockMut`, `seedFrom`) or an assignment to a `SourceFile` field other than `strings` through a receiver spelled `…file`. Allowlist: per-file counts in `elaborate.zig`, `elaborate/{clone,fixture,insert,instance,names}.zig`, `hier_param.zig`, `lower.zig` (its test harness), `lib/root.zig` (the five caller-set fields) and `src/sim/digital/root.zig`, until Phase 12.
-- **R4:** no `*Lowered` mutated outside lowering. Checked as a mutable `*Lowered` on a `pub` line or in a struct field outside `lib/ir/lower{.zig,/}`. Allowlist: `pruneHeld` (`plan/setup.zig:742`) until Phase 6.
+- **R4:** no `*Lowered` mutated outside lowering. Checked as a mutable `*Lowered` on a `pub` line or in a struct field outside `lib/analog/lower{.zig,/}` (`lib/ir/lower{.zig,/}` until Phase 5). Allowlist: `pruneHeld` (`plan/setup.zig:742`) until Phase 6.
 - **R5:** each of the `__xz`/`__w{d}`/`__1b`/`__held__` literals has one owner: `lower/context.zig` for the first three, `plan/names.zig` for `__held__`. Allowlist: `lower/expr.zig` (three) and `tb/runner.zig` (four) until Phase 8.
 - **R6:** no emitted `debug.print(`/`process.exit(` in device-emitting files (`codegen.zig`, `codegen/**`, `cg_*`, `kernels*`). Allowlist: per-file counts in `cg_display.zig`, `kernel_text.zig`, `render.zig` and five kernel files until B2.
 - **R7:** a per-file ceiling on `std.mem.eql(u8` in `lib/` and `src/`; a line with `// str: <LRM data>` does not count. The ceilings are the counts of 2026-10-17 (479 sites in 81 files); they have no deleting phase.
@@ -217,4 +217,5 @@ line numbers had moved.
 | 2 | written 2026-10-17 on branch `phase2-base` (`lib/base/`: `deep_stack`, `interner`, `big_arena`; `sim`'s six `deep_stack` sites and `mir.zig`'s interner read `base`); awaits its gate, G |
 | 3 | written 2026-10-17 on branch `phase3-kernels` (`lib/kernels/`: the kernel files byte for byte, `root.zig`, `text.*`; `integer`/`ref4`, `fold` with `strToInt`, `fmt`; `frontend` imports `kernels` and drops `contract`; `opcode.zig` and `src/sim` read `kernels`); awaits its gate, G+T, `test-rng-reference`, `test-printf-reference` |
 | 4 | written 2026-10-17 on branch `phase4-elab` (`lib/elab/`: `elaborate.zig` + `elaborate/`, `dist`, `discipline_rules`, `hier_param`, byte for byte but `dist.zig`, whose callee test moved to `callee.zig`; the row imports `diag`, `frontend`, `kernels`, since no file needs `base` yet; `ir` re-exports `Elaborate`, and `lower/` and `vera` read `elab`); awaits its gate, G |
-| 5–12, B1–B4 | not started (2026-10-17) |
+| 5 | written 2026-10-17 on branch `phase5-analog-prove`: (a) inside `ir`, `lower/tables.zig` → `lowered.zig` and the §9.15 rows of `sysfunc.zig` → `simparam.zig`, with `ParamOverride` and the `simparam` names on `Lowered`, so backend and `src/vpi` bind `Lower = ir.Lowered`; (b) `lower.zig` + `lower/` + `ssa.zig` → `lib/analog/`, `analysis`, `ifconv`, `proof` + `proof/`, `verify` → `lib/prove/`, and the `ssa` random-program test, which needs `verify`, → `prove/ssa_test.zig`. Rows: `ir` drops `contract`; `analog` imports `diag`, `frontend`, `elab`, `ir`, `kernels`; `prove` imports `diag`, `frontend` [A until Phase 11], `ir`, `contract`, and `analog` for `proof/test.zig` and `ssa_test.zig` only (§1 row 11); `backend` gains `analog` (codegen's tests only) and `prove`; `vera` gains both and re-exports the six names `ir` dropped. Awaits its gate, G |
+| 6–12, B1–B4 | not started (2026-10-17) |
