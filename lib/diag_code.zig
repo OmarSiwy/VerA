@@ -296,6 +296,9 @@ pub const Code = enum(u16) {
     E0531,
     E0532,
     E0533,
+    E0534,
+    E0535,
+    E0536,
     E0572,
     E0573,
     E0574,
@@ -4342,6 +4345,52 @@ fn infoOf(c: Code) Info {
             \\        if (late) $vera_reject_step(t_edge);   // yes
             \\    end
             \\    analog initial $vera_reject_step(0.0);    // no
+            ,
+        },
+        .E0534 => .{
+            .title = "vera_scratch needs a constant value",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_scratch *)` is VerA's attribute for a variable that carries
+            \\nothing from one evaluation to the next: every evaluation starts it
+            \\at its declaration's initializer, the 3.2 zero when there is none.
+            \\`= 0` turns it off. The answer decides whether the device keeps a
+            \\slot for the variable, so it must fold before the model card exists
+            \\and may not name a parameter:
+            \\
+            \\    (* vera_scratch *) real st[0:63];       // scratch
+            \\    (* vera_scratch = 0 *) real st[0:63];   // held where observable
+            \\
+            \\The attribute is ignored and the variable is held where observable.
+            ,
+        },
+        .E0535 => .{
+            .title = "vera_scratch decorates something other than a variable",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_scratch *)` says a VARIABLE (3.2) starts every evaluation
+            \\afresh. A parameter (3.4) is a constant, a net (3.6) or a genvar
+            \\(3.5) holds no value an evaluation assigns, and a statement is not a
+            \\declaration, so on any of those it would mean nothing:
+            \\
+            \\    (* vera_scratch *) real st[0:63];          // yes
+            \\    (* vera_scratch *) parameter real k = 1;   // no
+            ,
+        },
+        .E0536 => .{
+            .title = "vera_scratch variable carries a value between evaluations",
+            .lrm = "5.10",
+            .explain =
+            \\A `(* vera_scratch *)` variable starts every evaluation afresh. An
+            \\`analog initial` block (5.2.1) runs on the first evaluation only, and
+            \\an event statement (5.10) only on the evaluations its event fires, so
+            \\a value either assigns is meant for the evaluations that do not run
+            \\it. Where a read may see such a value, the variable must be held:
+            \\
+            \\    @(initial_step) k = 3.0;
+            \\    y = k;   // no: k would read 0 on every later evaluation
+            \\
+            \\Drop the attribute, or assign the variable outside the event.
             ,
         },
         .E0572 => .{

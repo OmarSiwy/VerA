@@ -275,7 +275,7 @@ Device-table directives assert what a device PUBLISHES to a host, as
 per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order), and
 `//! abstol <unknown> = v` (the §3.6.1.2 `u_abstol` entry).
 
-**Vendor attributes.** VerA reads four §2.9 attributes. `vera_lte` is a
+**Vendor attributes.** VerA reads five §2.9 attributes. `vera_lte` is a
 prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)
 or a suffix on a `ddt` name (`ddt (* vera_lte = 0 *) (q)`, a slot A.8.2 gives
 only analog functions and VerA extends). It leaves those charge sites out of
@@ -296,6 +296,16 @@ function, event, system task or string assignment is E0530; a value read
 from before it that an iteration can move (a probe in a variable, a branch
 on one) is E0531; inside a loop, analog function or `analog initial` it is
 E0532. Held (§5.10) reads see the accepted state.
+`(* vera_scratch *)`, a prefix on a variable declaration (module or named
+block; scalars and arrays, real or integer), makes the variable never held:
+every evaluation starts it at its initializer, the §3.2 zero when there is
+none, so an unwritten slot of a runtime-indexed array reads 0 instead of
+what an earlier evaluation left. It is for stacks and scratch buffers the
+retention analysis cannot prove written before read; a device whose only
+state was such a variable drops to `state_class = .none`. `= 0` turns it
+off; the value folds without the card (E0534). On anything but a variable
+(parameter, net, genvar, statement) it is E0535; on a variable an `analog
+initial` or `@(...)` body assigns and a later read may see, E0536.
 
 **`$vera_reject_step(t_retry)`.** A VerA system task in an analog block:
 on a transient step's accepted solution, `updateState` returns
