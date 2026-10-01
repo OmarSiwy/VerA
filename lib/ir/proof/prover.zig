@@ -1414,15 +1414,9 @@ fn powIv(x: proof_lattice.Interval, y: proof_lattice.Interval) proof_lattice.Int
 /// `/` only for a one-signed divisor (the `.fdiv` transfer checks); `pow` only for x >= 0
 /// (`powIv` checks).
 pub fn combine(x: proof_lattice.Interval, y: proof_lattice.Interval, f: *const fn (f64, f64) f64) proof_lattice.Interval {
-    const c = [4]f64{ f(x.lo, y.lo), f(x.lo, y.hi), f(x.hi, y.lo), f(x.hi, y.hi) };
-    var lo = math.inf(f64);
-    var hi = -math.inf(f64);
-    for (c) |v| {
-        if (math.isNan(v)) return .top;
-        lo = @min(lo, v);
-        hi = @max(hi, v);
-    }
-    return .{ .lo = lo, .hi = hi };
+    const c: @Vector(4, f64) = .{ f(x.lo, y.lo), f(x.lo, y.hi), f(x.hi, y.lo), f(x.hi, y.hi) };
+    if (@reduce(.Or, c != c)) return .top; // a NaN corner
+    return .{ .lo = @reduce(.Min, c), .hi = @reduce(.Max, c) };
 }
 
 fn absIv(a: proof_lattice.Interval) proof_lattice.Interval {

@@ -169,10 +169,7 @@ fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     var buf: [64]u8 = undefined;
     const want = std.fmt.bufPrint(&buf, "break :B{d};\n", .{k}) catch return false;
     if (body.len != depth * 4 + want.len) return false;
-    for (body[0 .. depth * 4]) |ch| {
-        if (ch != ' ') return false;
-    }
-    return std.mem.eql(u8, body[depth * 4 ..], want);
+    return std.mem.allEqual(u8, body[0 .. depth * 4], ' ') and std.mem.eql(u8, body[depth * 4 ..], want);
 }
 
 /// Writes block `bi`'s terminator: the unit's return, a jump edge, or an
