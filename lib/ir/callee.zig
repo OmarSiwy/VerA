@@ -145,6 +145,9 @@ pub const Callee = enum(u8) {
     // §9.17 limiting and step control, §9.21 table model.
     @"$bound_step",
     @"$discontinuity",
+    // VerA's vendor task: reject the step being accepted and retry it ending
+    // at the argument (`contract.UpdateResult.request_reject_at`).
+    @"$vera_reject_step",
     @"$limit",
     @"$table_model",
     // VerA-synthetic: `absdelay` under `(* vera_interp = 2 *)`: the same
@@ -371,6 +374,7 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §5.10 `Lower.holdSlot`'s synthetic seed: the callee is chosen by the
     // variable's declared type, so the name IS the type.
     .@"$held_int" = .{ .ty = .int },
+    .@"$vera_reject_step" = .{ .args = one },
     .@"$tp_hit" = .{ .ty = .int },
     .@"$tp_int" = .{ .ty = .int },
     // §9.5: every descriptor function is integer-valued. The arities are
@@ -555,6 +559,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$sscanf",
         .@"$limit",
         .@"$table_model",
+        .@"$vera_reject_step",
         .@"$held_int",
         .@"$held_real",
         .@"$tp_hit",

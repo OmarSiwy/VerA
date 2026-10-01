@@ -259,6 +259,8 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// state in `Instance` that only `updateState` may advance.
 pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0) return true;
+    // VerA's `$vera_reject_step`: `updateState` is where the request is read.
+    if (self.lowered.reject_step != .undef) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op != .none) return true;
     }

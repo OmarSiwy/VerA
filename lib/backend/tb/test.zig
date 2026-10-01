@@ -462,7 +462,7 @@ test "a wave is per-timepoint and holds its last value" {
     // Four points, `in` = 1 after the first, and one `stepPost` per point so
     // operator state advances.
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        point("));
-    try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        stepPost(&model"));
+    try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        if (stepPost(&model"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= newState("));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "set(&x, &forced, \"in\", 1);"));
 }

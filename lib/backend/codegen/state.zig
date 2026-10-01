@@ -47,8 +47,15 @@ fn scanAccept(self: *Gen) Error!Accept {
     }
     for (self.core.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
     a.uses_core = a.uses_core or gen_file.pathLatches(self);
+    a.uses_core = a.uses_core or rejectStepIdx(self) != null;
     a.reads_t_prev = a.reads_t_prev or a.uses_dt;
     return a;
+}
+
+/// The core field of VerA's `$vera_reject_step` retry time, in `self.core`.
+fn rejectStepIdx(self: *const Gen) ?u32 {
+    if (self.lowered.reject_step == .undef) return null;
+    return gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_step));
 }
 
 /// Emits `<core>__state`, the core's slice computing only what `updateState`
@@ -64,6 +71,7 @@ pub fn emitCore(self: *Gen) Error!void {
     for (self.core.held_idx) |k| if (k != none_u32) {
         keep[k] = true;
     };
+    if (rejectStepIdx(self)) |k| keep[k] = true;
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op == .none) continue;
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
@@ -161,6 +169,15 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
     }
     try emitAcceptBody(self, acc);
+    // VerA's `$vera_reject_step`: in a transient, a retry time before this
+    // point rejects it. A static solve has no step to shorten.
+    if (rejectStepIdx(self)) |k| try self.w(
+        \\    {{
+        \\        const retry = m.f{d}.val();
+        \\        if (sim.kind == .tran and retry < sim.t) return .{{ .request_reject_at = retry }};
+        \\    }}
+        \\
+    , .{k});
     self.core = full;
     gen_unit.patchUnless(self, at_s, body, "S");
     gen_unit.patchUnless(self, at_model, body, "model");
@@ -195,6 +212,9 @@ fn emitStateClass(self: *Gen) Error!void {
 /// reactive half.
 fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (!gen_dispatch.anyQ(self)) return;
+    // It returns the charges, so it has no way to carry a
+    // `$vera_reject_step` request: such a host calls `q` and `updateState`.
+    if (self.lowered.reject_step != .undef) return;
     self.uses_x = false;
     self.uses_model = false;
     self.uses_inst = true; // the §9.17 resets below always write it

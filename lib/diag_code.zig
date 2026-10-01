@@ -295,6 +295,7 @@ pub const Code = enum(u16) {
     E0530,
     E0531,
     E0532,
+    E0533,
     E0572,
     E0573,
     E0574,
@@ -4323,6 +4324,24 @@ fn infoOf(c: Code) Info {
             \\    (* vera_timepoint *) for (i = 0; i < 3; i = i + 1) e[i] = exp(-h * p[i]);
             \\
             \\The attribute is ignored and the statement runs every evaluation.
+            ,
+        },
+        .E0533 => .{
+            .title = "$vera_reject_step outside an analog block",
+            .lrm = "2.8.3",
+            .explain =
+            \\`$vera_reject_step(t_retry)` is VerA's task for asking the host to
+            \\reject the transient step it is accepting and retry it ending at
+            \\`t_retry` (`contract.UpdateResult.request_reject_at`). `updateState`
+            \\reads it off the accepted solution, so it means something only where
+            \\a step is accepted: in an analog block. An `analog initial` block
+            \\(5.2.1) runs once per analysis and an analog function (4.7) once per
+            \\call, so neither has a step to reject:
+            \\
+            \\    analog begin
+            \\        if (late) $vera_reject_step(t_edge);   // yes
+            \\    end
+            \\    analog initial $vera_reject_step(0.0);    // no
             ,
         },
         .E0572 => .{

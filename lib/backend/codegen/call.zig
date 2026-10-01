@@ -679,6 +679,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$sscanf",
         .@"$limit",
         .@"$table_model",
+        .@"$vera_reject_step",
         .@"$limit$uf",
         .@"$idx",
         .@"$idx$int",
@@ -1103,6 +1104,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b(")", .{});
         },
         .@"$table_model" => return gen_render.emitTable(self, inst, args), // §9.21
+        // Lowered to a running minimum (`lower_event.lowerKernelCtl`), never a call.
+        .@"$vera_reject_step" => unreachable,
         // §3.2/§5.7 runtime array index (`emitIdx`), typed by the callee.
         .@"$idx", .@"$idx$int", .@"$idx$str" => return gen_render.emitIdx(self, args, Mir.callee.ty(c)),
         // §9.13 Table 9-10 as `Lower.lowerRandom` shapes it: the seed, then

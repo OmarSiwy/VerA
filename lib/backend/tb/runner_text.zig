@@ -498,9 +498,22 @@ pub const runner_body =
     \\/// only thing that ever writes it, so without this call every §4.5 operator
     \\/// would answer from zero history at every time point and the transcript
     \\/// would claim more than it proves.
-    \\fn step(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
-    \\    if (State == void) return;
-    \\    _ = D.updateState(Val, model, inst, x.*, state, sim_state);
+    \\///
+    \\/// Returns `contract.UpdateResult.request_reject_at`'s time when the device
+    \\/// rejects the step (VerA's `$vera_reject_step`), with every write this call
+    \\/// made undone; null when it accepts.
+    \\fn step(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) ?f64 {
+    \\    if (State == void) return null;
+    \\    const inst0 = inst.*;
+    \\    const state0 = state.*;
+    \\    switch (D.updateState(Val, model, inst, x.*, state, sim_state)) {
+    \\        .ok => return null,
+    \\        .request_reject_at => |r| {
+    \\            inst.* = inst0;
+    \\            state.* = state0;
+    \\            return r;
+    \\        },
+    \\    }
     \\}
     \\
     \\/// Iteration history advances independently of accepted-time operators.
@@ -534,9 +547,16 @@ pub const runner_body =
     \\    }
     \\}
     \\
-    \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) void {
+    \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) ?f64 {
     \\    acceptCheck(model, inst, x, state);
+    \\    const q0 = q_prev;
     \\    commitCharge(model, inst, x);
+    \\    const r = stepAdvance(model, inst, x, state, solved);
+    \\    if (r != null) q_prev = q0;
+    \\    return r;
+    \\}
+    \\
+    \\fn stepAdvance(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) ?f64 {
     \\    if (!solved) {
     \\        // Forced-point fixtures sample both lifetimes, and a forced point
     \\        // is one Newton iteration of an unbroken solve. Both updates read
@@ -546,12 +566,50 @@ pub const runner_body =
     \\        if (@hasDecl(D, "advanceIteration")) {
     \\            var next = inst.*;
     \\            D.advanceIteration(Val, model, &next, x.*, sim_state);
-    \\            step(model, inst, x, state);
-    \\            if (@hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
-    \\            return;
+    \\            const r = step(model, inst, x, state);
+    \\            if (r == null and @hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
+    \\            return r;
     \\        }
     \\    }
-    \\    step(model, inst, x, state);
+    \\    return step(model, inst, x, state);
+    \\}
+    \\
+    \\/// A host whose time walk cannot go back (the mixed and VPI runners)
+    \\/// refuses a `$vera_reject_step` request rather than accept the step anyway.
+    \\fn retryUnsupported(r: f64) void {
+    \\    std.debug.print("reject_step FAIL: this runner does not retry a rejected step (retry at {e})\n", .{r});
+    \\    std.process.exit(1);
+    \\}
+    \\
+    \\/// The host half of `contract.UpdateResult.request_reject_at` (VerA's
+    \\/// `$vera_reject_step`): the step to `t` was rejected and undone, so a point
+    \\/// is solved and accepted at `r`, between the last accepted time and `t`,
+    \\/// and then `t` is solved again from there. The forced unknowns keep the
+    \\/// values they have at `t`. A request during the retry is honoured the same
+    \\/// way, 16 deep at most.
+    \\fn retry(r: f64, n: usize, x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *D.Instance, state: *State, depth: u32) void {
+    \\    const t = sim_state.t;
+    \\    const t_prev = t - sim_state.dt;
+    \\    const last = sim_state.final_step;
+    \\    if (!(r > t_prev and r < t) or depth == 16) {
+    \\        std.debug.print("reject_step FAIL: retry at {e} is not inside ({e}, {e})\n", .{ r, t_prev, t });
+    \\        std.process.exit(1);
+    \\    }
+    \\    std.debug.print("--- point {d} rejected: retry at {e} ---\n", .{ n, r });
+    \\    sim_state.t = r;
+    \\    sim_state.dt = r - t_prev;
+    \\    sim_state.initial_step = false;
+    \\    sim_state.final_step = false;
+    \\    sim_state.analog_initial = false;
+    \\    const solved_r = solve(x, forced, model, inst);
+    \\    point(n, x, model, inst);
+    \\    if (stepPost(model, inst, x, state, solved_r)) |r2| retry(r2, n, x, forced, model, inst, state, depth + 1);
+    \\    sim_state.t = t;
+    \\    sim_state.dt = t - r;
+    \\    sim_state.final_step = last;
+    \\    const solved_t = solve(x, forced, model, inst);
+    \\    point(n, x, model, inst);
+    \\    if (stepPost(model, inst, x, state, solved_t)) |r3| retry(r3, n, x, forced, model, inst, state, depth + 1);
     \\}
     \\
     \\const u_names = blk: {
@@ -913,7 +971,7 @@ pub const vpi_lib_body =
     \\/// reads its history from.
     \\export fn vera_vpi_accept() callconv(.c) void {
     \\    if (@hasDecl(D, "display")) D.display(Dual, &g_x, &g_model, &g_inst, sim_state);
-    \\    stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved);
+    \\    if (stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved)) |r| retryUnsupported(r);
     \\}
     \\const n_rows = if (@hasDecl(D, "vpiContribs")) D.vpi_contrib_access.len else 0;
     \\export fn vera_vpi_n_rows() callconv(.c) usize {

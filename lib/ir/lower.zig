@@ -464,6 +464,8 @@ static_cond_depth: u32 = 0,
 /// bounds the step only on the arm that ran. `finishKernelCtl` turns the final
 /// value into one synthetic `call` (a unit). Null: the model never called it.
 bound_step_place: ?Ssa.Place = null,
+/// VerA's `$vera_reject_step`, the same way: +inf is "no request".
+reject_step_place: ?Ssa.Place = null,
 /// §9.17.1 `$discontinuity`, the same way as `bound_step_place`.
 disc_place: ?Ssa.Place = null,
 /// §9.17.1 `$discontinuity(-1)`'s flag, seeded 0 and set 1 at each call site;
@@ -1635,6 +1637,7 @@ fn readSiteFinals(self: *Lower, from: usize) Oom!void {
 /// evaluates the unit once per accepted step and stores it into `Instance`.
 fn finishKernelCtl(self: *Lower) Oom!void {
     if (self.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
+    if (self.reject_step_place) |p| self.out.reject_step = try self.builder.readVariable(p, self.cur);
     if (self.bound_step_place) |p| {
         const v = try self.builder.readVariable(p, self.cur);
         _ = try self.call("$bound_step", &.{v});
