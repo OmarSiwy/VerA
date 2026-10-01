@@ -1553,6 +1553,93 @@ pub const State = struct {
         try display.strength(self.out, .of(literal(&buf, w, false).bit(0), .strong, .strong));
     }
 
+    /// §17.2.3 a `$sformat` format held in a variable, read when the task
+    /// runs (`display.sformat`'s dynamic walk): its characters, how far they
+    /// are used, and whether they end inside a conversion.
+    pub const Format = struct { text: []const u8, i: usize = 0, bad: bool = false };
+
+    /// One argument-taking conversion of a `Format`.
+    pub const Spec = struct { conv: u8, width: ?u32, precision: i64 };
+
+    /// The characters of the `w`-bit format `a` (`system.text`) in `buf`,
+    /// `w / 8` bytes rounded up; none when it holds an x or z.
+    pub fn formatOf(buf: []u8, a: anytype, w: u32) Format {
+        var planes = logic.planesOf(a);
+        const v = literal(&planes, w, false);
+        if (v.hasUnknown()) return .{ .text = "" };
+        var n: usize = 0;
+        var k = buf.len;
+        while (k != 0) {
+            k -= 1;
+            var c: u8 = 0;
+            for (0..8) |b| {
+                const at: u32 = @intCast(k * 8 + b);
+                if (at < w and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(b);
+            }
+            if (c == 0 and n == 0) continue;
+            buf[n] = c;
+            n += 1;
+        }
+        return .{ .text = buf[0..n] };
+    }
+
+    /// The next conversion of `f` that takes an argument, printing the text
+    /// before it (`%%`, `%m` as `scope`, `%l` as `lib`); null, having warned
+    /// (W1153), when the format has none left for the argument.
+    pub fn nextSpec(self: *State, f: *Format, scope: []const u8, lib: []const u8) Error!?Spec {
+        if (try self.scanSpec(f, scope, lib)) |sp| return sp;
+        self.warn("W1153", display.sformat_mismatch, .{});
+        return null;
+    }
+
+    /// The text after the last argument's conversion; W1153 when another
+    /// conversion wants an argument or the format ends inside one.
+    pub fn endFormat(self: *State, f: *Format, scope: []const u8, lib: []const u8) Error!void {
+        if (try self.scanSpec(f, scope, lib) != null or f.bad) self.warn("W1153", display.sformat_mismatch, .{});
+    }
+
+    fn scanSpec(self: *State, f: *Format, scope: []const u8, lib: []const u8) Error!?Spec {
+        const t = f.text;
+        while (f.i < t.len) {
+            const c = t[f.i];
+            f.i += 1;
+            if (c != '%') {
+                try self.out.writeByte(c);
+                continue;
+            }
+            if (f.i < t.len and t[f.i] == '%') {
+                f.i += 1;
+                try self.out.writeByte('%');
+                continue;
+            }
+            var width: ?u32 = null;
+            while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
+                width = (width orelse 0) *| 10 +| (t[f.i] - '0');
+            var precision: i64 = -1;
+            if (f.i < t.len and t[f.i] == '.') {
+                f.i += 1;
+                precision = 0;
+                while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
+                    precision = precision *| 10 +| (t[f.i] - '0');
+            }
+            if (f.i == t.len) {
+                f.bad = true;
+                return null;
+            }
+            if ((width orelse 0) > display.max_field or precision > display.max_field)
+                return self.fail("a field width or precision here exceeds {d}", .{display.max_field});
+            const conv = t[f.i];
+            f.i += 1;
+            switch (conv) {
+                'm', 'M' => try self.out.writeAll(scope),
+                'l', 'L' => try self.out.writeAll(lib),
+                'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R', 't', 'T', 's', 'S', 'c', 'C', 'v', 'V' => return .{ .conv = conv, .width = width, .precision = precision },
+                else => return self.fail("only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %v are implemented", .{}),
+            }
+        }
+        return null;
+    }
+
     /// One `%s` or `%c` operand (§17.1.1.7).
     pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u32) Error!void {
         var buf = logic.planesOf(a);
