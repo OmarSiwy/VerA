@@ -858,11 +858,11 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
             return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
         },
         .@"$rng$check" => {
-            if (args.len != 4) return gen_call.abort(self, "malformed RNG validation effect", .{});
+            if (args.len != 4) return gen_call.abort(self, .E1020, "malformed RNG validation effect", .{});
             const val = "zV"; // a family has no `S.val`
             try self.b("S.con(zRngCheck({s}(", .{val});
             try renderVal(self, args[0], .real);
-            try self.b("), {d}, {s}(", .{ intArg(self, args, 1) orelse return gen_call.abort(self, "missing RNG validation rules", .{}), val });
+            try self.b("), {d}, {s}(", .{ intArg(self, args, 1) orelse return gen_call.abort(self, .E1020, "missing RNG validation rules", .{}), val });
             try renderVal(self, args[2], .real);
             try self.b("), {s}(", .{val});
             try renderVal(self, args[3], .real);
@@ -916,7 +916,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     // `np == 0` is §9.21.1's absent data source, reported by `zTable` at
     // the call.
     if (nd == 0 or ncol == 0 or args.len != head + np * ncol)
-        return gen_call.abort(self, "malformed `$table_model` call reached codegen", .{});
+        return gen_call.abort(self, .E1020, "malformed `$table_model` call reached codegen", .{});
     // The lookup runs at the union of its points' masks.
     var m: u64 = 0;
     for (args[7..head]) |v| m |= family.mask(self, v);
@@ -962,7 +962,7 @@ pub fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
         const def = self.mir.valueDef(self.an.rv(args[0]));
         break :blk if (def == .int_const) def.int_const else 0;
     };
-    if (args.len < 3) return gen_call.abort(self, "malformed `$idx` call reached codegen", .{});
+    if (args.len < 3) return gen_call.abort(self, .E1020, "malformed `$idx` call reached codegen", .{});
     // Every real arm widens to the union of the elements'.
     var m: u64 = 0;
     for (args[2..]) |v| m |= family.mask(self, v);

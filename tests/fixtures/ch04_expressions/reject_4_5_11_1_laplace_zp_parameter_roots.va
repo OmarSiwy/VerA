@@ -1,0 +1,29 @@
+// §4.5.11.1 (laplace_zp): "ζ is a vector of M pairs of real numbers. Each pair
+// represents a zero, the first number in the pair is the real part of the zero
+// and the second is the imaginary part. ... If a zero is complex, its
+// conjugate shall also be present." §4.5.11 lets the vector be "a reference
+// to a vector parameter".
+//
+// The roots here come from parameter ARRAYS, so a model card may change the
+// imaginary parts. VerA builds the cascade's section structure from the
+// conjugate pairing at compile time, so it cannot take a pole vector whose
+// pairing is not knowable without the card, and refuses it with E0540 at
+// the call. Before E0540 the CLI printed only "codegen refused a construct"
+// and the reason never reached the user.
+//
+// Legal neighbour: the same filter with literal roots,
+// laplace_zp(V(in), '{-1e9, 0, -2e9, 0}, '{-1e9, 1e9, -1e9, -1e9, ...}),
+// compiles (probed with `vera --check`), so the parameter-array roots are the
+// only cause.
+//
+//! lrm 4.5.11.1
+//! reject E0540
+`include "disciplines.vams"
+module reject_4_5_11_1_laplace_zp_parameter_roots(in, out);
+  inout in, out;
+  electrical in, out;
+  parameter real z[0:3] = '{-1e9, 0.0, -2e9, 0.0};
+  parameter real p[0:7] = '{-1e9, 1e9, -1e9, -1e9, -3e9, 2e9, -3e9, -2e9};
+
+  analog V(out) <+ laplace_zp(V(in), z, p);
+endmodule
