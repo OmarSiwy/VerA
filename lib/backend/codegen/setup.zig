@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
+const kt = @import("kernel_text.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
@@ -231,7 +232,7 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
         \\pub const Setup = struct {{
         \\
     , .{});
-    if (self.su.real != 0) try self.w("    r: [{d}]f64 = @splat(std.math.nan(f64)),\n", .{self.su.real});
+    if (self.su.real != 0) try self.w("    r: [{d}]f64 = @splat(" ++ kt.nan_lit ++ "),\n", .{self.su.real});
     if (self.su.int != 0) try self.w("    i: [{d}]i64 = @splat(0),\n", .{self.su.int});
     if (n_flag != 0) try self.w("    b: [{d}]bool = @splat(false),\n", .{n_flag});
     try self.w("}};\n\n", .{});

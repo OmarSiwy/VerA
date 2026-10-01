@@ -464,7 +464,7 @@ fn emitModel(self: *Gen) Error!void {
     // `derive` does not get a plausible 0.
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
-        const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
+        const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else kt.nan_lit;
         try self.w("    {s}: f64 = {s}, // §5.6.5 retention flag — `derive` writes it\n", .{ try gen_dispatch.guardField(self, @intCast(k)), d });
     }
     if (self.lowered.params.items.len == 0 and !host_simparam) {
@@ -674,8 +674,8 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
 /// but render differently, and NaN is not equal to itself. The text is
 /// arena-owned and shared between calls.
 pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
-    if (std.math.isNan(x)) return "std.math.nan(f64)";
-    if (std.math.isInf(x)) return if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)";
+    if (std.math.isNan(x)) return kt.nan_lit;
+    if (std.math.isInf(x)) return if (x > 0) kt.inf_lit else "-" ++ kt.inf_lit;
     const gop = try self.f64_cache.getOrPut(self.arena, @bitCast(x));
     if (gop.found_existing) return gop.value_ptr.*;
     // Render on the stack, then copy the survivor. `{d}` on an f64 is at
@@ -893,7 +893,7 @@ pub fn emitInstance(self: *Gen) Error!void {
 fn emitTpFields(self: *Gen) Error!void {
     for (self.lowered.timepoints.items, 0..) |t, b| {
         try self.w("    /// vera_timepoint {d}: the timepoint its cache holds, NaN when dropped.\n", .{b});
-        try self.w("    tp{d}_t: f64 = std.math.nan(f64),\n    tp{d}_k: u8 = 0,\n", .{ b, b });
+        try self.w("    tp{d}_t: f64 = " ++ kt.nan_lit ++ ",\n    tp{d}_k: u8 = 0,\n", .{ b, b });
         for (t.slots, 0..) |sl, k| {
             // A slot nothing reads after the statement is not queued (`plan_jobs`).
             if (gen_dispatch.coreIdx(self, self.an.rv(sl.final)) == null) continue;
@@ -915,7 +915,7 @@ fn emitTpHelpers(self: *Gen) Error!void {
     const tps = self.lowered.timepoints.items;
     if (tps.len == 0) return;
     try self.w("/// vera_timepoint: drop every per-timepoint cache.\nfn zTpDrop(inst: *Instance) void {{\n", .{});
-    for (0..tps.len) |b| try self.w("    inst.tp{d}_t = std.math.nan(f64);\n", .{b});
+    for (0..tps.len) |b| try self.w("    inst.tp{d}_t = " ++ kt.nan_lit ++ ";\n", .{b});
     try self.w("}}\n\n", .{});
     try self.w("/// vera_timepoint: store what a statement that ran on a stale cache assigned.\n", .{});
     try self.w("inline fn zTpStore(inst: *Instance, sim: contract.SimState, m: anytype) void {{\n", .{});
