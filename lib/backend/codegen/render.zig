@@ -366,9 +366,18 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 // element before reading it. Under runtime safety a broken
                 // promise reads NaN (`S.con` carries zero lanes; `scale` by
                 // NaN makes each one NaN) or minInt instead of stale bytes.
-                if (m.ty == .integer) return self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.minInt(i64));\n", .{d.array});
-                if (plain) return self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.nan(f64));\n", .{d.array});
-                return self.b("if (std.debug.runtime_safety) @memset(&a{d}, zTo(S, 0x{x}, S.con(std.math.nan(f64))).scale(std.math.nan(f64)));\n", .{ d.array, self.arr_mask[d.array] });
+                // Otherwise an empty asm that may have written the array
+                // ("memory" clobber, its address as input) freezes it: LLVM
+                // must treat the contents as defined but unknown, so a broken
+                // promise reads a stable garbage value, not undef/poison.
+                if (m.ty == .integer) {
+                    try self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.minInt(i64))", .{d.array});
+                } else if (plain) {
+                    try self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.nan(f64))", .{d.array});
+                } else {
+                    try self.b("if (std.debug.runtime_safety) @memset(&a{d}, zTo(S, 0x{x}, S.con(std.math.nan(f64))).scale(std.math.nan(f64)))", .{ d.array, self.arr_mask[d.array] });
+                }
+                return self.b(" else asm volatile (\"\" : : [p] \"r\" (&a{d}) : .{{ .memory = true }});\n", .{d.array});
             }
             if (m.held == none_u32) {
                 if (!plain) return self.b("@memset(&a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ d.array, self.arr_mask[d.array] });
