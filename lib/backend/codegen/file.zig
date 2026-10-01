@@ -203,6 +203,12 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     // a file importing itself is legal and, unreferenced, never analysed.
     if (self.core.name.len != 0)
         try p.print(self.arena, "const core = @import(\"{0s}.zig\").{0s};\n", .{self.core.name});
+    // §4.5.11/§4.5.12 the `pub fn <unit>__sec` readers live in device.zig
+    // (`unit.emitUnits`), so a unit calling one reads it through `dev`.
+    for (self.names.units, 0..) |_, i| {
+        if (gen_unit.filterSec(self, i) == null) continue;
+        try p.print(self.arena, "const {0s}__sec = dev.{0s}__sec;\n", .{self.names.unit_names[i]});
+    }
     try p.appendSlice(self.arena, "\n");
     self.prelude = p.items;
 

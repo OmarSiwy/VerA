@@ -23,15 +23,38 @@ const naming = @import("../naming.zig");
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
+const OpKind = @import("ir").op.OpKind;
 
 // =======================================================================
 // Units
 // =======================================================================
 
-/// Emits every unit declaration (the shared core, the filter coefficient
-/// readers and each job's unit), recording each range in `Output`.
+/// Returns the operator kind of unit `i` when it emits a `<unit>__sec`
+/// coefficient reader: a planned `laplace`/`zi` call with no refusal.
+pub fn filterSec(self: *const Gen, i: usize) ?OpKind {
+    const u = self.names.units[i];
+    if (u.role != .analog_op or (u.op != .laplace and u.op != .zi)) return null;
+    if (self.names.opInstOf(@intCast(i)) == null) return null;
+    if (self.filters[i].?.err != null) return null;
+    return u.op;
+}
+
+/// Emits the filter coefficient readers ahead of every unit declaration,
+/// then the units (the shared core and each job's unit), recording each
+/// unit's range in `Output`.
 pub fn emitUnits(self: *Gen) Error!void {
     try self.w("// ---- the model, in one declaration ----\n\n", .{});
+    // §4.5.11/§4.5.12 the coefficient reader is named from the operator's
+    // unit (`<unit>__sec`), not a Unit of its own, so the ordering in
+    // naming.zig/proof.zig is untouched. It reads `Model` alone, so it is
+    // not part of the residual slice. It stays in device.zig's prologue,
+    // ahead of the first recorded unit, and a unit file reads it through the
+    // prelude's `dev.<unit>__sec` alias (`file.buildPrelude`): as a unit file of its
+    // own, the prelude alias every other unit needs would redeclare it there.
+    for (self.names.units, 0..) |_, i| {
+        const k = filterSec(self, i) orelse continue;
+        _ = try cg_filters.emitFilterSections(self, self.names.unit_names[i], cg_filters.planOf(self, i), k == .zi);
+    }
     // The §9.4 display unit calls the core as `core`, so one spelling works
     // in the single-file form (this alias) and the split form (the alias in
     // `Output.prelude`). It sits ahead of the first recorded unit range, so
@@ -42,22 +65,6 @@ pub fn emitUnits(self: *Gen) Error!void {
     try gen_state.emitCore(self);
     try gen_state.emitIterCore(self);
     try gen_dispatch.emitNoiseCore(self);
-    // §4.5.11/§4.5.12 the coefficient reader is named from the operator's
-    // unit (`<unit>__sec`), not a Unit of its own, so the ordering in
-    // naming.zig/proof.zig is untouched. It reads `Model` alone, so it is
-    // not part of the residual slice.
-    for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const k = u.op;
-        if (k != .laplace and k != .zi) continue;
-        if (self.names.opInstOf(@intCast(i)) == null) continue;
-        const p = cg_filters.planOf(self, i);
-        if (p.err != null) continue;
-        const lo = self.out.items.len;
-        const nm = try std.fmt.allocPrint(self.arena, "{s}__sec", .{self.names.unit_names[i]});
-        const at = try cg_filters.emitFilterSections(self, self.names.unit_names[i], p, k == .zi);
-        try gen_file.recordUnitFile(self, nm, lo, at);
-    }
     for (self.jobs.list) |job| {
         if (job.kind != .display) continue;
         self.pre_fatal = job.pre_fatal;
