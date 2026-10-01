@@ -17,6 +17,7 @@
 //   t=5 same_input(1, 1): a = 1.
 //   t=6 mixed_direction .p({pa, pe}) with pa = 0: e = ~a = 1 drives pe -> 1.
 //! inherited IEEE 1364-2005 12.3.2 12.3.3
+// native-required
 `timescale 1ns/1ns
 module complex_ports ({c,d}, .e(f));
   input [1:0] c, d;

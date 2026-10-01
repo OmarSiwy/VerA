@@ -96,6 +96,8 @@ pub const Design = struct {
     nets: []const net.Net = &.{},
     drivers: []const net.Driver = &.{},
     udps: []const net.Udp = &.{},
+    /// §7.6 the pass switches between those nets.
+    trans: []const net.Tran = &.{},
     /// `--state=auto`: the plane words (first word, count) of the slots
     /// whose value at a time-step boundary nothing reads before a whole
     /// write (`digital/plan.zig` `stepLocal`), an x in which does not keep
@@ -587,7 +589,7 @@ pub const State = struct {
             .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
             .catalog = d.vcd,
             .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
-            .nets = try .init(gpa, d.nets, d.drivers, d.udps),
+            .nets = try .init(gpa, d.nets, d.drivers, d.udps, d.trans),
             .scratch = .init(gpa),
             .stdout = undefined,
             .sink = undefined,
@@ -852,6 +854,7 @@ pub const State = struct {
     pub const restore = snapshot.restore;
 
     pub const drive = net.drive;
+    pub const switchCtrl = net.switchCtrl;
     pub const gate = net.gate;
     pub const udp = net.udp;
     pub const mos = net.mos;

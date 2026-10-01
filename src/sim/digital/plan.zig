@@ -688,7 +688,8 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
                 try meet(a, in, seen, &work, nw, next, out);
                 try meet(a, in, seen, &work, nw, o.start, none);
             },
-            .call_timed, .task_return, .switch_ctrl => return &.{}, // `emit.reach` refuses these
+            .switch_ctrl => {},
+            .call_timed, .task_return => return &.{}, // `emit.reach` refuses these
         }
     }
     // A read of a candidate not written before it in its activation keeps

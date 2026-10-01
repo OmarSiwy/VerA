@@ -2,6 +2,7 @@
 // unlike a directed buffer. One driver is z in each observation, so no
 // strength resolution ambiguity is involved.
 //! inherited IEEE 1364-2005 7.6
+// native-required
 `timescale 1ns/1ns
 module audit_primitive_tran_both_directions;
   reg left, right;

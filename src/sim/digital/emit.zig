@@ -76,6 +76,9 @@ pub fn device(arena: std.mem.Allocator, r: *Run, file_name: []const u8, schedule
     var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .device = true };
     // `rt` reads these from the root module, which in a host is the host's.
     for (r.code.items) |ins| if (ins == .override_on) return .{ .refused = "a §9.3 procedural continuous assignment (assign or force)" };
+    // ponytail: rt resolves switches, but no host test drives a device's
+    // pins through one; open this with a vdev_host case that does.
+    if (r.trans.len != 0) return .{ .refused = "a §7.6 pass switch" };
     if (native(&e, file_name, schedule)) |text| return .{ .zig = text } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Unsupported => return .{ .refused = e.why },
@@ -488,7 +491,8 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         else => {}, // else: only a `disable` resumes a process somewhere it did not suspend
     };
     if (r.drv.watched.items.len != 0) return self.refuse("VAMS §9.22 driver access");
-    if (r.trans.len != 0) return self.refuse("a §7.6 pass switch");
+    // §7.6: what a switch passes is a strength, which an x or z carries.
+    if (r.trans.len != 0) try self.xMeaning("a §7.6 pass switch", null);
     try resolvedNets(self);
     // The time-0 queue in `Run.pending` order: every driver, declaration
     // assignment and process, as the pc it starts at.
@@ -845,7 +849,7 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
             // §9.3 the held slot's own process, started by its `.override_on`.
             .override_on => |o| try work.appendSlice(self.arena, &.{ next, o.start }),
             .override_eval, .override_off => try work.append(self.arena, next),
-            .switch_ctrl => return self.refuse("a §7.6 pass switch"),
+            .switch_ctrl => {},
         }
     }
     std.mem.sort(u32, pcs.items, {}, std.sort.asc(u32));
@@ -1246,7 +1250,13 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             } else try self.print("            _ = try s.release({d}, {});\n", .{ o.slot, o.force });
             try self.print("            continue :sw {d};\n", .{next});
         },
-        .call_timed, .task_return, .switch_ctrl => unreachable, // `reach` refused each of these by name
+        // §7.6 a controlled pass switch: read the control, re-resolve both
+        // sides (`rt.net.switchCtrl`), and re-arm on the control's operands.
+        .switch_ctrl => |sc| {
+            try bits(self, &.{r.trans[sc.tran].ctrl}, 0);
+            try self.print("            try s.switchCtrl({d}, b[0]);\n            s.armed[{d}] = true;\n            return;\n", .{ sc.tran, pc });
+        },
+        .call_timed, .task_return => unreachable, // `reach` refused each of these by name
     }
 }
 
@@ -1469,7 +1479,7 @@ pub fn plainDriver(r: *const Run, i: u32) bool {
         },
         .bridge, .udp, .mos, .pull => false,
     };
-    return plain and source and n.drivers.len == 1 and !n.strength_read and
+    return plain and source and n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and
         d.s0 == .strong and d.s1 == .strong and !d.delay.present and !n.delay.present;
 }
 
@@ -1482,7 +1492,8 @@ fn resolvedNets(self: *Emitter) Error!void {
     @memset(self.net_ix, null);
     @memset(self.drv_ix, null);
     for (r.nets, 0..) |n, k| {
-        const resolved = n.strength_read or for (n.drivers) |di| {
+        // §7.6 a switch terminal resolves with the nets it is joined to.
+        const resolved = n.strength_read or n.trans.len != 0 or for (n.drivers) |di| {
             if (!plainDriver(r, di)) break true;
         } else false;
         if (!resolved) continue;
@@ -1504,7 +1515,7 @@ fn netTables(self: *Emitter) Error!void {
     try self.print("    .nets = &.{{", .{});
     for (self.rt_nets.items) |k| {
         const n = r.nets[k];
-        var strong = !n.strength_read;
+        var strong = !n.strength_read and n.trans.len == 0;
         for (n.drivers) |di| {
             const d = r.drivers[di];
             const or_z = switch (d.source) {
@@ -1546,6 +1557,13 @@ fn netTables(self: *Emitter) Error!void {
         }
     }
     try self.print("\n    }},\n", .{});
+    if (r.trans.len != 0) {
+        try self.print("    .trans = &.{{", .{});
+        for (r.trans) |t| try self.print("\n        .{{ .a = {d}, .b = {d}, .a_bit = {d}, .b_bit = {d}, .on = .{t}, .state = .{t}, .resistive = {}, .delay = {f} }},", .{
+            self.net_ix[t.a].?, self.net_ix[t.b].?, t.a_bit, t.b_bit, t.on, t.state, t.resistive, fmtDelay(t.delay),
+        });
+        try self.print("\n    }},\n", .{});
+    }
     if (udps.items.len == 0) return;
     try self.print("    .udps = &.{{", .{});
     for (udps.items) |u| {
@@ -1608,7 +1626,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
         // or z meaning. Strength, several drivers, three states do.
         if (self.caresX()) {
             const two_ok = switch (n.kind) {
-                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and d.s0 == .strong and d.s1 == .strong,
+                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and d.s0 == .strong and d.s1 == .strong,
                 .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
             } and switch (d.source) {
                 .expr => true,

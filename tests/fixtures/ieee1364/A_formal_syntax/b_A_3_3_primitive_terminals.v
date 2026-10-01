@@ -15,6 +15,7 @@
 //   tran (s3, s0), s0 driven 1                              -> s3 = 1
 // Output: "y=110 s3=1".
 //! inherited IEEE 1364-2005 A.3.3
+// native-required
 `timescale 1ns/1ns
 module b_A_3_3_primitive_terminals;
   reg a, b;

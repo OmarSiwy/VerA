@@ -22,6 +22,7 @@
 // need a trireg charge on both sides and are not exercised here.
 // Line: "x1x0 xxxx 0".
 //! inherited IEEE 1364-2005 7.12
+// native-required
 `timescale 1ns/1ns
 module b_7_12_resistive_reduction_table;
   supply1 vdd;
