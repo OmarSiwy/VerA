@@ -50,6 +50,18 @@ pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeAll(std.mem.asBytes(&@as(u32, @intCast(slot))));
         try w.writeAll(std.mem.asBytes(&t));
     };
+    // §10.2.3 the activations in progress, each with its saved frame.
+    if (root.activations) {
+        try list(w, s.resident);
+        try list(w, s.free_acts.items);
+        try list(w, s.resumes.items);
+        try list(w, s.free_resumes.items);
+        try count(w, s.acts.items.len);
+        for (s.acts.items) |a| {
+            try w.writeAll(std.mem.asBytes(&[5]u32{ a.sub, a.ret_pc, a.ret_ctx, a.lo, a.n }));
+            try list(w, a.storage);
+        }
+    }
     try count(w, s.queues.count());
     var it = s.queues.iterator();
     while (it.next()) |e| {
@@ -163,6 +175,22 @@ fn load(s: *State, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.
         try r.readSliceAll(std.mem.asBytes(&slot));
         try r.readSliceAll(std.mem.asBytes(&t));
         try s.terms[slot].append(gpa, t);
+    }
+    if (root.activations) {
+        if (try take(r) != s.resident.len) return error.EndOfStream;
+        try r.readSliceAll(std.mem.sliceAsBytes(s.resident));
+        try reload(r, gpa, &s.free_acts);
+        try reload(r, gpa, &s.resumes);
+        try reload(r, gpa, &s.free_resumes);
+        for (s.acts.items) |a| gpa.free(a.storage);
+        try s.acts.resize(gpa, try take(r));
+        for (s.acts.items) |*a| {
+            var h: [5]u32 = undefined;
+            try r.readSliceAll(std.mem.asBytes(&h));
+            const storage = try gpa.alloc(u64, try take(r));
+            try r.readSliceAll(std.mem.sliceAsBytes(storage));
+            a.* = .{ .sub = h[0], .ret_pc = h[1], .ret_ctx = h[2], .lo = h[3], .n = h[4], .storage = storage };
+        }
     }
     var it = s.queues.valueIterator();
     while (it.next()) |q| q.jobs.deinit(gpa);

@@ -16,6 +16,7 @@
 //! inherited IEEE 1364-2005 9.7.3
 //! inherited IEEE 1364-2005 10.2.1
 //! inherited IEEE 1364-2005 10.2.3
+// native-required
 `timescale 1ns/1ns
 module b_9_7_3_event_array_automatic;
   event global_ev [0:1];

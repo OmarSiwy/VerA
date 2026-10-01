@@ -24,6 +24,7 @@
 //   total 2 and ra = 4.
 //! inherited IEEE 1364-2005 10.2.3 (automatic task storage per activation)
 //! inherited IEEE 1364-2005 10.2.2 (output copy-back)
+// native-required
 `timescale 1ns/1ns
 module audit_task_recursive_timed_automatic;
   integer ra, rb;

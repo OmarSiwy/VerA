@@ -689,7 +689,7 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
                 try meet(a, in, seen, &work, nw, o.start, none);
             },
             .switch_ctrl => {},
-            .call_timed, .task_return => return &.{}, // `emit.reach` refuses these
+            .call_timed, .task_return => return &.{}, // ponytail: §10.2.3 activations swap frames at run time; nothing is called dead
         }
     }
     // A read of a candidate not written before it in its activation keeps
