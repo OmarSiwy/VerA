@@ -406,7 +406,8 @@ pub fn main(init: std.process.Init) !u8 {
             try err.writeAll("error: digital .v source takes --run or --emit-exe, or --emit-zig, --check or --emit-so for a contract device\n");
             return 2;
         }
-        var arena = std.heap.ArenaAllocator.init(gpa);
+        // Its net, value and code tables grow to the design's size; see BigArena.
+        var arena: vera.BigArena = .init(gpa);
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
