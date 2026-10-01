@@ -325,10 +325,9 @@ test "R3: no Ast writes outside lib/frontend" {
 // handed its own local (verify.zig's self-test sample) is not one.
 // ---------------------------------------------------------------------------
 
-const r4_rows = [_]Row{
-    // `pruneHeld` rewrites `lowered.held_vars` and `mem_arrays[].held`.
-    .{ .path = "lib/backend/codegen/plan/setup.zig", .n = 1, .phase = "Phase 6" },
-};
+// Empty since Phase 6: `prove.setup.pruneHeld` returns a held-row mask and
+// lowering's `dropHeld` applies it.
+const r4_rows = [_]Row{};
 
 const LoweredMut = struct {
     fn hit(_: LoweredMut, l: []const u8) bool {
@@ -499,7 +498,6 @@ const r7_rows = [_]Row{
     .{ .path = "lib/backend/codegen/file.zig", .n = 1 },
     .{ .path = "lib/backend/codegen/instance.zig", .n = 2 },
     .{ .path = "lib/backend/codegen/plan/names.zig", .n = 2 },
-    .{ .path = "lib/backend/codegen/plan/setup.zig", .n = 1 },
     .{ .path = "lib/backend/codegen/setup.zig", .n = 2 },
     .{ .path = "lib/backend/codegen/setup_chunk.zig", .n = 6 },
     .{ .path = "lib/backend/codegen/unit.zig", .n = 1 },
@@ -537,6 +535,7 @@ const r7_rows = [_]Row{
     .{ .path = "lib/frontend/token.zig", .n = 3 },
     .{ .path = "lib/ir/callee.zig", .n = 1 },
     .{ .path = "lib/ir/simparam.zig", .n = 2 },
+    .{ .path = "lib/prove/setup.zig", .n = 1 },
     .{ .path = "src/cli/args.zig", .n = 39 },
     .{ .path = "src/cli/digital.zig", .n = 1 },
     .{ .path = "src/cli/lsp.zig", .n = 4 },

@@ -7,10 +7,10 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const proof = @import("prove").proof;
 const naming = @import("../../naming.zig");
-const Input = @import("input.zig").Input;
+const Input = @import("prove").Input;
 const Job = @import("jobs.zig").Job;
 const float_mode = @import("../float/mode.zig");
-const plan_setup = @import("setup.zig");
+const plan_setup = @import("prove").setup;
 const callee = Mir.callee;
 const assert = std.debug.assert;
 

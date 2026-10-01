@@ -6,9 +6,9 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const Input = @import("input.zig").Input;
+const Input = @import("prove").Input;
 const plan_topo = @import("topology.zig");
-const strArg = @import("args.zig").strArg;
+const strArg = @import("prove").strArg;
 const assert = std.debug.assert;
 
 /// Every fallible call here fails only on allocation.

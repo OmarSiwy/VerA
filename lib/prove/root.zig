@@ -1,6 +1,7 @@
 //! The passes over a lowered MIR: `Mir` + `Lowered` (`ir`) in; CFG and value
-//! facts, if-converted MIR, a float-mode verdict per unit and the MIR
-//! postcondition out. Re-exports only; the files import each other directly.
+//! facts, if-converted MIR, a float-mode verdict per unit, the setup tiers
+//! (solve invariance, the §3.2 held-row mask) and the MIR postcondition out.
+//! Re-exports only; the files import each other directly.
 //! `analog` is imported only by tests that lower source (`proof/test.zig`) or
 //! build SSA (`ssa_test.zig`), which Zig cannot scope to tests
 //! (ARCHITECTURE.md §1 row 11). `contract`: the proof's transfer functions
@@ -15,6 +16,15 @@ pub const ifconv = @import("ifconv.zig");
 pub const proof = @import("proof.zig");
 /// The MIR's postcondition, checked after lowering and each MIR pass.
 pub const verify = @import("verify.zig");
+/// The setup tiers: solve invariance (`Sinv`), which codegen reads as a
+/// value, and `pruneHeld`'s held-row mask, which lowering applies.
+pub const setup = @import("setup.zig");
+/// What a setup tier or a codegen `plan/` function reads.
+pub const Input = @import("input.zig").Input;
+/// The literal string at a call argument, or null.
+pub const strArg = @import("input.zig").strArg;
+/// Test-only: a hand-built `Mir` + `Lowered` for planner tests.
+pub const Fixture = @import("fixture.zig").Fixture;
 
 test {
     @import("std").testing.refAllDecls(@This());

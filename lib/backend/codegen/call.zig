@@ -1217,7 +1217,7 @@ pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, s
 
 /// Returns the string literal at `args[i]`, or null.
 pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
-    return plan_args.strArg(self.input(), args, i);
+    return @import("prove").strArg(self.input(), args, i);
 }
 
 /// Writes a §4.5 stateful analog operator call. Each operator is a named

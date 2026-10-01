@@ -12,6 +12,9 @@
 //! the whole module first, because a variable's storage is decided at its
 //! declaration, not at the statement that reveals it; then `declareVarDecl`
 //! per declaration; `checkScratchOwners` after every declaration is in.
+//! After lowering, the spine hands `dropHeld` the held rows `prove`'s
+//! `pruneHeld` found unobservable: lowering stays the one writer of
+//! `held_vars`.
 //!
 //! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.4, §3.4.8,
 //! §3.5, §4.2.7, §4.7.2.3, §5.2.1, §5.3.2, §5.6.1.3, §5.9, §5.9.2, §5.10, §5.11, §6.6.1,
@@ -146,7 +149,8 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// evaluation (`avar = avar`: what it reads is what the last evaluation
 /// wrote). The rest are `.unless_invariant`: no read precedes a write, so the
 /// held value is seen only if whether a write runs changes between
-/// evaluations, which `pruneHeld` (codegen/plan/setup.zig) decides.
+/// evaluations, which `pruneHeld` (prove/setup.zig) decides and `dropHeld`
+/// applies.
 ///
 /// §3.2.2 an array is its scalarized elements, so a write whose subscripts
 /// are literals assigns that element, and an array read with a subscript that does not
@@ -577,6 +581,27 @@ fn runtimeSub(self: *const Lower, vars: *const std.AutoHashMapUnmanaged(Ast.StrI
             return false;
         },
     }
+}
+
+/// §3.2 applies `prove.setup.pruneHeld`'s mask: drops every `held_vars` row
+/// whose `keep` flag is false and renumbers the `mem_arrays` rows that point
+/// at a kept one. The MIR side (the seeds' row arguments) is already
+/// renumbered the same way, densely over the kept rows in order. Asserts the
+/// mask has one flag per row and no dropped row is an array's.
+pub fn dropHeld(lowered: *Lower.Lowered, keep: []const bool) void {
+    const held = &lowered.held_vars;
+    std.debug.assert(keep.len == held.items.len);
+    var kept: usize = 0;
+    for (held.items, keep) |h, k| {
+        if (!k) {
+            std.debug.assert(h.array == none_u32);
+            continue;
+        }
+        if (h.array != none_u32) lowered.mem_arrays.items[h.array].held = @intCast(kept);
+        held.items[kept] = h;
+        kept += 1;
+    }
+    held.shrinkRetainingCapacity(kept);
 }
 
 // ---- declarations ----------------------------------------------------------

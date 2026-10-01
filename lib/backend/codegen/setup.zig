@@ -1,4 +1,4 @@
-//! `plan/setup.zig`'s solve-invariant values + the core's plan -> the setup
+//! `prove/setup.zig`'s solve-invariant values + the core's plan -> the setup
 //! roots (the invariant values the per-eval core and §9.4 display unit read),
 //! `pub const Setup`, and `pub fn setup` computing them into `Model.su` once
 //! per model card and temperature (`Model.temperature__`), so the instances
@@ -15,8 +15,7 @@ const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_instance = @import("instance.zig");
-const plan_setup = @import("plan/setup.zig");
-const plan_args = @import("plan/args.zig");
+const plan_setup = @import("prove").setup;
 const setup_chunk = @import("setup_chunk.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
@@ -70,7 +69,7 @@ pub fn probeInstance(self: *Gen) Error![]const u8 {
 }
 
 /// Decides the roots: runs the core's (and the display unit's) slice with
-/// every `plan/setup.zig` candidate a leaf and keeps the candidates it
+/// every `prove/setup.zig` candidate a leaf and keeps the candidates it
 /// reaches. Must run after the core is planned and before anything is
 /// emitted, since `emitInstance` sizes `Setup` from the roots.
 pub fn planSetup(self: *Gen) Error!void {
@@ -277,7 +276,7 @@ fn emitSimparams(self: *Gen) Error!void {
         if (def != .inst_result or self.mir.instOp(def.inst_result) != .call) continue;
         const d = self.mir.instData(def.inst_result).call;
         if (d.callee != .@"$simparam") continue;
-        const nm = plan_args.strArg(self.input(), d.args, 0) orelse continue;
+        const nm = @import("prove").strArg(self.input(), d.args, 0) orelse continue;
         for (names.items) |n| {
             if (std.mem.eql(u8, n, nm)) break;
         } else try names.append(self.arena, nm);
@@ -296,7 +295,7 @@ fn emitSimparams(self: *Gen) Error!void {
 /// are taken `then` untested (neither arm is setup work, and the §5.10.2
 /// initial-step arm is what setup must compute), and the walk stops at the
 /// first loop that is not invariant, since nothing after it is placeable.
-/// Asserts the body read no unknown and refused nothing: `plan/setup.zig`
+/// Asserts the body read no unknown and refused nothing: `prove/setup.zig`
 /// admits only solve-invariant, constant-renderable roots.
 pub fn emitSetup(self: *Gen) Error!void {
     try emitSetupInstance(self);
@@ -366,7 +365,7 @@ pub fn emitSetup(self: *Gen) Error!void {
     // true, and a runtime value so the arm it guards still compiles.
     if (self.su.stop) try self.out.insertSlice(self.gpa, at_stop, "    var zs_stop = true;\n    _ = &zs_stop;\n");
     // The stores write `model.su`, so `model` is always named. No root reads
-    // an instance (`plan/setup.zig` `callInvariant`: a `$held_*` read is
+    // an instance (`prove/setup.zig` `callInvariant`: a `$held_*` read is
     // per-eval), but a per-eval value the relooper places before a `zs_stop`
     // branch may, for the arm that flag never runs: it reads a default
     // Instance, so the text compiles and nothing stored depends on it.

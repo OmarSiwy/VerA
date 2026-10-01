@@ -8,7 +8,7 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
-const Input = @import("input.zig").Input;
+const Input = @import("prove").Input;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;

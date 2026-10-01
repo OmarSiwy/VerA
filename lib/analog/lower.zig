@@ -1392,6 +1392,8 @@ const lower_param = @import("lower/param.zig");
 
 // §3.2 variables: scopes, storage and retention, lower/var.zig
 const lower_var = @import("lower/var.zig");
+/// Applies `prove.setup.pruneHeld`'s held-row mask to `Lowered`.
+pub const dropHeld = lower_var.dropHeld;
 
 // §3.2.2/§3.4.4 array shapes and §3.4.8 assignment patterns, lower/shape.zig
 const lower_shape = @import("lower/shape.zig");

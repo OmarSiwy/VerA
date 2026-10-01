@@ -7,7 +7,7 @@ const Mir = @import("ir").Mir;
 const Analysis = @import("prove").Analysis;
 const Lowered = @import("ir").Lowered;
 const naming = @import("../../naming.zig");
-const Input = @import("input.zig").Input;
+const Input = @import("prove").Input;
 
 /// Allocation only: a name has no length bound (VAMS 2.8, VD-054).
 pub const Error = std.mem.Allocator.Error;

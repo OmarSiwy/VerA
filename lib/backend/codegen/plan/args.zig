@@ -1,13 +1,13 @@
-//! Call-argument facts the slice planners (`plan/setup.zig`, `plan/unit.zig`)
-//! and the emitter share: which arguments are values, and the §9.4 display
-//! mode that decides some of them. Callee in, answer out. Clauses: §3.3,
-//! §4.5, §4.5.14, §5.10.3, §9.4, §9.5, §9.7.3, §9.13, §9.15.
+//! Call-argument facts the slice planner (`plan/unit.zig`) and the emitter
+//! share: which arguments are values, and the §9.4 display mode that
+//! decides some of them. Callee in, answer out. The literal-string fact the
+//! setup tiers read too is `prove.strArg`. Clauses: §3.3, §4.5, §4.5.14,
+//! §5.10.3, §9.4, §9.5, §9.7.3, §9.13, §9.15.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const op = @import("ir").op;
 const OpKind = op.OpKind;
-const Input = @import("input.zig").Input;
 
 /// What to do with the §9.4 display tasks a model contains.
 ///
@@ -241,14 +241,6 @@ pub fn enableArgIdx(k: OpKind) ?usize {
     return op.enableArg(k) orelse return null;
 }
 
-/// The literal string at argument `i`, or null when it is not one (or `i` is
-/// past the end). The slice borrows the MIR's string table.
-pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
-    if (i >= args.len) return null;
-    const def = in.mir.valueDef(in.an.rv(args[i]));
-    return if (def == .str_const) def.str_const else null;
-}
-
 test "callArgIsValue: the display-gated prongs are the printing and §9.5 families" {
     // Only the §9.4.1/§9.7.3 printing tasks and the §9.5 family answer
     // differently under `.emit` and `.drop`; that is how `emitCall` gates them.
@@ -302,21 +294,3 @@ test "callArgIsValue: an event operator keeps only its enable (and a timer its p
     try t.expect(callArgIsValue(.@"$limit$uf", 1, .drop));
     try t.expect(!callArgIsValue(.@"$limit$uf", 2, .drop));
 }
-
-test strArg {
-    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init(&.{"a"});
-    defer f.deinit();
-    const a = f.alloc();
-    const s = try f.mir.addStrConst(a, "pnjlim");
-    const x = try f.mir.addFloatConst(a, 0.5);
-    const an = try f.analysis();
-    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
-    const args = [_]Mir.Value{ x, s };
-    try std.testing.expectEqualStrings("pnjlim", strArg(in, &args, 1).?);
-    // A number is not a string, and a position past the end is not either.
-    try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 0));
-    try std.testing.expectEqual(@as(?[]const u8, null), strArg(in, &args, 2));
-}
-
-const Fixture = @import("fixture.zig").Fixture;

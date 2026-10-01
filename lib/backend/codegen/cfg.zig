@@ -349,7 +349,7 @@ fn emitTerm(self: *Gen, bi: u32, depth: u32, stack: *std.ArrayList(Resume), targ
             if (self.su.mode and !self.sinv.val[@backingInt(self.an.rv(d.cond))]) {
                 // `setup` takes a per-eval branch `then` without testing it:
                 // neither arm holds setup work, and a §5.10.2 initial-step
-                // arm is exactly what it must compute (plan/setup.zig's
+                // arm is exactly what it must compute (prove/setup.zig's
                 // header). Both arms are still emitted, behind the always-true
                 // runtime flag, so every label and break stays where the
                 // relooper put it.

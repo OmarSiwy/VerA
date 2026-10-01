@@ -1,17 +1,20 @@
 //! Solve invariance: lowered MIR -> `Sinv`, the values that are the same at
 //! every Newton iterate and time point, so `setup` computes them once per
-//! card, instance and temperature. `pruneHeld` drops the §3.2 held slots a
-//! card cannot observe. The emitter half (setup roots, `pub fn setup`) is
-//! `codegen/setup.zig`. Clauses: §2.9, §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
-//! §5.10.2, §9.10, §9.15, §9.19.
+//! card, instance and temperature. Codegen reads the answer as a value
+//! (`Gen.sinv`). `pruneHeld` finds the §3.2 held slots a card cannot observe,
+//! rewrites the MIR and returns the rows to keep, which lowering applies
+//! (`Lower.dropHeld`): only lowering writes `Lowered`. The emitter half
+//! (setup roots, `pub fn setup`) is the backend's `codegen/setup.zig`.
+//! Clauses: §2.9, §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10, §5.10.2, §9.10,
+//! §9.15, §9.19.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
 const Lowered = @import("ir").Lowered;
-const Analysis = @import("prove").Analysis;
+const Analysis = @import("analysis.zig");
 const Input = @import("input.zig").Input;
-const plan_args = @import("args.zig");
+const strArg = @import("input.zig").strArg;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -267,7 +270,7 @@ fn callInvariant(in: Input, d: anytype) bool {
         // the card; a published homotopy knob (gmin, gdev, sourceScaleFactor)
         // is invariant within a solve, and the host re-runs `setup` after
         // writing one (`setup_simparams` lists which).
-        .@"$simparam" => !Lower.simparamIsRuntime(plan_args.strArg(in, d.args, 0) orelse return false),
+        .@"$simparam" => !Lower.simparamIsRuntime(strArg(in, d.args, 0) orelse return false),
         // IEEE 1364 §17.11 math and the §9.11/§9.12.1 conversions: pure.
         .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln", .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil" => true,
         .@"$sin", .@"$cos", .@"$tan", .@"$asin", .@"$acos", .@"$atan" => true,
@@ -610,7 +613,7 @@ fn callTimepoint(in: Input, d: anytype) bool {
     return switch (d.callee) {
         .@"$abstime", .@"$realtime", .analysis, .analog_initial, .initial_step, .final_step => true,
         // §9.15 `dt` moves with the timepoint, never within one; `iteration` does.
-        .@"$simparam" => std.mem.eql(u8, plan_args.strArg(in, d.args, 0) orelse return false, "dt"),
+        .@"$simparam" => std.mem.eql(u8, strArg(in, d.args, 0) orelse return false, "dt"),
         .@"$held_real", .@"$held_int", .@"$held_str", .@"$held_wide", .@"$tp_hit", .@"$tp_int", .@"$tp_real", .@"$tp_wide" => true,
         .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat", .@"$wide", .@"$wide$int" => true,
         else => false, // else: an ALLOWLIST — every other callee may read the iterate or state an iteration moves
@@ -722,8 +725,11 @@ fn tpRule(in: Input, vary: []const bool, inside: []const bool, cds: anytype, v: 
     };
 }
 
-/// §3.2 drops the held slots the card makes unobservable, rewriting `mir` and
-/// `lowered.held_vars` in place.
+/// §3.2 finds the held slots the card makes unobservable, rewrites `mir` in
+/// place, and returns which `lowered.held_vars` rows to keep (arena-owned,
+/// one flag per row), or null when every row stays and nothing changed.
+/// Lowering applies the mask (`Lower.dropHeld`) before the next MIR check,
+/// since the MIR already numbers the kept rows densely.
 ///
 /// A `.unless_invariant` held variable has no read that reaches a later write
 /// of the same evaluation (`lower_param.Exposed`), so its held value is
@@ -739,11 +745,11 @@ fn tpRule(in: Input, vary: []const bool, inside: []const bool, cds: anytype, v: 
 /// `plan`'s invariance, and a select must not yet hide the merges it reads.
 /// Every candidate is still held while the plan runs, so a condition over one
 /// reads as varying, which is conservative.
-pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!void {
-    const held = &lowered.held_vars;
-    for (held.items) |h| {
+pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *const Lowered) Error!?[]const bool {
+    const held = lowered.held_vars.items;
+    for (held) |h| {
         if (h.why == .unless_invariant) break;
-    } else return;
+    } else return null;
     const an = try Analysis.build(arena, mir, lowered);
     const in: Input = .{ .arena = arena, .mir = mir, .an = &an, .lowered = lowered };
     const s = try solve(in, false);
@@ -756,13 +762,10 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
         };
     }
     const web = try arena.alloc(bool, an.nv);
-    var kept: usize = 0;
-    for (held.items) |h| {
-        if (h.why != .unless_invariant or try observed(in, s, merges.items, web, h.seed)) {
-            held.items[kept] = h;
-            kept += 1;
-            continue;
-        }
+    const keep = try arena.alloc(bool, held.len);
+    for (held, keep) |h, *k| {
+        k.* = h.why != .unless_invariant or try observed(in, s, merges.items, web, h.seed);
+        if (k.*) continue;
         // `.unless_invariant` is a scalar's reason only: `holdArray` rows
         // are `.event`, so no `mem_arrays` row is left pointing here.
         assert(h.array == none_u32);
@@ -787,17 +790,18 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
         next[@backingInt(inst)] = .none;
         mir.setAlias(seed, h.init);
     }
-    held.shrinkRetainingCapacity(kept);
-    // The seed's argument is its row (`gen_call.heldIdx`). A held array's
-    // seed is its `anew`, which carries no row: its `mem_arrays` entry does.
-    for (held.items, 0..) |h, i| {
-        if (h.array != none_u32) {
-            lowered.mem_arrays.items[h.array].held = @intCast(i);
-            continue;
-        }
+    // The seed's argument is its row (`gen_call.heldIdx`), counted over the
+    // kept rows. A held array's seed is its `anew`, which carries no row: its
+    // `mem_arrays` entry does, and `Lower.dropHeld` renumbers that.
+    var i: usize = 0;
+    for (held, keep) |h, k| {
+        if (!k) continue;
+        defer i += 1;
+        if (h.array != none_u32) continue;
         const inst = mir.valueDef(an.rv(h.seed)).inst_result;
         mir.extra.items[mir.insts.items(.b)[@backingInt(inst)] + 1] = @backingInt(try mir.addIntConst(arena, @intCast(i)));
     }
+    return keep;
 }
 
 /// Does a merge of `seed`'s forward web vary from one evaluation to the next?
@@ -988,7 +992,8 @@ test "pruneHeld leaves a module with no card-conditional retention untouched" {
     const seed = try f.call("$held_real", &.{.zero});
     try f.lowered.held_vars.append(a, .{ .name = "x", .ty = .real, .init = .f_zero, .seed = seed, .final = seed, .why = .retained });
     const n_insts = f.mir.insts.len;
-    try pruneHeld(a, &f.mir, &f.lowered);
+    // Nothing to decide, so no mask: the spine has nothing to apply.
+    try std.testing.expect(try pruneHeld(a, &f.mir, &f.lowered) == null);
     try std.testing.expectEqual(@as(usize, 1), f.lowered.held_vars.items.len);
     try std.testing.expectEqual(n_insts, f.mir.insts.len);
     try std.testing.expect(!f.mir.hasAlias(seed));

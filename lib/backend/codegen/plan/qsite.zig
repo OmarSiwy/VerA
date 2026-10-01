@@ -8,7 +8,7 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lowered;
-const Input = @import("input.zig").Input;
+const Input = @import("prove").Input;
 const plan_topo = @import("topology.zig");
 const assert = std.debug.assert;
 
@@ -236,7 +236,7 @@ test "a flux on its branch row, a ground end, a port probe's mirror, and the cha
     try f.lowered.port_probes.append(a, .{ .port = 0, .u = 3 });
     const an = try f.analysis();
     const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
-    // `plan/setup.zig` would find qinv solve-invariant; stated here directly.
+    // `prove/setup.zig` would find qinv solve-invariant; stated here directly.
     const sinv = try a.alloc(bool, an.nv);
     @memset(sinv, false);
     sinv[@backingInt(qinv)] = true;

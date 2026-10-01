@@ -5,8 +5,9 @@
 //! `lib/` a dependency of `src/`, never the reverse.
 //!
 //! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
-//! check, lower, `pruneHeld`, if-conversion (each followed by the MIR
-//! verifier under runtime safety), prove, then the §9.4 drop warnings.
+//! check, lower, `pruneHeld` (`prove`) and `dropHeld` (lowering),
+//! if-conversion (each followed by the MIR verifier under runtime safety),
+//! prove, then the §9.4 drop warnings.
 //! Codegen runs later and lazily, from `CompileResult.generateOutput`.
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
@@ -437,8 +438,9 @@ fn lowerAndProve(
     try verify.check(mir, lowered, "lowering");
 
     // §3.2: drop the held slots no card can observe. Runs before ifconv,
-    // whose selects would hide the merges it reads. See `codegen.pruneHeld`.
-    try codegen.pruneHeld(arena, mir, lowered);
+    // whose selects would hide the merges it reads. `prove` decides and
+    // rewrites the MIR; lowering, `Lowered`'s one writer, drops the rows.
+    if (try @import("prove").setup.pruneHeld(arena, mir, lowered)) |keep| Lower.dropHeld(lowered, keep);
     try verify.check(mir, lowered, "pruneHeld");
 
     // If-convert pure diamonds to §4.2.12 selects before the proof: a

@@ -3379,7 +3379,7 @@ test "codegen: §3.2 a held slot only a card-varying write could need is dropped
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
         try std.testing.expectEqual(1, h.lowered.held_vars.items.len);
-        try codegen.pruneHeld(h.arena_state.allocator(), &h.mir, &h.lowered);
+        if (try @import("prove").setup.pruneHeld(h.arena_state.allocator(), &h.mir, &h.lowered)) |keep| Lower.dropHeld(&h.lowered, keep);
         try std.testing.expectEqual(c.held, h.lowered.held_vars.items.len);
         _ = try h.gen(std.testing.allocator); // and the device still generates
     }
@@ -3738,7 +3738,7 @@ test "codegen: the setup split — invariant values are computed by setup and re
 test "codegen: the setup split computes a probe-guarded card value, and lists its $simparams" {
     // ln(r) runs only on the `V(p,n) > 0` arm, a branch on the solve: its
     // block is not placeable, but ln cannot fault (a negative r is NaN,
-    // read only on the arm), so `setup` computes it (plan/setup.zig
+    // read only on the arm), so `setup` computes it (prove/setup.zig
     // `speculable`) and the core reads the root.
     // `$simparam("gmin")` is a Table 9-27 name other than `iteration`, so it
     // is invariant and `setup_simparams` names it.
@@ -3787,7 +3787,7 @@ test "codegen: setup stores a card expression written twice once, and a 0/1 flag
 
 test "codegen: §5.10.2 a held variable written only by @(initial_step) is computed once, by setup" {
     // Every write of `g` is in an unqualified `@(initial_step)` with a
-    // card-only value, so `g` is initial-only (plan/setup.zig's header): its
+    // card-only value, so `g` is initial-only (prove/setup.zig's header): its
     // merge phi is a setup root and the core reads it with no initial-step
     // test at all.
     var h: Harness = undefined;

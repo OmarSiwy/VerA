@@ -15,7 +15,9 @@ const Lowered = @import("ir").Lowered;
 const proof = @import("prove").proof;
 const diag = @import("diag");
 /// The pure planners (codegen/plan/): inputs in, a plan value out, no writer.
-const plan_input = @import("codegen/plan/input.zig");
+/// What they read (`prove.Input`) and the setup tiers (`prove.setup`) are
+/// `prove`'s: codegen reads the tiers as a value and never writes `Lowered`.
+const Input = @import("prove").Input;
 /// The float mode and lanes of the emitted device (codegen/float/).
 const float_mode = @import("codegen/float/mode.zig");
 const float_lanes = @import("codegen/float/lanes.zig");
@@ -26,11 +28,8 @@ const plan_noise = @import("codegen/plan/noise.zig");
 const plan_jobs = @import("codegen/plan/jobs.zig");
 const plan_core = @import("codegen/plan/core.zig");
 const plan_args = @import("codegen/plan/args.zig");
-const plan_setup = @import("codegen/plan/setup.zig");
+const plan_setup = @import("prove").setup;
 const plan_qsite = @import("codegen/plan/qsite.zig");
-/// Drops held slots that can never differ from their initializer (§3.2).
-/// root.zig runs it between lowering and if-conversion.
-pub const pruneHeld = plan_setup.pruneHeld;
 const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
@@ -242,7 +241,7 @@ pub const Gen = struct {
     limits: plan_limit.Limits = .{},
     /// §4.6.3/§4.6.4 the small-signal source rows and tables (`plan/noise.zig`).
     noise: plan_noise.Noise = .{},
-    /// Solve invariance per value, block and loop (`plan/setup.zig`).
+    /// Solve invariance per value, block and loop (`prove/setup.zig`).
     sinv: plan_setup.Sinv = .{},
     /// §5.6.1.2 the charge sites `q` returns and the rows they stamp
     /// (`plan/qsite.zig`).
@@ -402,8 +401,8 @@ pub const Gen = struct {
         }
     };
 
-    /// Returns what a `plan/` function reads (`plan/input.zig`).
-    pub fn input(self: *const Gen) plan_input.Input {
+    /// Returns what a `plan/` function reads (`prove/input.zig`).
+    pub fn input(self: *const Gen) Input {
         return .{ .arena = self.arena, .mir = self.mir, .an = self.an, .lowered = self.lowered };
     }
 
@@ -629,7 +628,6 @@ test {
     _ = plan_jobs;
     _ = plan_core;
     _ = plan_args;
-    _ = plan_setup;
     _ = plan_qsite;
     _ = plan_jac;
     _ = UnitPlan;
