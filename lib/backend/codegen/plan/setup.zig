@@ -683,8 +683,13 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
         mir.setAlias(seed, h.init);
     }
     held.shrinkRetainingCapacity(kept);
-    // The seed's argument is its row (`gen_call.heldIdx`).
+    // The seed's argument is its row (`gen_call.heldIdx`). A held array's
+    // seed is its `anew`, which carries no row: its `mem_arrays` entry does.
     for (held.items, 0..) |h, i| {
+        if (h.array != none_u32) {
+            lowered.mem_arrays.items[h.array].held = @intCast(i);
+            continue;
+        }
         const inst = mir.valueDef(an.rv(h.seed)).inst_result;
         mir.extra.items[mir.insts.items(.b)[@intFromEnum(inst)] + 1] = @intFromEnum(try mir.addIntConst(arena, @intCast(i)));
     }
