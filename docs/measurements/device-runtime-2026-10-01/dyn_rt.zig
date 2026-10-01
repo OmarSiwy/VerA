@@ -27,6 +27,7 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
         @export(&A.bench_loop_tran, .{ .name = "bench_loop_tran" });
         @export(&A.bench_loop_update, .{ .name = "bench_loop_update" });
         @export(&A.bench_hash_tran, .{ .name = "bench_hash_tran" });
+        @export(&A.bench_dump, .{ .name = "bench_dump" });
     }
 }
 
@@ -124,7 +125,26 @@ fn Api(comptime D: type, comptime name: []const u8) type {
             }
         }
         fn mix(h: u64, v: f64) u64 {
+            if (g_rec) |r| if (g_rec_n < g_rec_cap) {
+                r[g_rec_n] = v;
+                g_rec_n += 1;
+            };
             return (h ^ @as(u64, @bitCast(v))) *% 0x100000001b3 +% 0x9e3779b97f4a7c15;
+        }
+        var g_rec: ?[*]f64 = null;
+        var g_rec_n: usize = 0;
+        var g_rec_cap: usize = 0;
+        /// Every value the two hashes mix, in order, into `out` (at most
+        /// `cap`); returns how many. Compares two builds output by output.
+        fn bench_dump(out: [*]f64, cap: usize) callconv(.c) usize {
+            g_rec = out;
+            g_rec_n = 0;
+            g_rec_cap = cap;
+            bench_setup();
+            _ = bench_hash();
+            _ = bench_hash_tran();
+            g_rec = null;
+            return g_rec_n;
         }
         fn bench_hash() callconv(.c) u64 {
             var h: u64 = 0xcbf29ce484222325;

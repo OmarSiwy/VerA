@@ -144,3 +144,111 @@ evalQ are flat apart from libm; no single emitted region dominates.
 * Noise: load 5-75 during runs. Cycles are compared only within one
   interleaved group; a change with identical instructions and identical
   device text (bsim4va q −15%, txl evalQ +30% in one group) is noise.
+
+## Round 2: the compact models' math (2026-10-01, on 7e7eeac7)
+
+The user's decision: lose bit-exactness against the old math where the
+result stays correct (faithful rounding); the old routines are removed,
+not kept behind a flag.
+"Correct" and the accuracy table are in docs/IMPLEMENTATION.md, "Host math"
+(that table is `mathtable.zig`'s output).
+
+### Where the cycles went before
+
+`perf record -e cycles:u` of `bench_loop` (evalQ), `--debug-info` builds:
+
+| Model | device code | compiler_rt `exp` | `math.ldexp` (exp's scalbn) | `log` | `std.math.pow` (+ its ldexp/frexp) |
+|---|---:|---:|---:|---:|---:|
+| mos1 | 65% | 29% | 4% | — | — |
+| bsim4va | 61% | 18% | 5% | 9% | — |
+| psp103 | 51% | 26% | 4% | 7% | 7% |
+
+The derivative lanes do not run any transcendental: `RefFamily`'s
+`exp(a)` is one scalar `gm.exp(a.v)` and a scale of `a.d` by that value
+(`map(a, e, e)`), so every host evalQ takes the scalar path. Only the
+batch family (`tb/runner_text.zig`, `@Vector(NL, f64)` of operating
+points) calls the vector form.
+
+The rest of evalQ (device code) is flat: no single emitted region above a
+few percent, no repeated transcendental on one argument (psp103: 77 `exp`
+sites, all distinct operands).
+
+### Result: evalQ cycles per call, before → after
+
+`cmp.py`, 3 interleaved rounds, pinned P-core (`math.txt`):
+
+| Model | evalQ | eval | q | updateState | tran step |
+|---|---|---|---|---|---|
+| diode | 77 → 41 (−47%) | 76 → 40 | 54 → 25 | — | 303 → 268 |
+| mos1 | 195 → 163 (−16%) | 115 → 90 | 35 → 35 | 325 → 325 | 1052 → 552 |
+| bsim4va | 2622 → 2285 (−13%) | 2126 → 1854 | 1389 → 730 | 1437 → 1204 | 8884 → 7934 |
+| psp103 | 4027 → 3139 (−22%) | 3809 → 2895 | 3226 → 2304 | 274 → 273 | 11659 → 9565 |
+| txl | 68 → 67 | 68 → 70 | — | 240 → 239 | 899 → 891 |
+| coupled_ltra | 101 → 109 | 100 → 105 | — | 1935 → 1848 | 14702 → 13940 |
+| bsource | 555 → 514 | 558 → 524 | — | — | 1937 → 1883 |
+
+mos1's tran step halving (3248 → 1776 instructions, while evalQ and
+updateState move by 26 and 0) is not attributed yet: the trajectory's
+outputs differ by an ulp, so a data-dependent path differs; the evalQ row at
+fixed bias points is the math alone. With exp/log/pow replaced by a multiply-add (a lower bound, not
+a device), psp103 evalQ is 2123 cycles and bsim4va 1758: the math is still
+~30% of psp103 and ~23% of bsim4va. What remains is call count (psp103, traced: 12 exp, 8 log and 6 pow per
+evaluation, much of it in dependent chains), not per-call cost. Batching independent transcendentals within one evaluation was
+measured and not built (below).
+
+### Output differences from the old math
+
+`reldiff.py` over every value both hashes mix (`reldiff.txt`; relative
+difference, values above 1e-15 in magnitude):
+
+| Model | values | differ | max relative difference |
+|---|---:|---:|---|
+| diode | 134 050 | 928 | 2.7e-16 (1.2 ulp) |
+| mos1 | 479 378 | 522 | 3.4e-16 (1.5 ulp) |
+| bsim4va | 2 271 738 | 2 125 | 4.4e-16 (2.0 ulp) |
+| psp103 | 1 037 058 | 29 676 | 7.1e-13 (3219 ulp) |
+| txl | 280 170 | 0 | 0 |
+| coupled_ltra | 731 674 | 5 037 | 1.3e-15 (5.9 ulp) |
+| bsource | 877 730 | 58 | 6.0e-15 (26.9 ulp) |
+
+psp103's 7.1e-13 is the old `std.math.pow`'s error (up to 20 ulp,
+amplified by the model): a third build on glibc's exp/log/pow (measurement
+only, `math/glibccmp.sh`) differs from the new outputs by at most 7.6e-16
+(3.4 ulp), and from the old ones by 7.1e-13 at the same entry.
+(Before the old path was removed, a `--bit-exact` build of every model
+hashed identically to 7e7eeac7's; that flag is gone.)
+
+### Rejected and measured
+
+| Variant | Result |
+|---|---|
+| table-free polynomial exp (degree-13 Taylor, generic over vectors) | scalar 17.4 ticks vs ARM's 7.2; worst 0.65 ulp |
+| table-free log (double-double atanh series) | scalar 24 ticks vs 9.5 |
+| pow's own log as `ln` | 13.1 ticks vs log.c's 9.5, same bound |
+| fma where the target has it | ln 10.1 vs 12.5, pow 23.7 vs 28.0 ticks; rejected: bits would differ between an fma and a non-fma build of the same device |
+| bit-exact compiler_rt exp with an exact fast scalbn | bit-identical (0 mismatches over 8.4e8 inputs), 1.8x throughput; superseded by the ARM exp |
+| ARM exp alone in coupled_ltra updateState | +17%: its history decay factors are exp(±1e-10); fixed by the \|x\| < 2^-28 path (now −4.5%) |
+
+### Measured and not built: batching transcendentals inside one evaluation
+
+`math/indep.py` groups each emitted core's exp/log/pow sites by block and
+dependency level (no def-use path between members):
+
+| Core | sites | singletons | same-level groups |
+|---|---:|---:|---|
+| psp103 | 157 | 103 | 19 pairs, 1 triple, 2 quads, 1 five |
+| bsim4va | 95 | 35 | 22 pairs, 2 triples, 1 quad, 1 six |
+| mos1 | 6 | 0 | 3 pairs |
+| diode | 5 | 1 | 2 pairs |
+
+psp103's core is mostly one dependent chain (its surface-potential
+iteration: exp, log, divide, sqrt, exp again). Out-of-order execution
+already overlaps independent calls, so a batch saves instructions, not
+latency: two scalar exps cost 14.4 TSC ticks (7.2 each, throughput) and a
+2-wide vector exp about 10; with ~12 exp, 8 log and 6 pow executed per
+psp103 evaluation that is ≈1% of psp103 evalQ and up to ≈4% of bsim4va's.
+It would need the planner to hoist independent calls into slots and emit
+one batched call where all operands are ready, plus an optional family
+primitive so a host's own family keeps its math. Not worth it; the vector
+entry points (`gm.hexp`, `gm.hlog`) are kept for batched instances, where
+every lane is an independent operating point.

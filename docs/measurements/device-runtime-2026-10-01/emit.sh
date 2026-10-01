@@ -14,7 +14,7 @@ for m in $ms; do
   esac
   rm -rf "${OUT:?}/$m"
   t0=$(date +%s.%N)
-  so=$("$VERA" --emit-so --dyn "$HERE/dyn_rt.zig" --work-dir "$OUT/$m" -I "$A" -I "$(dirname "$src")" "$src" 2>"$OUT/$m.err")
+  so=$("$VERA" --emit-so ${DEBUGINFO:+--debug-info} ${BITEXACT:+--bit-exact} --dyn "$HERE/dyn_rt.zig" --work-dir "$OUT/$m" -I "$A" -I "$(dirname "$src")" "$src" 2>"$OUT/$m.err")
   t1=$(date +%s.%N)
   echo "$m ${so:-FAIL} $(echo "$t1 - $t0" | bc)s"
 done

@@ -185,8 +185,10 @@ pub const runner_body =
     \\        pub fn div(a: B, b: B) B { return .{ .v = a.v / b.v }; }
     \\        pub fn scale(a: B, c: f64) B { return .{ .v = a.v * @as(VF, @splat(c)) }; }
     \\        pub fn addC(a: B, c: f64) B { return .{ .v = a.v + @as(VF, @splat(c)) }; }
-    \\        pub fn exp(a: B) B { return map1(a, contract.gm.exp); }
-    \\        pub fn log(a: B) B { return map1(a, contract.gm.log); }
+    \\        // exp/log take the whole vector (`contract.gm`: lane for lane the
+    \\        // scalar call's bits, which `batch_ok` promises).
+    \\        pub fn exp(a: B) B { return .{ .v = contract.gm.exp(a.v) }; }
+    \\        pub fn log(a: B) B { return .{ .v = contract.gm.log(a.v) }; }
     \\        pub fn expm1(a: B) B { return map1(a, contract.gm.expm1); }
     \\        pub fn log1p(a: B) B { return map1(a, std.math.log1p); }
     \\        pub fn sqrt(a: B) B { return .{ .v = @sqrt(a.v) }; }

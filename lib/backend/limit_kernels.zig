@@ -76,20 +76,16 @@
 // function of the new iterate, the previous one, and the algorithm's own
 // constants.
 
-/// Natural log, device-routed (this file is both spliced into generated
-/// devices and `@import`ed by codegen.zig's tests, so it may reference no
-/// emitted name — hence its own alias, not math_txt's zDevLog). The engine's
-/// GPU StateKernel compiles these kernels for NVPTX/AMDGCN, where `@log(f64)`
-/// has no libcall; `contract.gm.log`'s host branch IS the builtin, so host
-/// numerics are unchanged, clamp-at-0 -inf behaviour included. The contract
-/// import sits in the dead branch, so VerA's own compilation of this file
-/// (host, no `contract` module) never resolves it.
+/// Natural log: the devices' own (`contract.gm.log`, one implementation on
+/// host, NVPTX and AMDGCN; log(0) = -inf, so the clamp-at-0 behaviour is
+/// unchanged). This file is both spliced into generated devices and
+/// `@import`ed by the `kernels` module, which imports `contract` for it.
 const k_dev = switch (@import("builtin").target.cpu.arch) {
     .nvptx64, .amdgcn => true,
     else => false,
 };
 inline fn klog(x: f64) f64 {
-    return if (comptime k_dev) @import("contract").gm.log(x) else @log(x);
+    return @import("contract").gm.log(x);
 }
 
 /// Two-way pick, BIT-SELECT spelling: mask is all-ones/all-zeros from the
@@ -266,11 +262,11 @@ fn zPnjlimOracle(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
             // strictly positive argument (or exactly 0 after rounding).
             const arg = (vnew - vold) / vt;
             vnew = if (arg > 0.0)
-                vold + vt * (2.0 + @log(arg - 2.0))
+                vold + vt * (2.0 + klog(arg - 2.0))
             else
-                vold - vt * (2.0 + @log(2.0 - arg));
+                vold - vt * (2.0 + klog(2.0 - arg));
         } else {
-            vnew = vt * @log(vnew / vt);
+            vnew = vt * klog(vnew / vt);
         }
     } else if (vnew < 0.0) {
         const arg = if (vold > 0.0) -vold - 1.0 else 2.0 * vold - 1.0;

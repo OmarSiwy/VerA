@@ -42,32 +42,19 @@ pub const gm = struct {
     const ln2lo = 1.90821492927058770002e-10;
     const log2e = 1.44269504088896338700;
 
-    pub inline fn exp(x: f64) f64 {
-        return if (comptime dev) softExp(x) else @exp(x);
+    /// exp, log and pow are VerA's own, one implementation on every target
+    /// (host, NVPTX, AMDGCN): faithful (< 1 ulp; docs/IMPLEMENTATION.md, "Host
+    /// math"), fma-free so every target rounds alike (`exact_everywhere`).
+    /// `exp`/`log` take `f64` or `@Vector(n, f64)`; `powV` is pow's vector
+    /// form.
+    pub inline fn exp(x: anytype) @TypeOf(x) {
+        return hexp(x);
     }
-    pub inline fn log(x: f64) f64 {
-        return if (comptime dev) softLog(x) else @log(x);
+    pub inline fn log(x: anytype) @TypeOf(x) {
+        return hlog(x);
     }
     pub inline fn pow(x: f64, y: f64) f64 {
-        if (comptime !dev) return std.math.pow(f64, x, y);
-        // Square-and-multiply for integer |y| <= 64 (exact); exp(y ln x)
-        // otherwise. Negative base only for integer y.
-        if (y == 0 or x == 1) return 1;
-        if (x == 0) return if (y > 0) 0 else std.math.inf(f64);
-        if (y == @trunc(y) and @abs(y) <= 64) {
-            var n: u32 = @intFromFloat(@abs(y));
-            var base = x;
-            var acc: f64 = 1;
-            while (n != 0) : (n >>= 1) {
-                if (n & 1 != 0) acc *= base;
-                base *= base;
-            }
-            return if (y < 0) 1 / acc else acc;
-        }
-        if (x > 0) return softExp(y * softLog(x));
-        if (y != @trunc(y)) return std.math.nan(f64);
-        const m = softExp(y * softLog(-x));
-        return if (@rem(@abs(y), 2.0) == 1) -m else m;
+        return armPow(x, y);
     }
     pub inline fn tanh(x: f64) f64 {
         if (comptime !dev) return std.math.tanh(x);
@@ -81,7 +68,7 @@ pub const gm = struct {
                 2.23548839060100448583e3) * z + 4.84406305325125486048e3;
             return x + x * (p / q);
         }
-        const r = 1 - 2.0 / (softExp(2 * ax) + 1);
+        const r = 1 - 2.0 / (armExp(2 * ax) + 1);
         return if (x < 0) -r else r;
     }
     pub inline fn sinh(x: f64) f64 {
@@ -93,13 +80,13 @@ pub const gm = struct {
                 z * (1.0 / 5040.0 + z * (1.0 / 362880.0 +
                     z * (1.0 / 39916800.0 + z * (1.0 / 6227020800.0)))))));
         }
-        const e = softExp(ax);
+        const e = armExp(ax);
         const r = 0.5 * e - 0.5 / e;
         return if (x < 0) -r else r;
     }
     pub inline fn cosh(x: f64) f64 {
         if (comptime !dev) return std.math.cosh(x);
-        const e = softExp(@abs(x));
+        const e = armExp(@abs(x));
         return 0.5 * e + 0.5 / e;
     }
     pub inline fn sin(x: f64) f64 {
@@ -125,6 +112,833 @@ pub const gm = struct {
         return std.math.atan(v)[0];
     }
 
+    // ---- host exp and log for a scalar or a vector of operating points ----
+    //
+    // `hexp`/`hlog` take `f64` or `@Vector(n, f64)` (a batch family's value
+    // type). A vector whose lanes are all ordinary inputs runs ARM's
+    // arithmetic below on the whole vector (one table gather per lane); a
+    // vector with any special lane (zero, subnormal, huge, inf, NaN, negative
+    // log argument) takes the scalar routine lane by lane. The vector
+    // arithmetic is the scalar's, operation for operation, so a lane's
+    // result is the scalar call's bit for bit.
+
+    fn UOf(comptime T: type) type {
+        return switch (@typeInfo(T)) {
+            .vector => |v| @Vector(v.len, u64),
+            else => u64,
+        };
+    }
+    fn IOf(comptime T: type) type {
+        return switch (@typeInfo(T)) {
+            .vector => |v| @Vector(v.len, i64),
+            else => i64,
+        };
+    }
+    inline fn sp(comptime T: type, c: anytype) T {
+        return switch (@typeInfo(T)) {
+            .vector => @splat(c),
+            else => c,
+        };
+    }
+    inline fn shl(v: anytype, comptime n: u6) @TypeOf(v) {
+        return switch (@typeInfo(@TypeOf(v))) {
+            .vector => |t| v << @as(@Vector(t.len, u6), @splat(n)),
+            else => v << n,
+        };
+    }
+    inline fn shrU(v: anytype, comptime n: u6) @TypeOf(v) {
+        return switch (@typeInfo(@TypeOf(v))) {
+            .vector => |t| v >> @as(@Vector(t.len, u6), @splat(n)),
+            else => v >> n,
+        };
+    }
+    /// `tab[idx]` lane by lane: a gather.
+    inline fn gather(comptime E: type, tab: []const E, idx: anytype) switch (@typeInfo(@TypeOf(idx))) {
+        .vector => |v| @Vector(v.len, E),
+        else => E,
+    } {
+        switch (@typeInfo(@TypeOf(idx))) {
+            .vector => |v| {
+                var out: @Vector(v.len, E) = undefined;
+                inline for (0..v.len) |l| out[l] = tab[@intCast(idx[l])];
+                return out;
+            },
+            else => return tab[@intCast(idx)],
+        }
+    }
+
+    /// `exp_inline`'s ordinary-input arithmetic: scale bits, the reduction's
+    /// k and tmp, exp(x + xtail) ~= scale * (1 + tmp).
+    inline fn expMain(comptime T: type, x: T, xtail: T, sbias: u64) struct { tmp: T, sbits: UOf(T), ki: UOf(T) } {
+        const U = UOf(T);
+        const z = sp(T, exp_invln2n) * x;
+        var kd = z + sp(T, exp_shift);
+        const ki: U = @bitCast(kd);
+        kd -= sp(T, exp_shift);
+        var r = x + kd * sp(T, exp_negln2hin) + kd * sp(T, exp_negln2lon);
+        r += xtail;
+        const idx = shl(ki % sp(U, exp_n), 1);
+        const top = shl(ki +% sp(U, sbias), 52 - 7);
+        const tail: T = @bitCast(gather(u64, &exp_tab, idx));
+        const sbits = gather(u64, &exp_tab, idx + sp(U, 1)) +% top;
+        const r2 = r * r;
+        const tmp = tail + r + r2 * (sp(T, exp_c2) + r * sp(T, exp_c3)) + r2 * r2 * (sp(T, exp_c4) + r * sp(T, exp_c5));
+        return .{ .tmp = tmp, .sbits = sbits, .ki = ki };
+    }
+
+    /// `log_inline`: log(x) = y + tail for x's (normalized) bits.
+    inline fn powLogG(comptime T: type, ix: UOf(T)) struct { y: T, tail: T } {
+        const U = UOf(T);
+        const I = IOf(T);
+        const tmp = ix -% sp(U, pow_off);
+        const i = shrU(tmp, 52 - 7) % sp(U, 128);
+        const k = @as(I, @bitCast(tmp)) >> switch (@typeInfo(T)) {
+            .vector => |v| @as(@Vector(v.len, u6), @splat(52)),
+            else => @as(u6, 52),
+        };
+        const iz = ix -% (tmp & sp(U, @as(u64, 0xfff) << 52));
+        const z: T = @bitCast(iz);
+        const kd: T = @floatFromInt(k);
+        const invc = gather(f64, &pow_log_invc, i);
+        const logc = gather(f64, &pow_log_logc, i);
+        const logctail = gather(f64, &pow_log_logctail, i);
+        // No fma (`exact_everywhere`): split z so rhi, rlo and rhi*rhi are
+        // exact and |rlo| <= |r|.
+        const zhi: T = @bitCast((iz +% sp(U, 1 << 31)) & sp(U, ~@as(u64, 0) << 32));
+        const zlo = z - zhi;
+        const rhi = zhi * invc - sp(T, 1.0);
+        const rlo = zlo * invc;
+        const r = rhi + rlo;
+        const t1 = kd * sp(T, pow_ln2hi) + logc;
+        const t2 = t1 + r;
+        const lo1 = kd * sp(T, pow_ln2lo) + logctail;
+        const lo2 = t1 - t2 + r;
+        const ar = sp(T, pow_a[0]) * r;
+        const ar2 = r * ar;
+        const ar3 = r * ar2;
+        const arhi = sp(T, pow_a[0]) * rhi;
+        const arhi2 = rhi * arhi;
+        const hi = t2 + arhi2;
+        const lo3 = rlo * (ar + arhi);
+        const lo4 = t2 - hi + arhi2;
+        const p = ar3 * (sp(T, pow_a[1]) + r * sp(T, pow_a[2]) + ar2 * (sp(T, pow_a[3]) + r * sp(T, pow_a[4]) + ar2 * (sp(T, pow_a[5]) + r * sp(T, pow_a[6]))));
+        const lo = lo1 + lo2 + lo3 + lo4 + p;
+        const y = hi + lo;
+        return .{ .y = y, .tail = hi - y + lo };
+    }
+
+    /// exp(x) for `f64` or `@Vector(n, f64)`; the contract is `armExp`'s.
+    pub fn hexp(x: anytype) @TypeOf(x) {
+        const T = @TypeOf(x);
+        switch (@typeInfo(T)) {
+            .vector => |v| {
+                const U = UOf(T);
+                const abstop = shrU(@as(U, @bitCast(x)), 52) & sp(U, 0x7ff);
+                const ordinary = abstop -% sp(U, top12(0x1p-54)) < sp(U, top12(512.0) - top12(0x1p-54));
+                if (!@reduce(.And, ordinary)) {
+                    @branchHint(.unlikely);
+                    var out: T = undefined;
+                    inline for (0..v.len) |l| out[l] = armExp(x[l]);
+                    return out;
+                }
+                const m = expMain(T, x, sp(T, 0.0), 0);
+                const scale: T = @bitCast(m.sbits);
+                // `expSmall`'s lanes: the scalar call's branch, as a select.
+                const small = abstop < sp(U, top12(0x1p-28));
+                return @select(f64, small, expSmall(x), scale + scale * m.tmp);
+            },
+            else => return armExp(x),
+        }
+    }
+
+    /// log.c's band around 1, where it switches to a direct polynomial in
+    /// x - 1: bits in [LO, HI).
+    const log_lo: u64 = @bitCast(@as(f64, 1.0 - 0x1p-4));
+    const log_hi: u64 = @bitCast(@as(f64, 1.0 + 0x1.09p-4));
+
+    /// log.c's table path for an ordinary x (positive, normal, finite,
+    /// outside the band around 1): k ln2 + log(c) + poly(z/c - 1).
+    inline fn logMain(comptime T: type, ix: UOf(T)) T {
+        const U = UOf(T);
+        const I = IOf(T);
+        const tmp = ix -% sp(U, 0x3fe6000000000000);
+        const i = shrU(tmp, 52 - 7) % sp(U, 128);
+        const k = @as(I, @bitCast(tmp)) >> switch (@typeInfo(T)) {
+            .vector => |v| @as(@Vector(v.len, u6), @splat(52)),
+            else => @as(u6, 52),
+        };
+        const iz = ix -% (tmp & sp(U, @as(u64, 0xfff) << 52));
+        const z: T = @bitCast(iz);
+        const invc = gather(f64, &log_invc, i);
+        const logc = gather(f64, &log_logc, i);
+        const r = (z - gather(f64, &log_chi, i) - gather(f64, &log_clo, i)) * invc;
+        const kd: T = @floatFromInt(k);
+        const w = kd * sp(T, 0x1.62e42fefa3800p-1) + logc;
+        const hi = w + r;
+        const lo = w - hi + r + kd * sp(T, 0x1.ef35793c76730p-45);
+        const r2 = r * r;
+        return lo + r2 * sp(T, log_poly[0]) + r * r2 * (sp(T, log_poly[1]) + r * sp(T, log_poly[2]) + r2 * (sp(T, log_poly[3]) + r * sp(T, log_poly[4]))) + hi;
+    }
+
+    /// log(x) for `f64` or `@Vector(n, f64)`; the contract is `armLog`'s.
+    pub fn hlog(x: anytype) @TypeOf(x) {
+        const T = @TypeOf(x);
+        switch (@typeInfo(T)) {
+            .vector => |v| {
+                const U = UOf(T);
+                const ix: U = @bitCast(x);
+                // Positive, normal and finite (top12 in [0x001, 0x7fe]), and
+                // outside the band around 1.
+                const normal = shrU(ix, 52) -% sp(U, 0x001) < sp(U, 0x7fe);
+                const off_band = (ix -% sp(U, log_lo)) >= sp(U, log_hi - log_lo);
+                if (!@reduce(.And, normal) or !@reduce(.And, off_band)) {
+                    @branchHint(.unlikely);
+                    var out: T = undefined;
+                    inline for (0..v.len) |l| out[l] = armLog(x[l]);
+                    return out;
+                }
+                return logMain(T, ix);
+            },
+            else => return armLog(x),
+        }
+    }
+
+    /// log(x): ARM's log.c, max error 0.52 ulp (measured 0.515 in the band
+    /// around 1, 0.500 elsewhere); log(+-0) = -inf, log(x < 0) = NaN,
+    /// log(+inf) = +inf, log(1) = +0, NaN propagates, subnormals normalized.
+    pub fn armLog(x: f64) f64 {
+        var ix = asU(x);
+        if (ix -% log_lo < log_hi - log_lo) {
+            @branchHint(.unlikely);
+            if (ix == asU(1.0)) return 0;
+            const r = x - 1.0;
+            const r2 = r * r;
+            const r3 = r * r2;
+            const p = log_poly1;
+            const y = r3 * (p[1] + r * p[2] + r2 * p[3] + r3 * (p[4] + r * p[5] + r2 * p[6] + r3 * (p[7] + r * p[8] + r2 * p[9] + r3 * p[10])));
+            var w = r * 0x1p27;
+            const rhi = r + w - w;
+            const rlo = r - rhi;
+            w = rhi * rhi * p[0];
+            const hi = r + w;
+            const lo = r - hi + w + p[0] * rlo * (rhi + r);
+            return y + lo + hi;
+        }
+        const top = ix >> 48;
+        if (top -% 0x0010 >= 0x7ff0 - 0x0010) {
+            @branchHint(.unlikely);
+            if (ix << 1 == 0) return -std.math.inf(f64); // +-0
+            if (ix == asU(std.math.inf(f64))) return x;
+            if (top & 0x8000 != 0 or top & 0x7ff0 == 0x7ff0) return std.math.nan(f64); // < 0, NaN
+            // Subnormal: normalize so the exponent goes negative.
+            ix = asU(x * 0x1p52) -% (52 << 52);
+        }
+        return logMain(f64, ix);
+    }
+
+    // ARM log.c (musl src/math/log.c, log_data.c; Copyright (c) 2018, Arm
+    // Limited, MIT), its fma-free variant (`exact_everywhere`), as Zig's
+    // compiler_rt/log.zig carries it.
+    const log_poly = [5]f64{ -0x1.0000000000001p-1, 0x1.555555551305bp-2, -0x1.fffffffeb459p-3, 0x1.999b324f10111p-3, -0x1.55575e506c89fp-3 };
+    const log_poly1 = [11]f64{ -0x1p-1, 0x1.5555555555577p-2, -0x1.ffffffffffdcbp-3, 0x1.999999995dd0cp-3, -0x1.55555556745a7p-3, 0x1.24924a344de3p-3, -0x1.fffffa4423d65p-4, 0x1.c7184282ad6cap-4, -0x1.999eb43b068ffp-4, 0x1.78182f7afd085p-4, -0x1.5521375d145cdp-4 };
+    const log_invc = [128]f64{
+        0x1.734f0c3e0de9fp+0, 0x1.713786a2ce91fp+0, 0x1.6f26008fab5a0p+0, 0x1.6d1a61f138c7dp+0,
+        0x1.6b1490bc5b4d1p+0, 0x1.69147332f0cbap+0, 0x1.6719f18224223p+0, 0x1.6524f99a51ed9p+0,
+        0x1.63356aa8f24c4p+0, 0x1.614b36b9ddc14p+0, 0x1.5f66452c65c4cp+0, 0x1.5d867b5912c4fp+0,
+        0x1.5babccb5b90dep+0, 0x1.59d61f2d91a78p+0, 0x1.5805612465687p+0, 0x1.56397cee76bd3p+0,
+        0x1.54725e2a77f93p+0, 0x1.52aff42064583p+0, 0x1.50f22dbb2bddfp+0, 0x1.4f38f4734ded7p+0,
+        0x1.4d843cfde2840p+0, 0x1.4bd3ec078a3c8p+0, 0x1.4a27fc3e0258ap+0, 0x1.4880524d48434p+0,
+        0x1.46dce1b192d0bp+0, 0x1.453d9d3391854p+0, 0x1.43a2744b4845ap+0, 0x1.420b54115f8fbp+0,
+        0x1.40782da3ef4b1p+0, 0x1.3ee8f5d57fe8fp+0, 0x1.3d5d9a00b4ce9p+0, 0x1.3bd60c010c12bp+0,
+        0x1.3a5242b75dab8p+0, 0x1.38d22cd9fd002p+0, 0x1.3755bc5847a1cp+0, 0x1.35dce49ad36e2p+0,
+        0x1.34679984dd440p+0, 0x1.32f5cceffcb24p+0, 0x1.3187775a10d49p+0, 0x1.301c8373e3990p+0,
+        0x1.2eb4ebb95f841p+0, 0x1.2d50a0219a9d1p+0, 0x1.2bef9a8b7fd2ap+0, 0x1.2a91c7a0c1babp+0,
+        0x1.293726014b530p+0, 0x1.27dfa5757a1f5p+0, 0x1.268b39b1d3bbfp+0, 0x1.2539d838ff5bdp+0,
+        0x1.23eb7aac9083bp+0, 0x1.22a012ba940b6p+0, 0x1.2157996cc4132p+0, 0x1.201201dd2fc9bp+0,
+        0x1.1ecf4494d480bp+0, 0x1.1d8f5528f6569p+0, 0x1.1c52311577e7cp+0, 0x1.1b17c74cb26e9p+0,
+        0x1.19e010c2c1ab6p+0, 0x1.18ab07bb670bdp+0, 0x1.1778a25efbcb6p+0, 0x1.1648d354c31dap+0,
+        0x1.151b990275fddp+0, 0x1.13f0ea432d24cp+0, 0x1.12c8b7210f9dap+0, 0x1.11a3028ecb531p+0,
+        0x1.107fbda8434afp+0, 0x1.0f5ee0f4e6bb3p+0, 0x1.0e4065d2a9fcep+0, 0x1.0d244632ca521p+0,
+        0x1.0c0a77ce2981ap+0, 0x1.0af2f83c636d1p+0, 0x1.09ddb98a01339p+0, 0x1.08cabaf52e7dfp+0,
+        0x1.07b9f2f4e28fbp+0, 0x1.06ab58c358f19p+0, 0x1.059eea5ecf92cp+0, 0x1.04949cdd12c90p+0,
+        0x1.038c6c6f0ada9p+0, 0x1.02865137932a9p+0, 0x1.0182427ea7348p+0, 0x1.008040614b195p+0,
+        0x1.fe01ff726fa1ap-1, 0x1.fa11cc261ea74p-1, 0x1.f6310b081992ep-1, 0x1.f25f63ceeadcdp-1,
+        0x1.ee9c8039113e7p-1, 0x1.eae8078cbb1abp-1, 0x1.e741aa29d0c9bp-1, 0x1.e3a91830a99b5p-1,
+        0x1.e01e009609a56p-1, 0x1.dca01e577bb98p-1, 0x1.d92f20b7c9103p-1, 0x1.d5cac66fb5ccep-1,
+        0x1.d272caa5ede9dp-1, 0x1.cf26e3e6b2ccdp-1, 0x1.cbe6da2a77902p-1, 0x1.c8b266d37086dp-1,
+        0x1.c5894bd5d5804p-1, 0x1.c26b533bb9f8cp-1, 0x1.bf583eeece73fp-1, 0x1.bc4fd75db96c1p-1,
+        0x1.b951e0c864a28p-1, 0x1.b65e2c5ef3e2cp-1, 0x1.b374867c9888bp-1, 0x1.b094b211d304ap-1,
+        0x1.adbe885f2ef7ep-1, 0x1.aaf1d31603da2p-1, 0x1.a82e63fd358a7p-1, 0x1.a5740ef09738bp-1,
+        0x1.a2c2a90ab4b27p-1, 0x1.a01a01393f2d1p-1, 0x1.9d79f24db3c1bp-1, 0x1.9ae2505c7b190p-1,
+        0x1.9852ef297ce2fp-1, 0x1.95cbaeea44b75p-1, 0x1.934c69de74838p-1, 0x1.90d4f2f6752e6p-1,
+        0x1.8e6528effd79dp-1, 0x1.8bfce9fcc007cp-1, 0x1.899c0dabec30ep-1, 0x1.87427aa2317fbp-1,
+        0x1.84f00acb39a08p-1, 0x1.82a49e8653e55p-1, 0x1.8060195f40260p-1, 0x1.7e22563e0a329p-1,
+        0x1.7beb377dcb5adp-1, 0x1.79baa679725c2p-1, 0x1.77907f2170657p-1, 0x1.756cadbd6130cp-1,
+    };
+    const log_logc = [128]f64{
+        -0x1.7cc7f79e69000p-2, -0x1.76feec20d0000p-2, -0x1.713e31351e000p-2, -0x1.6b85b38287800p-2,
+        -0x1.65d5590807800p-2, -0x1.602d076180000p-2, -0x1.5a8ca86909000p-2, -0x1.54f4356035000p-2,
+        -0x1.4f637c36b4000p-2, -0x1.49da7fda85000p-2, -0x1.445923989a800p-2, -0x1.3edf439b0b800p-2,
+        -0x1.396ce448f7000p-2, -0x1.3401e17bda000p-2, -0x1.2e9e2ef468000p-2, -0x1.2941b3830e000p-2,
+        -0x1.23ec58cda8800p-2, -0x1.1e9e129279000p-2, -0x1.1956d2b48f800p-2, -0x1.141679ab9f800p-2,
+        -0x1.0edd094ef9800p-2, -0x1.09aa518db1000p-2, -0x1.047e65263b800p-2, -0x1.feb224586f000p-3,
+        -0x1.f474a7517b000p-3, -0x1.ea4443d103000p-3, -0x1.e020d44e9b000p-3, -0x1.d60a22977f000p-3,
+        -0x1.cc00104959000p-3, -0x1.c202956891000p-3, -0x1.b81178d811000p-3, -0x1.ae2c9ccd3d000p-3,
+        -0x1.a45402e129000p-3, -0x1.9a877681df000p-3, -0x1.90c6d69483000p-3, -0x1.87120a645c000p-3,
+        -0x1.7d68fb4143000p-3, -0x1.73cb83c627000p-3, -0x1.6a39a9b376000p-3, -0x1.60b3154b7a000p-3,
+        -0x1.5737d76243000p-3, -0x1.4dc7b8fc23000p-3, -0x1.4462c51d20000p-3, -0x1.3b08abc830000p-3,
+        -0x1.31b996b490000p-3, -0x1.2875490a44000p-3, -0x1.1f3b9f879a000p-3, -0x1.160c8252ca000p-3,
+        -0x1.0ce7f57f72000p-3, -0x1.03cdc49fea000p-3, -0x1.f57bdbc4b8000p-4, -0x1.e370896404000p-4,
+        -0x1.d17983ef94000p-4, -0x1.bf9674ed8a000p-4, -0x1.adc79202f6000p-4, -0x1.9c0c3e7288000p-4,
+        -0x1.8a646b372c000p-4, -0x1.78d01b3ac0000p-4, -0x1.674f145380000p-4, -0x1.55e0e6d878000p-4,
+        -0x1.4485cdea1e000p-4, -0x1.333d94d6aa000p-4, -0x1.22079f8c56000p-4, -0x1.10e4698622000p-4,
+        -0x1.ffa6c6ad20000p-5, -0x1.dda8d4a774000p-5, -0x1.bbcece4850000p-5, -0x1.9a1894012c000p-5,
+        -0x1.788583302c000p-5, -0x1.5715e67d68000p-5, -0x1.35c8a49658000p-5, -0x1.149e364154000p-5,
+        -0x1.e72c082eb8000p-6, -0x1.a55f152528000p-6, -0x1.63d62cf818000p-6, -0x1.228fb8caa0000p-6,
+        -0x1.c317b20f90000p-7, -0x1.419355daa0000p-7, -0x1.81203c2ec0000p-8, -0x1.0040979240000p-9,
+        0x1.feff384900000p-9,  0x1.7dc41353d0000p-7,  0x1.3cea3c4c28000p-6,  0x1.b9fc114890000p-6,
+        0x1.1b0d8ce110000p-5,  0x1.58a5bd001c000p-5,  0x1.95c8340d88000p-5,  0x1.d276aef578000p-5,
+        0x1.07598e598c000p-4,  0x1.253f5e30d2000p-4,  0x1.42edd8b380000p-4,  0x1.606598757c000p-4,
+        0x1.7da76356a0000p-4,  0x1.9ab434e1c6000p-4,  0x1.b78c7bb0d6000p-4,  0x1.d431332e72000p-4,
+        0x1.f0a3171de6000p-4,  0x1.067152b914000p-3,  0x1.147858292b000p-3,  0x1.2266ecdca3000p-3,
+        0x1.303d7a6c55000p-3,  0x1.3dfc33c331000p-3,  0x1.4ba366b7a8000p-3,  0x1.5933928d1f000p-3,
+        0x1.66acd2418f000p-3,  0x1.740f8ec669000p-3,  0x1.815c0f51af000p-3,  0x1.8e92954f68000p-3,
+        0x1.9bb3602f84000p-3,  0x1.a8bed1c2c0000p-3,  0x1.b5b515c01d000p-3,  0x1.c2967ccbcc000p-3,
+        0x1.cf635d5486000p-3,  0x1.dc1bd3446c000p-3,  0x1.e8c01b8cfe000p-3,  0x1.f5509c0179000p-3,
+        0x1.00e6c121fb800p-2,  0x1.071b80e93d000p-2,  0x1.0d46b9e867000p-2,  0x1.13687334bd000p-2,
+        0x1.1980d67234800p-2,  0x1.1f8ffe0cc8000p-2,  0x1.2595fd7636800p-2,  0x1.2b9300914a800p-2,
+        0x1.3187210436000p-2,  0x1.377266dec1800p-2,  0x1.3d54ffbaf3000p-2,  0x1.432eee32fe000p-2,
+    };
+    const log_chi = [128]f64{
+        0x1.61000014fb66bp-1, 0x1.63000034db495p-1, 0x1.650000d94d478p-1, 0x1.67000074e6fadp-1,
+        0x1.68ffffedf0faep-1, 0x1.6b0000763c5bcp-1, 0x1.6d0001e5cc1f6p-1, 0x1.6efffeb05f63ep-1,
+        0x1.710000e86978p-1,  0x1.72ffffc67e912p-1, 0x1.74fffdf81116ap-1, 0x1.770000f679c9p-1,
+        0x1.78ffffa7ec835p-1, 0x1.7affffe20c2e6p-1, 0x1.7cfffed3fc9p-1,   0x1.7efffe9261a76p-1,
+        0x1.81000049ca3e8p-1, 0x1.8300017932c8fp-1, 0x1.850000633739cp-1, 0x1.87000204289c6p-1,
+        0x1.88fffebf57904p-1, 0x1.8b00022bc04dfp-1, 0x1.8cfffe50c1b8ap-1, 0x1.8effffc918e43p-1,
+        0x1.910001efa5fc7p-1, 0x1.9300013467bb9p-1, 0x1.94fffe6ee076fp-1, 0x1.96fffde3c12d1p-1,
+        0x1.98ffff4458a0dp-1, 0x1.9afffdd982e3ep-1, 0x1.9cfffed49fb66p-1, 0x1.9f00020f19c51p-1,
+        0x1.a10001145b006p-1, 0x1.a300007bbf6fap-1, 0x1.a500010971d79p-1, 0x1.a70001df52e48p-1,
+        0x1.a90001c593352p-1, 0x1.ab0002a4f3e4bp-1, 0x1.acfffd7ae1ed1p-1, 0x1.aefffee510478p-1,
+        0x1.b0fffdb650d5bp-1, 0x1.b2ffffeaaca57p-1, 0x1.b4fffd995badcp-1, 0x1.b7000249e659cp-1,
+        0x1.b8ffff987164p-1,  0x1.bafffd204cb4fp-1, 0x1.bcfffd2415c45p-1, 0x1.beffff86309dfp-1,
+        0x1.c0fffe1b57653p-1, 0x1.c2ffff1fa57e3p-1, 0x1.c4fffdcbfe424p-1, 0x1.c6fffed54b9f7p-1,
+        0x1.c8fffeb998fd5p-1, 0x1.cb0002125219ap-1, 0x1.ccfffdd94469cp-1, 0x1.cefffeafdc476p-1,
+        0x1.d1000169af82bp-1, 0x1.d30000d0ff71dp-1, 0x1.d4fffea790fc4p-1, 0x1.d70002edc87e5p-1,
+        0x1.d900021dc82aap-1, 0x1.dafffd86b0283p-1, 0x1.dd000296c4739p-1, 0x1.defffe54490f5p-1,
+        0x1.e0fffcdabf694p-1, 0x1.e2fffdb52c8ddp-1, 0x1.e4ffff24216efp-1, 0x1.e6fffe88a5e11p-1,
+        0x1.e9000119eff0dp-1, 0x1.eafffdfa51744p-1, 0x1.ed0001a127fa1p-1, 0x1.ef00007babcc4p-1,
+        0x1.f0ffff57a8d02p-1, 0x1.f30001ee58ac7p-1, 0x1.f4ffff5823494p-1, 0x1.f6ffffca94c6bp-1,
+        0x1.f8fffe1f9c441p-1, 0x1.fafffd2e0e37ep-1, 0x1.fd0001c77e49ep-1, 0x1.feffff7e0c331p-1,
+        0x1.00ffff465606ep+0, 0x1.02ffff3867a58p+0, 0x1.04ffffdfc0d17p+0, 0x1.0700003cd4d82p+0,
+        0x1.08ffff9f2cbe8p+0, 0x1.0b000010cda65p+0, 0x1.0d00001a4d338p+0, 0x1.0effffadafdfdp+0,
+        0x1.110000bbafd96p+0, 0x1.12ffffae5f45dp+0, 0x1.150000dd59ad9p+0, 0x1.170000f21559ap+0,
+        0x1.18ffffc275426p+0, 0x1.1b000123d3c59p+0, 0x1.1cffff8299eb7p+0, 0x1.1effff48ad4p+0,
+        0x1.210000c8b86a4p+0, 0x1.2300003854303p+0, 0x1.24fffffbcf684p+0, 0x1.26ffff52921d9p+0,
+        0x1.2900014933a3cp+0, 0x1.2b00014556313p+0, 0x1.2cfffebfe523bp+0, 0x1.2f0000bb8ad96p+0,
+        0x1.30ffffb7ae2afp+0, 0x1.32ffffeac5f7fp+0, 0x1.350000ca66756p+0, 0x1.3700011fbf721p+0,
+        0x1.38ffff9592fb9p+0, 0x1.3b00004ddd242p+0, 0x1.3cffff5b2c957p+0, 0x1.3efffeab0b418p+0,
+        0x1.410001532aff4p+0, 0x1.4300017478b29p+0, 0x1.44fffe795b463p+0, 0x1.46fffe80475ep+0,
+        0x1.48fffef6fc1e7p+0, 0x1.4afffe5bea704p+0, 0x1.4d000171027dep+0, 0x1.4f0000ff03ee2p+0,
+        0x1.5100012dc4bd1p+0, 0x1.530001605277ap+0, 0x1.54fffecdb704cp+0, 0x1.56fffef5f54a9p+0,
+        0x1.5900017e61012p+0, 0x1.5b00003c93e92p+0, 0x1.5d0001d4919bcp+0, 0x1.5efffe7b87a89p+0,
+    };
+    const log_clo = [128]f64{
+        0x1.e026c91425b3cp-56,  0x1.dbfea48005d41p-55,  0x1.e7fa786d6a5b7p-55,  0x1.1fcea6b54254cp-57,
+        -0x1.c7e274c590efdp-56, -0x1.ac16848dcda01p-55, 0x1.33f1c9d499311p-55,  -0x1.e80041ae22d53p-56,
+        0x1.bff6671097952p-56,  0x1.c00e226bd8724p-55,  -0x1.e02916ef101d2p-57, -0x1.7fc71cd549c74p-57,
+        0x1.1bec19ef50483p-55,  -0x1.07e1729cc6465p-56, -0x1.08072087b8b1cp-55, 0x1.dc0286d9df9aep-55,
+        0x1.97fd251e54c33p-55,  -0x1.afee9b630f381p-55, 0x1.9bfbf6b6535bcp-55,  -0x1.bbf65f3117b75p-55,
+        -0x1.9006ea23dcb57p-55, -0x1.d00df38e04b0ap-56, -0x1.8007146ff9f05p-55, 0x1.3817bd07a7038p-55,
+        0x1.93e9176dfb403p-55,  0x1.f804e4b980276p-56,  -0x1.f7ef0d9ff622ep-55, -0x1.082aa962638bap-56,
+        -0x1.7801b9164a8efp-55, -0x1.740e08a5a9337p-55, 0x1.fce08c19bep-60,     -0x1.a3faa27885b0ap-55,
+        0x1.4ff489958da56p-56,  0x1.cbeab8a2b6d18p-55,  0x1.8fecadd78793p-55,   -0x1.f41763dd8abdbp-55,
+        -0x1.ebf0284c27612p-55, -0x1.9fd043cff3f5fp-57, -0x1.23ee7129070b4p-55, 0x1.a063ee00edea3p-57,
+        0x1.a06c8381f0ab9p-58,  -0x1.9011e74233c1dp-56, -0x1.9ff1068862a9fp-56, 0x1.aff45d0864f3ep-55,
+        0x1.cfe7796c2c3f9p-56,  -0x1.3ff27eef22bc4p-57, -0x1.cffb7ee3bea21p-57, -0x1.14103972e0b5cp-55,
+        0x1.bc16494b76a19p-55,  -0x1.4feef8d30c6edp-57, -0x1.43f68bcec4775p-55, 0x1.47ea3f053e0ecp-55,
+        0x1.383068df992f1p-56,  -0x1.8fd8e64180e04p-57, 0x1.e7ebe1cc7ea72p-55,  0x1.ebe39ad9f88fep-55,
+        0x1.57d91a8b95a71p-56,  0x1.9c1906970c7dap-55,  -0x1.80e37c558fe0cp-58, -0x1.f80d64dc10f44p-56,
+        -0x1.47c8f94fd5c5cp-56, 0x1.c7f1dc521617ep-55,  0x1.8019eb2ffb153p-55,  0x1.e00d2c652cc89p-57,
+        -0x1.f8340202d69d2p-56, 0x1.b00c1ca1b0864p-56,  0x1.2ffa8b094ab51p-56,  -0x1.7f673b1efbe59p-58,
+        -0x1.4808d5e0bc801p-55, 0x1.80006d54320b5p-56,  -0x1.002f860565c92p-58, -0x1.540445d35e611p-55,
+        -0x1.ffb3139ef9105p-59, 0x1.a81acf2731155p-55,  0x1.a3f41d4d7c743p-55,  -0x1.202f41c987875p-57,
+        0x1.77dd1f477e74bp-56,  -0x1.f01199a7ca331p-57, 0x1.181ee4bceacb1p-56,  -0x1.e05370170875ap-57,
+        -0x1.a7ead491c0adap-55, -0x1.77f69c3fcb2ep-54,  0x1.7bffe34cb945bp-54,  0x1.20083c0e456cbp-55,
+        -0x1.dffdfbe37751ap-57, -0x1.13f7faee626ebp-54, 0x1.07dfa79489ff7p-55,  -0x1.7040570d66bcp-56,
+        0x1.e80d4846d0b62p-55,  0x1.dbffa64fd36efp-54,  0x1.a0077701250aep-54,  0x1.dfdf9e2e3deeep-55,
+        0x1.10030dc3b7273p-54,  0x1.97f7980030188p-54,  -0x1.5f932ab9f8c67p-57, 0x1.37fbf9da75bebp-54,
+        0x1.f806b91fd5b22p-54,  0x1.3ffc2eb9fbf33p-54,  0x1.601e77e2e2e72p-56,  0x1.ffcbb767f0c61p-56,
+        -0x1.202ca3c02412bp-56, -0x1.2808233f21f02p-54, -0x1.8ff7e384fdcf2p-55, -0x1.5ff51503041c5p-55,
+        -0x1.10071885e289dp-55, -0x1.1ff5d3fb7b715p-54, 0x1.57f82228b82bdp-54,  0x1.000bac40dd5ccp-55,
+        -0x1.43f9d2db2a751p-54, 0x1.57f6b707638e1p-55,  0x1.a023a10bf1231p-56,  0x1.87f6d66b152bp-54,
+        0x1.7f8375f198524p-57,  0x1.301e672dc5143p-55,  0x1.9ff69b8b2895ap-55,  -0x1.5c0b19bc2f254p-54,
+        0x1.b4009f23a2a72p-54,  -0x1.4ffb7bf0d7d45p-54, -0x1.9c06471dc6a3dp-54, 0x1.77f890b85531cp-54,
+        0x1.004657166a436p-57,  -0x1.6bfcece233209p-54, -0x1.902720505a1d7p-55, 0x1.bbfe60ec96412p-54,
+        0x1.87ec581afef9p-55,   -0x1.f41080abf0ccp-54,  -0x1.8812afb254729p-54, -0x1.47eb780ed6904p-54,
+    };
+
+    // ---- ARM optimized-routines exp and pow (musl src/math pow.c,
+    // exp_data.c, pow_data.c; Copyright (c) 2018, Arm Limited, MIT) ----
+    //
+    // The host math without libc. Correctness contract, checked by the tests
+    // below and measured in docs/measurements/device-runtime-2026-10-01.md:
+    //   exp:  error <= 0.52 ulp of the correctly rounded result for every
+    //         finite x (ARM: 0.509 with fma, 0.511 without); exp(+-0) = 1,
+    //         exp(+inf) = +inf, exp(-inf) = +0, NaN in -> NaN out; +inf above
+    //         0x1.62e42fefa39efp9 (709.78), gradual underflow to +0 below
+    //         -745.13; never negative.
+    //   pow:  error <= 0.54 ulp for finite non-special x, y; the special
+    //         cases of C99 F.10.4.4 (pow(x, +-0) = 1, pow(1, y) = 1,
+    //         pow(-x, odd int) = -pow(x, y), pow(-x, non-int) = NaN, zero and
+    //         infinity rows); exact for every case where x^y is exact and
+    //         fits.
+    // Both replace routines that were not more accurate: compiler_rt's exp
+    // (musl's older FreeBSD exp, < 1 ulp) and `std.math.pow` (repeated
+    // squaring for the integer part of y, then exp(yf*log x): its error grows
+    // with |y|). Neither is bit-identical to them.
+
+    const exp_n = 128;
+    const exp_invln2n = 0x1.71547652b82fep0 * 128.0;
+    const exp_negln2hin = -0x1.62e42fefa0000p-8;
+    const exp_negln2lon = -0x1.cf79abc9e3b3ap-47;
+    const exp_shift = 0x1.8p52;
+    const exp_c2 = 0x1.ffffffffffdbdp-2;
+    const exp_c3 = 0x1.555555555543cp-3;
+    const exp_c4 = 0x1.55555cf172b91p-5;
+    const exp_c5 = 0x1.1111167a4d017p-7;
+    const pow_ln2hi = 0x1.62e42fefa3800p-1;
+    const pow_ln2lo = 0x1.ef35793c76730p-45;
+    const pow_a = [7]f64{
+        -0x1p-1,
+        0x1.555555555556p-2 * -2.0,
+        -0x1.0000000000006p-2 * -2.0,
+        0x1.999999959554ep-3 * 4.0,
+        -0x1.555555529a47ap-3 * 4.0,
+        0x1.2495b9b4845e9p-3 * -8.0,
+        -0x1.0002b8b263fc3p-3 * -8.0,
+    };
+    const pow_off: u64 = 0x3fe6955500000000;
+    const sign_bias: u64 = 0x800 << 7;
+    // exact_everywhere: these routines use no fma. `@mulAdd` is one
+    // rounding where the hardware fuses and a slow libcall where it does not
+    // (baseline x86-64), and a fused and an unfused build round differently,
+    // so the same device would give different bits on host, NVPTX and
+    // AMDGCN. ARM's fma-free variants are the ones used, measured
+    // (round 2, i9-14900HX): exp unchanged (it has no fma), log 10.1 -> 12.5
+    // and pow 23.7 -> 28.0 TSC ticks/call, bounds unchanged at the measured
+    // precision (log <= 0.500, pow <= 0.505 ulp).
+
+    inline fn top12(x: f64) u32 {
+        return @intCast(@as(u64, @bitCast(x)) >> 52);
+    }
+    inline fn asF(u: u64) f64 {
+        return @bitCast(u);
+    }
+    inline fn asU(f: f64) u64 {
+        return @bitCast(f);
+    }
+
+    /// `pow.c` `specialcase`: scale * (1 + tmp) where scale's exponent may
+    /// have left the normal range (`ki` the reduction's k).
+    fn expSpecial(tmp: f64, sbits0: u64, ki: u64) f64 {
+        var sbits = sbits0;
+        if (ki & 0x80000000 == 0) {
+            // k > 0: the exponent of scale may have overflowed by <= 460.
+            sbits -%= 1009 << 52;
+            const scale = asF(sbits);
+            return 0x1p1009 * (scale + scale * tmp);
+        }
+        // k < 0: round in the normal range first, then scale into the
+        // subnormal one, so there is no double rounding.
+        sbits +%= 1022 << 52;
+        const scale = asF(sbits);
+        var y = scale + scale * tmp;
+        if (@abs(y) < 1.0) {
+            const one: f64 = if (y < 0.0) -1.0 else 1.0;
+            var lo = scale - y + scale * tmp;
+            const hi = one + y;
+            lo = one - hi + y + lo;
+            y = (hi + lo) - one;
+            if (y == 0.0) y = asF(sbits & 0x8000000000000000);
+        }
+        return 0x1p-1022 * y;
+    }
+
+    /// `pow.c` `exp_inline`: sign * exp(x + xtail), |xtail| < 2^-8/N.
+    inline fn expCore(x: f64, xtail: f64, sbias: u64) f64 {
+        var abstop = top12(x) & 0x7ff;
+        if (abstop -% top12(0x1p-54) >= top12(512.0) -% top12(0x1p-54)) {
+            @branchHint(.unlikely);
+            if (abstop -% top12(0x1p-54) >= 0x80000000) {
+                // Tiny x (0 included): 1 + x rounds right.
+                const one = 1.0 + x;
+                return if (sbias != 0) -one else one;
+            }
+            if (abstop >= top12(1024.0)) {
+                const inf = std.math.inf(f64);
+                const r: f64 = if (asU(x) >> 63 != 0) 0.0 else inf;
+                return if (sbias != 0) -r else r;
+            }
+            abstop = 0; // large |x|: `expSpecial` below
+        }
+        // exp(x) = 2^(k/N) * exp(r), r in [-ln2/2N, ln2/2N].
+        const m = expMain(f64, x, xtail, sbias);
+        if (abstop == 0) {
+            @branchHint(.unlikely);
+            return expSpecial(m.tmp, m.sbits, m.ki);
+        }
+        const scale = asF(m.sbits);
+        return scale + scale * m.tmp;
+    }
+
+    /// exp(x), see the contract above.
+    /// exp(x) for |x| < 2^-28: 1 + (x + x^2/2), the next term below
+    /// 2^-86 relative, so one final rounding (<= 0.5 + 2^-30 ulp). Cheaper
+    /// than the table path for the near-zero arguments a history decay
+    /// factor exp(-a*dt) feeds every step (coupled_ltra: all of them).
+    inline fn expSmall(x: anytype) @TypeOf(x) {
+        const T = @TypeOf(x);
+        return sp(T, 1.0) + (x + x * x * sp(T, 0.5));
+    }
+
+    pub fn armExp(x: f64) f64 {
+        const abstop = top12(x) & 0x7ff;
+        if (abstop < top12(0x1p-28)) return expSmall(x);
+        if (abstop >= top12(512.0)) {
+            @branchHint(.unlikely);
+            if (abstop >= 0x7ff) return if (asU(x) == asU(-std.math.inf(f64))) 0.0 else 1.0 + x; // +-inf, NaN
+            // The results `expSpecial` would round to anyway, without it
+            // (a decaying history term reaches here every step): exp(x)
+            // rounds to +0 below this double (it is above -1075 ln2, the
+            // next one below is not) and to +inf above ln(DBL_MAX).
+            if (x < -0x1.74910d52d3051p9) return 0.0;
+            if (x > 0x1.62e42fefa39efp9) return std.math.inf(f64);
+        }
+        return expCore(x, 0.0, 0);
+    }
+
+    /// `pow.c` `log_inline`: log(x) as hi + tail for x's (normalized) bits.
+    inline fn powLog(ix: u64, tail: *f64) f64 {
+        const l = powLogG(f64, ix);
+        tail.* = l.tail;
+        return l.y;
+    }
+
+    /// 0: not an integer, 1: odd, 2: even, for the bits of a non-zero
+    /// finite double.
+    inline fn checkInt(iy: u64) u32 {
+        const e: u32 = @intCast(iy >> 52 & 0x7ff);
+        if (e < 0x3ff) return 0;
+        if (e > 0x3ff + 52) return 2;
+        const sh: u6 = @intCast(0x3ff + 52 - e);
+        if (iy & ((@as(u64, 1) << sh) - 1) != 0) return 0;
+        if (iy & (@as(u64, 1) << sh) != 0) return 1;
+        return 2;
+    }
+    inline fn zeroInfNan(i: u64) bool {
+        return 2 *% i -% 1 >= 2 *% asU(std.math.inf(f64)) -% 1;
+    }
+
+    /// x^y for `f64` or `@Vector(n, f64)` bases and one exponent; the
+    /// contract is `armPow`'s. A vector whose bases are all positive, normal
+    /// and finite, with an ordinary y and an ordinary exp argument in every
+    /// lane, runs `armPow`'s arithmetic on the whole vector; any other takes
+    /// `armPow` lane by lane. Either way a lane is the scalar call's bits.
+    pub fn powV(x: anytype, y: f64) @TypeOf(x) {
+        const T = @TypeOf(x);
+        switch (@typeInfo(T)) {
+            .vector => |v| {
+                const U = UOf(T);
+                const ix: U = @bitCast(x);
+                const iy = asU(y);
+                const topy = top12(y) & 0x7ff;
+                const normal = shrU(ix, 52) -% sp(U, 0x001) < sp(U, 0x7fe);
+                if (@reduce(.And, normal) and topy -% 0x3be < 0x43e - 0x3be) {
+                    const l = powLogG(T, ix);
+                    // `armPow`'s fma-free y * (hi + lo).
+                    const yhi = asF(iy & (~@as(u64, 0) << 27));
+                    const ylo = y - yhi;
+                    const lhi: T = @bitCast(@as(U, @bitCast(l.y)) & sp(U, ~@as(u64, 0) << 27));
+                    const llo = l.y - lhi + l.tail;
+                    const ehi = sp(T, yhi) * lhi;
+                    const elo = sp(T, ylo) * lhi + sp(T, y) * llo;
+                    const abstop = shrU(@as(U, @bitCast(ehi)), 52) & sp(U, 0x7ff);
+                    if (@reduce(.And, abstop -% sp(U, top12(0x1p-54)) < sp(U, top12(512.0) - top12(0x1p-54)))) {
+                        const m = expMain(T, ehi, elo, 0);
+                        const scale: T = @bitCast(m.sbits);
+                        return scale + scale * m.tmp;
+                    }
+                }
+                var out: T = undefined;
+                inline for (0..v.len) |k| out[k] = armPow(x[k], y);
+                return out;
+            },
+            else => return armPow(x, y),
+        }
+    }
+
+    /// x^y, see the contract above.
+    pub fn armPow(x: f64, y: f64) f64 {
+        var sbias: u64 = 0;
+        var ix = asU(x);
+        const iy = asU(y);
+        var topx = top12(x);
+        const topy = top12(y);
+        if (topx -% 0x001 >= 0x7ff - 0x001 or (topy & 0x7ff) -% 0x3be >= 0x43e - 0x3be) {
+            @branchHint(.unlikely);
+            if (zeroInfNan(iy)) {
+                if (2 *% iy == 0) return 1.0;
+                if (ix == asU(1.0)) return 1.0;
+                if (2 *% ix > 2 *% asU(std.math.inf(f64)) or 2 *% iy > 2 *% asU(std.math.inf(f64))) return x + y;
+                if (2 *% ix == 2 *% asU(1.0)) return 1.0;
+                if ((2 *% ix < 2 *% asU(1.0)) == (iy >> 63 == 0)) return 0.0;
+                return y * y;
+            }
+            if (zeroInfNan(ix)) {
+                var x2 = x * x;
+                if (ix >> 63 != 0 and checkInt(iy) == 1) x2 = -x2;
+                return if (iy >> 63 != 0) 1.0 / x2 else x2;
+            }
+            // x and y are non-zero finite.
+            if (ix >> 63 != 0) {
+                const yint = checkInt(iy);
+                if (yint == 0) return std.math.nan(f64);
+                if (yint == 1) sbias = sign_bias;
+                ix &= 0x7fffffffffffffff;
+                topx &= 0x7ff;
+            }
+            if ((topy & 0x7ff) -% 0x3be >= 0x43e - 0x3be) {
+                if (ix == asU(1.0)) return 1.0;
+                if ((topy & 0x7ff) < 0x3be) return if (ix > asU(1.0)) 1.0 + y else 1.0 - y;
+                const inf = std.math.inf(f64);
+                return if ((ix > asU(1.0)) == (topy < 0x800)) inf else 0.0;
+            }
+            if (topx == 0) {
+                // Subnormal x: normalize so the exponent goes negative.
+                ix = asU(x * 0x1p52) & 0x7fffffffffffffff;
+                ix -%= 52 << 52;
+            }
+        }
+        var lo: f64 = undefined;
+        const hi = powLog(ix, &lo);
+        // y * (hi + lo) as ehi + elo without fma (`exact_everywhere`).
+        const yhi = asF(iy & (~@as(u64, 0) << 27));
+        const ylo = y - yhi;
+        const lhi = asF(asU(hi) & (~@as(u64, 0) << 27));
+        const llo = hi - lhi + lo;
+        const ehi = yhi * lhi;
+        const elo = ylo * lhi + y * llo;
+        return expCore(ehi, elo, sbias);
+    }
+    /// ARM exp_data.c `tab`: 2^(k/128) ~= H[k]*(1 + T[k]); [2k] = bits of T[k],
+    /// [2k+1] = bits of H[k] - (k << 52)/128.
+    const exp_tab = [256]u64{
+        0x0,                0x3ff0000000000000, 0x3c9b3b4f1a88bf6e, 0x3feff63da9fb3335,
+        0xbc7160139cd8dc5d, 0x3fefec9a3e778061, 0xbc905e7a108766d1, 0x3fefe315e86e7f85,
+        0x3c8cd2523567f613, 0x3fefd9b0d3158574, 0xbc8bce8023f98efa, 0x3fefd06b29ddf6de,
+        0x3c60f74e61e6c861, 0x3fefc74518759bc8, 0x3c90a3e45b33d399, 0x3fefbe3ecac6f383,
+        0x3c979aa65d837b6d, 0x3fefb5586cf9890f, 0x3c8eb51a92fdeffc, 0x3fefac922b7247f7,
+        0x3c3ebe3d702f9cd1, 0x3fefa3ec32d3d1a2, 0xbc6a033489906e0b, 0x3fef9b66affed31b,
+        0xbc9556522a2fbd0e, 0x3fef9301d0125b51, 0xbc5080ef8c4eea55, 0x3fef8abdc06c31cc,
+        0xbc91c923b9d5f416, 0x3fef829aaea92de0, 0x3c80d3e3e95c55af, 0x3fef7a98c8a58e51,
+        0xbc801b15eaa59348, 0x3fef72b83c7d517b, 0xbc8f1ff055de323d, 0x3fef6af9388c8dea,
+        0x3c8b898c3f1353bf, 0x3fef635beb6fcb75, 0xbc96d99c7611eb26, 0x3fef5be084045cd4,
+        0x3c9aecf73e3a2f60, 0x3fef54873168b9aa, 0xbc8fe782cb86389d, 0x3fef4d5022fcd91d,
+        0x3c8a6f4144a6c38d, 0x3fef463b88628cd6, 0x3c807a05b0e4047d, 0x3fef3f49917ddc96,
+        0x3c968efde3a8a894, 0x3fef387a6e756238, 0x3c875e18f274487d, 0x3fef31ce4fb2a63f,
+        0x3c80472b981fe7f2, 0x3fef2b4565e27cdd, 0xbc96b87b3f71085e, 0x3fef24dfe1f56381,
+        0x3c82f7e16d09ab31, 0x3fef1e9df51fdee1, 0xbc3d219b1a6fbffa, 0x3fef187fd0dad990,
+        0x3c8b3782720c0ab4, 0x3fef1285a6e4030b, 0x3c6e149289cecb8f, 0x3fef0cafa93e2f56,
+        0x3c834d754db0abb6, 0x3fef06fe0a31b715, 0x3c864201e2ac744c, 0x3fef0170fc4cd831,
+        0x3c8fdd395dd3f84a, 0x3feefc08b26416ff, 0xbc86a3803b8e5b04, 0x3feef6c55f929ff1,
+        0xbc924aedcc4b5068, 0x3feef1a7373aa9cb, 0xbc9907f81b512d8e, 0x3feeecae6d05d866,
+        0xbc71d1e83e9436d2, 0x3feee7db34e59ff7, 0xbc991919b3ce1b15, 0x3feee32dc313a8e5,
+        0x3c859f48a72a4c6d, 0x3feedea64c123422, 0xbc9312607a28698a, 0x3feeda4504ac801c,
+        0xbc58a78f4817895b, 0x3feed60a21f72e2a, 0xbc7c2c9b67499a1b, 0x3feed1f5d950a897,
+        0x3c4363ed60c2ac11, 0x3feece086061892d, 0x3c9666093b0664ef, 0x3feeca41ed1d0057,
+        0x3c6ecce1daa10379, 0x3feec6a2b5c13cd0, 0x3c93ff8e3f0f1230, 0x3feec32af0d7d3de,
+        0x3c7690cebb7aafb0, 0x3feebfdad5362a27, 0x3c931dbdeb54e077, 0x3feebcb299fddd0d,
+        0xbc8f94340071a38e, 0x3feeb9b2769d2ca7, 0xbc87deccdc93a349, 0x3feeb6daa2cf6642,
+        0xbc78dec6bd0f385f, 0x3feeb42b569d4f82, 0xbc861246ec7b5cf6, 0x3feeb1a4ca5d920f,
+        0x3c93350518fdd78e, 0x3feeaf4736b527da, 0x3c7b98b72f8a9b05, 0x3feead12d497c7fd,
+        0x3c9063e1e21c5409, 0x3feeab07dd485429, 0x3c34c7855019c6ea, 0x3feea9268a5946b7,
+        0x3c9432e62b64c035, 0x3feea76f15ad2148, 0xbc8ce44a6199769f, 0x3feea5e1b976dc09,
+        0xbc8c33c53bef4da8, 0x3feea47eb03a5585, 0xbc845378892be9ae, 0x3feea34634ccc320,
+        0xbc93cedd78565858, 0x3feea23882552225, 0x3c5710aa807e1964, 0x3feea155d44ca973,
+        0xbc93b3efbf5e2228, 0x3feea09e667f3bcd, 0xbc6a12ad8734b982, 0x3feea012750bdabf,
+        0xbc6367efb86da9ee, 0x3fee9fb23c651a2f, 0xbc80dc3d54e08851, 0x3fee9f7df9519484,
+        0xbc781f647e5a3ecf, 0x3fee9f75e8ec5f74, 0xbc86ee4ac08b7db0, 0x3fee9f9a48a58174,
+        0xbc8619321e55e68a, 0x3fee9feb564267c9, 0x3c909ccb5e09d4d3, 0x3feea0694fde5d3f,
+        0xbc7b32dcb94da51d, 0x3feea11473eb0187, 0x3c94ecfd5467c06b, 0x3feea1ed0130c132,
+        0x3c65ebe1abd66c55, 0x3feea2f336cf4e62, 0xbc88a1c52fb3cf42, 0x3feea427543e1a12,
+        0xbc9369b6f13b3734, 0x3feea589994cce13, 0xbc805e843a19ff1e, 0x3feea71a4623c7ad,
+        0xbc94d450d872576e, 0x3feea8d99b4492ed, 0x3c90ad675b0e8a00, 0x3feeaac7d98a6699,
+        0x3c8db72fc1f0eab4, 0x3feeace5422aa0db, 0xbc65b6609cc5e7ff, 0x3feeaf3216b5448c,
+        0x3c7bf68359f35f44, 0x3feeb1ae99157736, 0xbc93091fa71e3d83, 0x3feeb45b0b91ffc6,
+        0xbc5da9b88b6c1e29, 0x3feeb737b0cdc5e5, 0xbc6c23f97c90b959, 0x3feeba44cbc8520f,
+        0xbc92434322f4f9aa, 0x3feebd829fde4e50, 0xbc85ca6cd7668e4b, 0x3feec0f170ca07ba,
+        0x3c71affc2b91ce27, 0x3feec49182a3f090, 0x3c6dd235e10a73bb, 0x3feec86319e32323,
+        0xbc87c50422622263, 0x3feecc667b5de565, 0x3c8b1c86e3e231d5, 0x3feed09bec4a2d33,
+        0xbc91bbd1d3bcbb15, 0x3feed503b23e255d, 0x3c90cc319cee31d2, 0x3feed99e1330b358,
+        0x3c8469846e735ab3, 0x3feede6b5579fdbf, 0xbc82dfcd978e9db4, 0x3feee36bbfd3f37a,
+        0x3c8c1a7792cb3387, 0x3feee89f995ad3ad, 0xbc907b8f4ad1d9fa, 0x3feeee07298db666,
+        0xbc55c3d956dcaeba, 0x3feef3a2b84f15fb, 0xbc90a40e3da6f640, 0x3feef9728de5593a,
+        0xbc68d6f438ad9334, 0x3feeff76f2fb5e47, 0xbc91eee26b588a35, 0x3fef05b030a1064a,
+        0x3c74ffd70a5fddcd, 0x3fef0c1e904bc1d2, 0xbc91bdfbfa9298ac, 0x3fef12c25bd71e09,
+        0x3c736eae30af0cb3, 0x3fef199bdd85529c, 0x3c8ee3325c9ffd94, 0x3fef20ab5fffd07a,
+        0x3c84e08fd10959ac, 0x3fef27f12e57d14b, 0x3c63cdaf384e1a67, 0x3fef2f6d9406e7b5,
+        0x3c676b2c6c921968, 0x3fef3720dcef9069, 0xbc808a1883ccb5d2, 0x3fef3f0b555dc3fa,
+        0xbc8fad5d3ffffa6f, 0x3fef472d4a07897c, 0xbc900dae3875a949, 0x3fef4f87080d89f2,
+        0x3c74a385a63d07a7, 0x3fef5818dcfba487, 0xbc82919e2040220f, 0x3fef60e316c98398,
+        0x3c8e5a50d5c192ac, 0x3fef69e603db3285, 0x3c843a59ac016b4b, 0x3fef7321f301b460,
+        0xbc82d52107b43e1f, 0x3fef7c97337b9b5f, 0xbc892ab93b470dc9, 0x3fef864614f5a129,
+        0x3c74b604603a88d3, 0x3fef902ee78b3ff6, 0x3c83c5ec519d7271, 0x3fef9a51fbc74c83,
+        0xbc8ff7128fd391f0, 0x3fefa4afa2a490da, 0xbc8dae98e223747d, 0x3fefaf482d8e67f1,
+        0x3c8ec3bc41aa2008, 0x3fefba1bee615a27, 0x3c842b94c3a9eb32, 0x3fefc52b376bba97,
+        0x3c8a64a931d185ee, 0x3fefd0765b6e4540, 0xbc8e37bae43be3ed, 0x3fefdbfdad9cbe14,
+        0x3c77893b4d91cd9d, 0x3fefe7c1819e90d8, 0x3c5305c14160cc89, 0x3feff3c22b8f71f1,
+    };
+    /// ARM pow_data.c `tab`: { invc, logc, logctail } per 1/128 subinterval.
+    const pow_log_invc = column(0);
+    const pow_log_logc = column(1);
+    const pow_log_logctail = column(2);
+    fn column(comptime c: usize) [128]f64 {
+        var out: [128]f64 = undefined;
+        for (&out, pow_log_tab) |*o, row| o.* = row[c];
+        return out;
+    }
+    const pow_log_tab = [128][3]f64{
+        .{ 0x1.6a00000000000p+0, -0x1.62c82f2b9c800p-2, 0x1.ab42428375680p-48 },
+        .{ 0x1.6800000000000p+0, -0x1.5d1bdbf580800p-2, -0x1.ca508d8e0f720p-46 },
+        .{ 0x1.6600000000000p+0, -0x1.5767717455800p-2, -0x1.362a4d5b6506dp-45 },
+        .{ 0x1.6400000000000p+0, -0x1.51aad872df800p-2, -0x1.684e49eb067d5p-49 },
+        .{ 0x1.6200000000000p+0, -0x1.4be5f95777800p-2, -0x1.41b6993293ee0p-47 },
+        .{ 0x1.6000000000000p+0, -0x1.4618bc21c6000p-2, 0x1.3d82f484c84ccp-46 },
+        .{ 0x1.5e00000000000p+0, -0x1.404308686a800p-2, 0x1.c42f3ed820b3ap-50 },
+        .{ 0x1.5c00000000000p+0, -0x1.3a64c55694800p-2, 0x1.0b1c686519460p-45 },
+        .{ 0x1.5a00000000000p+0, -0x1.347dd9a988000p-2, 0x1.5594dd4c58092p-45 },
+        .{ 0x1.5800000000000p+0, -0x1.2e8e2bae12000p-2, 0x1.67b1e99b72bd8p-45 },
+        .{ 0x1.5600000000000p+0, -0x1.2895a13de8800p-2, 0x1.5ca14b6cfb03fp-46 },
+        .{ 0x1.5600000000000p+0, -0x1.2895a13de8800p-2, 0x1.5ca14b6cfb03fp-46 },
+        .{ 0x1.5400000000000p+0, -0x1.22941fbcf7800p-2, -0x1.65a242853da76p-46 },
+        .{ 0x1.5200000000000p+0, -0x1.1c898c1699800p-2, -0x1.fafbc68e75404p-46 },
+        .{ 0x1.5000000000000p+0, -0x1.1675cababa800p-2, 0x1.f1fc63382a8f0p-46 },
+        .{ 0x1.4e00000000000p+0, -0x1.1058bf9ae4800p-2, -0x1.6a8c4fd055a66p-45 },
+        .{ 0x1.4c00000000000p+0, -0x1.0a324e2739000p-2, -0x1.c6bee7ef4030ep-47 },
+        .{ 0x1.4a00000000000p+0, -0x1.0402594b4d000p-2, -0x1.036b89ef42d7fp-48 },
+        .{ 0x1.4a00000000000p+0, -0x1.0402594b4d000p-2, -0x1.036b89ef42d7fp-48 },
+        .{ 0x1.4800000000000p+0, -0x1.fb9186d5e4000p-3, 0x1.d572aab993c87p-47 },
+        .{ 0x1.4600000000000p+0, -0x1.ef0adcbdc6000p-3, 0x1.b26b79c86af24p-45 },
+        .{ 0x1.4400000000000p+0, -0x1.e27076e2af000p-3, -0x1.72f4f543fff10p-46 },
+        .{ 0x1.4200000000000p+0, -0x1.d5c216b4fc000p-3, 0x1.1ba91bbca681bp-45 },
+        .{ 0x1.4000000000000p+0, -0x1.c8ff7c79aa000p-3, 0x1.7794f689f8434p-45 },
+        .{ 0x1.4000000000000p+0, -0x1.c8ff7c79aa000p-3, 0x1.7794f689f8434p-45 },
+        .{ 0x1.3e00000000000p+0, -0x1.bc286742d9000p-3, 0x1.94eb0318bb78fp-46 },
+        .{ 0x1.3c00000000000p+0, -0x1.af3c94e80c000p-3, 0x1.a4e633fcd9066p-52 },
+        .{ 0x1.3a00000000000p+0, -0x1.a23bc1fe2b000p-3, -0x1.58c64dc46c1eap-45 },
+        .{ 0x1.3a00000000000p+0, -0x1.a23bc1fe2b000p-3, -0x1.58c64dc46c1eap-45 },
+        .{ 0x1.3800000000000p+0, -0x1.9525a9cf45000p-3, -0x1.ad1d904c1d4e3p-45 },
+        .{ 0x1.3600000000000p+0, -0x1.87fa06520d000p-3, 0x1.bbdbf7fdbfa09p-45 },
+        .{ 0x1.3400000000000p+0, -0x1.7ab890210e000p-3, 0x1.bdb9072534a58p-45 },
+        .{ 0x1.3400000000000p+0, -0x1.7ab890210e000p-3, 0x1.bdb9072534a58p-45 },
+        .{ 0x1.3200000000000p+0, -0x1.6d60fe719d000p-3, -0x1.0e46aa3b2e266p-46 },
+        .{ 0x1.3000000000000p+0, -0x1.5ff3070a79000p-3, -0x1.e9e439f105039p-46 },
+        .{ 0x1.3000000000000p+0, -0x1.5ff3070a79000p-3, -0x1.e9e439f105039p-46 },
+        .{ 0x1.2e00000000000p+0, -0x1.526e5e3a1b000p-3, -0x1.0de8b90075b8fp-45 },
+        .{ 0x1.2c00000000000p+0, -0x1.44d2b6ccb8000p-3, 0x1.70cc16135783cp-46 },
+        .{ 0x1.2c00000000000p+0, -0x1.44d2b6ccb8000p-3, 0x1.70cc16135783cp-46 },
+        .{ 0x1.2a00000000000p+0, -0x1.371fc201e9000p-3, 0x1.178864d27543ap-48 },
+        .{ 0x1.2800000000000p+0, -0x1.29552f81ff000p-3, -0x1.48d301771c408p-45 },
+        .{ 0x1.2600000000000p+0, -0x1.1b72ad52f6000p-3, -0x1.e80a41811a396p-45 },
+        .{ 0x1.2600000000000p+0, -0x1.1b72ad52f6000p-3, -0x1.e80a41811a396p-45 },
+        .{ 0x1.2400000000000p+0, -0x1.0d77e7cd09000p-3, 0x1.a699688e85bf4p-47 },
+        .{ 0x1.2400000000000p+0, -0x1.0d77e7cd09000p-3, 0x1.a699688e85bf4p-47 },
+        .{ 0x1.2200000000000p+0, -0x1.fec9131dbe000p-4, -0x1.575545ca333f2p-45 },
+        .{ 0x1.2000000000000p+0, -0x1.e27076e2b0000p-4, 0x1.a342c2af0003cp-45 },
+        .{ 0x1.2000000000000p+0, -0x1.e27076e2b0000p-4, 0x1.a342c2af0003cp-45 },
+        .{ 0x1.1e00000000000p+0, -0x1.c5e548f5bc000p-4, -0x1.d0c57585fbe06p-46 },
+        .{ 0x1.1c00000000000p+0, -0x1.a926d3a4ae000p-4, 0x1.53935e85baac8p-45 },
+        .{ 0x1.1c00000000000p+0, -0x1.a926d3a4ae000p-4, 0x1.53935e85baac8p-45 },
+        .{ 0x1.1a00000000000p+0, -0x1.8c345d631a000p-4, 0x1.37c294d2f5668p-46 },
+        .{ 0x1.1a00000000000p+0, -0x1.8c345d631a000p-4, 0x1.37c294d2f5668p-46 },
+        .{ 0x1.1800000000000p+0, -0x1.6f0d28ae56000p-4, -0x1.69737c93373dap-45 },
+        .{ 0x1.1600000000000p+0, -0x1.51b073f062000p-4, 0x1.f025b61c65e57p-46 },
+        .{ 0x1.1600000000000p+0, -0x1.51b073f062000p-4, 0x1.f025b61c65e57p-46 },
+        .{ 0x1.1400000000000p+0, -0x1.341d7961be000p-4, 0x1.c5edaccf913dfp-45 },
+        .{ 0x1.1400000000000p+0, -0x1.341d7961be000p-4, 0x1.c5edaccf913dfp-45 },
+        .{ 0x1.1200000000000p+0, -0x1.16536eea38000p-4, 0x1.47c5e768fa309p-46 },
+        .{ 0x1.1000000000000p+0, -0x1.f0a30c0118000p-5, 0x1.d599e83368e91p-45 },
+        .{ 0x1.1000000000000p+0, -0x1.f0a30c0118000p-5, 0x1.d599e83368e91p-45 },
+        .{ 0x1.0e00000000000p+0, -0x1.b42dd71198000p-5, 0x1.c827ae5d6704cp-46 },
+        .{ 0x1.0e00000000000p+0, -0x1.b42dd71198000p-5, 0x1.c827ae5d6704cp-46 },
+        .{ 0x1.0c00000000000p+0, -0x1.77458f632c000p-5, -0x1.cfc4634f2a1eep-45 },
+        .{ 0x1.0c00000000000p+0, -0x1.77458f632c000p-5, -0x1.cfc4634f2a1eep-45 },
+        .{ 0x1.0a00000000000p+0, -0x1.39e87b9fec000p-5, 0x1.502b7f526feaap-48 },
+        .{ 0x1.0a00000000000p+0, -0x1.39e87b9fec000p-5, 0x1.502b7f526feaap-48 },
+        .{ 0x1.0800000000000p+0, -0x1.f829b0e780000p-6, -0x1.980267c7e09e4p-45 },
+        .{ 0x1.0800000000000p+0, -0x1.f829b0e780000p-6, -0x1.980267c7e09e4p-45 },
+        .{ 0x1.0600000000000p+0, -0x1.7b91b07d58000p-6, -0x1.88d5493faa639p-45 },
+        .{ 0x1.0400000000000p+0, -0x1.fc0a8b0fc0000p-7, -0x1.f1e7cf6d3a69cp-50 },
+        .{ 0x1.0400000000000p+0, -0x1.fc0a8b0fc0000p-7, -0x1.f1e7cf6d3a69cp-50 },
+        .{ 0x1.0200000000000p+0, -0x1.fe02a6b100000p-8, -0x1.9e23f0dda40e4p-46 },
+        .{ 0x1.0200000000000p+0, -0x1.fe02a6b100000p-8, -0x1.9e23f0dda40e4p-46 },
+        .{ 0x1.0000000000000p+0, 0x0.0000000000000p+0, 0x0.0000000000000p+0 },
+        .{ 0x1.0000000000000p+0, 0x0.0000000000000p+0, 0x0.0000000000000p+0 },
+        .{ 0x1.fc00000000000p-1, 0x1.0101575890000p-7, -0x1.0c76b999d2be8p-46 },
+        .{ 0x1.f800000000000p-1, 0x1.0205658938000p-6, -0x1.3dc5b06e2f7d2p-45 },
+        .{ 0x1.f400000000000p-1, 0x1.8492528c90000p-6, -0x1.aa0ba325a0c34p-45 },
+        .{ 0x1.f000000000000p-1, 0x1.0415d89e74000p-5, 0x1.111c05cf1d753p-47 },
+        .{ 0x1.ec00000000000p-1, 0x1.466aed42e0000p-5, -0x1.c167375bdfd28p-45 },
+        .{ 0x1.e800000000000p-1, 0x1.894aa149fc000p-5, -0x1.97995d05a267dp-46 },
+        .{ 0x1.e400000000000p-1, 0x1.ccb73cdddc000p-5, -0x1.a68f247d82807p-46 },
+        .{ 0x1.e200000000000p-1, 0x1.eea31c006c000p-5, -0x1.e113e4fc93b7bp-47 },
+        .{ 0x1.de00000000000p-1, 0x1.1973bd1466000p-4, -0x1.5325d560d9e9bp-45 },
+        .{ 0x1.da00000000000p-1, 0x1.3bdf5a7d1e000p-4, 0x1.cc85ea5db4ed7p-45 },
+        .{ 0x1.d600000000000p-1, 0x1.5e95a4d97a000p-4, -0x1.c69063c5d1d1ep-45 },
+        .{ 0x1.d400000000000p-1, 0x1.700d30aeac000p-4, 0x1.c1e8da99ded32p-49 },
+        .{ 0x1.d000000000000p-1, 0x1.9335e5d594000p-4, 0x1.3115c3abd47dap-45 },
+        .{ 0x1.cc00000000000p-1, 0x1.b6ac88dad6000p-4, -0x1.390802bf768e5p-46 },
+        .{ 0x1.ca00000000000p-1, 0x1.c885801bc4000p-4, 0x1.646d1c65aacd3p-45 },
+        .{ 0x1.c600000000000p-1, 0x1.ec739830a2000p-4, -0x1.dc068afe645e0p-45 },
+        .{ 0x1.c400000000000p-1, 0x1.fe89139dbe000p-4, -0x1.534d64fa10afdp-45 },
+        .{ 0x1.c000000000000p-1, 0x1.1178e8227e000p-3, 0x1.1ef78ce2d07f2p-45 },
+        .{ 0x1.be00000000000p-1, 0x1.1aa2b7e23f000p-3, 0x1.ca78e44389934p-45 },
+        .{ 0x1.ba00000000000p-1, 0x1.2d1610c868000p-3, 0x1.39d6ccb81b4a1p-47 },
+        .{ 0x1.b800000000000p-1, 0x1.365fcb0159000p-3, 0x1.62fa8234b7289p-51 },
+        .{ 0x1.b400000000000p-1, 0x1.4913d8333b000p-3, 0x1.5837954fdb678p-45 },
+        .{ 0x1.b200000000000p-1, 0x1.527e5e4a1b000p-3, 0x1.633e8e5697dc7p-45 },
+        .{ 0x1.ae00000000000p-1, 0x1.6574ebe8c1000p-3, 0x1.9cf8b2c3c2e78p-46 },
+        .{ 0x1.ac00000000000p-1, 0x1.6f0128b757000p-3, -0x1.5118de59c21e1p-45 },
+        .{ 0x1.aa00000000000p-1, 0x1.7898d85445000p-3, -0x1.c661070914305p-46 },
+        .{ 0x1.a600000000000p-1, 0x1.8beafeb390000p-3, -0x1.73d54aae92cd1p-47 },
+        .{ 0x1.a400000000000p-1, 0x1.95a5adcf70000p-3, 0x1.7f22858a0ff6fp-47 },
+        .{ 0x1.a000000000000p-1, 0x1.a93ed3c8ae000p-3, -0x1.8724350562169p-45 },
+        .{ 0x1.9e00000000000p-1, 0x1.b31d8575bd000p-3, -0x1.c358d4eace1aap-47 },
+        .{ 0x1.9c00000000000p-1, 0x1.bd087383be000p-3, -0x1.d4bc4595412b6p-45 },
+        .{ 0x1.9a00000000000p-1, 0x1.c6ffbc6f01000p-3, -0x1.1ec72c5962bd2p-48 },
+        .{ 0x1.9600000000000p-1, 0x1.db13db0d49000p-3, -0x1.aff2af715b035p-45 },
+        .{ 0x1.9400000000000p-1, 0x1.e530effe71000p-3, 0x1.212276041f430p-51 },
+        .{ 0x1.9200000000000p-1, 0x1.ef5ade4dd0000p-3, -0x1.a211565bb8e11p-51 },
+        .{ 0x1.9000000000000p-1, 0x1.f991c6cb3b000p-3, 0x1.bcbecca0cdf30p-46 },
+        .{ 0x1.8c00000000000p-1, 0x1.07138604d5800p-2, 0x1.89cdb16ed4e91p-48 },
+        .{ 0x1.8a00000000000p-1, 0x1.0c42d67616000p-2, 0x1.7188b163ceae9p-45 },
+        .{ 0x1.8800000000000p-1, 0x1.1178e8227e800p-2, -0x1.c210e63a5f01cp-45 },
+        .{ 0x1.8600000000000p-1, 0x1.16b5ccbacf800p-2, 0x1.b9acdf7a51681p-45 },
+        .{ 0x1.8400000000000p-1, 0x1.1bf99635a6800p-2, 0x1.ca6ed5147bdb7p-45 },
+        .{ 0x1.8200000000000p-1, 0x1.214456d0eb800p-2, 0x1.a87deba46baeap-47 },
+        .{ 0x1.7e00000000000p-1, 0x1.2bef07cdc9000p-2, 0x1.a9cfa4a5004f4p-45 },
+        .{ 0x1.7c00000000000p-1, 0x1.314f1e1d36000p-2, -0x1.8e27ad3213cb8p-45 },
+        .{ 0x1.7a00000000000p-1, 0x1.36b6776be1000p-2, 0x1.16ecdb0f177c8p-46 },
+        .{ 0x1.7800000000000p-1, 0x1.3c25277333000p-2, 0x1.83b54b606bd5cp-46 },
+        .{ 0x1.7600000000000p-1, 0x1.419b423d5e800p-2, 0x1.8e436ec90e09dp-47 },
+        .{ 0x1.7400000000000p-1, 0x1.4718dc271c800p-2, -0x1.f27ce0967d675p-45 },
+        .{ 0x1.7200000000000p-1, 0x1.4c9e09e173000p-2, -0x1.e20891b0ad8a4p-45 },
+        .{ 0x1.7000000000000p-1, 0x1.522ae0738a000p-2, 0x1.ebe708164c759p-45 },
+        .{ 0x1.6e00000000000p-1, 0x1.57bf753c8d000p-2, 0x1.fadedee5d40efp-46 },
+        .{ 0x1.6c00000000000p-1, 0x1.5d5bddf596000p-2, -0x1.a0b2a08a465dcp-47 },
+    };
+
     // musl exp.c / log.c ports (f64 <= 1 ulp).
     const P1 = 1.66666666666666019037e-01;
     const P2 = -2.77777777770155933842e-03;
@@ -132,40 +946,10 @@ pub const gm = struct {
     const P4 = -1.65339022054652515390e-06;
     const P5 = 4.13813679705723846039e-08;
 
-    fn softExp(x: f64) f64 {
-        const bits: u64 = @bitCast(x);
-        const neg = bits >> 63 != 0;
-        const ax: u32 = @truncate((bits >> 32) & 0x7fffffff);
-        if (ax >= 0x4086232b) { // |x| >~ 708.39
-            if (std.math.isNan(x)) return x;
-            if (x > 709.782712893383973096) return std.math.inf(f64);
-            if (x < -745.13321910194110842) return 0;
-        }
-        var k: i32 = 0;
-        var hi: f64 = x;
-        var lo: f64 = 0;
-        var r = x;
-        if (ax > 0x3fd62e42) { // |x| > 0.5 ln2
-            k = if (ax >= 0x3ff0a2b2) // |x| >= 1.5 ln2
-                @intFromFloat(log2e * x + if (neg) @as(f64, -0.5) else 0.5)
-            else if (neg) -1 else 1;
-            const kf: f64 = @floatFromInt(k);
-            hi = x - kf * ln2hi;
-            lo = kf * ln2lo;
-            r = hi - lo;
-        } else if (ax <= 0x3e300000) { // |x| <= 2^-28: 1+x is already correct
-            return 1 + x;
-        }
-        const rr = r * r;
-        const c = r - rr * (P1 + rr * (P2 + rr * (P3 + rr * (P4 + rr * P5))));
-        const y = 1 + (r * c / (2 - c) - lo + hi);
-        return if (k == 0) y else std.math.scalbn(y, k);
-    }
-
     /// musl expm1.c, by way of `std.math.expm1`, minus its one
     /// `doNotOptimizeAway`, see `expm1` above.
     ///
-    /// Not `softExp(x) - 1`: the whole point is that the `-1` happens INSIDE
+    /// Not `exp(x) - 1`: the whole point is that the `-1` happens INSIDE
     /// the reduced-argument polynomial, where the subtraction would otherwise
     /// cancel away most of the significand for small x.
     fn softExpm1(x_: f64) f64 {
@@ -254,36 +1038,6 @@ pub const gm = struct {
     const Lg5 = 1.818357216161805012e-01;
     const Lg6 = 1.531383769920937332e-01;
     const Lg7 = 1.479819860511658591e-01;
-
-    fn softLog(x: f64) f64 {
-        var u: u64 = @bitCast(x);
-        var hx: u32 = @truncate(u >> 32);
-        var k: i32 = 0;
-        if (hx < 0x00100000 or hx >> 31 != 0) {
-            if (u << 1 == 0) return -std.math.inf(f64); // log(+-0)
-            if (hx >> 31 != 0) return std.math.nan(f64); // log(negative)
-            u = @bitCast(x * 0x1p54); // subnormal: scale into range
-            hx = @truncate(u >> 32);
-            k -= 54;
-        } else if (hx >= 0x7ff00000) {
-            return x; // inf / nan
-        } else if (hx == 0x3ff00000 and u << 32 == 0) {
-            return 0; // log(1)
-        }
-        hx +%= 0x3ff00000 - 0x3fe6a09e; // reduce into [sqrt(2)/2, sqrt(2)]
-        k += @as(i32, @intCast(hx >> 20)) - 0x3ff;
-        hx = (hx & 0x000fffff) + 0x3fe6a09e;
-        u = (@as(u64, hx) << 32) | (u & 0xffffffff);
-        const f = @as(f64, @bitCast(u)) - 1.0;
-        const hfsq = 0.5 * f * f;
-        const s = f / (2.0 + f);
-        const z = s * s;
-        const w = z * z;
-        const t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
-        const t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
-        const dk: f64 = @floatFromInt(k);
-        return s * (hfsq + t2 + t1) + dk * ln2lo - hfsq + f + dk * ln2hi;
-    }
 
     // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2.
     const pio4 = 0x1.921fb54442d18p-1;
@@ -412,29 +1166,189 @@ pub const gm = struct {
         };
     }
 
-    test "gm host branches are the builtins, device ports agree to ~1 ulp" {
-        // The host branch is the builtin; the soft ports are pinned against
-        // libm on a physical range so a transcription slip fails here, not
-        // inside a kernel.
+    /// Distance in units in the last place between two finite doubles of the
+    /// same sign.
+    fn ulps(a: f64, b: f64) u64 {
+        const ia: i64 = @bitCast(a);
+        const ib: i64 = @bitCast(b);
+        return @abs(ia - ib);
+    }
+
+    // ---- the accuracy bound, against an f128 oracle ----
+    const ln2_q: f128 = 0x1.62e42fefa39ef35793c7673007e6p-1;
+    fn expQ(t: f128) f128 {
+        const k = @round(t / ln2_q);
+        const r = t - k * ln2_q;
+        var term: f128 = 1;
+        var sum: f128 = 1;
+        var n: f128 = 1;
+        while (n < 36) : (n += 1) {
+            term = term * r / n;
+            sum += term;
+        }
+        return std.math.ldexp(sum, @intFromFloat(k));
+    }
+    fn logQ(x: f64) f128 {
+        const fr = std.math.frexp(@as(f128, x));
+        var m = fr.significand;
+        var e: f128 = @floatFromInt(fr.exponent);
+        if (m < 0.70710678) {
+            m *= 2;
+            e -= 1;
+        }
+        const u = (m - 1) / (m + 1);
+        const uu = u * u;
+        var term = u;
+        var sum: f128 = 0;
+        var k: f128 = 1;
+        while (k < 100) : (k += 2) {
+            sum += term / k;
+            term *= uu;
+        }
+        return 2 * sum + e * ln2_q;
+    }
+    /// `f(x)` evaluated by the compiler (comptime IEEE arithmetic).
+    fn folds(comptime f: fn (f64) f64, comptime x: f64) f64 {
+        @setEvalBranchQuota(1_000_000);
+        return f(x);
+    }
+    /// `x` as a run-time value, so the call below is not folded.
+    fn rt(x: f64) f64 {
+        var v = x;
+        std.mem.doNotOptimizeAway(&v);
+        return v;
+    }
+    /// |got - ref| in units of the last place of the double nearest ref.
+    fn ulpQ(got: f64, ref: f128) f64 {
+        const rd: f64 = @floatCast(ref);
+        const e = @max(std.math.ilogb(rd) - 52, -1074);
+        return @floatCast(@abs(@as(f128, got) - ref) / std.math.ldexp(@as(f128, 1.0), e));
+    }
+
+    test "exp/log/pow stay within the documented bound of an f128 oracle" {
+        // docs/IMPLEMENTATION.md: exp <= 0.52, log <= 0.52, pow <= 0.55 ulp
+        // (measured maxima 0.507, 0.500, 0.505; the margin is the bound ARM
+        // proves). A fixed sample, so the test is reproducible.
+        var prng = std.Random.DefaultPrng.init(0x7a11);
+        const r = prng.random();
+        var worst = [3]f64{ 0, 0, 0 };
+        for (0..1500) |_| {
+            const x = r.float(f64) * 1440.0 - 735.0;
+            worst[0] = @max(worst[0], ulpQ(armExp(x), expQ(x)));
+            const lx: f64 = @bitCast((r.int(u64) % 0x7fe0000000000000) + 0x0010000000000000);
+            worst[1] = @max(worst[1], ulpQ(armLog(lx), logQ(lx)));
+            const px = std.math.pow(f64, 10.0, r.float(f64) * 15.0 - 3.0);
+            const py = r.float(f64) * 21.0 - 3.0;
+            worst[2] = @max(worst[2], ulpQ(armPow(px, py), expQ(@as(f128, py) * logQ(px))));
+        }
+        try std.testing.expect(worst[0] <= 0.52);
+        try std.testing.expect(worst[1] <= 0.52);
+        try std.testing.expect(worst[2] <= 0.55);
+    }
+
+    test "exp/log/pow fold at comptime to the bits they run to: no target-dependent operation" {
+        // `exact_everywhere`: no fma, so the routines are plain IEEE f64
+        // arithmetic, which Zig's comptime evaluates target-independently.
+        // A run that matches the fold matches every target the same code
+        // compiles for (host, NVPTX, AMDGCN) unless a backend fuses or
+        // reassociates on its own, which none does without contract flags.
+        const xs = [_]f64{ -744.9, -700.25, -20.5, -0.75, -1e-9, 0.0, 3e-17, 0.693, 1.0, 22.0, 512.5, 709.7 };
+        const ls = [_]f64{ 0x1p-1060, 1e-300, 1e-9, 0.5, 0.999999, 1.0, 1.0000001, 3.0, 1e18, 1e308 };
+        inline for (xs) |x| {
+            const folded = comptime folds(armExp, x);
+            try std.testing.expectEqual(@as(u64, @bitCast(folded)), @as(u64, @bitCast(armExp(rt(x)))));
+        }
+        inline for (ls) |x| {
+            const folded = comptime folds(armLog, x);
+            try std.testing.expectEqual(@as(u64, @bitCast(folded)), @as(u64, @bitCast(armLog(rt(x)))));
+            const pf = comptime blk: {
+                @setEvalBranchQuota(1_000_000);
+                break :blk armPow(x, 1.4552480184709202);
+            };
+            try std.testing.expectEqual(@as(u64, @bitCast(pf)), @as(u64, @bitCast(armPow(rt(x), 1.4552480184709202))));
+        }
+        // The vector form is the scalar's, lane for lane.
+        const v: @Vector(4, f64) = .{ -3.5, 0.25, 7.0, 41.0 };
+        const ev = hexp(v);
+        const lv = hlog(v * v);
+        const pv = powV(v * v, 1.4552480184709202);
+        const pn = powV(v, 3.0); // a negative base: lane by lane
+        inline for (0..4) |l| {
+            try std.testing.expectEqual(@as(u64, @bitCast(armPow(v[l] * v[l], 1.4552480184709202))), @as(u64, @bitCast(pv[l])));
+            try std.testing.expectEqual(@as(u64, @bitCast(armPow(v[l], 3.0))), @as(u64, @bitCast(pn[l])));
+            try std.testing.expectEqual(@as(u64, @bitCast(armExp(v[l]))), @as(u64, @bitCast(ev[l])));
+            try std.testing.expectEqual(@as(u64, @bitCast(armLog(v[l] * v[l]))), @as(u64, @bitCast(lv[l])));
+        }
+    }
+
+    test "armExp/armPow: the contract's special cases, exact cases and 1-ulp agreement" {
+        const inf = std.math.inf(f64);
+        // exp: specials and range ends.
+        try std.testing.expectEqual(@as(f64, 1.0), armExp(0.0));
+        try std.testing.expectEqual(@as(f64, 1.0), armExp(-0.0));
+        try std.testing.expectEqual(inf, armExp(inf));
+        try std.testing.expectEqual(@as(u64, 0), @as(u64, @bitCast(armExp(-inf))));
+        try std.testing.expect(std.math.isNan(armExp(std.math.nan(f64))));
+        try std.testing.expectEqual(inf, armExp(709.8));
+        try std.testing.expect(armExp(709.78) < inf);
+        try std.testing.expectEqual(@as(f64, 0.0), armExp(-745.2));
+        try std.testing.expect(armExp(-745.0) > 0.0); // gradual underflow
+        // The thresholds: the last double whose exp rounds to the least
+        // subnormal / to DBL_MAX's neighbourhood, and the next one past it.
+        try std.testing.expectEqual(@as(f64, 0x1p-1074), armExp(-0x1.74910d52d3051p9));
+        try std.testing.expectEqual(@as(f64, 0.0), armExp(-0x1.74910d52d3052p9));
+        try std.testing.expect(armExp(0x1.62e42fefa39efp9) < inf);
+        try std.testing.expectEqual(inf, armExp(0x1.62e42fefa39f0p9));
+        try std.testing.expectEqual(std.math.e, armExp(1.0));
+        // Monotone across a reduction-table seam and against compiler_rt.
+        var x: f64 = -745.0;
+        var prev: f64 = 0.0;
+        while (x < 709.0) : (x += 0.0731) {
+            const e = armExp(x);
+            try std.testing.expect(e >= prev);
+            prev = e;
+            if (@exp(x) > 0x1p-1022) try std.testing.expect(ulps(e, @exp(x)) <= 1);
+        }
+        // pow: C99 F.10.4.4 rows and exact results.
+        try std.testing.expectEqual(@as(f64, 1.0), armPow(-3.0, 0.0));
+        try std.testing.expectEqual(@as(f64, 1.0), armPow(1.0, std.math.nan(f64)));
+        try std.testing.expectEqual(@as(f64, 1024.0), armPow(2.0, 10.0));
+        try std.testing.expectEqual(@as(f64, -8.0), armPow(-2.0, 3.0));
+        try std.testing.expectEqual(@as(f64, 0.0625), armPow(-2.0, -4.0));
+        try std.testing.expectEqual(@as(f64, 2.0), armPow(4.0, 0.5));
+        try std.testing.expectEqual(@as(f64, 0.1), armPow(0.1, 1.0));
+        try std.testing.expect(std.math.isNan(armPow(-2.0, 0.5)));
+        try std.testing.expectEqual(inf, armPow(0.0, -1.0));
+        try std.testing.expectEqual(-inf, armPow(-0.0, -1.0));
+        try std.testing.expectEqual(@as(u64, 1 << 63), @as(u64, @bitCast(armPow(-0.0, 3.0))));
+        try std.testing.expectEqual(@as(f64, 0.0), armPow(0.5, inf));
+        try std.testing.expectEqual(inf, armPow(2.0, inf));
+        try std.testing.expectEqual(inf, armPow(10.0, 400.0));
+        try std.testing.expectEqual(@as(f64, 0.0), armPow(10.0, -400.0));
+        var b: f64 = 0.013;
+        while (b < 90.0) : (b *= 1.37) {
+            var e: f64 = -7.3;
+            while (e < 7.3) : (e += 0.61) {
+                const want = std.math.pow(f64, b, e);
+                // std's pow is the less accurate of the two; a few ulps apart.
+                try std.testing.expect(ulps(armPow(b, e), want) <= 4);
+            }
+        }
+    }
+
+    test "gm exp/log agree with compiler_rt to 1 ulp; the device ports with libm" {
+        // exp/log are VerA's (<= 0.52 ulp); compiler_rt's are < 1 ulp, so
+        // the two may differ by one ulp, never more. The sin/cos/expm1 device
+        // ports are pinned against libm so a transcription slip fails here,
+        // not inside a kernel.
         var x: f64 = -700.0;
-        while (x <= 700.0) : (x += 13.77) {
-            try std.testing.expectEqual(@exp(x), exp(x));
-            const se = softExp(x);
-            const re = @exp(x);
-            if (re != 0 and std.math.isFinite(re))
-                try std.testing.expect(@abs(se - re) <= 2 * @abs(re) * std.math.floatEps(f64));
-        }
+        while (x <= 700.0) : (x += 13.77) try std.testing.expect(ulps(exp(x), @exp(x)) <= 1);
         var y: f64 = 1e-30;
-        while (y < 1e30) : (y *= 3.7) {
-            try std.testing.expectEqual(@log(y), log(y));
-            const sl = softLog(y);
-            const rl = @log(y);
-            try std.testing.expect(@abs(sl - rl) <= 2 * @max(@abs(rl), 1.0) * std.math.floatEps(f64));
-        }
-        try std.testing.expectEqual(-std.math.inf(f64), softLog(0.0));
-        try std.testing.expect(std.math.isNan(softLog(-1.0)));
-        try std.testing.expectEqual(std.math.inf(f64), softExp(710.0));
-        try std.testing.expectEqual(@as(f64, 0.0), softExp(-746.0));
+        while (y < 1e30) : (y *= 3.7) try std.testing.expect(ulps(log(y), @log(y)) <= 1);
+        try std.testing.expectEqual(-std.math.inf(f64), log(0.0));
+        try std.testing.expect(std.math.isNan(log(-1.0)));
+        try std.testing.expectEqual(std.math.inf(f64), exp(710.0));
+        try std.testing.expectEqual(@as(f64, 0.0), exp(-746.0));
         var t: f64 = -8.0;
         while (t <= 8.0) : (t += 0.0937) {
             try std.testing.expectEqual(@sin(t), sin(t));

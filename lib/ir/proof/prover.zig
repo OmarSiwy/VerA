@@ -741,9 +741,9 @@ pub const Prover = struct {
 
     fn unaryTransfer(op: Mir.Opcode, a: proof_lattice.Interval, af: bool) Abstract {
         const monotone: ?[2]f64 = switch (op) {
-            .exp => .{ @exp(a.lo), @exp(a.hi) },
+            .exp => .{ gm.exp(a.lo), gm.exp(a.hi) },
             .expm1 => .{ math.expm1(a.lo), math.expm1(a.hi) },
-            .ln => .{ @log(a.lo), @log(a.hi) },
+            .ln => .{ gm.log(a.lo), gm.log(a.hi) },
             .ln1p => .{ math.log1p(a.lo), math.log1p(a.hi) },
             .log10 => .{ @log10(a.lo), @log10(a.hi) },
             .sqrt => .{ @sqrt(a.lo), @sqrt(a.hi) },
@@ -1363,8 +1363,11 @@ fn divOp(a: f64, b: f64) f64 {
     return a / b;
 }
 fn powOp(a: f64, b: f64) f64 {
-    return math.pow(f64, a, b);
+    return gm.pow(a, b);
 }
+
+/// The devices' exp/log/pow, so a bound is the value a device computes.
+const gm = @import("contract").gm;
 
 /// §4.3.1 Table 4-14 pow(x,y) over a box. Corner combination is sound only where pow is
 /// monotone in each argument separately, which fails in the ways a negative base admits:
