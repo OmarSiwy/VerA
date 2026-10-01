@@ -12,6 +12,7 @@ const root = @import("root.zig");
 const State = root.State;
 const Error = root.Error;
 const Dispatch = root.Dispatch;
+const engine = root.engine;
 
 /// The fixed-size fields that change while a design runs, as names of
 /// `State` fields (one value or a slice each), then of `State.nets`.
@@ -73,6 +74,14 @@ pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeAll(std.mem.asBytes(&q));
         try list(w, e.value_ptr.jobs.items);
     }
+}
+
+/// `save` into `buf`: the bytes written, or `WriteFailed` when they do not fit.
+pub fn saveTo(s: *const State, buf: []u8) std.Io.Writer.Error!usize {
+    if (root.prebuilt) return engine.saveTo(s, buf);
+    var w: std.Io.Writer = .fixed(buf);
+    try save(s, &w);
+    return w.end;
 }
 
 /// The most bytes `save` writes for design `d`: the part the design fixes,
@@ -146,6 +155,7 @@ fn list(w: *std.Io.Writer, items: anytype) std.Io.Writer.Error!void {
 
 /// `s` as `save` wrote it to `b`, for the same design.
 pub fn restore(s: *State, b: []const u8) Error!void {
+    if (root.prebuilt) return engine.restore(s, b);
     var r: std.Io.Reader = .fixed(b);
     load(s, &r) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else s.fail("a saved tick boundary is truncated", .{});
 }

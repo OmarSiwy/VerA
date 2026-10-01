@@ -373,9 +373,7 @@ pub fn Device(comptime spec: Spec) type {
             // A stopped engine is never run again, so its state is not kept.
             if (inst.stopped) return;
             const into = st.cur ^ 1;
-            var w: std.Io.Writer = .fixed(&st.bufs[into]);
-            try s.save(&w);
-            st.lens[into] = @intCast(w.end);
+            st.lens[into] = @intCast(try snapshot.saveTo(s, &st.bufs[into]));
             st.work = true;
         }
 

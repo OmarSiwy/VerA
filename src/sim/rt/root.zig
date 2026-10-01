@@ -176,10 +176,12 @@ fn run(init_: std.process.Init, s: *State, comptime four: Dispatch, comptime two
 
 /// Dispatches every event of `s` at a tick up to `limit` in its phase;
 /// returns how the run ended, null also when the next event is past `limit`.
-pub fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch, limit: u64) ?Error {
+/// `four` is a `Dispatch`, or in the prebuilt engine an `engine.DispatchC`.
+pub fn loop(s: *State, four: anytype, comptime two_: ?Dispatch, limit: u64) ?Error {
+    if (prebuilt) return engine.loop(s, four, two_, limit);
     while (true) {
         const pc = (@call(.always_inline, State.next, .{ s, limit }) catch |e| return e) orelse return null;
-        (if (two_ != null and s.two) two_.?(s, pc) else four(s, pc)) catch |e| return e;
+        (if (two_ != null and s.two) two_.?(s, pc) else if (@TypeOf(four) == engine.DispatchC) engine.call(four, s, pc) else four(s, pc)) catch |e| return e;
     }
 }
 
@@ -313,15 +315,20 @@ pub const max_parts = 4;
 
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
 /// declares `vera_overrides`.
-const overrides = @hasDecl(@import("root"), "vera_overrides");
+pub const overrides = @hasDecl(@import("root"), "vera_overrides");
 
 /// A §10.2.3 timed task reaches itself (`emit`'s `.call_timed`): the
 /// executable's root declares `vera_activations`, and its processes carry
 /// an activation (`State.ctx`).
 pub const activations = @hasDecl(@import("root"), "vera_activations");
 
+/// A contract device's root declares `vera_prebuilt_engine`: the engine's
+/// design-independent half is linked prebuilt (`engine.zig`).
+pub const prebuilt = @hasDecl(@import("root"), "vera_prebuilt_engine");
+pub const engine = @import("engine.zig");
+
 /// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
-const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
+pub const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
 
 /// `get` of planes `v`, `x`; `k` as `poke`'s.
 inline fn peek(comptime k: bool, v: [*]const u64, x: [*]const u64, off: u32) W {
