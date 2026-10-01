@@ -1,6 +1,6 @@
 //! Value and instruction rendering: one MIR value or instruction in, its Zig
 //! expression text out, with the §4.2.1.1/§4.2.1.2 integer/real conversions
-//! explicit. LRM clauses cited: §2.7, §3.2, §3.2.1, §3.2.2, §4.2.1, §4.2.4, §4.2.11,
+//! explicit. LRM clauses cited: §2.7, §2.9, §3.2, §3.2.1, §3.2.2, §4.2.1, §4.2.4, §4.2.11,
 //! §4.3.1, §4.3.2, §4.5, §9.4, §9.13, §9.21.
 
 const std = @import("std");
@@ -351,6 +351,15 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
         .anew => |d| {
             const m = self.lowered.mem_arrays.items[d.array];
             const plain = arrPlain(self, d.array);
+            // VerA's `vera_timepoint` (§2.9): the version a cached statement
+            // left, from its `Instance` slot; a copy-on-write array reads it
+            // in place, as a held one reads its own field.
+            if (d.tp) |tp| {
+                self.uses_inst = true;
+                if (cow(self, d.array)) return self.b("p{d} = &inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
+                if (plain) return self.b("a{d} = inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
+                return self.b("for (&a{d}, inst.tp{d}_s{d}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, tp.block, tp.slot, self.arr_mask[d.array] });
+            }
             if (m.held == none_u32) {
                 if (!plain) return self.b("@memset(&a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ d.array, self.arr_mask[d.array] });
                 return self.b("@memset(&a{d}, {s});\n", .{ d.array, if (m.ty == .integer) "0" else "0.0" });

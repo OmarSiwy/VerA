@@ -2,7 +2,7 @@
 //! `initState`, `updateState`, `acceptQ`, `advanceIteration`, the collapse
 //! hooks and the breakpoint hooks out. Advances each operator's `Instance`
 //! slots once per accepted timepoint (§4.5.2) and emits §5.6.5 collapse.
-//! LRM clauses cited: §4.5.2, §4.5.7, §4.5.10, §4.5.12, §5.6.1.3, §5.6.5,
+//! LRM clauses cited: §2.9, §4.5.2, §4.5.7, §4.5.10, §4.5.12, §5.6.1.3, §5.6.5,
 //! §5.10.3, §5.10.5, §9.13.1, §9.17.
 
 const std = @import("std");
@@ -122,7 +122,17 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         .{self.lowered.limit_slots.items.len},
     );
     try gen_file.emitStateTwins(self, acc.reads_t_prev);
-    try self.w(
+    // VerA's `vera_timepoint` (§2.9): a fresh state is a fresh cache.
+    if (self.lowered.timepoints.items.len != 0) try self.w(
+        \\}};
+        \\
+        \\pub fn initState(_: *const Model, inst: *Instance) State {{
+        \\    zTpDrop(inst);
+        \\    return .{{}};
+        \\}}
+        \\
+        \\pub fn updateState(comptime
+    , .{}) else try self.w(
         \\}};
         \\
         \\pub fn initState(_: *const Model, _: *Instance) State {{
@@ -228,6 +238,9 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
 fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     const val = ".val()";
     const uses_dt = acc.uses_dt;
+    // VerA's `vera_timepoint` (§2.9): the held values below move, and a
+    // static solve iterates again at the same time when asked to.
+    if (self.lowered.timepoints.items.len != 0) try self.w("    zTpDrop(inst);\n", .{});
     // §5.6.1.2 stage the path-latch operands. They commit only at
     // stateCtl(.commit), so a rejected attempt leaves pb/pq untouched and
     // the retry reopens on the accepted charge.

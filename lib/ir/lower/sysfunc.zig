@@ -2,7 +2,7 @@
 //!
 //! In: `$`-calls. Out: MIR calls or folded values, and the host fields (`$simparam`) they read.
 //!
-//! LRM clauses this file's code cites: §3.4.7, §4.3.1, §9.2, §9.5, §9.5.4.2, §9.5.7, §9.15, §9.17.3, §9.18, §9.20, §9.22, §9.23.
+//! LRM clauses this file's code cites: §2.9, §3.4.7, §4.3.1, §9.2, §9.5, §9.5.4.2, §9.5.7, §9.15, §9.17.3, §9.18, §9.20, §9.22, §9.23.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
@@ -134,6 +134,11 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // error. Only these two literal names: an unknown string is treated "just as
     // if no string had been supplied".
     if (std.mem.eql(u8, name, "$limit")) {
+        // VerA's `vera_timepoint` (§2.9): a limiter reads the iterate.
+        if (self.tp_cur != null) {
+            try self.err(ex.mainTok(e), .E0530, "`$limit` (§9.17.3)", .{});
+            return poison;
+        }
         const args = ex.args(e);
         // Syntax 9-12 spells every form's first argument access_function_reference,
         // and the prose says what it is for: "It returns a real value that is

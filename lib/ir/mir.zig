@@ -201,6 +201,8 @@ pub fn opIsInteger(op: Opcode) bool {
 ///   call    a = Callee, b = extra start (the raw name's StrId, then the
 ///           args), c = arg count
 ///   anew    a = array id (`Lowered.mem_arrays` index)                (§3.2.2)
+///           b = 0, or 1 + the `Lowered.timepoints` row whose cache fills
+///           it, c = that row's slot (VerA's `vera_timepoint`, §2.9)
 ///   load    a = array version, b = flat index
 ///   store   a = array version, b = flat index, c = value
 pub const InstRow = struct {
@@ -263,7 +265,9 @@ pub const InstData = union(OpClass) {
     /// `name` is the spelling the call was emitted with: `@tagName(callee)`,
     /// except for `.systf`, whose name only this carries.
     call: struct { callee: Callee, name: []const u8, args: []const Value },
-    anew: struct { array: u32 },
+    /// `tp`: null for a zero or held start; else the `vera_timepoint` cache
+    /// slot it starts from (`Lower.TpBlock`).
+    anew: struct { array: u32, tp: ?struct { block: u32, slot: u32 } = null },
     load: struct { op: Opcode, arr: Value, index: Value },
     store: struct { arr: Value, index: Value, value: Value },
 };
@@ -643,6 +647,12 @@ pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !V
     return self.addResultInst(gpa, block, .{ .op = .anew, .a = array });
 }
 
+/// Returns a version of `array` filled from slot `slot` of `vera_timepoint`
+/// statement `tp`'s cache (`Lower.TpBlock`).
+pub fn emitAnewCached(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32, tp: u32, slot: u32) !Value {
+    return self.addResultInst(gpa, block, .{ .op = .anew, .a = array, .b = tp + 1, .c = slot });
+}
+
 /// Appends a §5.8 two-way branch, the block's terminator.
 pub fn emitBranch(self: *Mir, gpa: std.mem.Allocator, block: Block, cond: Value, then_block: Block, else_block: Block) !Inst {
     return self.addInst(gpa, block, .{
@@ -756,7 +766,7 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
                 .args = @ptrCast(self.extra.items[row.b + 1 ..][0..row.c]),
             },
         },
-        .anew => .{ .anew = .{ .array = row.a } },
+        .anew => .{ .anew = .{ .array = row.a, .tp = if (row.b == 0) null else .{ .block = row.b - 1, .slot = row.c } } },
         .load => .{ .load = .{ .op = row.op, .arr = @enumFromInt(row.a), .index = @enumFromInt(row.b) } },
         .store => .{ .store = .{
             .arr = @enumFromInt(row.a),

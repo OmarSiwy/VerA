@@ -51,6 +51,8 @@ const Features = struct {
     rng: bool,
     files: bool,
     arrs: bool,
+    /// `tp_txt`: a VerA `vera_timepoint` statement.
+    tp: bool,
 };
 
 /// Writes the whole device.zig into `self.out` and builds `self.prelude` and
@@ -80,6 +82,7 @@ pub fn emitFile(self: *Gen) Error!void {
         .files = self.display == .emit and self.lowered.uses.contains(.file_tasks),
         // §3.2.2 set in lowering: a runtime-indexed array is one storage.
         .arrs = self.lowered.mem_arrays.items.len != 0,
+        .tp = self.lowered.timepoints.items.len != 0,
     };
     try buildPrelude(self, f);
     try self.out.appendSlice(self.gpa, kt.header_txt);
@@ -92,6 +95,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.hist) try self.out.appendSlice(self.gpa, kt.hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, kt.hist_quad_txt);
     if (f.arrs) try self.out.appendSlice(self.gpa, kt.arr_txt);
+    if (f.tp) try self.out.appendSlice(self.gpa, kt.tp_txt);
     // The embedded kernel files arrive already `pub`, which is right for
     // `h.zig` and wrong here: `contract.rejectStrayPubDecls` allows only
     // contract-recognized public names. So they are depublished; every other
@@ -123,7 +127,8 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_setup.emitSetupDecl(self);
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
-    if (self.lowered.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
+    // VerA's `vera_timepoint` (§2.9): `eval` fills the per-timepoint caches.
+    if (self.lowered.table_samples.items.len != 0 or self.lowered.timepoints.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
     try gen_setup.emitSetup(self);
     try gen_unit.emitUnits(self);
     try gen_dispatch.emitDispatchers(self);
@@ -150,7 +155,9 @@ pub fn emitFile(self: *Gen) Error!void {
     // Lane-parallel permission (see `float/lanes.zig`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
-    if (!self.float.pinned) try self.w("pub const batch_ok = true;\n\n", .{});
+    // ponytail: a `vera_timepoint` cache stores one point's values, so a
+    // device with one is not batched; store lane 0 when a host batches it.
+    if (!self.float.pinned and self.lowered.timepoints.items.len == 0) try self.w("pub const batch_ok = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 
@@ -169,6 +176,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist) try alias(&p, self.arena, kt.hist_txt);
     if (f.hist_quad) try alias(&p, self.arena, kt.hist_quad_txt);
     if (f.arrs) try alias(&p, self.arena, kt.arr_txt);
+    if (f.tp) try alias(&p, self.arena, kt.tp_txt);
     if (f.filt) try alias(&p, self.arena, kt.filt_txt);
     if (f.ac) try alias(&p, self.arena, kt.ac_txt);
     if (self.display == .emit or f.strs) try alias(&p, self.arena, kt.display_txt);
@@ -196,6 +204,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist) try publish(self.arena, &hz, kt.hist_txt);
     if (f.hist_quad) try publish(self.arena, &hz, kt.hist_quad_txt);
     if (f.arrs) try publish(self.arena, &hz, kt.arr_txt);
+    if (f.tp) try publish(self.arena, &hz, kt.tp_txt);
     if (f.filt) try publish(self.arena, &hz, kt.filt_txt);
     if (f.ac) try publish(self.arena, &hz, kt.ac_txt);
     if (self.display == .emit or f.strs) try publish(self.arena, &hz, kt.display_txt);
@@ -863,14 +872,63 @@ pub fn emitInstance(self: *Gen) Error!void {
             });
         }
     }
+    try emitTpFields(self);
     // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
     // the held block above. `su_ok` exists only where it is asserted.
     if (self.su.vals.len != 0) try self.w(
         \\    su: Setup = .{{}},
         \\    su_ok: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {{}},
         \\
-    , .{});
+    , .{}) else if (self.lowered.timepoints.items.len != 0) try self.w("    su: Setup = .{{}},\n", .{});
     try self.w("}};\n\n", .{});
+    try emitTpHelpers(self);
+}
+
+/// VerA's `vera_timepoint` (§2.9): each cached statement's `Instance` fields,
+/// `tp<b>_t`/`tp<b>_k` (the time and `zTpKey` it was filled at; NaN when
+/// dropped) and one `tp<b>_s<k>` per slot. Not history: `stateCtl` drops
+/// them rather than restoring them (`zTpDrop`).
+fn emitTpFields(self: *Gen) Error!void {
+    for (self.lowered.timepoints.items, 0..) |t, b| {
+        try self.w("    /// vera_timepoint {d}: the timepoint its cache holds, NaN when dropped.\n", .{b});
+        try self.w("    tp{d}_t: f64 = std.math.nan(f64),\n    tp{d}_k: u8 = 0,\n", .{ b, b });
+        for (t.slots, 0..) |sl, k| {
+            // A slot nothing reads after the statement is not queued (`plan_jobs`).
+            if (gen_dispatch.coreIdx(self, self.an.rv(sl.final)) == null) continue;
+            if (sl.array != none_u32) {
+                const m = self.lowered.mem_arrays.items[sl.array];
+                try self.w("    tp{d}_s{d}: [{d}]{s} = @splat(0), // {s}\n", .{ b, k, m.len, if (m.ty == .integer) "i64" else "f64", sl.name });
+            } else {
+                try self.w("    tp{d}_s{d}: {s} = 0, // {s}\n", .{ b, k, if (sl.ty == .integer) "i64" else "f64", sl.name });
+            }
+        }
+    }
+}
+
+/// VerA's `vera_timepoint` (§2.9): `zTpDrop`, which every entry point that
+/// moves what a cached statement reads calls (`initState`, `setup`,
+/// `updateState`, `stateCtl`), and `zTpStore`, which `eval` and `evalQ`
+/// call on the core result: a statement that ran on a stale cache fills it.
+fn emitTpHelpers(self: *Gen) Error!void {
+    const tps = self.lowered.timepoints.items;
+    if (tps.len == 0) return;
+    try self.w("/// vera_timepoint: drop every per-timepoint cache.\nfn zTpDrop(inst: *Instance) void {{\n", .{});
+    for (0..tps.len) |b| try self.w("    inst.tp{d}_t = std.math.nan(f64);\n", .{b});
+    try self.w("}}\n\n", .{});
+    try self.w("/// vera_timepoint: store what a statement that ran on a stale cache assigned.\n", .{});
+    try self.w("inline fn zTpStore(inst: *Instance, sim: contract.SimState, m: anytype) void {{\n", .{});
+    for (tps, 0..) |t, b| {
+        // An unconditional statement's mark folds to 1 and is no core field.
+        if (gen_dispatch.coreIdx(self, self.an.rv(t.mark))) |mk| try self.w("    if (m.f{d} != 0 and ", .{mk}) else try self.w("    if (", .{});
+        try self.w("!zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)) {{\n", .{ b, b });
+        for (t.slots, 0..) |sl, k| {
+            const fk = gen_dispatch.coreIdx(self, self.an.rv(sl.final)) orelse continue;
+            const val = sl.array == none_u32 and sl.ty != .integer;
+            try self.w("        inst.tp{d}_s{d} = m.f{d}{s};\n", .{ b, k, fk, if (val) ".val()" else "" });
+        }
+        try self.w("        inst.tp{d}_t = sim.t;\n        inst.tp{d}_k = zTpKey(sim);\n    }}\n", .{ b, b });
+    }
+    try self.w("}}\n\n", .{});
 }
 
 /// Records `Instance` field `fmt` as history `stateCtl` commits and reverts.
@@ -957,6 +1015,9 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         \\    if (op == .query) {{
         \\        return
     , .{});
+    // VerA's `vera_timepoint` (§2.9): a commit or a revert moves the held
+    // state a cached statement reads.
+    const tp_drop = if (self.lowered.timepoints.items.len != 0) "        zTpDrop(inst);\n" else "";
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
@@ -973,8 +1034,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         \\;
         \\    }}
         \\    if (op == .commit) {{
-        \\
-    , .{});
+        \\{s}
+    , .{tp_drop});
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
@@ -989,7 +1050,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         );
     }
     if (t_prev) try self.w("        state.t_prev__acc = state.t_prev;\n", .{});
-    try self.w("    }} else {{\n", .{});
+    try self.w("    }} else {{\n{s}", .{tp_drop});
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},

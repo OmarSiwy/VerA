@@ -483,6 +483,19 @@ pub const Gen = struct {
             if (self.diags) |bag| try bag.add(.codegen, r.code, self.lowered.tokenSpan(r.tok), "{s}", .{r.msg});
             self.any_fatal = true;
         }
+        // VerA's `vera_timepoint` (§2.9): a cached statement may read nothing
+        // a Newton iteration moves.
+        for (self.lowered.timepoints.items) |t| {
+            const v = try plan_setup.timepointVarying(self.input(), t) orelse continue;
+            self.any_fatal = true;
+            const bag = self.diags orelse continue;
+            var d = bag.build(.codegen, .E0531, self.lowered.tokenSpan(t.tok));
+            // The value's own source token, when it has one.
+            const def = self.mir.valueDef(v);
+            const tok = if (def == .inst_result) self.mir.insts.items(.tok)[@intFromEnum(def.inst_result)] else Mir.no_tok;
+            if (tok != Mir.no_tok) d.label(self.lowered.tokenSpan(tok), "this value can change between iterations", .{});
+            try d.emit();
+        }
         // Solve invariance first: the charge-site plan reads it to leave the
         // time-constant charges out of `q`, and the jobs queue what it keeps.
         self.sinv = try plan_setup.plan(self.input());

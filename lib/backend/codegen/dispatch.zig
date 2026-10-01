@@ -2,7 +2,7 @@
 //! one charge per site), `evalQ`, the structural Jacobian tables, and the
 //! §4.6.3/§4.6.4 small-signal source tables. Stamps follow §1.3.1.2 reference
 //! directions.
-//! LRM: §1.3.1.2, §4.6.3, §4.6.4, §5.4.2.1, §5.4.3, §5.6, §5.6.1.2, §5.6.1.3,
+//! LRM: §1.3.1.2, §2.9, §4.6.3, §4.6.4, §5.4.2.1, §5.4.3, §5.6, §5.6.1.2, §5.6.1.3,
 //! §5.6.6, §9.4.
 
 const std = @import("std");
@@ -324,7 +324,19 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("    return res;\n}}\n\n", .{});
 
     try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
-    if (self.core_wanted) {
+    if (self.core_wanted and self.lowered.timepoints.items.len != 0) {
+        // VerA's `vera_timepoint` (§2.9): the core result fills a stale cache.
+        try self.w(
+            \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
+            \\    const xs = zProbe(S, x);
+            \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
+            \\    zTpStore(inst, sim, m);
+            \\    return zResidual(S, xs, m);
+            \\}}
+            \\
+            \\
+        , .{self.heldArg(false)});
+    } else if (self.core_wanted) {
         try self.w(
             \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
             \\    const xs = zProbe(S, x);
@@ -612,8 +624,8 @@ pub fn emitFused(self: *Gen) Error!void {
         \\pub fn evalQ(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
         \\    const xs = zProbe(S, x);
         \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
-        \\
-    , .{self.heldArg(false)});
+        \\{s}
+    , .{ self.heldArg(false), if (self.lowered.timepoints.items.len != 0) "    zTpStore(inst, sim, m);\n" else "" });
     // §5.6.1.2 the charges, one per site, off the same core.
     try self.b("    return .{{ .res = zResidual(S, xs, m), .q = ", .{});
     try writeSites(self);

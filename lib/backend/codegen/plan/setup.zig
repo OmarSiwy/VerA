@@ -2,7 +2,7 @@
 //! every Newton iterate and time point, so `setup` computes them once per
 //! card, instance and temperature. `pruneHeld` drops the §3.2 held slots a
 //! card cannot observe. The emitter half (setup roots, `pub fn setup`) is
-//! `codegen/setup.zig`. Clauses: §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
+//! `codegen/setup.zig`. Clauses: §2.9, §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
 //! §5.10.2, §9.10, §9.15, §9.19.
 
 const std = @import("std");
@@ -510,6 +510,122 @@ pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     const b = in.an.def_block[i];
     if (b == none_u32 or in.an.loop_of[b] != none_u32) return false;
     return in.an.foldConst(v, false) == null;
+}
+
+/// VerA's `vera_timepoint` (§2.9): the calls whose value is the same at
+/// every Newton iteration of one timepoint, given their arguments. The
+/// solve-invariant ones (`callInvariant`), the time and analysis the host
+/// keys the cache on, the accepted held state, the cache itself, and the
+/// pure synthetic reads lowering mints. An allowlist, as `callInvariant` is.
+fn callTimepoint(in: Input, d: anytype) bool {
+    if (callInvariant(in, d)) return true;
+    return switch (d.callee) {
+        .@"$abstime", .@"$realtime", .analysis, .analog_initial, .initial_step, .final_step => true,
+        .@"$held_real", .@"$held_int", .@"$tp_hit", .@"$tp_int", .@"$tp_real" => true,
+        .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat" => true,
+        else => false, // else: an ALLOWLIST — every other callee may read the iterate or state an iteration moves
+    };
+}
+
+/// VerA's `vera_timepoint` (§2.9): a value of statement `t`, or a branch
+/// condition inside it, that can move between the Newton iterations of one
+/// timepoint (E0531), or null. Optimistic and monotone like `solve`: every
+/// value starts fixed and only falls.
+///   - A probe varies; a constant or parameter does not.
+///   - A call varies unless `callTimepoint` allows it over fixed arguments.
+///   - A pure op, select, load or store varies with an operand; an `anew` is
+///     fixed (zero, the accepted held state, or the cache).
+///   - A phi varies with an incoming value. Outside the statement it varies
+///     also when an incoming edge's predecessor ends in, or is control-
+///     dependent on, a varying branch: `if (V(a) > 0) y = 1; else y = 2;`.
+///     Inside, every branch is checked itself, so data suffices.
+pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
+    const a = in.arena;
+    const nb = in.an.nb;
+    const nv = in.an.nv;
+    const inside = try a.alloc(bool, nb);
+    @memset(inside, false);
+    var stack: std.ArrayList(u32) = .empty;
+    const miss: u32 = @intFromEnum(t.miss);
+    const join: u32 = @intFromEnum(t.join);
+    inside[miss] = true;
+    try stack.append(a, miss);
+    while (stack.pop()) |b| for (in.an.succs[b]) |x| {
+        if (x == join or inside[x]) continue;
+        inside[x] = true;
+        try stack.append(a, x);
+    };
+    const cds = try controlDeps(in, try postDominators(in));
+    const vary = try a.alloc(bool, nv);
+    @memset(vary, false);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (Mir.Value.first_dynamic..nv) |i| {
+            if (vary[i]) continue;
+            const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+            const r = in.an.rv(v);
+            const now = if (r != v) varies(in, vary, r) else tpRule(in, vary, inside, cds, v);
+            if (!now) continue;
+            vary[i] = true;
+            changed = true;
+        }
+    }
+    for (0..nb) |bi| {
+        if (!inside[bi]) continue;
+        if (branchCond(in, @intCast(bi))) |c| if (varies(in, vary, c)) return c;
+    }
+    // An alias is the value it names, wherever that is: a pass-through phi
+    // the SSA builder placed inside and then folded away reads nothing here.
+    for (Mir.Value.first_dynamic..nv) |i| {
+        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        const b = in.an.def_block[i];
+        if (vary[i] and in.an.rv(v) == v and b != none_u32 and inside[b]) return v;
+    }
+    return null;
+}
+
+fn varies(in: Input, vary: []const bool, v0: Mir.Value) bool {
+    const v = in.an.rv(v0);
+    return switch (in.mir.valueDef(v)) {
+        .undef, .float_const, .int_const, .str_const, .param_ref => false,
+        .block_param => true,
+        .inst_result => vary[@intFromEnum(v)],
+    };
+}
+
+fn tpRule(in: Input, vary: []const bool, inside: []const bool, cds: anytype, v: Mir.Value) bool {
+    const def = in.mir.valueDef(v);
+    if (def != .inst_result) return varies(in, vary, v);
+    const inst = def.inst_result;
+    return switch (in.mir.instData(inst)) {
+        .unary => |d| varies(in, vary, d.operand),
+        .binary => |d| varies(in, vary, d.lhs) or varies(in, vary, d.rhs),
+        .ternary => |d| varies(in, vary, d.cond) or varies(in, vary, d.then_val) or varies(in, vary, d.else_val),
+        .call => |d| blk: {
+            if (!callTimepoint(in, d)) break :blk true;
+            for (d.args) |x| if (varies(in, vary, x)) break :blk true;
+            break :blk false;
+        },
+        .anew, .branch, .jump => false,
+        .load => |d| varies(in, vary, d.arr) or varies(in, vary, d.index),
+        .store => |d| varies(in, vary, d.arr) or varies(in, vary, d.index) or varies(in, vary, d.value),
+        .phi => |d| blk: {
+            const blk_v = in.an.def_block[@intFromEnum(v)];
+            const out = blk_v == none_u32 or !inside[blk_v];
+            for (0..d.count) |k| {
+                const pp = in.mir.phiPair(inst, @intCast(k));
+                if (varies(in, vary, pp.value)) break :blk true;
+                if (!out) continue;
+                const pb: u32 = @intFromEnum(pp.block);
+                if (branchCond(in, pb)) |c| if (varies(in, vary, c)) break :blk true;
+                for (cds.cd[cds.off[pb]..cds.off[pb + 1]]) |cd| {
+                    if (varies(in, vary, branchCond(in, cd.a).?)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+    };
 }
 
 /// §3.2 drops the held slots the card makes unobservable, rewriting `mir` and

@@ -1,7 +1,7 @@
 //! A unit and its backward slice of the MIR -> one stably named Zig function
 //! with its own @setFloatMode (proof.zig's verdict), including the shared core
 //! every residual reads. Also decides where each slot is declared.
-//! LRM: §1.3.1.1, §3.2.2, §3.6.2.2, §4.5, §4.5.11, §4.5.12, §4.6.3, §4.6.4,
+//! LRM: §1.3.1.1, §2.9, §3.2.2, §3.6.2.2, §4.5, §4.5.11, §4.5.12, §4.6.3, §4.6.4,
 //! §5.6.1.3, §5.10, §9.4.
 
 const std = @import("std");
@@ -291,7 +291,10 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     const model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const inst = self.out.items.len;
-    try self.w("inst: InstancePtr, ", .{});
+    // A unit only reads a `vera_timepoint` cache; `eval` writes it. So unless
+    // §9.21.1 tables make the core itself write, a `*const` serves every
+    // caller, `limit` and `collapse` included.
+    try self.w("inst: {s}, ", .{if (self.lowered.timepoints.items.len != 0 and self.lowered.table_samples.items.len == 0) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
     return .{ .x = x, .model = model, .inst = inst, .sim = sim };

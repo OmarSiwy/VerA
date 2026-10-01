@@ -526,6 +526,12 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     return @min(i, self.names.held_names.len -| 1);
 }
 
+/// The literal index at argument `i` of a lowering-minted call (`$tp_*`).
+fn litArg(self: *const Gen, args: []const Mir.Value, i: usize) u32 {
+    const c = self.an.foldConst(if (i < args.len) args[i] else .zero, false) orelse return 0;
+    return @intFromFloat(c.f);
+}
+
 /// Returns whether this call, as `emitCall` renders it, reads state the host
 /// changes between evaluations with `x` held: `SimState`, operator history,
 /// the §5.2.1 sub-task flag, the Newton iteration, limiter history, a
@@ -573,6 +579,10 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .systf,
         .@"$held_real",
         .@"$held_int",
+        // VerA's `vera_timepoint`: the per-timepoint cache (`Lower.TpBlock`).
+        .@"$tp_hit",
+        .@"$tp_int",
+        .@"$tp_real",
         => true,
         // §9.15 `$simparam("iteration")`: sim.iteration.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
@@ -930,6 +940,23 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
                 self.b("inst.{s}", .{f})
             else
                 self.b("S.con(inst.{s})", .{f});
+        },
+        // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
+        // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).
+        .@"$tp_hit" => {
+            self.uses_inst = true;
+            self.uses_sim = true;
+            const b = litArg(self, args, 0);
+            return self.b("@as(i64, @intFromBool(zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)))", .{ b, b });
+        },
+        .@"$tp_int", .@"$tp_real" => {
+            self.uses_inst = true;
+            const b = litArg(self, args, 0);
+            const slot = litArg(self, args, 1);
+            return if (c == .@"$tp_int")
+                self.b("inst.tp{d}_s{d}", .{ b, slot })
+            else
+                self.b("S.con(inst.tp{d}_s{d})", .{ b, slot });
         },
         .@"$mfactor" => { // §6.3.6
             self.uses_inst = true;

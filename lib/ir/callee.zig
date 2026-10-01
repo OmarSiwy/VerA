@@ -153,6 +153,11 @@ pub const Callee = enum(u8) {
     // VerA-synthetic: lowering's rewrites of one source call into several.
     @"$held_int",
     @"$held_real",
+    // VerA's `vera_timepoint` (§2.9, `Lower.TpBlock`): is the cache of
+    // statement b current, and slot k of it.
+    @"$tp_hit",
+    @"$tp_int",
+    @"$tp_real",
     @"$limit$old",
     @"$limit$uf",
     @"$idx",
@@ -366,6 +371,8 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §5.10 `Lower.holdSlot`'s synthetic seed: the callee is chosen by the
     // variable's declared type, so the name IS the type.
     .@"$held_int" = .{ .ty = .int },
+    .@"$tp_hit" = .{ .ty = .int },
+    .@"$tp_int" = .{ .ty = .int },
     // §9.5: every descriptor function is integer-valued. The arities are
     // Syntax 9-2 (`$fopen(filename [, type])`) and the call shapes §9.5.4.1,
     // §9.5.4.2, §9.5.5, §9.5.7 and §9.5.8 print.
@@ -550,6 +557,9 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$table_model",
         .@"$held_int",
         .@"$held_real",
+        .@"$tp_hit",
+        .@"$tp_int",
+        .@"$tp_real",
         .@"$limit$old",
         .@"$limit$uf",
         .@"$idx",
