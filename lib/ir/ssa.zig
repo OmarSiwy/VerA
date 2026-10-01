@@ -19,13 +19,13 @@ pub const Place = enum(u32) { _ };
 /// End-of-list sentinel for the intrusive pools. Not 0: index 0 is a real slot.
 const list_end: u32 = std.math.maxInt(u32);
 
-/// "No definition recorded for this (place, block)" in the `defs` matrix.
+/// "No definition recorded for this (place, block)" in the builder's map.
 ///
 /// Not `Mir.Value.undef`, which is a legitimate stored result (a phi over only
 /// self-references collapses to it); confusing the two would re-run the
 /// recursive read and re-create the collapsed phi. Cells hold
-/// `@intFromEnum(value) + 1` so a freshly mapped, all-zero page already reads
-/// as empty. `writeVariable` asserts no overflow.
+/// `@intFromEnum(value) + 1` so a zeroed chunk already reads as empty.
+/// `writeVariable` asserts no overflow.
 const absent: u32 = 0;
 
 /// "This (place, block) is a join whose predecessors are being read right
@@ -34,11 +34,20 @@ const absent: u32 = 0;
 /// a biased Value: `writeVariable` keeps the Value space two short of it.
 const pending: u32 = std.math.maxInt(u32);
 
-// `defs` is mapped straight from the OS, whose fresh pages are zero: that is
-// the `absent` fill for free, and untouched cells never become resident.
-// `std.heap.page_allocator` will not do: the `Allocator` interface poisons
-// fresh bytes with 0xAA under runtime safety. `mapZeroed` canary-checks it.
-const PageAllocator = std.heap.PageAllocator;
+/// log2 of the cells per chunk of the `(place, block)` map. A chunk is the
+/// unit that becomes resident, so this is the map's memory granularity: 64
+/// cells (256 B) against the 1024 of a 4 KiB page. A place's cells cluster
+/// along the blocks between its definition and its last read, so finer
+/// chunks keep the map near its written cells and coarser ones only add
+/// zeros; a narrower one makes the directory, which is dense, grow instead.
+const chunk_bits = 6;
+const chunk_len = 1 << chunk_bits;
+
+/// The directory and the cells live outside the caller's allocator: lowering
+/// passes its compilation arena, which could not give either back when it
+/// grows, so every regrowth would stay resident until the end of the compile.
+/// They are scratch for the lowering phase alone and freed by `deinit`.
+const map_gpa = std.heap.page_allocator;
 
 /// Braun-style SSA builder over one `Mir`. Blocks are created by the caller
 /// (`Mir.addBlock`); the builder records edges, writes and reads, and emits
@@ -46,17 +55,29 @@ const PageAllocator = std.heap.PageAllocator;
 pub const SsaBuilder = struct {
     gpa: std.mem.Allocator,
     mir: *Mir,
-    /// (place, block) → Value as a dense place-major matrix:
-    /// `defs[place * block_stride + block]`, `absent` (= 0) where unwritten and
-    /// `@intFromEnum(value) + 1` where written. Dense because on large compact
-    /// models the pairs are not sparse, and a hash map cost more in both time
-    /// and memory. Place-major because the hot recursion walks predecessor
-    /// blocks for one fixed place, so consecutive probes land in adjacent cells.
-    defs: []u32 = &.{},
-    /// Row length of `defs`: capacity along the block axis, not the live count.
-    block_stride: u32 = 0,
-    /// Rows allocated in `defs`: capacity along the place axis.
+    /// (place, block) → Value as a two-level place-major table: `dir[place *
+    /// dir_stride + block >> chunk_bits]` names a `chunk_len`-cell chunk of
+    /// `cells`, and the cell is `block`'s low bits within it. A cell holds
+    /// `absent` (= 0) where unwritten and `@intFromEnum(value) + 1` where
+    /// written. Chunk 0 is all `absent` and never written: every directory
+    /// entry starts on it, so a read needs no presence test.
+    ///
+    /// Two-level, not one dense matrix: Braun's reads memoize along every
+    /// block they walk, so on a compact model a place is written across the
+    /// blocks it is live in and nowhere else (psp103: 19% of the 2070 x 4234
+    /// matrix). The dense matrix touched each page that held one cell, and
+    /// regrowing its block axis copied every row whole, zeros included, while
+    /// the old copy was still mapped: a 100 MB transient on psp103. A hash
+    /// map cost more in both time and memory. Place-major because the hot
+    /// recursion walks predecessor blocks for one fixed place, so consecutive
+    /// probes land in one chunk.
+    dir: []u32 = &.{},
+    /// Directory row length: chunks per place, capacity along the block axis.
+    dir_stride: u32 = 0,
+    /// Directory rows: capacity along the place axis.
     place_cap: u32 = 0,
+    /// The chunks, `chunk_len` cells each, appended as first written.
+    cells: std.ArrayList(u32) = .empty,
     /// Row per Mir.Block, grown lazily (lower.zig owns block creation).
     block_state: std.MultiArrayList(BlockState) = .empty,
     /// Flat pools; BlockState holds head/tail indices into them.
@@ -100,7 +121,8 @@ pub const SsaBuilder = struct {
 
     /// Frees builder scratch only; the MIR it wrote into is untouched.
     pub fn deinit(self: *SsaBuilder) void {
-        unmapMatrix(self.defs);
+        map_gpa.free(self.dir);
+        self.cells.deinit(map_gpa);
         self.block_state.deinit(self.gpa);
         self.pred_pool.deinit(self.gpa);
         self.incomplete_pool.deinit(self.gpa);
@@ -165,7 +187,7 @@ pub const SsaBuilder = struct {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@intFromEnum(value) < std.math.maxInt(u32) - 1);
         const i = try self.defsIndex(place, block);
-        self.defs[i] = @intFromEnum(value) + 1;
+        self.cells.items[i] = @intFromEnum(value) + 1;
     }
 
     /// Returns the value of `place` in `block`, emitting phis as needed. A place
@@ -188,8 +210,9 @@ pub const SsaBuilder = struct {
     fn defsRaw(self: *const SsaBuilder, place: Place, block: Mir.Block) u32 {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);
-        if (p >= self.place_cap or b >= self.block_stride) return absent;
-        return self.defs[@as(usize, p) * self.block_stride + b];
+        if (p >= self.place_cap or b >> chunk_bits >= self.dir_stride) return absent;
+        const chunk: usize = self.dir[@as(usize, p) * self.dir_stride + (b >> chunk_bits)];
+        return self.cells.items[chunk << chunk_bits | (b & (chunk_len - 1))];
     }
 
     fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
@@ -198,55 +221,38 @@ pub const SsaBuilder = struct {
         return if (v == absent) null else @enumFromInt(v - 1);
     }
 
-    /// `n` cells of `absent`, for free (see `PageAllocator`). The assert is a
-    /// canary that the zero-page guarantee still holds.
-    fn mapZeroed(n: usize) Error![]u32 {
-        const bytes = std.math.mul(usize, n, @sizeOf(u32)) catch return error.OutOfMemory;
-        const p = PageAllocator.map(bytes, .of(u32)) orelse return error.OutOfMemory;
-        const buf = @as([*]u32, @ptrCast(@alignCast(p)))[0..n];
-        assert(buf[0] == absent and buf[n - 1] == absent);
-        return buf;
-    }
-
-    fn unmapMatrix(defs: []u32) void {
-        if (defs.len == 0) return;
-        const p: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(defs.ptr));
-        PageAllocator.unmap(p[0 .. defs.len * @sizeOf(u32)]);
-    }
-
-    /// Index of (place, block), growing the matrix to cover it. Both axes grow
-    /// geometrically: exact growth on either axis is quadratic.
+    /// Index into `cells` of (place, block), growing the directory to cover it
+    /// and giving the pair's chunk its own cells on first write. Both axes
+    /// grow geometrically: exact growth on either axis is quadratic. The
+    /// index stays valid while the directory regrows, not while `cells` does.
     fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
         const p = @intFromEnum(place);
-        const b = @intFromEnum(block);
+        const col = @intFromEnum(block) >> chunk_bits;
 
-        if (b >= self.block_stride) {
-            const new_stride = @max(b + 1, @max(self.block_stride * 2, 16));
-            const new_cap = @max(self.place_cap, 1);
-            const grown = try mapZeroed(@as(usize, new_cap) * new_stride);
-            // Unminted rows are zero already; copying them would fault in pages.
-            var row: usize = 0;
-            while (row < @min(self.place_cap, self.next_place)) : (row += 1) {
-                const src = self.defs[row * self.block_stride ..][0..self.block_stride];
-                @memcpy(grown[row * new_stride ..][0..self.block_stride], src);
+        if (col >= self.dir_stride or p >= self.place_cap) {
+            const stride = if (col < self.dir_stride) self.dir_stride else @max(col + 1, self.dir_stride * 2, 1);
+            const cap = if (p < self.place_cap) self.place_cap else @max(p + 1, self.place_cap * 2, 16);
+            const grown = try map_gpa.alloc(u32, @as(usize, cap) * stride);
+            @memset(grown, 0);
+            // Rows past `next_place` are still all chunk 0.
+            for (0..@min(self.place_cap, self.next_place)) |row| {
+                const src = self.dir[row * self.dir_stride ..][0..self.dir_stride];
+                @memcpy(grown[row * stride ..][0..self.dir_stride], src);
             }
-            unmapMatrix(self.defs);
-            self.defs = grown;
-            self.block_stride = new_stride;
-            self.place_cap = new_cap;
+            map_gpa.free(self.dir);
+            self.dir = grown;
+            self.dir_stride = stride;
+            self.place_cap = cap;
+            if (self.cells.items.len == 0) try self.cells.appendNTimes(map_gpa, absent, chunk_len); // chunk 0
         }
-        if (p >= self.place_cap) {
-            const new_cap = @max(p + 1, @max(self.place_cap * 2, 16));
-            // Appending rows moves nothing, so this is one flat copy. It is a
-            // fresh mapping rather than a `realloc` because an in-place resize
-            // would hand back tail bytes with no zero guarantee (see `absent`).
-            const grown = try mapZeroed(@as(usize, new_cap) * self.block_stride);
-            @memcpy(grown[0..self.defs.len], self.defs);
-            unmapMatrix(self.defs);
-            self.defs = grown;
-            self.place_cap = new_cap;
+        const d = @as(usize, p) * self.dir_stride + col;
+        if (self.dir[d] == 0) {
+            const chunk = self.cells.items.len >> chunk_bits;
+            if (chunk > std.math.maxInt(u32)) return error.OutOfMemory;
+            try self.cells.appendNTimes(map_gpa, absent, chunk_len);
+            self.dir[d] = @intCast(chunk);
         }
-        return @as(usize, p) * self.block_stride + b;
+        return @as(usize, self.dir[d]) << chunk_bits | (@intFromEnum(block) & (chunk_len - 1));
     }
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
@@ -283,13 +289,14 @@ pub const SsaBuilder = struct {
             // back here (`readVariable` mints it) or the predecessors disagree.
             // An acyclic trivial join gets no row at all.
             const cell = try self.defsIndex(place, block);
-            self.defs[cell] = pending;
+            self.cells.items[cell] = pending;
             const top = self.scratch.items.len;
             defer self.scratch.shrinkRetainingCapacity(top);
             try self.readPreds(place, block);
             const pairs = self.scratch.items[top..];
-            // Re-index: the reads may have re-strided the matrix.
-            const now = self.defs[try self.defsIndex(place, block)];
+            // Re-read: the reads may have regrown `cells`, and the cell is
+            // already allocated, so this cannot allocate again.
+            const now = self.cells.items[try self.defsIndex(place, block)];
             if (now != pending) {
                 val = try self.fillPhi(@enumFromInt(now - 1), pairs);
             } else if (sameValue(self.mir, pairs)) |same| {
@@ -570,7 +577,7 @@ test "ssa: diamond phi, trivial collapse, loop phi, undefined read" {
     try std.testing.expectEqual(w0, mir.resolveAlias(try b.readVariable(w, exit)));
 }
 
-test "ssa: matrix growth preserves values, undefined cells and unused rows" {
+test "ssa: map growth preserves values, undefined cells and unused rows" {
     const gpa = std.testing.allocator;
     var mir: Mir = .{ .name = "ssa_growth" };
     defer mir.deinit(gpa);
@@ -583,7 +590,7 @@ test "ssa: matrix growth preserves values, undefined cells and unused rows" {
     try b.writeVariable(x, entry, .f_one);
     try b.writeVariable(y, entry, .undef);
     var last = entry;
-    for (0..16) |_| last = try mir.addBlock(gpa);
+    for (0..2 * chunk_len) |_| last = try mir.addBlock(gpa);
     try b.writeVariable(x, last, .f_two); // grow the block axis with spare rows
     try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
     try std.testing.expectEqual(Mir.Value.undef, try b.readVariable(y, entry));
