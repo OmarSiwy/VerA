@@ -25,7 +25,7 @@ since they feed `evalQ`) is identical to the baseline device.
 | 2 | Group hoisted slots by mask: `[k]zOf(S,m)` arrays instead of one `@Tuple` field per slot (lever 5) | 132.6 → 110.9 Gi (−16%); sema 2.80 → 1.42 s | 72.7 → 63.9 Gi (−12%); sema 1.47 → 0.95 s | txl −4%, others ≈0 | 0 (psp103 `.text` byte-identical; bsim4va same size, identical instructions/eval) | yes | low-medium: slot allocation in `codegen/plan`, device text changes (minor version) |
 | 3 | Split the device into setup / state / eval objects built by parallel `zig build-obj`, then link (levers 3+1) | wall 6.2 → 3.3-3.4 s (stripped); CPU +12 Gi | wall 3.5 → 2.0 s | coupled_ltra 4.6 → 2.5 s; mos1 no gain; resistor 2.9x CPU | 0 (instructions/eval within 0.4%) | yes | medium-high: orchestrator + dyn host contract must export per part; gate on device size |
 | 4 | Skip the preflight `build-obj -fno-emit-bin` on `--emit-so` (lever 7) | −0.23 s, −0.8 Gi | −0.11 s | resistor/diode −0.05 s of ~0.25-0.4 s | 0 | yes | trivial; run it only after a failed build to keep `.va`-attributed errors |
-| 5 | Prebuild the digital engine once (lever 6) | — | — | v_count 21.9 → ≈6.1 Gi upper bound (−70%) | **not measured** (dispatch becomes indirect, State methods cross an object boundary) | not tested | high: C-ABI seam in `src/sim/rt` |
+| 5 | Prebuild the digital engine once (lever 6) | — | — | v_count 17.0 → 4.9 Gi, v_inv 22.2 → 5.1 Gi (stripped, engine cached; Lever 6) | instructions/point +0.0% (v_count), +0.3% (v_inv) | yes | **landed** for `.v` `--emit-so` (LLVM); not for `.v` executables (Lever 6) |
 | 6 | `eval` delegates to `evalQ` (`.res`) in a 3-entry host (lever 2, middle ground) | 172.0 → 141.6 Gi (−18%) | 90.8 → 77.1 Gi (−15%) | mos1 −13% | evalQ unchanged on psp103/bsim4va but **mos1 evalQ +14% cycles**; eval +4% (psp103), +24% (bsim4va) | yes | low, but host-dependent; no gain for the `--emit-so` host |
 | 7 | setup/derive object at ReleaseSmall (lever 4) | −33% without strip; **−2.5% once stripped** | ≈0 once stripped | — | evalQ +0.4% instr | yes | small on top of lever 3; not worth it |
 | — | `-flto` on the device build (re-enables loop vectorisation) | +6.8% Gi | +6.5% | coupled_ltra +1.6%, txl +5% | evalQ −1 to −4% cycles, −2% instr (psp103) | yes (strict sites unaffected) | trivial flag; gain unproven on the array loops (see below) |
@@ -314,6 +314,37 @@ not measured: `rt.root.loop(s, comptime four: Dispatch, …)` currently gets
 table), and engine `State` methods would no longer inline into the device.
 This needs a prototype before a recommendation; implementation is a C-ABI seam
 in `src/sim/rt/device.zig` + `root.zig`.
+
+**Landed 2026-10-01 for `--emit-so` (LLVM) of a `.v` device**
+(`src/sim/rt/engine.zig`, `orchestrator.buildEngine`). Measured against
+e6d9ab3a, fresh work directory, `perf_event` user instructions over vera
+and every child:
+
+| `--emit-so` | e6d9ab3a | engine cached | first build (engine too) |
+|---|---:|---:|---:|
+| v_count | 17.03 Gi | 4.93 Gi (−71%) | 20.77 Gi |
+| v_inv | 22.16 Gi | 5.11 Gi (−77%) | 20.95 Gi |
+
+v_inv's extra 5 Gi was `std.mem.sort`'s block sort of the A2D edges (28 KB
+of `.text`), now an insertion sort (stable, same order). Runtime, 100k 1 ns
+transient points of `updateState` + `commit` (bit-identical hashes):
+v_count 1721.2 → 1721.1 instructions per point, v_inv 881.3 → 883.8
+(+0.3%); cycles within run-to-run noise. A first version that also moved
+`State.initIn` across the seam cost +7% instructions per point (the
+design's table lengths stop being comptime-known), so `initIn` stays on the
+device side.
+
+The seam was tried for native `.v` executables too and **not landed**:
+count8 (8 × 32-bit counters) built 34.1 → 27.5 Gi (−19%, the design's
+own code dominates), and the executable exited 1 with no output when its
+stdout was a pipe (it printed correctly to a file or terminal). That is
+consistent with Zig numbering error values per compilation: an engine-built
+`File.Writer.drain` cannot match the `error.Unseekable` the design's `std.Io`
+returns, so it fails the write. An executable's engine does I/O
+through `std.Io` and writers on both sides; a contract device's does none
+(it is always `quiet`, which `engine.cLoop` checks), so only devices cross.
+The self-hosted backend (Debug) builds the whole v_inv engine in the same
+5.9 Gi as a cache check plus the device, so it links nothing prebuilt.
 
 ## Lever 7 — preflight type check
 
