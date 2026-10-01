@@ -269,7 +269,12 @@ const Resume = struct { pc: u32, ctx: u32, live: bool };
 /// The emitted function reads the declaring scope's slots in the active
 /// logic phase. Its address is immutable across a saved tick boundary.
 pub const EventSelect = fn (*State) Error!?u32;
-const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSelect = null };
+const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSelect = null, rec: u32 = no_rec };
+/// §9.7.2 a constant select term's bits: `width` of them from bit `shift`
+/// of plane word `word` on, and their value when last tested.
+const Rec = struct { word: u32, shift: u32, width: u32, v: u64, x: u64 };
+/// `Term.rec` of a term that watches its whole slot.
+const no_rec = std.math.maxInt(u32);
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
 /// holds then. `v`, `x` and `m` are `n` words each: the row's own `one`
@@ -503,6 +508,9 @@ pub const State = struct {
     words: std.ArrayList(u64) = .empty,
     susps: std.ArrayList(Susp) = .empty,
     free_susps: std.ArrayList(u32) = .empty,
+    /// The select terms' bits (`Term.rec`), and the rows free.
+    recs: std.ArrayList(Rec) = .empty,
+    free_recs: std.ArrayList(u32) = .empty,
     terms: []std.ArrayList(Term),
     fan_start: []const u32,
     fan: []const u32,
@@ -1349,7 +1357,10 @@ pub const State = struct {
         var keep: usize = 0;
         for (list.items) |t| {
             const s = &self.susps.items[t.susp];
-            if (s.gen != t.gen) continue;
+            if (s.gen != t.gen) {
+                self.dropRec(t);
+                continue;
+            }
             // Only named-event lists carry selectors. IEEE §10.4.4(f)
             // forbids a function from triggering an event, so a selector
             // cannot recursively compact this same list. Its blocking
@@ -1359,11 +1370,13 @@ pub const State = struct {
             // A selector can call an HDL function whose writes resume this
             // suspension through another term of its event-or expression.
             if (s.gen != t.gen) continue;
-            if (!t.edge.matches(before, after) or !selected) {
+            const hit = if (t.rec == no_rec) t.edge.matches(before, after) else self.recChanged(t.rec, t.edge);
+            if (!hit or !selected) {
                 list.items[keep] = t;
                 keep += 1;
                 continue;
             }
+            self.dropRec(t);
             if (reach.watch) try self.wakeWatchers(slot, before, after, s.seq);
             const pc = s.pc;
             const ctx = s.ctx;
@@ -1393,7 +1406,8 @@ pub const State = struct {
     pub fn wakes(self: *const State, slot: u32) std.EnumSet(Edge) {
         var e: std.EnumSet(Edge) = .initEmpty();
         if (self.sensed(slot) or (slot + 1 < self.fan_start.len and self.fan_start[slot] != self.fan_start[slot + 1])) e.insert(.any);
-        for (self.terms[slot].items) |t| if (self.susps.items[t.susp].gen == t.gen) e.insert(t.edge);
+        // A select term's edge is of a bit other than the slot's LSB.
+        for (self.terms[slot].items) |t| if (self.susps.items[t.susp].gen == t.gen) e.insert(if (t.rec == no_rec) t.edge else .any);
         if (slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
             if (self.waiting[w.proc] != 0) e.insert(w.edge);
         };
@@ -1441,11 +1455,63 @@ pub const State = struct {
             for (list.items) |t| if (self.susps.items[t.susp].gen == t.gen) {
                 list.items[keep] = t;
                 keep += 1;
-            };
+            } else self.dropRec(t);
             list.shrinkRetainingCapacity(keep);
             if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.gpa, list.capacity * 2);
         }
         try list.append(self.gpa, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge, .select = select });
+    }
+
+    /// §9.7.2 a constant select term: bits `[lo, lo + width)` (at most 64)
+    /// of `slot`, whose words start at `off`. It remembers them, so every
+    /// update of the slot is tested against them at once (§11.6.3), a
+    /// pulse that puts them back included.
+    pub fn watchBits(self: *State, id: u32, slot: u32, off: u32, lo: u32, width: u32, edge: Edge) Error!void {
+        const k = self.free_recs.pop() orelse blk: {
+            try self.recs.append(self.gpa, undefined);
+            break :blk @as(u32, @intCast(self.recs.items.len - 1));
+        };
+        // `dropRec` returns it without failing.
+        try self.free_recs.ensureTotalCapacity(self.gpa, self.recs.items.len);
+        const r = &self.recs.items[k];
+        r.* = .{ .word = off + lo / 64, .shift = lo % 64, .width = width, .v = 0, .x = 0 };
+        const now = self.bits(r.*);
+        r.v = now.v;
+        r.x = now.x;
+        try self.watchTerm(id, slot, edge, null);
+        const list = &self.terms[slot];
+        list.items[list.items.len - 1].rec = k;
+    }
+
+    /// A select term's bits now.
+    fn bits(self: *const State, r: Rec) W {
+        const sh: u6 = @intCast(r.shift);
+        var v = self.v[r.word] >> sh;
+        var x = if (two) 0 else self.x[r.word] >> sh;
+        if (sh != 0 and r.shift + r.width > 64) {
+            const up: u6 = @intCast(64 - r.shift);
+            v |= self.v[r.word + 1] << up;
+            if (!two) x |= self.x[r.word + 1] << up;
+        }
+        const m = if (r.width == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(r.width)) - 1;
+        return .{ .v = v & m, .x = x & m };
+    }
+
+    /// Did select term `k`'s bits change in a way `edge` matches (of their
+    /// least significant bit)? Either way it now remembers them.
+    fn recChanged(self: *State, k: u32, edge: Edge) bool {
+        const r = &self.recs.items[k];
+        const now = self.bits(r.*);
+        if (now.v == r.v and now.x == r.x) return false;
+        const before = logic.low(W{ .v = r.v, .x = r.x });
+        r.v = now.v;
+        r.x = now.x;
+        return edge.matches(before, logic.low(now));
+    }
+
+    /// A term leaves its list: its select bits' row is free.
+    inline fn dropRec(self: *State, t: Term) void {
+        if (t.rec != no_rec) self.free_recs.appendAssumeCapacity(t.rec);
     }
 
     fn retire(self: *State, id: u32) void {

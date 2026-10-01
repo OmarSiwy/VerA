@@ -110,7 +110,40 @@ pub const Term = struct {
     /// waiter. Changing the index itself does not cause an occurrence.
     event_select: Ast.ExprId = .none,
     scope: u32 = 0,
+    /// §9.7.2 a constant select term (`compile.selectTerm`): bits
+    /// `[lo, lo + width)` of the slot, and their value when last tested
+    /// (`v`, `x` planes); width 0 is the whole slot.
+    lo: u32 = 0,
+    width: u32 = 0,
+    v: u64 = 0,
+    x: u64 = 0,
 };
+
+/// Bits `[lo, lo + width)` of `value`, `width` at most 64, as (values,
+/// unknowns) words.
+fn termBits(value: Int.Literal, lo: u32, width: u32) [2]u64 {
+    var out: [2]u64 = undefined;
+    for ([_][]const u64{ value.values(), value.unknowns() }, &out) |plane, *o| {
+        const w = lo / 64;
+        const sh: u6 = @intCast(lo % 64);
+        var bits = plane[w] >> sh;
+        if (sh != 0 and w + 1 < plane.len) bits |= plane[w + 1] << @intCast(64 - @as(u7, sh));
+        o.* = bits & wordMask(width, 0);
+    }
+    return out;
+}
+
+/// A change of a select term's bits: whether it matches `t.edge` (of the
+/// select's least significant bit) and, either way, `t` now remembers them.
+fn selectChanged(t: *Term, value: Int.Literal) bool {
+    const now = termBits(value, t.lo, t.width);
+    if (now[0] == t.v and now[1] == t.x) return false;
+    const before: Int.Bit = @enumFromInt(@as(u2, @intCast(t.v & 1)) | @as(u2, @intCast(t.x & 1)) << 1);
+    const after: Int.Bit = @enumFromInt(@as(u2, @intCast(now[0] & 1)) | @as(u2, @intCast(now[1] & 1)) << 1);
+    t.v = now[0];
+    t.x = now[1];
+    return t.edge.matches(before, after);
+}
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -961,11 +994,13 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
     // stale one (its suspension resumed through another slot, or was
     // disabled) is dropped.
     var keep: usize = 0;
-    for (list.items) |t| {
+    for (list.items) |t0| {
+        var t = t0;
         const s = &self.susps.items[t.susp];
         if (s.gen != t.gen) continue;
         const selected = (if (event) |e| event_ctx == eventContext(self, e.scope, s.ctx) else true) and
-            t.edge.matches(before, after) and try selectedEvent(self, t, target);
+            (if (t.width == 0) t.edge.matches(before, after) else selectChanged(&t, self.values[target])) and
+            try selectedEvent(self, t, target);
         // An index function's blocking write can satisfy another term of
         // this event-or suspension while selectedEvent evaluates it.
         if (s.gen != t.gen) continue;
@@ -1506,6 +1541,14 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
             }
             return;
         }
+    }
+    if (try compile.selectTerm(self, watched)) |sel| {
+        try watch(self, id, sel.slot, edge);
+        const list = termsOf(self, sel.slot).?;
+        const term = &list.items[list.items.len - 1];
+        const now = termBits(self.values[sel.slot], sel.first, sel.count);
+        term.* = .{ .susp = term.susp, .gen = term.gen, .edge = edge, .lo = sel.first, .width = sel.count, .v = now[0], .x = now[1] };
+        return;
     }
     try watch(self, id, try self.termSlot(watched), edge);
 }

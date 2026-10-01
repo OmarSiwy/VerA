@@ -35,6 +35,8 @@ pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
     try list(w, s.susps.items);
     try list(w, s.free_susps.items);
     try list(w, s.free_late.items);
+    try list(w, s.recs.items);
+    try list(w, s.free_recs.items);
     try count(w, s.late.items.len);
     for (s.late.items) |l| {
         try w.writeAll(std.mem.asBytes(&[4]u32{ l.slot, l.off, l.n, @intFromBool(l.real) }));
@@ -159,6 +161,9 @@ fn load(s: *State, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.
     // `park` grows the free list so `retire` never fails.
     try s.free_susps.ensureTotalCapacity(gpa, s.susps.items.len);
     try reload(r, gpa, &s.free_late);
+    try reload(r, gpa, &s.recs);
+    try reload(r, gpa, &s.free_recs);
+    try s.free_recs.ensureTotalCapacity(gpa, s.recs.items.len);
     for (s.late.items) |l| gpa.free(l.words);
     try s.late.resize(gpa, try take(r));
     for (s.late.items) |*l| {

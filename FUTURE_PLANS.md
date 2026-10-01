@@ -164,9 +164,13 @@ Two older user worktrees remain untouched after read-only review:
   - nested/conditional generate metadata and generated net arrays; ordinary
     generated scalar/vector nets and their enclosing scopes are gated at
     `c0e9b469`.
-- **`@(posedge v[0])`** wakes one active-region pass later than `@(posedge v)`
-  (§11.4.2 allows it, but a glitch inside one pass is missed). An exact per-bit
-  event term for constant selects is 2–3 h.
+- **Constant select event terms** (`@(posedge v[0])`, `@(v[3:2])`) watch
+  their bits of the vector directly in both engines (`compile.selectTerm`,
+  `rt.State.watchBits`), so a zero-width pulse inside one pass is seen
+  (`b_9_7_2_select_edge_glitch`). Left: a select wider than 64 bits, out of
+  range, or of an array element keeps the hidden-slot term one pass later;
+  under `--schedule=static` a process waiting on a select term is general,
+  not triggered.
 - **Compile and run Verilog:** `test-1364 -- --native`, `--native=static`
   and `--native=four` build executables, run them and check their transcripts.
   `zig build test` also executes generated `.v` contract devices in host

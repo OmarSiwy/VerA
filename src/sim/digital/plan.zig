@@ -24,6 +24,10 @@ pub const Term = struct {
     /// occurrence resumes it at run time. Its index is not a value event.
     count: u32 = 1,
     event_select: Ast.ExprId = .none,
+    /// §9.7.2 a constant select term (`compile.selectTerm`): it watches
+    /// bits `[lo, lo + width)` of `slot`; width 0 is the whole slot.
+    lo: u32 = 0,
+    width: u32 = 0,
 };
 
 pub const Role = union(enum) {
@@ -91,6 +95,8 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
             .event_select = watched,
         });
     }
+    if (compile.selectTerm(r, watched) catch return self.refuse("an event term the engine resolves only at run time")) |sel|
+        return out.append(self.arena, .{ .slot = sel.slot, .edge = edge, .lo = sel.first, .width = sel.count });
     const at = r.termSlot(watched) catch return self.refuse("an event term the engine resolves only at run time");
     try out.append(self.arena, .{ .slot = at, .edge = edge });
 }
@@ -420,12 +426,15 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
 /// Does `p` suspend only at its entry, returning there after every pass?
 fn fixedWait(self: *Emitter, p: Proc) Error!bool {
     // An indexed named event re-evaluates its index at each occurrence;
-    // its suspension therefore needs a selector, not a fixed watcher.
+    // its suspension therefore needs a selector, not a fixed watcher. A
+    // select term remembers its bits per suspension (`rt.State.watchBits`).
+    // ponytail: such a process is general, not triggered; give `Watcher`
+    // a bit window if a levelized design needs it.
     if (self.r.code.items[p.entry] == .wait_event) {
         self.r.scope = self.r.code_scope.items[p.entry];
         var ts: std.ArrayList(Term) = .empty;
         try terms(self, self.r.code.items[p.entry].wait_event, &ts);
-        for (ts.items) |t| if (t.event_select != .none) return false;
+        for (ts.items) |t| if (t.event_select != .none or t.width != 0) return false;
     }
     for (p.pcs) |pc| {
         if (pc == p.entry) continue;
