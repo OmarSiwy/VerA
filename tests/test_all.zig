@@ -104,3 +104,12 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
     // emitting the prefix would otherwise pass by matching nothing.
     try std.testing.expect(std.mem.indexOf(u8, device, "contract.validate(") != null);
 }
+
+// The split build writes `orchestrator.Part` tags into the shims as enum
+// literals the host's `exportDevicePart` takes as `contract.DevicePart`.
+test "orchestrator.Part and contract.DevicePart name the same parts" {
+    const a = std.meta.fieldNames(vera.orchestrator.Part);
+    const b = std.meta.fieldNames(contract.DevicePart);
+    try std.testing.expectEqual(a.len, b.len);
+    for (a, b) |x, y| try std.testing.expectEqualStrings(x, y);
+}
