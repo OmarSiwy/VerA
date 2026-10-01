@@ -968,22 +968,26 @@ pub const hist_txt =
     \\            "{d}-sample history holds; see `vera --explain E1012`\n", .{n});
     \\        std.process.exit(1);
     \\    }
-    \\    var i: usize = 0;
-    \\    const last: usize = @intCast((head + n - 1) % n);
-    \\    var newer = last;
-    \\    while (i < n) : (i += 1) {
-    \\        const older = (newer + n - 1) % n;
-    \\        if (ts[older] <= t and t <= ts[newer]) {
-    \\            const span = ts[newer] - ts[older];
-    \\            if (span <= 0.0) return vs[newer];
-    \\            const f = (t - ts[older]) / span;
-    \\            return vs[older] + (vs[newer] - vs[older]) * f;
-    \\        }
-    \\        newer = older;
+    \\    // Binary search in age order (c = 0 is the oldest live sample): `lo`
+    \\    // ends at the newest sample at or before t, so the bracket is the
+    \\    // NEWEST interval holding t, the one a scan from the newest end finds
+    \\    // first. O(log n): a 5 ns line at 1 ps looks 5000 samples back.
+    \\    // `zAbsdelay` covers t > newest, so t ≤ ts[newest] here.
+    \\    const count: usize = @intCast(@min(head, n));
+    \\    if (count < 2) return vs[oldest]; // only a NaN t gets here
+    \\    var lo: usize = 0;
+    \\    var hi: usize = count;
+    \\    while (hi - lo > 1) {
+    \\        const mid = lo + (hi - lo) / 2;
+    \\        if (ts[(oldest + mid) % n] <= t) lo = mid else hi = mid;
     \\    }
-    \\    // Unreachable for a monotone ring: the clamp above covers t ≤ oldest and
-    \\    // `zAbsdelay` covers t > newest, so every remaining t is bracketed.
-    \\    return vs[last];
+    \\    const c = @min(lo + 1, count - 1);
+    \\    const older = (oldest + c - 1) % n;
+    \\    const newer = (oldest + c) % n;
+    \\    const span = ts[newer] - ts[older];
+    \\    if (span <= 0.0) return vs[newer];
+    \\    const f = (t - ts[older]) / span;
+    \\    return vs[older] + (vs[newer] - vs[older]) * f;
     \\}
     \\fn zHistPush(ts: []f64, vs: []f64, head: *u64, t: f64, v: f64) void {
     \\    const at: usize = @intCast(head.* % ts.len);
@@ -1032,11 +1036,16 @@ pub const hist_quad_txt =
     \\    const count: usize = @intCast(@min(head, n));
     \\    const oldest: usize = if (head > n) @intCast(head % n) else 0;
     \\    if (count < 3 or t <= ts[oldest]) return zHistAt(ts, vs, head, t);
-    \\    // The ring is monotone in time and its live slots are `ts[0..count]`,
-    \\    // so the samples at or before `t` count out the older end of its
-    \\    // interval: no data-dependent exit.
-    \\    var m: usize = 0;
-    \\    for (ts[0..count]) |s| m += @intFromBool(s <= t);
+    \\    // The ring is monotone in time, so the samples at or before `t` count
+    \\    // out the older end of its interval; `zHistAt`'s binary search in age
+    \\    // order finds that count in O(log n).
+    \\    var lo: usize = 0;
+    \\    var hi: usize = count;
+    \\    while (hi - lo > 1) {
+    \\        const mid = lo + (hi - lo) / 2;
+    \\        if (ts[(oldest + mid) % n] <= t) lo = mid else hi = mid;
+    \\    }
+    \\    const m = lo + 1;
     \\    const w = oldest + @min(m - 1 -| 1, count - 3);
     \\    const i_0 = w % n;
     \\    const i_1 = (w + 1) % n;

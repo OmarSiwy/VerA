@@ -601,7 +601,8 @@ pub fn isAnalysisName(s: []const u8) bool {
     return false;
 }
 
-/// Length of the §4.5.7 absdelay history ring, in samples.
+/// Length of the §4.5.7 absdelay history ring, in samples, of a site with no
+/// constant `maxdelay`.
 // ponytail: a fixed 1024 samples with linear interpolation. SPICE's
 // maxstep = min(tstep, span/50) already allows td/dt = 100 steps per delay,
 // and ch04_expressions/a04_05 needs 515. A query older than the ring ends the
@@ -609,6 +610,13 @@ pub fn isAnalysisName(s: []const u8) bool {
 // so a clamp would silently shorten the delay. Upgrade path: host-owned
 // growable history.
 pub const hist_len: usize = 1024;
+/// The step a `maxdelay` site's ring is sized for: `ceil(maxdelay /
+/// hist_min_step) + 2` samples, within [`hist_len`, `hist_max`]. 1 ps is
+/// the step a transmission line with a 1-5 ns delay is resolved at.
+pub const hist_min_step: f64 = 1e-12;
+/// The largest ring a `maxdelay` sizes: 16384 samples, 256 KiB of
+/// `Instance` per site (16.4 ns of delay at `hist_min_step`).
+pub const hist_max: usize = 16384;
 
 // ===========================================================================
 // §4.5 analog operators: which ones own per-instance state

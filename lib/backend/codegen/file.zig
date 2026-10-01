@@ -28,8 +28,21 @@ const none_u32 = codegen.none_u32;
 /// testbench runs `validateHost`, which compares the two.
 const contract_abi = 5;
 const VTy = codegen.VTy;
-const hist_len = codegen.hist_len;
 const OpKind = @import("ir").op.OpKind;
+
+/// The ring length of absdelay unit `i`: `codegen.hist_len`, or, for a
+/// §4.5.7 `maxdelay` that folds (its declared default when a parameter), enough
+/// samples to hold that delay at `codegen.hist_min_step`, up to
+/// `codegen.hist_max`. A longer lookback still ends the run with E1012.
+fn histLen(self: *const Gen, i: usize) usize {
+    const args = self.names.opArgs(self.mir, i);
+    if (args.len < 3) return codegen.hist_len;
+    const md = (self.an.foldConst(args[2], true) orelse return codegen.hist_len).f;
+    const want = md / codegen.hist_min_step + 2.0;
+    if (!(want > @as(f64, @floatFromInt(codegen.hist_len)))) return codegen.hist_len;
+    if (!(want < @as(f64, @floatFromInt(codegen.hist_max)))) return codegen.hist_max;
+    return @intFromFloat(@ceil(want));
+}
 
 // =======================================================================
 // File assembly
@@ -788,7 +801,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
                         "    {s}__v: [{d}]f64 = @splat(0.0),\n" ++
                         "    {s}__head: u64 = 0,\n",
-                    .{ n, hist_len, n, hist_len, n },
+                    .{ n, histLen(self, i), n, histLen(self, i), n },
                 );
                 // The ring itself is not copied: `stateCtl` keeps the one
                 // sample the next push overwrites (`emitStateCtl`).
@@ -1048,7 +1061,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
             "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n",
-            .{ self.names.unit_names[i], hist_len },
+            .{ self.names.unit_names[i], histLen(self, i) },
         );
     }
     if (t_prev) try self.w("        state.t_prev__acc = state.t_prev;\n", .{});
@@ -1062,7 +1075,7 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
             "        inst.{0s}__t[@intCast(inst.{0s}__head % {1d})] = state.{0s}__t__acc;\n        inst.{0s}__v[@intCast(inst.{0s}__head % {1d})] = state.{0s}__v__acc;\n",
-            .{ self.names.unit_names[i], hist_len },
+            .{ self.names.unit_names[i], histLen(self, i) },
         );
     }
     if (t_prev) try self.w("        state.t_prev = state.t_prev__acc;\n", .{});

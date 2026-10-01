@@ -6390,13 +6390,16 @@ fn infoOf(c: Code) Info {
             \\An engine limit, not a language rule. LRM 4.5.7 defines absdelay
             \\over all past time, Output(t) = Input(max(t - td, 0)), and bounds
             \\no lookback. VerA keeps the last 1024 accepted samples of each
-            \\absdelay site. When the delay reaches past the oldest one, the run
-            \\ends with this code and exit status 1: answering from a newer
-            \\sample would be a shorter delay reported as this one.
+            \\absdelay site; a site with a constant maxdelay keeps enough for
+            \\that delay at a 1 ps step, ceil(maxdelay / 1ps) + 2, up to 16384.
+            \\When the delay reaches past the oldest sample, the run ends with
+            \\this code and exit status 1: answering from a newer sample would
+            \\be a shorter delay reported as this one.
             \\
-            \\The count is of accepted timepoints, not of time. Take fewer,
-            \\larger steps across the delay (a larger maximum step in the host),
-            \\or shorten td.
+            \\The count is of accepted timepoints, not of time. Give the call
+            \\its maxdelay, absdelay(x, td, td_max), take fewer, larger steps
+            \\across the delay (a larger maximum step in the host), or shorten
+            \\td.
             ,
         },
         .E1013 => .{
