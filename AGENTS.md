@@ -305,7 +305,8 @@ retention analysis cannot prove written before read; a device whose only
 state was such a variable drops to `state_class = .none`. `= 0` turns it
 off; the value folds without the card (E0534). On anything but a variable
 (parameter, net, genvar, statement) it is E0535; on a variable an `analog
-initial` or `@(...)` body assigns and a later read may see, E0536.
+initial` or `@(...)` body assigns and a later read may see, E0536; on one
+an `initial`/`always` block or a task assigns (§7.2.2 digital-owned), E0537.
 
 **`$vera_reject_step(t_retry)`.** A VerA system task in an analog block:
 on a transient step's accepted solution, `updateState` returns

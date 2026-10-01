@@ -568,7 +568,7 @@ fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
     return null;
 }
 
-fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
+pub fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
     if (id == .none) return;
     const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
