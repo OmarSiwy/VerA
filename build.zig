@@ -119,7 +119,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/bench.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "vera", .module = byName(mods, "vera") }},
+        .imports = &.{
+            .{ .name = "vera", .module = byName(mods, "vera") },
+            // Vendored under deps/; no `module_specs` row uses it, so an
+            // embedder of the compiler does not take it.
+            .{ .name = "stdpp", .module = b.dependency("stdpp", .{}).module("stdpp") },
+        },
     });
     suite_mod.addOptions("suite_options", o);
     // An executable, not a `test` block, so one run prints every failing
