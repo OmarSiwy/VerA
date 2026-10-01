@@ -887,6 +887,27 @@ pub const arr_txt =
     \\    return a;
     \\}
     \\
+    \\/// Every element of `a` set to `v`, the per-evaluation §3.2 start. Past a
+    \\/// few stores LLVM lowers `@memset` to a `memset` call, and Zig 0.16's
+    \\/// compiler_rt `memset` stores ONE BYTE per iteration (a 1.5 KB
+    \\/// derivative stack took ~800 cycles). Read through a volatile, `v` is
+    \\/// no constant LLVM can turn back into a memset, so the loop below stays
+    \\/// explicit 4-lane stores (a plain `f64`/`i64` array) or one element per
+    \\/// store. The stored bits are `v`'s either way.
+    \\fn zFill(comptime T: type, comptime n: usize, a: *[n]T, v: T) void {
+    \\    if (@sizeOf([n]T) <= 128) return @memset(a, v);
+    \\    var o = v;
+    \\    const z = @as(*volatile T, &o).*;
+    \\    if (T == f64 or T == i64) {
+    \\        const k = n / 4;
+    \\        const vs: *align(@alignOf(T)) [k]@Vector(4, T) = @ptrCast(a);
+    \\        for (vs) |*e| e.* = @splat(z);
+    \\        for (a[k * 4 ..]) |*e| e.* = z;
+    \\    } else for (a) |*e| {
+    \\        e.* = z;
+    \\    }
+    \\}
+    \\
     \\/// The values of an `S` array: what a held array's `f64` `Instance`
     \\/// field keeps.
     \\fn zArrVal(comptime S: type, comptime n: usize, a: *const [n]S) [n]f64 {

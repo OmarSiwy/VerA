@@ -385,9 +385,12 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 }
                 return self.b(" else asm volatile (\"\" : : [p] \"r\" (&a{d}) : .{{ .memory = true }});\n", .{d.array});
             }
+            // §3.2 every evaluation starts it at zero (`zFill`: no
+            // byte-wise compiler_rt `memset` call).
             if (m.held == none_u32) {
-                if (!plain) return self.b("@memset(&a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ d.array, self.arr_mask[d.array] });
-                return self.b("@memset(&a{d}, {s});\n", .{ d.array, if (m.ty == .integer) "0" else "0.0" });
+                const ty = try arrElemTy(self, d.array);
+                if (!plain) return self.b("zFill({s}, {d}, &a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ ty, m.len, d.array, self.arr_mask[d.array] });
+                return self.b("zFill({s}, {d}, &a{d}, {s});\n", .{ ty, m.len, d.array, if (m.ty == .integer) "0" else "0.0" });
             }
             // §5.10 a held array starts from what the last accepted
             // evaluation left in its `Instance` field.

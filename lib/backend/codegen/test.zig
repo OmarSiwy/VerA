@@ -401,6 +401,55 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.hh__held__hist = m.f") == null);
 }
 
+test "codegen: §3.2 a memory-backed array starts each evaluation through zFill, not @memset" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module zf(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  integer sp;
+        \\  real st[0:31];
+        \\  analog begin
+        \\    sp = ($abstime < 0.5) ? 1 : 2;
+        \\    st[sp] = V(p, n);
+        \\    I(p, n) <+ st[sp] + st[sp - 1];
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zFill(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "@memset(&a") == null);
+}
+
+test "zFill: every element gets the value's bits, small and large, plain and odd lengths" {
+    const T = struct {
+        fn zFill(comptime E: type, comptime n: usize, a: *[n]E, v: E) void {
+            if (@sizeOf([n]E) <= 128) return @memset(a, v);
+            var o = v;
+            const z = @as(*volatile E, &o).*;
+            if (E == f64 or E == i64) {
+                const k = n / 4;
+                const vs: *align(@alignOf(E)) [k]@Vector(4, E) = @ptrCast(a);
+                for (vs) |*e| e.* = @splat(z);
+                for (a[k * 4 ..]) |*e| e.* = z;
+            } else for (a) |*e| {
+                e.* = z;
+            }
+        }
+    };
+    // The kernel text must stay the copy above.
+    try std.testing.expect(std.mem.indexOf(u8, @import("kernel_text.zig").arr_txt, "    const vs: *align(@alignOf(T)) [k]@Vector(4, T) = @ptrCast(a);") != null);
+    var a: [37]f64 = @splat(1.0);
+    T.zFill(f64, 37, &a, -0.0);
+    for (a) |x| try std.testing.expectEqual(@as(u64, 1 << 63), @as(u64, @bitCast(x)));
+    var b: [9]i64 = @splat(3);
+    T.zFill(i64, 9, &b, 0);
+    for (b) |x| try std.testing.expectEqual(@as(i64, 0), x);
+    var c: [21][3]f64 = undefined;
+    T.zFill([3]f64, 21, &c, .{ 1, 2, 3 });
+    for (c) |x| try std.testing.expectEqual([3]f64{ 1, 2, 3 }, x);
+}
+
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);
