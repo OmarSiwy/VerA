@@ -1,0 +1,1 @@
+{"sub": "build-exe", "opt": "-OReleaseSmall", "noemit": false, "wall": 8.892175427998154, "cpu": 8.915013, "gi": 56.807232872, "llvm": true, "selfhosted": false, "listen": false, "t_end": 1790824371.290184}

@@ -1,0 +1,8 @@
+{"so": "psp103.base.so", "entry": "bench_loop", "hash": "3485a2fc8eafa8e4", "bit_exact_vs_first": true, "cyc_min": 4918.2, "ins": 7868.85, "ns_min": 2341.099, "delta_cyc_pct": 0.0}
+{"so": "psp103.combo.so", "entry": "bench_loop", "hash": "3485a2fc8eafa8e4", "bit_exact_vs_first": true, "cyc_min": 4814.37, "ins": 7867.52, "ns_min": 2164.652, "delta_cyc_pct": -2.11}
+{"so": "bsim4va.base.so", "entry": "bench_loop", "hash": "3b64905a86dc7508", "bit_exact_vs_first": true, "cyc_min": 3665.35, "ins": 6506.04, "ns_min": 1724.123, "delta_cyc_pct": 0.0}
+{"so": "bsim4va.combo.so", "entry": "bench_loop", "hash": "3b64905a86dc7508", "bit_exact_vs_first": true, "cyc_min": 3739.88, "ins": 6506.06, "ns_min": 1684.251, "delta_cyc_pct": 2.03}
+{"so": "coupled_ltra.base.so", "entry": "bench_loop", "hash": "75a7e1d5f964f61a", "bit_exact_vs_first": true, "cyc_min": 140.48, "ins": 318.03, "ns_min": 68.386, "delta_cyc_pct": 0.0}
+{"so": "coupled_ltra.combo.so", "entry": "bench_loop", "hash": "75a7e1d5f964f61a", "bit_exact_vs_first": true, "cyc_min": 154.94, "ins": 318.02, "ns_min": 69.124, "delta_cyc_pct": 10.29}
+{"so": "mos1.base.so", "entry": "bench_loop", "hash": "f8cc188c5773b6fd", "bit_exact_vs_first": true, "cyc_min": 289.43, "ins": 612.12, "ns_min": 135.762, "delta_cyc_pct": 0.0}
+{"so": "mos1.combo.so", "entry": "bench_loop", "hash": "f8cc188c5773b6fd", "bit_exact_vs_first": true, "cyc_min": 290.92, "ins": 612.14, "ns_min": 134.419, "delta_cyc_pct": 0.51}

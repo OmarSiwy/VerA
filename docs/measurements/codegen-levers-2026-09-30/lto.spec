@@ -1,0 +1,10 @@
+psp103.strip2:trees/psp103:dyn_bench.zig:-fstrip
+psp103.lto:trees/psp103:dyn_bench.zig:-fstrip,-flto
+bsim4va.strip2:trees/bsim4va:dyn_bench.zig:-fstrip
+bsim4va.lto:trees/bsim4va:dyn_bench.zig:-fstrip,-flto
+coupled_ltra.strip2:trees/coupled_ltra:dyn_bench.zig:-fstrip
+coupled_ltra.lto:trees/coupled_ltra:dyn_bench.zig:-fstrip,-flto
+txl.strip2:trees/txl:dyn_bench.zig:-fstrip
+txl.lto:trees/txl:dyn_bench.zig:-fstrip,-flto
+mos1.strip2:trees/mos1:dyn_bench.zig:-fstrip
+mos1.lto:trees/mos1:dyn_bench.zig:-fstrip,-flto
