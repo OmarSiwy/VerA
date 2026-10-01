@@ -20,6 +20,7 @@
 //   record or value follows the last $comment section after
 //   $enddefinitions                                    -> comment_last=1
 //! inherited IEEE 1364-2005 18.3.4
+// native-required
 `timescale 1ns/1ns
 module b_18_3_4_dev(a, y);
   input a;

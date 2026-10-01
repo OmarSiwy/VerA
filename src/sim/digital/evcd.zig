@@ -5,8 +5,8 @@
 //! (§18.4.3) changed, and `$vcdclose` when the run ends (§18.3.6.1).
 //! A port's state is read from its net's drivers, split at the instance
 //! boundary: those inside the dumped instance drive its output side, the
-//! rest its input side (§18.4.3.2). The interpreter's alone: a native
-//! executable keeps no driver strengths, so `emit` refuses `$dumpports`.
+//! rest its input side (§18.4.3.2). A native executable writes the same
+//! file through `rt/evcd.zig`, from `rt.net`'s driver rows.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -249,7 +249,7 @@ fn portName(r: *Run, p: Port) []const u8 {
 }
 
 /// The instance path of `scope` from its root, `top.u`.
-fn path(r: *Run, w: *std.Io.Writer, scope: u32) std.Io.Writer.Error!void {
+pub fn path(r: *Run, w: *std.Io.Writer, scope: u32) std.Io.Writer.Error!void {
     const info = r.scope_info.items[scope];
     if (!root.isRoot(r, scope)) {
         try path(r, w, info.parent);
@@ -349,7 +349,7 @@ fn unknown(a: std.mem.Allocator, r: *Run, p: Port) Error![]const u8 {
 }
 
 /// Is `scope` the instance `inst` or inside it?
-fn below(r: *Run, scope: u32, inst: u32) bool {
+pub fn below(r: *Run, scope: u32, inst: u32) bool {
     var s = scope;
     while (true) {
         if (s == inst) return true;
@@ -358,7 +358,7 @@ fn below(r: *Run, scope: u32, inst: u32) bool {
     }
 }
 
-const State = struct { c: u8, s0: u8, s1: u8 };
+pub const State = struct { c: u8, s0: u8, s1: u8 };
 
 /// A signal's strength components: the strength0 and strength1 levels it
 /// spans (0 on a side it does not reach).
@@ -370,7 +370,7 @@ fn levels(s: Signal) [2]u8 {
 /// what the input side (`in`, the test fixture) and the output side (`out`,
 /// the device) drive. "Strength 7 to 5: strong strength; Strength 4 to 1:
 /// weak strength."
-fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
+pub fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
     const li = levels(in);
     const lo = levels(out);
     if (in.none() and out.none()) return .{ .c = switch (dir) {

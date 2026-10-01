@@ -215,6 +215,8 @@ pub const Emitter = struct {
     /// The `Run` nets and drivers of those rows, in row order.
     rt_nets: std.ArrayList(u32) = .empty,
     rt_drivers: std.ArrayList(u32) = .empty,
+    /// §18.3 each `$dumpports` call (`rt.evcd.File`), by the pc it is at.
+    port_files: std.ArrayList(PortFile) = .empty,
 
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
         self.out.writer.print(f, args) catch return error.OutOfMemory;
@@ -493,6 +495,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     if (r.drv.watched.items.len != 0) return self.refuse("VAMS §9.22 driver access");
     // §7.6: what a switch passes is a strength, which an x or z carries.
     if (r.trans.len != 0) try self.xMeaning("a §7.6 pass switch", null);
+    try portDumps(self);
     try resolvedNets(self);
     // The time-0 queue in `Run.pending` order: every driver, declaration
     // assignment and process, as the pc it starts at.
@@ -626,6 +629,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
     if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try netTables(self);
+    try portTables(self);
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
@@ -1014,7 +1018,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 },
                 .fflush => {},
                 .user => return self.refuse("a PLI application's system task, which runs only under a VPI host"),
-                .ports => return self.refuse("§18.3 extended VCD, whose port states need the driver strengths an executable does not keep"),
+                .ports => |op| try portTask(self, pc, op, t.args),
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);
@@ -1524,6 +1528,123 @@ fn resolvedNets(self: *Emitter) Error!void {
             try self.rt_drivers.append(self.arena, di);
         }
     }
+}
+
+/// One `$dumpports` call: the pc it is at, its file and scopes
+/// (`evcd.task`'s, resolved where it is emitted).
+const PortFile = struct { pc: u32, name: []const u8, call: []const u8, scopes: []const u32 };
+
+/// `evcd.task`'s arguments: a null-only list is none (§18.3.7's "name()").
+fn portArgs(args: []const Ast.ExprId) []const Ast.ExprId {
+    return if (args.len == 1 and args[0] == .none) &.{} else args;
+}
+
+/// §18.3.1 every `$dumpports` call's file and scopes, as `evcd.task` finds
+/// them when it runs: what it reads of a port is its net's drivers and
+/// their strengths, so each port's net keeps them (`strength_read`), and
+/// resolves in `rt.net`.
+fn portDumps(self: *Emitter) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    for (r.code.items, 0..) |ins, pc| {
+        if (ins != .task or ins.task.task != .ports or ins.task.task.ports != .ports) continue;
+        const t = ins.task;
+        r.scope = r.code_scope.items[pc];
+        var scopes: std.ArrayList(u32) = .empty;
+        var name: []const u8 = "dumpports.vcd";
+        const given = portArgs(t.args);
+        for (given, 0..) |e, i| {
+            if (ex.tag(e) == .ident or ex.tag(e) == .hier_ident) switch (vcd.target(r, e) catch return self.refuse("a $dumpports scope the engine resolves only at run time")) {
+                .scope => |sc| {
+                    try scopes.append(self.arena, sc);
+                    continue;
+                },
+                .slot => {},
+            };
+            if (i + 1 != given.len) continue;
+            if (ex.tag(e) != .str_literal) return self.refuse("a $dumpports file name held in a variable");
+            name = r.file.str(ex.strOf(e));
+        }
+        if (scopes.items.len == 0) try scopes.append(self.arena, r.instanceOf(r.scope));
+        for (scopes.items) |sc| for (r.file.modules[r.scope_info.items[sc].def].ports) |mp| {
+            const slot = r.names.get(.{ .scope = sc, .str = mp.name }) orelse continue;
+            if (r.net_of.get(slot)) |n| r.nets[n].strength_read = true;
+        };
+        try self.port_files.append(self.arena, .{ .pc = @intCast(pc), .name = name, .call = vcd.callText(r.text, r.starts[t.tok]), .scopes = scopes.items });
+    }
+    if (self.port_files.items.len != 0) try self.xMeaning("§18.3 extended VCD, whose port states are strengths", null);
+}
+
+/// `rt.Design.ports_dump`: each `PortFile` with its header text and ports.
+fn portTables(self: *Emitter) Error!void {
+    const r = self.r;
+    if (self.port_files.items.len == 0) return;
+    try self.print("    .ports_dump = &.{{", .{});
+    for (self.port_files.items) |f| {
+        var head: std.Io.Writer.Allocating = .init(self.arena);
+        const w = &head.writer;
+        var ports: std.Io.Writer.Allocating = .init(self.arena);
+        const pw = &ports.writer;
+        var n: u32 = 0;
+        // §18.4.2: "$scope module <full instance path> $end", then one
+        // `$var port <size> <n> <name> $end` per port (`evcd.tick`).
+        for (f.scopes) |sc| {
+            w.writeAll("$scope module ") catch return error.OutOfMemory;
+            @import("evcd.zig").path(r, w, sc) catch return error.OutOfMemory;
+            w.writeAll(" $end\n") catch return error.OutOfMemory;
+            for (r.file.modules[r.scope_info.items[sc].def].ports) |mp| {
+                const slot = r.names.get(.{ .scope = sc, .str = mp.name }) orelse continue;
+                const width = r.values[slot].width;
+                w.writeAll("$var port ") catch return error.OutOfMemory;
+                if (width == 1) w.writeAll("1") catch return error.OutOfMemory else {
+                    const range = r.vecRange(slot);
+                    w.print("[{d}:{d}]", .{ range.msb, range.lsb }) catch return error.OutOfMemory;
+                }
+                w.print(" <{d} {s} $end\n", .{ n, r.file.str(mp.name) }) catch return error.OutOfMemory;
+                n += 1;
+                pw.print("\n            .{{ .off = {d}, .width = {d}, .dir = .{t}, ", .{ self.off[slot], width, mp.direction }) catch return error.OutOfMemory;
+                if (r.net_of.get(slot)) |k| {
+                    pw.print(".net = {d}, .inside = &.{{", .{self.net_ix[k] orelse return self.refuse("a dumped port whose net the executable does not resolve")}) catch return error.OutOfMemory;
+                    for (r.nets[k].drivers) |d| pw.print(" {},", .{@import("evcd.zig").below(r, r.drivers[d].scope, sc)}) catch return error.OutOfMemory;
+                    pw.writeAll(" } },") catch return error.OutOfMemory;
+                } else pw.writeAll("},") catch return error.OutOfMemory;
+            }
+            w.writeAll("$upscope $end\n") catch return error.OutOfMemory;
+        }
+        w.writeAll("$enddefinitions $end\n") catch return error.OutOfMemory;
+        try self.print("\n        .{{ .name = \"{f}\", .call = \"{f}\", .finest = {d}, .header = \"{f}\", .ports = &.{{{s}\n        }} }},", .{
+            std.zig.fmtString(f.name), std.zig.fmtString(f.call), r.finest, std.zig.fmtString(head.written()), ports.written(),
+        });
+    }
+    try self.print("\n    }},\n", .{});
+}
+
+/// One §18.3 task at `pc` (`evcd.task`): a `$dumpports` call selects its
+/// file; the others act on the file their last argument names, or on
+/// every file. A name no `$dumpports` gives is ignored.
+fn portTask(self: *Emitter, pc: u32, op: @import("evcd.zig").Op, args: []const Ast.ExprId) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    if (op == .ports) {
+        for (self.port_files.items, 0..) |f, k| if (f.pc == pc) return self.print("            try s.portsSelect({d});\n", .{k});
+        unreachable; // `portDumps` listed every call
+    }
+    const given = portArgs(args);
+    var k: ?usize = null;
+    if (given.len != 0 and (op != .limit or given.len == 2)) {
+        const e = given[given.len - 1];
+        if (ex.tag(e) != .str_literal) return self.refuse("a §18.3 file name held in a variable");
+        const name = r.file.str(ex.strOf(e));
+        k = for (self.port_files.items, 0..) |f, i| {
+            if (std.mem.eql(u8, f.name, name)) break i;
+        } else return;
+    }
+    try self.print("            try s.portsControl(.{t}, {?d}, ", .{ op, k });
+    if (op == .limit) {
+        try self.print("std.math.lossyCast(u64, ", .{});
+        try int(self, given[0]);
+        try self.print("));\n", .{});
+    } else try self.print("0);\n", .{});
 }
 
 /// Which of `slot`'s forced selects (§9.3.2) `sel` is: its place among the
