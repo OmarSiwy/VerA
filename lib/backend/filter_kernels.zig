@@ -11,8 +11,10 @@
 //
 // Nothing here allocates or depends on the enclosing device — `NS` (sections)
 // and `D` (degree) are structural constants from the flattened call, while
-// every COEFFICIENT is a runtime read of Model. The one data dependence is a
-// LOOP BOUND, not a per-sample branch: `zDeg` reads each section's effective
+// every COEFFICIENT is a runtime read of Model. Two things read which
+// coefficients are zero, neither a per-sample branch: `zH0`, the static gain
+// (a pole at s = 0 has no DC value), and a LOOP BOUND: `zDeg` reads each
+// section's effective
 // degree off its coefficients, and `zBilin` transforms at that degree, so a
 // coefficient vector padded with zeros (`parameter real d[0:15]`, three
 // nonzero) runs as the low-order section it is rather than as a degree-15
@@ -84,9 +86,36 @@ pub fn zPush(uh: []f64, yh: []f64, u: f64, y: f64) void {
     yh[0] = y;
 }
 
+/// §4.5.11 a section's gain at s = 0, as the pair (n, d) a static point
+/// scales by in the order `n / d`. With `den[0] != 0` that is
+/// `num[0]/den[0]`, the exact H(0). Otherwise the lowest power of s the
+/// denominator has, `sⁿ`, decides: a numerator with a lower nonzero power
+/// leaves a POLE at s = 0, and one without cancels `sⁿ` (`s/(s + s²)` is 1).
+///
+/// §4.5.11 does not say what a filter with a pole at s = 0 returns in a DC
+/// analysis. VerA answers 0, the choice it makes for §4.5.4's `idt` with no
+/// loop to force its argument: the integrator state starts at 0. A transient
+/// then integrates from there (`zLaplaceStep`). docs/IMPLEMENTATION.md §1.
+pub fn zH0(comptime D: usize, sec: [2][D + 1]f64) [2]f64 {
+    if (sec[1][0] != 0.0) return .{ sec[0][0], sec[1][0] };
+    var n: usize = 1;
+    while (n <= D and sec[1][n] == 0.0) n += 1;
+    // An all-zero denominator divides by zero, as a zero resistance does.
+    if (n > D) return .{ sec[0][0], 0.0 };
+    for (0..n) |j| if (sec[0][j] != 0.0) return .{ 0.0, 1.0 }; // the pole
+    return .{ sec[0][n], sec[1][n] };
+}
+
+/// `zH0` of every section, for `zAcLaplace`'s operating-point value.
+pub fn zLaplaceH0(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64) [NS][2]f64 {
+    var h: [NS][2]f64 = undefined;
+    for (&h, sec) |*hi, si| hi.* = zH0(D, si);
+    return h;
+}
+
 /// §4.5.11 the cascade, in the residual. `dt <= 0` is a static analysis, where
-/// the filter IS its DC gain `H(0) = ∏ num[i][0]/den[i][0]` — the exact value
-/// of the transfer function at s = 0, not a stand-in for one.
+/// the filter IS its DC gain `H(0) = ∏ zH0(section)` — the exact value of the
+/// transfer function at s = 0 wherever it has one.
 pub fn zLaplace(
     comptime S: type,
     comptime NS: usize,
@@ -100,7 +129,8 @@ pub fn zLaplace(
     var y = uin;
     for (0..NS) |i| {
         if (!(dt > 0.0)) {
-            y = y.scale(sec[i][0][0] / sec[i][1][0]);
+            const h = zH0(D, sec[i]);
+            y = y.scale(h[0] / h[1]);
             continue;
         }
         const k = 2.0 / dt;
@@ -110,7 +140,10 @@ pub fn zLaplace(
     return y;
 }
 
-/// §4.5.11 advance the cascade once the step is accepted.
+/// §4.5.11 advance the cascade once the step is accepted. A static point is
+/// a steady state, so it fills EVERY history slot with its (input, output):
+/// pushing it once left a degree-2 section's older slot at 0, and the first
+/// transient step answered a step the input never took.
 pub fn zLaplaceStep(
     comptime NS: usize,
     comptime D: usize,
@@ -124,12 +157,17 @@ pub fn zLaplaceStep(
     for (0..NS) |i| {
         const us = uh[i * D ..][0..D];
         const ys = yh[i * D ..][0..D];
+        if (!(dt > 0.0)) {
+            const h = zH0(D, sec[i]);
+            const y = u * h[0] / h[1];
+            @memset(us, u);
+            @memset(ys, y);
+            u = y;
+            continue;
+        }
         const k = 2.0 / dt;
         const d = zDeg(D, sec[i]);
-        const y = if (!(dt > 0.0))
-            u * sec[i][0][0] / sec[i][1][0]
-        else
-            zSecR(D, u, zBilin(D, sec[i][0], k, d), zBilin(D, sec[i][1], k, d), us, ys);
+        const y = zSecR(D, u, zBilin(D, sec[i][0], k, d), zBilin(D, sec[i][1], k, d), us, ys);
         zPush(us, ys, u, y);
         u = y;
     }
@@ -296,6 +334,19 @@ test "zPush: newest first, and an empty history is a no-op" {
     // A degree-0 section keeps no history; the guard is what makes that legal.
     var none: [0]f64 = .{};
     zPush(&none, &none, 1.0, 1.0);
+}
+
+test "zH0: the gain at s = 0, common powers of s cancelled, a pole answers 0" {
+    const stdx = @import("std");
+    // den[0] != 0: num[0]/den[0], the pair unchanged.
+    try stdx.testing.expectEqual([2]f64{ 3.0, 2.0 }, zH0(1, .{ .{ 3.0, 5.0 }, .{ 2.0, 7.0 } }));
+    // s / (s + s²) = 1 / (1 + s): H(0) = 1, not 0/0.
+    try stdx.testing.expectEqual([2]f64{ 1.0, 1.0 }, zH0(2, .{ .{ 0.0, 1.0, 0.0 }, .{ 0.0, 1.0, 1.0 } }));
+    // s² / (s + s²): a zero at s = 0 remains, H(0) = 0.
+    const z = zH0(2, .{ .{ 0.0, 0.0, 1.0 }, .{ 0.0, 1.0, 1.0 } });
+    try stdx.testing.expectEqual(@as(f64, 0.0), z[0] / z[1]);
+    // 1 / s: a pole at s = 0, VerA's static output 0.
+    try stdx.testing.expectEqual([2]f64{ 0.0, 1.0 }, zH0(1, .{ .{ 1.0, 0.0 }, .{ 0.0, 1.0 } }));
 }
 
 test "zSecR: unit section is the identity, and gain is b0/a0" {

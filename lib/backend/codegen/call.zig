@@ -1360,7 +1360,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // `__sec` always takes `model`, so keep the parameter named.
             self.uses_model = true;
             try opOpen(self, fm);
-            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcLaplace({s}, {d}, {d}, {s}, {s}__sec(model))", .{ kS, p.ns, p.deg, in, n }));
+            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}__sec(model), zLaplaceH0({1d}, {2d}, {4s}__sec(model)))", .{ kS, p.ns, p.deg, in, n }));
             try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
                 kS, p.ns, p.deg, in, n, n, n,
             });
