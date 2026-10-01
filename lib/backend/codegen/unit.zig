@@ -388,10 +388,12 @@ fn slotNum(self: *Gen, i: usize) u32 {
     return s;
 }
 /// Writes the name value `i`'s slot is read and written under: its own `tN`
-/// or an element of its type's hoist array. Every slotted use goes through it.
+/// or an element of a hoist array. Every slotted use goes through it.
 pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
     if (slotArr(self, i)) |arr| {
-        return self.b("{s}[{d}]", .{ arr, slotNum(self, i) });
+        const k = slotNum(self, i);
+        if (self.an.vty[i] == .real) return self.b("h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
+        return self.b("{s}[{d}]", .{ arr, k });
     }
     return self.b("t{d}", .{slotNum(self, i)});
 }
@@ -416,13 +418,34 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
         self.hoist_mask.items[k] |= family.mask(self, lv);
     }
     for (self.hoist_mask.items) |m| try family.note(self, m);
+    // One array per distinct mask: a `@Tuple` with one field per slot is
+    // most of a large body's sema time (psp103 `setup`: 1,576 fields, 9
+    // masks; `docs/measurements/codegen-levers-2026-09-30.md` lever 5), and
+    // every element keeps exactly the type its tuple field had.
+    self.hoist_grp.clearRetainingCapacity();
+    self.hoist_pos.clearRetainingCapacity();
+    self.hoist_gmask.clearRetainingCapacity();
+    self.hoist_glen.clearRetainingCapacity();
+    for (self.hoist_mask.items) |m| {
+        // ponytail: linear scan; a body has 1-30 distinct masks.
+        const g = std.mem.indexOfScalar(u64, self.hoist_gmask.items, m) orelse blk: {
+            try self.hoist_gmask.append(self.arena, m);
+            try self.hoist_glen.append(self.arena, 0);
+            break :blk self.hoist_gmask.items.len - 1;
+        };
+        try self.hoist_grp.append(self.arena, @intCast(g));
+        try self.hoist_pos.append(self.arena, self.hoist_glen.items[g]);
+        self.hoist_glen.items[g] += 1;
+    }
 }
 
 /// Returns `writeSlotRef`'s text as an arena-owned string, for a caller that
 /// needs the name as a value (`f64Const`).
 pub fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
     if (slotArr(self, i)) |arr| {
-        return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, slotNum(self, i) });
+        const k = slotNum(self, i);
+        if (self.an.vty[i] == .real) return std.fmt.allocPrint(self.arena, "h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
+        return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, k });
     }
     return std.fmt.allocPrint(self.arena, "t{d}", .{slotNum(self, i)});
 }
@@ -639,9 +662,10 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         if (n == 0) continue;
         try self.ind(1);
         if (ty == .real) {
-            try self.b("var h: zSlots(S, &.{{", .{});
-            for (self.hoist_mask.items, 0..) |m, k| try self.b("{s}0x{x}", .{ if (k == 0) " " else ", ", m });
-            try self.b(" }}) = undefined;\n", .{});
+            for (self.hoist_gmask.items, self.hoist_glen.items, 0..) |m, len, g| {
+                if (g != 0) try self.ind(1);
+                try self.b("var h{d}: [{d}]zOf(S, 0x{x}) = undefined;\n", .{ g, len, m });
+            }
             continue;
         }
         try self.b("var {s}: [{d}]{s} = undefined;\n", .{ hoistArray(ty), n, zigTy(ty) });

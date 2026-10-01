@@ -205,8 +205,8 @@ test "codegen: the family text types each merge by its unknowns" {
     for ([_][]const u8{
         "fn d__common__core(comptime S: type, x: anytype, ",
         "    f0: zOf(S, 0x7),\n",
-        "    var h: zSlots(S, &.{ 0x7 }) = undefined;\n",
-        "h[0] = zTo(S, 0x7, x[@intFromEnum(U.b)]);",
+        "    var h0: [1]zOf(S, 0x7) = undefined;\n",
+        "h0[0] = zTo(S, 0x7, x[@intFromEnum(U.b)]);",
         "        .f0 = zTo(S, 0x7, t",
         "res[@intFromEnum(U.a)] = zRow(S, .a, res[@intFromEnum(U.a)].add(c));",
         "pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {",
@@ -562,7 +562,7 @@ test "codegen: every split unit file passes AstGen, hoist arrays included" {
     const o = try h.genOut(std.testing.allocator);
     const gpa = std.testing.allocator;
     try std.testing.expect(o.names.len != 0);
-    try std.testing.expect(std.mem.indexOf(u8, o.text, "var h: zSlots(S, &.{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o.text, "var h0: [") != null);
     for (o.unit_lo, o.unit_fn, o.unit_hi) |lo, fn_at, hi| {
         // `orchestrator.writeTree`'s unit file.
         const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
@@ -1811,16 +1811,16 @@ test "codegen: a unit whose target is defined in one arm returns a VALUE, not un
     // written into the signature, and it closes with `\n} {`.
     const end = std.mem.indexOfPos(u8, src, at, "\n}\n").?;
     const body = src[at..end];
-    // Hoisted slots share one `var h: zSlots(...) = undefined`, so the
-    // guarantee is two facts: the array is exactly as long as the number of
+    // Hoisted slots of one mask share one `var h0: [n]zOf(...) = undefined`, so
+    // the guarantee is two facts: the array is exactly as long as the number of
     // zero-seeds, and every seed writes `S.con(0.0)`. The only hoists are the
     // two returned fields (the one-arm operator input and the contribution
     // phi); every other slot is a `const` at its definition (`probeBody`).
-    try std.testing.expect(std.mem.indexOf(u8, body, "    var h: zSlots(S, &.{ 0x3, 0x3 }) = undefined;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "    var h0: [2]zOf(S, 0x3) = undefined;") != null);
     var hoists: usize = 0;
     var it = std.mem.splitScalar(u8, body, '\n');
     while (it.next()) |line| {
-        if (!std.mem.startsWith(u8, line, "    h[")) continue;
+        if (!std.mem.startsWith(u8, line, "    h0[")) continue;
         hoists += 1;
         try std.testing.expect(std.mem.endsWith(u8, line, "= zTo(S, 0x3, S.con(0.0));"));
     }
