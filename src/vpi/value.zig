@@ -86,8 +86,7 @@ const Bits = struct {
     }
 
     fn known(b: Bits) bool {
-        for (b.unk) |w| if (w != 0) return false;
-        return true;
+        return std.mem.allEqual(u64, b.unk, 0);
     }
 
     /// The low 64 bits with x and z read as 0 — Table 12-4's vpiIntVal rule
