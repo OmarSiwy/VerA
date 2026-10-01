@@ -2813,7 +2813,7 @@ test "codegen: §4.5.11 the bilinear transform is the one the emitted filter run
     // `(1+z⁻¹)ᴰ`. Multiplied out for D = 2 that is
     //   q₀ = p₀ + p₁k + p₂k², q₁ = 2p₀ − 2p₂k², q₂ = p₀ − p₁k + p₂k²,
     // and with p = [1,2,3], k = 2 every term is dyadic, so this is exact.
-    const q2 = k.zBilin(2, .{ 1.0, 2.0, 3.0 }, 2.0);
+    const q2 = k.zBilin(2, .{ 1.0, 2.0, 3.0 }, 2.0, 2);
     try std.testing.expectEqual([3]f64{ 17.0, -22.0, 9.0 }, q2);
 
     // The two evaluations of the transform that hold at EVERY degree, and the
@@ -2825,7 +2825,7 @@ test "codegen: §4.5.11 the bilinear transform is the one the emitted filter run
     //   z = −1 (z⁻¹ = −1) ⇒ (1+z⁻¹) = 0, so only i = D lives: Σ(−1)ʲqⱼ = p_D·kᴰ·2ᴰ.
     const p3 = [4]f64{ 1.5, -2.0, 0.25, 4.0 };
     inline for (.{ 1.0, 2.0, 8.0 }) |kk| {
-        const q3 = k.zBilin(3, p3, kk);
+        const q3 = k.zBilin(3, p3, kk, 3);
         var dc: f64 = 0.0;
         var ny: f64 = 0.0;
         for (q3, 0..) |c, j| {
@@ -2836,7 +2836,7 @@ test "codegen: §4.5.11 the bilinear transform is the one the emitted filter run
         try std.testing.expectApproxEqRel(p3[3] * kk * kk * kk * 8.0, ny, 1e-12);
     }
     // D = 0 is a bare gain: no substitution to make, nothing to clear.
-    try std.testing.expectEqual([1]f64{7.0}, k.zBilin(0, .{7.0}, 3.0));
+    try std.testing.expectEqual([1]f64{7.0}, k.zBilin(0, .{7.0}, 3.0, 0));
 }
 
 test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures assert" {
