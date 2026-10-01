@@ -596,7 +596,7 @@ Checked against the code on 2026-09-27.
   `zig build test` (its `//! design` line, and `vpi_app.c` under
   `test-vpi`), analog routines, analog task output arguments and `ac` sweeps
   included. Its `//! xfail` lines are the known gaps.
-- **Setup split** (`codegen/plan/setup.zig`) computes solve-invariant values
+- **Setup split** (`lib/prove/setup.zig`, read by `codegen/setup.zig`) computes solve-invariant values
   once. Array operations are classified per evaluation, so an array filled
   once in `analog initial` is still recomputed every eval. A per-timepoint
   "step" tier was measured and not built: compact models gain 0-16 values each.

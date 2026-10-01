@@ -428,7 +428,7 @@ pub const HeldVar = struct {
         /// write of the same evaluation.
         retained,
         /// §3.2 retention that only a card-varying write could make
-        /// observable. The backend's `pruneHeld` drops it when every merge
+        /// observable. `prove`'s `pruneHeld` drops it when every merge
         /// of the held value is solve-invariant.
         unless_invariant,
         /// §7.3.3 a discrete context reads it (`Lowered.discrete_reads`): the
