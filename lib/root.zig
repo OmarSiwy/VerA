@@ -5,6 +5,7 @@
 //! `lib/` a dependency of `src/`, never the reverse.
 
 const std = @import("std");
+const BigArena = @import("big_arena.zig");
 const Allocator = std.mem.Allocator;
 
 const token = @import("frontend").token;
@@ -114,16 +115,17 @@ pub const Options = struct {
 /// The output of one compilation: source to MIR, and optionally to device.zig.
 ///
 /// Owns every allocation of the run. Preprocessed text, tokens, AST, MIR and
-/// lowering's tables live in `arena`; only `verdict.unit_modes` and
+/// lowering's tables live in `arena`, a `BigArena`: its large tables are the
+/// gpa's own blocks, grown in place and freed with it. Only `verdict.unit_modes` and
 /// `device.text` are gpa-owned (the device text can reach hundreds of
 /// megabytes, and an arena cannot grow a buffer in place). `deinit` frees all
 /// three. The value is freely movable.
 pub const CompileResult = struct {
     gpa: Allocator,
     // Heap-allocated because the AST stores and `Ssa.SsaBuilder` hold an
-    // `Allocator` whose `ptr` is this ArenaAllocator's address: moving it by
+    // `Allocator` whose `ptr` is this arena's address: moving it by
     // value would dangle them.
-    arena: *std.heap.ArenaAllocator,
+    arena: *BigArena,
     /// Preprocessed source (arena). Every AST/MIR string borrows from it.
     source: []const u8,
     mir: *Mir,
@@ -199,7 +201,7 @@ pub fn compileSourceOpts(
     target: Target,
     opts: Options,
 ) Error!CompileResult {
-    const arena_state = try gpa.create(std.heap.ArenaAllocator);
+    const arena_state = try gpa.create(BigArena);
     arena_state.* = .init(gpa);
 
     var bag = diag.Bag.init(arena_state.allocator());
@@ -241,7 +243,7 @@ pub fn compileSourceOpts(
 /// is detached.
 fn compileInArena(
     gpa: Allocator,
-    arena_state: *std.heap.ArenaAllocator,
+    arena_state: *BigArena,
     source: []const u8,
     target: Target,
     opts: Options,
@@ -400,7 +402,7 @@ pub fn buildArtifact(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn freeArena(gpa: Allocator, a: *std.heap.ArenaAllocator) void {
+fn freeArena(gpa: Allocator, a: *BigArena) void {
     a.deinit();
     gpa.destroy(a);
 }
@@ -576,7 +578,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // Zig analyses lazily, so an unreferenced decl is never type-checked. This
 // forces analysis of every top-level pub decl of every stage.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
+    inline for (.{ @This(), BigArena, token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }
