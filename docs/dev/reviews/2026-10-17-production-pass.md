@@ -86,3 +86,11 @@ Issues closed by these waves: #35–#48 (bugs found by the pass, each with a fix
 | golden diff | 1 file differs in both snapshots: #48's end-of-file fixture's `.stderr` gains #49's third E0207 (still `reject-only E0207`); 13580 files are only in the new snapshot: Phase 0's runner, `.so/` and program kinds, and #49's new fixture |
 | fixture suite | 2615/2615 → 2616/2616, FAIL list empty |
 | `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
+
+### ARCHITECTURE.md Phases 2 and 3 (gate c0ca2080 against base a8d9b32f; pre-rebase hashes)
+
+`base` (deep_stack, interner, BigArena) and `kernels` grown into `rt` (kernel files byte-for-byte, Integer, ref4, fold, fmt, strToInt): `check`, `test` Debug and ReleaseSafe exit 0; goldens **IDENTICAL: 21148 files** (Phase 0's runner, `.so` and program kinds included); fixture suite 2616/2616 both sides, name lists equal; `test-devices`, `test-vpi-fixtures`, `suite-exe` exit 0.
+
+### History note
+
+Local `main` was fast-forwarded to this branch at 8ac3de14 by another session and gained three `vera --lsp` commits and the #51 fix (892dafce). The branch was rebased onto that `main` (7971b23e): the Phase 5a/#51 overlap (the §9.15 rows) was resolved by hand, and R7 gained two rows for `vera --lsp` (boundary data: flag names, LSP method names). `main` fast-forwards to this branch.
