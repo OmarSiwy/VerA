@@ -2081,90 +2081,93 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
         @compileError(h ++ ".systf must be `fn (*const Model) ?*const contract.SystfHost`");
 }
 
-const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
-    .{ "U", {} },
-    .{ "num_ports", {} },
-    .{ "contract_abi", {} },
-    .{ "Model", {} },
-    .{ "Instance", {} },
-    .{ "eval", {} },
-    .{ "q", {} },
-    .{ "evalQ", {} },
-    .{ "limit", {} },
-    .{ "limit_reads", {} },
-    .{ "limit_writes", {} },
-    .{ "deriv_reads", {} },
-    .{ "ddx_reads", {} },
-    .{ "jac_const", {} },
-    .{ "seed", {} },
-    .{ "collapse", {} },
-    .{ "collapse_full", {} },
-    .{ "initState", {} },
-    .{ "updateState", {} },
-    .{ "advanceIteration", {} },
-    .{ "checkConvergence", {} },
-    .{ "stateCtl", {} },
-    .{ "State", {} },
-    .{ "state_class", {} },
-    .{ "acceptQ", {} },
-    .{ "Setup", {} },
-    .{ "setup", {} },
-    .{ "setup_simparams", {} },
-    .{ "jac_f32", {} },
-    .{ "jac_f32_host", {} },
+/// The pub names `validate` accepts. An enum, not a string map: `@hasField`
+/// is one lookup, where building a `StaticStringMap` at comptime cost every
+/// device build analysis time.
+const AllowedPubDecl = enum {
+    U,
+    num_ports,
+    contract_abi,
+    Model,
+    Instance,
+    eval,
+    q,
+    evalQ,
+    limit,
+    limit_reads,
+    limit_writes,
+    deriv_reads,
+    ddx_reads,
+    jac_const,
+    seed,
+    collapse,
+    collapse_full,
+    initState,
+    updateState,
+    advanceIteration,
+    checkConvergence,
+    stateCtl,
+    State,
+    state_class,
+    acceptQ,
+    Setup,
+    setup,
+    setup_simparams,
+    jac_f32,
+    jac_f32_host,
     // Nothing steers on a `.val()` of an x-dependent value, draws a per-call
     // scalar, or collapses an x-dependent chain to its value.
-    .{ "batch_ok", {} },
-    .{ "mutable_eval", {} },
-    .{ "noiseTablePoints", {} },
+    batch_ok,
+    mutable_eval,
+    noiseTablePoints,
     // §9.4 display tasks and §9.5 file I/O, one accepted-point phase (§9.5.9
     // performs file writes only at an accepted point), kept out of `eval` so
     // the residual stays a pure function of x. A device built for a solver has
     // no display phase, and its `$fopen` returns §9.5.1's failure value 0.
-    .{ "display", {} },
-    .{ "file_io", {} },
-    .{ "attempt", {} },
-    .{ "u_kinds", {} },
-    .{ "u_abstol", {} },
-    .{ "u_nodeset", {} },
-    .{ "jac_pattern", {} },
-    .{ "q_pattern", {} },
-    .{ "jac_rows", {} },
-    .{ "q_rows", {} },
-    .{ "n_q", {} },
-    .{ "q_stamps", {} },
-    .{ "q_lte", {} },
-    .{ "q_site_pattern", {} },
-    .{ "noise_gens", {} },
-    .{ "noisePsd", {} },
-    .{ "noise_tables", {} },
-    .{ "ac_gens", {} },
-    .{ "acStim", {} },
-    .{ "ac_dyn_slots", {} },
-    .{ "acDyn", {} },
-    .{ "systf_calls", {} },
-    .{ "mc_param", {} },
-    .{ "derive", {} },
-    .{ "checkShape", {} },
-    .{ "precompute", {} },
-    .{ "constant", {} },
-    .{ "nextBreakpoint", {} },
-    .{ "pendingBreakpoint", {} },
-    .{ "delays", {} },
+    display,
+    file_io,
+    attempt,
+    u_kinds,
+    u_abstol,
+    u_nodeset,
+    jac_pattern,
+    q_pattern,
+    jac_rows,
+    q_rows,
+    n_q,
+    q_stamps,
+    q_lte,
+    q_site_pattern,
+    noise_gens,
+    noisePsd,
+    noise_tables,
+    ac_gens,
+    acStim,
+    ac_dyn_slots,
+    acDyn,
+    systf_calls,
+    mc_param,
+    derive,
+    checkShape,
+    precompute,
+    constant,
+    nextBreakpoint,
+    pendingBreakpoint,
+    delays,
     // Clause 12: the §5.6 contribution rows an analog VPI host reads §12.10's
     // flows from, emitted only under `codegen.Options.vpi_contribs`.
-    .{ "vpiContribs", {} },
-    .{ "vpi_contrib_access", {} },
-    .{ "vpi_contrib_hi", {} },
-    .{ "vpi_contrib_lo", {} },
-    .{ "vpi_contrib_flow_u", {} },
-    .{ "lane_masks", {} },
-});
+    vpiContribs,
+    vpi_contrib_access,
+    vpi_contrib_hi,
+    vpi_contrib_lo,
+    vpi_contrib_flow_u,
+    lane_masks,
+};
 
 fn rejectStrayPubDecls(comptime D: type) void {
     const decls = @typeInfo(D).@"struct".decls;
     for (decls) |d| {
-        if (allowed_pub_decls.has(d.name)) continue;
+        if (@hasField(AllowedPubDecl, d.name)) continue;
         // `<module>__analog_op__{laplace,zi}_*__sec`: a §4.5.11/§4.5.12
         // filter's cascade coefficients, public because a small-signal host
         // builds H(jw) from them. The name embeds the module, so it cannot be
@@ -2494,7 +2497,7 @@ const MockTline = struct {
     }
 };
 
-/// Declares every contract member, so `allowed_pub_decls` cannot drift from
+/// Declares every contract member, so `AllowedPubDecl` cannot drift from
 /// `validate`: a member missing from the allowlist is a stray-pub-decl error
 /// here.
 const MockAll = struct {
@@ -2699,9 +2702,9 @@ test "validate: every contract member at once (allowlist cannot drift)" {
     comptime validate(MockAll);
     // Every allowlisted name is either declared above or is a required decl
     // MockAll already has, so an entry added to one and not the other fails.
-    comptime for (allowed_pub_decls.keys()) |k| {
+    comptime for (std.meta.fieldNames(AllowedPubDecl)) |k| {
         if (!@hasDecl(MockAll, k))
-            @compileError("allowed_pub_decls has `" ++ k ++ "` but MockAll does not declare it");
+            @compileError("AllowedPubDecl has `" ++ k ++ "` but MockAll does not declare it");
     };
 }
 
