@@ -24,6 +24,7 @@
 // sources place on nets shall have pull strength") makes Pu0, and it reads
 // pd at time 0, racing the gate's first evaluation.
 //! inherited IEEE 1364-2005 17.1.1.5
+// native-required
 `timescale 1ns/1ns
 module b_17_1_1_5_strength_format;
   wire s1, p1, hz, sx;

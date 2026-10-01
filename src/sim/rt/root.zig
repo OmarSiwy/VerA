@@ -1541,6 +1541,18 @@ pub const State = struct {
         try self.out.writeAll(out);
     }
 
+    /// §17.1.1.5 `%v` of the native net `k` (`Nets.sig0`, kept by the fold
+    /// a net whose strength is read resolves through).
+    pub fn netStrength(self: *State, k: u32) Error!void {
+        try display.strength(self.out, self.nets.sig0[k]);
+    }
+
+    /// §17.1.1.5 `%v` of an operand that is not a net: its bit 0, strong.
+    pub fn strongStrength(self: *State, a: anytype, w: u32) Error!void {
+        var buf = logic.planesOf(a);
+        try display.strength(self.out, .of(literal(&buf, w, false).bit(0), .strong, .strong));
+    }
+
     /// One `%s` or `%c` operand (§17.1.1.7).
     pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u32) Error!void {
         var buf = logic.planesOf(a);
