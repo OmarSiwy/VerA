@@ -512,8 +512,13 @@ pub const Gen = struct {
         // §5.10 a held array's storage carries a derivative only for a load
         // `eval`/`q` returns something from: the rest are read by the value-
         // only consumers (`updateState` and `acceptQ` read `.val()`), so
-        // the lanes such a load would carry are never observed.
-        if (self.core.eval_need.len != 0) for (self.arr_s, 0..) |*s, id| {
+        // the lanes such a load would carry are never observed. Except by a
+        // §4.5.14 `ddx` in a display task: the display unit is a consumer
+        // `eval_need` does not see, and it reads lanes.
+        const display_ddx = self.display == .emit and for (self.an.i_op, 0..) |op, ii| {
+            if (op == .call and self.mir.instData(@enumFromInt(ii)).call.callee == .ddx) break true;
+        } else false;
+        if (self.core.eval_need.len != 0 and !display_ddx) for (self.arr_s, 0..) |*s, id| {
             if (!s.* or self.lowered.mem_arrays.items[id].held == none_u32) continue;
             s.* = for (self.an.i_op, 0..) |op, ii| {
                 if (op != .fload) continue;
@@ -526,6 +531,7 @@ pub const Gen = struct {
         // rest of the compilation; `cached` reads them per unit.
         self.plan.lo_idx = self.core.lo_idx;
         self.plan.lo_vals = self.core.lo_vals;
+        self.plan.arr_lanes = self.arr_s;
         // Last, and before any emission: the roots are what the core's slice
         // reaches, and `emitInstance` sizes `Setup` from them.
         try gen_setup.planSetup(self);
