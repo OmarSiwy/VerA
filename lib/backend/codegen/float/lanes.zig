@@ -2,6 +2,8 @@
 //! dirty once an x-dependent value collapses to one scalar decision
 //! (`pinLanes`, `pinCrossing` set `Float.pinned`). A device with no dirty lane
 //! emits `batch_ok = true`: `eval`/`q` are exact per point on a multi-point `V`.
+//! A decision on a per-point value the lead protocol can steer (`leadLanes`)
+//! keeps `batch_ok` and adds `batch_lead`.
 //! Under `.strict`, a select with total, cheap inline arms renders as `sel`
 //! (`eagerSafe`, `eagerCostly`). The float mode half is `mode.zig`.
 
@@ -79,7 +81,19 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
 pub fn pinLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
     if (!self.an.xDep(v)) return;
+    // An x-dependent integer is already one decision per call: it came from
+    // a real collapse (`leadLanes`) or a call that pinned where it was made.
+    if (self.an.tyOf(self.an.rv(v)) == .int) return;
     self.float.pinned = true;
+}
+
+/// Records a decision on `v` that goes through the lead protocol
+/// (`zCmp`, `zRoundI`, `zStrip`): a batch family that implements it stays
+/// exact per point, so it marks the device `batch_lead` rather than pinned.
+pub fn leadLanes(self: *Gen, v: Mir.Value) void {
+    if (self.emitting_display) return;
+    if (!self.an.xDep(v)) return;
+    self.float.lead = true;
 }
 
 /// Records a crossing that is one scalar per call, not per lane (a §9.13

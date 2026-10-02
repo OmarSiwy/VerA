@@ -140,6 +140,10 @@ fn emitQ(self: *Gen) Error!void {
         \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
         \\/// the host differentiates each and stamps it into its rows.
         \\pub fn q(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Sites(Self, S) {{
+        \\
+    , .{});
+    try writeLead(self, "q", "out");
+    try self.w(
         \\{s}    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});
         \\{s}
     , .{
@@ -349,6 +353,10 @@ fn emitEval(self: *Gen) Error!void {
     } else if (self.core_wanted) {
         try self.w(
             \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
+            \\
+        , .{});
+        try writeLead(self, "eval", "out");
+        try self.w(
             \\    const xs = zProbe(S, x);
             \\    return zResidual(S, xs, @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }}));
             \\}}
@@ -362,6 +370,31 @@ fn emitEval(self: *Gen) Error!void {
         \\
         \\
     , .{});
+}
+
+/// Whether the device is `batch_lead` (`file.batchLead`): its entry points
+/// then open with the lead loop.
+fn leads(self: *const Gen) bool {
+    return gen_file.batchLead(self);
+}
+
+/// Writes the lead loop an entry point opens with (`batch_lead`): a family
+/// running the protocol (`S.Inner`) evaluates the batch once per leader,
+/// merging each run's points that followed the leader's path, until every
+/// point has run on its own. A scalar family skips it at compile time. The
+/// first run is inlined and the re-runs (divergent batches) share one
+/// out-of-line copy, so a coherent batch costs one inlined body.
+fn writeLead(self: *Gen, call: []const u8, ret: []const u8) Error!void {
+    if (!leads(self)) return;
+    try self.w(
+        \\    if (comptime zLeads(S)) {{
+        \\        S.leadBegin();
+        \\        var out = @call(.always_inline, {0s}, .{{ S.Inner, x, model, inst, sim }});
+        \\        while (S.leadNext()) S.leadMerge(&out, @call(.never_inline, {0s}, .{{ S.Inner, x, model, inst, sim }}));
+        \\        return {1s};
+        \\    }}
+        \\
+    , .{ call, ret });
 }
 
 /// §9.7.3 a status device's entry-point guards (`gen_file.hasStatus`): a
@@ -639,6 +672,10 @@ pub fn emitFused(self: *Gen) Error!void {
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
         \\pub fn evalQ(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
+        \\
+    , .{});
+    try writeLead(self, "evalQ", ".{ .res = out.res, .q = out.q }");
+    try self.w(
         \\{s}    const xs = zProbe(S, x);
         \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
         \\{s}{s}

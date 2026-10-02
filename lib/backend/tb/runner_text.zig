@@ -153,13 +153,48 @@ pub const runner_body =
     \\/// A batch family: `V` is NL operating points, one per vector element, and
     \\/// every value is lane-free. Per element it computes what `Val` does:
     \\/// `contract.RefFamily`'s IEEE division, `gm` transcendentals.
-    \\/// Instantiated only for a device that declares `batch_ok` — codegen's
-    \\/// promise that nothing steers on a `.val()` of an x-dependent value,
-    \\/// which is what makes `val` answering element 0 safe.
+    \\/// Instantiated only for a device that declares `batch_ok`; a
+    \\/// `batch_lead` device decides per point, and the family runs the lead
+    \\/// protocol (`contract.LeadState`), so `val` answers the leader.
     \\const NL = 4;
     \\const VF = @Vector(NL, f64);
+    \\var batch_lead: contract.LeadState(NL, true) = .{};
     \\const Batch = struct {
     \\    pub const V = VF;
+    \\    pub const Of = BatchCore.Of;
+    \\    pub const con = BatchCore.con;
+    \\    pub const lift = BatchCore.lift;
+    \\    pub const probe = BatchCore.probe;
+    \\    pub const sel = BatchCore.sel;
+    \\    pub const B = BatchCore.B;
+    \\    pub const Inner = BatchCore;
+    \\    pub fn leadBegin() void { batch_lead.begin(); }
+    \\    pub fn leadNext() bool { return batch_lead.next(); }
+    \\    pub fn leadMerge(out: anytype, new: @TypeOf(out.*)) void { contract.leadMergeInto(out, new, batch_lead.keep()); }
+    \\};
+    \\const BatchCore = struct {
+    \\    pub const V = VF;
+    \\    pub const Lane = Val;
+    \\    pub const lane_count = NL;
+    \\    pub fn laneOf(a: B, comptime w: usize) Val.Of(0) { return .{ .v = a.v[w] }; }
+    \\    pub fn fromLanes(comptime _: u64, ls: [NL]Val.Of(0)) B {
+    \\        var r: VF = undefined;
+    \\        inline for (0..NL) |w| r[w] = ls[w].v;
+    \\        return .{ .v = r };
+    \\    }
+    \\    pub fn decide(comptime op: std.math.CompareOperator, a: B, b: B) bool {
+    \\        const c: @Vector(NL, bool) = switch (op) {
+    \\            .lt => a.v < b.v, .lte => a.v <= b.v, .gt => a.v > b.v,
+    \\            .gte => a.v >= b.v, .eq => a.v == b.v, .neq => a.v != b.v,
+    \\        };
+    \\        return batch_lead.mark(c);
+    \\    }
+    \\    pub fn decideI(a: B) i64 {
+    \\        var r: @Vector(NL, i64) = undefined;
+    \\        inline for (0..NL) |w| r[w] = std.math.lossyCast(i64, @round(a.v[w]));
+    \\        return batch_lead.markI(r);
+    \\    }
+    \\    pub fn strip(a: B) B { return a; }
     \\    pub fn Of(comptime _: u64) type { return B; }
     \\    pub fn con(c: f64) B { return .{ .v = @splat(c) }; }
     \\    pub fn lift(v: VF) B { return .{ .v = v }; }
@@ -167,7 +202,7 @@ pub const runner_body =
     \\    pub fn sel(c: B, a: B, b: B) B { return .{ .v = @select(f64, c.v != zeros, a.v, b.v) }; }
     \\    const zeros: VF = @splat(0.0);
     \\    const ones: VF = @splat(1.0);
-    \\    const B = struct {
+    \\    pub const B = struct {
     \\        v: VF,
     \\        fn map1(a: B, comptime f: anytype) B {
     \\            var r: VF = undefined;
@@ -175,7 +210,8 @@ pub const runner_body =
     \\            return .{ .v = r };
     \\        }
     \\        pub fn to(a: B, comptime _: u64) B { return a; }
-    \\        pub fn val(a: B) f64 { return a.v[0]; }
+    \\        pub fn val(a: B) f64 { const arr: [NL]f64 = a.v; return arr[batch_lead.leader]; }
+    \\        pub fn leadKeep(a: *B, n: B, keep: @Vector(NL, bool)) void { a.v = @select(f64, keep, n.v, a.v); }
     \\        pub fn ddxAt(_: B, comptime _: usize) f64 { return 0.0; }
     \\        pub fn add(a: B, b: B) B { return .{ .v = a.v + b.v }; }
     \\        pub fn sub(a: B, b: B) B { return .{ .v = a.v - b.v }; }
@@ -219,14 +255,20 @@ pub const runner_body =
     \\/// with NL scalar evals, element by element. Bit equality is the
     \\/// expectation — the same IEEE ops run in the same order per element —
     \\/// with a 1e-12 relative escape for a vectorizer that contracts
-    \\/// differently than the scalar pipeline. Silent on success.
+    \\/// differently than the scalar pipeline. Silent on success. Run twice:
+    \\/// nearby points, and points spread far enough that a `batch_lead`
+    \\/// device's points take different branches (the lead protocol's runs).
     \\fn laneCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    laneCheckSpread(x, model, inst, 1.0e-3);
+    \\    if (comptime @hasDecl(D, "batch_lead") and D.batch_lead) laneCheckSpread(x, model, inst, 0.37);
+    \\}
+    \\fn laneCheckSpread(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), spread: f64) void {
     \\    if (comptime !(@hasDecl(D, "batch_ok") and D.batch_ok)) return;
     \\    var xs: [NL][n_u]f64 = undefined;
     \\    var xv: [n_u]VF = undefined;
     \\    for (0..NL) |k| {
-    \\        const s = 1.0 + 1.0e-3 * @as(f64, @floatFromInt(k));
-    \\        for (0..n_u) |i| xs[k][i] = x[i] * s + 1.0e-3 * @as(f64, @floatFromInt(k));
+    \\        const s = 1.0 + spread * @as(f64, @floatFromInt(k));
+    \\        for (0..n_u) |i| xs[k][i] = x[i] * s + spread * @as(f64, @floatFromInt(k)) * @as(f64, if (i % 2 == 0) 1.0 else -1.0);
     \\    }
     \\    for (0..n_u) |i| {
     \\        // Through an array: a vector index must be comptime-known.
@@ -235,6 +277,14 @@ pub const runner_body =
     \\        xv[i] = lanes;
     \\    }
     \\    const rv: [n_u]Batch.B = D.eval(Batch, &xv, model, inst, sim_state);
+    \\    // The signatures the batched call produced are `contract.region`'s.
+    \\    const sigs = if (comptime @hasDecl(D, "batch_lead")) batch_lead.regions() else [_]u16{0} ** NL;
+    \\    for (0..NL) |k| {
+    \\        const want = contract.region(D, &xs[k], model, inst, sim_state);
+    \\        if (sigs[k] == want) continue;
+    \\        std.debug.print("lane_check FAIL: region lane {d}: batch {d} vs region {d}\n", .{ k, sigs[k], want });
+    \\        std.process.exit(1);
+    \\    }
     \\    const qv: [n_u]Batch.B = if (comptime @hasDecl(D, "q")) qRowsOf(Batch, &xv, model, inst) else undefined;
     \\    for (0..NL) |k| {
     \\        const rs: [n_u]Val = D.eval(Val, &xs[k], model, inst, sim_state);
@@ -248,7 +298,7 @@ pub const runner_body =
     \\
     \\fn laneAssert(what: []const u8, i: usize, k: usize, a: f64, b: f64) void {
     \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
-    \\    if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) return;
+    \\    if (a != a and b != b) return; // NaN payloads may differ
     \\    std.debug.print("lane_check FAIL: {s}[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ what, u_names[i], k, a, b });
     \\    std.process.exit(1);
     \\}

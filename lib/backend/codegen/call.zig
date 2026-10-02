@@ -275,6 +275,10 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // declaration would be unread. `depth > 0` because at depth 0 the
         // caller is this slot's own declaration.
         if (depth > 0 and self.an.dFree(v)) {
+            // An x-dependent one differs per point of a batch: `.val()`
+            // would pick one, so the caller keeps it an `S` value (the same
+            // f64 arithmetic on a lane-free value).
+            if (self.an.xDep(v)) return null;
             const i = @intFromEnum(v);
             // A setup field is already a plain f64.
             if (i < self.an.nv and self.plan.isRoot(v)) return try gen_setup.rootRef(self, v, true);

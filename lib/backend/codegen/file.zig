@@ -172,8 +172,22 @@ pub fn emitFile(self: *Gen) Error!void {
     // batch differential check keys on it, and a batching host may.
     // ponytail: a `vera_timepoint` cache stores one point's values, so a
     // device with one is not batched; store lane 0 when a host batches it.
-    if (!self.float.pinned and self.lowered.timepoints.items.len == 0 and !hasStatus(self)) try self.w("pub const batch_ok = true;\n\n", .{});
+    if (batchOk(self)) try self.w("pub const batch_ok = true;\n\n", .{});
+    // ...exact per point only for a family running the lead protocol: the
+    // device decides on per-point values (`lanes.leadLanes`).
+    if (batchLead(self)) try self.w("pub const batch_lead = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
+}
+
+/// Whether the device declares `batch_ok`: no lane pinned, no per-timepoint
+/// cache or status latch (each stores one point's values).
+pub fn batchOk(self: *const Gen) bool {
+    return !self.float.pinned and self.lowered.timepoints.items.len == 0 and !hasStatus(self);
+}
+
+/// Whether the device declares `batch_lead` (`batchOk` and a lead decision).
+pub fn batchLead(self: *const Gen) bool {
+    return batchOk(self) and self.float.lead;
 }
 
 /// Builds `Output.prelude` (the file-scope prologue of a `u/<key>.zig`) and

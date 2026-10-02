@@ -99,12 +99,12 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
                 // Not a literal, so §3.3 leaves it with no numeric value.
                 .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => self.b("@as(i64, 0)", .{}),
             };
-            float_lanes.pinLanes(self, v); // a real→int collapse is a scalar decision
+            float_lanes.leadLanes(self, v); // a real→int collapse is a decision
             // Saturating (§4.2.1.1 defines only the rounding): under
             // ReleaseFast `@intFromFloat` of an out-of-range or NaN value is UB.
-            try self.b("std.math.lossyCast(i64, @round((", .{});
+            try self.b("zRoundI(S, ", .{});
             try renderValueRef(self, v);
-            try self.b(").val()))", .{});
+            try self.b(")", .{});
         },
         .str => try self.b("\"\"", .{}),
     }
@@ -484,6 +484,24 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         // not fold. Each rewrite is value-preserving under IEEE 754 (`a - k`
         // is `a + (-k)`). `fdiv` keeps `div`: `a * (1/k)` is not `a / k`.
         .fadd, .fsub, .fmul => {
+            // A derivative-free operand that still differs per point (a
+            // `ddx`-stripped probe) goes through `zMulP`/`zAddP`/`zSubP`:
+            // `scale`/`addC` of its value in a one-point family, the same
+            // arithmetic kept per point in a batch.
+            const pa = perPoint(self, a);
+            const pb = perPoint(self, b2);
+            if (pb or (pa and !self.an.dFree(b2))) {
+                const k, const o = if (pb) .{ b2, a } else .{ a, b2 };
+                try self.b("{s}(S, (", .{switch (op) {
+                    .fmul => "zMulP",
+                    .fsub => if (pb) "zSubP" else "zAddP",
+                    else => "zAddP", // else: the prong is `.fadd, .fsub, .fmul`
+                }});
+                try renderVal(self, o, .real);
+                try self.b("){s}, ", .{if (op == .fsub and !pb) ".neg()" else ""});
+                try renderVal(self, k, .real);
+                return self.b(")", .{});
+            }
             if (self.an.dFree(b2)) {
                 try self.b("(", .{});
                 try renderVal(self, a, .real);
@@ -575,19 +593,18 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 try self.b(").pow({s})", .{s});
             } else {
                 // zPow linearizes around `.val()` of both operands
-                // (including §4.3.1's negative-base steering), so either
-                // being x-dependent pins lanes.
-                float_lanes.pinLanes(self, a);
-                float_lanes.pinLanes(self, b2);
+                // (including §4.3.1's negative-base steering): a batch
+                // family runs it point by point (`zPowL`, the lead protocol).
+                float_lanes.leadLanes(self, a);
+                float_lanes.leadLanes(self, b2);
                 // The last argument drops the ∂/∂y term (and its `ln`) when
                 // the exponent cannot move with the solve.
                 const m = family.mask(self, a) | family.mask(self, b2);
-                try kernelOpen(self, "zPow", m);
-                try kernelArg(self, a, m);
-                try self.b(", ", .{});
-                try kernelArg(self, b2, m);
-                try self.b(", {}", .{!self.an.dFree(b2)});
-                try kernelClose(self);
+                try self.b("zPowL(S, 0x{x}, zTo(S, 0x{x}, ", .{ m, m });
+                try renderVal(self, a, .real);
+                try self.b("), zTo(S, 0x{x}, ", .{m});
+                try renderVal(self, b2, .real);
+                try self.b("), {})", .{!self.an.dFree(b2)});
             }
         },
         // §4.2.1 conversions
@@ -600,19 +617,19 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // §4.2.1.1 rounds and leaves overflow undefined; `lossyCast`
             // (saturate, NaN to 0) avoids UB under ReleaseFast and matches
             // `Analysis.asI64`'s fold.
-            float_lanes.pinLanes(self, a); // a real→int collapse is a scalar decision
-            try self.b("std.math.lossyCast(i64, @round((", .{});
+            float_lanes.leadLanes(self, a); // a real→int collapse is a decision
+            try self.b("zRoundI(S, ", .{});
             try renderVal(self, a, .real);
-            try self.b(").val()))", .{});
+            try self.b(")", .{});
         },
         .opt_barrier => try renderVal(self, a, res_ty),
         // VerA's `vera_nodiff` (§2.9): the operand's value with no lanes. The
         // `.val()` is a scalar decision on an x-varying value.
         .dstop => {
-            float_lanes.pinLanes(self, a);
-            try self.b("S.con((", .{});
+            float_lanes.leadLanes(self, a);
+            try self.b("zStrip(S, ", .{});
             try renderVal(self, a, .real);
-            try self.b(").val())", .{});
+            try self.b(")", .{});
         },
         // §5.6.1.2 path-integrated reactive latches: value only, fixed
         // across one Newton attempt (advanced by stateCtl(.commit)). The
@@ -736,8 +753,17 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
 /// rendered S for values with no GPU-safe f64 spelling (`$temperature`, a
 /// transcendental of a parameter). Depth 1: naming the operand's own slot
 /// is wanted here, unlike `renderInst`'s depth-0 self-reference.
+/// Whether real `v` is derivative-free yet x-dependent: a `.val()` of it
+/// would be one point's value (see `renderOp`'s `.fadd, .fsub, .fmul`).
+fn perPoint(self: *Gen, v: Mir.Value) bool {
+    return self.an.dFree(v) and self.an.xDep(v) and self.an.tyOf(self.an.rv(v)) == .real;
+}
+
 fn writeConst(self: *Gen, v: Mir.Value) Error!void {
     if (try gen_call.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
+    // A derivative-free value can still differ per point (a `ddx`-stripped
+    // probe): `.val()` collapses it to one, so a batch is not exact.
+    float_lanes.pinLanes(self, v);
     try self.b("(", .{});
     try renderVal(self, v, .real);
     try self.b(").val()", .{});
@@ -1028,13 +1054,14 @@ pub fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
 }
 
 fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
-    float_lanes.pinLanes(self, a);
-    float_lanes.pinLanes(self, b2);
-    try self.b("@as(i64, @intFromBool((", .{});
+    float_lanes.leadLanes(self, a);
+    float_lanes.leadLanes(self, b2);
+    const op: []const u8 = if (std.mem.eql(u8, opx, "<")) "lt" else if (std.mem.eql(u8, opx, "<=")) "lte" else if (std.mem.eql(u8, opx, ">")) "gt" else if (std.mem.eql(u8, opx, ">=")) "gte" else if (std.mem.eql(u8, opx, "==")) "eq" else "neq";
+    try self.b("@as(i64, @intFromBool(zCmp(S, .{s}, ", .{op});
     try renderVal(self, a, .real);
-    try self.b(").val() {s} (", .{opx});
+    try self.b(", ", .{});
     try renderVal(self, b2, .real);
-    try self.b(").val()))", .{});
+    try self.b(")))", .{});
 }
 
 fn cmpInt(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {

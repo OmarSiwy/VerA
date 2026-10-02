@@ -227,15 +227,16 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
 /// Writes `cond` as a Zig bool (`!= 0` on its scalar value) and pins lanes
 /// if it depends on x.
 pub fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
-    float_lanes.pinLanes(self, cond);
     const v = self.an.rv(cond);
     if (self.an.tyOf(v) == .int) {
+        float_lanes.pinLanes(self, cond);
         try gen_render.renderVal(self, v, .int);
         try self.b(" != 0", .{});
     } else {
-        try self.b("(", .{});
+        float_lanes.leadLanes(self, cond);
+        try self.b("zCmp(S, .neq, ", .{});
         try gen_render.renderVal(self, v, .real);
-        try self.b(").val() != 0.0", .{});
+        try self.b(", S.con(0.0))", .{});
     }
 }
 
