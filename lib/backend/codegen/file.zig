@@ -20,6 +20,8 @@ const Analysis = @import("ir").Analysis;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
+const Mir = @import("ir").Mir;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -141,7 +143,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
     // VerA's `vera_timepoint` (§2.9): `eval` fills the per-timepoint caches.
-    if (self.lowered.table_samples.items.len != 0 or self.lowered.timepoints.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
+    if (self.lowered.table_samples.items.len != 0 or self.lowered.timepoints.items.len != 0 or hasStatus(self)) try self.w("pub const mutable_eval = true;\n", .{});
     try gen_setup.emitSetup(self);
     try gen_unit.emitUnits(self);
     try gen_dispatch.emitDispatchers(self);
@@ -151,7 +153,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
     // advance, the only place a stream may move: a per-iteration draw makes
     // the residual non-deterministic and Newton never converges.
-    if (f.stateful or self.lowered.rng_auto_seeds.items.len != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
+    if (f.stateful or self.lowered.rng_auto_seeds.items.len != 0 or pathLatches(self) or hasStatus(self)) try gen_state.emitStateMachine(self);
     try cg_limit.emit(self);
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
@@ -170,7 +172,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // batch differential check keys on it, and a batching host may.
     // ponytail: a `vera_timepoint` cache stores one point's values, so a
     // device with one is not batched; store lane 0 when a host batches it.
-    if (!self.float.pinned and self.lowered.timepoints.items.len == 0) try self.w("pub const batch_ok = true;\n\n", .{});
+    if (!self.float.pinned and self.lowered.timepoints.items.len == 0 and !hasStatus(self)) try self.w("pub const batch_ok = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 
@@ -907,8 +909,98 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    su_ok: if (std.debug.runtime_safety and contract.validating) bool else void = if (std.debug.runtime_safety and contract.validating) false else {{}},
         \\
     , .{}) else if (self.lowered.timepoints.items.len != 0) try self.w("    su: Setup = .{{}},\n", .{});
+    if (hasStatus(self)) try self.w(
+        \\    /// §9.7.3 the first `$fatal`/`$error` reported, `contract.statusSite`'s
+        \\    /// code; 0 = ok. Sticky until `initState` or `setup`.
+        \\    vera_status__: u32 = 0,
+        \\    /// The reported site's numeric arguments (`contract.formatStatus`).
+        \\    vera_status_args__: [{d}]f64 = @splat(0.0),
+        \\
+    , .{Lowered.status_arg_max});
     try self.w("}};\n\n", .{});
     try emitTpHelpers(self);
+    try emitStatusHelpers(self);
+}
+
+/// §9.7.3 `initState` and `setup` clear a latched status (a `w` format).
+pub const status_drop = "    inst.vera_status__ = 0;\n    inst.vera_status_args__ = @splat(0.0);\n";
+
+/// Whether the device reports §9.7.3 `$fatal`/`$error` as a status
+/// (`Lowered.status`): a printing artifact runs them in its display chain.
+pub fn hasStatus(self: *const Gen) bool {
+    return self.display == .drop and self.lowered.status != .undef;
+}
+
+/// The core result's spelling of status value `v`: its field, its folded
+/// constant, or 0 for an argument the site never set.
+fn statusVal(self: *Gen, v: Mir.Value) Error![]const u8 {
+    if (v == .undef) return "0.0";
+    if (self.an.foldConst(v, false)) |c| return fmtF64(self, c.f);
+    const k = gen_dispatch.coreIdx(self, self.an.rv(v)).?;
+    return std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
+}
+
+/// §9.7.3 `status_sites`, `zStatusStore` (which `eval`, `q` and `evalQ` call
+/// on the core result: the first status reported sticks) and `zStatusDrop`
+/// (`initState`, `setup`).
+fn emitStatusHelpers(self: *Gen) Error!void {
+    if (!hasStatus(self)) return;
+    try self.w(
+        \\/// §9.7.3 every `$fatal`/`$error` in the analog context: a device cannot
+        \\/// print or stop its host, so the first one an evaluation reaches latches
+        \\/// `Instance.vera_status__` (`contract.formatStatus` renders it), and
+        \\/// from then on `eval`, `q` and `evalQ` return all-zero rows and
+        \\/// `updateState` leaves the state alone.
+        \\pub const status_sites = [_]contract.StatusSite{{
+        \\
+    , .{});
+    for (self.lowered.status_sites.items) |s| {
+        const at = srcLine(self, s.tok);
+        try self.w("    .{{ .severity = .{s}, .fmt = \"{f}\", .file = \"{f}\", .line = {d} }},\n", .{
+            if (s.fatal) "fatal" else "@\"error\"", std.zig.fmtString(s.fmt), std.zig.fmtString(at.file), at.line,
+        });
+    }
+    try self.w("}};\n\n", .{});
+    const code = try statusVal(self, self.lowered.status);
+    var args: [Lowered.status_arg_max][]const u8 = undefined;
+    var reads_m = std.mem.startsWith(u8, code, "m.");
+    for (&args, self.lowered.status_args) |*s, a| {
+        s.* = try statusVal(self, a);
+        reads_m = reads_m or std.mem.startsWith(u8, s.*, "m.");
+    }
+    try self.w("/// §9.7.3 latch the first status reported; later ones change nothing.\n", .{});
+    try self.w("inline fn zStatusStore(inst: *Instance, {s}: anytype) void {{\n", .{if (reads_m) "m" else "_"});
+    try self.w("    if (inst.vera_status__ != 0) return;\n", .{});
+    try self.w("    const code: f64 = {s};\n", .{code});
+    try self.w("    if (code == 0.0) return;\n    inst.vera_status__ = @intFromFloat(code);\n", .{});
+    try self.w("    inst.vera_status_args__ = .{{ {s}, {s}, {s}, {s} }};\n}}\n\n", .{ args[0], args[1], args[2], args[3] });
+    // Every charge zero, value and derivative lanes, as `zRowsZero` does
+    // for the rows. Unreferenced (so unanalysed) without a reactive half.
+    try self.w(
+        \\fn zSitesZero(comptime S: type) contract.Sites(Self, S) {{
+        \\    var r: contract.Sites(Self, S) = undefined;
+        \\    inline for (0..contract.nQ(Self)) |k| r[k] = zTo(S, contract.siteMask(Self, k), S.con(0.0));
+        \\    return r;
+        \\}}
+        \\
+        \\
+    , .{});
+}
+
+/// The source file and 1-based line of token `tok`, through the diagnostic
+/// bag's source map (an `include`d file names itself). Empty and 0 when
+/// codegen runs without a bag.
+fn srcLine(self: *const Gen, tok: u32) struct { file: []const u8, line: u32 } {
+    const bag = self.diags orelse return .{ .file = "", .line = 0 };
+    if (tok >= self.lowered.tok_starts.len) return .{ .file = "", .line = 0 };
+    const start = self.lowered.tok_starts[tok];
+    const at = bag.locate(.{ .start = start, .end = start }, null);
+    const off = bag.toSourceOffset(at.file, at.offset);
+    const text = bag.sourceText(at.file);
+    return .{
+        .file = bag.fileName(at.file),
+        .line = @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n")),
+    };
 }
 
 /// VerA's `vera_timepoint` (§2.9): each cached statement's `Instance` fields,

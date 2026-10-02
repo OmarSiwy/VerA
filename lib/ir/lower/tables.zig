@@ -31,6 +31,18 @@ pub const DiscreteEvent = struct {
 /// §7.8.4 one port an automatic connect module was inserted on (`inserts`).
 pub const Inserted = Elaborate.Inserted;
 
+/// One §9.7.3 `$fatal`/`$error` call in the analog context (`status_sites`).
+pub const StatusSite = struct {
+    fatal: bool,
+    /// The format string, "" when the call has none.
+    fmt: []const u8,
+    /// The call token, for the site's source line.
+    tok: u32,
+};
+
+/// How many numeric arguments a status site carries (`status_args`).
+pub const status_arg_max = 4;
+
 /// One row of `nodes`.
 pub const Node = struct {
     /// The unknown's unique spelling (codegen's `U` member).
@@ -202,6 +214,16 @@ reject_iteration: Mir.Value = .zero,
 /// (+inf when none ran), or `.undef` when the module never calls it.
 /// `updateState` turns it into `contract.UpdateResult.request_reject_at`.
 reject_step: Mir.Value = .undef,
+/// §9.7.3 `$fatal`/`$error` in the analog context, in source order: a
+/// device (`--display=drop`) reports the first one an evaluation reaches
+/// through `Instance.vera_status__` (`contract.StatusSite`).
+status_sites: std.ArrayList(StatusSite) = .empty,
+/// The status code the evaluation ends with: 0 when no site ran, else the
+/// FIRST site's `(severity << 24) | (site + 1)`. `.undef` without sites.
+status: Mir.Value = .undef,
+/// The first site's numeric arguments, after its format string (0 past
+/// its count, and for a string argument).
+status_args: [status_arg_max]Mir.Value = @splat(.undef),
 
 // ---- which kernels the device needs ----
 /// The device-side facilities the model needs (see `Kernel`).

@@ -300,6 +300,34 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/paramset_host.zig")) test_paramsets.dependOn(run_host);
+        // §9.7.3 the status channel on the GPU targets a device also builds
+        // for: AMDGCN to an object; NVPTX to LLVM IR only, because `@export`
+        // of a `callconv(.kernel)` function is an LLVM alias the NVPTX
+        // backend refuses (a host rewrites the IR first, as Gompute does).
+        if (std.mem.eql(u8, h.host, "tests/status_host.zig")) for ([_][2][]const u8{
+            .{ "nvptx64-cuda", "sm_70" },
+            .{ "amdgcn-amdhsa", "gfx906" },
+        }) |gpu| {
+            const gt = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = gpu[0], .cpu_features = gpu[1] }) catch unreachable);
+            const gc = b.createModule(.{ .root_source_file = b.path("tools/contract.zig"), .target = gt, .optimize = .ReleaseFast });
+            const obj = b.addObject(.{ .name = "status-gpu", .root_module = b.createModule(.{
+                .root_source_file = b.path("tests/status_gpu.zig"),
+                .target = gt,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .imports = &.{
+                    .{ .name = "contract", .module = gc },
+                    .{ .name = "device", .module = b.createModule(.{
+                        .root_source_file = device,
+                        .target = gt,
+                        .optimize = .ReleaseFast,
+                        .imports = &.{.{ .name = "contract", .module = gc }},
+                    }) },
+                },
+            }) });
+            const out = if (gt.result.cpu.arch == .nvptx64) obj.getEmittedLlvmIr() else obj.getEmittedBin();
+            test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{"status_ops_kernel"} }).step);
+        };
     }
 
     // `.v` contract devices (`rt.Device`) under a mock analog host, each
@@ -438,6 +466,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
+    .{ .host = "tests/status_host.zig", .va = "tests/status_ops.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },

@@ -140,9 +140,13 @@ fn emitQ(self: *Gen) Error!void {
         \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
         \\/// the host differentiates each and stamps it into its rows.
         \\pub fn q(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Sites(Self, S) {{
-        \\    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});
-        \\
-    , .{self.heldArg(false)});
+        \\{s}    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});
+        \\{s}
+    , .{
+        if (gen_file.hasStatus(self)) status_pre ++ "zSitesZero(S);\n" else "",
+        self.heldArg(false),
+        if (gen_file.hasStatus(self)) status_post ++ "zSitesZero(S);\n" else "",
+    });
     try self.w("    return ", .{});
     try writeSites(self);
     try self.w(";\n}}\n\n", .{});
@@ -324,18 +328,24 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("    return res;\n}}\n\n", .{});
 
     try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
-    if (self.core_wanted and self.lowered.timepoints.items.len != 0) {
+    const st = gen_file.hasStatus(self);
+    if (self.core_wanted and (self.lowered.timepoints.items.len != 0 or st)) {
         // VerA's `vera_timepoint` (§2.9): the core result fills a stale cache.
+        // §9.7.3 a status latches, and a latched one zeroes every row.
         try self.w(
             \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
-            \\    const xs = zProbe(S, x);
+            \\{s}    const xs = zProbe(S, x);
             \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
-            \\    zTpStore(inst, sim, m);
-            \\    return zResidual(S, xs, m);
+            \\{s}{s}    return zResidual(S, xs, m);
             \\}}
             \\
             \\
-        , .{self.heldArg(false)});
+        , .{
+            if (st) status_pre ++ "zRowsZero(S);\n" else "",
+            self.heldArg(false),
+            if (self.lowered.timepoints.items.len != 0) "    zTpStore(inst, sim, m);\n" else "",
+            if (st) status_post ++ "zRowsZero(S);\n" else "",
+        });
     } else if (self.core_wanted) {
         try self.w(
             \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
@@ -353,6 +363,13 @@ fn emitEval(self: *Gen) Error!void {
         \\
     , .{});
 }
+
+/// §9.7.3 a status device's entry-point guards (`gen_file.hasStatus`): a
+/// latched status returns zero rows before the core runs, and the core's own
+/// report latches and does the same. Each is followed by the zero value.
+const status_pre = "    if (inst.vera_status__ != 0) return ";
+const status_post = "    zStatusStore(inst, m);\n" ++ status_pre;
+const zero_both = ".{ .res = zRowsZero(S), .q = zSitesZero(S) };\n";
 
 /// Emits the §5.6 stamp rows for one residual half into a `res` the caller
 /// has declared. Accumulates `uses_x`/`uses_model`/`uses_inst`, `pat`, `rows`
@@ -622,10 +639,15 @@ pub fn emitFused(self: *Gen) Error!void {
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
         \\pub fn evalQ(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
-        \\    const xs = zProbe(S, x);
+        \\{s}    const xs = zProbe(S, x);
         \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
-        \\{s}
-    , .{ self.heldArg(false), if (self.lowered.timepoints.items.len != 0) "    zTpStore(inst, sim, m);\n" else "" });
+        \\{s}{s}
+    , .{
+        if (gen_file.hasStatus(self)) status_pre ++ zero_both else "",
+        self.heldArg(false),
+        if (self.lowered.timepoints.items.len != 0) "    zTpStore(inst, sim, m);\n" else "",
+        if (gen_file.hasStatus(self)) status_post ++ zero_both else "",
+    });
     // §5.6.1.2 the charges, one per site, off the same core.
     try self.b("    return .{{ .res = zResidual(S, xs, m), .q = ", .{});
     try writeSites(self);

@@ -15,6 +15,7 @@ const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
+const Ssa = @import("../ssa.zig");
 const dist = @import("../dist.zig");
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
@@ -681,6 +682,61 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
 
 // ---- ch9 system tasks (statement position) ---------------------------------
 
+/// §9.7.3 `$fatal`/`$error` as a STATUS for a device, which cannot print or
+/// stop its host (`Lowered.status`). Records the site, then makes the site the
+/// evaluation's status unless an earlier one already is: the code place
+/// keeps its value when nonzero, and each argument place moves only with it.
+/// Runs at the statement, under its guards, so a call on an arm that did not
+/// run reports nothing. The printing artifact ignores the result.
+fn lowerStatus(self: *Lower, tok: u32, fatal: bool, args: []const Ast.ExprId) Oom!void {
+    const Lowered = Lower.Lowered;
+    const site: u32 = @intCast(self.out.status_sites.items.len);
+    // §9.7.3 `$fatal(finish_number, "…", …)`: the format is the first
+    // argument that is a string literal, as `checkFormatPairing` reads it.
+    var fmt: []const u8 = "";
+    var first = args.len;
+    for (args, 0..) |a, i| {
+        if (a == .none) continue;
+        const text = try lower_sysfunc.outputLiteral(self, a) orelse
+            if (lower_constfold.constEval(self, a)) |cv| switch (cv) {
+                .str => |s| s,
+                else => null,
+            } else null;
+        if (text) |t| {
+            fmt = t;
+            first = i + 1;
+            break;
+        }
+    }
+    try self.out.status_sites.append(self.arena, .{ .fatal = fatal, .fmt = fmt, .tok = tok });
+
+    const ps = self.status_places orelse blk: {
+        var ps: [1 + Lowered.status_arg_max]Ssa.Place = undefined;
+        for (&ps) |*p| {
+            p.* = self.builder.newPlace();
+            try self.builder.writeVariable(p.*, .entry, .f_zero);
+        }
+        self.status_places = ps;
+        break :blk ps;
+    };
+    const cur = try self.builder.readVariable(ps[0], self.cur);
+    const first_here = try self.emit(.feq, &.{ cur, .f_zero });
+    const code: f64 = @floatFromInt((@as(u32, if (fatal) 1 else 2) << 24) | (site + 1));
+    try self.builder.writeVariable(ps[0], self.cur, try self.emit(.select, &.{ first_here, try self.mir.addFloatConst(self.arena, code), cur }));
+    var k: usize = 0;
+    for (args[@min(first, args.len)..]) |a| {
+        if (a == .none) continue;
+        if (k == Lowered.status_arg_max) break;
+        const tv = try lower_sysfunc.lowerTaskArg(self, a, if (fatal) "$fatal" else "$error");
+        // A string argument has no numeric slot; `contract.formatStatus`
+        // prints `%s` as `?`.
+        const v = if (tv.ty == .string) Mir.Value.f_zero else try self.toReal(tv);
+        const old = try self.builder.readVariable(ps[1 + k], self.cur);
+        try self.builder.writeVariable(ps[1 + k], self.cur, try self.emit(.select, &.{ first_here, v, old }));
+        k += 1;
+    }
+}
+
 /// Lowers a §5.12/ch9 system task in statement position. Display and file tasks
 /// are void calls codegen may drop; the unsupported set is rejected by name.
 pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
@@ -725,6 +781,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // argument. In statement position the count is dropped, the write is not.
     if (try lowerFileRead(self, tok, name, args)) |_| return;
     if (try lowerKernelCtl(self, tok, name, args)) return; // §9.17
+    if (c == .@"$fatal" or c == .@"$error") try lowerStatus(self, tok, c == .@"$fatal", args);
     // §9.4.1 `$monitor` and its §9.5.2 file twin: registered HERE, reported at
     // the end of every accepted step from then on — see `armMonitor`.
     const mon: ?Mir.Value = if (c == .@"$monitor" or c == .@"$fmonitor") try armMonitor(self, name) else null;

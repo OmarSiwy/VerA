@@ -287,7 +287,10 @@ fn timepointRefuses(self: *const Lower, id: Ast.StmtId) ?[]const u8 {
         .contribute, .indirect => "a contribution (§5.6)",
         .event_control => "an event control (§5.10)",
         .event_trigger, .disable => "an event statement (§5.10)",
-        .sys_task => "a system task",
+        // §9.7.3 `$fatal`/`$error` set the device's sticky status, which
+        // a cache hit cannot clear: the statement ran once and reported.
+        .sys_task => |t| if (std.mem.eql(u8, self.file.str(t.name), "$fatal") or
+            std.mem.eql(u8, self.file.str(t.name), "$error")) null else "a system task",
         .empty, .block, .assign, .if_stmt, .case_stmt, .for_stmt, .while_stmt, .repeat_stmt, .jump => null,
     };
 }

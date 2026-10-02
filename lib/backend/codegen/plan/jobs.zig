@@ -99,6 +99,9 @@ pub const Job = struct {
         timepoint,
         /// VerA's `$vera_reject_step`: the retry time `updateState` returns.
         reject_step,
+        /// §9.7.3 a device's status code and its arguments, which `eval`
+        /// latches into `Instance` (`Lowered.status`).
+        status,
         /// §9.4: the one job that is NOT folded into the core, because its
         /// body has side effects the residual must not trigger. See
         /// `plan_core.plan`.
@@ -342,6 +345,21 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .mode = .strict,
         .comment = "$vera_reject_step retry time",
     });
+    // §9.7.3 a device reports `$fatal`/`$error` as a status (a printing
+    // artifact runs the display chain instead). Values that fold are written
+    // as constants by `zStatusStore` and need no core field.
+    if (!from.emit_display and self.lowered.status != .undef) {
+        const vals = [_]Mir.Value{self.lowered.status} ++ self.lowered.status_args;
+        for (vals) |v| {
+            if (v == .undef or self.an.foldConst(v, false) != null) continue;
+            try jobs.append(self.arena, .{
+                .kind = .status,
+                .target = self.an.rv(v),
+                .mode = .strict,
+                .comment = "§9.7.3 the device status and its arguments",
+            });
+        }
+    }
     // §9.4 the display tasks, as one unit. Queued last, so no existing job
     // (and so no declaration name) moves when a model gains or loses a
     // `$strobe`. `.strict` unconditionally: a print is not on the residual

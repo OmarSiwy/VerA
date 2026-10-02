@@ -348,6 +348,9 @@ fn compileInArena(
     for (lowered.displays.items) |d| {
         const span = lowered.tokenSpan(d.tok);
         if (opts.display == .drop) {
+            // §9.7.3 a device reports these through its status channel
+            // (`contract.StatusSite`): kept, not dropped.
+            if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
             // A §9.5 file task is kept for sequencing, not text; its answer is
             // §9.5.1's zero descriptor rather than a dropped print.
             if (Mir.callee.isFileCall(.fromName(d.name)))
