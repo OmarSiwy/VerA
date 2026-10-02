@@ -103,3 +103,7 @@ Local `main` was fast-forwarded to this branch at 8ac3de14 by another session an
 | golden diff | 52 files in both snapshots differ: 51 `.v` by #43's flags argument on `s.real(` (plus the base harness's absolute fixture paths, which Phase 0's harness writes repo-relative), 1 `.stderr` by #49's third E0207 on #48's fixture; the rest are only in the new snapshot (Phase 0's kinds, new fixtures) |
 | fixture suite | 2614/2614 → 2618/2618, FAIL list empty (7 fixtures added: 4 `.va` counted here, 3 `.v` under `test-devices`) |
 | `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
+
+### ARCHITECTURE.md Phases 6, 7, 9 (gate 6bdc3d58 against base 7971b23e)
+
+Setup tiers into `prove` (no backend writes `Lowered`; R4's allowlist empty), `zigbuild` (the testbench no longer reaches codegen; R2's tb row gone), the digital emitter out of `sim`: `check`, `test` Debug and ReleaseSafe exit 0; goldens **IDENTICAL: 21164 files**; fixture suite 2618/2618, name lists equal; `test-devices`, `test-vpi-fixtures`, `suite-exe` exit 0.
