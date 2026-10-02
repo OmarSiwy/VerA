@@ -94,3 +94,12 @@ Issues closed by these waves: #35–#48 (bugs found by the pass, each with a fix
 ### History note
 
 Local `main` was fast-forwarded to this branch at 8ac3de14 by another session and gained three `vera --lsp` commits and the #51 fix (892dafce). The branch was rebased onto that `main` (7971b23e): the Phase 5a/#51 overlap (the §9.15 rows) was resolved by hand, and R7 gained two rows for `vera --lsp` (boundary data: flag names, LSP method names). `main` fast-forwards to this branch.
+
+### Rebased tip 7971b23e against `main` 892dafce (ARCHITECTURE.md Phases 4–5, waves 2–5's later fixes, `vera --lsp`, #51)
+
+| Check | Result |
+|---|---|
+| `zig build check`; `zig build test` Debug / ReleaseSafe | exit 0; exit 0 / exit 0 (`main` itself fails `test`: it carries the mid-pass snapshot 8ac3de14 without the `linkArgv` and printf-oracle fixes) |
+| golden diff | 52 files in both snapshots differ: 51 `.v` by #43's flags argument on `s.real(` (plus the base harness's absolute fixture paths, which Phase 0's harness writes repo-relative), 1 `.stderr` by #49's third E0207 on #48's fixture; the rest are only in the new snapshot (Phase 0's kinds, new fixtures) |
+| fixture suite | 2614/2614 → 2618/2618, FAIL list empty (7 fixtures added: 4 `.va` counted here, 3 `.v` under `test-devices`) |
+| `test-devices`, `test-vpi-fixtures`, `suite-exe` | exit 0 |
