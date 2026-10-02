@@ -126,7 +126,7 @@ fn deviceRoot(self: *Emitter) Error!void {
     ;
     try self.print(
         \\/// The contract ABI this device was generated for (`contract.abi_version`).
-        \\pub const contract_abi: u32 = 5;
+        \\pub const contract_abi: u32 = {d};
         \\pub const U = enum(u8) {{{s} }};
         \\pub const num_ports: usize = {d};
         \\const Dev = rt.Device(.{{ .U = U, .design = &design, .dispatch = Code(false).dispatch, .units = {d}, .pins = &.{{{s}
@@ -145,7 +145,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\    @import("contract").validate(@This());
         \\}}
         \\
-    , .{ names.written(), n, r.finest, pins.written(), masks });
+    , .{ @import("contract").abi_version, names.written(), n, r.finest, pins.written(), masks });
 }
 
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {

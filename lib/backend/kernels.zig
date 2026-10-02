@@ -5,6 +5,9 @@
 //! No device imports this file: its `test` block would pull test code in.
 
 /// §9.5.3/§9.5.4.2 string formatting and scanning.
+/// `tools/contract.zig`'s `abi_version`, re-exported for `backend`, which
+/// cannot import `contract` itself: codegen stamps it into every device.
+pub const abi_version = @import("contract").abi_version;
 pub const str_kernels = @import("str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
 pub const table_kernels = @import("table_kernels.zig");
