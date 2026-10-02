@@ -490,6 +490,11 @@ fn emitModel(self: *Gen) Error!void {
     // `setup` derives from it is shared by the instances of that row. A host
     // simulating an instance at its own temperature gives it its own row.
     try self.w("    temperature__: f64 = 300.15, // §9.10 $temperature, kelvin — host-written\n", .{});
+    // §9.19 which of the device's ports the host's card connects, bit p for
+    // port p in declaration order; all ones (every port connected) unless the
+    // host writes it. Read by `$port_connected` in setup, derive and eval, so
+    // the host writes it with the card, before `derive`.
+    if (self.lowered.uses.contains(.port_mask)) try self.w("    port_connected__: u64 = std.math.maxInt(u64), // §9.19 host-written connection mask\n", .{});
     // The setup roots (`Setup`), LAST so a new parameter does not move them.
     // `su_ok` exists only where it is asserted: Debug, in a program that
     // asked for the contract's checks (`contract.validating`).

@@ -102,6 +102,14 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 "$port_connected requires a port identifier"});
             return poison;
         }
+        // A top-level device's own port: whether the host connected it is a
+        // property of the card the host builds (a 4-terminal card for a
+        // 6-port model), so the call carries the port's ordinal and codegen
+        // reads that bit of the host-written `Model.port_connected__`.
+        if (!is_pg) if (id) |n| if (portOrdinal(self, n)) |k| {
+            self.out.uses.insert(.port_mask);
+            return .{ .v = try self.call("$port_connected", &.{try self.mir.addIntConst(self.arena, k)}), .ty = .integer };
+        };
     }
     // §4.3.1 Table 4-14 gives these system spellings the same operand-sensitive
     // result types as their traditional spellings. A generic call's name-only
@@ -412,6 +420,13 @@ fn isPort(self: *const Lower, name: []const u8) bool {
     const m = self.out.module orelse return false;
     for (m.ports) |p| if (std.mem.eql(u8, self.file.str(p.name), name)) return true;
     return false;
+}
+
+/// Returns `name`'s position in the module's port list, or null.
+fn portOrdinal(self: *const Lower, name: []const u8) ?i64 {
+    const m = self.out.module orelse return null;
+    for (m.ports, 0..) |p, k| if (std.mem.eql(u8, self.file.str(p.name), name)) return @intCast(k);
+    return null;
 }
 
 /// Returns the constant string an argument folds to, or null for any other expression.

@@ -88,6 +88,9 @@ pub const Kernel = enum {
     /// §9.17.1 `$discontinuity(-1)`: `reject_iteration` is a live root and the
     /// device carries the rejection flag.
     reject_iteration,
+    /// §9.19 a top-level `$port_connected`: the Model owes the host-written
+    /// connection mask `port_connected__`.
+    port_mask,
     /// §9.12 `$test$plusargs`/`$value$plusargs`: the `Instance.plusargs`
     /// field the host writes and the `zPlusarg` search over it.
     plusargs,
