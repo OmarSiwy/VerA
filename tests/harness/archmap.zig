@@ -350,6 +350,7 @@ const groups = [_]struct { title: []const u8, prefixes: []const []const u8 }{
     .{ .title = "Build driver: `.so`, engine and testbench builds (`zigbuild` module)", .prefixes = &.{"lib/zigbuild/"} },
     .{ .title = "Backend: codegen (`backend` module)", .prefixes = &.{ "lib/backend/codegen", "lib/backend/cg_" } },
     .{ .title = "Backend: naming, testbench", .prefixes = &.{"lib/backend/"} },
+    .{ .title = "Native emitter: `.v` executables and devices (`digital` module)", .prefixes = &.{"lib/digital/"} },
     .{ .title = "Compiler facade (`vera` module)", .prefixes = &.{"lib/root.zig"} },
     .{ .title = "CLI", .prefixes = &.{ "src/main.zig", "src/cli/" } },
     .{ .title = "Digital simulator and mixed-signal runner (`sim` module)", .prefixes = &.{"src/sim/"} },

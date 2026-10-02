@@ -27,7 +27,7 @@ const time = @import("../time.zig");
 /// is word `off` of the planes.
 pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u32 };
 
-/// What `digital/emit.zig`'s device root passes `Device`, all comptime.
+/// What `lib/digital/emit.zig`'s device root passes `Device`, all comptime.
 pub const Spec = struct {
     /// The pins' enum, `U` of the device.
     U: type,

@@ -18,6 +18,7 @@ pub const prove = @import("prove");
 pub const zigbuild = @import("zigbuild");
 pub const backend = @import("backend");
 pub const sim = @import("sim");
+pub const digital = @import("digital");
 pub const vera = @import("vera");
 pub const vpi = @import("vpi");
 

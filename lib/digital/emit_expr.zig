@@ -7,8 +7,8 @@
 //! §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const compile = @import("compile.zig");
-const evaluate = @import("evaluate.zig");
+const compile = @import("sim").digital.for_emitter.compile;
+const evaluate = @import("sim").digital.for_emitter.evaluate;
 const emit = @import("emit.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
@@ -724,7 +724,7 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     }
     try self.print(" var o{d}: u64 = 0;", .{label});
     for (selects, 0..) |sel, d| {
-        const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
+        const span: @import("sim").digital.Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
         try self.print(" const i{d}_{d} = L.asIndex(", .{ label, d });
         const t = try selfDetermined(self, sel);
         try self.print(", {d}, {}) orelse break :b{d} null;", .{ t.width, t.signed, label });
@@ -735,7 +735,7 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
 }
 
 /// The interpreter's §3.3 `[msb:lsb]`, so both engines number bits alike.
-pub const VecRange = @import("root.zig").VecRange;
+pub const VecRange = @import("sim").digital.VecRange;
 
 /// A slot's declared `[msb:lsb]`, `[w-1:0]` when it declares none.
 pub fn vecRange(r: anytype, at: u32, width: u32) VecRange {

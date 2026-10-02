@@ -8,18 +8,19 @@
 //! §9.3, §9.7.6, §9.7.7, §9.8.2, §10.2.2/§10.2.3, §10.3, §15, §17.1 to §17.6,
 //! §18; VAMS §9.22 driver access (refused).
 const std = @import("std");
-const no_cold = @import("net.zig").no_cold;
+const no_cold = root.for_emitter.net.no_cold;
 const Front = @import("frontend");
 const Ast = Front.Ast;
-const root = @import("root.zig");
+// The interpreter, whose elaborated `Run` this reads until B4.
+const root = @import("sim").digital;
 const Run = root.Run;
-const compile = @import("compile.zig");
-const evaluate = @import("evaluate.zig");
-const display = @import("display.zig");
+const compile = root.for_emitter.compile;
+const evaluate = root.for_emitter.evaluate;
+const display = root.for_emitter.display;
 const fmt = @import("kernels").fmt;
 const expr = @import("emit_expr.zig");
 const plan = @import("plan.zig");
-const vcd = @import("vcd.zig");
+const vcd = root.for_emitter.vcd;
 const Type = compile.Type;
 /// `plan.Schedule`, here for `vera --schedule=` (src/main.zig).
 pub const Schedule = plan.Schedule;
@@ -574,7 +575,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         try forcedParts(self);
         break;
     };
-    if (r.budget != @import("root.zig").max_events_per_tick) try self.print("pub const vera_event_budget: u64 = {d};\n", .{r.budget});
+    if (r.budget != root.max_events_per_tick) try self.print("pub const vera_event_budget: u64 = {d};\n", .{r.budget});
     // Every function of the design, once per phase (`rt.Phase`): `main`
     // names `Code(true)` only when it runs both, and Zig compiles only what
     // is named.
@@ -1789,7 +1790,7 @@ fn portTables(self: *Emitter) Error!void {
         // `$var port <size> <n> <name> $end` per port (`evcd.tick`).
         for (f.scopes) |sc| {
             w.writeAll("$scope module ") catch return error.OutOfMemory;
-            @import("evcd.zig").path(r, w, sc) catch return error.OutOfMemory;
+            root.for_emitter.evcd.path(r, w, sc) catch return error.OutOfMemory;
             w.writeAll(" $end\n") catch return error.OutOfMemory;
             for (r.file.modules[r.scope_info.items[sc].def].ports) |mp| {
                 const slot = r.names.get(.{ .scope = sc, .str = mp.name }) orelse continue;
@@ -1804,7 +1805,7 @@ fn portTables(self: *Emitter) Error!void {
                 pw.print("\n            .{{ .off = {d}, .width = {d}, .dir = .{t}, ", .{ self.off[slot], width, mp.direction }) catch return error.OutOfMemory;
                 if (r.net_of.get(slot)) |k| {
                     pw.print(".net = {d}, .inside = &.{{", .{self.net_ix[k] orelse return self.refuse("a dumped port whose net the executable does not resolve")}) catch return error.OutOfMemory;
-                    for (r.netDrivers(k)) |d| pw.print(" {},", .{@import("evcd.zig").below(r, r.drivers[d].scope, sc)}) catch return error.OutOfMemory;
+                    for (r.netDrivers(k)) |d| pw.print(" {},", .{root.for_emitter.evcd.below(r, r.drivers[d].scope, sc)}) catch return error.OutOfMemory;
                     pw.writeAll(" } },") catch return error.OutOfMemory;
                 } else pw.writeAll("},") catch return error.OutOfMemory;
             }
@@ -1821,7 +1822,7 @@ fn portTables(self: *Emitter) Error!void {
 /// One §18.3 task at `pc` (`evcd.task`): a `$dumpports` call selects its
 /// file; the others act on the file their last argument names, or on
 /// every file. A name no `$dumpports` gives is ignored.
-fn portTask(self: *Emitter, pc: u32, op: @import("evcd.zig").Op, args: []const Ast.ExprId) Error!void {
+fn portTask(self: *Emitter, pc: u32, op: root.for_emitter.evcd.Op, args: []const Ast.ExprId) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
     if (op == .ports) {
@@ -1907,7 +1908,7 @@ fn netTables(self: *Emitter) Error!void {
         try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
     }
     try self.print("\n    }},\n    .drivers = &.{{", .{});
-    var udps: std.ArrayList(*const @import("net.zig").Udp) = try .initCapacity(self.arena, self.rt_drivers.items.len);
+    var udps: std.ArrayList(*const root.for_emitter.net.Udp) = try .initCapacity(self.arena, self.rt_drivers.items.len);
     for (self.rt_drivers.items) |di| {
         const d = r.drivers[di];
         r.scope = d.scope;
@@ -1956,11 +1957,11 @@ fn netTables(self: *Emitter) Error!void {
     try self.print("\n    }},\n", .{});
 }
 
-fn fmtDelay(d: @import("net.zig").Delay) std.fmt.Alt(@import("net.zig").Delay, delayText) {
+fn fmtDelay(d: root.for_emitter.net.Delay) std.fmt.Alt(root.for_emitter.net.Delay, delayText) {
     return .{ .data = d };
 }
 
-fn delayText(d: @import("net.zig").Delay, out: *std.Io.Writer) std.Io.Writer.Error!void {
+fn delayText(d: root.for_emitter.net.Delay, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.print(".{{ .rise = {d}, .fall = {d}, .off = {d}, .present = {} }}", .{ d.rise, d.fall, d.off, d.present });
 }
 
@@ -2013,7 +2014,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
             if (!two_ok) try self.xMeaning("a §7.9 net resolved from strengths or several drivers, or a three-state, switch, UDP, port-window or pull driver", null);
             // §7.14 picks the delay by the value transitioned to: with
             // three different ones, an x or z decides when a value lands.
-            for ([_]@import("net.zig").Delay{ d.delay, r.netCold(n).delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
+            for ([_]root.for_emitter.net.Delay{ d.delay, r.netCold(n).delay }) |dl| if (dl.present and (dl.rise != dl.fall or dl.fall != dl.off))
                 try self.xMeaning("a `delay3` whose rise, fall and turn-off differ, chosen by an x or z", null);
         }
         switch (d.source) {
@@ -2046,7 +2047,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
 
 /// A continuous assignment's value in its net's type; with `slice`, the
 /// window of a §12.3.6 concatenated port it asserts.
-fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?@import("net.zig").Slice, net_slot: u32) Error!void {
+fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?root.for_emitter.net.Slice, net_slot: u32) Error!void {
     if (slice) |sl| {
         const t = try expr.natural(self, e);
         const ctx: Type = .{ .width = @max(t.width, sl.total), .signed = t.signed };
@@ -2316,7 +2317,7 @@ fn strengthOf(self: *Emitter, e: Ast.ExprId) Error!void {
         // (`display.walk`'s test, which the interpreter prints by).
         if (r.netDrivers(k).len == 0 and r.netCold(r.nets[k]).trans.len == 0) {
             var buf: std.Io.Writer.Allocating = .init(self.arena);
-            display.strength(&buf.writer, @import("net.zig").netPull(r.nets[k].kind)) catch return error.OutOfMemory;
+            display.strength(&buf.writer, root.for_emitter.net.netPull(r.nets[k].kind)) catch return error.OutOfMemory;
             return self.print("            try s.out.writeAll(\"{s}\");\n", .{buf.written()});
         }
         const ix = self.net_ix[k] orelse return self.refuse("a %v of a net the executable does not resolve");

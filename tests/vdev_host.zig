@@ -478,7 +478,7 @@ test "v_say: a step's transcript is printed when it is accepted, never when reje
 }
 
 test "every .v device is stamped with the contract's abi_version" {
-    // `src/sim/digital/emit.zig` once wrote a literal 5 after the contract
+    // `lib/digital/emit.zig` (then in src/sim) once wrote a literal 5 after the contract
     // moved to 6, so every `.v` device failed a host's ABI check (ESPice,
     // 2026-10-02). The stamp now reads `contract.abi_version`.
     inline for (.{ @import("v_inv"), @import("v_buf"), @import("v_count"), @import("v_a2d"), @import("v_edge"), @import("v_any"), @import("v_huge") }) |D|

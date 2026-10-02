@@ -5,7 +5,7 @@
 //!
 //! Every declaration here is reached from outside the module: `src/main.zig`,
 //! `src/vpi/`, `lib/backend/tb*`, `tests/`, and the Zig text that
-//! `lib/zigbuild/orchestrator.zig` and `digital/emit.zig` generate (`sim.rt`,
+//! `lib/zigbuild/orchestrator.zig` and `lib/digital/emit.zig` generate (`sim.rt`,
 //! `sim.digital`, `sim.mixed`). The generated text is why a rename here is a
 //! golden change, not only a compile error.
 //! Clauses: none here; each file's header names the ones its code cites.

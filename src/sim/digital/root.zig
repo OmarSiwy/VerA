@@ -10,7 +10,8 @@
 //! resolution.zig (§7.9 resolution), waiters.zig (the write path), driver.zig
 //! (VAMS §9.22 driver access), tchk.zig (§15), display.zig and system.zig
 //! (§17), vcd.zig and evcd.zig (§18), bind.zig (§13), vpi.zig (a VPI
-//! application's requests), emit.zig (`--emit-exe`).
+//! application's requests). The native emitter over a `Run` is the
+//! `digital` module (lib/digital/), which reads the files it names below.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -22,19 +23,28 @@ pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
 const deep = @import("base").deep_stack;
 const compile = @import("compile.zig");
+const evaluate = @import("evaluate.zig");
+const display = @import("display.zig");
+/// The files the native emitter (the `digital` module: `vera --emit-exe` and
+/// `.v` devices) reads besides `Run`, until B4 gives it IR of its own. A
+/// namespace, since `net`, `vcd` and `evcd` name locals and fields here.
+pub const for_emitter = struct {
+    pub const compile = @import("compile.zig");
+    pub const evaluate = @import("evaluate.zig");
+    pub const display = @import("display.zig");
+    pub const net = @import("net.zig");
+    pub const vcd = @import("vcd.zig");
+    pub const evcd = @import("evcd.zig");
+};
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
 /// process does (`waiters.store` now, `exec.enqueue` of a `.write` later), so a
 /// §12.30 put wakes waiters and value-change watchers like any other write.
 pub const exec = @import("exec.zig");
-const display = @import("display.zig");
-/// `vera --emit-exe design.v`: an elaborated `Run` as an executable's root.
-pub const emit = @import("emit.zig");
 /// The §17.2 descriptor table a `Run` with no `file_io` opens files through.
 pub const own_files = @import("system.zig").own;
 const driver = @import("driver.zig");
 const binding = @import("bind.zig");
 const elab = @import("elab.zig");
-const evaluate = @import("evaluate.zig");
 const waiters = @import("waiters.zig");
 const resolution = @import("resolution.zig");
 const tchk = @import("tchk.zig");
@@ -63,7 +73,7 @@ const TimeFormat = display.TimeFormat;
 /// `WriteFailed`: the transcript writer `out` failed.
 pub const Error = error{DigitalFailed} || std.mem.Allocator.Error || std.Io.Writer.Error;
 
-/// How `run`, `elaborate` and `emitDevice` read the source.
+/// How `run`, `elaborate` and `digital.emitDevice` read the source.
 pub const Options = struct {
     file_name: []const u8 = "<digital>",
     include_dirs: []const []const u8 = &.{},
@@ -1354,38 +1364,6 @@ fn runDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     try @import("evcd.zig").close(&r);
 }
 
-/// A `.v` design as a contract device an analog host loads (`rt.Device`).
-const DeviceZig = struct {
-    /// The top module's name.
-    name: []const u8,
-    /// The device's Zig root; it imports the modules `contract` and `sim`.
-    zig: []const u8,
-};
-
-/// `source`'s top module as a contract device (`emit.device`), 4-state and
-/// under `schedule`. A design that cannot be one is E1103 in `bag` and
-/// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
-pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
-    return deep.runGuarded(0, emitDeviceDeep, .{ arena, source, opts, schedule, bag });
-}
-
-fn emitDeviceDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
-    var discard: std.Io.Writer.Discarding = .init(&.{});
-    var r = try elaborate(arena, source, opts, bag, &discard.writer);
-    const top = r.file.modules[r.scope_info.items[0].def];
-    const at: diag.Span = .{ .start = r.starts[top.main_tok], .end = r.starts[top.main_tok] };
-    switch (try emit.device(arena, &r, opts.file_name, schedule)) {
-        .zig => |text| {
-            if (r.finest == 0) try bag.add(.lower, .W1155, at, "module `{s}`: no `timescale sets a finer precision", .{r.file.str(top.name)});
-            return .{ .name = r.file.str(top.name), .zig = text };
-        },
-        .refused => |why| {
-            try bag.add(.lower, .E1103, at, "module `{s}`: {s}", .{ r.file.str(top.name), why });
-            return error.DigitalFailed;
-        },
-    }
-}
-
 /// Everything `run` does before the first event dispatches: preprocess,
 /// parse, §6.2.2 elaboration, and every driver and process compiled and
 /// enqueued at time 0. The returned `Run` owns nothing outside `arena`, so a
@@ -1770,7 +1748,6 @@ fn processes(r: *Run, blocks: []const Ast.DiscreteBlock) Error!void {
 // ---- tests ------------------------------------------------------------------
 
 test {
-    _ = emit;
     _ = elab;
     _ = @import("system.zig");
     _ = @import("vcd.zig");

@@ -76,6 +76,10 @@ const module_specs = [_]ModuleSpec{
     // §9.4.3 real conversion and §17.2 file I/O match the analog devices
     // (`contract.FileIo`, LRM §9.5.1.2).
     .{ .name = "sim", .path = "src/sim/root.zig", .role = .runtime, .imports = &.{ "contract", "base", "diag", "frontend", "kernels" } },
+    // The native emitter: an elaborated `sim.digital.Run` -> the Zig root of
+    // an `--emit-exe` executable or a `.v` contract device, both over
+    // `sim.rt`. Out of `sim`, so the executable does not ship it.
+    .{ .name = "digital", .path = "lib/digital/root.zig", .role = .backend, .imports = &.{ "sim", "frontend", "diag", "contract", "kernels", "base" } },
     // `c`: the variadic routines, which Zig cannot define on every target.
     .{ .name = "vpi", .path = "src/vpi/root.zig", .role = .tool, .imports = &.{ "frontend", "ir", "vera", "sim" }, .c = "src/vpi/varargs.c" },
 };
@@ -291,8 +295,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "vera", .module = byName(mods, "vera") },
-            // `golden` snapshots a `.v` design's `digital.emit.program` text.
+            // `golden` elaborates a `.v` design and snapshots its
+            // `digital.program` text.
             .{ .name = "sim", .module = byName(mods, "sim") },
+            .{ .name = "digital", .module = byName(mods, "digital") },
         },
     });
     suite_mod.addOptions("suite_options", o);

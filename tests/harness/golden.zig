@@ -19,7 +19,7 @@
 //!   <path>.so/...        a `.va`: the tree `--emit-so` writes before `zig`
 //!                        runs, `shim.zig` and the split device (`soTree`)
 //!   <path>.program.txt   a `.v`: the executable root `--emit-exe` builds
-//!                        (`digital.emit.program`)
+//!                        (`digital.program`)
 //!
 //! The last three are made in-process through `vera`'s and `sim`'s API, not by
 //! spawning. A kind that fails is `error=<name>` in its own file (a `.so` tree
@@ -39,6 +39,8 @@ const options = @import("suite_options");
 const harness = @import("../harness.zig");
 const vera = @import("vera");
 const digital = @import("sim").digital;
+/// The native emitter (lib/digital/).
+const native = @import("digital");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -234,7 +236,7 @@ fn program(arena: Allocator, io: Io, src: []const u8, includes: []const []const 
     var sink: Io.Writer.Discarding = .init(&.{});
     var r = try digital.elaborate(arena, source, opts, &bag, &sink.writer);
     if (bag.failed()) return error.DigitalFailed;
-    const prog = try digital.emit.program(arena, &r, .{
+    const prog = try native.program(arena, &r, .{
         .source = source,
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,

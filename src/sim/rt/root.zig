@@ -1,5 +1,5 @@
 //! The runtime a `vera --emit-exe design.v` executable links: the emitted
-//! design (`digital/emit.zig`) in, its IEEE 1364 §17 transcript on stdout
+//! design (`lib/digital/emit.zig`) in, its IEEE 1364 §17 transcript on stdout
 //! out (exit 0), or a diagnostic on stderr (exit 1).
 //! Clauses: §11 scheduling (§11.4.2 for the `static` order), §9.7 event
 //! controls, §9.2.2 nonblocking updates, §6.1 and §7.9 nets, §17 system
@@ -43,7 +43,7 @@ test {
 }
 
 /// Runs `source` through the interpreter, exactly `vera --run`: the
-/// executable of a design `digital/emit.zig` did not make native. Prints
+/// executable of a design `lib/digital/emit.zig` did not make native. Prints
 /// the transcript on stdout and diagnostics on stderr; returns `vera --run`'s
 /// exit status. The names in `opts` resolve against the working directory.
 pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
@@ -118,7 +118,7 @@ pub const Design = struct {
     trans: []const net.Tran = &.{},
     /// `--state=auto`: the plane words (first word, count) of the slots
     /// whose value at a time-step boundary nothing reads before a whole
-    /// write (`digital/plan.zig` `stepLocal`), an x in which does not keep
+    /// write (`lib/digital/plan.zig` `stepLocal`), an x in which does not keep
     /// the design 4-state.
     dead: []const [2]u32 = &.{},
     /// §10.2.1 per slot (empty without `vera_activations`): 1 + the task
@@ -277,7 +277,7 @@ pub const Edge = enum(u2) {
 pub const Error = error{ Failed, Rerun } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// What can observe a change of a slot, decided per slot by the
-/// emitter's planner (`Plan.reach`):
+/// native emitter's planner (`lib/digital/plan.zig`, `Plan.reach`):
 /// a store's `wake` in `rt.State` does only these.
 pub const Reach = packed struct(u8) {
     /// Continuous drivers the fan-out queues (§6.1).

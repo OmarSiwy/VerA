@@ -10,6 +10,8 @@
 const std = @import("std");
 const vera = @import("vera");
 const digital = @import("sim").digital;
+/// The native emitter (lib/digital/): `--emit-exe` roots and `.v` devices.
+const native = @import("digital");
 const diag = vera.diag;
 const Io = std.Io;
 const args = @import("args.zig");
@@ -86,7 +88,7 @@ pub fn run(
 
 /// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
 /// is refused now with `vera --run`'s diagnostics; then build the executable
-/// `digital.emit` writes and print its path. A design that is not native says
+/// `native.program` writes and print its path. A design that is not native says
 /// so on stderr and embeds the interpreter.
 fn emitDigital(
     gpa: std.mem.Allocator,
@@ -96,8 +98,8 @@ fn emitDigital(
     source: []const u8,
     opts: digital.Options,
     build: vera.tb.BuildOptions,
-    schedule: digital.emit.Schedule,
-    logic: digital.emit.Logic,
+    schedule: native.Schedule,
+    logic: native.Logic,
     out: *Io.Writer,
     err: *Io.Writer,
     json: bool,
@@ -111,7 +113,7 @@ fn emitDigital(
     };
     try report(bag, err, json, use_color);
     if (bag.failed()) return 1;
-    const prog = try digital.emit.program(arena, &r, .{
+    const prog = try native.program(arena, &r, .{
         .source = source,
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,
@@ -176,7 +178,7 @@ const DeviceFlags = struct {
 };
 
 /// `vera --emit-zig|--check|--emit-so|--emit-osdi design.v`: the top module
-/// as a contract device (`digital.emitDevice`). `--check` builds it beside a
+/// as a contract device (`native.emitDevice`). `--check` builds it beside a
 /// root that validates it and calls every hook; `--emit-so` builds it over
 /// the VerA tree `--contract` sits in, and `--emit-osdi` is `--emit-so`
 /// under that tree's `tools/osdi_dyn.zig`.
@@ -187,8 +189,8 @@ fn emitDevice(
     bag: *diag.Bag,
     source: []const u8,
     opts: digital.Options,
-    schedule: digital.emit.Schedule,
-    logic: digital.emit.Logic,
+    schedule: native.Schedule,
+    logic: native.Logic,
     f: DeviceFlags,
     out: *Io.Writer,
     err: *Io.Writer,
@@ -203,13 +205,13 @@ fn emitDevice(
         try report(bag, err, json, use_color);
         return 1;
     }
-    const dev = digital.emitDevice(arena, source, opts, schedule, bag) catch |e| {
+    const dev = native.emitDevice(arena, source, opts, schedule, bag) catch |e| {
         try report(bag, err, json, use_color);
         if (e != error.DigitalFailed) try err.print("error: {s}: emitting the device failed: {t}\n", .{ opts.file_name, e });
         return 1;
     };
     try report(bag, err, json, use_color);
-    // `digital.emitDevice` adds W1155 after a successful emit; --deny makes
+    // `native.emitDevice` adds W1155 after a successful emit; --deny makes
     // it an error, and an error writes no device.
     if (bag.failed()) return 1;
     if (f.check) {

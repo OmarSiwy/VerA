@@ -6,15 +6,15 @@
 //! IEEE 1364-2005 §11.4.2 (active events in any order), §6.1, §9.7.2, §9.7.5, §5.2.1.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
-const compile = @import("compile.zig");
-const evaluate = @import("evaluate.zig");
+const compile = @import("sim").digital.for_emitter.compile;
+const evaluate = @import("sim").digital.for_emitter.evaluate;
 const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
 /// Owned by `rt`, which the emitted executable links; decided per slot
 /// here (`Plan.reach`).
-pub const Reach = @import("../rt/root.zig").Reach;
+pub const Reach = @import("sim").rt.Reach;
 
 /// `vera --schedule=`: same-time events in the interpreter's FIFO order
 /// (`fifo`), or combinational processes levelized into topological nodes
@@ -863,7 +863,7 @@ const StmtReads = struct {
 fn emitted(arena: std.mem.Allocator, source: []const u8, schedule: Schedule) ![]const u8 {
     var bag = @import("diag").Bag.init(arena);
     var sink: std.Io.Writer.Discarding = .init(&.{});
-    var r = try @import("root.zig").elaborate(arena, source, .{}, &bag, &sink.writer);
+    var r = try @import("sim").digital.elaborate(arena, source, .{}, &bag, &sink.writer);
     const p = try emit.program(arena, &r, .{ .source = source, .file_name = "<digital>", .include_dirs = &.{}, .language = @import("frontend").token.default_keyword_set }, schedule, .auto);
     try std.testing.expectEqual(@as(?[]const u8, null), p.fallback);
     return p.text;

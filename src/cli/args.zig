@@ -13,6 +13,8 @@ const std = @import("std");
 const ams = @import("build_options").ams;
 const vera = @import("vera");
 const digital = @import("sim").digital;
+/// The native emitter (lib/digital/): `--schedule=` and `--state=`.
+const native = @import("digital");
 const diag = vera.diag;
 const Io = std.Io;
 
@@ -193,9 +195,9 @@ pub const Cli = struct {
     /// Null: `Backend.auto`.
     zig_backend: ?vera.orchestrator.Backend = null,
     spice_path: ?[]const u8 = null,
-    schedule: digital.emit.Schedule = .static,
+    schedule: native.Schedule = .static,
     event_budget: u64 = digital.max_events_per_tick,
-    logic: digital.emit.Logic = .auto,
+    logic: native.Logic = .auto,
     /// `--state=` or `--two-state`, whichever was typed last.
     logic_flag: ?[]const u8 = null,
 
@@ -324,7 +326,7 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, 
             };
             cli.logic_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--schedule=")) {
-            cli.schedule = std.meta.stringToEnum(digital.emit.Schedule, arg["--schedule=".len..]) orelse {
+            cli.schedule = std.meta.stringToEnum(native.Schedule, arg["--schedule=".len..]) orelse {
                 try err.print("error: `{s}`: not static|fifo\n", .{arg});
                 return 2;
             };
@@ -724,7 +726,7 @@ test "parse: --optimize takes the four Zig mode names as the flag always spelled
 }
 
 test "parse: --state/--two-state, --schedule and --zig-backend" {
-    const Logic = digital.emit.Logic;
+    const Logic = native.Logic;
     var l: Line = .init();
     defer l.deinit();
     _ = try l.read(&.{ "--two-state", "--state=4" });
@@ -737,7 +739,7 @@ test "parse: --state/--two-state, --schedule and --zig-backend" {
     try expectRefused(&.{"--state=3"}, "error: `--state=3`: not auto|2|4\n");
 
     _ = try l.read(&.{"--schedule=fifo"});
-    try testing.expectEqual(digital.emit.Schedule.fifo, l.cli.schedule);
+    try testing.expectEqual(native.Schedule.fifo, l.cli.schedule);
     try expectRefused(&.{"--schedule=lifo"}, "error: `--schedule=lifo`: not static|fifo\n");
 
     _ = try l.read(&.{"--zig-backend=native"});
