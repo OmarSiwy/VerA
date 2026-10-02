@@ -275,13 +275,13 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // declaration would be unread. `depth > 0` because at depth 0 the
         // caller is this slot's own declaration.
         if (depth > 0 and self.an.dFree(v)) {
-            // An x-dependent one differs per point of a batch: `.val()`
-            // would pick one, so the caller keeps it an `S` value (the same
-            // f64 arithmetic on a lane-free value).
-            if (self.an.xDep(v)) return null;
             const i = @intFromEnum(v);
             // A setup field is already a plain f64.
             if (i < self.an.nv and self.plan.isRoot(v)) return try gen_setup.rootRef(self, v, true);
+            // One that differs per point of a batch: `.val()` would pick
+            // one, so the caller keeps it an `S` value (the same f64
+            // arithmetic on a lane-free value).
+            if (float_lanes.perPoint(self, v)) return null;
             if (i < self.an.nv and self.plan.cached(v))
                 return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
             if (i < self.an.nv and self.plan.slot[i] != none_u32) {
@@ -945,10 +945,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$held_real", .@"$held_int" => {
             self.uses_inst = true;
             const f = self.names.held_names[heldIdx(self, args)];
-            return if (c == .@"$held_int")
-                self.b("inst.{s}", .{f})
-            else
-                self.b("S.con(inst.{s})", .{f});
+            float_lanes.instLanes(self, c == .@"$held_int");
+            return self.b("{s}(S, inst, \"{s}\")", .{ if (c == .@"$held_int") "zInstI" else "zInst", f });
         },
         // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
         // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).
@@ -969,7 +967,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         },
         .@"$mfactor" => { // §6.3.6
             self.uses_inst = true;
-            return self.b("S.con(inst.mfactor)", .{});
+            float_lanes.instLanes(self, false);
+            return self.b("zInst(S, inst, \"mfactor\")", .{});
         },
         // §9.18 Table 9-29 hierarchical system parameters. The device is the
         // top level, so the "Top-Level Value" column is exact. ($mfactor is
@@ -1043,6 +1042,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // plusarg that `$sscanf$<ty>` converts.
         .@"$test$plusargs", .@"$value$plusargs", .@"$plusarg$str" => {
             self.uses_inst = true;
+            float_lanes.instPin(self);
             const str = c == .@"$plusarg$str";
             try self.b("{s}zPlusarg(inst.plusargs, ", .{if (str) "(" else "@as(i64, @intFromBool("});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .undef, .str);
@@ -1062,6 +1062,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         },
         .@"$limit$old" => {
             self.uses_inst = true;
+            float_lanes.instPin(self);
             return self.b("S.con(inst.limiter_previous[{d}])", .{gen_render.intArg(self, args, 0) orelse unreachable});
         },
         // §4.5.15 the host owns the limiting algorithm (contract `limit`), so
@@ -1280,6 +1281,7 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     };
     // Reads `inst`, so `emitUnit` keeps the parameter named.
     self.uses_inst = true;
+    float_lanes.instPin(self);
 
     const label = self.systf_sites;
     self.systf_sites += 1;
@@ -1363,6 +1365,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     else
         "";
     self.uses_inst = true;
+    float_lanes.instPin(self); // the operator's history is the instance's
     // Every sim-state read below is spelled `sim.<field>`.
     const at = self.out.items.len;
     defer if (std.mem.indexOf(u8, self.out.items[at..], "sim.") != null) {

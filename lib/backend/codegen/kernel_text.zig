@@ -85,6 +85,28 @@ pub const math_txt =
     \\    if (comptime @typeInfo(S.V) == .vector) return a.sub(k);
     \\    return a.addC(-(k.val()));
     \\}
+    \\/// Field `f` of the `Instance`, as a value: per point in a batch, whose
+    \\/// points each have their own instance (`S.instLane(T, w)`, contract.zig
+    \\/// `batch_inst`); a one-point family reads `inst`.
+    \\fn zInst(comptime S: type, inst: anytype, comptime f: []const u8) @TypeOf(S.con(0.0)) {
+    \\    if (comptime contract.instLanes(S)) {
+    \\        var ls: [S.lane_count]@TypeOf(S.Lane.con(0.0)) = undefined;
+    \\        inline for (0..S.lane_count) |w| ls[w] = S.Lane.con(@field(S.instLane(@TypeOf(inst.*), w), f));
+    \\        return S.fromLanes(0, ls);
+    \\    }
+    \\    return S.con(@field(inst, f));
+    \\}
+    \\/// Integer field `f` of the `Instance`: one value per call, so in a batch
+    \\/// a decision (the lead protocol) over each point's own instance.
+    \\fn zInstI(comptime S: type, inst: anytype, comptime f: []const u8) i64 {
+    \\    if (comptime contract.instLanes(S)) {
+    \\        var ls: [S.lane_count]@TypeOf(S.Lane.con(0.0)) = undefined;
+    \\        inline for (0..S.lane_count) |w| ls[w] = S.Lane.con(@floatFromInt(@field(S.instLane(@TypeOf(inst.*), w), f)));
+    \\        return S.decideI(S.fromLanes(0, ls));
+    \\    }
+    \\    if (comptime @hasDecl(S, "decideI")) return S.decideI(S.con(@floatFromInt(@field(inst, f)))); // `region` hashes it
+    \\    return @field(inst, f);
+    \\}
     \\/// Whether `S` runs the lead protocol; a vector family that cannot is
     \\/// refused, since its points would follow point 0's branches.
     \\fn zLeads(comptime S: type) bool {

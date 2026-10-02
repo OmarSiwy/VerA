@@ -159,6 +159,8 @@ pub const runner_body =
     \\const NL = 4;
     \\const VF = @Vector(NL, f64);
     \\var batch_lead: contract.LeadState(NL, true) = .{};
+    \\/// Each point's own `Instance` (contract.zig `batch_inst`).
+    \\var batch_insts: [NL]*const D.Instance = undefined;
     \\const Batch = struct {
     \\    pub const V = VF;
     \\    pub const Of = BatchCore.Of;
@@ -168,6 +170,10 @@ pub const runner_body =
     \\    pub const sel = BatchCore.sel;
     \\    pub const B = BatchCore.B;
     \\    pub const Inner = BatchCore;
+    \\    pub const Lane = Val;
+    \\    pub const lane_count = NL;
+    \\    pub const fromLanes = BatchCore.fromLanes;
+    \\    pub const instLane = BatchCore.instLane;
     \\    pub fn leadBegin() void { batch_lead.begin(); }
     \\    pub fn leadNext() bool { return batch_lead.next(); }
     \\    pub fn leadMerge(out: anytype, new: @TypeOf(out.*)) void { contract.leadMergeInto(out, new, batch_lead.keep()); }
@@ -195,6 +201,10 @@ pub const runner_body =
     \\        return batch_lead.markI(r);
     \\    }
     \\    pub fn strip(a: B) B { return a; }
+    \\    pub fn instLane(comptime T: type, comptime w: usize) *const T {
+    \\        comptime std.debug.assert(T == D.Instance);
+    \\        return batch_insts[w];
+    \\    }
     \\    pub fn Of(comptime _: u64) type { return B; }
     \\    pub fn con(c: f64) B { return .{ .v = @splat(c) }; }
     \\    pub fn lift(v: VF) B { return .{ .v = v }; }
@@ -264,6 +274,20 @@ pub const runner_body =
     \\}
     \\fn laneCheckSpread(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D), spread: f64) void {
     \\    if (comptime !(@hasDecl(D, "batch_ok") and D.batch_ok)) return;
+    \\    // Every point its own instance: point k's real and integer fields
+    \\    // moved apart, so a point that read another's latch or held value
+    \\    // would differ from its scalar evaluation.
+    \\    var insts: [NL]D.Instance = @splat(inst.*);
+    \\    for (1..NL) |k| inline for (@typeInfo(D.Instance).@"struct".fields) |fl| {
+    \\        const kf: f64 = @floatFromInt(k);
+    \\        if (fl.type == f64) {
+    \\            const v = @field(insts[k], fl.name);
+    \\            if (std.math.isFinite(v)) @field(insts[k], fl.name) = v * (1.0 + 0.25 * kf) + 0.125 * kf;
+    \\        } else if (fl.type == i64) {
+    \\            @field(insts[k], fl.name) +%= @intCast(k);
+    \\        }
+    \\    };
+    \\    for (0..NL) |k| batch_insts[k] = &insts[k];
     \\    var xs: [NL][n_u]f64 = undefined;
     \\    var xv: [n_u]VF = undefined;
     \\    for (0..NL) |k| {
@@ -276,21 +300,21 @@ pub const runner_body =
     \\        for (0..NL) |k| lanes[k] = xs[k][i];
     \\        xv[i] = lanes;
     \\    }
-    \\    const rv: [n_u]Batch.B = D.eval(Batch, &xv, model, inst, sim_state);
+    \\    const rv: [n_u]Batch.B = D.eval(Batch, &xv, model, &insts[0], sim_state);
     \\    // The signatures the batched call produced are `contract.region`'s.
     \\    const sigs = if (comptime @hasDecl(D, "batch_lead")) batch_lead.regions() else [_]u16{0} ** NL;
     \\    for (0..NL) |k| {
-    \\        const want = contract.region(D, &xs[k], model, inst, sim_state);
+    \\        const want = contract.region(D, &xs[k], model, &insts[k], sim_state);
     \\        if (sigs[k] == want) continue;
     \\        std.debug.print("lane_check FAIL: region lane {d}: batch {d} vs region {d}\n", .{ k, sigs[k], want });
     \\        std.process.exit(1);
     \\    }
-    \\    const qv: [n_u]Batch.B = if (comptime @hasDecl(D, "q")) qRowsOf(Batch, &xv, model, inst) else undefined;
+    \\    const qv: [n_u]Batch.B = if (comptime @hasDecl(D, "q")) qRowsOf(Batch, &xv, model, &insts[0]) else undefined;
     \\    for (0..NL) |k| {
-    \\        const rs: [n_u]Val = D.eval(Val, &xs[k], model, inst, sim_state);
+    \\        const rs: [n_u]Val = D.eval(Val, &xs[k], model, &insts[k], sim_state);
     \\        for (0..n_u) |i| laneAssert("res", i, k, @as([NL]f64, rv[i].v)[k], rs[i].v);
     \\        if (comptime @hasDecl(D, "q")) {
-    \\            const qs = qRowsOf(Val, &xs[k], model, inst);
+    \\            const qs = qRowsOf(Val, &xs[k], model, &insts[k]);
     \\            for (0..n_u) |i| laneAssert("q", i, k, @as([NL]f64, qv[i].v)[k], qs[i].v);
     \\        }
     \\    }

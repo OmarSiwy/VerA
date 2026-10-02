@@ -176,6 +176,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // ...exact per point only for a family running the lead protocol: the
     // device decides on per-point values (`lanes.leadLanes`).
     if (batchLead(self)) try self.w("pub const batch_lead = true;\n\n", .{});
+    if (batchOk(self) and self.float.inst) try self.w("pub const batch_inst = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 

@@ -23,6 +23,10 @@ pub const Float = struct {
     /// protocol (`lanes.leadLanes`). An unpinned device with it set is
     /// `batch_ok` only for a family that runs the protocol (`batch_lead`).
     lead: bool = false,
+    /// Set once eval reads per-instance state as a value (`lanes.instLanes`:
+    /// a held variable, a `$prev` path latch, `$mfactor`). A batch reads it
+    /// per point through `S.instLane` (`batch_inst`).
+    inst: bool = false,
     /// Which single-precision-Jacobian decls the device emits
     /// (`Options.jac_f32`/`jac_f32_host`).
     jac: Jac = .off,

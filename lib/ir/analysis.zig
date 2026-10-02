@@ -107,6 +107,10 @@ deps_folded: bool = false,
 /// the value can vary with (`xDep`). The same slice as `deps` when the module
 /// has no `dstop`.
 xdeps: []u64 = &.{},
+/// `xdeps` plus the per-instance values a value can vary with: a §5.10 held
+/// variable, `$mfactor`, a `$prev`/charge path latch (`pointDep`). The same
+/// slice as `xdeps` when the module reads none.
+pdeps: []u64 = &.{},
 /// Per Value: the unknowns whose derivative reaches it through an operator
 /// whose small-signal response depends on frequency (`op.acDynamic`). A
 /// subset of `deps`, and empty when the module calls no such operator.
@@ -716,6 +720,12 @@ fn buildDeps(self: *Analysis) Error!void {
         self.xdeps = try self.fixDeps(.value);
         break;
     }
+    self.pdeps = self.xdeps;
+    for (0..self.mir.insts.len) |i| {
+        if (!readsInstance(self, @enumFromInt(@as(u32, @intCast(i))))) continue;
+        self.pdeps = try self.fixDeps(.point);
+        break;
+    }
     // After `deps`, which an operator's `acdyn` reads.
     for (0..self.mir.insts.len) |i| {
         const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
@@ -725,8 +735,17 @@ fn buildDeps(self: *Analysis) Error!void {
     }
 }
 
-/// Which column `fixDeps` fills: `deps`, `xdeps` or `acdyn`.
-const DepCol = enum { deriv, value, ac_dyn };
+/// Which column `fixDeps` fills: `deps`, `xdeps`, `acdyn` or `pdeps`.
+const DepCol = enum { deriv, value, ac_dyn, point };
+
+/// Whether `inst` reads a per-instance value (`pdeps`' seeds).
+fn readsInstance(self: *const Analysis, inst: Mir.Inst) bool {
+    return switch (self.mir.instData(inst)) {
+        .call => |c| c.callee == .@"$held_real" or c.callee == .@"$held_int" or c.callee == .@"$mfactor",
+        .unary => |u| u.op == .path_prev or u.op == .path_acc,
+        else => false, // else: only a call or a latch reads the instance as a value
+    };
+}
 
 /// The lattice's fixpoint for column `which`.
 fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
@@ -769,13 +788,17 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCo
                 // Without this rule every `$temperature`-dependent parameter
                 // would carry a derivative.
                 .call => |c| {
+                    if (which == .point and self.readsInstance(inst)) return 1;
                     if (which == .ac_dyn and op_kind.acDynamic(Mir.callee.opKind(c.callee)))
                         return if (c.args.len == 0) 0 else self.depsIn(self.deps, c.args[0]);
                     var acc: u64 = 0;
                     for (c.args) |arg| acc |= self.depsIn(col, arg);
                     return acc;
                 },
-                .unary => |u| return if (which != .value and u.op == .dstop) 0 else self.depsIn(col, u.operand),
+                .unary => |u| {
+                    if (which == .point and (u.op == .path_prev or u.op == .path_acc)) return 1 | self.depsIn(col, u.operand);
+                    return if (which != .value and which != .point and u.op == .dstop) 0 else self.depsIn(col, u.operand);
+                },
                 .binary => |b| return self.depsIn(col, b.lhs) | self.depsIn(col, b.rhs),
                 // §4.2.12: the condition does not matter. It selects between
                 // arms rather than entering the value, so a conditional over
@@ -813,6 +836,14 @@ pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
 /// past a `dstop`, whose value varies while its derivative is zero.
 pub fn xDep(self: *const Analysis, v: Mir.Value) bool {
     return self.depsIn(self.xdeps, v) != 0;
+}
+
+/// Returns whether `v` can differ between two points of a batch that share
+/// the `Model` row and the `SimState`: `xDep`, or it reads per-instance
+/// state (a held variable, `$mfactor`, a path latch; contract.zig
+/// `batch_inst`).
+pub fn pointDep(self: *const Analysis, v: Mir.Value) bool {
+    return self.depsIn(self.pdeps, v) != 0;
 }
 
 /// The raw word, folded or not: what the fixpoint and `dFree` read.
