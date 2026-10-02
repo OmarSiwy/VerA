@@ -976,10 +976,11 @@ contract feature every host can use, or it does not exist.
 
 VerA today: `lib/backend/codegen/` and `lib/backend/tb/` share one module,
 `backend`, so the build cannot enforce this. No file under either imports the
-other directly, but `tb/exe.zig` reaches `codegen.zig` through
-`orchestrator.zig`, and `tb/runner.zig` re-spells the `__xz`/`__w{k}`/`__1b`
-field names lowering owns (inventory, 2026-10-17; `ARCHITECTURE.md` Phases 7
-and 8 remove both). Both read `lib/backend/naming.zig`. New code adds no
+other, directly or through another file: since Phase 7 the testbench build
+is `lib/zigbuild/exe.zig`, in a module that imports no compiler module. But
+`tb/runner.zig` re-spells the `__xz`/`__w{k}`/`__1b` field names lowering
+owns (inventory, 2026-10-17; `ARCHITECTURE.md` Phase 8 removes it). Both
+read `lib/backend/naming.zig`. New code adds no
 such edge; making the build enforce it is a refactor phase of its own (§4).
 
 ### 11.9 SIMD is for the emitted device
