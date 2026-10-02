@@ -12,7 +12,7 @@
 //! `renderVpiLib`); then `buildExe`, or `stageExe` and `buildBatch` for many.
 //! This file owns the directive types; `tb/directive.zig` parses them,
 //! `tb/runner.zig` renders them over the fixed text in `tb/runner_text.zig`,
-//! and `tb/exe.zig` builds the result.
+//! and `zigbuild` (`lib/zigbuild/exe.zig`) builds the result.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -403,14 +403,14 @@ pub const renderVpiLib = tb_runner.renderVpiLib;
 
 const tb_runner_text = @import("tb/runner_text.zig");
 
-const tb_exe = @import("tb/exe.zig");
-pub const BuildOptions = tb_exe.BuildOptions;
-pub const BuildResult = tb_exe.BuildResult;
-pub const buildExe = tb_exe.buildExe;
-pub const Staged = tb_exe.Staged;
-pub const stageExe = tb_exe.stage;
-pub const buildBatch = tb_exe.buildBatch;
-pub const batch_argv0 = tb_exe.batch_argv0;
+const zigbuild = @import("zigbuild");
+pub const BuildOptions = zigbuild.BuildOptions;
+pub const BuildResult = zigbuild.BuildResult;
+pub const buildExe = zigbuild.buildExe;
+pub const Staged = zigbuild.Staged;
+pub const stageExe = zigbuild.stage;
+pub const buildBatch = zigbuild.buildBatch;
+pub const batch_argv0 = zigbuild.batch_argv0;
 
 const tb_test = @import("tb/test.zig");
 
@@ -418,6 +418,5 @@ test {
     _ = tb_directive;
     _ = tb_runner;
     _ = tb_runner_text;
-    _ = tb_exe;
     _ = tb_test;
 }

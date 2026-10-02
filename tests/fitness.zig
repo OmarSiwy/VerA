@@ -191,8 +191,6 @@ test "R1: a runtime row's closure contains no compiler row" {
 // ---------------------------------------------------------------------------
 
 const r2_allow = [_]struct { from: []const u8, to: []const u8, phase: []const u8 }{
-    // -> orchestrator.zig:19 -> codegen.zig.
-    .{ .from = "lib/backend/tb/exe.zig", .to = "lib/backend/orchestrator.zig", .phase = "Phase 7" },
     // A test-only import (naming.zig's `Fixture`); tb/runner.zig and
     // tb/directive.zig import naming.zig.
     .{ .from = "lib/backend/naming.zig", .to = "lib/backend/codegen/plan/fixture.zig", .phase = "Phase 8" },
@@ -501,11 +499,8 @@ const r7_rows = [_]Row{
     .{ .path = "lib/backend/codegen/setup.zig", .n = 2 },
     .{ .path = "lib/backend/codegen/setup_chunk.zig", .n = 6 },
     .{ .path = "lib/backend/codegen/unit.zig", .n = 1 },
-    .{ .path = "lib/backend/driver/server.zig", .n = 1 },
     .{ .path = "lib/backend/naming.zig", .n = 1 },
-    .{ .path = "lib/backend/orchestrator.zig", .n = 3 },
     .{ .path = "lib/backend/tb/directive.zig", .n = 31 },
-    .{ .path = "lib/backend/tb/exe.zig", .n = 1 },
     .{ .path = "lib/backend/tb/runner.zig", .n = 9 },
     .{ .path = "lib/base/interner.zig", .n = 2 },
     .{ .path = "lib/diag/suggest.zig", .n = 1 },
@@ -536,6 +531,9 @@ const r7_rows = [_]Row{
     .{ .path = "lib/ir/callee.zig", .n = 1 },
     .{ .path = "lib/ir/simparam.zig", .n = 2 },
     .{ .path = "lib/prove/setup.zig", .n = 1 },
+    .{ .path = "lib/zigbuild/exe.zig", .n = 1 },
+    .{ .path = "lib/zigbuild/orchestrator.zig", .n = 3 },
+    .{ .path = "lib/zigbuild/server.zig", .n = 1 },
     .{ .path = "src/cli/args.zig", .n = 39 },
     .{ .path = "src/cli/digital.zig", .n = 1 },
     .{ .path = "src/cli/lsp.zig", .n = 4 },

@@ -700,3 +700,99 @@ test hasWord {
     try std.testing.expect(!hasWord("// S", "S")); // a comment
     try std.testing.expect(!hasWord("SS + S_", "S")); // longer names
 }
+
+// Moved from the orchestrator's split-build test (ARCHITECTURE.md Phase 7):
+// it builds `chunk`'s output, so it lives with codegen, not `zigbuild`.
+test "a chunked setup builds one object per chunk into a library that runs" {
+    const zigbuild = @import("zigbuild");
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try gpa.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer gpa.free(work);
+    try tmp.dir.writeFile(io, .{ .sub_path = "contract.zig", .data = "pub const k: f64 = 2.0;\n" });
+
+    // `setup` emitted as chunks: each chunk is its own object when the host
+    // names its value scalar, and `setup` reaches them through those objects.
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const chunked = (try chunk(arena.allocator(),
+        \\/// doc
+        \\pub fn setup(comptime V: type, model: *Model) void {
+        \\    @setFloatMode(.strict);
+        \\    _ = V;
+        \\    const t1: f64 = model.a * contract.k;
+        \\    const t2: f64 = t1 + 1.0;
+        \\    B1: {
+        \\        if (t2 > 0.0) {
+        \\            model.r = t2 * 2.0;
+        \\            break :B1;
+        \\        } else {
+        \\            model.r = 0.0;
+        \\            break :B1;
+        \\        }
+        \\    }
+        \\    return;
+        \\}
+        \\
+        \\
+    , 64)).?;
+    try std.testing.expect(chunked.n >= 2);
+    const su_dev = try std.mem.concat(arena.allocator(), u8, &.{
+        \\const std = @import("std");
+        \\const contract = @import("contract");
+        \\pub const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
+        \\
+        ,
+        chunked.text,
+    });
+    try tmp.dir.writeFile(io, .{ .sub_path = "su.zig", .data =
+        \\pub fn SetupValue(comptime D: type) type {
+        \\    _ = D;
+        \\    return f64;
+        \\}
+        \\pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
+        \\    _ = .{ D, name };
+        \\    @compileError("a split build calls exportDevicePart");
+        \\}
+        \\pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: @TypeOf(.setup)) void {
+        \\    _ = name;
+        \\    if (part == .setup) @export(&struct {
+        \\        fn f(m: *D.Model) callconv(.c) void {
+        \\            D.setup(f64, m);
+        \\        }
+        \\    }.f, .{ .name = "arp_setup" });
+        \\}
+        \\
+    });
+    {
+        const mods = [_]zigbuild.Module{
+            .{ .name = "contract", .root = try std.fs.path.join(gpa, &.{ work, "contract.zig" }) },
+            .{ .name = "dyn", .root = try std.fs.path.join(gpa, &.{ work, "su.zig" }) },
+        };
+        defer for (mods) |m| gpa.free(m.root);
+        const o: zigbuild.Options = .{ .work_dir = work, .name = "sudev", .optimize = .fast, .backend = .llvm, .modules = &mods, .split = true };
+        var r = zigbuild.compileRelease(gpa, io, o, .{ .text = su_dev, .setup_chunks = chunked.n }, 9) catch |err| switch (err) {
+            error.CompilerGone => return error.SkipZigTest,
+            else => return err,
+        };
+        defer r.deinit(gpa);
+        const so = switch (r) {
+            .failed => |b| {
+                b.renderToStderr(io, .{}, .off) catch {};
+                return error.UnexpectedBuildFailure;
+            },
+            .ok => |a| a.so_path,
+        };
+        try tmp.dir.access(io, "shim_setup1.zig", .{});
+        var lib = try @import("dynlib").DynLib.open(so);
+        defer lib.close();
+        const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
+        const setup = lib.lookup(*const fn (*Model) callconv(.c) void, "arp_setup") orelse return error.MissingSymbol;
+        var model: Model = .{};
+        setup(&model);
+        try std.testing.expectEqual(@as(f64, 14.0), model.r);
+    }
+}

@@ -10,18 +10,17 @@
 //!
 //! `compileRelease` is the spine: spawn the children, `writeTree`, write the
 //! shims, send every update, collect, link, `publish`. The text written beside
-//! the device is `driver/shim.zig`'s and the child protocol `driver/server.zig`'s;
-//! this file owns the build policy (options, argv, split, layout hash) and the
-//! on-disk tree.
+//! the device is `shim.zig`'s and the child protocol `server.zig`'s; this file
+//! owns the build policy (options, argv, split, layout hash), the on-disk tree
+//! and `Output`, the device text it takes, which codegen produces.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const codegen = @import("codegen.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Cache = std.Build.Cache;
-const shim = @import("driver/shim.zig");
-const server_mod = @import("driver/server.zig");
+const shim = @import("shim.zig");
+const server_mod = @import("server.zig");
 const Server = server_mod.Server;
 const send = server_mod.send;
 const assert = std.debug.assert;
@@ -187,15 +186,53 @@ fn writeIfChanged(
     return true;
 }
 
+/// The generated device, plus the ranges that let `writeTree` write it as
+/// one file per unit declaration. Zig caches ZIR per file keyed on inode, size
+/// and mtime, so an unchanged unit's file is left untouched and skips AstGen.
+/// `text` stays the single contiguous emission that `--emit-zig` writes
+/// verbatim; the split is a view over it. Codegen produces it
+/// (`codegen.generate`).
+///
+/// Invariant: the ranges tile. `unit_lo[i] == unit_hi[i-1]`, so
+/// `text[0..unit_lo[0]]` is the prologue and `text[unit_hi[n-1]..]` is the
+/// dispatcher tail.
+pub const Output = struct {
+    /// The whole device. Gpa-owned (see `codegen.generate`).
+    text: []const u8,
+    /// One entry per emitted top-level unit declaration, in emission order.
+    /// `names[i]` is both the declaration name and the file stem, so the file
+    /// set changes exactly when `naming.zig`'s keys do. Arena-owned.
+    names: []const []const u8 = &.{},
+    /// Offset in `text` where each unit's declaration starts.
+    unit_lo: []const u32 = &.{},
+    /// Offset of the declaration keyword inside `text`. The writer splices
+    /// `pub ` here; see `Gen.emitUnit` for why `text` cannot carry it itself.
+    unit_fn: []const u32 = &.{},
+    /// Offset in `text` just past each unit's declaration.
+    unit_hi: []const u32 = &.{},
+    /// File-scope prologue every `u/<key>.zig` needs. A unit file is a
+    /// separate Zig file and Zig has no textual include, so nothing
+    /// `device.zig` declares is in its scope. Arena-owned; empty when `names` is.
+    prelude: []const u8 = "",
+    /// `h.zig`: the §4.3/§4.5 helper kernels, public, for the unit files to
+    /// alias. device.zig keeps a private copy inline because `text` must stay
+    /// a valid stand-alone device and `contract.rejectStrayPubDecls` forbids
+    /// publishing them there. Arena-owned; empty when `names` is.
+    helpers: []const u8 = "",
+    /// How many chunks `setup` was emitted as (`setup_chunks.n`); 0 when it
+    /// is one function. A split build compiles each in its own object.
+    setup_chunks: u32 = 0,
+};
+
 /// Writes `<work_dir>/{shim.zig, device.zig, h.zig, u/<key>.zig ...}` and
 /// returns how many files changed on disk; an unchanged device writes 0.
 /// A split `device` gets one file per emitted unit (`zig`'s cache unit is the
 /// file) and `device.zig` imports them by their stable names; a single
 /// `device` is written as `device.zig` alone. Deletes `u/*.zig` files no
 /// longer emitted. Creates `work_dir` if absent. Asserts that a split
-/// `device` keeps `codegen.Output`'s invariant: one row per unit in every
+/// `device` keeps `Output`'s invariant: one row per unit in every
 /// column, and ranges that tile `text` in order.
-pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !usize {
+pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: Output) !usize {
     const cwd: Io.Dir = .cwd();
     try cwd.createDirPath(io, o.work_dir);
     var dir = try cwd.openDir(io, o.work_dir, .{});
@@ -247,7 +284,7 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     }
 
     // device.zig = prologue ++ one import per unit ++ dispatcher tail. The
-    // ranges tile (`codegen.Output`'s invariant), so those three pieces are the
+    // ranges tile (`Output`'s invariant), so those three pieces are the
     // whole file.
     body.clearRetainingCapacity();
     try body.appendSlice(gpa, device.text[0..device.unit_lo[0]]);
@@ -296,9 +333,9 @@ fn pruneUnits(io: Io, gpa: Allocator, udir: Io.Dir, names: []const []const u8) !
 /// The pieces a large LLVM device build is split into: one `zig build-obj`
 /// process each, run in parallel, then linked into the library. LLVM emits one
 /// module on one thread, so this is the only way a device build uses more
-/// than one core. `contract.DevicePart` spells the same tags for the host
-/// (`tests/test_all.zig` holds them equal).
-pub const Part = enum { setup, state, eval };
+/// than one core. The host's own enum (`contract.DevicePart`), so the tags
+/// the shims write are the ones its `exportDevicePart` takes.
+pub const Part = @import("contract").DevicePart;
 
 /// Emitted device text from which `Options.split = null` splits an LLVM
 /// build into `Part`s. Measured 2026-10-01 (stripped, slots grouped): the
@@ -310,7 +347,7 @@ pub const Part = enum { setup, state, eval };
 const split_min_bytes: usize = 768 * 1024;
 
 /// Whether `compileRelease` builds `device` as `Part`s.
-pub fn splits(o: Options, device: codegen.Output) bool {
+pub fn splits(o: Options, device: Output) bool {
     return o.split orelse (o.backend == .llvm and device.text.len >= split_min_bytes);
 }
 
@@ -501,7 +538,7 @@ pub fn compileRelease(
     gpa: Allocator,
     io: Io,
     o: Options,
-    device: codegen.Output,
+    device: Output,
     generation: u32,
 ) !Result {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
@@ -734,7 +771,7 @@ const split_tail =
 const split_text = split_prologue ++ split_unit_a ++ split_unit_b ++ split_tail;
 const split_prelude = "const dev = @import(\"../device.zig\");\nconst k2 = dev.k2;\n";
 
-fn splitOutput(names: []const []const u8) codegen.Output {
+fn splitOutput(names: []const []const u8) Output {
     return .{
         .text = split_text,
         .names = names,
@@ -794,7 +831,7 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
 
     // A vanished unit takes its file with it: device.zig plus the delete.
     // `u/unit_a.zig` is unchanged, so it is not rewritten.
-    const shrunk: codegen.Output = .{
+    const shrunk: Output = .{
         .text = split_prologue ++ split_unit_a ++ split_tail,
         .names = &.{"unit_a"},
         .unit_lo = &.{split_prologue.len},
@@ -1057,88 +1094,6 @@ test "a split build links one object per part into a library that runs" {
         try std.testing.expectEqual(@as(f64, 6.0), eval(3.0));
     }
 
-    // `setup` emitted as chunks: each chunk is its own object when the host
-    // names its value scalar, and `setup` reaches them through those objects.
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const chunked = (try codegen.setup_chunk.chunk(arena.allocator(),
-        \\/// doc
-        \\pub fn setup(comptime V: type, model: *Model) void {
-        \\    @setFloatMode(.strict);
-        \\    _ = V;
-        \\    const t1: f64 = model.a * contract.k;
-        \\    const t2: f64 = t1 + 1.0;
-        \\    B1: {
-        \\        if (t2 > 0.0) {
-        \\            model.r = t2 * 2.0;
-        \\            break :B1;
-        \\        } else {
-        \\            model.r = 0.0;
-        \\            break :B1;
-        \\        }
-        \\    }
-        \\    return;
-        \\}
-        \\
-        \\
-    , 64)).?;
-    try std.testing.expect(chunked.n >= 2);
-    const su_dev = try std.mem.concat(arena.allocator(), u8, &.{
-        \\const std = @import("std");
-        \\const contract = @import("contract");
-        \\pub const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
-        \\
-        ,
-        chunked.text,
-    });
-    try tmp.dir.writeFile(io, .{ .sub_path = "su.zig", .data =
-        \\pub fn SetupValue(comptime D: type) type {
-        \\    _ = D;
-        \\    return f64;
-        \\}
-        \\pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
-        \\    _ = .{ D, name };
-        \\    @compileError("a split build calls exportDevicePart");
-        \\}
-        \\pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: @TypeOf(.setup)) void {
-        \\    _ = name;
-        \\    if (part == .setup) @export(&struct {
-        \\        fn f(m: *D.Model) callconv(.c) void {
-        \\            D.setup(f64, m);
-        \\        }
-        \\    }.f, .{ .name = "arp_setup" });
-        \\}
-        \\
-    });
-    {
-        const mods = [_]Module{
-            .{ .name = "contract", .root = try std.fs.path.join(gpa, &.{ work, "contract.zig" }) },
-            .{ .name = "dyn", .root = try std.fs.path.join(gpa, &.{ work, "su.zig" }) },
-        };
-        defer for (mods) |m| gpa.free(m.root);
-        const o: Options = .{ .work_dir = work, .name = "sudev", .optimize = .fast, .backend = .llvm, .modules = &mods, .split = true };
-        var r = compileRelease(gpa, io, o, .{ .text = su_dev, .setup_chunks = chunked.n }, 9) catch |err| switch (err) {
-            error.CompilerGone => return error.SkipZigTest,
-            else => return err,
-        };
-        defer r.deinit(gpa);
-        const so = switch (r) {
-            .failed => |b| {
-                b.renderToStderr(io, .{}, .off) catch {};
-                return error.UnexpectedBuildFailure;
-            },
-            .ok => |a| a.so_path,
-        };
-        try tmp.dir.access(io, "shim_setup1.zig", .{});
-        var lib = try @import("dynlib").DynLib.open(so);
-        defer lib.close();
-        const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
-        const setup = lib.lookup(*const fn (*Model) callconv(.c) void, "arp_setup") orelse return error.MissingSymbol;
-        var model: Model = .{};
-        setup(&model);
-        try std.testing.expectEqual(@as(f64, 14.0), model.r);
-    }
-
     // The default splits only a large LLVM build.
     const base: Options = .{ .work_dir = work, .name = "d", .optimize = .fast, .backend = .llvm, .modules = &.{} };
     try std.testing.expect(!splits(base, .{ .text = dev }));
@@ -1236,7 +1191,7 @@ test "layoutHash: dependencies count, field boundaries count, placement does not
 }
 
 test "splits: an explicit choice wins over the size rule" {
-    const tiny: codegen.Output = .{ .text = "x" };
+    const tiny: Output = .{ .text = "x" };
     var o: Options = .{ .work_dir = "w", .name = "d", .optimize = .fast, .backend = .self_hosted, .modules = &.{}, .split = true };
     try std.testing.expect(splits(o, tiny));
     o.backend = .llvm;
@@ -1416,7 +1371,7 @@ test "writeTree keeps a unit's doc comment and an existing `pub`, and prunes onl
     const fn_a = "fn unit_a(y: f64) f64 {\n    return y;\n}\n";
     const pub_b = "pub fn unit_b(y: f64) f64 {\n    return y;\n}\n";
     const lo_b = split_prologue.len + doc.len + fn_a.len;
-    const out: codegen.Output = .{
+    const out: Output = .{
         .text = split_prologue ++ doc ++ fn_a ++ pub_b ++ split_tail,
         .names = &.{ "unit_a", "unit_b" },
         .unit_lo = &.{ split_prologue.len, lo_b },

@@ -1,12 +1,13 @@
 //! The Zig text `compileRelease` and `buildEngine` write next to a device:
 //! each artifact's root file (`shim*.zig`, `vera_engine_*.zig`), which binds
 //! the device to the host's `dyn` module. Build options in, source text out.
-//! Every byte here reaches a `zig` child and is frozen: the goldens
-//! (`--emit-zig`) cover the device only, never this text.
+//! Every byte here reaches a `zig` child and is frozen: the goldens hold
+//! `device`'s text (`.so/shim.zig`), and only the tests below pin the part,
+//! chunk and engine roots.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Part = @import("../orchestrator.zig").Part;
+const Part = @import("orchestrator.zig").Part;
 const assert = std.debug.assert;
 
 /// Returns the `shim_<piece>.zig` file name of a split build's piece.

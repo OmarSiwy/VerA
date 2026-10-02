@@ -1,0 +1,60 @@
+//! The Zig build driver: device text (`Output`) and testbench runner text in,
+//! a versioned `.so` (§8.3 device-side ABI), a prebuilt engine object or a
+//! testbench binary out, each built by a spawned `zig` child. Re-exports
+//! only; the files import each other directly. Imports no compiler module
+//! (ARCHITECTURE.md §1 row 12): the spine hands it bytes. `contract`: `Part`
+//! is the host's `DevicePart`. `dynlib`: only the tests that load what they
+//! built.
+
+const orchestrator = @import("orchestrator.zig");
+const exe = @import("exe.zig");
+
+/// Which Zig code generator builds an artifact.
+pub const Backend = orchestrator.Backend;
+/// One support module on the compiler command line.
+pub const Module = orchestrator.Module;
+/// What a `.so` build pins in its layout hash, plus where it writes.
+pub const Options = orchestrator.Options;
+/// The generated device text and its per-unit ranges.
+pub const Output = orchestrator.Output;
+/// A built shared library.
+pub const Artifact = orchestrator.Artifact;
+/// A `.so` build outcome.
+pub const Result = orchestrator.Result;
+/// The pieces a split build compiles in parallel (`contract.DevicePart`).
+pub const Part = orchestrator.Part;
+/// A module name as a file-name stem.
+pub const fileStem = orchestrator.fileStem;
+/// Whether a native build passes `-fstrip`.
+pub const strip = orchestrator.strip;
+/// Writes the device tree a `.so` build compiles, touching only changed files.
+pub const writeTree = orchestrator.writeTree;
+/// Whether `compileRelease` builds a device as `Part`s.
+pub const splits = orchestrator.splits;
+/// Builds a device into `lib<name>.<generation>.so`.
+pub const compileRelease = orchestrator.compileRelease;
+/// Builds `sim`'s runtime as a position-independent object for `Options.engine`.
+pub const buildEngine = orchestrator.buildEngine;
+
+/// How `buildExe` builds and where it writes.
+pub const BuildOptions = exe.BuildOptions;
+/// A testbench build outcome.
+pub const BuildResult = exe.BuildResult;
+/// Builds device.zig and the runner into one native binary.
+pub const buildExe = exe.buildExe;
+/// A testbench's module files on disk.
+pub const Staged = exe.Staged;
+/// Writes a testbench's module files without building.
+pub const stage = exe.stage;
+/// Builds several staged testbenches into one binary.
+pub const buildBatch = exe.buildBatch;
+/// The `argv[0]` prefix a batch binary dispatches on.
+pub const batch_argv0 = exe.batch_argv0;
+
+test {
+    @import("std").testing.refAllDecls(@This());
+    _ = orchestrator;
+    _ = exe;
+    _ = @import("shim.zig");
+    _ = @import("server.zig");
+}

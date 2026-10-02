@@ -12,7 +12,7 @@
 //!     half, over generated directive sets ("every directive set ...").
 //!   - a value reaches the testbench changed: Zig's literal reader;
 //!     runner.zig's `test fmtF64`.
-//!   - the build command is wrong: argv derived by hand; exe.zig's tests.
+//!   - the build command is wrong: argv derived by hand; lib/zigbuild/exe.zig's tests.
 //! The emitted solver and gates execute only in the fixture suite (`zig
 //! build benchmark`), which builds and runs a testbench per fixture.
 

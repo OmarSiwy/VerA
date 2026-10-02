@@ -15,6 +15,7 @@ pub const kernels = @import("kernels");
 pub const ir = @import("ir");
 pub const analog = @import("analog");
 pub const prove = @import("prove");
+pub const zigbuild = @import("zigbuild");
 pub const backend = @import("backend");
 pub const sim = @import("sim");
 pub const vera = @import("vera");
@@ -118,13 +119,4 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
     // The scan is evidence only if it found something: a device that stopped
     // emitting the prefix would otherwise pass by matching nothing.
     try std.testing.expect(std.mem.find(u8, device, "contract.validate(") != null);
-}
-
-// The split build writes `orchestrator.Part` tags into the shims as enum
-// literals the host's `exportDevicePart` takes as `contract.DevicePart`.
-test "orchestrator.Part and contract.DevicePart name the same parts" {
-    const a = @typeInfo(vera.orchestrator.Part).@"enum".field_names;
-    const b = @typeInfo(contract.DevicePart).@"enum".field_names;
-    try std.testing.expectEqual(a.len, b.len);
-    for (a, b) |x, y| try std.testing.expectEqualStrings(x, y);
 }

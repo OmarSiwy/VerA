@@ -566,7 +566,7 @@ fn typeCheck(
     defer gpa.free(device_arg);
 
     // `--dep` applies to the NEXT `-M`, and the FIRST `-M` is the root module —
-    // the ordering rule `buildArgv` in lib/backend/orchestrator.zig follows.
+    // the ordering rule `buildArgv` in lib/zigbuild/orchestrator.zig follows.
     const argv = [_][]const u8{
         zig_exe,       "build-obj",  "-fno-emit-bin",
         "--dep",       "device",     "--dep",

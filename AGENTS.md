@@ -281,7 +281,7 @@ A snapshot holds, per fixture, `vera --emit-zig`'s stdout and stderr
 `.va` (`.runner.txt`), the tree `--emit-so` writes for a `.va` before `zig`
 runs (`.so/`: `shim.zig`, the split device), and a `.v` design's
 `--emit-exe` root (`.program.txt`). It does not hold a split build's part and
-chunk shims, the engine root (`driver/shim.zig`'s tests pin those) or anything
+chunk shims, the engine root (`lib/zigbuild/shim.zig`'s tests pin those) or anything
 `zig` produces. `tests/harness/golden.zig`'s header has the rules.
 
 One phase = one branch = one PR. Never two phases in flight in `lib/`. No

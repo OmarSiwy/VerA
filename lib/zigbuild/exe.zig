@@ -1,9 +1,11 @@
 //! Testbench build: device.zig and runner text in, one `zig build-exe` (or
-//! `build-lib`) out, as the binary's path or the compiler's stderr.
+//! `build-lib`) out, as the binary's path or the compiler's stderr. The runner
+//! text is the caller's (`tb.renderRunner`); this file owns the argv, the
+//! module files on disk and the batch root.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const orchestrator = @import("../orchestrator.zig");
+const orchestrator = @import("orchestrator.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -294,11 +296,25 @@ fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
     return root.items;
 }
 
+/// Fails the test unless `src` passes Zig's AstGen with no error.
+fn expectAstGen(src: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const z = try gpa.dupeSentinel(u8, src, 0);
+    defer gpa.free(z);
+    var tree = try std.zig.Ast.parse(gpa, z, .{ .mode = .zig });
+    defer tree.deinit(gpa);
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    if (tree.errors.len == 0 and !zir.hasCompileErrors()) return;
+    std.debug.print("{s}\n", .{src});
+    return error.TestUnexpectedResult;
+}
+
 test batchRoot {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const src = try batchRoot(arena_state.allocator(), 3);
-    try @import("test.zig").expectAstGen(src);
+    try expectAstGen(src);
     // One arm per member and no more.
     try std.testing.expect(std.mem.find(u8, src, "        2 => @import(\"tb2\").main(init),\n") != null);
     try std.testing.expect(std.mem.find(u8, src, "3 =>") == null);

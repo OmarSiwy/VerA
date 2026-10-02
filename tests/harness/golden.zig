@@ -206,7 +206,7 @@ fn runner(gpa: Allocator, arena: Allocator, src: []const u8, includes: []const [
 /// The tree `vera --emit-so` writes for a `.va` device before `zig` runs
 /// (`orchestrator.writeTree`): `shim.zig`, and the split `device.zig`, `h.zig`
 /// and `u/*.zig`. A split LLVM build's part and chunk shims and the engine
-/// root are written only beside a `zig` child; `driver/shim.zig`'s whole-file
+/// root are written only beside a `zig` child; `zigbuild/shim.zig`'s whole-file
 /// tests pin those.
 fn soTree(gpa: Allocator, io: Io, arena: Allocator, src: []const u8, includes: []const []const u8, source: []const u8, dir: []const u8) !void {
     var bag: vera.diag.Bag = .init(gpa);

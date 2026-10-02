@@ -1,6 +1,6 @@
 //! Opening a dynamic library: a `--emit-so` artifact (path → `DynLib`), for
 //! the tests and test hosts that load one. VerA itself never loads a library;
-//! the host does (`orchestrator.zig`).
+//! the host does (`zigbuild` only builds it).
 //!
 //! The one file in lib/ and src/ that calls an OS directly
 //! (`tests/exhaustive.zig` allowlists it): Zig 0.17's `std.DynLib` has no

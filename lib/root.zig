@@ -39,8 +39,9 @@ pub const diag = @import("diag");
 pub const codegen = @import("backend").codegen;
 /// MIR to a behavioural Verilog module for digital simulation (`--emit-verilog`).
 pub const beh_verilog = @import("backend").beh_verilog;
-/// device.zig to a versioned `.so` (`buildArtifact`).
-pub const orchestrator = @import("backend").orchestrator;
+/// The `zigbuild` module under its pre-Phase-7 name: device.zig to a
+/// versioned `.so` (`buildArtifact`), and the testbench build `tb` re-exports.
+pub const orchestrator = @import("zigbuild");
 /// The fixture testbench: `//!` directives, runner text and its build.
 pub const tb = @import("backend").tb;
 // What `ir` exported until ARCHITECTURE.md Phase 5 moved lowering to `analog`

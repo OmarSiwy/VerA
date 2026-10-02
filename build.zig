@@ -61,9 +61,15 @@ const module_specs = [_]ModuleSpec{
     // `analog`: only the tests that lower source. `contract`: the proof's
     // transfer functions use the devices' `exp`/`log`/`pow`.
     .{ .name = "prove", .path = "lib/prove/root.zig", .role = .compiler, .imports = &.{ "diag", "frontend", "ir", "contract", "analog" } },
-    // `analog`: only codegen's tests, which lower source.
-    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels" } },
-    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "backend", "kernels" } },
+    // Device and testbench text in, artifacts out, through a spawned `zig`:
+    // the `.so` build, its shims, the engine object, the testbench binary.
+    // No compiler module. `contract`: `Part` is the host's `DevicePart`.
+    // `dynlib`: only the tests that load what they built.
+    .{ .name = "zigbuild", .path = "lib/zigbuild/root.zig", .role = .tool, .imports = &.{ "contract", "dynlib" } },
+    // `analog`: only codegen's tests, which lower source. `zigbuild`: the
+    // `Output` codegen produces, and the testbench build `tb` re-exports.
+    .{ .name = "backend", .path = "lib/backend/root.zig", .role = .backend, .imports = &.{ "diag", "dynlib", "frontend", "ir", "analog", "prove", "kernels", "zigbuild" } },
+    .{ .name = "vera", .path = "lib/root.zig", .role = .compiler, .imports = &.{ "base", "diag", "frontend", "elab", "ir", "analog", "prove", "backend", "kernels", "zigbuild" } },
 
     // src/: what runs after compilation. `sim` is an interpreter over the
     // shared AST, not a consumer of the pipeline. It takes `kernels` so the

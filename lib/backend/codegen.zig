@@ -48,42 +48,10 @@ pub const Error = std.mem.Allocator.Error || error{
 /// Sentinel for "no index" in the u32 columns (`Hoist.idx`, a non-held array).
 pub const none_u32 = std.math.maxInt(u32);
 
-/// The generated device, plus the ranges that let the orchestrator write it as
-/// one file per unit declaration. Zig caches ZIR per file keyed on inode, size
-/// and mtime, so an unchanged unit's file is left untouched and skips AstGen.
-/// `text` stays the single contiguous emission that `--emit-zig` writes
-/// verbatim; the split is a view over it.
-///
-/// Invariant: the ranges tile. `unit_lo[i] == unit_hi[i-1]`, so
-/// `text[0..unit_lo[0]]` is the prologue and `text[unit_hi[n-1]..]` is the
-/// dispatcher tail.
-pub const Output = struct {
-    /// The whole device. Gpa-owned (see `generate`).
-    text: []const u8,
-    /// One entry per emitted top-level unit declaration, in emission order.
-    /// `names[i]` is both the declaration name and the file stem, so the file
-    /// set changes exactly when `naming.zig`'s keys do. Arena-owned.
-    names: []const []const u8 = &.{},
-    /// Offset in `text` where each unit's declaration starts.
-    unit_lo: []const u32 = &.{},
-    /// Offset of the declaration keyword inside `text`. The writer splices
-    /// `pub ` here; see `Gen.emitUnit` for why `text` cannot carry it itself.
-    unit_fn: []const u32 = &.{},
-    /// Offset in `text` just past each unit's declaration.
-    unit_hi: []const u32 = &.{},
-    /// File-scope prologue every `u/<key>.zig` needs. A unit file is a
-    /// separate Zig file and Zig has no textual include, so nothing
-    /// `device.zig` declares is in its scope. Arena-owned; empty when `names` is.
-    prelude: []const u8 = "",
-    /// `h.zig`: the §4.3/§4.5 helper kernels, public, for the unit files to
-    /// alias. device.zig keeps a private copy inline because `text` must stay
-    /// a valid stand-alone device and `contract.rejectStrayPubDecls` forbids
-    /// publishing them there. Arena-owned; empty when `names` is.
-    helpers: []const u8 = "",
-    /// How many chunks `setup` was emitted as (`setup_chunks.n`); 0 when it
-    /// is one function. A split build compiles each in its own object.
-    setup_chunks: u32 = 0,
-};
+/// The generated device and its per-unit ranges: the value `zigbuild`
+/// writes and builds, defined there (`zigbuild.Output`) so the build never
+/// imports codegen. `generate` produces it.
+pub const Output = @import("zigbuild").Output;
 
 /// §9.4: whether display tasks are dropped or emitted (plan/args.zig).
 pub const Display = plan_args.Display;
@@ -614,7 +582,7 @@ pub const Gen = struct {
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9), codegen/kernel_text.zig
 const gen_kernel_text = @import("codegen/kernel_text.zig");
 
-/// `setup`'s text as chunks a split build compiles in parallel (the orchestrator's test drives it).
+/// `setup`'s text as chunks a split build compiles in parallel (its test builds and runs them).
 pub const setup_chunk = @import("codegen/setup_chunk.zig");
 
 // Codegen self-checks: MIR in, device.zig text out, asserted by shape, codegen/test.zig
