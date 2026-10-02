@@ -89,6 +89,9 @@ pub const Output = struct {
     /// a valid stand-alone device and `contract.rejectStrayPubDecls` forbids
     /// publishing them there. Arena-owned; empty when `names` is.
     helpers: []const u8 = "",
+    /// How many chunks `setup` was emitted as (`setup_chunks.n`); 0 when it
+    /// is one function. A split build compiles each in its own object.
+    setup_chunks: u32 = 0,
 };
 
 /// §9.4: whether display tasks are dropped or emitted (plan/args.zig).
@@ -168,6 +171,7 @@ pub fn generate(
         .unit_hi = g.file_hi.items,
         .prelude = g.prelude,
         .helpers = g.helpers,
+        .setup_chunks = g.su.chunks,
     };
 }
 
@@ -642,6 +646,9 @@ pub fn devSafe(op: Mir.Opcode) bool {
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9), codegen/kernel_text.zig
 const gen_kernel_text = @import("codegen/kernel_text.zig");
 
+/// `setup`'s text as chunks a split build compiles in parallel (the orchestrator's test drives it).
+pub const setup_chunk = @import("codegen/setup_chunk.zig");
+
 // Codegen self-checks: MIR in, device.zig text out, asserted by shape, codegen/test.zig
 const gen_test = @import("codegen/test.zig");
 
@@ -660,6 +667,7 @@ test {
     _ = float_mode;
     _ = float_lanes;
     _ = Gen.gen_setup;
+    _ = setup_chunk;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;
     _ = Gen.gen_cfg;
