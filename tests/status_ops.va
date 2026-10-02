@@ -25,5 +25,9 @@ module status_ops(p, n);
       $fatal(2, "fatal %d", 7);
     I(p, n) <+ V(p, n) / 1k;
     I(p, n) <+ ddt(1p * V(p, n));
+    // A noise source and an AC stimulus: both are zero outside their analyses,
+    // and they give the device `noisePsd` and `acStim`, which the contract
+    // types `*const Instance` (tests/status_host.zig calls them that way).
+    I(p, n) <+ white_noise(4e-21, "th") + ac_stim("ac", 1.0);
   end
 endmodule

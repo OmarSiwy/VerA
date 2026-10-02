@@ -467,6 +467,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
     .{ .host = "tests/status_host.zig", .va = "tests/status_ops.va" },
+    .{ .host = "tests/table_status_host.zig", .va = "tests/table_status.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },

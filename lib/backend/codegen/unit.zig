@@ -300,11 +300,17 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     const model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const inst = self.out.items.len;
-    // A unit only reads a `vera_timepoint` cache; `eval` writes it. So unless
-    // §9.21.1 tables make the core itself write, a `*const` serves every
-    // caller, `limit` and `collapse` included.
-    // An in-place held array (`plan.Core.in_place`) is stored through it.
-    try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.timepoints.items.len != 0 and self.lowered.table_samples.items.len == 0) "*const Instance" else "InstancePtr"});
+    // Of the three things that make a device `mutable_eval`, only §9.21.1
+    // table samples are written BY the core: a `vera_timepoint` cache and the
+    // §9.7.3 status latch are written by `eval` around it. So without tables a
+    // `*const` serves every caller, the `*const Instance` entries the contract
+    // fixes (`noisePsd`, `acStim`, `limit`, `seed`, `collapse`,
+    // `checkConvergence`) included. An in-place held array
+    // (`plan.Core.in_place`) is stored through it.
+    // Spelled `InstancePtr` where that already is `*const Instance` (a device
+    // that is not `mutable_eval`), so those devices' text is unchanged.
+    const eval_writes = self.lowered.timepoints.items.len != 0 or gen_file.hasStatus(self);
+    try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.table_samples.items.len == 0 and eval_writes) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
     return .{ .x = x, .model = model, .inst = inst, .sim = sim };
