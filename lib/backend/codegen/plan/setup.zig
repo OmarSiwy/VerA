@@ -206,11 +206,13 @@ pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd:
 }
 
 /// §9.10/§9.15/§9.19 and the pure math functions: the calls whose value is a
-/// function of the card, the instance and its temperature alone. An
-/// allowlist: a callee not here is per-eval.
+/// function of the `Model` row (its card and `temperature__`) alone, which
+/// `setup` computes into `Model.su`. An allowlist: a callee not here is
+/// per-eval. §6.3.6 `$mfactor` is an `Instance` field, so not here: instances
+/// sharing a row may differ in it.
 fn callInvariant(in: Input, d: anytype) bool {
     return switch (d.callee) {
-        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected" => true,
+        .@"$temperature", .@"$vt", .@"$param_given", .@"$port_connected" => true,
         // §9.15 Table 9-27: every literal name but `iteration`, which moves
         // with each Newton step, and `dt`, with each timepoint. `tnom` is a Model field the host writes with
         // the card; a published homotopy knob (gmin, gdev, sourceScaleFactor)

@@ -76,15 +76,11 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
     while (it.next()) |l| try all.append(a, dedent(l, 4));
     var body = all.items;
 
-    // The prologue: the float mode, the scalar alias, the timepoint drop and
-    // the hoisted arrays.
-    var tp = false;
+    // The prologue: the float mode, the scalar alias and the hoisted arrays.
     var fields: std.ArrayList(Piece) = .empty;
     while (body.len != 0) : (body = body[1..]) {
         const l = body[0];
-        if (std.mem.eql(u8, l, "zTpDrop(inst);")) {
-            tp = true;
-        } else if (std.mem.eql(u8, l, "@setFloatMode(.strict);") or std.mem.eql(u8, l, "const S = V;") or std.mem.eql(u8, l, "_ = V;")) {} else if (std.mem.startsWith(u8, l, "var ") and std.mem.endsWith(u8, l, " = undefined;")) {
+        if (std.mem.eql(u8, l, "@setFloatMode(.strict);") or std.mem.eql(u8, l, "const S = V;") or std.mem.eql(u8, l, "_ = V;")) {} else if (std.mem.startsWith(u8, l, "var ") and std.mem.endsWith(u8, l, " = undefined;")) {
             var p: Piece = .{ .guards = &.{}, .lines = body[0..1] };
             declOf(&p);
             if (p.ty.len == 0) return null;
@@ -178,10 +174,9 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
             if (p.guards.len != 0) try b.appendSlice(a, "    }\n");
         }
         const t = b.items;
-        try out.print(a, "fn zSetup{d}(comptime V: type, {s}: *const Model, {s}: *Instance, {s}: *zSetupZ(V)) void {{\n    @setFloatMode(.strict);\n", .{
+        try out.print(a, "fn zSetup{d}(comptime V: type, {s}: *Model, {s}: *zSetupZ(V)) void {{\n    @setFloatMode(.strict);\n", .{
             k,
             if (hasWord(t, "model")) "model" else "_",
-            if (hasWord(t, "inst")) "inst" else "_",
             if (std.mem.indexOf(u8, t, "z.") != null) "z" else "_",
         });
         if (hasWord(t, "S")) try out.appendSlice(a, "    const S = V;\n");
@@ -196,8 +191,8 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
         \\    pub const n: usize = {0d};
         \\    pub fn exportChunk(comptime V: type, comptime k: usize) void {{
         \\        @export(&struct {{
-        \\            fn f(model: *const Model, inst: *Instance, z: *anyopaque) callconv(.c) void {{
-        \\                at(V, k, model, inst, @ptrCast(@alignCast(z)));
+        \\            fn f(model: *Model, z: *anyopaque) callconv(.c) void {{
+        \\                at(V, k, model, @ptrCast(@alignCast(z)));
         \\            }}
         \\        }}.f, .{{ .name = sym(V, k), .visibility = .hidden }});
         \\    }}
@@ -208,11 +203,11 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
         \\        const root = @import("root");
         \\        return @hasDecl(root, "vera_setup_split") and root.vera_setup_split;
         \\    }}
-        \\    inline fn at(comptime V: type, comptime k: usize, model: *const Model, inst: *Instance, z: *zSetupZ(V)) void {{
+        \\    inline fn at(comptime V: type, comptime k: usize, model: *Model, z: *zSetupZ(V)) void {{
         \\        switch (k) {{
         \\
     , .{n});
-    for (0..n) |k| try out.print(a, "            {d} => zSetup{d}(V, model, inst, z),\n", .{ k, k });
+    for (0..n) |k| try out.print(a, "            {d} => zSetup{d}(V, model, z),\n", .{ k, k });
     try out.appendSlice(a,
         \\            else => comptime unreachable,
         \\        }
@@ -224,17 +219,13 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
     // `setup` only calls the chunks: its body is emitted once, as them.
     try out.appendSlice(a, text[0..fn_at]);
     try out.appendSlice(a,
-        \\pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {
-        \\
-    );
-    if (tp) try out.appendSlice(a, "    zTpDrop(inst);\n");
-    try out.appendSlice(a,
+        \\pub fn setup(comptime V: type, model: *Model) void {
         \\    var z: zSetupZ(V) = .{};
         \\    inline for (0..setup_chunks.n) |k| {
         \\        if (comptime setup_chunks.split())
-        \\            @extern(*const fn (*const Model, *Instance, *anyopaque) callconv(.c) void, .{ .name = setup_chunks.sym(V, k), .visibility = .hidden })(model, inst, &z)
+        \\            @extern(*const fn (*Model, *anyopaque) callconv(.c) void, .{ .name = setup_chunks.sym(V, k), .visibility = .hidden })(model, &z)
         \\        else
-        \\            setup_chunks.at(V, k, model, inst, &z);
+        \\            setup_chunks.at(V, k, model, &z);
         \\    }
         \\}
         \\
@@ -500,7 +491,7 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
     const a = arena.allocator();
     const text =
         \\/// doc
-        \\pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {
+        \\pub fn setup(comptime V: type, model: *Model) void {
         \\    @setFloatMode(.strict);
         \\    const S = V;
         \\    var h0: [2]zOf(S, 0x0) = undefined;
@@ -516,7 +507,7 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
         \\            break :B1;
         \\        }
         \\    }
-        \\    inst.su.r[0] = (h0[0]).val();
+        \\    model.su.r[0] = (h0[0]).val();
         \\    return;
         \\}
         \\
@@ -530,7 +521,7 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
         "    if (z.zg1) {\n",
         "    if (!z.zg1) {\n",
         "z.h0[0] = S.con(0.0);",
-        "inst.su.r[0] = (z.h0[0]).val();",
+        "model.su.r[0] = (z.h0[0]).val();",
         "/// doc\npub fn setup(",
     }) |want| if (std.mem.indexOf(u8, c.text, want) == null) {
         std.debug.print("missing `{s}` in:\n{s}\n", .{ want, c.text });
@@ -540,7 +531,7 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
     try std.testing.expect(std.mem.indexOf(u8, c.text, "break :B1") == null);
     try std.testing.expect(std.mem.indexOf(u8, c.text, ".mul(").? == std.mem.lastIndexOf(u8, c.text, ".mul(").?);
     // A `return` before the end would leave only its chunk: one function.
-    const early = try std.mem.replaceOwned(u8, a, text, "    inst.su.r[0] = (h0[0]).val();\n", "    if (t2 == 2) return;\n    inst.su.r[0] = (h0[0]).val();\n");
+    const early = try std.mem.replaceOwned(u8, a, text, "    model.su.r[0] = (h0[0]).val();\n", "    if (t2 == 2) return;\n    model.su.r[0] = (h0[0]).val();\n");
     try std.testing.expect(try chunk(a, early, 120) == null);
     // A jump out of an arm keeps that statement whole.
     const out = try std.mem.replaceOwned(u8, a, text, "            h0[0] = S.con(0.0);\n", "            h0[0] = S.con(0.0);\n            if (t2 == 1) break :B1;\n");

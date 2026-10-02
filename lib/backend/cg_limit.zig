@@ -94,7 +94,7 @@ pub fn liveSets(g: *const Gen) Live {
 /// Returns true when a clamp or the §9.17.1 verdict reads a value out of the
 /// shared core at clamp time, so `limit` must run its slice of the core
 /// (`emitCore`). An argument that is a literal, a parameter or a `setup` root
-/// (latched in `Instance.su`) needs no core.
+/// (latched in `Model.su`) needs no core.
 pub fn usesCore(g: *const Gen) bool {
     return rejectsInCore(g) or anyArg(g, needsCore);
 }
@@ -219,9 +219,9 @@ pub fn emit(g: *Gen) Error!void {
     if (g.limits.calls.len == 0 and !rejects) return;
 
     const needs_core = usesCore(g);
-    // A setup root is an `inst.su` read, so `inst` stays named even when the
-    // core call is gone. `model` goes with the core, or with a parameter leaf.
-    const reads_inst = needs_core or anyArg(g, isRoot) or (rejects and isRoot(g, g.lowered.reject_iteration));
+    // A setup root is a `model.su` read, so `model` stays named even when the
+    // core call is gone, as it does for a parameter leaf. `inst` goes with the core.
+    const reads_model = needs_core or anyArg(g, paramLeaf) or anyArg(g, isRoot) or (rejects and isRoot(g, g.lowered.reject_iteration));
     if (g.limits.calls.len != 0) try g.w(
         \\/// §4.5.15 `$limit`: SPICE voltage limiting, applied by the host between
         \\/// the linear solve and the next `eval`.
@@ -244,8 +244,8 @@ pub fn emit(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn limit(comptime {s}: type, {s}: *const Model, {s}: *const Instance, cur: [n_u]f64, {s}: [n_u]f64, {s}: contract.SimState) contract.LimitResult(n_u) {{\n", .{
         if (needs_core) "S" else "_",
-        if (needs_core or anyArg(g, paramLeaf)) "model" else "_",
-        if (reads_inst) "inst" else "_",
+        if (reads_model) "model" else "_",
+        if (needs_core) "inst" else "_",
         if (needs_core or g.limits.calls.len != 0) "old" else "_",
         if (needs_core) "sim" else "_",
     });
@@ -554,7 +554,7 @@ fn emitSeed(g: *Gen) Error!void {
     }
     if (!any) return;
     const needs_core = seedUsesCore(g);
-    const reads_inst = needs_core or anyArg(g, isRoot);
+    const reads_model = needs_core or anyArg(g, paramLeaf) or anyArg(g, isRoot);
     try g.w(
         \\/// SPICE `MODEINITJCT`: start every pnjlim-limited junction at its own
         \\/// `vcrit` rather than at 0 V, where the junction is invisible to Newton.
@@ -568,8 +568,8 @@ fn emitSeed(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn seed(comptime {s}: type, {s}: *const Model, {s}: *const Instance, {s}: contract.SimState) [n_u]?f64 {{\n", .{
         if (needs_core) "S" else "_",
-        if (needs_core or anyArg(g, paramLeaf)) "model" else "_",
-        if (reads_inst) "inst" else "_",
+        if (reads_model) "model" else "_",
+        if (needs_core) "inst" else "_",
         if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
@@ -636,8 +636,8 @@ fn emitSeedTree(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn seed(comptime {s}: type, {s}: *const Model, {s}: *const Instance, {s}: contract.SimState) [n_u]?f64 {{\n", .{
         if (needs_core) "S" else "_",
-        if (needs_core or reads_param) "model" else "_",
-        if (needs_core or reads_root) "inst" else "_",
+        if (needs_core or reads_param or reads_root) "model" else "_",
+        if (needs_core) "inst" else "_",
         if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";

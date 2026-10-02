@@ -11,7 +11,14 @@ const std = @import("std");
 /// The ABI version this file specifies. A generated device mirrors it as
 /// `pub const contract_abi`, and `validateHost` refuses a device whose value
 /// differs. Bumped by every change a linked host could observe.
-pub const abi_version: u32 = 5;
+///
+/// 6: the temperature is the `Model` row's (`Model.temperature__`, kelvin),
+/// not the instance's (`Instance.temperature` is gone); the solve-invariant
+/// cache moved from `Instance.su` to `Model.su`, and `setup(V, *Model)` fills
+/// it once per row; an instance's own card-derived caches are dropped by the
+/// optional `setupInstance(*const Model, *Instance)`. `IMPLEMENTATION.md`
+/// ("Device ABI 6") is the host migration note.
+pub const abi_version: u32 = 6;
 
 /// Whether this program asked for the contract's conformance checks: its root
 /// module declares `pub const vera_validate_contract = true`. Off by default:
@@ -50,7 +57,7 @@ pub const DevicePart = enum { setup, state, eval };
 /// order). A device cannot print or stop its host, so the first one an
 /// evaluation reaches latches `Instance.vera_status__` = `statusCode(site)`,
 /// with up to four numeric arguments in `Instance.vera_status_args__`. While
-/// it is latched (until `initState` or `setup`), `eval`, `q` and `evalQ`
+/// it is latched (until `initState` or `setupInstance`), `eval`, `q` and `evalQ`
 /// return all-zero rows and charges (value and every derivative lane) and
 /// `updateState` changes nothing, so a host polls the field after a solve
 /// and renders it with `formatStatus`. Optional: a device without it has no
@@ -1574,7 +1581,6 @@ pub const UnknownKind = enum {
 /// a silently ignored field rather than an error.
 const SimStateField = struct { name: []const u8, T: type };
 const sim_state_fields = [_]SimStateField{
-    .{ .name = "temperature", .T = f64 }, // §9.15 $temperature, kelvin
     .{ .name = "mfactor", .T = f64 }, // §9.15/E.4.1 $mfactor
     .{ .name = "bound_step", .T = f64 }, // §9.17.2 $bound_step
     // §9.12 / IEEE 1364 §17.10 the command line's arguments (`argv[1..]`),
@@ -1589,6 +1595,8 @@ const sim_state_fields = [_]SimStateField{
 /// host writes them before `derive`, and calls `setup` again after writing a
 /// name `setup_simparams` lists.
 const host_model_fields = [_][]const u8{
+    "temperature__", // §9.10 $temperature, kelvin; 300.15. Per Model row, so
+    // an instance at its own temperature gets its own row. `setup` reads it.
     "nom_temp__", // $simparam("tnom"), degC; 27
     "reltol__", // $simparam("reltol"); 1e-3
     "abstol__", // $simparam("abstol"), amperes; 1e-12
@@ -2684,8 +2692,12 @@ pub fn InstancePtr(comptime D: type) type {
 ///                                (§6.3.4 parameters derived from others)
 ///   checkShape(&model)           after derive; non-null names a §3.4 shape
 ///                                parameter the card moved, so refuse the card
-///   setup(S, &model, &inst)      after every card, instance, temperature or
-///                                `setup_simparams` write; fills `inst.su`
+///   setup(S, &model)             after derive, and after every card,
+///                                `temperature__` or `setup_simparams` write;
+///                                fills `model.su`, once per Model row
+///   setupInstance(&model, &inst) per instance after every `setup`, and after
+///                                an instance write (optional: drops what the
+///                                instance cached from the card)
 ///   collapse(S, &model, &inst)   once per instance at build: per internal unknown,
 ///                                the index it merges into, or null
 ///   initState(&model, &inst)     once per instance, before the first solve
@@ -2842,20 +2854,22 @@ pub fn validate(comptime D: type) void {
         if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
             @compileError(name ++ ".state_class = .path_latch requires stateCtl");
     }
-    // The solve-invariant slice: `setup` fills `inst.su`, and `eval` reads it
+    // The solve-invariant slice: `setup` fills `model.su`, and `eval` reads it
     // as constants. `setup`'s family must compute values the way `eval`'s does.
     if (@hasDecl(D, "Setup") != @hasDecl(D, "setup") or @hasDecl(D, "setup") != @hasDecl(D, "setup_simparams"))
         @compileError(name ++ ": Setup, setup and setup_simparams come together");
     if (@hasDecl(D, "setup")) {
         const info = @typeInfo(@TypeOf(D.setup));
-        if (info != .@"fn" or info.@"fn".params.len != 3 or info.@"fn".params[0].type != type)
-            @compileError(name ++ ".setup: expected fn (comptime S: type, *const Model, *Instance) void");
-        if (!@hasField(D.Instance, "su") or @FieldType(D.Instance, "su") != D.Setup)
-            @compileError(name ++ ".Instance must carry `su: Setup`");
+        if (info != .@"fn" or info.@"fn".params.len != 2 or info.@"fn".params[0].type != type)
+            @compileError(name ++ ".setup: expected fn (comptime S: type, *Model) void");
+        if (!@hasField(D.Model, "su") or @FieldType(D.Model, "su") != D.Setup)
+            @compileError(name ++ ".Model must carry `su: Setup`");
         const sp = @typeInfo(@TypeOf(D.setup_simparams));
         if (sp != .array or sp.array.child != []const u8)
             @compileError(name ++ ".setup_simparams must be [k][]const u8");
     }
+    if (@hasDecl(D, "setupInstance") and @TypeOf(D.setupInstance) != fn (*const D.Model, *D.Instance) void)
+        @compileError(name ++ ".setupInstance: expected fn (*const Model, *Instance) void");
     if (@hasDecl(D, "setup_chunks")) {
         if (!@hasDecl(D, "setup")) @compileError(name ++ ".setup_chunks needs `setup`");
         if (@TypeOf(D.setup_chunks.n) != usize or D.setup_chunks.n == 0)
@@ -3023,8 +3037,10 @@ pub fn validate(comptime D: type) void {
 /// error, checked only when `validating`; the ABI check always runs. `H`
 /// declares each obligation it meets as a `true` bool:
 ///   `D.contract_abi` must equal `abi_version` (no declaration; regenerate D);
-///   `calls_setup` when D has `setup`: the host calls it after every card,
-///     instance, temperature or `setup_simparams` write, before `eval`;
+///   `calls_setup` when D has `setup` or `setupInstance`: the host calls
+///     `setup` once per Model row after `derive` and after every card,
+///     `temperature__` or `setup_simparams` write, then `setupInstance` for
+///     every instance of the row, before `eval`;
 ///   `mutable_eval` when D declares it: evaluations get exclusive `*Instance`;
 ///   `iteration_hooks` when D has `advanceIteration`/`checkConvergence`: the
 ///     host calls the first after every iterate and the second before
@@ -3044,13 +3060,14 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
             std.fmt.comptimePrint("abi_version = {d}", .{abi_version}) ++
             "; regenerate it with the VerA this contract came from.");
     if (!validating) return;
-    // A host that skips `setup` evaluates at `inst.su`'s NaN initializers.
-    if (@hasDecl(D, "setup")) {
+    // A host that skips `setup` evaluates at `model.su`'s NaN initializers.
+    if (@hasDecl(D, "setup") or @hasDecl(D, "setupInstance")) {
         if (!@hasDecl(H, "calls_setup") or !H.calls_setup)
             @compileError(@typeName(H) ++ " must call `setup`: " ++ @typeName(D) ++
-                " computes its solve-invariant values once, into `Instance.su`, and `eval` " ++
+                " computes its solve-invariant values once per Model row, into `Model.su`, and `eval` " ++
                 "reads them. Declare calls_setup = true once the host calls " ++
-                "`setup(V, &model, &inst)` after every card, instance, temperature or " ++
+                "`setup(V, &model)` per Model row, then `setupInstance(&model, &inst)` per " ++
+                "instance where declared, after every card, `temperature__`, instance or " ++
                 "`setup_simparams` write.");
     }
     if (@hasDecl(D, "mutable_eval") and D.mutable_eval) {
@@ -3133,6 +3150,7 @@ const AllowedPubDecl = enum {
     acceptQ,
     Setup,
     setup,
+    setupInstance,
     setup_simparams,
     setup_chunks,
     jac_f32,
@@ -3391,7 +3409,7 @@ fn isValueType(comptime T: type) bool {
         // Integer-backed enums are fixed-size POD.
         .@"enum" => |e| isValueType(e.tag_type),
         .array => |a| isValueType(a.child),
-        // `Instance.su` (a `Setup`): a plain struct of value fields is as
+        // `Model.su` (a `Setup`): a plain struct of value fields is as
         // copyable as its fields. `void` is `su_ok` outside Debug, or when
         // the program did not ask for the checks (`validating`).
         .@"struct" => |s| for (s.fields) |f| {
@@ -3550,21 +3568,26 @@ const MockAll = struct {
     pub const batch_ok = true;
     pub const mutable_eval = false;
 
-    pub const Model = struct { g: f32 = 1e-3 };
+    pub const Model = struct {
+        g: f32 = 1e-3,
+        temperature__: f64 = 300.15,
+        su: Setup = .{},
+    };
     pub const Instance = struct {
-        temperature: f64 = 300.15,
         mfactor: f64 = 1,
         bound_step: f64 = std.math.inf(f64),
         systf: ?*const SystfHost = null,
-        su: Setup = .{},
         vera_status__: u32 = 0,
         vera_status_args__: [4]f64 = @splat(0.0),
     };
     pub const Setup = struct { r: [1]f64 = @splat(std.math.nan(f64)) };
     pub const status_sites = [_]StatusSite{.{ .severity = .@"error", .fmt = "g = %g%% of %s", .file = "m.va", .line = 3 }};
     pub const setup_simparams = [_][]const u8{"tnom"};
-    pub fn setup(comptime V: type, m: *const Model, inst: *Instance) void {
-        inst.su.r[0] = V.con(@floatCast(m.g)).val();
+    pub fn setup(comptime V: type, m: *Model) void {
+        m.su.r[0] = V.con(@floatCast(m.g)).val();
+    }
+    pub fn setupInstance(_: *const Model, inst: *Instance) void {
+        inst.vera_status__ = 0;
     }
     pub const setup_chunks = struct {
         pub const n: usize = 1;
@@ -4018,7 +4041,7 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
         pub const noise_table_points = true;
         // ...and MockAll has a shape parameter, so the host calls `checkShape`.
         pub const shape_check = true;
-        // ...and a `setup`, so the host fills `Instance.su` before `eval`.
+        // ...and a `setup`, so the host fills `Model.su` before `eval`.
         pub const calls_setup = true;
         // ...and a frequency-dependent slot, so the host adds `acDyn`.
         pub const calls_ac_dyn = true;

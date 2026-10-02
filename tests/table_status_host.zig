@@ -12,10 +12,11 @@ const n_u = contract.nU(D);
 const S0 = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
 
 test "noisePsd and acStim take a *const Instance and leave it untouched" {
-    const m: D.Model = .{};
+    var m: D.Model = .{};
     var inst: D.Instance = .{};
     _ = D.initState(&m, &inst);
-    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), &m, &inst);
+    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), &m);
+    if (@hasDecl(D, "setupInstance")) D.setupInstance(&m, &inst);
     const ci: *const D.Instance = &inst;
     var xv: [n_u]f64 = @splat(0.0);
     xv[@intFromEnum(D.U.a)] = 0.5;

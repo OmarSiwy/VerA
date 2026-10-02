@@ -1104,7 +1104,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
         const f = body[i + ".white = m.f".len ..];
         const end = std.mem.indexOfScalar(u8, f, '.').?;
-        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = zTo(S, 0x0, S.con(inst.su.r[", .{f[0..end]});
+        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = zTo(S, 0x0, S.con(model.su.r[", .{f[0..end]});
         defer std.testing.allocator.free(decl);
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
         k = i + 1;
@@ -3302,7 +3302,7 @@ test "codegen: §5.2.1 an `analog initial` variable is a setup root, not a per-e
     try std.testing.expectEqual(Lower.HeldVar.Why.retained, h.lowered.held_vars.items[0].why);
     _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "inst.su.r[0] = ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "model.su.r[0] = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "if (inst.is_analog_initial)") == null);
 }
 
@@ -3574,7 +3574,7 @@ test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset tab
 test "codegen: the setup split — invariant values are computed by setup and read by eval" {
     // `$param_given(gain) ? gain : 0.0` depends on the card alone, so it is a
     // setup root: `setup` computes it with the host's value scalar V, the core
-    // reads `inst.su` (asserting in Debug that setup ran), and no
+    // reads `model.su` (asserting in Debug that setup ran), and no
     // `precompute`, prefix latch or `P` scalar is emitted.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -3587,10 +3587,10 @@ test "codegen: the setup split — invariant values are computed by setup and re
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const Setup = struct {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.r[0] = (") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".scale(inst.su.r[0])") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "if (std.debug.runtime_safety and contract.validating) std.debug.assert(inst.su_ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn setup(comptime V: type, model: *Model) void {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.su.r[0] = (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".scale(model.su.r[0])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (std.debug.runtime_safety and contract.validating) std.debug.assert(model.su_ok);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{};") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "precompute") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "hp_ok") == null);
@@ -3644,7 +3644,7 @@ test "codegen: setup stores a card expression written twice once, and a 0/1 flag
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(" ++ gen_kernel_text.nan_lit ++ "),\n    b: [1]bool = @splat(false),\n};") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.b[0] = (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.su.b[0] = (") != null);
 }
 
 test "codegen: §5.10.2 a held variable written only by @(initial_step) is computed once, by setup" {
@@ -3670,7 +3670,7 @@ test "codegen: §5.10.2 a held variable written only by @(initial_step) is compu
     try std.testing.expect(std.mem.indexOf(u8, su[0..std.mem.indexOf(u8, su, "\n}\n").?], ".log()") != null);
     const core = src[std.mem.indexOf(u8, src, "__common__core(comptime S").?..];
     const body = core[0..std.mem.indexOf(u8, core, "\n}\n").?];
-    try std.testing.expect(std.mem.indexOf(u8, body, ".scale(inst.su.r[0])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, ".scale(model.su.r[0])") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "is_initial_step") == null);
     try std.testing.expect(std.mem.indexOf(u8, body, "log") == null);
 }
@@ -3709,7 +3709,7 @@ test "codegen: setup's live exits share one copy of the root stores" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     const su = setupBody(src);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, su, "inst.su.r[0] = "));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, su, "model.su.r[0] = "));
     try std.testing.expect(std.mem.indexOf(u8, su, "if (zs_stop) break :zs_done;") != null);
 }
 

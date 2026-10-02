@@ -28,7 +28,7 @@ const none_u32 = codegen.none_u32;
 
 /// `tools/contract.zig`'s `abi_version`, which `backend` cannot import. Every
 /// testbench runs `validateHost`, which compares the two.
-const contract_abi = 5;
+const contract_abi = 6;
 const VTy = codegen.VTy;
 const OpKind = @import("ir").op.OpKind;
 
@@ -471,9 +471,7 @@ fn emitModel(self: *Gen) Error!void {
     // §9.15 the host-published simulation parameters. Model, not Instance:
     // each `.options` entry is one number per run. The initializer is the
     // default, for a host that never writes it.
-    var host_simparam = false;
     for (Lower.host_simparams) |h| if (self.lowered.uses.contains(h.use)) {
-        host_simparam = true;
         try self.w("    {s}: f64 = {s}, // §9.15 $simparam(\"{s}\"){s} — host-written\n", .{
             h.field, try fmtF64(self, self.lowered.simparamValue(h.name).?), h.name, if (h.use == .host_tnom) ", degC" else "",
         });
@@ -488,9 +486,18 @@ fn emitModel(self: *Gen) Error!void {
         const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else kt.nan_lit;
         try self.w("    {s}: f64 = {s}, // §5.6.5 retention flag — `derive` writes it\n", .{ try gen_dispatch.guardField(self, @intCast(k)), d });
     }
-    if (self.lowered.params.items.len == 0 and !host_simparam) {
-        try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
-    }
+    // §9.10 `$temperature`, kelvin: one number per Model row, so every value
+    // `setup` derives from it is shared by the instances of that row. A host
+    // simulating an instance at its own temperature gives it its own row.
+    try self.w("    temperature__: f64 = 300.15, // §9.10 $temperature, kelvin — host-written\n", .{});
+    // The setup roots (`Setup`), LAST so a new parameter does not move them.
+    // `su_ok` exists only where it is asserted: Debug, in a program that
+    // asked for the contract's checks (`contract.validating`).
+    if (self.su.vals.len != 0) try self.w(
+        \\    su: Setup = .{{}},
+        \\    su_ok: if (std.debug.runtime_safety and contract.validating) bool else void = if (std.debug.runtime_safety and contract.validating) false else {{}},
+        \\
+    , .{});
     try self.w("}};\n\n", .{});
 }
 
@@ -610,7 +617,8 @@ fn deriveFlags(self: *Gen) Error!bool {
         \\    var pin: Instance = .{{}};
         \\
     , .{});
-    if (self.su.vals.len != 0) try self.w("    setup(S, model, &pin);\n", .{}) else try self.w("    _ = &pin;\n", .{});
+    if (self.su.vals.len != 0) try self.w("    setup(S, model);\n", .{});
+    try self.w("    _ = &pin;\n", .{});
     try self.w("    const m = core(S, xr, model, &pin, .{{}}{s});\n", .{self.heldArg(true)});
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
@@ -734,10 +742,9 @@ pub fn emitInstance(self: *Gen) Error!void {
     self.held_in_place = try gen_state.inPlaceArrays(self);
     try self.w(
         \\/// Per-instance state. The host owns every field above the operator
-        \\/// block: `temperature` in kelvin (§9.10) and `mfactor` (§6.3.6). Time,
-        \\/// step and analysis reach every entry point as `contract.SimState`.
+        \\/// block: `mfactor` (§6.3.6); the temperature is `Model.temperature__`.
+        \\/// Time, step and analysis reach every entry point as `contract.SimState`.
         \\pub const Instance = struct {{
-        \\    temperature: f64 = 300.15,
         \\    mfactor: f64 = 1.0,
         \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
         \\    /// NEXT timestep, in seconds. `inf` = unconstrained. Written by
@@ -901,17 +908,9 @@ pub fn emitInstance(self: *Gen) Error!void {
         }
     }
     try emitTpFields(self);
-    // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
-    // the held block above. `su_ok` exists only where it is asserted: Debug,
-    // in a program that asked for the contract's checks (`contract.validating`).
-    if (self.su.vals.len != 0) try self.w(
-        \\    su: Setup = .{{}},
-        \\    su_ok: if (std.debug.runtime_safety and contract.validating) bool else void = if (std.debug.runtime_safety and contract.validating) false else {{}},
-        \\
-    , .{}) else if (self.lowered.timepoints.items.len != 0) try self.w("    su: Setup = .{{}},\n", .{});
     if (hasStatus(self)) try self.w(
         \\    /// §9.7.3 the first `$fatal`/`$error` reported, `contract.statusSite`'s
-        \\    /// code; 0 = ok. Sticky until `initState` or `setup`.
+        \\    /// code; 0 = ok. Sticky until `initState` or `setupInstance`.
         \\    vera_status__: u32 = 0,
         \\    /// The reported site's numeric arguments (`contract.formatStatus`).
         \\    vera_status_args__: [{d}]f64 = @splat(0.0),
@@ -922,7 +921,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     try emitStatusHelpers(self);
 }
 
-/// §9.7.3 `initState` and `setup` clear a latched status (a `w` format).
+/// §9.7.3 `initState` and `setupInstance` clear a latched status (a `w` format).
 pub const status_drop = "    inst.vera_status__ = 0;\n    inst.vera_status_args__ = @splat(0.0);\n";
 
 /// Whether the device reports §9.7.3 `$fatal`/`$error` as a status
