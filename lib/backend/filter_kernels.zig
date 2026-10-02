@@ -5,9 +5,13 @@
 //
 // A filter is a CASCADE of sections, `H = ∏ num[i]/den[i]`, each section a
 // polynomial ratio in `s` (§4.5.11) or `z⁻¹` (§4.5.12) with ascending
-// coefficients. Sections are realised in direct form I: the state is the
-// section's own past inputs and outputs, so a static analysis can seed it with
-// the steady state and the first transient step starts consistent.
+// coefficients. A proper §4.5.11 section runs as continuous-time states
+// stepped by the trapezoidal rule (`zSsForm`, `zSsStep`): the bilinear
+// transform, without forming the ill-conditioned z-domain coefficients. A
+// §4.5.12 section and an improper §4.5.11 one run in direct form I: the state
+// is the section's own past inputs and outputs. Either way a static analysis
+// seeds the state with the steady state, so the first transient step starts
+// consistent.
 //
 // Nothing here allocates or depends on the enclosing device — `NS` (sections)
 // and `D` (degree) are structural constants from the flattened call, while
@@ -113,6 +117,94 @@ pub fn zLaplaceH0(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64)
     return h;
 }
 
+/// A proper §4.5.11 section in STATE-SPACE form: `off` common powers of s
+/// cancelled from both sides, `m` the denominator degree left. Null for a
+/// section the form cannot hold (an all-zero denominator, or a numerator of
+/// higher degree than the denominator: an improper section), which runs in
+/// direct form I on its bilinear coefficients instead.
+///
+/// WHY. Direct form on bilinear coefficients loses the DC gain when a pole is
+/// slow against the step: with k = 2/dt, Σ a_z of a degree-d section is
+/// O((ω·dt)^d) of its terms, so the discrete fixed point Σb/Σa is roundoff
+/// (a 3 kHz pole at dt = 0.1 ns in a fitted line settled 0.6% low). The
+/// state-space step below is the SAME trapezoidal rule (bilinear transform)
+/// written as an increment Δx of continuous-time states, and an input held
+/// at its value leaves a state with A·x + B·u = 0 exactly where it is, so the
+/// steady output is N(0)/D(0) to rounding.
+pub const ZSs = struct { off: usize, m: usize };
+
+pub fn zSsForm(comptime D: usize, sec: [2][D + 1]f64) ?ZSs {
+    var off: usize = 0;
+    while (off <= D and sec[0][off] == 0.0 and sec[1][off] == 0.0) off += 1;
+    var m: ?usize = null;
+    var n: usize = 0;
+    for (0..D + 1) |j| {
+        if (sec[1][j] != 0.0) m = j;
+        if (sec[0][j] != 0.0) n = j;
+    }
+    const top = m orelse return null;
+    if (n > top) return null;
+    return .{ .off = off, .m = top - off };
+}
+
+/// The controllable canonical form of `sec` with denominator `f.m`, monic:
+/// x_i' = x_{i+1}, x_{m-1}' = u − Σ α_i x_i, y = Σ γ_i x_i + β_m u, where
+/// α_i = a_i/a_m, β_i = n_i/a_m and γ_i = β_i − β_m α_i (indices past `off`).
+/// One trapezoidal step from (x, ua) to ub over `dt`:
+///   (I − cA) Δ = c(2(A x + B ua) + B (ub − ua)),  c = dt/2,
+/// solved by back substitution along the companion chain in O(m). Writes
+/// x + Δ into `xn` when given and returns the new output and its gain
+/// ∂y/∂ub, the derivative the solver sees.
+fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f64, ub: f64, dt: f64, xn: ?[]f64) [2]f64 {
+    const m = f.m;
+    const am = sec[1][f.off + m];
+    const bm = sec[0][f.off + m] / am;
+    if (D == 0 or m == 0) return .{ bm * ub, bm };
+    const c = 0.5 * dt;
+    // Back substitution: Δ_i = P_i + Q_i Δ_{m-1}, P_{m-1} = 0, Q_{m-1} = 1.
+    var p: [D]f64 = undefined;
+    var q: [D]f64 = undefined;
+    p[m - 1] = 0.0;
+    q[m - 1] = 1.0;
+    var i = m - 1;
+    while (i > 0) {
+        i -= 1;
+        p[i] = 2.0 * c * x[i + 1] + c * p[i + 1];
+        q[i] = c * q[i + 1];
+    }
+    var fm = ua;
+    var sp: f64 = 0.0;
+    var sq: f64 = 0.0;
+    for (0..m) |j| {
+        const al = sec[1][f.off + j] / am;
+        fm -= al * x[j];
+        sp += al * p[j];
+        sq += al * q[j];
+    }
+    const den = 1.0 + c * sq;
+    const dl = (c * (2.0 * fm + (ub - ua)) - c * sp) / den;
+    var y = bm * ub;
+    var g: f64 = 0.0;
+    for (0..m) |j| {
+        const ga = sec[0][f.off + j] / am - bm * (sec[1][f.off + j] / am);
+        const xj = x[j] + (p[j] + q[j] * dl);
+        if (xn) |o| o[j] = xj;
+        y += ga * xj;
+        g += ga * q[j];
+    }
+    return .{ y, bm + g * c / den };
+}
+
+/// The steady state of `zSsStep`'s form at a constant input `u`: A x + B u = 0
+/// is x_0 = u/α_0 and the rest 0. A pole left at s = 0 (α_0 = 0) has none,
+/// and its integrator starts at 0, as `zH0` says.
+fn zSsRest(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, u: f64, x: []f64) void {
+    @memset(x[0..f.m], 0.0);
+    if (D == 0 or f.m == 0) return;
+    const a0 = sec[1][f.off];
+    if (a0 != 0.0) x[0] = u * sec[1][f.off + f.m] / a0;
+}
+
 /// §4.5.11 the cascade, in the residual. `dt <= 0` is a static analysis, where
 /// the filter IS its DC gain `H(0) = ∏ zH0(section)` — the exact value of the
 /// transfer function at s = 0 wherever it has one.
@@ -131,6 +223,14 @@ pub fn zLaplace(
         if (!(dt > 0.0)) {
             const h = zH0(D, sec[i]);
             y = y.scale(h[0] / h[1]);
+            continue;
+        }
+        if (zSsForm(D, sec[i])) |f| {
+            const xs = yh[i * D ..][0..D];
+            const ua = if (D == 0 or f.m == 0) 0.0 else uh[i * D];
+            const r = zSsStep(D, f, sec[i], xs, ua, y.val(), dt, null);
+            // Linear in ub: the value from the states, the slope `r[1]`.
+            y = y.scale(r[1]).addC(r[0] - r[1] * y.val());
             continue;
         }
         const k = 2.0 / dt;
@@ -157,11 +257,20 @@ pub fn zLaplaceStep(
     for (0..NS) |i| {
         const us = uh[i * D ..][0..D];
         const ys = yh[i * D ..][0..D];
+        const ss = zSsForm(D, sec[i]);
         if (!(dt > 0.0)) {
             const h = zH0(D, sec[i]);
             const y = u * h[0] / h[1];
             @memset(us, u);
-            @memset(ys, y);
+            if (ss) |f| zSsRest(D, f, sec[i], u, ys) else @memset(ys, y);
+            u = y;
+            continue;
+        }
+        if (ss) |f| {
+            // `us[0]` is the accepted input, `ys[0..m]` the states.
+            const ua = if (D == 0 or f.m == 0) 0.0 else us[0];
+            const y = zSsStep(D, f, sec[i], ys, ua, u, dt, ys)[0];
+            if (D != 0 and f.m != 0) us[0] = u;
             u = y;
             continue;
         }
@@ -347,6 +456,45 @@ test "zH0: the gain at s = 0, common powers of s cancelled, a pole answers 0" {
     try stdx.testing.expectEqual(@as(f64, 0.0), z[0] / z[1]);
     // 1 / s: a pole at s = 0, VerA's static output 0.
     try stdx.testing.expectEqual([2]f64{ 0.0, 1.0 }, zH0(1, .{ .{ 1.0, 0.0 }, .{ 0.0, 1.0 } }));
+}
+
+test "zLaplaceStep: a slow pole holds H(0), and a step follows the bilinear difference equation" {
+    const stdx = @import("std");
+    // 0.625 / ((1 + s/1e5)(1 + s/1e9)) at dt = 0.1 ns: ω·dt = 1e-5 on the
+    // slow pole. Direct form on the bilinear coefficients drifts off H(0)
+    // here (docs/IMPLEMENTATION.md); the state-space step may not move at all.
+    const sec: [1][2][3]f64 = .{.{ .{ 0.625, 0.0, 0.0 }, .{ 1.0, 1e-5 + 1e-9, 1e-14 } }};
+    var uh: [2]f64 = undefined;
+    var yh: [2]f64 = undefined;
+    zLaplaceStep(1, 2, 1.0, sec, 0.0, &uh, &yh);
+    for (0..2000) |_| zLaplaceStep(1, 2, 1.0, sec, 1e-10, &uh, &yh);
+    const f = zSsForm(2, sec[0]).?;
+    try stdx.testing.expectEqual(ZSs{ .off = 0, .m = 2 }, f);
+    try stdx.testing.expectEqual(@as(f64, 0.625), zSsStep(2, f, sec[0], &yh, 1.0, 1.0, 1e-10, null)[0]);
+
+    // First order, 1/(1 + s), stepped 0 -> 1 from rest with h = 0.5: the
+    // bilinear difference equation of y' = u − y,
+    //   (1 + h/2) y_n = (1 − h/2) y_{n−1} + h/2 (u_{n−1} + u_n),
+    // so y = 0.2, 0.52, 0.712, ... (u_0 = 0 is the static point).
+    const one: [1][2][2]f64 = .{.{ .{ 1.0, 0.0 }, .{ 1.0, 1.0 } }};
+    var uh1: [1]f64 = undefined;
+    var yh1: [1]f64 = undefined;
+    zLaplaceStep(1, 1, 0.0, one, 0.0, &uh1, &yh1);
+    var want: f64 = 0.0;
+    var u_prev: f64 = 0.0;
+    for (0..5) |_| {
+        want = (0.75 * want + 0.25 * (u_prev + 1.0)) / 1.25;
+        u_prev = 1.0;
+        const got = zSsStep(1, zSsForm(1, one[0]).?, one[0], &yh1, uh1[0], 1.0, 0.5, null)[0];
+        zLaplaceStep(1, 1, 1.0, one, 0.5, &uh1, &yh1);
+        try stdx.testing.expectApproxEqRel(want, got, 1e-15);
+    }
+    // A bare gain (D = 0) has no state to index: 3/2 at every point.
+    var none: [0]f64 = .{};
+    zLaplaceStep(1, 0, 2.0, .{.{ .{3.0}, .{2.0} }}, 0.0, &none, &none);
+    zLaplaceStep(1, 0, 2.0, .{.{ .{3.0}, .{2.0} }}, 1e-9, &none, &none);
+    // An improper section (s / 1) keeps direct form.
+    try stdx.testing.expectEqual(@as(?ZSs, null), zSsForm(1, .{ .{ 0.0, 1.0 }, .{ 1.0, 0.0 } }));
 }
 
 test "zSecR: unit section is the identity, and gain is b0/a0" {
