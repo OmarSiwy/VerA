@@ -249,7 +249,7 @@ held needed three modules a bottom-of-stack file cannot import.
 a cycle**. Dependency order is enforced by the build, not by review.
 
 **How a big file is split** (lower/, codegen/, parser/, pp/, proof/, diag/,
-elaborate/, tb/, sim/digital/): a sub-file holds free functions that keep
+elaborate/, tb/, sim/digital/, digital/): a sub-file holds free functions that keep
 `self: *T` and are called directly, `lower_expr.lowerExpr(self, e)`, the
 pattern of Zig's own `src/Sema/*.zig`. The root file aliases ONLY what other
 modules call; that alias list IS the module's API. Every file opens with a
