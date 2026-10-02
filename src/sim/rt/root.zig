@@ -276,9 +276,27 @@ pub const Edge = enum(u2) {
 /// cannot hold (`Phase`); `auto` runs the design again, 4-state.
 pub const Error = error{ Failed, Rerun } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
-/// What can observe a change of a slot; owned by `digital/plan.zig`, which
-/// finds it.
-pub const Reach = @import("../digital/plan.zig").Reach;
+/// What can observe a change of a slot, decided per slot by the
+/// emitter's planner (`Plan.reach`):
+/// a store's `wake` in `rt.State` does only these.
+pub const Reach = packed struct(u8) {
+    /// Continuous drivers the fan-out queues (§6.1).
+    fan: bool = false,
+    /// Combinational nodes (`Design.comb`).
+    comb: bool = false,
+    /// Triggered processes (`Design.watchers`).
+    watch: bool = false,
+    /// A process suspended at an event control (`State.watch`).
+    terms: bool = false,
+    /// The §17.1.3 monitor.
+    mon: bool = false,
+    /// A §18 dump.
+    dump: bool = false,
+    _: u2 = 0,
+
+    /// Everything: the reach of a store `plan` could not narrow.
+    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
+};
 
 /// `waiters.Susp`: where the process resumes, in which §10.2.3 activation
 /// (`State.ctx`, 0 for none). `seq` is its `State.stamp`.
