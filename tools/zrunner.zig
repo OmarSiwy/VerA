@@ -6,6 +6,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const TestFn = std.builtin.TestFn;
 
+/// Every test artifact runs `contract`'s conformance checks (opt-in
+/// elsewhere, `contract.validating`), so a contract regression fails CI.
+pub const vera_validate_contract = true;
+
 pub fn main(init: std.process.Init.Minimal) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .{};
     defer if (gpa.deinit() == .leak) unreachable;

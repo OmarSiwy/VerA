@@ -493,6 +493,7 @@ fn runAndCheck(
     var dm = d;
     dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
     dm.op_states = try vera.tb.opStates(arena, result.lowered);
+    dm.validate_contract = true;
     const runner = try vera.tb.renderRunner(arena, f.stem, dm);
 
     // One work directory per fixture, keyed on the whole relative path: two
