@@ -3740,3 +3740,120 @@ test "codegen: §5.6.5 a collapsible short's flow column leaves deriv_reads behi
     // p, n, ai have lanes; the flow unknown (bit 3) does not.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const deriv_reads: u64 = 0x0000000000000007;") != null);
 }
+
+test "codegen: no embedded kernel shadows a device-level declaration" {
+    // The kernel files are spliced verbatim into device.zig, beside the
+    // device's own public entry points. A kernel local named like one of them
+    // (`var q` in `zBilin` beside a ddt() device's `pub fn q`) is an AstGen
+    // shadowing error that only a device using both shows (ESPice W element:
+    // laplace_nd + ddt). AstGen every kernel against stubs of every name a
+    // device or its contract surface declares.
+    const gpa = std.testing.allocator;
+    // Every `pub` name codegen emits at device scope, plus the contract
+    // surface a host reaches by name.
+    const names = [_][]const u8{
+        "ac_gens",
+        "batch_ok",
+        "constant",
+        "deriv_reads",
+        "file_io",
+        "jac_f",
+        "lane_masks",
+        "limit_reads",
+        "limit_writes",
+        "Model",
+        "mutable_eval",
+        "noise_gens",
+        "noise_tables",
+        "n_q",
+        "num_ports",
+        "q_lte",
+        "Setup",
+        "setup_simparams",
+        "State",
+        "state_class",
+        "systf_calls",
+        "U",
+        "u_abstol",
+        "u_kinds",
+        "u_nodeset",
+        "vpi_contrib_access",
+        "acceptQ",
+        "acStim",
+        "acDyn",
+        "advanceIteration",
+        "checkConvergence",
+        "collapse",
+        "delays",
+        "derive",
+        "display",
+        "eval",
+        "evalQ",
+        "initState",
+        "limit",
+        "nextBreakpoint",
+        "noisePsd",
+        "noiseTablePoints",
+        "pendingBreakpoint",
+        "q",
+        "setup",
+        "stateCtl",
+        "updateState",
+        "vpiContribs",
+        "core",
+        "n_u",
+        "Instance",
+        "InstancePtr",
+        "jac_pattern",
+    };
+    var stubs: std.ArrayList(u8) = .empty;
+    defer stubs.deinit(gpa);
+    try stubs.appendSlice(gpa, "const contract = @import(\"contract\");\nconst Self = @This();\n");
+    for (names) |n| try stubs.print(gpa, "pub fn {s}() void {{}}\n", .{n});
+    const kernels = [_][]const u8{
+        gen_kernel_text.timer_txt, gen_kernel_text.str_txt,  gen_kernel_text.rng_txt,
+        gen_kernel_text.table_txt, gen_kernel_text.file_txt, gen_kernel_text.limit_txt,
+        gen_kernel_text.filt_txt,
+    };
+    for (kernels) |k| {
+        const has_std = std.mem.indexOf(u8, k, "const std = @import(\"std\");") != null;
+        const file = try std.mem.concatWithSentinel(gpa, u8, &.{
+            if (has_std) "" else "const std = @import(\"std\");\n", stubs.items, k,
+        }, 0);
+        defer gpa.free(file);
+        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        defer tree.deinit(gpa);
+        var zir = try std.zig.AstGen.generate(gpa, tree);
+        defer zir.deinit(gpa);
+        if (zir.hasCompileErrors()) std.debug.print("{s}\n", .{k[0..@min(k.len, 120)]});
+        try std.testing.expect(!zir.hasCompileErrors());
+    }
+}
+
+test "codegen: a device with laplace_nd and ddt passes AstGen" {
+    // ESPice's W element: a filter (whose kernels are spliced in) beside a
+    // charge site (which gives the device `pub fn q`).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module wmix(p, n, cp, cn);
+        \\  inout p, n, cp, cn;
+        \\  electrical p, n, cp, cn;
+        \\  parameter real num[0:2] = '{1.0, 0.0, 0.0};
+        \\  parameter real den[0:2] = '{1.0, 1e-9, 1e-19};
+        \\  analog begin
+        \\    V(p, n) <+ laplace_nd(V(cp, cn), num, den);
+        \\    I(cp, cn) <+ ddt(1e-12 * V(cp, cn));
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const gpa = std.testing.allocator;
+    const text = try gpa.dupeZ(u8, try h.gen(gpa));
+    defer gpa.free(text);
+    try std.testing.expect(std.mem.indexOf(u8, text, "pub fn q(") != null);
+    var tree = try std.zig.Ast.parse(gpa, text, .zig);
+    defer tree.deinit(gpa);
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    try std.testing.expect(!zir.hasCompileErrors());
+}
