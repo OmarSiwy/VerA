@@ -110,6 +110,61 @@ pub fn zH0(comptime D: usize, sec: [2][D + 1]f64) [2]f64 {
     return .{ sec[0][n], sec[1][n] };
 }
 
+/// §4.5.11/§4.5.12 a root vector whose parts the model card sets (parameter
+/// arrays), as `(M + 1) / 2` real sections of degree ≤ 2, ascending, the
+/// polynomial 1 where unused. `z` selects §4.5.12's z⁻¹ factors over
+/// §4.5.11's s ones. Read in `__sec` on every evaluation, like any
+/// coefficient, so the section STRUCTURE is fixed and only values move.
+///
+/// Pairing: a root whose imaginary part is exactly 0 is real ("If a root is
+/// real, the imaginary part shall be specified as zero"); real roots combine
+/// two at a time in vector order, a leftover one into a degree-1 section. A
+/// zero root is §4.5.11's `s` / §4.5.12's z⁻¹ term. A complex a + jb takes
+/// the first unused root within `zroot_tol`·|a + jb| of a − jb, and the pair
+/// is one real quadratic. A complex root with no partner breaks "its
+/// conjugate shall also be present": every coefficient is NaN, so the
+/// filter's output is NaN rather than some other filter's.
+pub fn zRootSecs(comptime M: usize, comptime z: bool, r: [2 * M]f64) [(M + 1) / 2][3]f64 {
+    var out: [(M + 1) / 2][3]f64 = @splat(.{ 1.0, 0.0, 0.0 });
+    var used: [M]bool = @splat(false);
+    var k: usize = 0;
+    var pend: ?[2]f64 = null;
+    for (0..M) |i| {
+        if (used[i]) continue;
+        used[i] = true;
+        const a = r[2 * i];
+        const b = r[2 * i + 1];
+        if (b == 0.0) {
+            // §4.5.11 (1 − s/ρ), §4.5.12 (1 − z⁻¹ρ); ρ = 0 is `s` / z⁻¹.
+            const f: [2]f64 = if (a == 0.0) .{ 0.0, 1.0 } else if (z) .{ 1.0, -a } else .{ 1.0, -1.0 / a };
+            if (pend) |p| {
+                out[k] = .{ p[0] * f[0], p[0] * f[1] + p[1] * f[0], p[1] * f[1] };
+                k += 1;
+                pend = null;
+            } else pend = f;
+            continue;
+        }
+        const tol = zroot_tol * @sqrt(a * a + b * b);
+        const j = for (0..M) |c| {
+            if (!used[c] and @abs(r[2 * c] - a) <= tol and @abs(r[2 * c + 1] + b) <= tol) break c;
+        } else return @splat(@splat(zroot_nan));
+        used[j] = true;
+        // The constant path's quadratics, (1 − s/ρ)(1 − s/ρ*) and
+        // (1 − z⁻¹ρ)(1 − z⁻¹ρ*), on this root's own a and b.
+        const mag = a * a + b * b;
+        out[k] = if (z) .{ 1.0, -2.0 * a, mag } else .{ 1.0, -2.0 * a / mag, 1.0 / mag };
+        k += 1;
+    }
+    if (pend) |p| out[k] = .{ p[0], p[1], 0.0 };
+    return out;
+}
+
+/// The relative distance within which two roots are each other's conjugate:
+/// a fitted model prints its pairs to ~1e-12, and 1e-9 is still far below any
+/// two distinct roots a fit keeps apart.
+pub const zroot_tol = 1e-9;
+const zroot_nan: f64 = @bitCast(@as(u64, 0x7ff8000000000000));
+
 /// `zH0` of every section, for `zAcLaplace`'s operating-point value.
 pub fn zLaplaceH0(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64) [NS][2]f64 {
     var h: [NS][2]f64 = undefined;
@@ -495,6 +550,21 @@ test "zLaplaceStep: a slow pole holds H(0), and a step follows the bilinear diff
     zLaplaceStep(1, 0, 2.0, .{.{ .{3.0}, .{2.0} }}, 1e-9, &none, &none);
     // An improper section (s / 1) keeps direct form.
     try stdx.testing.expectEqual(@as(?ZSs, null), zSsForm(1, .{ .{ 0.0, 1.0 }, .{ 1.0, 0.0 } }));
+}
+
+test "zRootSecs: conjugates pair within tolerance, reals pair in order, an orphan is NaN" {
+    const stdx = @import("std");
+    // -1 ± 1j (the partner off by 1e-12 relative) and -2: (1 + s + s²/2), (1 + s/2).
+    const s = zRootSecs(3, false, .{ -1, 1, -2, 0, -1, -1 - 1e-12 });
+    try stdx.testing.expectApproxEqRel(@as(f64, 1.0), s[0][1], 1e-12);
+    try stdx.testing.expectApproxEqRel(@as(f64, 0.5), s[0][2], 1e-12);
+    try stdx.testing.expectEqual([3]f64{ 1, 0.5, 0 }, s[1]);
+    // Two reals and a zero root in z⁻¹: (1 − 0.5z⁻¹)(1 − 0.25z⁻¹), z⁻¹.
+    const z = zRootSecs(3, true, .{ 0.5, 0, 0.25, 0, 0, 0 });
+    try stdx.testing.expectEqual([3]f64{ 1, -0.75, 0.125 }, z[0]);
+    try stdx.testing.expectEqual([3]f64{ 0, 1, 0 }, z[1]);
+    // -1 + 1j alone has no conjugate.
+    try stdx.testing.expect(zRootSecs(1, false, .{ -1, 1 })[0][0] != zRootSecs(1, false, .{ -1, 1 })[0][0]);
 }
 
 test "zSecR: unit section is the identity, and gain is b0/a0" {
