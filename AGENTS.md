@@ -217,10 +217,16 @@ points evaluates a `batch_ok` device exactly per point, which the
 testbench's batch family (`tb/runner_text.zig`, `@Vector(NL, f64)`) asserts.
 
 Measured and not built (2026-09):
-- Instance lanes (several operating points per SIMD register, `batch_ok`):
-  measured on AVX2, not worth it alone (hand-converted diode and mos1 at
-  W = 4/8: 1.07-1.22× and 0.78-0.86×); re-evaluation with sparse lanes +
-  AVX-512 pending, so the ABI keeps `S.V` and `batch_ok` for it.
+- Instance lanes (several operating points per SIMD register, `batch_ok`),
+  re-measured 2026-10-01 with vector exp/log/pow
+  (docs/measurements/batched-instances-2026-10-01.md): when every point of a
+  batch takes the same branches, 1.2-2.1× per instance on AVX2 (diode 1.35×,
+  mos1 1.42×, bsim4va 1.58×, psp103 2.11× at W = 4; W = 8 spills its tiles
+  and gains less). With points spread over regions, divergence and per-point
+  value collapses make mos1 and bsim4va 0.37-0.55× and psp103 about 1.0×. No
+  compact model is `batch_ok` today. AVX-512 W = 8 is estimated (llvm-mca,
+  calibrated) at about 1.2-1.8×, NEON W = 2 at about 0.8-1.1×. The ABI keeps
+  `S.V` and `batch_ok` for it.
 - Liveness-coloured hoist slots: bsim4 33% slower (they defeat SROA).
 - A no-inline core on the GPU: eval 2× slower.
 - `strict` → `optimized` float mode: 0%.
