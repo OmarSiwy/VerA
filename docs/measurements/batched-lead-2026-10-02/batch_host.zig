@@ -18,6 +18,8 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
     @export(&A.bench_check, .{ .name = "bench_check" });
     @export(&A.bench_groups, .{ .name = "bench_groups" });
     @export(&A.bench_check_mixed, .{ .name = "bench_check_mixed" });
+    @export(&A.bench_check_hist, .{ .name = "bench_check_hist" });
+    @export(&A.bench_hist_distinct, .{ .name = "bench_hist_distinct" });
     @export(&A.bench_check_sims, .{ .name = "bench_check_sims" });
     @export(&A.bench_coherent, .{ .name = "bench_coherent" });
     @export(&A.bench_set_points, .{ .name = "bench_set_points" });
@@ -45,6 +47,10 @@ fn Api(comptime D: type) type {
 
         var g_model: D.Model = .{};
         var g_inst: D.Instance = .{};
+        /// The instance of each lane: W distinct copies of `g_inst` for the
+        /// timing runs, so the batch reads W instances as a host's would.
+        var g_insts: [W]D.Instance = undefined;
+        var g_lane: [W]*const D.Instance = undefined;
         var g_sim: contract.SimState = .{ .kind = .tran, .t = 1e-9, .dt = 1e-12, .analog_initial = false, .iteration = 3 };
         const NB = 64;
         /// Bias k: the dyn_rt host's points, and W consecutive ones per batch
@@ -69,6 +75,10 @@ fn Api(comptime D: type) type {
             if (@hasDecl(D, "derive")) D.derive(Vv, &g_model);
             if (@hasDecl(D, "setup")) D.setup(Vv, &g_model);
             if (@hasDecl(D, "setupInstance")) D.setupInstance(&g_model, &g_inst);
+            for (&g_insts, &g_lane) |*gi, *gl| {
+                gi.* = g_inst;
+                gl.* = gi;
+            }
         }
 
         fn writeS(rows: anytype, out: *[per]f64, comptime first: usize) void {
@@ -88,7 +98,10 @@ fn Api(comptime D: type) type {
         }
 
         fn evalScalar(x: *const [n]f64, out: *[per]f64) void {
-            const both = @call(.always_inline, D.evalQ, .{ S, x, &g_model, &g_inst, g_sim });
+            evalScalarI(x, &g_inst, out);
+        }
+        fn evalScalarI(x: *const [n]f64, inst: *const D.Instance, out: *[per]f64) void {
+            const both = @call(.always_inline, D.evalQ, .{ S, x, &g_model, inst, g_sim });
             writeS(both.res, out, 0);
             writeS(both.q, out, n);
         }
@@ -97,7 +110,8 @@ fn Api(comptime D: type) type {
             inline for (0..n) |u| inline for (0..W) |w| {
                 x[u][w] = pts[w][u];
             };
-            const both = @call(.always_inline, D.evalQ, .{ B, &x, &g_model, &g_inst, g_sim });
+            inline for (0..W) |w| B.Core_.insts[w] = g_lane[w];
+            const both = @call(.always_inline, D.evalQ, .{ B, &x, &g_model, g_lane[0], g_sim });
             writeB(both.res, 0);
             writeB(both.q, n);
         }
@@ -105,7 +119,7 @@ fn Api(comptime D: type) type {
         /// `iters` instances, one evalQ each (W calls per batch of W).
         fn bench_scalar(iters: u64) callconv(.c) void {
             var i: u64 = 0;
-            while (i < iters) : (i += 1) @call(.never_inline, evalScalar, .{ &biases[i % NB], &g_out[i % W] });
+            while (i < iters) : (i += 1) @call(.never_inline, evalScalarI, .{ &biases[i % NB], &g_insts[i % W], &g_out[i % W] });
         }
         /// `iters` instances, W per evalQ call, W distinct bias points per
         /// batch. A device that steers follows point 0's branches in every
@@ -272,6 +286,73 @@ fn Api(comptime D: type) type {
                 bad += bench_check_mixed();
             }
             return bad;
+        }
+        /// Per-lane instance state: W instances each driven through its own
+        /// transient history (updateState + stateCtl commit at 6 accepted
+        /// points of different bias), so their latches and held values
+        /// differ; then every mixed batch, its lanes on those W instances,
+        /// against each instance's scalar evalQ, bit for bit, and every instance byte-identical
+        /// after the batched call (updateState stays per instance).
+        /// Lane w's instance after its own transient history, then every
+        /// real and integer field moved apart per lane (as the testbench's
+        /// batch check does), so held values and latches surely differ.
+        fn histInst(w: usize) D.Instance {
+            var h = g_inst;
+            var s = if (@hasDecl(D, "initState")) D.initState(&g_model, &h) else {};
+            if (@hasDecl(D, "updateState")) for (0..6) |k| {
+                var sm = g_sim;
+                sm.t = 1e-12 * @as(f64, @floatFromInt(k + 1));
+                _ = D.updateState(Vv, &g_model, &h, biases[(w * 11 + k * 5) % NB], &s, sm);
+                if (@hasDecl(D, "stateCtl")) _ = D.stateCtl(&g_model, &h, &s, .commit);
+            };
+            const kf: f64 = @floatFromInt(w);
+            if (w > 0) inline for (@typeInfo(D.Instance).@"struct".fields) |fl| {
+                if (fl.type == f64) {
+                    const v = @field(h, fl.name);
+                    if (std.math.isFinite(v)) @field(h, fl.name) = v * (1.0 + 0.25 * kf) + 0.125 * kf;
+                } else if (fl.type == i64) {
+                    @field(h, fl.name) +%= @intCast(w);
+                }
+            };
+            return h;
+        }
+        fn bench_check_hist() callconv(.c) u64 {
+            var hist: [W]D.Instance = undefined;
+            for (&hist, 0..) |*h, w| h.* = histInst(w);
+            const snap = hist;
+            var bad: u64 = 0;
+            const keep = g_lane;
+            defer g_lane = keep;
+            for (0..W) |w| g_lane[w] = &hist[w];
+            var b: usize = 0;
+            while (b + W <= NB) : (b += W) {
+                var pts: [W][n]f64 = undefined;
+                inline for (0..W) |w| pts[w] = biases[b + w];
+                for (&g_out) |*o| @memset(o, 0);
+                evalBatch(&pts);
+                for (0..W) |w| {
+                    var ref: [per]f64 = @splat(0);
+                    evalScalarI(&biases[b + w], &hist[w], &ref);
+                    for (ref, g_out[w]) |x, y| {
+                        if (@as(u64, @bitCast(x)) != @as(u64, @bitCast(y)) and !(x != x and y != y)) bad += 1;
+                    }
+                    // The batched call reads instances, never writes them.
+                    if (!std.mem.eql(u8, std.mem.asBytes(&hist[w]), std.mem.asBytes(&snap[w]))) bad += 1;
+                }
+            }
+            return bad;
+        }
+        /// Whether the W history instances' latches and held values differ
+        /// (the test above is only a test if they do): count of lanes whose
+        /// instance bytes differ from lane 0's.
+        fn bench_hist_distinct() callconv(.c) u64 {
+            var hist: [W]D.Instance = undefined;
+            var d: u64 = 0;
+            for (&hist, 0..) |*h, w| {
+                h.* = histInst(w);
+                if (w > 0 and !std.mem.eql(u8, std.mem.asBytes(h), std.mem.asBytes(&hist[0]))) d += 1;
+            }
+            return d;
         }
         fn bench_check_mixed() callconv(.c) u64 {
             var bad: u64 = 0;

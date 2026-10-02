@@ -23,11 +23,11 @@ def timeit(f, w):
     return round(min(cy), 1), round(sorted(ins)[2], 1)
 for so in sys.argv[1:]:
     lib = ctypes.CDLL(so)
-    for f in ("bench_check", "bench_check_mixed", "bench_check_sims", "bench_groups"): getattr(lib, f).restype = ctypes.c_uint64
+    for f in ("bench_check", "bench_check_mixed", "bench_check_sims", "bench_check_hist", "bench_hist_distinct", "bench_groups"): getattr(lib, f).restype = ctypes.c_uint64
     lib.bench_w.restype = ctypes.c_uint32
     lib.bench_setup()
     w = lib.bench_w()
-    out = {"so": so.split("/")[-2], "W": w, "bad_coherent": lib.bench_check(), "bad_mixed": lib.bench_check_mixed(), "bad_sims": lib.bench_check_sims(),
+    out = {"so": so.split("/")[-2], "W": w, "bad_coherent": lib.bench_check(), "bad_mixed": lib.bench_check_mixed(), "bad_sims": lib.bench_check_sims(), "bad_hist": lib.bench_check_hist(), "hist_distinct_lanes": lib.bench_hist_distinct(),
            "runs_per_batch": round(lib.bench_groups() / (64 // w), 2)}
     out["scalar"], out["scalar_ins"] = timeit(lib.bench_scalar, w)
     out["mixed"], out["mixed_ins"] = timeit(lib.bench_batch, w)
