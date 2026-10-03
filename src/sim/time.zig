@@ -3,6 +3,13 @@
 //! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1 and 19.8; VAMS §5.10.3.1, §7.3.6.5.
 const std = @import("std");
 
+/// Why a timescale or a delay has no tick count. `InvalidQuantum`: not one
+/// of §19.8's 18 operands. `PrecisionTooCoarse`: a module's precision is
+/// coarser than its unit, which §19.8 forbids. `GlobalPrecisionTooCoarse`:
+/// the tick is coarser than a module's precision, which only a caller that
+/// passes something other than the design's finest precision causes.
+/// `DelayOverflow`: more than 2^64 - 1 ticks. `NonFiniteDelay` and
+/// `NegativeRealDelay`: a real delay that names no tick.
 pub const Error = error{
     InvalidQuantum,
     PrecisionTooCoarse,
@@ -55,6 +62,10 @@ pub const Scale = struct {
     local_per_unit: u57,
     global_per_local: u57,
 
+    /// The scale of a module written under `` `timescale unit/precision ``,
+    /// counted in ticks of `global`, the design's finest precision (§19.8).
+    /// `PrecisionTooCoarse` when `precision` is coarser than `unit`,
+    /// `GlobalPrecisionTooCoarse` when `global` is coarser than `precision`.
     pub fn init(unit: Quantum, precision: Quantum, global: Quantum) Error!Scale {
         const u: i6 = @backingInt(unit);
         const p: i6 = @backingInt(precision);
@@ -67,6 +78,8 @@ pub const Scale = struct {
         };
     }
 
+    /// `value` time units as global ticks, exactly; `DelayOverflow` past
+    /// 2^64 - 1 ticks.
     pub fn unsignedDelay(self: Scale, value: u64) Error!u64 {
         return self.globalTicks(try multiply(value, self.local_per_unit));
     }

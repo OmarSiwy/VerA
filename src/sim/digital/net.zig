@@ -159,6 +159,8 @@ pub const Tran = struct {
     target: State = .on,
     pending: ?Handle = null,
 
+    /// Whether the switch conducts: `on` or `off` by its control's value,
+    /// `unknown` while the control is x or z.
     pub const State = enum { on, off, unknown };
 };
 
@@ -364,6 +366,7 @@ pub const Signal = struct {
         return of(.x, if (b == .one) .highz else s0, if (b == .zero) .highz else s1);
     }
 
+    /// Does the signal reach neither side, the `.{}` of no driver at all?
     pub fn none(self: Signal) bool {
         return self.lo == 0 and self.hi == 0;
     }

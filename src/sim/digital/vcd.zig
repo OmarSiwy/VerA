@@ -56,6 +56,7 @@ const Code = struct {
     fired: bool = false,
 };
 
+/// Why a dump stops; `message` gives each non-memory, non-writer one's text.
 pub const Failure = error{ NoFilesystem, CannotCreate, CannotWrite, DumpvarsTime } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// The text of a `Failure` other than memory and writing, with the file's name.
@@ -530,9 +531,11 @@ fn variable(r: *Run, a: std.mem.Allocator, decls: []const Ast.VarDecl, name: Ast
 /// The interpreter as `Vcd`'s `src`.
 const Values = struct {
     r: *Run,
+    /// Copies `v`'s current planes into `out`, which is exactly as long.
     pub fn dumpPlanes(self: Values, v: Var, out: []u64) void {
         @memcpy(out, self.r.values[v.slot].planes);
     }
+    /// Marks `slot` dumped, so `store` requests the end-of-step section.
     pub fn dumpSlot(self: Values, slot: u32) void {
         self.r.watch[slot].insert(.vcd);
     }

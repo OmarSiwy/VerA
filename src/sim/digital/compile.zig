@@ -24,6 +24,7 @@ const tasks = display.tasks;
 /// An expression's type (§5.5.1): a width and a signedness, or IEEE 1364-2005
 /// §4.8's `real`, a double held in a slot as its 64 bits.
 pub const Type = struct { width: u32, signed: bool, real: bool = false };
+/// §4.8 `real`: 64 bits, signed, `real` set. The one real type there is.
 pub const real_type: Type = .{ .width = 64, .signed = true, .real = true };
 
 /// One bytecode row, consumed whole by one dispatch; expressions stay in the
@@ -360,6 +361,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
     };
 }
 
+/// §3.6 a string literal's width: eight bits per character, and 8 for "".
 pub fn stringWidth(text: []const u8) u32 {
     return @intCast(@max(1, text.len) * 8);
 }
@@ -370,6 +372,9 @@ pub fn common(a: Type, b: Type) Type {
     return .{ .width = @max(a.width, b.width), .signed = a.signed and b.signed };
 }
 
+/// The natural type `checkExpr` gave `e` in the executing scope's
+/// specialization (`Run.specOf`). Asserts `e` was checked: an untyped row is
+/// unreachable.
 pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
     const i = @backingInt(e);
     return switch (self.ty_state[i]) {
@@ -379,6 +384,10 @@ pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
     };
 }
 
+/// Types `e` and every operand under it in the executing scope (§5.5.1),
+/// recording each in `Run.types`/`spec_types`, or fails with E1100 on a
+/// form digital execution does not implement. Must run before `typeOf` or
+/// any evaluation of `e`.
 pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
     _ = try inferValue(self, e, 0);
 }
@@ -404,6 +413,10 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     return ty;
 }
 
+/// IEEE 1364-2005 §5.2: is `e`, in the executing scope, a constant
+/// expression: literals, parameters and the operators over them, constant
+/// system function calls, and §10.4.5 constant function calls while
+/// elaboration still folds (`Run.growing`)? Evaluates nothing.
 pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     return isConstantExpression(self, e, false);
 }
@@ -894,6 +907,8 @@ fn site(self: *Run, id: Ast.StmtId) Error!void {
     try sites.append(self.arena, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = position(self) });
 }
 
+/// Appends one instruction in the executing scope and returns its pc.
+/// Fails at 2^32 - 1 instructions. Invalidates pointers into `Run.code`.
 pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     if (self.code.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital instructions", .{});
     const at = position(self);
@@ -902,6 +917,10 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     return at;
 }
 
+/// Appends statement `id`'s bytecode, compiled in the executing scope, at
+/// the end of `Run.code`. `depth` is the statement nesting so far; 256 is
+/// refused rather than recursed into. Every expression is type-checked here,
+/// so nothing a process runs can fail to type at run time.
 pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     const tok = self.file.stmtTok(id);
     if (depth == 256) return self.fail(tok, "digital statements deeper than 256 AST levels are not implemented", .{});
@@ -1305,7 +1324,10 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     return override(self, target, value, kind, null);
 }
 
+/// The bits of an overriding value one concatenation operand takes: from
+/// bit `lo` of a value `of` bits wide (§9.3 `assign {a, b} = v`).
 pub const Slice = struct { lo: u32, of: u32 };
+/// A constant bit range of a slot, `width` bits from bit position `lo`.
 pub const Bits = struct { lo: u32, width: u32 };
 const OverTarget = struct { at: u32, bits: ?Bits };
 

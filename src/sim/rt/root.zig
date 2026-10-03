@@ -8,13 +8,20 @@ const std = @import("std");
 const diag = @import("diag");
 const digital = @import("../digital/root.zig");
 const Scheduler = @import("../scheduler.zig").Scheduler;
+/// A module's §19.8 time scale, which the emitted code passes to `$time` and delays.
 pub const Scale = @import("../time.zig").Scale;
+/// §17.1 value text, shared with the interpreter.
 pub const fmt = @import("../fmt.zig");
+/// The four-state operators the emitted expressions call (`L`).
 pub const logic = @import("logic.zig");
+/// §7.9 net resolution of the native design.
 pub const net = @import("net.zig");
+/// §18 the value change dump, shared with the interpreter.
 pub const vcd = @import("../digital/vcd.zig");
+/// §18.3 the extended (ports) dump.
 pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
+/// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
@@ -253,6 +260,7 @@ pub const Reach = packed struct(u8) {
     dump: bool = false,
     _: u2 = 0,
 
+    /// Everything: the reach of a store `plan` could not narrow.
     pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
 };
 
@@ -311,6 +319,7 @@ const resume_base: u32 = 5 << 29;
 const Layers = struct { assign: ?Range = null, force: ?Range = null, parts: [max_parts]Part = @splat(.{}) };
 const Range = struct { start: u32, end: u32 };
 const Part = struct { lo: u32 = 0, width: u32 = 0, range: ?Range = null };
+/// Forced selects per net a native design may hold (`emit` refuses more).
 pub const max_parts = 4;
 
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
@@ -325,6 +334,7 @@ pub const activations = @hasDecl(@import("root"), "vera_activations");
 /// A contract device's root declares `vera_prebuilt_engine`: the engine's
 /// design-independent half is linked prebuilt (`engine.zig`).
 pub const prebuilt = @hasDecl(@import("root"), "vera_prebuilt_engine");
+/// The prebuilt-engine seam (`prebuilt`).
 pub const engine = @import("engine.zig");
 
 /// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
@@ -366,54 +376,63 @@ inline fn poke(comptime k: bool, v: [*]u64, x: [*]u64, off: u32, a: anytype, m: 
 /// storing it ends the phase. `s` is a `*State` or a `View`.
 pub fn Phase(comptime k: bool) type {
     return struct {
+        /// `State.get`; the x half is 0 in the 2-state phase.
         pub inline fn get(s: anytype, off: u32) W {
             var a = s.get(off);
             if (k) a.x = 0;
             return a;
         }
 
+        /// `State.getw`; the x half is 0 in the 2-state phase.
         pub inline fn getw(s: anytype, off: u32, comptime n: u32) logic.Wide(n) {
             var a = s.getw(off, n);
             if (k) a.x = @splat(0);
             return a;
         }
 
+        /// `State.set`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn set(s: anytype, off: u32, a: anytype, m: anytype) Error!void {
             if (!k) return s.set(off, a, m);
             try known(a, m);
             poke(true, planeV(s), undefined, off, a, m);
         }
 
+        /// `State.put`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn put(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
             if (k) try known(a, m);
             if (@TypeOf(a) != W) return s.store(slot, off, &a.v, &a.x, &m);
             return s.putWordAs(k, reach, slot, off, 0, a, m);
         }
 
-        /// `put` and `set` out of line, for code that runs once.
+        /// `put` out of line, for code that runs once.
         pub noinline fn putCold(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
             return put(s, reach, slot, off, a, m);
         }
 
+        /// `set` out of line.
         pub noinline fn setCold(s: *State, off: u32, a: anytype, m: anytype) Error!void {
             return set(s, off, a, m);
         }
 
+        /// `State.putWord`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn putWord(s: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
             if (k) try known(a, m);
             return s.putWordAs(k, reach, slot, off, j, a, m);
         }
 
+        /// `View.putNode`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn putNode(s: View, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
             if (k) try known(a, @as(@TypeOf(a.x), if (@TypeOf(a) == W) std.math.maxInt(u64) else @splat(std.math.maxInt(u64))));
             return s.putNodeAs(k, reach, slot, off, a, senses);
         }
 
+        /// `State.nba`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn nba(s: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
             if (k) try known(a, m);
             return @call(.always_inline, State.nba, .{ s, reach, slot, off, a, m });
         }
 
+        /// `State.nbaAfter`; `error.Rerun` on an x or z in the 2-state phase.
         pub inline fn nbaAfter(s: *State, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
             if (k) try known(a, m);
             return s.nbaAfter(reach, after, slot, off, a, m);
@@ -447,14 +466,17 @@ pub const View = struct {
     x: [*]u64,
     dirty: [*]u64,
 
+    /// `State.get` through the held pointers.
     pub inline fn get(self: View, off: u32) W {
         return peek(two, self.v, self.x, off);
     }
 
+    /// `State.getw` through the held pointers.
     pub inline fn getw(self: View, off: u32, comptime n: u32) logic.Wide(n) {
         return peekw(self.v, self.x, off, n);
     }
 
+    /// `State.set` through the held pointers.
     pub inline fn set(self: View, off: u32, a: anytype, m: anytype) void {
         poke(two, self.v, self.x, off, a, m);
     }
@@ -939,19 +961,27 @@ pub const State = struct {
         try self.wake(slot, before, logic.low(a));
     }
 
+    // The emitted code calls these as `s.<name>(...)`; each lives in the
+    // file that owns its data.
+
+    /// `snapshot.save`: this state as a tick boundary.
     pub const save = snapshot.save;
+    /// `snapshot.restore`: a tick boundary `save` wrote.
     pub const restore = snapshot.restore;
 
+    /// §7.9 the net-resolution entry points (`net.zig`).
     pub const drive = net.drive;
     pub const switchCtrl = net.switchCtrl;
-    pub const portsSelect = evcd.select;
-    pub const portsControl = evcd.control;
     pub const gate = net.gate;
     pub const udp = net.udp;
     pub const mos = net.mos;
     pub const bridge = net.bridge;
     pub const pull = net.pull;
     pub const resolve = net.resolve;
+
+    /// §18.3 `$dumpports` selection and control (`evcd.zig`).
+    pub const portsSelect = evcd.select;
+    pub const portsControl = evcd.control;
 
     /// `put` of the bits `m` of an `n`-word value at runtime width.
     pub fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
@@ -1625,6 +1655,8 @@ pub const State = struct {
         return system.fileScan(a, system.own, if (self.quiet) null else descriptor, try chars(a, format, fw), outs);
     }
 
+    /// `system.finishFileScan` of a `scanFile`: the file position follows
+    /// what the scan consumed.
     pub fn finishFileScan(self: *const State, file: system.FileScan, sc: system.Scan) void {
         if (self.quiet) return;
         _ = system.finishFileScan(system.own, file, sc);

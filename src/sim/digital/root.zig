@@ -49,8 +49,12 @@ const TimeFormat = display.TimeFormat;
 
 // ---- the public surface -----------------------------------------------------
 
+/// `DigitalFailed`: a diagnostic is already in the `bag` (E1100 by default,
+/// or the rule's own code through `Run.failWith`); the run stops there.
+/// `WriteFailed`: the transcript writer `out` failed.
 pub const Error = error{DigitalFailed} || std.mem.Allocator.Error || std.Io.Writer.Error;
 
+/// How `run`, `elaborate` and `emitDevice` read the source.
 pub const Options = struct {
     file_name: []const u8 = "<digital>",
     include_dirs: []const []const u8 = &.{},
@@ -106,6 +110,8 @@ pub const UserSystf = struct {
     call: *const fn (r: *Run, scope: u32, tok: u32, result: ?Int.Literal) Error!void,
 };
 
+/// A registered PLI name: a task, or a function and the type its call
+/// returns (§20.3's sized function).
 pub const UserKind = union(enum) { task, func: Type };
 
 /// One more source file and the library it maps into (`vera --libmap`).
@@ -236,6 +242,15 @@ pub const max_events_per_tick: u64 = 10_000_000;
 /// (§8.5.3.7) by payload.
 pub const analog_payload: u32 = std.math.maxInt(u32);
 
+/// One elaborated design and its whole simulation state: the slot space
+/// every variable, net and array element lives in (`values`), the nets and
+/// their drivers, the compiled processes (`code`), the waiters, and the
+/// scheduler. Everything is allocated from `arena`, which must outlive the
+/// `Run`; nothing is freed before the arena is. Made only by `elaborate`.
+///
+/// A `Run` is one thread's: `scope`, `pc` and `ctx` are the executing
+/// process's registers, so a caller outside the engine (the VPI, the mixed
+/// coordinator) saves and restores `scope` around anything it evaluates.
 pub const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
@@ -649,6 +664,8 @@ pub const Run = struct {
         for (m.analog) |ab| try (W{ .r = r, .named = named }).stmt(ab.body);
     }
 
+    /// The slot whose waiters monitor `e` of instance `scope` wakes, or null
+    /// when that event is not monitored. O(monitors).
     pub fn monitorSlot(r: *const Run, e: Ast.ExprId, scope: u32) ?u32 {
         for (r.monitors.items) |m| if (m.expr == e and m.scope == scope) return m.slot;
         return null;
@@ -831,6 +848,8 @@ pub const Run = struct {
         return &self.net_cold.items[n.cold];
     }
 
+    /// Adds an E1100 diagnostic at token `tok` (clamped to the last token)
+    /// and returns `error.DigitalFailed` for the caller to propagate.
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         return self.failWith(.E1100, tok, fmt, args);
     }
@@ -840,6 +859,7 @@ pub const Run = struct {
         self.bag.add(.lower, code, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
         return error.DigitalFailed;
     }
+    /// `fail` at expression `e`'s main token, with a fixed message.
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }
@@ -878,13 +898,17 @@ pub const Run = struct {
         return .{ .width = self.values[at].width, .signed = self.values[at].signed };
     }
 
+    /// A value a VPI application reads: a real's double, else the 4-state bits.
+    pub const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
+
     /// IEEE 1364-2005 §26.6.19(e): evaluate a retained VPI expression in
     /// its original scope, when its value is requested. Arguments to user
     /// systfs can denote non-values (scopes, arrays, named events), so their
     /// value typing is deferred until this request too. Function bodies
     /// were compiled during elaboration; `checkExpr` prepares the call and
     /// its operands without executing them. The result's storage is `a`'s.
-    pub const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
+    /// The scope is the one `vpi_expr_scopes` recorded for (`instance`,
+    /// `e`), else `instance`; `scope` is restored on return.
     pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!VpiValue {
         const saved = self.scope;
         defer self.scope = saved;
@@ -1169,12 +1193,11 @@ fn pickTops(r: *Run, modules: []const Ast.ModuleDecl) Error![]const u32 {
     return tops.items;
 }
 
-/// Is `scope` a top-level module's instance? The first is scope 0; every
-/// other is its own parent.
 /// A defparam path relative to a scope, spelled as `Ast.Defparam.path` is.
 pub const PathKey = struct {
     scope: u32,
     path: []const u8,
+    /// Hashes and compares the path's bytes, not its pointer.
     pub const Ctx = struct {
         pub fn hash(_: Ctx, k: PathKey) u64 {
             return std.hash.Wyhash.hash(k.scope, k.path);
@@ -1256,6 +1279,8 @@ fn checkDefparams(r: *Run) Error!void {
     }
 }
 
+/// Is `scope` a top-level module's instance? The first is scope 0; every
+/// other is its own parent.
 pub fn isRoot(r: *const Run, scope: u32) bool {
     return scope == 0 or r.scope_info.items[scope].parent == scope;
 }
@@ -2384,6 +2409,8 @@ fn continuous(file: *const Ast.SourceFile, name: Ast.StrId) bool {
     return false;
 }
 
+/// The next scope id. The caller appends its `scope_info` row, which must be
+/// row `id` (ids are dense, root 0). Fails at 2^32 - 1 scopes.
 pub fn newScope(r: *Run, tok: u32) Error!u32 {
     r.scopes += 1;
     if (r.scopes == std.math.maxInt(u32)) return r.fail(tok, "too many digital instances", .{});
@@ -2515,7 +2542,11 @@ pub const Overrides = struct {
     /// holding its own bits.
     parts: std.ArrayList(PartForce) = .empty,
 };
+/// One `force` of a constant select (§9.3.2): the bits it holds and the
+/// process maintaining them.
 pub const PartForce = struct { bits: compile.Bits, range: PcRange };
+/// A half-open range of `Run.code` pcs, `[start, end)`: one process body.
+/// Empty for a VPI force, which no process maintains (`exec.forceValue`).
 pub const PcRange = struct { start: u32, end: u32 };
 
 /// One activation's storage: a scope, a slot per formal, the result slot of
@@ -3344,16 +3375,20 @@ pub const SlotNets = struct {
 
     const none = std.math.maxInt(u32);
 
+    /// The net slot `slot` is, or null for a variable's slot.
     pub fn get(self: *const SlotNets, slot: u32) ?u32 {
         if (slot >= self.of.items.len) return null;
         const net = self.of.items[slot];
         return if (net == none) null else net;
     }
 
+    /// Is slot `slot` a net's?
     pub fn contains(self: *const SlotNets, slot: u32) bool {
         return self.get(slot) != null;
     }
 
+    /// Records that `slot` is net `net`, growing the table to `slot + 1`
+    /// rows from `arena`. Asserts `net` is not the reserved maxInt(u32).
     pub fn put(self: *SlotNets, arena: std.mem.Allocator, slot: u32, net: u32) Error!void {
         std.debug.assert(net != none);
         const len = self.of.items.len;
@@ -3385,6 +3420,8 @@ test {
     _ = @import("driver.zig");
 }
 
+/// Test helper: runs `source` and expects its transcript to be `expected`
+/// exactly; on a refusal prints the rendered diagnostics, then fails.
 pub fn expectRun(source: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -3893,6 +3930,8 @@ test "§7.8 pullup and pulldown are drivers at the strength of their own side" {
     , "1011\n");
 }
 
+/// Test helper: expects `source` to fail before printing anything, with a
+/// rendered diagnostic containing `message`.
 pub fn expectRejected(source: []const u8, message: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

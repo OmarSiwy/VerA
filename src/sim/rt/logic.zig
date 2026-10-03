@@ -134,6 +134,7 @@ pub fn mask(comptime w: u32) u64 {
     return if (w == 64) std.math.maxInt(u64) else (@as(u64, 1) << w) - 1;
 }
 
+/// A `W` from its two planes; the caller keeps bits above the width 0.
 pub inline fn k(v: u64, x: u64) W {
     return .{ .v = v, .x = x };
 }
@@ -187,6 +188,7 @@ pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
     return rs(W{ .v = n & 1, .x = n >> 1 }, 1, w, sign);
 }
 
+/// §5.1.10 Table 5-16 `~`: x and z bits invert to x.
 pub inline fn not(a: anytype, comptime w: u32) T(w) {
     if (w <= 64) return .{ .v = (~a.v | a.x) & mask(w), .x = a.x };
     const V = @Vector(words(w), u64);
@@ -214,8 +216,11 @@ fn negWide(comptime w: u32, a: T(w)) T(w) {
     return orX(w, r, anyX(a));
 }
 
+/// §5.1.10's binary bitwise operators, Tables 5-12 to 5-15.
 pub const Bitwise = enum { @"and", @"or", xor, xnor };
 
+/// `a op b` per bit (§5.1.10): a known 0 decides `&`, a known 1 decides
+/// `|`, and any unknown bit makes `^`/`~^` x. Both operands already `w` wide.
 pub inline fn bitwise(comptime op: Bitwise, a: anytype, b: @TypeOf(a), comptime w: u32) T(w) {
     if (w > 64) {
         var o: T(w) = undefined;
@@ -246,6 +251,7 @@ fn sext(v: u64, comptime w: u32) u64 {
     return v | (~mask(w) & (0 -% ((v >> (w - 1)) & 1)));
 }
 
+/// §5.1.5's binary arithmetic operators but `**` (`pow`).
 pub const Arith = enum { add, sub, mul, div, mod };
 
 /// `Literal.arithmetic` at one word: any unknown bit, and `/` or `%` by 0,
@@ -340,6 +346,7 @@ pub fn pow(a: anytype, comptime w: u32, comptime signed: bool, e: anytype, compt
     return .{ .v = result & m, .x = 0 };
 }
 
+/// §5.1.12's four shift operators.
 pub const Shift = enum { left, right, arithmetic_left, arithmetic_right };
 
 /// `Literal.shift`: an unknown amount is all x; an amount of at least the
@@ -400,6 +407,7 @@ fn wideFull(comptime w: u32) [words(w)]u64 {
     return m;
 }
 
+/// §5.1.7's four relational operators.
 pub const Relational = enum { lt, le, gt, ge };
 
 /// Any unknown bit makes the relation x (§5.1.7).
@@ -443,6 +451,7 @@ fn relWide(comptime op: Relational, comptime w: u32, comptime signed: bool, a: T
     }) .one else .zero;
 }
 
+/// §5.1.8: logical (`==`, `!=`) and case (`===`, `!==`) equality.
 pub const Equality = enum { eq, neq, case_eq, case_neq };
 
 /// Both operands already in their common type (§5.1.8).
@@ -465,8 +474,11 @@ pub inline fn eq(comptime op: Equality, a: anytype, b: @TypeOf(a)) Bit {
     return if (op == .neq or op == .case_neq) invert(r) else r;
 }
 
+/// §5.1.11's six reduction operators.
 pub const Reduction = enum { @"and", nand, @"or", nor, xor, xnor };
 
+/// §5.1.11 Tables 5-17 to 5-19: one bit from every bit of the `w`-bit `a`; a
+/// decisive known bit wins over x and z, else any unknown bit is x.
 pub inline fn reduce(comptime op: Reduction, a: anytype, comptime w: u32) Bit {
     var zeros: u64 = 0;
     var known1: u64 = 0;
@@ -502,6 +514,7 @@ pub inline fn truth(a: anytype) Bit {
     return if (known1 != 0) .one else if (unknown != 0) .x else .zero;
 }
 
+/// §5.1.9 `!` of one truth: x and z are x.
 pub inline fn invert(b: Bit) Bit {
     return switch (b) {
         .zero => .one,
@@ -510,6 +523,7 @@ pub inline fn invert(b: Bit) Bit {
     };
 }
 
+/// §5.1.9's binary logical operators `&&` and `||`.
 pub const Logical = enum { @"and", @"or" };
 
 /// `Literal.logical` of two one-bit truths.
@@ -763,6 +777,7 @@ pub inline fn clog2(a: anytype, comptime w: u32) u64 {
     return if (a.v & (a.v - 1) == 0) length - 1 else length;
 }
 
+/// §9.5 `case` and §9.5.1's `casez` and `casex`.
 pub const CaseKind = enum { normal, casez, casex };
 
 /// §9.5 / §9.5.1: `case` is `===`; casez/casex skip z (and x) bits of

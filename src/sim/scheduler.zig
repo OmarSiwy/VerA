@@ -12,6 +12,9 @@ pub const Time = u64;
 /// pseudocode reverses these two. We follow the explicit normative ordering;
 /// docs/ch8-scheduling.html carries an editorial note on the discrepancy.
 pub const Region = enum(u3) { active, explicit_d2a, inactive, nba, analog, monitor };
+/// The region a future event lands in when its time comes: §8.5.1 lets only
+/// `#d` resumptions (inactive) and delayed nonblocking updates (nba) wait
+/// for a later time.
 pub const FutureKind = enum(u1) {
     inactive,
     nba,
@@ -25,7 +28,12 @@ pub const FutureKind = enum(u1) {
 };
 
 const SlotId = enum(u32) { none = std.math.maxInt(u32), _ };
+/// One scheduled event, for `cancel` and `payloadOf`. Stale once its event
+/// dispatches or is cancelled: the generation no longer matches, so a stale
+/// handle cancels nothing and never aliases the slot's next event.
 pub const Handle = struct { slot: SlotId, generation: u32 };
+/// One dispatched event as `next` returns it: `time` is `now`, `payload`
+/// the caller's row, and `handle` already stale.
 pub const Event = struct { time: Time, region: Region, payload: u32, handle: Handle };
 /// One live event as `Scheduler.pendingPayloads` reports it.
 pub const Live = struct { time: Time, payload: u32 };
@@ -52,8 +60,13 @@ const Future = struct {
     }
 };
 
+/// The event queue of one simulation: a FIFO per current-time region plus a
+/// heap of future events, over one pool of slots (`slots`) that a `Handle`
+/// names. Capacity: 2^32 - 1 slots, the most events pending at once
+/// (`error.TooManyEvents` beyond). Owns its memory, from `allocator`.
 pub const Scheduler = struct {
     allocator: std.mem.Allocator,
+    /// The current simulation time; only `nextUntil` advances it.
     now: Time = 0,
     slots: std.MultiArrayList(Slot) = .empty,
     heads: [6]SlotId = @splat(.none),
@@ -63,6 +76,13 @@ pub const Scheduler = struct {
     sequence: u64 = 0,
     phase: union(enum) { idle, dispatch: Region, stopped } = .idle,
 
+    /// `TooManyEvents`: 2^32 - 1 slots are live. `SequenceOverflow`: 2^64
+    /// future events were ever scheduled, so FIFO order among equal times can
+    /// no longer be kept. `TimeOverflow`: `now + delay` passes 2^64 - 1.
+    /// `TimeInPast`: an absolute time before `now`. `MonitorMutation`: a
+    /// schedule or cancel while a monitor-region event is being dispatched,
+    /// which reads the settled step and must not change it. `Stopped`: after
+    /// `finish`.
     pub const Error = std.mem.Allocator.Error || error{
         TooManyEvents,
         SequenceOverflow,
@@ -72,10 +92,12 @@ pub const Scheduler = struct {
         Stopped,
     };
 
+    /// An empty queue at time 0. Allocates nothing until the first event.
     pub fn init(allocator: std.mem.Allocator) Scheduler {
         return .{ .allocator = allocator };
     }
 
+    /// Frees every slot and heap entry; invalidates every `Handle`.
     pub fn deinit(self: *Scheduler) void {
         self.slots.deinit(self.allocator);
         self.future.deinit(self.allocator);
@@ -105,6 +127,7 @@ pub const Scheduler = struct {
         return handle;
     }
 
+    /// `scheduleAt(now + delay)`; `TimeOverflow` when that sum passes 2^64 - 1.
     pub fn scheduleAfter(self: *Scheduler, delay: Time, kind: FutureKind, payload: u32) Error!Handle {
         try self.checkMutation();
         const time = std.math.add(Time, self.now, delay) catch return error.TimeOverflow;
