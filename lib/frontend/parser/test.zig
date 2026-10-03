@@ -1355,7 +1355,7 @@ test "Annex A text the parser used to take is refused by its production; the nei
     try std.testing.expectEqual(diag.Code.E0289, call.code(0));
 }
 
-test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49)" {
+test "an attribute instance before an item list's closer prefixes nothing: E0207 in every list (#49, #50)" {
     // §2.9: an attribute_instance is "a prefix attached to a declaration, a
     // module item, a statement, or a port connection". Each bad source puts
     // one where its list closes; the good one has it prefix the item before.
@@ -1363,20 +1363,24 @@ test "an attribute instance before an item list's closer prefixes nothing: E0207
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const head = "module m(p); inout p; electrical p; ";
-    const cases = [_]struct { bad: []const u8, good: []const u8 }{
+    const cases = [_]struct { bad: []const u8, good: []const u8, digital: bool = false }{
         .{ .bad = head ++ "analog I(p) <+ V(p); (* a *) endmodule", .good = head ++ "(* a *) analog I(p) <+ V(p); endmodule" },
         .{ .bad = head ++ "if (1) begin analog I(p) <+ V(p); (* a *) end endmodule", .good = head ++ "if (1) begin (* a *) analog I(p) <+ V(p); end endmodule" },
         .{ .bad = head ++ "generate analog I(p) <+ V(p); (* a *) endgenerate endmodule", .good = head ++ "generate (* a *) analog I(p) <+ V(p); endgenerate endmodule" },
         .{ .bad = head ++ "analog function real f; input x; real x; (* a *) endfunction analog I(p) <+ V(p); endmodule", .good = head ++ "analog function real f; input x; (* a *) real x; f = x; endfunction analog I(p) <+ V(p); endmodule" },
         .{ .bad = head ++ "parameter real r = 1; analog I(p) <+ r * V(p); endmodule paramset ps m; parameter real q = 2; .r = q; (* a *) endparamset", .good = head ++ "parameter real r = 1; analog I(p) <+ r * V(p); endmodule paramset ps m; (* a *) parameter real q = 2; .r = q; endparamset" },
         .{ .bad = head ++ "analog I(p) <+ V(p); endmodule (* a *)", .good = "(* a *) " ++ head ++ "analog I(p) <+ V(p); endmodule" },
+        // #50: a digital function or task body, as `vera --run` parses it.
+        // The good source's attribute prefixes the body's first statement.
+        .{ .bad = "module m; function integer f(input x); (* a *) endfunction endmodule", .good = "module m; function integer f(input x); (* a *) f = x; endfunction endmodule", .digital = true },
+        .{ .bad = "module m; task t; input x; (* a *) endtask endmodule", .good = "module m; task t; input x; (* a *) $display(x); endtask endmodule", .digital = true },
     };
     for (cases) |c| {
-        const bad = try parseForTest(arena, c.bad);
+        const bad = if (c.digital) try parseDigitalForTest(arena, c.bad) else try parseForTest(arena, c.bad);
         var e0207 = false;
         for (0..bad.count()) |i| e0207 = e0207 or bad.code(i) == .E0207;
         try std.testing.expect(e0207);
-        const good = try parseForTest(arena, c.good);
+        const good = if (c.digital) try parseDigitalForTest(arena, c.good) else try parseForTest(arena, c.good);
         for (0..good.count()) |i| try std.testing.expect(good.bag.at(i).severity != .err);
     }
 }

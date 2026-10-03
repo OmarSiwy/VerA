@@ -335,7 +335,15 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
                 }
                 _ = try self.expect(.semicolon);
             },
-            else => break, // else: the first token that declares nothing begins the body
+            else => { // else: the first token that declares nothing begins the body
+                // A.2.6/A.2.7 make the body one `statement`, so a closer here
+                // means the prefix just read attaches to nothing (#50). A
+                // prefix on the first statement stays read: `parseStmt`
+                // binds it to the statement at the cursor.
+                if (self.peek() == .eof or self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word))
+                    try self.attributesEnd(item_at);
+                break;
+            },
         }
     }
     var body: std.ArrayList(Ast.StmtId) = .empty;
