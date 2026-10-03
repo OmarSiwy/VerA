@@ -90,7 +90,9 @@ pub fn planSetup(self: *Gen) Error!void {
     }
     self.plan.su_idx = self.su.idx;
     self.plan.su_on = true;
-    const root = try a.alloc(bool, nv);
+    // `root` and `same` are scratch of this pass: on the gpa, freed on return.
+    const root = try self.gpa.alloc(bool, nv);
+    defer self.gpa.free(root);
     @memset(root, false);
     if (self.core.lo_vals.len != 0) {
         self.plan.display_unit = false;
@@ -110,6 +112,7 @@ pub fn planSetup(self: *Gen) Error!void {
     }
     @memset(self.su.idx, none_u32);
     const same = try valueNumbers(self);
+    defer self.gpa.free(same);
     var vals: std.ArrayList(Mir.Value) = .empty;
     var n: [3]u32 = @splat(0);
     for (0..3) |group| {
@@ -143,13 +146,18 @@ fn rootGroup(self: *const Gen, v: Mir.Value) u2 {
 /// same operands, placed so `setup` has it wherever it has this one (itself
 /// if none). Lowering does not number values, so a card expression written
 /// twice would otherwise be two roots. `x != 0` over a 0/1 flag `x` is `x`.
+/// Caller owns the returned slice and frees it with `self.gpa`.
 fn valueNumbers(self: *Gen) Error![]Mir.Value {
     const Opnd = struct { tag: enum(u8) { none, val, f, i, param }, x: u64 };
     const Key = struct { op: Mir.Opcode, a: Opnd, b: Opnd, c: Opnd };
     const nv = self.an.nv;
-    const same = try self.arena.alloc(Mir.Value, nv);
+    const same = try self.gpa.alloc(Mir.Value, nv);
+    errdefer self.gpa.free(same);
     for (same, 0..) |*r, i| r.* = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+    // Scratch for this pass alone: on the gpa and freed on return, so its
+    // doublings do not stay in the compilation arena.
     var seen: std.AutoHashMapUnmanaged(Key, Mir.Value) = .empty;
+    defer seen.deinit(self.gpa);
     const opnd = struct {
         fn f(g: *Gen, sm: []const Mir.Value, raw: u32) ?Opnd {
             const v = g.an.rv(@fromBackingInt(@intCast(raw)));
@@ -188,7 +196,7 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
                 continue;
             }
         }
-        const gop = try seen.getOrPut(self.arena, key);
+        const gop = try seen.getOrPut(self.gpa, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = v;
         } else if (placedOver(self, gop.value_ptr.*, v)) same[i] = gop.value_ptr.*;
@@ -370,7 +378,13 @@ pub fn emitSetup(self: *Gen) Error!void {
     std.debug.assert(self.fatal == null);
     if (self.out.items.len - at_doc < setup_chunk.chunk_bytes) return;
     // A large `setup` becomes chunks a split build compiles in parallel.
-    const c = try setup_chunk.chunk(self.arena, self.out.items[at_doc..], setup_chunk.chunk_bytes) orelse return;
+    // The split is a text transform whose working copies (several times the
+    // body: psp103's 1 MiB `setup` churns ~7 MiB) die once `c.text` is
+    // copied into `out`, so they live in an arena of this call, not the
+    // compilation's.
+    var scratch: std.heap.ArenaAllocator = .init(self.gpa);
+    defer scratch.deinit();
+    const c = try setup_chunk.chunk(scratch.allocator(), self.out.items[at_doc..], setup_chunk.chunk_bytes) orelse return;
     self.out.shrinkRetainingCapacity(at_doc);
     try self.out.appendSlice(self.gpa, c.text);
     self.su.chunks = c.n;
