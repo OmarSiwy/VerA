@@ -9,13 +9,22 @@ pub const Error = error{ MissingBase, MissingDigits, DigitOutOfRange, ZeroSize, 
 
 /// One four-state bit; the integer is `value | unknown << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
+/// How `Literal.resize` fills the bits it adds: with zero, or with copies of
+/// the top bit (X and Z included), IEEE 1364-2005 §5.5.
 pub const Extension = enum(u1) { zero, sign };
+/// IEEE 1364-2005 §5.1.10's `&`, `|`, `^` and `~^`, for `Literal.bitwise`.
 pub const Bitwise = enum(u2) { and_bits, or_bits, xor_bits, xnor_bits };
+/// IEEE 1364-2005 §5.1.9's `&&` and `||`, for `Literal.logical`.
 pub const Logical = enum(u1) { and_bits, or_bits };
+/// IEEE 1364-2005 §5.1.11's six reductions, for `Literal.reduce`.
 pub const Reduction = enum(u3) { and_bits, nand_bits, or_bits, nor_bits, xor_bits, xnor_bits };
+/// IEEE 1364-2005 §5.1.8's `==`, `!=`, `===` and `!==`, for `Literal.equality`.
 pub const Equality = enum(u2) { equal, not_equal, case_equal, case_not_equal };
+/// IEEE 1364-2005 §5.1.12's `<<`, `>>`, `<<<` and `>>>`, for `Literal.shift`.
 pub const Shift = enum(u2) { left, right, arithmetic_left, arithmetic_right };
+/// IEEE 1364-2005 §5.1.7's four relations, for `Literal.relational`.
 pub const Relational = enum(u2) { less, less_equal, greater, greater_equal };
+/// IEEE 1364-2005 §5.1.5's binary arithmetic, for `Literal.arithmetic`.
 pub const Arithmetic = enum(u3) { add, subtract, multiply, divide, remainder };
 
 /// A four-state integer of any width. Both planes are one allocation, owned by
@@ -36,6 +45,7 @@ pub const Literal = struct {
     pub fn unknowns(self: Literal) []u64 {
         return self.planes[self.planes.len / 2 ..];
     }
+    /// Returns whether any bit is X or Z.
     pub fn hasUnknown(self: Literal) bool {
         return !std.mem.allEqual(u64, self.unknowns(), 0);
     }
@@ -632,9 +642,6 @@ fn mask(width: u32) u64 {
 /// a literal allocates stay at 4 MiB.
 pub const max_width: u32 = 1 << 24;
 
-/// Parses one §2.6.1 number token (size, `'`, optional `s`, base, digits;
-/// white space allowed around the base) into a `Literal` allocated from
-/// `arena`. A sized value wider than its size is truncated from the left.
 /// §2.6.1 the radix `text`'s base format names: 2, 8, 10 or 16, and 10 for
 /// a literal without one. `text` is one `parse` accepted.
 pub fn radixOf(text: []const u8) u8 {
@@ -650,6 +657,11 @@ pub fn radixOf(text: []const u8) u8 {
     };
 }
 
+/// Parses one §2.6.1 number token (size, `'`, optional `s`, base, digits;
+/// white space allowed around the base) into a `Literal` whose planes are
+/// allocated from `arena`; the caller owns them. A sized value wider than its
+/// size is truncated from the left. An unsized literal is at least 64 bits
+/// wide and, when it has no X or Z digit, only as wide as its value needs.
 pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Allocator.Error)!Literal {
     var digits = text;
     var radix: u8 = 10;

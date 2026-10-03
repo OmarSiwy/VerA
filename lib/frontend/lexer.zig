@@ -471,6 +471,11 @@ pub const IntLiteral = struct {
     radix: u8 = 10,
 };
 
+// Budget: 16 bytes, one per `.int_literal` row (4,750 on hisimhv_va).
+comptime {
+    std.debug.assert(@sizeOf(IntLiteral) == 16);
+}
+
 /// Decodes a `.real_literal`'s text (LRM §2.6.2). Strips `_` and rewrites a
 /// Table 2-1 scale factor into an exponent, so IEEE-754 rounding happens once.
 /// Fails with `LiteralTooLong` past the 512-byte decode buffer.
