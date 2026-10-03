@@ -1151,6 +1151,271 @@ SUBCOMMANDS["comments"] = comments
 
 
 # ---------------------------------------------------------------------------
+# verilator: a second engine on the same .v designs
+# ---------------------------------------------------------------------------
+
+# N 32-bit Fibonacci LFSRs in a chain, scaled by substituting N and CYCLES.
+LFSR_CHAIN = """\
+// N 32-bit Fibonacci LFSRs in a chain, each stage XORing in its predecessor's
+// previous value, clocked for CYCLES rising edges. One checksum line.
+module lfsr_chain;
+  parameter N = 64;
+  parameter CYCLES = 1000;
+  reg clk;
+  reg [31:0] r [0:N-1];
+  reg [31:0] prev, t, sum;
+  integer i;
+  always @(posedge clk) begin
+    prev = 32'hACE1;
+    for (i = 0; i < N; i = i + 1) begin
+      t = r[i];
+      r[i] <= {t[30:0], t[31] ^ t[21] ^ t[1] ^ t[0]} ^ prev;
+      prev = t;
+    end
+  end
+  initial begin
+    for (i = 0; i < N; i = i + 1) r[i] = i + 1;
+    clk = 0;
+    repeat (2 * CYCLES) #1 clk = ~clk;
+    #1 sum = 0;
+    for (i = 0; i < N; i = i + 1) sum = sum ^ r[i];
+    $display("lfsr_chain N=%0d CYCLES=%0d checksum=%h", N, CYCLES, sum);
+    $finish(0);
+  end
+endmodule
+"""
+
+
+def ripple_adder(width, vectors, gates=False):
+    """A `width`-bit ripple-carry adder of full-adder instances on scalar nets,
+    so each vector ripples through `width` carry events, fed `vectors` LFSR
+    operand pairs. One checksum line. Generated because VerA's digital path
+    assigns whole nets only. `gates`: each full adder is five §7 gate
+    primitives instead of two assigns, with the same checksum."""
+    out = ["module fa(a, b, ci, s, co);\n  input a, b, ci;\n  output s, co;"]
+    if gates:
+        out.append("  wire p, g, t;\n  xor x1(p, a, b), x2(s, p, ci);\n  and a1(g, a, b), a2(t, ci, p);\n  or o1(co, g, t);\nendmodule\n")
+    else:
+        out.append("  assign s = a ^ b ^ ci;\n  assign co = (a & b) | (ci & (a ^ b));\nendmodule\n")
+    out.append(f"module ripple_adder;\n  reg [{width - 1}:0] a, b;\n  reg [31:0] x, sum;\n  integer i, k;\n  wire c0 = 1'b0;")
+    text = "\n".join(out) + "\n"
+    for g in range(width):
+        text += f"  wire s{g}, c{g + 1};\n  fa f{g}(a[{g}], b[{g}], c{g}, s{g}, c{g + 1});\n"
+    text += "  wire [31:0] lo = {" + ", ".join(f"s{g % width}" for g in range(31, -1, -1)) + "};\n"
+    text += "\n".join([
+        f"  initial begin\n    x = 32'hACE1;\n    sum = 0;\n    for (i = 0; i < {vectors}; i = i + 1) begin",
+        f"      for (k = 0; k < {width}; k = k + 1) begin\n        x = {{x[30:0], x[31] ^ x[21] ^ x[1] ^ x[0]}};\n        a[k] = x[0];\n        b[k] = x[7];\n      end",
+        f"      #1 sum = {{sum[30:0], sum[31]}} ^ lo ^ c{width};\n    end",
+        f"    $display(\"ripple_adder W={width} VECTORS={vectors} checksum=%h\", sum);\n    $finish(0);\n  end\nendmodule",
+    ]) + "\n"
+    return text
+
+
+def without_report(data):
+    """`grep -v '^- '`: Verilator's report lines dropped, every line ended."""
+    lines = data.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    return b"".join(l + b"\n" for l in lines if not l.startswith(b"- "))
+
+
+def verilator_oracle(work):
+    """Verilator over every tests/fixtures/ieee1364 .v, one row each, into
+    tests/fixtures/ieee1364/VERILATOR.tsv. VerA is not run; its answer is the
+    committed transcript `zig build test-1364` already holds it to. A row that
+    disagrees is data for a reader, never a reason to edit the fixture."""
+    import concurrent.futures
+    import shutil
+
+    def oracle(f):
+        n = f.removeprefix("tests/fixtures/ieee1364/")
+        d = work / f.replace("/", "_")
+        expected = ROOT / (f[:-2] + ".expected.txt")
+        shutil.copytree(ROOT / os.path.dirname(f), d, dirs_exist_ok=True)  # `$readmem`/`$fopen` paths are relative
+        source = (ROOT / f).read_text(errors="replace")
+        if re.search(r"(?m)^\s*(// digital-runner: reject|//! reject)", source):
+            expect = "reject"
+        elif expected.is_file():
+            expect = "transcript"
+        else:
+            expect = "other"
+        acc, rc, agrees, note = "refuses", "-", "-", ""
+        build = subprocess.run(["verilator", "--binary", "--timing", "-j", "2", "-Wno-fatal", "-Wno-lint", "-Wno-style",
+                                "--Mdir", str(d / "obj"), "-o", "sim", f], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        (d / "build.log").write_bytes(build.stdout)
+        if build.returncode == 0:
+            acc = "accepts"
+            with open(d / "out.txt", "wb") as out, open(d / "err.txt", "wb") as err:
+                try:
+                    code = subprocess.run(["./obj/sim"], cwd=d, stdout=out, stderr=err, timeout=60).returncode
+                    rc = str(code if code >= 0 else 128 - code)
+                except subprocess.TimeoutExpired:
+                    rc = "124"
+        else:
+            first_error = next((l for l in build.stdout.split(b"\n") if b"%Error" in l), b"")
+            first_error = first_error.replace(str(ROOT).encode() + b"/", b"", 1).replace(b"\t", b" ")
+            note = first_error[:160].decode(errors="replace")
+        if expect == "reject":
+            if acc == "refuses" or rc != "0":
+                agrees = "yes"
+            else:
+                agrees, note = "no", "accepts and exits 0"
+        elif expect == "transcript":
+            if acc == "accepts" and rc == "0" and without_report((d / "out.txt").read_bytes()) == expected.read_bytes():
+                agrees = "yes"
+            else:
+                agrees = "no"
+                if acc == "accepts":
+                    note = "timeout" if rc == "124" else f"exit {rc}"
+                    if rc == "0":
+                        note = "stdout differs"
+                    if re.search(rb"(?m)(^|[^A-Za-z0-9_])[01_]*[xXzZ][01xXzZ_]*($|[^A-Za-z0-9_])", expected.read_bytes()):
+                        note += "; golden shows x/z"
+        return f"{n}\t{expect}\t{acc}\t{rc}\t{agrees}\t{note}\n"
+
+    fixtures = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "tests/fixtures/ieee1364").rglob("*.v"))
+    with concurrent.futures.ThreadPoolExecutor(12) as pool:
+        rows = list(pool.map(oracle, fixtures))
+    # `sort`, not `sorted`: the committed file is in the locale's collation.
+    rows = subprocess.run(["sort"], input="".join(rows), capture_output=True, text=True).stdout
+    version = subprocess.run(["verilator", "--version"], capture_output=True, text=True).stdout.rstrip("\n")
+    out = ROOT / "tests/fixtures/ieee1364/VERILATOR.tsv"
+    out.write_text(
+        f"# {version} — `verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style`,\n"
+        "# written by `tools/conformance.py verilator --oracle`. agrees: a transcript fixture's stdout\n"
+        "# (Verilator's `- ` report lines dropped) equals its .expected.txt, a reject fixture is\n"
+        "# refused at build or exits nonzero. Verilator is 2-state by default, so a golden\n"
+        "# showing x/z is expected to differ. Disagreements are listed, never resolved.\n"
+        "fixture\texpect\tverilator\texit\tagrees\tnote\n" + rows)
+    agree = sum(1 for r in rows.splitlines() if r.split("\t")[4] == "yes")
+    judged = sum(1 for r in rows.splitlines() if r.split("\t")[4] in ("yes", "no"))
+    print("verilator: %d / %d fixtures agree (%.1f%%) -> %s" % (agree, judged, 100 * agree / judged, out.relative_to(ROOT)),
+          file=sys.stderr)
+    return 0
+
+
+def verilator_table(work, vera):
+    """VerA against Verilator on six self-contained digital fixtures plus the
+    scalable LFSR chain and ripple adder (twice: assigns, then gate primitives).
+    Three engines per design, one Markdown row:
+      interp     `vera --run`: parse + elaborate + interpret, one process
+      native     `vera --emit-exe --optimize=ReleaseFast --zig-backend=llvm`
+                 (the default --schedule=static; SCHEDULE=fifo for the other;
+                 the default --state=auto), built in a cold cache, then the
+                 executable run. A design the emitter refuses embeds the
+                 interpreter; its row says `(interp)`. `state` is what auto
+                 ran: `2 @t` (2-state from tick t), `rerun` (then 4-state
+                 again), `4` (never left 4-state), `4: <why>` (built 4-state)
+      verilator  `verilator --binary -j 0`, then obj/sim
+    Wall time and peak RSS of each build and run (GNU time), executable bytes
+    as built (not stripped), and whether all three stdouts agree (Verilator's
+    `- ` report lines dropped). The column a reader wants for conformance is
+    the last one; the times mean nothing unless vera is -Doptimize=ReleaseFast."""
+    designs = [f"tests/fixtures/ieee1364/{f}.v" for f in (
+        "05_expressions/audit_expr_signed_boundaries", "10_tasks_functions/audit_function_return_variable",
+        "17_system_tasks/audit_ieee_math_clog2_unsigned", "04_data_types/audit_type_multidimensional_array",
+        "10_tasks_functions/d04_09_task_argument_passing", "17_system_tasks/d09_01_display_radix")]
+    for n, c in ((64, 1000), (1024, 10000)):
+        f = work / f"lfsr_chain_{n}x{c}.v"
+        f.write_text(LFSR_CHAIN.replace("N = 64;", f"N = {n};", 1).replace("CYCLES = 1000;", f"CYCLES = {c};", 1))
+        designs.append(str(f))
+    for wd, v in ((64, 1000), (512, 10000)):
+        f = work / f"ripple_adder_{wd}x{v}.v"
+        f.write_text(ripple_adder(wd, v))
+        designs.append(str(f))
+        f = work / f"gate_adder_{wd}x{v}.v"
+        f.write_text(ripple_adder(wd, v, gates=True))
+        designs.append(str(f))
+
+    def timed(out, argv, cwd=ROOT):
+        """argv with stdout to `out`, stderr to work/err: (ok, seconds, MB) by GNU time."""
+        with open(out, "wb") as o, open(work / "err", "wb") as e:
+            rc = subprocess.run(["/usr/bin/time", "-f", "%e %M", "-o", str(work / "t")] + argv, stdout=o, stderr=e, cwd=cwd).returncode
+        secs, kb = (work / "t").read_text().strip().split("\n")[-1].split()
+        return rc == 0, secs, "%.1f" % (int(kb) / 1024)
+
+    def kb(path):
+        return str((os.path.getsize(path) + 1023) // 1024)
+
+    print("| design | interp run s | interp MB | native build s | native run s | native MB | native KB | state | verilator build s | verilator run s | verilator MB | verilator KB | outputs agree |")
+    print("|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---|")
+    for d in designs:
+        n = os.path.basename(d)[:-2]
+        ok, vs, vm = timed(work / "vera.out", [vera, "--std=1364-2005", "--run", d])
+        if not ok:
+            vs, vm = "error", "-"
+        # Native: a cold cache per design, so the build column is a whole build.
+        vn = work / f"vn_{n}"
+        vn.mkdir(parents=True, exist_ok=True)
+        ok, nb, _ = timed(work / "vn.path", [vera, "--std=1364-2005", "--emit-exe", f"--schedule={os.environ.get('SCHEDULE') or 'static'}",
+                                             "--optimize=ReleaseFast", "--zig-backend=llvm", "--work-dir", ".", os.path.realpath(ROOT / d)], cwd=vn)
+        if ok:
+            err = (work / "err").read_text(errors="replace")
+            nexe = vn / (work / "vn.path").read_text().split("\n")[0]
+            if "not native (" in err:
+                nb += " (interp)"
+            four = next((l[l.index("4-state: "):] for l in err.split("\n") if "4-state: " in l), "")
+            four = ("4" + four[len("4-state"):]).replace("|", "\\|") if four else ""
+            ok, nr, nm = timed(work / "vn.out", [str(nexe)])
+            nk = kb(nexe) if ok else "-"
+            if not ok:
+                nr, nm = "error", "-"
+            # The state line costs nothing extra: the run above is the timed one.
+            st_err = subprocess.run([str(nexe), "--vera-state"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True).stderr
+            st = next((l[len("vera-state: "):] for l in st_err.split("\n") if l.startswith("vera-state: ")), "")
+            if "rerun" in st:
+                st = "rerun"
+            elif st.startswith("2-state from tick "):
+                st = "2 @" + st[len("2-state from tick "):]
+            elif st == "4-state":
+                st = "4"
+            else:
+                st = four or "4"
+        else:
+            nb, nr, nm, nk, st = "error", "-", "-", "-", "-"
+            (work / "vn.out").write_bytes(b"")
+        ok, bs, _ = timed(os.devnull, ["verilator", "--binary", "-j", "0", "-Wno-fatal", "--Mdir", str(work / f"obj_{n}"), "-o", "sim", d])
+        if ok:
+            ok, rs, rm = timed(work / "vl.out", [str(work / f"obj_{n}/sim")])
+            rk = kb(work / f"obj_{n}/sim") if ok else "-"
+            if not ok:
+                rs, rm = "error", "-"
+        else:
+            bs, rs, rm, rk = "error", "-", "-", "-"
+            (work / "vl.out").write_bytes(b"")
+        vera_out = (work / "vera.out").read_bytes()
+        vl = without_report((work / "vl.out").read_bytes())
+        agree = (vs != "error" and nr not in ("error", "-") and rs not in ("error", "-")
+                 and vera_out == (work / "vn.out").read_bytes() and vera_out == vl)
+        print(f"| {n} | {vs} | {vm} | {nb} | {nr} | {nm} | {nk} | {st} | {bs} | {rs} | {rm} | {rk} | {'yes' if agree else 'NO'} |")
+    return 0
+
+
+def verilator(argv):
+    """VerA against Verilator 5 (`--binary`) on the same .v designs.
+
+        tools/conformance.py verilator [VERA]    # the three-engine table; VERA
+                                                 # defaults to zig-out/bin/vera
+        tools/conformance.py verilator --oracle  # tests/fixtures/ieee1364/VERILATOR.tsv
+    """
+    import tempfile
+    # Resolved once: `nix shell` per call would add its start-up to every build.
+    bins = subprocess.run(["nix", "build", "--no-link", "--print-out-paths", "nixpkgs#verilator", "nixpkgs#gcc"],
+                          capture_output=True, text=True)
+    if bins.returncode:
+        print("verilator: skipped — Verilator is not reachable through nix", file=sys.stderr)
+        return 0
+    os.environ["PATH"] = "".join(p + "/bin:" for p in bins.stdout.split()) + os.environ.get("PATH", "")
+    with tempfile.TemporaryDirectory() as work:
+        if argv[:1] == ["--oracle"]:
+            return verilator_oracle(Path(work))
+        return verilator_table(Path(work), os.path.realpath(ROOT / (argv[0] if argv else "zig-out/bin/vera")))
+
+
+SUBCOMMANDS["verilator"] = verilator
+
+
+# ---------------------------------------------------------------------------
 # selftest: regression checks for the subcommands above and for the LRM text
 # they read. Documentation integrity, not language conformance: no fixture
 # earns credit here, and none of these runs the compiler.

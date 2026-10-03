@@ -374,7 +374,8 @@ build fails keeps the `.va`-attributed message.
   time once setup is in its own object (setup LLVM 1.6-1.8 s); the 2026-09-23
   "chunking 2.8x slower" note was about `eval`.
 * Native `.v` executable, 128-bit gate ripple adder (`tools/bench-v/
-  ripple_adder.sh 128 200 gates`, 640 KB `.tb.zig`, already `-fstrip`):
+  ripple_adder.sh 128 200 gates`, now `ripple_adder(128, 200, gates=True)`
+  in `tools/conformance.py`, 640 KB `.tb.zig`, already `-fstrip`):
   sema 4.3 s (the 900 `settleN` functions, ~70-130 ms each), LLVM 32 s (85%;
   ISel 4.2, InstCombine 3.3, SROA 2.6 s). `--state=auto` 61.4 Gi, `--state=4`
   52.0 Gi, `--state=2` 45.5 Gi: the second phase adds 18%, not 2x as
