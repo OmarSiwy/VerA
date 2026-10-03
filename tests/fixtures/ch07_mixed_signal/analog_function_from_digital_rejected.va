@@ -14,11 +14,11 @@
 // the rule this file is named for, and pinning its code is what makes the file
 // fail if the check regresses rather than if the dialect gate moves.
 //
-// E0433 also fires on the same statement, and the two say different things: the
-// call is not a constant expression, so a constant-assignment `initial` block
-// cannot hold it either (see digital_initial_accepted.va for what VerA does
-// lower). Only E0430 is pinned, because a compiler with a full discrete kernel
-// would emit E0430 and not E0433, and the LRM rule is E0430's.
+// The call is not a constant expression, so the block is not the constant
+// shape VerA folds (digital_initial_accepted.va) and is a process for the
+// mixed-signal kernel (#57). Only E0430 is pinned: the LRM rule is E0430's,
+// whatever else a compiler reports about the block, and a compiler with a full
+// discrete kernel emits it.
 //
 // The other sentence of §7.3.7 — no DIGITAL function called from analog — is
 // still masked; digital_function_from_analog_unsupported.va records why.

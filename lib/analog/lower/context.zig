@@ -60,12 +60,15 @@ const DiscreteCtx = struct {
 
 /// §8.5: does this module's discrete half need the event queue? An `always`
 /// block and a continuous assignment are processes: each re-runs whenever
-/// what it reads changes — and an `initial` block that suspends (a delay, an
-/// event or level control, a nonblocking or intra-assignment-timed write) is
-/// one too. Anything else is `collectInitialState`'s constant shape, which
-/// needs no kernel and keeps its fast path. So does a block written in a
-/// generate block (`DiscreteBlock.generated`): whether it exists at all is
-/// the kernel's scheme to decide (§6.6).
+/// what it reads changes. Every `initial` block is a process too (IEEE
+/// 1364-2005 §9.9.1, via VAMS §1.1: it executes once, with or without a
+/// timing control), and one runs on the kernel unless it is
+/// `collectInitialState`'s constant shape (`constantShape`), the one body
+/// whose whole effect is a value fixed before the analysis, which keeps its
+/// fast path. So an untimed `initial $display(...)` runs exactly as
+/// `initial #0 $display(...)` does. A block written in a generate block
+/// (`DiscreteBlock.generated`) is the kernel's as well: whether it exists at
+/// all is the kernel's scheme to decide (§6.6).
 ///
 /// Takes the file rather than the `Lower`: it is a question about the AST.
 fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
@@ -75,13 +78,67 @@ fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     for (module.nets) |n| if (n.kind == .wreal) return true;
     // §8.5.3.5 a switch on a discrete net is processed in the discrete cycle.
     for (module.switches) |sw| for (sw.terms) |t| if (discreteNet(file, module, t) != null) return true;
-    for (module.discrete) |blk| if (blk.is_always or blk.generated or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body)) return true;
+    for (module.discrete) |blk| if (blk.is_always or blk.generated or suspends(file, blk.body) or writesFourState(file, blk.body) or usesFiles(file, blk.body) or !constantShape(file, module, blk.body)) return true;
     // §7.3.2's `a2d` reads `input dnet; wire dnet;` with nothing in the
     // module driving it: a discrete net's value, driven or not (§3.7: an
     // undriven wire is z), is the kernel's.
     // Without a list the walk allocates nothing.
     for (module.analog) |blk| if (analogDiscreteNets(file, module, blk.body, null) catch unreachable) return true;
     return false;
+}
+
+/// A.6.2 / §7.2.2: is an untimed `initial` body `collectInitialState`'s
+/// constant shape? Blocking writes, to scalar module variables, of what
+/// `lower_constfold.constEval` folds (`constantExpr`), in blocks with no local
+/// declarations. Only that body means "this variable holds this constant for
+/// the whole analysis" with no kernel; §7.3.3 lets any other discrete
+/// statement read the continuous side, so it is a process like any other.
+/// A target that is not a module variable keeps the fast path, where it is
+/// E0313 or E0482 (`lowerModule`, `checkDiscreteContext`).
+fn constantShape(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, id: Ast.StmtId) bool {
+    if (id == .none) return true;
+    const ex = &file.exprs;
+    switch (file.stmt(id)) {
+        .empty => return true,
+        .block => |b| {
+            if (b.vars.len != 0 or b.params.len != 0) return false;
+            for (b.body) |s| if (!constantShape(file, module, s)) return false;
+            return true;
+        },
+        .assign => |a| {
+            if (a.target == .none or ex.tag(a.target) != .ident) return false;
+            const name = ex.strOf(a.target);
+            for (module.vars) |v| if (v.name == name and v.dims.len != 0) return false;
+            return constantExpr(file, module, a.value);
+        },
+        // An analog-only task is §9.2's E0821 in either context (`scanContext`).
+        .sys_task => |s| return lower_sysfunc.isAnalogOnlySysFunc(file.str(s.name)),
+        else => return false, // else: every other statement is a process's to run, a new one included
+    }
+}
+
+/// Whether `e` is built only from what `lower_constfold.constEval` folds:
+/// literals, module parameters (§3.4), operators, §4.3 math, and the
+/// IEEE 1364-2005 §17.8 conversions `$rtoi`/`$itor` and `$clog2`.
+fn constantExpr(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &file.exprs;
+    switch (ex.tag(e)) {
+        .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => return true,
+        .ident => {
+            for (module.params) |p| if (p.name == ex.strOf(e)) return true;
+            return false;
+        },
+        .sys_call => {
+            const name = file.str(ex.strOf(e));
+            if (!std.mem.eql(u8, name, "$rtoi") and !std.mem.eql(u8, name, "$itor") and !std.mem.eql(u8, name, "$clog2")) return false;
+        },
+        .unary, .binary, .ternary, .builtin_call => {},
+        else => return false, // else: a variable, net, call or access is a value only a run computes
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (!constantExpr(file, module, c)) return false;
+    return true;
 }
 
 /// Whether the analog statement `id` reads a discrete net by name (§7.3: a
@@ -808,8 +865,9 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
 /// This records the expression and `lowerModule` installs it as the variable's
 /// initial value, where an A.2.2.1 declaration assignment lands.
 ///
-/// Everything else is E0433: a delay, an event control, a loop, a conditional
-/// or a non-constant right-hand side needs §8.5's simulation cycle to read.
+/// Every other body made the module mixed (`isMixed`, `constantShape`) and
+/// runs on the kernel. E0433 is what is left: a body `constantShape` admits
+/// whose value `constEval` still cannot fold.
 pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // A mixed module's `initial` blocks run on the kernel, with the rest of
     // its digital half: their writes are discrete inputs, not constants.
@@ -1126,6 +1184,19 @@ test isMixed {
         .{ .src = "module m; real x; initial x <= 1.0; endmodule", .want = true },
         // §9.5.1.2 one descriptor table for both contexts.
         .{ .src = "module m; integer fd; initial fd = $fopen(\"f\"); endmodule", .want = true },
+        // #57: an untimed initial is a process (IEEE 1364-2005 §9.9.1) and runs
+        // on the kernel exactly as the same body behind `#0` does.
+        .{ .src = "module m(p); inout p; electrical p; initial $display(\"hi\"); analog I(p) <+ V(p); endmodule", .want = true },
+        .{ .src = "module m(p); inout p; electrical p; initial #0 $display(\"hi\"); analog I(p) <+ V(p); endmodule", .want = true },
+        // §7.3.3 a discrete context may read a continuous variable: a value
+        // only the run computes.
+        .{ .src = "module m; real x; integer k; initial x = k + 1.0; endmodule", .want = true },
+        .{ .src = "module m; integer q; initial for (q = 0; q < 3; q = q + 1) q = 1; endmodule", .want = true },
+        .{ .src = "module m; real a[0:1]; initial a[0] = 1.0; endmodule", .want = true },
+        .{ .src = "module m; real x; initial begin : b integer t; t = 1; x = 2.0; end endmodule", .want = true },
+        // What `constEval` folds stays on the fast path: a parameter (§3.4),
+        // §4.3 math and a §17.8 conversion.
+        .{ .src = "module m; parameter real k = 2.5; real r; initial r = sqrt(k) + $rtoi(2.5); endmodule", .want = false },
     };
     for (cases) |c| {
         var h: Lower.Harness = undefined;
@@ -1172,15 +1243,10 @@ test markDiscreteExprs {
     try std.testing.expectEqual(1, unmarked);
 }
 
-test "collectInitialState: A.6.2 only constant assignments to module variables (E0433)" {
+test "collectInitialState: A.6.2 a constant initial installs its value; an undeclared target is E0313" {
+    // A body that is not the constant shape is `isMixed`'s (its test, #57).
     const cases = [_]struct { decls: []const u8, want: ?@import("diag").Code }{
         .{ .decls = "  real x;\n  initial x = 2.0;", .want = null },
-        // "runs once, before the analysis": nothing the analysis computes.
-        .{ .decls = "  real x;\n  integer k;\n  initial x = k + 1.0;", .want = .E0433 },
-        // Which element is a question about a value.
-        .{ .decls = "  real a[0:1];\n  initial a[0] = 1.0;", .want = .E0433 },
-        // A block-local name is not the variable the analog block reads.
-        .{ .decls = "  real x;\n  initial begin : b\n    integer t;\n    t = 1;\n    x = 2.0;\n  end", .want = .E0433 },
         // §6.8: a name the module never declared.
         .{ .decls = "  initial zz = 1.0;", .want = .E0313 },
     };

@@ -642,28 +642,20 @@ test "lower: §3.2 a variable some path reads before writing is held, and only t
     }
 }
 
-test "lower: A.6.2 an initial block of constant assignments lowers; anything else is E0433" {
+test "lower: A.6.2 an initial block of constant assignments lowers; its refusals name their own clause" {
     // The accepting side is six fixtures (ch07/digital_initial_accepted,
     // discrete_bus_narrow, discrete_bus_31, discrete_real_from_analog,
     // annex_c/13, ch08/analog_digital_initial_order), which pin the VALUE end to
-    // end. What no fixture reaches is E0433's own arms: the procedural_*
-    // fixtures die in the parser first (`force`, `release` and a procedural
-    // `assign` have no statement production), and a timed initial is not
-    // E0433: it makes the module mixed (`lower_context.isMixed`). So the arms
-    // are stated here, one per reading a kernel would be needed for.
+    // end. Every body that is not the constant shape (a non-constant
+    // right-hand side, a loop, an array element, a system task) is a process
+    // and makes the module mixed (`lower_context.isMixed`'s test, #57), so it
+    // runs on the kernel rather than being refused. What stays refused here is
+    // stated below, each under its own rule.
     const cases = [_]struct { stmt: []const u8, code: diag.Code }{
-        // A non-constant right-hand side: `v` is a runtime variable, so there is
-        // nothing to install and nothing computed it before the analysis.
-        .{ .stmt = "q = v;", .code = .E0433 },
         // §5.10 event control: the block suspends, so it is a PROCESS and the
         // module is mixed; what it suspends on is `initial_step`, which §5.10
         // does not allow "in the digital context".
         .{ .stmt = "@(initial_step) q = 1;", .code = .E0708 },
-        // §5.9.2 a loop, and §5.8 a conditional over a runtime value: both are
-        // only worth writing over something that changes during the run.
-        .{ .stmt = "for (q = 0; q < 3; q = q + 1) q = 1;", .code = .E0433 },
-        // §3.2.2 an array element: which element is a question about a value.
-        .{ .stmt = "arr[0] = 1;", .code = .E0433 },
         // §6.8 a name this module never declares. Nothing else lowers the block,
         // so if this scan does not report it, nobody does.
         .{ .stmt = "nope = 1;", .code = .E0313 },

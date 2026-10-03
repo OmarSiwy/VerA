@@ -23,10 +23,10 @@
 // context reads for the whole analysis. A compiler that parsed the block and
 // discarded it reads §3.2's initial 0 and prints ok=0 on the line below.
 //
-// The ceiling of that reading is E0433: a statement in an `initial` block that
-// is not a constant assignment — a delay, a loop, an event control, a
-// non-constant right-hand side — is refused rather than guessed at, because
-// choosing between its possible meanings is what §8.5's simulation cycle is for.
+// A body that is not constant assignments — a delay, a loop, an event control,
+// a system task, a non-constant right-hand side — is an ordinary digital
+// process and runs on §8.5's simulation cycle, the mixed-signal kernel
+// (ch07_mixed_signal/initial_untimed_process_runs.va, #57).
 //
 //! lrm C.7
 //! lrm A.6.2

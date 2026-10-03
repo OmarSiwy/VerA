@@ -4105,26 +4105,22 @@ fn infoOf(c: Code) Info {
             .lrm = "7.2.2",
             .explain =
             \\A.6.2's `initial_construct ::= initial statement` is legal
-            \\Verilog-AMS and VerA accepts it, in ONE shape: assignments of
-            \\constant expressions to module variables. That shape has a meaning
-            \\a compiler can honour on its own — LRM 7.2.2's "the domain of a
-            \\variable is that of the context from which its value is assigned"
-            \\gives the target to the discrete context, the block runs once
-            \\before the analysis, so the variable simply holds that constant for
-            \\the whole analysis and LRM 7.3.1 Table 7-1 says how the continuous
-            \\context reads it.
+            \\Verilog-AMS, and an `initial` block is a digital process whether or
+            \\not it has a timing control (IEEE 1364-2005 9.9.1, via LRM 1.1).
+            \\VerA runs it in one of two ways. A body of assignments of constant
+            \\expressions to scalar module variables is folded: LRM 7.2.2's "the
+            \\domain of a variable is that of the context from which its value is
+            \\assigned" gives the target to the discrete context, the block runs
+            \\once before the analysis, so the variable holds that constant for the
+            \\whole analysis and LRM 7.3.1 Table 7-1 says how the continuous
+            \\context reads it. Any other body (a system task, a loop, a
+            \\non-constant right-hand side, an array element, a delay) runs on the
+            \\mixed-signal kernel (LRM 8.5), exactly as the same body behind `#0`.
             \\
-            \\Everything else in a digital process needs a digital process: a
-            \\delay or an event control needs a time queue to suspend on, a loop
-            \\or a conditional needs values that change during the run to be worth
-            \\writing, and a non-constant right-hand side needs whatever it reads
-            \\to have been computed by something. VerA implements no discrete
-            \\kernel (LRM 8.5 has no analog counterpart here), so it refuses those
-            \\rather than picking one of their several possible readings.
-            \\
-            \\If the value is genuinely fixed, write it as a constant — or as a
-            \\parameter (LRM 3.4), which is the language's own name for a value
-            \\determined before the analysis starts.
+            \\This error is the gap between the two: a right-hand side built only
+            \\from literals, parameters and constant functions whose value still
+            \\does not fold. Write the value as a constant, or as a parameter
+            \\(LRM 3.4).
             ,
         },
         .E0434 => .{

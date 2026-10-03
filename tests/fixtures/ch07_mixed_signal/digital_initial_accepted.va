@@ -24,10 +24,10 @@
 // WHY `always` STAYS REFUSED, since one AMS ruling covers both keywords: an
 // `always` block RE-RUNS on an event, so its variable's value is a function of a
 // schedule, and there is no reading of it that does not need §8.5's simulation
-// cycle. The `initial` block's constant has exactly one meaning. That asymmetry
-// is VerA's ceiling stated at the one place it is true, and E0433 is the rest of
-// it — a delay, a loop, an event control or a non-constant right-hand side
-// inside an `initial` block is refused rather than guessed at.
+// cycle. The `initial` block's constant has exactly one meaning. (Both now run:
+// any other `initial` body — a delay, a loop, an event control, a system task,
+// a non-constant right-hand side — runs on the mixed-signal kernel,
+// initial_untimed_process_runs.va, #57.)
 //
 //! lrm 7.2.2
 //! lrm C.7

@@ -21,8 +21,8 @@
 // — is enough on its own to say what `r` holds: the discrete context owns it,
 // §7.2.2 forbids the continuous context to assign it too, the block runs once
 // before the analysis, so `r` is 8'hff for the whole analysis. VerA lowers that
-// into `r`'s initial value; anything a digital process would need a schedule for
-// is E0433. See digital_initial_accepted.va for the rule itself.
+// into `r`'s initial value; any other body runs on the mixed-signal kernel.
+// See digital_initial_accepted.va for the rule itself.
 //
 //! lrm 7.3.1
 //! lrm 7.2.2
