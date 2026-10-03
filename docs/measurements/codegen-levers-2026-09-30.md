@@ -85,7 +85,7 @@ Not for the large models, and the measurement says why:
 
 ARPice `16781d6e` models (same SHA-256 as BUILD-SPEED.md for the first five):
 resistor, diode, mos1, bsim4va, psp103, `native/coupled_ltra.va`,
-`native/txl.va`; VerA `tests/vdev/v_inv.v`, `v_count.v`. Device trees were
+`native/txl.va`; VerA `tests/vdev/v_inv.v`, `v_count.v` (now in `tests/fixtures/ch07_mixed_signal/`). Device trees were
 emitted once by `vera --emit-so` (ReleaseFast VerA) and then rebuilt by hand so
 each lever touches only the Zig side. Emitted Zig: psp103 1.44 MB (units:
 `core` 279 KB, `core__noise` 205 KB, `core__state` 42 KB, `device.zig` 917 KB
