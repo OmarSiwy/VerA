@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const diag = @import("../diag.zig");
-const Allocator = diag.Allocator;
+const Allocator = std.mem.Allocator;
 
 // ---------------------------------------------------------------------------
 // Locations
@@ -18,6 +18,7 @@ pub const Span = struct {
     start: u32 = 0,
     end: u32 = 0,
 
+    /// "No location": the renderer prints no `-->` line and no snippet.
     pub const none: Span = .{ .start = 0, .end = 0 };
 
     /// Returns a zero-width span at `start`.
@@ -25,12 +26,20 @@ pub const Span = struct {
         return .{ .start = start, .end = start };
     }
 
+    /// Byte length; an inverted span (`end < start`) saturates to 0.
     pub fn len(self: Span) u32 {
         return self.end -| self.start;
     }
 
+    /// True for `none`, and therefore also for `at(0)`: a zero-width span at
+    /// the first byte is indistinguishable from no span.
     pub fn isNone(self: Span) bool {
         return self.start == 0 and self.end == 0;
+    }
+
+    // Budget: two u32 offsets. Every `Record` carries up to nine of these.
+    comptime {
+        std.debug.assert(@sizeOf(Span) == 8);
     }
 };
 
@@ -64,9 +73,19 @@ pub const Segment = struct {
     /// Macro name, for `.macro` segments. Borrowed from the arena.
     macro: []const u8 = "",
 
+    /// `parent` of a top-level segment: no enclosing expansion or include.
     pub const no_parent: u32 = std.math.maxInt(u32);
+
+    // Budget: 32 B, one row per origin change (7,769 rows on hisimhv_va).
+    // Half of it is the `macro` slice; see docs/seams/s1-diag.md.
+    comptime {
+        std.debug.assert(@sizeOf(Segment) == 32);
+    }
 };
 
+/// One file of the compilation, as `Bag.files` stores it. Every slice is
+/// borrowed from the compilation arena (or static) until `Bag.detach` copies
+/// them into one gpa buffer.
 pub const File = struct {
     name: []const u8,
     /// The text SPANS INDEX: comment-STRIPPED once the preprocessor has run
@@ -90,17 +109,27 @@ pub const File = struct {
 /// Before the first mark the mapping is identity. Sorted by `out` by
 /// construction — the stripper appends left to right — so lookup is the same
 /// binary search `SourceMap.resolve` runs.
-pub const StripMark = struct { out: u32, src: u32 };
+pub const StripMark = struct {
+    out: u32,
+    src: u32,
+
+    // Budget: two u32s, one row per stripped comment (3,703 on hisimhv_va).
+    comptime {
+        std.debug.assert(@sizeOf(StripMark) == 8);
+    }
+};
 
 /// An EMPTY map is legal and means "the preprocessed text is the source": every
 /// offset resolves to `root` unchanged. That is exactly right for the unit
 /// tests and for `compilePreprocessed`, and it means no stage needs a null
 /// check.
 pub const SourceMap = struct {
+    /// Borrowed: the preprocessor's arena, or `Bag.detach`'s gpa copy.
     segs: []const Segment = &.{},
 
     pub const empty: SourceMap = .{};
 
+    /// Where a preprocessed offset came from.
     pub const Resolved = struct {
         file: FileId,
         offset: u32,
@@ -147,20 +176,25 @@ pub const SourceMap = struct {
 pub const LineIndex = struct {
     starts: []const u32,
 
-    /// Returns the index of `text`, allocated in `arena`.
+    /// Returns the index of `text`, one exact allocation in `arena` (4 bytes
+    /// per line plus one). O(n) in `text`: two scans, count then fill.
     pub fn build(arena: Allocator, text: []const u8) Allocator.Error!LineIndex {
-        var starts: std.ArrayList(u32) = .empty;
-        try starts.append(arena, 0);
-        // ponytail: reuse stdlib byte search; batch offsets if indexing profiles hot.
+        // Counted first so the arena holds one exact slice, not the dead
+        // prefixes of a list grown one line at a time.
+        const starts = try arena.alloc(u32, std.mem.countScalar(u8, text, '\n') + 1);
+        starts[0] = 0;
+        var n: usize = 1;
         var pos: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, text, pos, '\n')) |i| {
+        while (std.mem.indexOfScalarPos(u8, text, pos, '\n')) |i| : (n += 1) {
             pos = i + 1;
-            try starts.append(arena, @intCast(pos));
+            starts[n] = @intCast(pos);
         }
-        return .{ .starts = try starts.toOwnedSlice(arena) };
+        std.debug.assert(n == starts.len);
+        return .{ .starts = starts };
     }
 
-    /// 1-based line and column of `off`.
+    /// 1-based line and column of `off`. An `off` past the text lands on the
+    /// last line, with a column past its end.
     pub fn loc(self: LineIndex, off: u32) Loc {
         // `starts[0]` is 0, so the count is at least 1.
         const lo = std.sort.partitionPoint(u32, self.starts, off, struct {
@@ -171,7 +205,9 @@ pub const LineIndex = struct {
         return .{ .line = @intCast(lo + 1), .col = off - self.starts[lo] + 1 };
     }
 
-    /// The text of `line` (1-based), without its newline.
+    /// The text of `line` (1-based), without its `\n` or `\r\n`; a slice of
+    /// `text`, which must be the text the index was built from. Empty for
+    /// line 0 or a line past the end.
     pub fn lineText(self: LineIndex, text: []const u8, line: u32) []const u8 {
         if (line == 0 or line > self.starts.len) return "";
         const start = self.starts[line - 1];
