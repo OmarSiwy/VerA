@@ -123,6 +123,7 @@ pub fn cloneDelay(self: *Flatten, d: Ast.Delay3) Error!Ast.Delay3 {
     return .{ .rise = try cloneExpr(self, d.rise), .fall = try cloneExpr(self, d.fall), .off = try cloneExpr(self, d.off) };
 }
 
+/// Returns named event `e` under its flat name, dimensions cloned.
 pub fn cloneEvent(self: *Flatten, e: Ast.EventDecl) Error!Ast.EventDecl {
     return .{ .name = elab_names.flat(self, e.name), .dims = try cloneDims(self, e.dims), .main_tok = e.main_tok };
 }
