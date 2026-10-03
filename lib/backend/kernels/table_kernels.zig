@@ -42,9 +42,6 @@ fn ztExtrapError() noreturn {
     ztstd.process.exit(1);
 }
 
-/// §9.21: "If there are two or more data points with the same independent values
-/// but different dependent values then an error is generated." See `zTable` for
-/// why the generation point is the call and not elaboration.
 /// §9.21.1: the data source named by this site could not be read. Reported at
 /// the call for the same reason `ztDuplicateError` is — "the state of the data
 /// source is captured on the first call", so a site that is never executed
@@ -54,6 +51,9 @@ fn ztMissingSource() noreturn {
     ztstd.process.exit(1);
 }
 
+/// §9.21: "If there are two or more data points with the same independent values
+/// but different dependent values then an error is generated." See `zTable` for
+/// why the generation point is the call and not elaboration.
 fn ztDuplicateError() noreturn {
     ztstd.debug.print("error: $table_model: LRM 9.21: two data points share their independent values and disagree on the dependent\n", .{});
     ztstd.process.exit(1);
