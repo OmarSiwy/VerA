@@ -131,6 +131,19 @@ pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+//
+// Ownership: every `out` table has one writer, the sub-file named for it
+// (`out.nodes` node.zig, `out.params` param.zig, `out.held_vars` and
+// `out.mem_arrays` var.zig, `out.contributions` and `out.charge_sites`
+// contrib.zig, `out.displays` and the status channel systask.zig, ...;
+// `out.uses` is a flag set any of them may raise). The symbol tables below
+// follow the same rule (`branches` and `node_voltages` node.zig, with §9.20's
+// alias rebinding in hier_name.zig; `param_index` param.zig; `access_kind`
+// discipline.zig). The context fields (`cur`, `vars`, `consts`, `arrays`,
+// `scope_log`, `loops`, `cond_depth`, `restrict`, `cur_unit`, `block_path`,
+// `scope_path`, `gen_iter`, `active_genvars`) belong to whichever construct is
+// being lowered: it sets them on entry and restores them on exit. Every
+// buffer lives in `arena`, for the whole pass.
 
 arena: std.mem.Allocator,
 mir: *Mir,
@@ -999,6 +1012,7 @@ pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
 /// Returns the `Model` field that answers a §9.15 simulation parameter the
 /// card supplies (`tnom`), or null.
 pub const simparamHostField = lower_sysfunc.simparamHostField;
+/// The §9.15 simulation parameters a host supplies, in `Model` field order.
 pub const host_simparams = lower_sysfunc.host_simparams;
 
 // Clause 9 system tasks: §9.4 display, §9.5 I/O, §9.7 status, §9.17 kernel control, lower/systask.zig

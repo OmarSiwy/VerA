@@ -570,6 +570,10 @@ fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
     return null;
 }
 
+/// Appends to `out` the base identifier of every lvalue the statement tree
+/// `id` writes (`Ast.SourceFile.stmtWrites`: assignment targets, output
+/// actuals, inout seeds), child statements included, in walk order with
+/// repeats. `out` grows in `self.arena`.
 pub fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
     if (id == .none) return;
     const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};

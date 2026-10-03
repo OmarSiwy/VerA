@@ -3,6 +3,12 @@
 //! In: net and port declarations. Out: `nodes` (the U-enum index codegen depends on),
 //! implicit nets, and the port/branch tables.
 //!
+//! Spine, in `lowerModule`'s order: `declarePorts`, `declareNets`,
+//! `bindPortConnections`, `resolveDisciplines`, `declareBranches`. After them,
+//! rows are only appended (implicit nets, §5.4.2 flow unknowns, §4.5.2 operator
+//! states), so a row index, once handed out, is stable. At most `max_nodes`
+//! rows; past that, E1015.
+//!
 //! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §7.2.4.
 
 const std = @import("std");
@@ -48,8 +54,8 @@ const max_nodes = ground;
 
 /// §6.5 interns the module's ports as the first `nodes` rows, in declaration
 /// order, which is the host device's terminal order; a §3.6.3 vector port is
-/// one row per element, msb first. Sets `Lowered.num_ports`. Runs before
-/// `declareNets`, so no net can take a terminal's row.
+/// one row per element, msb first. Sets `Lowered.num_ports` to the row count
+/// after them.
 pub fn declarePorts(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.ports) |p| {
         // §3.6.3/§6.5.2 a vector port is N terminals, in declaration order.
