@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const diag = @import("../diag.zig");
-const Allocator = diag.Allocator;
+const Allocator = std.mem.Allocator;
 
 // ---------------------------------------------------------------------------
 // Locations
