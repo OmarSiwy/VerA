@@ -14,7 +14,7 @@ const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const gen_cfg = @import("cfg.zig");
-const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const plan_setup = @import("plan/setup.zig");
 const plan_args = @import("plan/args.zig");
 const setup_chunk = @import("setup_chunk.zig");
@@ -211,7 +211,7 @@ fn placeOf(self: *const Gen, v: Mir.Value) u32 {
 pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     const i = @backingInt(v);
     const k = self.su.idx[i];
-    self.uses_model = true;
+    self.uses.model = true;
     if (rootGroup(self, v) == 2) {
         if (as_f64) return self.arena.print("@as(f64, @floatFromInt(@intFromBool(model.su.b[{d}])))", .{k});
         return self.arena.print("@as(i64, @intFromBool(model.su.b[{d}]))", .{k});
@@ -248,7 +248,7 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
 /// after `setup` (`contract.validateHost`'s `calls_setup`).
 fn emitSetupInstance(self: *Gen) Error!void {
     const tp = self.lowered.timepoints.items.len != 0;
-    if (!tp and !gen_file.hasStatus(self)) return;
+    if (!tp and !gen_instance.hasStatus(self)) return;
     try self.w(
         \\/// Call for every instance after `setup`, or after any write to
         \\/// `Model` or this instance: it drops what the instance cached from
@@ -257,7 +257,7 @@ fn emitSetupInstance(self: *Gen) Error!void {
         \\{s}{s}}}
         \\
         \\
-    , .{ if (tp) "    zTpDrop(inst);\n" else "", if (gen_file.hasStatus(self)) gen_file.status_drop else "" });
+    , .{ if (tp) "    zTpDrop(inst);\n" else "", if (gen_instance.hasStatus(self)) gen_instance.status_drop else "" });
 }
 
 /// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes
@@ -288,6 +288,8 @@ fn emitSimparams(self: *Gen) Error!void {
 /// are taken `then` untested (neither arm is setup work, and the §5.10.2
 /// initial-step arm is what setup must compute), and the walk stops at the
 /// first loop that is not invariant, since nothing after it is placeable.
+/// Asserts the body read no unknown and refused nothing: `plan/setup.zig`
+/// admits only solve-invariant, constant-renderable roots.
 pub fn emitSetup(self: *Gen) Error!void {
     try emitSetupInstance(self);
     if (self.su.vals.len == 0) return;
@@ -313,9 +315,9 @@ pub fn emitSetup(self: *Gen) Error!void {
     try self.plan.analyze(.undef, true);
     try emitSimparams(self);
 
-    self.uses_x = false;
-    self.uses_model = true;
-    self.uses_inst = false;
+    self.uses.x = false;
+    self.uses.model = true;
+    self.uses.inst = false;
     self.fatal = null;
     self.su.chunks = 0;
     const at_doc = self.out.items.len;
@@ -360,11 +362,11 @@ pub fn emitSetup(self: *Gen) Error!void {
     // per-eval), but a per-eval value the relooper places before a `zs_stop`
     // branch may, for the arm that flag never runs: it reads a default
     // Instance, so the text compiles and nothing stored depends on it.
-    if (self.uses_inst) {
+    if (self.uses.inst) {
         std.debug.assert(self.su.stop);
         try self.out.insertSlice(self.gpa, at_stop, "    const inst: *const Instance = &.{};\n");
     }
-    std.debug.assert(!self.uses_x);
+    std.debug.assert(!self.uses.x);
     std.debug.assert(self.fatal == null);
     if (self.out.items.len - at_doc < setup_chunk.chunk_bytes) return;
     // A large `setup` becomes chunks a split build compiles in parallel.

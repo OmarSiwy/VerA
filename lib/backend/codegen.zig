@@ -9,14 +9,10 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("codegen/plan/unit.zig");
-const cg_display = @import("cg_display.zig");
 const cg_filters = @import("cg_filters.zig");
-const cg_limit = @import("cg_limit.zig");
-const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
-const naming = @import("naming.zig");
 /// The pure planners (codegen/plan/): inputs in, a plan value out, no writer.
 const plan_input = @import("codegen/plan/input.zig");
 /// The float mode and lanes of the emitted device (codegen/float/).
@@ -37,9 +33,10 @@ pub const pruneHeld = plan_setup.pruneHeld;
 const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
-/// Re-exported for the codegen sub-files.
-pub const assert = std.debug.assert;
 
+/// Every way `generate` fails. Out of memory aside, each is a refusal of
+/// the whole device: no partial `Output` is returned. A refusal confined to
+/// one unit is not an error here but a `@compileError` body plus `fatal_out`.
 pub const Error = std.mem.Allocator.Error || error{
     /// proof.zig rejected the model. `generate` returns this before emitting
     /// a byte.
@@ -54,7 +51,7 @@ pub const Error = std.mem.Allocator.Error || error{
     UnsupportedParameterDefault,
 };
 
-/// Sentinel for "no index" in the u32 columns (`hoist_idx`, a non-held array).
+/// Sentinel for "no index" in the u32 columns (`Hoist.idx`, a non-held array).
 pub const none_u32 = std.math.maxInt(u32);
 
 /// The generated device, plus the ranges that let the orchestrator write it as
@@ -163,12 +160,13 @@ pub fn generate(
     try g.prepare();
     try g.emitFile();
     fatal_out.* = g.any_fatal or (if (opts.diags) |bag| bag.failed() else false);
+    const files = g.files.slice();
     return .{
         .text = try g.out.toOwnedSlice(gpa),
-        .names = g.file_names.items,
-        .unit_lo = g.file_lo.items,
-        .unit_fn = g.file_fn.items,
-        .unit_hi = g.file_hi.items,
+        .names = files.items(.name),
+        .unit_lo = files.items(.lo),
+        .unit_fn = files.items(.fn_at),
+        .unit_hi = files.items(.hi),
         .prelude = g.prelude,
         .helpers = g.helpers,
         .setup_chunks = g.su.chunks,
@@ -200,51 +198,88 @@ const F64Context = struct {
 // The generator
 // ===========================================================================
 
-/// The emitter's state for one device: planner results, per-unit scratch and
-/// the output buffer. Built and driven by `generate`.
+/// The emitter's state for one device. Built and driven by `generate`.
+///
+/// Fields are grouped by who writes them and when: the inputs (never
+/// written), the device plans (`prepare`, once), the output, the state of the
+/// one declaration being written (reset per unit), and the facts emission
+/// accumulates for the tables written after the units. Every slice is
+/// arena-owned except `out`.
 pub const Gen = struct {
+    // ---- inputs: set by `generate`, never written -------------------------
+
     /// Owns `out` and nothing else (see `generate`).
     gpa: std.mem.Allocator,
-    /// Per-unit state: the slice, use counts, inline decisions and slots for the
-    /// declaration being written. Reset in full by every `analyze`.
-    plan: UnitPlan = undefined,
+    arena: std.mem.Allocator,
+    mir: *const Mir,
+    lowered: *const Lowered,
     /// The derived facts this emitter reads and never writes: CFG, dominators,
     /// loops, block pools, instruction columns, value types, aliases
     /// (ir/analysis.zig). Policy (naming, hoisting, inlining) stays below.
     an: *const Analysis,
-    arena: std.mem.Allocator,
-    mir: *const Mir,
-    lowered: *const Lowered,
     verdict: proof.Verdict,
+    /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
+    display: Display = .drop,
+    /// `Options.vpi_contribs`.
+    vpi_contribs: bool = false,
+    /// `Options.diags`: where E0515 goes, when the caller kept a bag.
+    diags: ?*diag.Bag = null,
+
+    // ---- device plans: written once by `prepare` --------------------------
+
+    /// Every declared identifier and the unknowns behind them (`plan/names.zig`).
+    names: plan_names.Names = .{},
+    /// Free branch flows and collapsible switch branches (`plan/topology.zig`).
+    topo: plan_topo.Topology = .{},
+    /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for
+    /// every other unit). Filled once by `cg_filters.planAll`.
+    filters: []?cg_filters.FilterPlan = &.{},
+    /// §4.5.15 the honoured and declined `$limit` sites (`plan/limit.zig`).
+    limits: plan_limit.Limits = .{},
+    /// §4.6.3/§4.6.4 the small-signal source rows and tables (`plan/noise.zig`).
+    noise: plan_noise.Noise = .{},
+    /// Solve invariance per value, block and loop (`plan/setup.zig`).
+    sinv: plan_setup.Sinv = .{},
+    /// §5.6.1.2 the charge sites `q` returns and the rows they stamp
+    /// (`plan/qsite.zig`).
+    qs: plan_qsite.QSites = .{},
+    // The shared core (plan/core.zig says why it exists).
+    /// Every unit target the core returns, in insert-tolerant order (`plan/jobs.zig`).
+    jobs: plan_jobs.Jobs = .{},
+    /// The shared core's live-outs, latches, name and float mode (`plan/core.zig`).
+    core: plan_core.Core = .{},
+    /// §3.2.2 per `Lowered.mem_arrays` row: does some load read a version a
+    /// derivative-carrying store reached (`Analysis.dFree` of the version)?
+    /// Then the storage is `S`; otherwise plain `f64`, and a store keeps only
+    /// the value, since no load could see what it dropped. See `prepare`.
+    arr_s: []bool = &.{},
+    /// The mask of each `Lowered.mem_arrays` row's storage (`family.arrMask`).
+    arr_mask: []u64 = &.{},
+    /// The setup roots and `setup`'s emission state (`codegen/setup.zig`).
+    su: gen_setup.Setup = .{},
+
+    // ---- output -----------------------------------------------------------
+
     out: std.ArrayList(u8) = .empty,
     /// Rendered text of every float constant seen, keyed on its bit pattern.
     /// See `fmtF64`.
     f64_cache: std.HashMapUnmanaged(u64, []const u8, F64Context, std.hash_map.default_max_load_percentage) = .empty,
+    /// One row per emitted top-level unit declaration, in emission order; the
+    /// columns become `Output.names`/`unit_lo`/`unit_fn`/`unit_hi`. Appended
+    /// by `file.recordUnitFile`.
+    files: std.MultiArrayList(gen_file.UnitFile) = .empty,
+    /// See `Output.prelude` / `Output.helpers`. Built by `emitFile`, which is
+    /// where the conditionally-emitted helper blocks are already decided.
+    prelude: []const u8 = "",
+    helpers: []const u8 = "",
 
-    /// Whether the unit body being rendered read each parameter. Zig rejects
-    /// an unused parameter, so the signature must say `_`; `emitUnit`
-    /// back-patches it.
-    uses_x: bool = false,
-    uses_model: bool = false,
-    uses_inst: bool = false,
-    /// The body read the host's `contract.SimState` (§4.6.1, §5.10.2, §9.10).
-    uses_sim: bool = false,
-    /// The core read its `held` flag (`plan_core.heldOnly`): a skippable
-    /// store was emitted. Patched to `_` otherwise, like the flags above.
-    uses_held: bool = false,
-    /// §2.8.3/§12.32: the `$name`s this backend did not resolve, in first-call
-    /// order. Becomes `systf_calls`, so the index is the host's binding index.
-    /// Deduplicated by name, because `vpi_register_analog_systf()` registers
-    /// names and requires them unique. Linear scan: the list is tiny.
-    systf_names: std.ArrayList([]const u8) = .empty,
-    /// The `Instance` fields `updateState` advances, in declaration order
-    /// (`file.emitInstance` fills it). `stateCtl` commits each to, and reverts
-    /// it from, the `State` field of the same name.
-    hist: std.ArrayList([]const u8) = .empty,
-    /// Distinguishes one emitted systf block's `break` label from another's.
-    /// Blocks nest, so the label has to be unique within a unit and a counter
-    /// is the cheapest thing that is.
-    systf_sites: u32 = 0,
+    // ---- the declaration being written: reset per unit --------------------
+
+    /// Per-unit state: the slice, use counts, inline decisions and slots for the
+    /// declaration being written. Reset in full by every `analyze`.
+    plan: UnitPlan = undefined,
+    /// Which uniform parameters the body read (`unit.Uses`).
+    uses: gen_unit.Uses = .{},
     /// Set when the unit asks for a value the LRM fixes and this backend
     /// cannot produce (§4.5's non-constant control argument, E0515; a §3.6.2.2
     /// signal-flow contribution). The whole body collapses to one
@@ -253,9 +288,6 @@ pub const Gen = struct {
     /// An unregistered system function (W0852) does not come here: the language
     /// defines no value for it, so 0.0 contradicts nothing.
     fatal: ?[]const u8 = null,
-    /// Sticky: generation failed, even outside a unit body. Reported out so
-    /// callers do not have to substring-search generated text for a refusal.
-    any_fatal: bool = false,
     /// Seeds `fatal` for the NEXT unit, for a gap visible from the unit's
     /// DECLARATION rather than from an instruction in its body (§3.6.2.2
     /// signal-flow contributions). `emitUnit` consumes it.
@@ -270,48 +302,12 @@ pub const Gen = struct {
     /// Token of the innermost call `emitCall` is rendering: the span
     /// `gen_call.abort` reports its refusal at.
     call_tok: u32 = Mir.no_tok,
-
+    /// Distinguishes one emitted systf block's `break` label from another's.
+    /// Blocks nest, so the label has to be unique within a unit and a counter
+    /// is the cheapest thing that is.
+    systf_sites: u32 = 0,
     /// The float mode and lane state of the body being written (`codegen/float/`).
     float: float_mode.Float = .{},
-    /// Every declared identifier and the unknowns behind them (`plan/names.zig`).
-    names: plan_names.Names = .{},
-    /// One entry per emitted top-level unit declaration; see `Output`. Arena
-    /// lists, appended by `recordUnitFile`.
-    file_names: std.ArrayList([]const u8) = .empty,
-    file_lo: std.ArrayList(u32) = .empty,
-    file_fn: std.ArrayList(u32) = .empty,
-    file_hi: std.ArrayList(u32) = .empty,
-    /// See `Output.prelude` / `Output.helpers`. Built by `emitFile`, which is
-    /// where the conditionally-emitted helper blocks are already decided.
-    prelude: []const u8 = "",
-    helpers: []const u8 = "",
-
-    // ---- the shared core (plan/core.zig says why it exists) ----
-    /// §4.6.3/§4.6.4 the small-signal source rows and tables (`plan/noise.zig`).
-    noise: plan_noise.Noise = .{},
-    /// Every unit target the core returns, in insert-tolerant order (`plan/jobs.zig`).
-    jobs: plan_jobs.Jobs = .{},
-    /// The shared core's live-outs, latches, name and float mode (`plan/core.zig`).
-    core: plan_core.Core = .{},
-    /// Value → field of `limit`'s slice of the core, or `none_u32`
-    /// (`cg_limit.emitCore`); empty when `limit` reads nothing off the core.
-    lim_idx: []u32 = &.{},
-    /// The core as `updateState` reads it: its slice (`gen_state.emitCore`),
-    /// or `.{}` when `updateState` reads nothing off the core.
-    state_core: plan_core.Core = .{},
-    /// The core as `noisePsd` reads it: its slice (`gen_dispatch.emitNoiseCore`),
-    /// or `.{}` when `noisePsd` reads nothing off the core.
-    noise_core: plan_core.Core = .{},
-    /// The core as `advanceIteration` and `checkConvergence` read it: their
-    /// slice (`gen_state.emitIterCore`), or `.{}` when they read nothing off it.
-    iter_core: plan_core.Core = .{},
-    /// Solve invariance per value, block and loop (`plan/setup.zig`).
-    sinv: plan_setup.Sinv = .{},
-    /// §5.6.1.2 the charge sites `q` returns and the rows they stamp
-    /// (`plan/qsite.zig`).
-    qs: plan_qsite.QSites = .{},
-    /// The setup roots and `setup`'s emission state (`codegen/setup.zig`).
-    su: gen_setup.Setup = .{},
     /// Set while the core is emitted. The core slices from every target at
     /// once and computes each value; the §9.4 display unit, the only other
     /// body, slices from one target and reads the rest.
@@ -330,105 +326,54 @@ pub const Gen = struct {
     /// Set by `emitStamps` when it wanted a core call. Under `core_hoisted` it
     /// is the only record that one is needed.
     core_wanted: bool = false,
-    /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
-    display: Display = .drop,
-    /// `Options.vpi_contribs`.
-    vpi_contribs: bool = false,
-    /// `Options.diags`: where E0515 goes, when the caller kept a bag.
-    diags: ?*diag.Bag = null,
-    /// Free branch flows and collapsible switch branches (`plan/topology.zig`).
-    topo: plan_topo.Topology = .{},
-    /// Structural Jacobian columns per residual row: `pat[react][ru]` has bit
-    /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
-    /// it writes each row. Empty until `emitResidual`/`emitFused` allocates it.
-    /// The host reads the emitted constant to drop structurally-zero stamps at
-    /// compile time.
-    pat: [2][]u64 = .{ &.{}, &.{} },
-    /// Which residual rows each half ever writes: bit `ru` of `rows[react]` is
-    /// set when the emitted `eval` (resp. `q`) contains any `res[ru] = ...`.
-    /// Not `pat[react][ru] != 0`: a term that depends on no unknown writes the
-    /// row with a clear pattern (an independent current source), and a host
-    /// that read a clear pattern as "identically zero" would drop it.
-    /// Set beside `pat` in `patRow`, which every `res[...]` writer goes through.
-    rows: [2]u64 = .{ 0, 0 },
-    /// Which half of `pat` the current `emitStamps` writes.
-    pat_react: bool = false,
-    /// Per residual row, either half: the columns whose partial reaches it
-    /// through a frequency-dependent operator (`Analysis.acDynDeps`), the
-    /// source of `ac_dyn_slots`. `patRow` fills it from `cur_dyn`.
-    dpat: []u64 = &.{},
-    /// `acDynDeps` of the contribution `emitStamps` is writing.
-    cur_dyn: u64 = 0,
-    /// Unknowns whose derivative lane `eval`/`q` may read: the mask behind the
-    /// emitted `deriv_reads`. Syntactic, so a superset: every `x[u]`
-    /// `renderValueRef` writes, every `.ddxAt(u)`, and every dispatcher term
-    /// with a non-constant coefficient. See `emitDerivReads`.
-    deriv_reads: u64 = 0,
-    /// §3.2.2 per `Lowered.mem_arrays` row: does some load read a version a
-    /// derivative-carrying store reached (`Analysis.dFree` of the version)?
-    /// Then the storage is `S`; otherwise plain `f64`, and a store keeps only
-    /// the value, since no load could see what it dropped. See `prepare`.
-    arr_s: []bool = &.{},
+    /// The dry run that places each slot's declaration (`unit.Probe`).
+    probe: gen_unit.Probe = .{},
+    /// The surviving hoisted slots and their arrays (`unit.Hoist`).
+    hoist: gen_unit.Hoist = .{},
+
+    // ---- accumulated across declarations, for the tables emitted after ----
+
+    /// Sticky: generation failed, even outside a unit body. Reported out so
+    /// callers do not have to substring-search generated text for a refusal.
+    any_fatal: bool = false,
+    /// §2.8.3/§12.32: the `$name`s this backend did not resolve, in first-call
+    /// order. Becomes `systf_calls`, so the index is the host's binding index.
+    /// Deduplicated by name, because `vpi_register_analog_systf()` registers
+    /// names and requires them unique. Linear scan: the list is tiny.
+    systf_names: std.ArrayList([]const u8) = .empty,
+    /// The `Instance` fields `updateState` advances, in declaration order
+    /// (`file.emitInstance` fills it). `stateCtl` commits each to, and reverts
+    /// it from, the `State` field of the same name.
+    hist: std.ArrayList([]const u8) = .empty,
     /// §5.10 per `Lowered.mem_arrays` row: the held array `updateState`
     /// stores in place and whose `<field>__dirty` range `stateCtl` copies
     /// (`state.inPlaceArrays`). Set by `emitInstance`; empty when none.
     held_in_place: []const bool = &.{},
-    /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
-    /// `ddx_reads`, and a subset of `deriv_reads` by construction.
-    ddx_reads: u64 = 0,
-    /// The dispatcher's constant-coefficient terms, per half:
-    /// `lin[react][row * n_u + col]` is the exact coefficient of `x[col]` in
-    /// `res[row]` as far as the stamps are linear. Only the columns OUTSIDE
-    /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
-    /// Empty above 64 unknowns, where neither decl is emitted.
-    lin: [2][]f64 = .{ &.{}, &.{} },
-    /// The constants of a collapsible switch row that hold only under its
-    /// guard (`dispatch.emitSwitchRow`), eval half; `plan/jac.zig` merges
-    /// them into `jac_const` with a `.when`.
-    guarded: std.ArrayList(plan_jac.Entry) = .empty,
-    /// §4.5.15 the honoured and declined `$limit` sites (`plan/limit.zig`).
-    limits: plan_limit.Limits = .{},
-    /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for
-    /// every other unit). Filled once by `cg_filters.planAll`.
-    filters: []?cg_filters.FilterPlan = &.{},
-
-    /// Where each slot's declaration goes. Filled by `probeBody`; meaningful
-    /// only on the out-of-SSA path (`straight` declares everything at its
-    /// definition).
-    place: std.ArrayList(gen_unit.Place) = .empty,
-    /// Index of a slot inside its type's hoist array, or `none_u32` for a slot
-    /// that keeps its own name. See `emitUnitBody`: the surviving hoists are
-    /// one array per real mask (`hoist_grp`) plus `hi`/`hs`, rather than one
-    /// `var tN` apiece.
-    /// All-`none_u32` while `probing`, so the dry run names every slot `tN`;
-    /// `probeBody` only compares offsets within its own text.
-    hoist_idx: std.ArrayList(u32) = .empty,
-    /// The mask of each real hoist element, by its `hoist_idx` (`emitUnitBody`).
-    hoist_mask: std.ArrayList(u64) = .empty,
-    /// Where each real hoist element (by `hoist_idx`) lives: array `h<grp>`
-    /// at `[pos]`. Array `h<g>` holds every element of mask `hoist_gmask[g]`
-    /// (distinct, in first-use order) and is `hoist_glen[g]` long.
-    hoist_grp: std.ArrayList(u32) = .empty,
-    hoist_pos: std.ArrayList(u32) = .empty,
-    hoist_gmask: std.ArrayList(u64) = .empty,
-    hoist_glen: std.ArrayList(u32) = .empty,
-    /// The mask of each `Lowered.mem_arrays` row's storage (`family.arrMask`).
-    arr_mask: []u64 = &.{},
+    /// Value → field of `limit`'s slice of the core, or `none_u32`
+    /// (`cg_limit.emitCore`); empty when `limit` reads nothing off the core.
+    lim_idx: []u32 = &.{},
+    /// The core as `updateState` reads it: its slice (`gen_state.emitCore`),
+    /// or `.{}` when `updateState` reads nothing off the core.
+    state_core: plan_core.Core = .{},
+    /// The core as `noisePsd` reads it: its slice (`gen_noise.emitNoiseCore`),
+    /// or `.{}` when `noisePsd` reads nothing off the core.
+    noise_core: plan_core.Core = .{},
+    /// The core as `advanceIteration` and `checkConvergence` read it: their
+    /// slice (`gen_state.emitIterCore`), or `.{}` when they read nothing off it.
+    iter_core: plan_core.Core = .{},
+    /// The Jacobian evidence the dispatchers and the renderer leave behind
+    /// (`dispatch.Jac`): patterns, written rows, lane reads and constant
+    /// coefficients.
+    jac: gen_dispatch.Jac = .{},
     /// The raw mask of every real declared, for `family.emitLaneMasks`.
     fam_masks: std.ArrayList(u64) = .empty,
-    /// Emitted lexical scopes, as half-open output offsets. `sc_open` is the
-    /// stack of scopes still being written; `sc_end` their closing offset once
-    /// written. Only live during `probing`.
-    sc_end: std.ArrayList(u32) = .empty,
-    sc_open: std.ArrayList(u32) = .empty,
-    probing: bool = false,
 
     /// The one fact `plan_jobs` needs from the renderer: does a §4.5 control
     /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
     const DynCtrl = struct {
         g: *Gen,
         pub fn isDynamic(d: DynCtrl, v: Mir.Value) Error!bool {
-            return gen_call.ctrlIsDynamic(d.g, v);
+            return gen_host.ctrlIsDynamic(d.g, v);
         }
     };
 
@@ -555,6 +500,11 @@ pub const Gen = struct {
         try gen_setup.planSetup(self);
     }
 
+    // ---- the emitter sub-files ----
+    //
+    // The `pub` aliases below are the sub-file API the `cg_*.zig` emitters
+    // call (`g.renderVal(...)`); everything else stays file-private.
+
     // Setup: the solve-invariant slice, computed once per card (codegen/setup.zig)
     const gen_setup = @import("codegen/setup.zig");
     pub const probeInstance = gen_setup.probeInstance;
@@ -562,10 +512,13 @@ pub const Gen = struct {
 
     // --------------------------------------------------------------- units ----
 
-    // File assembly: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`, §4.5 `Instance`), codegen/file.zig
+    // File assembly, the spine: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`), codegen/file.zig
     const gen_file = @import("codegen/file.zig");
     pub const emitFile = gen_file.emitFile;
     pub const fmtF64 = gen_file.fmtF64;
+
+    // §4.5 `Instance`, its `State` twin and `stateCtl`, codegen/instance.zig
+    const gen_instance = @import("codegen/instance.zig");
 
     // Units: one function per source unit and the body it computes, codegen/unit.zig
     const gen_unit = @import("codegen/unit.zig");
@@ -577,71 +530,25 @@ pub const Gen = struct {
     const gen_render = @import("codegen/render.zig");
     pub const renderVal = gen_render.renderVal;
 
+    // Host expressions: a parameter or control argument -> plain f64/i64 text over `model`, codegen/host_expr.zig
+    const gen_host = @import("codegen/host_expr.zig");
+    pub const f64Const = gen_host.f64Const;
+    pub const f64Expr = gen_host.f64Expr;
+
     // Calls: §4.5 analog operators, §4.6 noise, Clause 9 system functions, codegen/call.zig
     const gen_call = @import("codegen/call.zig");
-    pub const f64Const = gen_call.f64Const;
-    pub const f64Expr = gen_call.f64Expr;
     pub const abort = gen_call.abort;
     pub const strArg = gen_call.strArg;
 
     // Dispatchers: §5.6 residual assembly, §1.3.1.2 reference directions, codegen/dispatch.zig
     const gen_dispatch = @import("codegen/dispatch.zig");
 
+    // §4.6.3/§4.6.4 small-signal source tables, codegen/noise.zig
+    const gen_noise = @import("codegen/noise.zig");
+
     // §4.5.2 the analog-operator state machine and §5.6.5 zero-parasitic collapse, codegen/state.zig
     const gen_state = @import("codegen/state.zig");
 };
-
-/// Returns the LRM Table 4-14/4-15 opcode for `name`, including the `log10`
-/// spelling of the `$` form (IEEE 1364 §17.11). Reuses lowering's tables.
-pub fn mathOpByName(name: []const u8) ?Mir.Opcode {
-    if (Lower.unaryMathOp(name)) |op| return op;
-    if (Lower.binaryMathOp(name)) |op| return op;
-    if (std.mem.eql(u8, name, "log10")) return .log10;
-    return null;
-}
-
-/// Returns whether `s` is an analysis name `analysis()` recognises (LRM §4.6.1).
-pub fn isAnalysisName(s: []const u8) bool {
-    const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
-    for (names) |n| {
-        if (std.mem.eql(u8, s, n)) return true;
-    }
-    return false;
-}
-
-/// Length of the §4.5.7 absdelay history ring, in samples, of a site with no
-/// constant `maxdelay`.
-// ponytail: a fixed 1024 samples with linear interpolation. SPICE's
-// maxstep = min(tstep, span/50) already allows td/dt = 100 steps per delay,
-// and ch04_expressions/a04_05 needs 515. A query older than the ring ends the
-// run with E1012 in `zHistAt` rather than clamping: §4.5.7 bounds no lookback,
-// so a clamp would silently shorten the delay. Upgrade path: host-owned
-// growable history.
-pub const hist_len: usize = 1024;
-/// The step a `maxdelay` site's ring is sized for: `ceil(maxdelay /
-/// hist_min_step) + 2` samples, within [`hist_len`, `hist_max`]. 1 ps is
-/// the step a transmission line with a 1-5 ns delay is resolved at.
-pub const hist_min_step: f64 = 1e-12;
-/// The largest ring a `maxdelay` sizes: 16384 samples, 256 KiB of
-/// `Instance` per site (16.4 ns of delay at `hist_min_step`).
-pub const hist_max: usize = 16384;
-
-// ===========================================================================
-// §4.5 analog operators: which ones own per-instance state
-// ===========================================================================
-
-/// Returns whether `op` has a plain-f64 spelling a GPU can execute.
-///
-/// Unit bodies also compile for nvptx, which has no libm, so only arithmetic
-/// LLVM lowers to one PTX instruction qualifies; everything else keeps its S
-/// form. Real opcodes only: `f64Const` renders integer opcodes in f64, which
-/// drops §3.2's 32-bit wraparound, so an integer residual goes through
-/// `intBin32` instead. Only `f64Const`'s `in_unit` path consults this.
-pub fn devSafe(op: Mir.Opcode) bool {
-    // The `dev_safe` column: sqrt/floor/ceil are there because they are
-    // sqrt.rn.f64 and cvt.rmi/rpi.f64.f64, single instructions.
-    return opcode_zig.get(op).dev_safe;
-}
 
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9), codegen/kernel_text.zig
 const gen_kernel_text = @import("codegen/kernel_text.zig");
@@ -669,11 +576,14 @@ test {
     _ = Gen.gen_setup;
     _ = setup_chunk;
     _ = Gen.gen_file;
+    _ = Gen.gen_instance;
     _ = Gen.gen_unit;
     _ = Gen.gen_cfg;
     _ = Gen.gen_render;
+    _ = Gen.gen_host;
     _ = Gen.gen_call;
     _ = Gen.gen_dispatch;
+    _ = Gen.gen_noise;
     _ = Gen.gen_state;
     _ = gen_kernel_text;
     _ = gen_test;

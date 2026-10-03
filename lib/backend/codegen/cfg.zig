@@ -74,7 +74,7 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     gen_unit.probeDef(self, self.plan.slot[i], true);
     // `or` short-circuits, so the straight-line path (`decl`, which runs
     // without a probe) never touches `place`.
-    const at_def = decl or self.place.items[self.plan.slot[i]].at_def;
+    const at_def = decl or self.probe.place.items[self.plan.slot[i]].at_def;
     try self.ind(depth);
     var m: ?u64 = null;
     if (at_def) {
