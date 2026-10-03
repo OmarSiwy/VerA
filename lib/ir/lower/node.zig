@@ -3,6 +3,12 @@
 //! In: net and port declarations. Out: `nodes` (the U-enum index codegen depends on),
 //! implicit nets, and the port/branch tables.
 //!
+//! Spine, in `lowerModule`'s order: `declarePorts`, `declareNets`,
+//! `bindPortConnections`, `resolveDisciplines`, `declareBranches`. After them,
+//! rows are only appended (implicit nets, §5.4.2 flow unknowns, §4.5.2 operator
+//! states), so a row index, once handed out, is stable. At most `max_nodes`
+//! rows; past that, E1015.
+//!
 //! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §7.2.4.
 
 const std = @import("std");
@@ -12,7 +18,7 @@ const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
 const discipline_rules = @import("../discipline_rules.zig");
 const lower_expr = @import("expr.zig");
-const lower_param = @import("param.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Preprocessor = @import("frontend").Preprocessor;
@@ -44,6 +50,305 @@ pub const State = struct {
 /// The most rows `nodes` holds: a row is a u16 and `ground` is the last value.
 const max_nodes = ground;
 
+// ---- the module's declarations, in `lowerModule`'s order ---------------------
+
+/// §6.5 interns the module's ports as the first `nodes` rows, in declaration
+/// order, which is the host device's terminal order; a §3.6.3 vector port is
+/// one row per element, msb first. Sets `Lowered.num_ports` to the row count
+/// after them.
+pub fn declarePorts(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    for (module.ports) |p| {
+        // §3.6.3/§6.5.2 a vector port is N terminals, in declaration order.
+        if (try portRange(self, &p)) |r| {
+            const name = self.file.str(p.name);
+            const disc = strOrEmpty(self, p.discipline);
+            for (0..r.size()) |k| {
+                const idx = try internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
+                self.out.nodes.items(.dir)[idx] = p.direction;
+            }
+            try self.out.vectors.put(self.arena, name, r);
+            continue;
+        }
+        const idx = try internNode(self, try netKey(self, self.file.str(p.name), p.main_tok), strOrEmpty(self, p.discipline));
+        // §6.5.2.2. Recorded here and nowhere else: only a port can be
+        // directional, and this loop is the only place the direction is known.
+        self.out.nodes.items(.dir)[idx] = p.direction;
+        // §1.3.4.1/§1.3.4.2's "not to `inout` ports" is checked below the net
+        // loop (E0360): the discipline is not known yet here.
+    }
+    self.out.num_ports = @intCast(self.out.nodes.len);
+}
+
+/// §3.6.3 interns the module's internal nets after the ports, records their
+/// §3.6.3.2 nodesets, and binds §3.6.4 ground declarations to `ground`. A net
+/// the discrete half owns (`Lowered.discrete_inputs`) never becomes a row.
+pub fn declareNets(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    for (module.nets) |n| {
+        if (self.out.discrete_inputs.contains(self.file.str(n.name))) continue;
+        // §2.8.1 vs §3.6.3 (see `netKey`). A ranged declaration is a vector and
+        // its own name never reaches the node table, so the key is the scalar
+        // path's and the `vectors` entry below keeps the declared spelling.
+        const name = try netKey(self, self.file.str(n.name), n.main_tok);
+        // §3.6.3 a vector net is N independent nets, scalarised here.
+        //
+        // §3.6.3.2's bus initializer is scalarised with them: "In the case of
+        // analog buses, a constant array expression is used as an initializer.
+        // A null value in the constant array indicates that no nodeset value is
+        // being specified for this element of the bus." `flattenPattern` is
+        // already the per-cell reader the §3.4.4 parameter arrays use, and it
+        // answers `.none` for both spellings of "nothing here" — the clause's
+        // hole and a pattern shorter than the bus.
+        if (n.range) |d| {
+            if (try foldDim(self, d, n.main_tok)) |r| {
+                // Only a pattern seeds nodesets. A non-pattern initializer
+                // (`wire [3:0] wbus = 4'h5;`) is A.2.2.1's continuous assignment
+                // of one value to the whole vector, legal 1364, not §3.6.3.2's
+                // bus form, so it is not an error.
+                // ponytail: the value is dropped. When `assign` is modeled, it
+                // becomes that continuous assignment instead.
+                const seeds: []const Ast.ExprId = if (n.init == .none or
+                    self.file.exprs.tag(n.init) != .assign_pattern)
+                    &.{}
+                else
+                    try lower_shape.flattenPattern(self, n.init, &.{lower_shape.Bounds{ .lo = 0, .hi = r.size() - 1 }});
+                for (0..r.size()) |k| {
+                    const idx = try internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), strOrEmpty(self, n.discipline));
+                    if (k < seeds.len and seeds[k] != .none)
+                        try recordNodeset(self, idx, seeds[k], n.main_tok, name);
+                }
+                try self.out.vectors.put(self.arena, name, r);
+            }
+            continue;
+        }
+        if (n.is_ground) {
+            // §3.6.4 "Each ground declaration is associated with an already
+            // declared net of continuous discipline. ... The net must be
+            // assigned a continuous discipline to be declared ground." The
+            // global reference node is the zero of a potential, and §3.6.2.2
+            // leaves a discrete discipline with no nature to have one.
+            //
+            // The discipline can come from either spelling: `ground <disc> g;`
+            // carries it here, `<disc> g; ground g;` left it on the node the
+            // earlier declaration interned.
+            const dname = if (n.discipline != .none)
+                self.file.str(n.discipline)
+            else if (self.node_voltages.get(name)) |idx|
+                (if (idx == ground) "" else self.out.nodes.items(.disc)[idx])
+            else
+                "";
+            if (self.out.disciplines.get(dname)) |info| {
+                if (info.is_discrete)
+                    try self.err(n.main_tok, .E0344, "`{s}` is of discipline `{s}`, whose domain is discrete", .{ name, dname });
+            }
+            try self.node_voltages.put(self.arena, name, ground);
+            continue;
+        }
+        // §7.4.4, printed again as step 3 of F.2.1/F.2.2: "More than one
+        // conflicting discipline declaration from the same context ... is an
+        // error. In this case, conflicting simply means an attempt to declare
+        // more than one discipline regardless of whether the disciplines are
+        // compatible or not." So the test is a second declaration, not a
+        // mismatch. This is the only site that sees both shapes (a port
+        // interned by the loop above; a body declaration re-disciplining it).
+        //
+        // Both sides must be non-empty: §3.6.5 implicit nets and §3.9 undeclared
+        // ports carry `""`, and a later declaration of one of those is the
+        // first declaration, not a conflict.
+        if (n.discipline != .none) if (self.node_voltages.get(name)) |idx| {
+            const had = if (idx == ground) "" else self.out.nodes.items(.disc)[idx];
+            if (had.len != 0) {
+                var b = self.errWith(n.main_tok, .E0902);
+                b.msg("`{s}` is already of discipline `{s}`", .{ name, had });
+                b.note("`{s}` would be its second, and §7.4.4 forbids a second declaration whether or not the two are compatible", .{self.file.str(n.discipline)});
+                try b.emit();
+                continue; // keep the FIRST declaration; do not silently overwrite it
+            }
+        };
+        const idx = try internNode(self, name, strOrEmpty(self, n.discipline));
+        // §3.6.3.2 the net_decl_assignment, folded. `consts` is already loaded
+        // (the parameter loop runs above the port loop), so a nodeset written
+        // over a parameter folds here and not later.
+        if (n.init != .none) try recordNodeset(self, idx, n.init, n.main_tok, name);
+    }
+}
+
+/// §6.5.7.1 the port connections elaboration recorded: E0925 when a port and
+/// its net differ in width, and each element of a port bound to a
+/// concatenation named as the net it is (E0906 when the counts differ).
+pub fn bindPortConnections(self: *Lower) Oom!void {
+    // §6.5.7.1 "The sizes of the ports and net must match." A net this module
+    // never interned (a discrete input) has no width here to compare.
+    for (self.port_widths) |pw| {
+        const port: u64 = if (pw.range) |d| ((try foldDim(self, d, pw.main_tok)) orelse continue).size() else 1;
+        const net: u64 = if (self.out.vectors.get(pw.net)) |v| v.size() else if (self.node_voltages.contains(pw.net)) 1 else continue;
+        if (port != net)
+            try self.err(pw.main_tok, .E0925, "`{s}` is {d} wide and the port it connects is {d}", .{ pw.net, net, port });
+    }
+
+    // §6.5.7.1 a vector port bound to a concatenated net expression: element k
+    // of the port IS net `elems[k]`, so its key names that net's node.
+    for (self.port_concats) |pc| {
+        const r = (try foldDim(self, pc.range, pc.main_tok)) orelse continue;
+        if (r.size() != pc.elems.len) {
+            try self.err(pc.main_tok, .E0906, "the concatenation is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
+            continue;
+        }
+        for (pc.elems, 0..) |el, k| {
+            const idx = try internNode(self, el, "");
+            try self.node_voltages.put(self.arena, try self.arena.print("{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
+        }
+        try self.out.vectors.put(self.arena, pc.name, r);
+    }
+}
+
+/// §7.4 resolution, as far as VerA implements it: §10.2's default discipline
+/// on every port and net, after every declaration is interned. Then the rules
+/// that need a net's final discipline: §3.9 primitive terminals, §1.3.4's
+/// `inout` ban on signal-flow ports (E0360) and §3.6.3.2's ban on a discrete
+/// net's nodeset (E0366).
+pub fn resolveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's
+    // default. It runs here, after every declaration has been interned: a port
+    // and a body declaration of the same net are two entries
+    // (`module (p); inout p; electrical p;`), and a default written at the
+    // first would make the second a §7.4.4 second declaration (E0902).
+    //
+    // A vector is scalarised by now, so the default is applied to the
+    // elements: `p` itself is not a node.
+    for (module.ports) |p| try applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
+    for (module.nets) |n| if (!self.out.discrete_inputs.contains(self.file.str(n.name)))
+        try applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
+    // §3.9 a digital primitive on a continuous net needs the default the loops
+    // above just applied — after them, so a net it made discrete is not mixed.
+    try checkPrimitiveDisciplines(self, module);
+
+    // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
+    // be bound to `input` or `output` ports of the module, not to `inout`
+    // ports"; §1.3.4.2 says the same of flow signal-flow disciplines. The
+    // sibling of E0425, which rules on the contribution target rather than the
+    // declaration.
+    //
+    // Here and not in the port loop, because only now is the discipline known:
+    // `inout p; voltage p;` splits direction and discipline across two
+    // declarations, and §10.2's default arrives in the `applyDefaultToAll`
+    // loops above.
+    //
+    // `.unspecified` is deliberately not caught: §6.5.2 leaves a port with no
+    // direction declaration to §3.9, and the clause names `inout` only.
+    for (module.ports) |p| {
+        if (p.direction != .inout) continue;
+        const base = self.file.str(p.name);
+        // A vector port is N nets sharing one declaration and therefore one
+        // discipline (§6.5.2), so the first element answers for all of them and
+        // the violation is reported once, at the declaration that commits it.
+        var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+        const probe_name = if (self.out.vectors.get(base)) |r| try lower_shape.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
+        const idx = self.node_voltages.get(probe_name) orelse continue;
+        if (idx == ground) continue;
+        const dname = self.out.nodes.items(.disc)[idx];
+        if (!isSignalFlow(self, dname)) continue;
+        var b = self.errWith(p.main_tok, .E0360);
+        b.msg("`{s}` is an `inout` port of discipline `{s}`, which binds a {s} nature only", .{
+            base, dname, if (self.out.disciplines.get(dname).?.has_potential) "potential" else "flow",
+        });
+        b.help("declare `{s}` as `input` or `output`", .{base});
+        try b.emit();
+    }
+
+    // §3.6.3.2: "Nets with continuous disciplines are allowed to have
+    // initializers on their net discipline declarations; however, nets of
+    // non-continuous disciplines are not."
+    //
+    // Here for the same reason E0360 is here and not at the declaration: a net
+    // and its discipline can arrive in two declarations, and §10.2's default
+    // arrives in the `applyDefaultToAll` loops above. A net that still has no
+    // discipline at this point is left alone — it is §3.6.5's implicit net,
+    // whose domain is decided by resolution (§7.4) and not by this module, and
+    // E0337 already rules on it if anything analog touches it.
+    for (self.out.nodesets.items) |ns| {
+        const dname = self.out.nodes.items(.disc)[ns.node];
+        const info = self.out.disciplines.get(dname) orelse continue;
+        if (!info.is_discrete) continue;
+        var b = self.errWith(ns.tok, .E0366);
+        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.out.nodes.items(.name)[ns.node], dname });
+        b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
+        try b.emit();
+    }
+}
+
+/// §3.12 the module's named branches: a node pair with a fresh `BranchInfo.id`
+/// each (an A.2.3 branch array is one pair and several ids), a §3.12.1 port
+/// branch as the port it names, and a branch with a vector terminal as a
+/// vector branch. Runs after `declareNets`, so every terminal has its row.
+pub fn declareBranches(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §3.12 named branches.
+    for (module.branches) |b| {
+        const base = self.file.str(b.name);
+        // A.2.3 `list_of_branch_identifiers ::= branch_identifier [ range ]
+        // { , branch_identifier [ range ] }`: a branch array, several branches
+        // over one declared terminal pair. Folded here and not in the parser
+        // because the bounds are constant EXPRESSIONS (same reason as §6.5.2.2's
+        // port ranges), and the elements are registered under their scalarised
+        // names so `V(pair[1])` resolves through the ordinary branch lookup.
+        const arr: ?VecRange = if (b.range) |d|
+            (try foldDim(self, d, b.main_tok) orelse continue)
+        else
+            null;
+        if (b.is_port_branch) {
+            // §3.12.1 "A port branch is a special type of branch used to access
+            // the flow into a port of a module (see 5.4.3). It is a branch
+            // between the upper and lower connections of the port." Recorded as
+            // the port and not as a node pair, because those two connections are
+            // one node here: a pair would give an identically zero potential and
+            // an unconstrained second flow unknown. The flow is `I(<p>)`'s (see
+            // `lowerBranchAccess`).
+            const p = try nodeOf(self, b.hi);
+            for (0..(if (arr) |r| r.size() else 1)) |k| {
+                const key = if (arr) |r| try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }) else base;
+                try self.port_branches.put(self.arena, key, p);
+            }
+        } else if (arr) |r| {
+            // A.2.3's branch array: the elements share one (hi, lo) and are
+            // separate branches over it (§5.4.1 "any number of named branches
+            // between any two signals"), so each takes its own identity and its
+            // own accumulator: `br1[0]` and `br1[1]` are two sources.
+            const hi = try nodeOf(self, b.hi);
+            const lo = if (b.lo == .none) ground else try nodeOf(self, b.lo);
+            try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo); // §3.12 → §3.11
+            for (0..r.size()) |k|
+                try self.branches.put(self.arena, try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }), .{
+                    .hi = hi,
+                    .lo = lo,
+                    .id = newBranchId(self),
+                });
+        } else if (vecTerminal(self, b.hi) != null or vecTerminal(self, b.lo) != null) {
+            // §3.12 a branch with a vector terminal is a vector branch.
+            try declareVectorBranch(self, &b);
+            continue;
+        } else {
+            const hi = try nodeOf(self, b.hi);
+            const lo = if (b.lo == .none) ground else try nodeOf(self, b.lo);
+            // §3.12: "The disciplines for the specified nets shall be
+            // compatible (see 3.11)." Only the two-terminal form has two
+            // disciplines to compare; the one-terminal form's second net is
+            // ground, and §3.12 says the branch then "derives" its discipline
+            // from the one net that is named.
+            try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo);
+            try self.branches.put(self.arena, base, .{ .hi = hi, .lo = lo, .id = newBranchId(self) });
+        }
+        // The base name is a vector, so `V(pair)` and `V(pair[9])` get the
+        // vector diagnostics (E0351/E0352) rather than interning an implicit
+        // net, as `declareVectorBranch` arranges for a vector terminal.
+        if (arr) |r| try self.out.vectors.put(self.arena, base, r);
+    }
+}
+
+/// The declared discipline's spelling, `""` for none (§3.6.5, §3.9).
+fn strOrEmpty(self: *const Lower, id: Ast.StrId) []const u8 {
+    return if (id == .none) "" else self.file.str(id);
+}
+// ---- nodes --------------------------------------------------------------------
+
 /// Reports whether `dname` is a §1.3.4 signal-flow discipline: exactly one of its
 /// two natures is bound. A discipline binding both is conservative (§3.6.2.1); one
 /// binding neither (natureless continuous, or discrete) is not signal-flow either.
@@ -58,9 +363,9 @@ pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.out.vectors.get(name) orelse
         return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
-        try applyDefaultDiscipline(self, try lower_param.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
+        try applyDefaultDiscipline(self, try lower_shape.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
 }
 
 /// §10.2: "The default discipline is applied ... to all discrete signals without a
@@ -130,8 +435,8 @@ fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: [
     const name = self.file.str(ex.strOf(base));
     // A vector is scalarised by now and its elements share one discipline
     // (§3.6.3), so the first element answers for the whole net.
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    const key = if (self.out.vectors.get(name)) |r| try lower_param.elemKey(self, &key_buf, name, &.{r.at(0)}) else name;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    const key = if (self.out.vectors.get(name)) |r| try lower_shape.elemKey(self, &key_buf, name, &.{r.at(0)}) else name;
     const idx = self.node_voltages.get(key) orelse return;
     if (idx == ground) return;
     const dname = self.out.nodes.items(.disc)[idx];
@@ -205,13 +510,13 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
 /// continuous segments sharing it. Preserve the net's resolved discipline:
 /// §5.5.3 still reads that net's local nature attributes, not this minimum.
 pub fn collectSignalAbstols(self: *Lower, segments: []const @import("../elaborate.zig").SignalDiscipline) Oom!void {
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (segments) |s| {
         const info = self.out.disciplines.get(s.discipline) orelse continue;
         if (info.is_discrete or !info.has_potential) continue;
         if (self.out.vectors.get(s.net)) |r| {
             for (0..r.size()) |k| {
-                const key = try lower_param.elemKey(self, &key_buf, s.net, &.{r.at(@intCast(k))});
+                const key = try lower_shape.elemKey(self, &key_buf, s.net, &.{r.at(@intCast(k))});
                 collectNodeAbstol(self, key, info.potential_abstol);
             }
         } else collectNodeAbstol(self, s.net, info.potential_abstol);
@@ -404,8 +709,8 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
 /// `internNode` for a vector element, spelled as the source does (`bus[3]`).
 /// Looks up on a stack buffer and allocates only for a new element.
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
-    var buf: [lower_param.elem_key_len]u8 = undefined;
-    const key = try lower_param.elemKey(self, &buf, base, &.{i});
+    var buf: [lower_shape.elem_key_len]u8 = undefined;
+    const key = try lower_shape.elemKey(self, &buf, base, &.{i});
     const name = self.node_voltages.getKey(key) orelse try self.arena.print("{s}[{d}]", .{ base, i });
     return internNode(self, name, "");
 }

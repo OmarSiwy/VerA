@@ -1,18 +1,27 @@
-//! Clause 9 system functions and tasks in analog context, and their arguments.
+//! Clause 9 system functions in analog context, and their arguments.
 //!
-//! In: `$`-calls. Out: MIR calls or folded values, and the host fields (`$simparam`) they read.
+//! In: a `$`-call in expression position. Out: a MIR call or a folded value, and
+//! the host field (`$simparam`) it reads. Statement-position tasks are
+//! `lower/systask.zig`'s, and the §9.13 distributions `lower/random.zig`'s; the
+//! argument helpers here serve both. The §9.2 context tables
+//! (`isDigitalOnlySysFunc` and its siblings) end the file.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.4.7, §4.3.1, §9.2, §9.5, §9.5.4.2, §9.5.7, §9.15, §9.17.3, §9.18, §9.20, §9.22, §9.23.
+//! LRM clauses this file's code cites: §2.8.3, §2.9, §3.3, §3.4.7, §4.3, §4.3.1, §4.4,
+//! §4.5.13, §4.5.15, §4.6.1, §4.7, §4.7.2, §5.6.1.2, §6.6.3, §6.7, §7, §7.6, §9.2, §9.4.1,
+//! §9.4.2, §9.5, §9.5.1, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1, §9.5.4.2, §9.5.7, §9.6, §9.7,
+//! §9.8, §9.9, §9.10, §9.11, §9.12, §9.13, §9.14, §9.15, §9.17, §9.17.3, §9.18, §9.19,
+//! §9.20, §9.21, §9.22, §9.22.1, §9.22.2, §9.22.3, §9.23, §9.23.1, §9.23.4.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
-const lower_event = @import("event.zig");
+const lower_random = @import("random.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_limit = @import("limit.zig");
+const lower_systask = @import("systask.zig");
 const lower_table_model = @import("table_model.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
@@ -42,13 +51,13 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     if (try refuseReserved(self, ex.mainTok(e), name)) return poison;
-    if (lower_event.isDigitalOnlySysFunc(name)) { // §9.2
+    if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.err(self.file.exprs.mainTok(e), .E0806, "`{s}`", .{name});
         return poison;
     }
     // §9.22/§9.23 the driver access family, refused outside a connect module
     // (see `isConnectModuleOnlySysFunc`).
-    if (lower_event.isConnectModuleOnlySysFunc(name)) {
+    if (isConnectModuleOnlySysFunc(name)) {
         // Tables 9-19 and 9-20 split the connect module in two: every driver
         // function reads "Supported in analog context of connectmodule: No"
         // ($receiver_count alone reads Yes). This call is in a connect module's
@@ -123,7 +132,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return .{ .v = self.param_values.items[pi], .ty = .real };
     // §9.13 Table 9-10. Before everything below, because the seed is an inout
     // argument and the write-back is not something a `call` result can express.
-    if (try lower_event.lowerRandom(self, ex.mainTok(e), name, ex.args(e))) |tv| return tv;
+    if (try lower_random.lowerRandom(self, ex.mainTok(e), name, ex.args(e))) |tv| return tv;
     // Annex G Table G.1: the OVI Verilog-A v1.0 spelling `$limexp` was replaced
     // in v2.0 by the bare `limexp` (§4.5.13). `$limexp` is in neither Table 9-11
     // nor A.8.2, so the name does not exist; this is the only retired `$` spelling
@@ -284,15 +293,15 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (std.mem.eql(u8, name, "$test$plusargs") or std.mem.eql(u8, name, "$value$plusargs"))
         self.out.uses.insert(.plusargs);
     if (std.mem.eql(u8, name, "$value$plusargs") and sys_args.len == 2 and sys_args[0] != .none and sys_args[1] != .none)
-        return .{ .v = try lower_event.lowerValuePlusargs(self, sys_args), .ty = .integer };
+        return .{ .v = try lower_systask.lowerValuePlusargs(self, sys_args), .ty = .integer };
     // §9.5.4.2 `$sscanf` writes through its arguments, which a `call` cannot do;
     // `lowerScan` turns it into the assignments it means.
     if (std.mem.eql(u8, name, "$sscanf"))
-        return .{ .v = try lower_event.lowerScan(self, ex.mainTok(e), sys_args), .ty = .integer };
+        return .{ .v = try lower_systask.lowerScan(self, ex.mainTok(e), sys_args), .ty = .integer };
     // §9.5.4/§9.5.7 the same, for the three §9.5 calls with a destination
     // argument. Both halves are integer-valued (§9.5.4.1's character count,
     // §9.5.4.2's item count, §9.5.7's errno).
-    if (try lower_event.lowerFileRead(self, ex.mainTok(e), name, sys_args)) |v|
+    if (try lower_systask.lowerFileRead(self, ex.mainTok(e), name, sys_args)) |v|
         return .{ .v = v, .ty = .integer };
     // §9.5.3 the two writers are tasks: their whole content is the assignment to
     // the string variable, and in expression position there is nothing to assign.
@@ -335,7 +344,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
     // $feof): ordinary values, but each one moves or creates state the next call
     // observes, so it is sequenced into the I/O phase like the tasks.
-    if (Mir.callee.family(.fromName(name)) == .file_func) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
+    if (Mir.callee.family(.fromName(name)) == .file_func) try lower_systask.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
 }
 
@@ -560,10 +569,117 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
 
 /// Returns a system function's result type from `callee.zig`'s `ty` column, the
 /// list `callee.ty` reads too. An unlisted name, including a user `$name`, is real.
-pub fn sysFuncTy(name: []const u8) Ty {
+fn sysFuncTy(name: []const u8) Ty {
     return switch (Mir.callee.ty(Mir.Callee.fromName(name))) {
         .real => .real,
         .int => .integer,
         .str => .string,
     };
+}
+
+// ---- §9.2 which context a system function belongs to -----------------------
+
+/// Whether `name` is a system function whose §9.2 "supported in analog
+/// context" cell says No, across the seven Chapter 9 tables (E0806).
+///
+/// A name test, with no context flag: every statement lowering sees is in the
+/// analog context (A.6.2 `analog_construct`, with §4.7.2 function bodies
+/// inlined into one).
+/// ponytail: add the flag when a §7 digital block is lowered here.
+pub fn isDigitalOnlySysFunc(name: []const u8) bool {
+    const digital_only = [_][]const u8{
+        // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
+        "$displayb",         "$displayh",         "$displayo",
+        "$strobeb",          "$strobeh",          "$strobeo",
+        "$writeb",           "$writeh",           "$writeo",
+        "$monitorb",         "$monitorh",         "$monitoro",
+        "$monitoron",        "$monitoroff",
+        // Table 9-2 (§9.5) — the same radix story against a descriptor, plus
+        // the byte/vector reads and the two digital-netlist loaders.
+              "$fdisplayb",
+        "$fdisplayh",        "$fdisplayo",        "$fwriteb",
+        "$fwriteh",          "$fwriteo",          "$fstrobeb",
+        "$fstrobeh",         "$fstrobeo",         "$fmonitorb",
+        "$fmonitorh",        "$fmonitoro",        "$swriteb",
+        "$swriteh",          "$swriteo",          "$fgetc",
+        "$ungetc",           "$fread",            "$readmemb",
+        "$readmemh",         "$sdf_annotate",
+        // Table 9-3 (§9.6) — the timescale tick, which the analog kernel has
+        // no notion of.
+            "$printtimescale",
+        "$timeformat",
+        // Table 9-5 (§9.8) — "Verilog AMS HDL does not extend the PLA modeling
+        // tasks defined in IEEE Std 1364 Verilog." All sixteen spellings; the
+        // `$` inside the name is an ordinary identifier character (§2.8.3), so
+        // each of these is one token.
+              "$async$and$array",  "$async$and$plane",
+        "$async$nand$array", "$async$nand$plane", "$async$or$array",
+        "$async$or$plane",   "$async$nor$array",  "$async$nor$plane",
+        "$sync$and$array",   "$sync$and$plane",   "$sync$nand$array",
+        "$sync$nand$plane",  "$sync$or$array",    "$sync$or$plane",
+        "$sync$nor$array",   "$sync$nor$plane",
+        // Table 9-6 (§9.9) — "Verilog AMS HDL does not extend the stochastic
+        // analysis tasks defined in IEEE Std 1364 Verilog."
+          "$q_initialize",
+        "$q_remove",         "$q_exam",           "$q_add",
+        "$q_full",
+        // Table 9-7 (§9.10) — tick counts. $abstime is the analog spelling and
+        // is the one row of that table with Yes in both columns; §9.10's NOTE
+        // additionally deprecates $realtime in the analog context.
+                  "$time",             "$stime",
+        "$realtime",
+        // Table 9-8 (§9.11) — the extension is four names, not two:
+        // "$bitstoreal and $realtobits,$rtoi and $itor can be used in the
+        // analog context". Table 9-8's analog column agrees — only $signed and
+        // $unsigned read No, and both presuppose a sized vector.
+                "$signed",           "$unsigned",
+    };
+    for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
+}
+
+/// Whether `name` is analog-only: its §9.2 "Supported in digital context" cell
+/// is No and its analog cell Yes. §9.7 says it of the severity tasks in prose.
+pub fn isAnalogOnlySysFunc(name: []const u8) bool {
+    const analog_only = [_][]const u8{
+        "$debug", "$fdebug", // Tables 9-1/9-2
+        "$fatal", "$warning", "$error", "$info", // Table 9-4
+        "$simprobe", // §9.15
+        "$discontinuity", "$limit", "$bound_step", // §9.17
+        "$vera_reject_step", // VerA's step rejection
+        "$param_given", "$port_connected", // §9.19
+        "$analog_node_alias", "$analog_port_alias", // §9.20
+    };
+    for (analog_only) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
+}
+
+/// §9.22 paragraph 3, second sentence: "Driver access functions can only be
+/// called from connect modules." §9.23 repeats the fence for its four
+/// supplementary functions ("supported in the digital context of
+/// connectmodules"), and Table 9-19 gives every name below "Supported in analog
+/// context of connectmodule: No".
+///
+/// A rule about the call site: an ordinary module is not a connect module, so
+/// the call is illegal on sight. Answering 0 in codegen would look right and be
+/// wrong, since §9.22.2/§9.22.3/§9.23.x index "between 0 and N-1".
+///
+/// A name test like `isDigitalOnlySysFunc`: every call site lowering reaches is
+/// inside the elaborated device, and `elaborate.pickTop` never picks a connect
+/// module (§7.6), so a driver call inside one is never lowered here.
+///
+/// `$receiver_count` is listed because its "Non-normative" §9.22.1 paragraph
+/// sits inside §9.22, takes the same `signal_name` argument, and Table 9-19
+/// carries it with the rest.
+pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
+    const cm_only = [_][]const u8{
+        // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.
+        "$driver_count",         "$receiver_count", "$driver_state",
+        "$driver_strength",
+        // §9.23.1–§9.23.4, the supplementary pending-event queries.
+             "$driver_delay",   "$driver_next_state",
+        "$driver_next_strength", "$driver_type",
+    };
+    for (cm_only) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
 }
