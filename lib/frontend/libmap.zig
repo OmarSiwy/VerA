@@ -20,6 +20,8 @@ pub const Spec = struct {
     class: Class,
 };
 
+/// One §13.2.1 `library` declaration: its name and every file path
+/// specification it lists, in order. Slices live in `load`'s arena.
 pub const Library = struct { name: []const u8, specs: []const Spec };
 
 /// Where §13.2.1.1 puts a source file.
@@ -29,6 +31,8 @@ pub const Placement = union(enum) {
     ambiguous: [2][]const u8,
 };
 
+/// Every library map file read, merged; built by `load`, all slices in its
+/// arena.
 pub const Map = struct {
     /// In declaration order, map files in the order given; a name declared
     /// twice is one library holding both declarations' specifications.
@@ -61,7 +65,7 @@ pub const Map = struct {
 
     /// §13.5.1 the search order with no configuration: "the library
     /// declaration order in the library map file", then `work` when no map
-    /// declares it.
+    /// declares it. The slice is allocated in `arena`.
     pub fn order(map: Map, arena: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
         var out: std.ArrayList([]const u8) = .empty;
         for (map.libraries) |l| try out.append(arena, l.name);
@@ -69,12 +73,14 @@ pub const Map = struct {
         return out.items;
     }
 
+    /// Returns the index of the library called `name` in `libraries`, or null.
     pub fn declares(map: Map, name: []const u8) ?usize {
         for (map.libraries, 0..) |l, i| if (std.mem.eql(u8, l.name, name)) return i;
         return null;
     }
 };
 
+/// `load`'s errors: `MapFailed` after a refusal reported as E0244.
 pub const Error = error{ MapFailed, OutOfMemory };
 
 /// Reads the map files at `paths`, in order (§13.2.1: "If multiple map files
