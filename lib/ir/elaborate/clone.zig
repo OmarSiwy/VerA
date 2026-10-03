@@ -9,7 +9,7 @@ const hier_param = @import("../hier_param.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
-const elab_paramset = @import("paramset.zig");
+const elab_override = @import("override.zig");
 const Ast = @import("frontend").Ast;
 const dist = @import("../dist.zig");
 const rng = @import("kernels").rng_kernels;
@@ -123,6 +123,7 @@ pub fn cloneDelay(self: *Flatten, d: Ast.Delay3) Error!Ast.Delay3 {
     return .{ .rise = try cloneExpr(self, d.rise), .fall = try cloneExpr(self, d.fall), .off = try cloneExpr(self, d.off) };
 }
 
+/// Returns named event `e` under its flat name, dimensions cloned.
 pub fn cloneEvent(self: *Flatten, e: Ast.EventDecl) Error!Ast.EventDecl {
     return .{ .name = elab_names.flat(self, e.name), .dims = try cloneDims(self, e.dims), .main_tok = e.main_tok };
 }
@@ -175,6 +176,11 @@ pub fn cloneFunc(self: *Flatten, fd: Ast.FuncDecl) Error!Ast.FuncDecl {
 
 /// A rename-map entry `hide` removed, restored by `unhide`.
 pub const HiddenName = struct { name: Ast.StrId, was: ?Ast.StrId };
+
+comptime {
+    // One row per local of every cloned block and function; 12 B budget.
+    std.debug.assert(@sizeOf(HiddenName) == 12);
+}
 
 /// Removes `name` from the unit's rename map for a local scope and records
 /// the old binding in `list`. The caller restores the whole list with
@@ -446,7 +452,7 @@ fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
         const seed = constIntLit(x, eff[0]) orelse break :fold;
         var p = [2]f64{ 0, 0 };
         for (eff[1..], 0..) |arg, i| {
-            p[i] = elab_paramset.constReal(self, arg) orelse break :fold;
+            p[i] = elab_override.constReal(self, arg) orelse break :fold;
             if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
                 try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, dist.paramName(d, i), p[i] });
                 bad = true;
