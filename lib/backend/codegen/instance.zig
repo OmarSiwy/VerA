@@ -236,6 +236,12 @@ pub fn emitInstance(self: *Gen) Error!void {
             });
         }
     }
+    // A `State` with no field at all is zero-sized and comptime-known, and a
+    // host that stores it beside its `Instance` (`.{ inst, st }`) can no longer
+    // take its bytes: keep the §9.17 twins as its content rather than emit an
+    // empty `State`.
+    if (self.hist.items.len == 0 and !pathLatches(self) and self.lowered.limit_slots.items.len == 0)
+        try self.hist.appendSlice(self.arena, &.{ "bound_step", "discontinuity_order" });
     try emitTpFields(self);
     if (hasStatus(self)) try self.w(
         \\    /// §9.7.3 the first `$fatal`/`$error` reported, `contract.statusSite`'s
