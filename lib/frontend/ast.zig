@@ -422,11 +422,39 @@ pub const ExprStore = struct {
 /// Stored slices are borrowed (source substrings or parser arena copies) and
 /// never freed here; they must outlive the table.
 pub const StringInterner = struct {
+    /// The text of each id, indexed by `StrId`.
     strings: std.ArrayList([]const u8) = .empty,
-    map: std.StringHashMapUnmanaged(StrId) = .empty,
+    /// The set of ids, hashed by their text. The key is the 4-byte id, not
+    /// the 16-byte slice `strings` already holds: 5 bytes a slot instead of
+    /// 21 (3,640 names in 8,192 slots on psp103, in both the AST's table and
+    /// the MIR's).
+    map: std.HashMapUnmanaged(StrId, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    /// Hashes an id by its text, for the map's own rehashing.
+    const IdContext = struct {
+        strings: []const []const u8,
+        pub fn hash(c: IdContext, id: StrId) u64 {
+            return std.hash_map.hashString(c.strings[@backingInt(id)]);
+        }
+        pub fn eql(_: IdContext, a: StrId, b: StrId) bool {
+            return a == b;
+        }
+    };
+
+    /// Looks a text up among the ids without interning it.
+    const TextAdapter = struct {
+        strings: []const []const u8,
+        pub fn hash(_: TextAdapter, s: []const u8) u64 {
+            return std.hash_map.hashString(s);
+        }
+        pub fn eql(a: TextAdapter, s: []const u8, id: StrId) bool {
+            return std.mem.eql(u8, s, a.strings[@backingInt(id)]);
+        }
+    };
 
     pub const empty: StringInterner = .{};
 
+    /// Frees both tables; the interned slices are borrowed and left alone.
     pub fn deinit(self: *StringInterner, gpa: std.mem.Allocator) void {
         self.strings.deinit(gpa);
         self.map.deinit(gpa);
@@ -434,16 +462,17 @@ pub const StringInterner = struct {
     }
 
     /// Returns the id for `s`, adding it if new. `s` is borrowed and must
-    /// outlive the table.
+    /// outlive the table. On OOM the table is unchanged.
     pub fn intern(self: *StringInterner, gpa: std.mem.Allocator, s: []const u8) !StrId {
-        const gop = try self.map.getOrPut(gpa, s);
-        if (gop.found_existing) return gop.value_ptr.*;
-        const id: StrId = @fromBackingInt(@intCast(@as(u32, @intCast(self.strings.items.len))));
-        // errdefer: on OOM below, drop the just-inserted key so the table never
-        // maps a name to an id that has no string.
-        errdefer _ = self.map.remove(s);
-        try self.strings.append(gpa, s);
-        gop.value_ptr.* = id;
+        // Room for the text first, so a failed append can never leave the
+        // map holding an id with no string.
+        try self.strings.ensureUnusedCapacity(gpa, 1);
+        const items = self.strings.items;
+        const gop = try self.map.getOrPutContextAdapted(gpa, s, TextAdapter{ .strings = items }, .{ .strings = items });
+        if (gop.found_existing) return gop.key_ptr.*;
+        const id: StrId = @fromBackingInt(@intCast(@as(u32, @intCast(items.len))));
+        gop.key_ptr.* = id;
+        self.strings.appendAssumeCapacity(s);
         return id;
     }
 
@@ -455,7 +484,15 @@ pub const StringInterner = struct {
 
     /// Returns the id for `s` without inserting it.
     pub fn find(self: *const StringInterner, s: []const u8) ?StrId {
-        return self.map.get(s);
+        return self.map.getKeyAdapted(s, TextAdapter{ .strings = self.strings.items });
+    }
+
+    /// Returns a copy whose tables are `gpa`'s; the interned slices stay
+    /// borrowed. Caller owns the copy and frees it with `deinit(gpa)`.
+    pub fn clone(self: *const StringInterner, gpa: std.mem.Allocator) !StringInterner {
+        var strings = try self.strings.clone(gpa);
+        errdefer strings.deinit(gpa);
+        return .{ .strings = strings, .map = try self.map.cloneContext(gpa, IdContext{ .strings = self.strings.items }) };
     }
 
     /// Returns whether `id` names `s`; false for `.none`.
@@ -1613,8 +1650,7 @@ pub const SourceFile = struct {
         std.debug.assert(self.strings.strings.items.len == 0);
         std.debug.assert(self.exprs.nodes.len == 0);
         std.debug.assert(self.stmts.items.len == 0);
-        self.strings.strings = try src.strings.strings.clone(gpa);
-        self.strings.map = try src.strings.map.clone(gpa);
+        self.strings = try src.strings.clone(gpa);
         self.exprs.nodes = try src.exprs.nodes.clone(gpa);
         self.exprs.pool = try src.exprs.pool.clone(gpa);
         self.exprs.reals = try src.exprs.reals.clone(gpa);
@@ -1657,6 +1693,38 @@ pub const SourceFile = struct {
     pub fn stmtTok(self: *const SourceFile, id: StmtId) u32 {
         return self.stmt_toks.items[@backingInt(id)];
     }
+
+    /// Returns the §5.3.2 block statement `id` for in-place editing (the
+    /// parser names a generate block after the fact, §6.6.3). Asserts `id`
+    /// is a `.block`. Invalidated by the next `addStmt`.
+    ///
+    /// Use this, not `stmts.items[id].block`: a pool row will hold a handle
+    /// to the block rather than the block (docs/seams/s1-frontcore.md).
+    pub fn seqBlockMut(self: *SourceFile, id: StmtId) *SeqBlock {
+        return &self.stmts.items[@backingInt(id)].block;
+    }
+
+    /// Returns an iterator over every §5.3.2 block statement in the pool, in
+    /// statement order, for a pass that wants every block's declarations.
+    /// Use it, not a filter over `stmts.items`: the pool will keep blocks in
+    /// a table of their own.
+    pub fn seqBlocks(self: *const SourceFile) SeqBlockIterator {
+        return .{ .rows = self.stmts.items };
+    }
+
+    /// See `seqBlocks`. Valid until the next `addStmt`.
+    pub const SeqBlockIterator = struct {
+        rows: []const Stmt,
+        i: u32 = 0,
+
+        pub fn next(it: *SeqBlockIterator) ?*const SeqBlock {
+            while (it.i < it.rows.len) {
+                defer it.i += 1;
+                if (it.rows[it.i] == .block) return &it.rows[it.i].block;
+            }
+            return null;
+        }
+    };
 
     /// What an expression edge of a statement is to that statement.
     pub const Edge = enum {
@@ -1992,4 +2060,12 @@ test "statement pool keeps handles and token column in lockstep" {
         .contribute => |c| try std.testing.expectEqual(lhs, c.lhs),
         else => return error.WrongTag,
     }
+
+    // A block edited in place is the block every later read sees.
+    const name = try f.intern(gpa, "genblk1");
+    f.seqBlockMut(blk).gen_name = name;
+    var it = f.seqBlocks();
+    try std.testing.expectEqual(name, it.next().?.gen_name);
+    try std.testing.expectEqual(null, it.next());
+    try std.testing.expectEqual(name, f.stmt(blk).block.gen_name);
 }
