@@ -8,6 +8,7 @@ const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
 const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
@@ -349,7 +350,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             break :blk .{ .width = if (n.width == 0) 32 else n.width, .signed = n.signed };
         },
         // An unsized based constant is an integer-sized operand (Table
-        // 5-22) whose x/z fill is decided in context (`exec.unsizedFill`).
+        // 5-22) whose x/z fill is decided in context (`evaluate.unsizedFill`).
         .logic_literal => blk: {
             const n = ex.logicValue(e);
             break :blk .{ .width = if (n.sized) n.width else 32, .signed = n.signed };
@@ -547,7 +548,7 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
     if (!constantExpression(self, e)) return self.exprFail(e, "integral replication requires a constant expression");
     var scratch = std.heap.ArenaAllocator.init(self.arena);
     defer scratch.deinit();
-    const value = try exec.eval(self, scratch.allocator(), e, 0);
+    const value = try evaluate.eval(self, scratch.allocator(), e, 0);
     if (value.hasUnknown()) return self.exprFail(e, "replication count cannot contain X or Z");
     if (value.signed and value.bit(value.width - 1) == .one) return self.exprFail(e, "replication count cannot be negative");
     for (value.values()[1..]) |word| if (word != 0) return self.exprFail(e, "replication count exceeds the supported u32 range");
@@ -1356,7 +1357,7 @@ fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
                 else => rg, // else: a bit-select's index
             };
             if (index != .none and !constantExpression(self, index)) return self.exprFail(x, refused);
-            const sel = (try exec.selection(self, self.arena, x)) orelse return self.exprFail(x, "§9.3.2: the select's index is x or z");
+            const sel = (try evaluate.selection(self, self.arena, x)) orelse return self.exprFail(x, "§9.3.2: the select's index is x or z");
             if (sel.first < 0 or sel.first + sel.count > self.values[at].width) return self.exprFail(x, "§9.3.2: the select is outside its net");
             return .{ .at = at, .bits = .{ .lo = @intCast(sel.first), .width = sel.count } };
         },
@@ -1669,7 +1670,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (ex.tag(e) == .concat) {
         for (ex.args(e)) |x| {
             try checkTarget(self, x);
-            if ((try exec.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
+            if ((try evaluate.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
         }
         return;
     }
@@ -1801,7 +1802,7 @@ pub fn selectTerm(self: *Run, e: Ast.ExprId) Error!?SelectTerm {
         else => if (!constantExpression(self, rg)) return null, // else: a bit-select's index
     }
     try checkExpr(self, e);
-    const sel = (try exec.selection(self, self.arena, e)) orelse return null;
+    const sel = (try evaluate.selection(self, self.arena, e)) orelse return null;
     if (sel.first < 0 or sel.count > 64 or sel.first + sel.count > self.values[at].width) return null;
     return .{ .slot = at, .first = @intCast(sel.first), .count = sel.count };
 }

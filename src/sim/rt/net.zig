@@ -1,5 +1,5 @@
 //! What the drivers of a resolved net assert -> the value the net shows,
-//! published through `State.store` so its waiters wake as `exec.resolve`'s
+//! published through `State.store` so its waiters wake as `resolution.resolve`'s
 //! store wakes them, plus the delayed transitions in flight. The tables are
 //! `digital/net.zig`'s; the one fold here, the all-strong one, is `Signal`'s.
 //! Clauses: IEEE 1364-2005 §7.9 Tables 7-4 to 7-7, §7.10, §3.7, §3.8, §6.1.3,
@@ -25,7 +25,7 @@ pub const net_base: u32 = root.show_base | 2 << 28;
 /// `decay_base + k`: net k's §3.8 charge decays to x (`drive_base`).
 pub const decay_base: u32 = root.show_base | 3 << 28;
 
-/// One net `exec.resolve` folds: `Run.nets[k]` with its word offset.
+/// One net `resolution.resolve` folds: `Run.nets[k]` with its word offset.
 pub const Net = struct {
     kind: Ast.NetKind,
     slot: u32,
@@ -304,7 +304,7 @@ pub fn gate(s: *State, i: u32, comptime kind: Ast.GateKind, ins: []const Bit) Er
     return driveBit(s, i, s.nets.drivers[i].source.gate, o.bit, o.or_z);
 }
 
-/// §8 UDP driver `i` over its input bits (`exec.udpValue`).
+/// §8 UDP driver `i` over its input bits (`resolution.udpValue`).
 pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const t = &s.nets;
     const k = t.drivers[i].source.udp;
@@ -326,7 +326,7 @@ pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     return driveBit(s, i, t.drivers[i].delay_bit orelse 0, out, false);
 }
 
-/// §7.6 MOS switch driver `i` (`exec.mosValue`): its data at the data
+/// §7.6 MOS switch driver `i` (`resolution.mosValue`): its data at the data
 /// net's strength, reduced by §7.12, while `gate` conducts; z when it does
 /// not; H/L when the gate is x or z. A z on the data passes as z.
 pub fn mos(s: *State, i: u32, data: Bit, gate_: Bit) Error!void {
@@ -368,7 +368,7 @@ pub fn pull(s: *State, i: u32) Error!void {
     return drive(s, i, planes, false);
 }
 
-/// `exec.resolve` of net `k`: every driver folded, a `trireg`'s charge
+/// `resolution.resolve` of net `k`: every driver folded, a `trireg`'s charge
 /// where none asserts anything, the net type's own pull; then published,
 /// or after the net's `delay3`.
 pub fn resolve(s: *State, k: u32) Error!void {
@@ -452,7 +452,7 @@ fn foldStrong(t: *const Nets, n: Net, res: []u64, cv: []const u64, cx: []const u
     return driven_any == 0;
 }
 
-/// `exec.resolve`'s fold, bit by bit through `Signal`.
+/// `resolution.resolve`'s fold, bit by bit through `Signal`.
 fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
     const n = t.nets[k];
     const nw = cv.len;
@@ -483,7 +483,7 @@ fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
 /// One bit of one net, as a pass switch terminal sees it.
 const Node = struct { net: u32, bit: u32 };
 
-/// `exec.resolveJoined`: §7.6 "switch processing shall consider all the
+/// `resolution.resolveJoined`: §7.6 "switch processing shall consider all the
 /// devices in a bidirectional switch-connected net before it can determine
 /// the appropriate value for any node". Each bit of net `start` and the net
 /// bits joined to it through switches that may conduct resolve as one, from
@@ -543,14 +543,14 @@ fn shown(s: *const State, n: Net, at: u32) Int.Bit {
     return @fromBackingInt(@intCast(v | x << 1));
 }
 
-/// What driver `di` asserts on bit `at` of its net (`exec.contribution`).
+/// What driver `di` asserts on bit `at` of its net (`resolution.contribution`).
 pub fn contribution(t: *const Nets, di: u32, at: u32) Signal {
     const nw = words(t.nets[t.drivers[di].net].width);
     const b = bitAt(t.cur[t.at[di]..][0 .. 2 * nw], at);
     return if (t.or_z[di] and b != .z) .orZ(b, t.s0[di], t.s1[di]) else .of(b, t.s0[di], t.s1[di]);
 }
 
-/// `exec.arrive`: what `own`, asserted at `z`, asserts at `y` over `p`.
+/// `resolution.arrive`: what `own`, asserted at `z`, asserts at `y` over `p`.
 fn crossed(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
     const sig = dnet.reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
     return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
@@ -632,7 +632,7 @@ pub fn switchCtrl(s: *State, i: u32, c: Bit) Error!void {
     try resolve(s, tr.b);
 }
 
-/// `exec.switchAfter`: a controlled switch with a delay turns on after the
+/// `resolution.switchAfter`: a controlled switch with a delay turns on after the
 /// first, off after the second, and to unknown conduction after the
 /// smaller; a control that returns before its change lands cancels it.
 fn switchAfter(s: *State, i: u32, next: dnet.Tran.State) Error!void {
@@ -651,7 +651,7 @@ fn switchAfter(s: *State, i: u32, next: dnet.Tran.State) Error!void {
     t.tpending[i] = s.sched.scheduleAfter(t.trans[i].delay.to(to), .inactive, tran_base + i) catch |e| return s.timeFail(e);
 }
 
-/// `exec.chargeState`: the §3.8 decay countdown restarts on each entry
+/// `resolution.chargeState`: the §3.8 decay countdown restarts on each entry
 /// into the capacitive state and stops on leaving it.
 fn chargeState(s: *State, k: u32, floating: bool) Error!void {
     const t = &s.nets;
@@ -665,7 +665,7 @@ fn chargeState(s: *State, k: u32, floating: bool) Error!void {
     t.decay_ev[k] = s.sched.scheduleAfter(after, .inactive, decay_base + k) catch |e| return s.timeFail(e);
 }
 
-/// `exec.schedule`, §6.1.3's inertial rule: whether a transition to `to`
+/// `resolution.schedule`, §6.1.3's inertial rule: whether a transition to `to`
 /// must be scheduled, having cancelled the one it displaces and recorded
 /// `to` in `tgt`. Not when the value settles back to what is published, or
 /// is what is already on its way: a pulse shorter than the delay vanishes.
@@ -725,7 +725,7 @@ pub fn arrive(s: *State, payload: u32) Error!void {
 
 test "the all-strong plane fold is Signal's fold" {
     // Every net kind the fold covers, three drivers, every 4^3 combination
-    // on one bit each, against `exec.resolve`'s per-bit fold.
+    // on one bit each, against `resolution.resolve`'s per-bit fold.
     const kinds = [_]Ast.NetKind{ .wire, .tri, .wand, .wor, .triand, .trior, .tri0, .tri1, .supply0, .supply1, .trireg };
     const bits = [_]Int.Bit{ .zero, .one, .z, .x };
     for (kinds) |kind| for (bits) |charge| {

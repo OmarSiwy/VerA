@@ -7,7 +7,8 @@ const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
 const Int = Front.Integer;
-const exec = @import("exec.zig");
+const waiters = @import("waiters.zig");
+const evaluate = @import("evaluate.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
@@ -47,7 +48,7 @@ const bad_length = 5;
 const duplicate_id = 6;
 
 fn int(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?i64 {
-    return (try exec.eval(self, a, e, 0)).asInt();
+    return (try evaluate.eval(self, a, e, 0)).asInt();
 }
 
 /// The simulation time in the module's unit, which §17.6's statistics are in.
@@ -62,9 +63,9 @@ pub fn queueTask(self: *Run, a: std.mem.Allocator, op: QueueOp, args: []const As
     const in1: ?i64 = if (op == .initialize or op == .add or op == .exam) try int(self, a, args[1]) else null;
     const in2: ?i64 = if (op == .initialize or op == .add) try int(self, a, args[2]) else null;
     const r = try queueStep(&self.queues, self.arena, op, id, in1, in2, now(self));
-    if (r.out[0]) |v| try exec.assignInt(self, a, args[1], v);
-    if (r.out[1]) |v| try exec.assignInt(self, a, args[2], v);
-    try exec.assignInt(self, a, args[3], r.status);
+    if (r.out[0]) |v| try evaluate.assignInt(self, a, args[1], v);
+    if (r.out[1]) |v| try evaluate.assignInt(self, a, args[2], v);
+    try evaluate.assignInt(self, a, args[3], r.status);
 }
 
 /// The §17.6 queues, by `q_id`.
@@ -135,7 +136,7 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
 /// §17.6.5 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
 pub fn queueFull(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
     const r = queueIsFull(&self.queues, try int(self, a, args[0]));
-    try exec.assignInt(self, a, args[1], r.status);
+    try evaluate.assignInt(self, a, args[1], r.status);
     return r.full;
 }
 
@@ -212,7 +213,7 @@ pub fn random(self: *Run, a: std.mem.Allocator, f: Dist, args: []const Ast.ExprI
         try self.bag.add(.lower, .W1151, .{ .start = start, .end = start }, dist_warning, .{});
         return 0;
     };
-    try exec.assignInt(self, a, args[0], d.seed);
+    try evaluate.assignInt(self, a, args[0], d.seed);
     return d.value;
 }
 
@@ -280,8 +281,8 @@ pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.E
     };
     switch (f) {
         .fopen => {
-            const name = try text(a, try exec.eval(self, a, args[0], 0));
-            const mode = if (args.len == 1) null else try text(a, try exec.eval(self, a, args[1], 0));
+            const name = try text(a, try evaluate.eval(self, a, args[0], 0));
+            const mode = if (args.len == 1) null else try text(a, try evaluate.eval(self, a, args[1], 0));
             return fopen(t, a, self.file_name, name, mode, args.len == 1);
         },
         .fgets => return fgets(self, a, t, args),
@@ -290,7 +291,7 @@ pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.E
         // §17.2.7: the code, and its description in `str`, cleared when 0.
         .ferror => {
             const code = if (t.err) |err| err((try descriptor(self, a, args[0])) orelse 0) else 0;
-            try exec.assign(self, a, args[1], try stringValue(a, fk.zFErrorStr(code, 0)));
+            try evaluate.assign(self, a, args[1], try stringValue(a, fk.zFErrorStr(code, 0)));
             return code;
         },
         else => {}, // else: `fileOp`'s
@@ -354,9 +355,9 @@ pub fn fileOp(t: contract.FileIo, f: FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
 /// count, 0 when nothing was read (and `str` is left alone).
 fn fgets(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
     const d = (try descriptor(self, a, args[1])) orelse return 0;
-    const room = (try exec.targetType(self, args[0])).width / 8;
+    const room = (try evaluate.targetType(self, args[0])).width / 8;
     const line = try readLine(a, t, d, room);
-    if (line.len != 0) try exec.assign(self, a, args[0], try stringValue(a, line));
+    if (line.len != 0) try evaluate.assign(self, a, args[0], try stringValue(a, line));
     return @intCast(line.len);
 }
 
@@ -379,7 +380,7 @@ pub fn readLine(a: std.mem.Allocator, t: contract.FileIo, d: i64, room: u32) std
 /// offending input character is left unread in the input stream".
 fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
     const d = (try descriptor(self, a, args[0])) orelse return -1;
-    const format = try text(a, try exec.eval(self, a, args[1], 0));
+    const format = try text(a, try evaluate.eval(self, a, args[1], 0));
     var file = try fileScan(a, t, d, format, args.len - 2);
     try scanAssign(self, a, &file.scan, args[2..]);
     return finishFileScan(t, file, file.scan);
@@ -430,9 +431,9 @@ fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast
     const ex = &self.file.exprs;
     const base = if (ex.tag(args[0]) == .ident) try self.slot(args[0]) else 0;
     const arr = (if (ex.tag(args[0]) == .ident) self.arrays.get(base) else null) orelse {
-        const width = (try exec.targetType(self, args[0])).width;
+        const width = (try evaluate.targetType(self, args[0])).width;
         const w = try readWord(a, t, d, width);
-        if (w.value) |v| try exec.assign(self, a, args[0], v);
+        if (w.value) |v| try evaluate.assign(self, a, args[0], v);
         return w.n;
     };
     var at = if (args.len > 2 and args[2] != .none) (try int(self, a, args[2])) orelse return 0 else arr.low;
@@ -441,7 +442,7 @@ fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast
     while (at >= arr.low and at <= arr.high and left > 0) {
         const w = try readWord(a, t, d, self.values[base].width);
         read += w.n;
-        try exec.store(self, base + @as(u32, @intCast(at - arr.low)), (w.value orelse break).planes);
+        try waiters.store(self, base + @as(u32, @intCast(at - arr.low)), (w.value orelse break).planes);
         if (at == arr.high) break;
         at += 1;
         left -= 1;
@@ -509,8 +510,8 @@ pub fn channels(t: ?contract.FileIo, io: ?std.Io, out: *std.Io.Writer, d: i64, b
 
 /// §17.2.4.3 `$sscanf(str, format, args...)` in the interpreter (`Scan`).
 fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
-    const input = try text(a, try exec.eval(self, a, args[0], 0));
-    const format = try text(a, try exec.eval(self, a, args[1], 0));
+    const input = try text(a, try evaluate.eval(self, a, args[0], 0));
+    const format = try text(a, try evaluate.eval(self, a, args[1], 0));
     return (try scanInto(self, a, input, format, args[2..])).code;
 }
 
@@ -528,10 +529,10 @@ fn scanAssign(self: *Run, a: std.mem.Allocator, sc: *Scan, outs: []const Ast.Exp
             const v = try filled(a, 64, true, .zero);
             v.values()[0] = b[0];
             v.unknowns()[0] = b[1];
-            try exec.assign(self, a, outs[x.arg], v);
+            try evaluate.assign(self, a, outs[x.arg], v);
         },
-        .chars => |c| try exec.assign(self, a, outs[x.arg], try stringValue(a, c)),
-        .real => |r| try exec.assignReal(self, a, outs[x.arg], r),
+        .chars => |c| try evaluate.assign(self, a, outs[x.arg], try stringValue(a, c)),
+        .real => |r| try evaluate.assignReal(self, a, outs[x.arg], r),
     };
 }
 
@@ -725,7 +726,7 @@ pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show:
     defer self.out = saved;
     if (show) |sh| try @import("display.zig").display(self, args[1..], a, sh) else try @import("display.zig").sformat(self, args[1..], a);
     self.out = saved;
-    try exec.assign(self, a, args[0], try stringValue(a, buf.written()));
+    try evaluate.assign(self, a, args[0], try stringValue(a, buf.written()));
 }
 
 fn setBitsOfByte(v: Int.Literal, lo: u32, byte: u8) void {
@@ -764,10 +765,10 @@ pub const pla_tasks = blk: {
 pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) Error!void {
     const base = try self.slot(args[0]);
     const arr = self.arrays.get(base).?; // compile proved it is an array
-    const in = try exec.eval(self, a, args[1], 0);
-    const out = try filled(a, (try exec.targetType(self, args[2])).width, false, .x);
+    const in = try evaluate.eval(self, a, args[1], 0);
+    const out = try filled(a, (try evaluate.targetType(self, args[2])).width, false, .x);
     plaEval(p, self.values[base..][0..arr.count], in, out);
-    try exec.assign(self, a, args[2], out);
+    try evaluate.assign(self, a, args[2], out);
 }
 
 /// §17.5 one evaluation into `out`, which starts all x: row k of the

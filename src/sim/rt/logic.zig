@@ -182,7 +182,7 @@ fn rsWide(s: anytype, comptime from: u32, comptime to: u32, comptime sign: bool)
     return narrow(to, o);
 }
 
-/// A one-bit result in its context (`exec.scalarContext`).
+/// A one-bit result in its context (`evaluate.scalarContext`).
 pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
     const n: u2 = @backingInt(b);
     return rs(W{ .v = n & 1, .x = n >> 1 }, 1, w, sign);
@@ -552,7 +552,7 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
     };
 }
 
-/// §4.8.2 integer to real (`exec.realOfInt`): the value read by its own
+/// §4.8.2 integer to real (`evaluate.realOfInt`): the value read by its own
 /// signedness, each x or z bit as 0.
 pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
     // ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
@@ -561,7 +561,7 @@ pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
     return @floatFromInt(lo);
 }
 
-/// §4.8.2 real to integer (`exec.intOfReal`): rounded to nearest, halves
+/// §4.8.2 real to integer (`evaluate.intOfReal`): rounded to nearest, halves
 /// away from zero, as a 64-bit signed value; x when no such integer exists.
 pub inline fn ofReal(r: f64) W {
     if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return allX(64);
@@ -590,7 +590,7 @@ pub inline fn word0(a: anytype) u64 {
 }
 
 /// §5.1.13 a real `?:` under an x or z condition is always zero, after
-/// both arms have been evaluated (`exec.evalReal`).
+/// both arms have been evaluated (`evaluate.evalReal`).
 pub inline fn realCond(c: Bit, y: f64, n: f64) f64 {
     return switch (c) {
         .one => y,

@@ -7,7 +7,8 @@
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
-const exec = @import("exec.zig");
+const waiters = @import("waiters.zig");
+const evaluate = @import("evaluate.zig");
 const compile = @import("compile.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
@@ -559,7 +560,7 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
     const v = &r.vcd;
     switch (op) {
         .file => if (args.len == 1 and !v.started) {
-            const name = try @import("system.zig").text(a, try exec.eval(r, a, args[0], 0));
+            const name = try @import("system.zig").text(a, try evaluate.eval(r, a, args[0], 0));
             v.setFile(r.arena, name, callText(r.text, r.starts[tok])) catch |e| return failed(r, e);
         },
         .vars => {
@@ -568,16 +569,16 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
             if (args.len == 0) {
                 for (r.roots) |s| try targets.append(a, .{ .scope = s });
             } else {
-                levels = std.math.lossyCast(u32, (try exec.eval(r, a, args[0], 0)).asInt() orelse 0);
+                levels = std.math.lossyCast(u32, (try evaluate.eval(r, a, args[0], 0)).asInt() orelse 0);
                 for (args[1..]) |e| try targets.append(a, try target(r, e));
             }
             v.select(r.arena, r.scheduler.now, tok, levels, targets.items) catch |e| {
                 if (e == error.DumpvarsTime) return r.fail(tok, message(error.DumpvarsTime), .{});
                 return failed(r, e);
             };
-            try exec.requestVcd(r);
+            try waiters.requestVcd(r);
         },
-        .limit => v.limit = std.math.lossyCast(u64, (try exec.eval(r, a, args[0], 0)).asInt() orelse 0),
+        .limit => v.limit = std.math.lossyCast(u64, (try evaluate.eval(r, a, args[0], 0)).asInt() orelse 0),
         .flush, .off, .on, .all => v.control(a, r.io, try catalogOf(r), Values{ .r = r }, r.scheduler.now, op) catch |e| return failed(r, e),
     }
 }

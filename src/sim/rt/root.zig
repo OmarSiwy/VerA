@@ -115,7 +115,7 @@ pub const Design = struct {
     dead: []const [2]u32 = &.{},
     /// §10.2.1 per slot (empty without `vera_activations`): 1 + the task
     /// whose out-of-line automatic activations each own this named event,
-    /// else 0 (`exec.eventContext`).
+    /// else 0 (`waiters.eventContext`).
     act_events: []const u32 = &.{},
 };
 
@@ -222,7 +222,7 @@ pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
 /// What `State.next` returns for a settle event.
 pub const settle_pc: u32 = std.math.maxInt(u32);
 
-/// `exec.Edge`: §5.10.1 an edge is a change toward 1 or away from 1.
+/// `waiters.Edge`: §5.10.1 an edge is a change toward 1 or away from 1.
 pub const Edge = enum(u2) {
     any,
     posedge,
@@ -264,7 +264,7 @@ pub const Reach = packed struct(u8) {
     pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
 };
 
-/// `exec.Susp`: where the process resumes, in which §10.2.3 activation
+/// `waiters.Susp`: where the process resumes, in which §10.2.3 activation
 /// (`State.ctx`, 0 for none). `seq` is its `State.stamp`.
 const Susp = struct { pc: u32, gen: u32, ctx: u32 = 0, alive: bool, seq: u64 = 0 };
 /// `exec.Act`: one activation of a timed task that reaches itself, entered
@@ -907,7 +907,7 @@ pub const State = struct {
         poke(two, self.v.ptr, self.x.ptr, off, .{ .v = v, .x = x }, m);
     }
 
-    /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
+    /// `waiters.store` of the bits `m` of `slot`, whose words start at `off`:
     /// nothing happens unless the value changes; then every waiter it
     /// matches wakes, of those `reach` names. `a` is a `logic.T`, `m` the
     /// `logic.M` of its width.
@@ -948,7 +948,7 @@ pub const State = struct {
         try self.wakeOf(reach, slot, before, logic.low(peek(k, self.v.ptr, self.x.ptr, off)));
     }
 
-    /// `put` of a real (§4.8, `exec.store`): it changes when its value
+    /// `put` of a real (§4.8, `waiters.store`): it changes when its value
     /// does, so -0.0 over 0.0 is no change and a NaN always is one.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
         _ = m;
@@ -1085,7 +1085,7 @@ pub const State = struct {
     }
 
     /// §9.3: an `assign` or `force` holds `slot` and blocks every write but
-    /// its own process's (`exec.store`'s guard; an `assign` holds only a
+    /// its own process's (`waiters.store`'s guard; an `assign` holds only a
     /// variable, which `compile` ensures).
     inline fn held(self: *const State, slot: u32) bool {
         if (!overrides or self.overriding) return false;
@@ -1129,7 +1129,7 @@ pub const State = struct {
         try self.runPlain(start, null);
     }
 
-    /// `exec.releaseBits`: part `k` of `slot` is its drivers' again; the
+    /// `waiters.releaseBits`: part `k` of `slot` is its drivers' again; the
     /// design re-resolves the net.
     pub fn releaseBits(self: *State, slot: u32, k: u32) Error!void {
         const p = &self.layers[slot].parts[k];
@@ -1161,7 +1161,7 @@ pub const State = struct {
         return self.layers[slot].force != null;
     }
 
-    /// `exec.release`: §9.3 `deassign` (`force` false) or `release` of
+    /// `waiters.release`: §9.3 `deassign` (`force` false) or `release` of
     /// `slot`; releasing what is not held is a no-op. A released variable
     /// held by an `assign` is that assign's again; true when a released net
     /// must be re-resolved from its drivers, which the design does.
@@ -1272,7 +1272,7 @@ pub const State = struct {
         self.resident[act.sub] = ctx;
     }
 
-    /// `exec.eventContext`: the live activation of automatic task `sub`
+    /// `waiters.eventContext`: the live activation of automatic task `sub`
     /// that activation `from` runs inside, or 0.
     fn eventContext(self: *const State, sub: u32, from: u32) u32 {
         var ctx = from;
@@ -1280,7 +1280,7 @@ pub const State = struct {
         return 0;
     }
 
-    /// `exec.selectedEvent`: §9.7.3 the element `select` names, read in the
+    /// `waiters.selectedEvent`: §9.7.3 the element `select` names, read in the
     /// waiter's activation `ctx`; the running one is resident again after.
     fn selectIn(self: *State, select: *const EventSelect, ctx: u32) Error!?u32 {
         if (!activations or ctx == self.ctx) return select(self);
@@ -1359,7 +1359,7 @@ pub const State = struct {
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e});
     }
 
-    /// `exec.wake`: the continuous drivers reading `slot` first, then the
+    /// `waiters.wake`: the continuous drivers reading `slot` first, then the
     /// event controls in the order they suspended. Under the static
     /// schedule the nodes reading it come before them, and the triggered
     /// processes take their place in that order by `stamp`. A change of a
@@ -1458,7 +1458,7 @@ pub const State = struct {
         return self.seq;
     }
 
-    /// `exec.park`: suspend the running process, to resume at `pc`.
+    /// `waiters.park`: suspend the running process, to resume at `pc`.
     pub fn park(self: *State, pc: u32) Error!u32 {
         const id = self.free_susps.pop() orelse blk: {
             try self.susps.append(self.gpa, .{ .pc = 0, .gen = 0, .alive = false });
@@ -1473,7 +1473,7 @@ pub const State = struct {
         return id;
     }
 
-    /// `exec.watch`: file one term of suspension `id` under `slot`.
+    /// `waiters.watch`: file one term of suspension `id` under `slot`.
     pub fn watch(self: *State, id: u32, slot: u32, edge: Edge) Error!void {
         return self.watchTerm(id, slot, edge, null);
     }
