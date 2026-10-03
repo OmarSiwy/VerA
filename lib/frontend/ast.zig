@@ -389,6 +389,7 @@ pub const SourceFile = struct {
         rows: []const Stmt,
         i: u32 = 0,
 
+        /// Returns the next block, or null after the last.
         pub fn next(it: *SeqBlockIterator) ?*const SeqBlock {
             while (it.i < it.rows.len) {
                 defer it.i += 1;
