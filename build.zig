@@ -108,6 +108,7 @@ pub fn build(b: *std.Build) void {
     // roots here keeps every runner grading the same suite.
     const o = b.addOptions();
     o.addOption([]const u8, "fixture_root", pathFromRoot(b, "tests/fixtures"));
+    o.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     o.addOption([]const u8, "docs_root", pathFromRoot(b, "docs"));
     o.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-suite"));
     o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
@@ -200,6 +201,17 @@ pub fn build(b: *std.Build) void {
     spice.addArg("spice");
     b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
         .dependOn(&spice.step);
+
+    // What vera says about every fixture, snapshotted so a refactor phase can
+    // prove it changed nothing (AGENTS.md §4): `-- before`, `-- after`, then
+    // `-- diff`. No check on the step, for the cacheability reason
+    // `test-devices` gives: the fixtures are read at run time.
+    const golden = b.addRunArtifact(suite_exe);
+    golden.addArtifactArg2(exe, .{});
+    golden.addArg("golden");
+    golden.addPassthruArgs();
+    b.step("golden", "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)")
+        .dependOn(&golden.step);
 
     // The VPI acceptance test. A VPI implementation is only tested from C:
     // `tests/fixtures/ch11_vpi/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
