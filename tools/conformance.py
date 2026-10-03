@@ -1327,10 +1327,14 @@ def verilator_table(work, vera):
         f.write_text(ripple_adder(wd, v, gates=True))
         designs.append(str(f))
 
+    import shutil
+    # GNU time, not the shell keyword; NixOS has no /usr/bin/time.
+    gnu_time = "/usr/bin/time" if os.path.exists("/usr/bin/time") else shutil.which("time") or "/usr/bin/time"
+
     def timed(out, argv, cwd=ROOT):
         """argv with stdout to `out`, stderr to work/err: (ok, seconds, MB) by GNU time."""
         with open(out, "wb") as o, open(work / "err", "wb") as e:
-            rc = subprocess.run(["/usr/bin/time", "-f", "%e %M", "-o", str(work / "t")] + argv, stdout=o, stderr=e, cwd=cwd).returncode
+            rc = subprocess.run([gnu_time, "-f", "%e %M", "-o", str(work / "t")] + argv, stdout=o, stderr=e, cwd=cwd).returncode
         secs, kb = (work / "t").read_text().strip().split("\n")[-1].split()
         return rc == 0, secs, "%.1f" % (int(kb) / 1024)
 
