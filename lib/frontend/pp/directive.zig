@@ -62,13 +62,13 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         if (pp.opts.include_dirs.len == 0) {
             b.note("no include directories were configured; only the built-in annex D headers ({s}) are resolvable", .{"constants.vams, disciplines.vams"});
         } else {
-            b.note("searched: {s}", .{try std.mem.join(pp.arena, ", ", pp.opts.include_dirs)});
+            b.note("searched: {s}", .{try std.mem.join(pp.scratch, ", ", pp.opts.include_dirs)});
         }
         try b.emit();
         return error.PreprocessFailed;
     };
 
-    try pp.includes.append(pp.arena, path);
+    try pp.includes.append(pp.scratch, path);
     defer _ = pp.includes.pop();
     // Registered under the opened path, so `__FILE__` and every diagnostic
     // inside the file name the file that was read (§10.7).
@@ -103,7 +103,8 @@ pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
         }
     }
     const text = builtin_includes.get(std.fs.path.basename(path)) orelse return null;
-    return .{ .text = text, .path = path };
+    // `path` may slice a macro body on scratch, and the bag keeps the name.
+    return .{ .text = text, .path = try pp.arena.dupe(u8, path) };
 }
 
 // ---------------------------------------------------------------------------
@@ -133,10 +134,11 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
     // Anything after the qualifier is not in Syntax 10-1 either. Reported with
     // the same code so the rule reads as one rule.
     try expectEnd(pp, &r, off, .E0127, "qualifier", "Syntax 10-1 is `default_discipline [ discipline_identifier [ qualifier ] ], and nothing more");
-    try pp.defaults.append(pp.arena, .{
+    try pp.events.disciplines.append(pp.scratch, .{
         .at = @intCast(pp.out.items.len),
         .qualifier = qual,
-        .discipline = disc,
+        // Published in `Output`, and `disc` may slice a macro body on scratch.
+        .discipline = try pp.arena.dupe(u8, disc),
     });
 }
 
@@ -173,7 +175,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "a transition time cannot be `{s}`", .{text});
     }
     try expectEnd(pp, &r, off, .E0129, "transition time", "Syntax 10-2 is `default_transition transition_time, and nothing more");
-    try pp.mark(&pp.transitions, t);
+    try pp.mark(&pp.events.transitions, t);
 }
 
 /// Parses an IEEE 1364 §19.9 `` `timescale <unit> / <precision> `` and records
@@ -182,8 +184,8 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
 /// is E0142.
 pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     // Marked null first and filled in on success; a `resetall also writes null.
-    const event = pp.timescale_events.items.len;
-    try pp.mark(&pp.timescale_events, null);
+    const event = pp.events.timescales.items.len;
+    try pp.mark(&pp.events.timescales, null);
     var r: Rest = .{ .s = rest };
     const unit = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time unit");
     r.skipSpace();
@@ -201,7 +203,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     }
     r.skipSpace();
     if (r.i < r.s.len) return badTimescale(pp, off, &r, "nothing more");
-    pp.timescale_events.items[event].value = .{ .unit = unit, .precision = precision };
+    pp.events.timescales.items[event].value = .{ .unit = unit, .precision = precision };
 }
 
 /// Emits E0142 naming what §19.9's grammar wanted. `r.i` is undefined after a
@@ -245,7 +247,7 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
         return error.PreprocessFailed;
     };
     try expectEnd(pp, &r, off, .E0140, "net type", "§19.2 is `default_nettype default_nettype_value, and nothing more");
-    try pp.mark(&pp.nettypes, value);
+    try pp.mark(&pp.events.nettypes, value);
 }
 
 /// Parses an IEEE 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
@@ -272,7 +274,7 @@ pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void 
         return error.PreprocessFailed;
     };
     try expectEnd(pp, &r, off, .E0141, "pull value", "§19.10 takes one operand and nothing more");
-    try pp.mark(&pp.drives, value);
+    try pp.mark(&pp.events.drives, value);
 }
 
 /// Fails with `code` if anything but white space is left on the directive
