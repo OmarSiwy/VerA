@@ -103,6 +103,7 @@ const Env = struct {
     }
 };
 
+/// `Env` with `$clog2`'s width and signedness rules (`constfold.intPlan`'s env).
 const ClogEnv = struct {
     base: Env,
     pub fn leaf(env: ClogEnv, e: Ast.ExprId) ?Const {
@@ -180,6 +181,8 @@ pub fn clog2Width(self: *const Lower, e: Ast.ExprId) ?u32 {
     return constfold.clog2Width(self.file, e, WidthEnv(true){ .self = self, .depth = 0 });
 }
 
+/// `$clog2`'s IEEE self-determined source signedness, the companion of
+/// `clog2Width`; null when nothing in scope states it.
 pub fn clog2Signed(self: *const Lower, e: Ast.ExprId) ?bool {
     return constfold.clog2Signed(self.file, e, WidthEnv(true){ .self = self, .depth = 0 });
 }
@@ -200,6 +203,9 @@ fn nameSignedForClog2(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
     return if (p.ty != .integer) null else if (p.integer32) true else p.source_signed;
 }
 
+/// The width-and-sign plan `lower/expr.zig` lowers a `$clog2` operand by, under
+/// `parent`'s context. Folds no parameter (`params = false`): a model card may
+/// override one. Null when the operand's integer sizing is unknown.
 pub fn clog2Plan(self: *const Lower, e: Ast.ExprId, parent: ?constfold.IntContext) ?constfold.IntPlan {
     return constfold.intPlan(self.file, e, ClogEnv{ .base = .{ .self = self, .params = false } }, parent);
 }

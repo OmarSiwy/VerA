@@ -1,8 +1,17 @@
 //! AST → MIR lowering: elaborates the file (§6), then lowers the device
 //! module's declarations and analog blocks into `Mir` plus the `Lowered` side
 //! tables (params, nodes, branches, contributions, held state) every later
-//! stage reads. Covers most of LRM ch3-5 and ch9 in analog context; the work is
-//! split across `lower/*.zig`, and the aliases at the bottom are the API.
+//! stage reads. Covers most of LRM ch3-5 and ch9 in analog context.
+//!
+//! The spine is `lower` → `lowerFile` → `lowerModule`, and `lowerModule` reads
+//! as the order of the pass: disciplines, parameters, ports and nets, branches,
+//! variables, the analog blocks, then the end-of-block reads and finishers.
+//! Each step lives in the `lower/*.zig` file named for the table it owns (the
+//! map at the bottom of this file); a sub-file's private state is a `State` on
+//! `Lower` that only that file touches. This file holds what every sub-file
+//! shares: the state, the diagnostics, the MIR helpers and the §4.2.1 type
+//! coercions. The aliases at the bottom are what other modules call.
+//!
 //! `nodes` order is the solver-unknown order; keep it stable.
 
 const std = @import("std");
@@ -29,38 +38,37 @@ pub const Oom = std.mem.Allocator.Error;
 /// `lowerFile`'s errors: OOM, "diagnostics were reported", or no module to lower.
 pub const Error = Oom || error{ DiagnosticsReported, NoModule };
 
-/// A resolved §3.4 parameter.
-pub const ParamInfo = struct {
-    name: []const u8,
-    /// Token of the declaration, so a finiteness diagnostic can point a label at
-    /// "`k` declared here" and hang a `from (0:inf)` suggestion off it.
-    tok: u32 = Mir.no_tok,
-    ty: Ast.Type,
-    /// An explicit `integer` declaration converts to signed 32 bits; an
-    /// inferred integral parameter retains its initializer's bit pattern.
-    integer32: bool = true,
-    /// Final HDL declaration width, retained for self-determined operands.
-    /// Numeric model bindings change the value, not this source metadata.
-    source_width: ?u32 = null,
-    source_signed: ?bool = null,
-    default: Mir.Value,
-    /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`; proof.zig uses them as
-    /// bound evidence.
-    ranges: []const Ast.ValueRange = &.{},
-    /// §3.4.5 localparam: not part of the model card ABI.
-    is_local: bool = false,
-    /// §3.4 the value under the declared defaults, folded over the AST. The
-    /// emitted `Model` field initializer needs it, and it cannot always be
-    /// recovered from `default`: a §4.2.12 `?:` lowers to a diamond and a phi
-    /// that no MIR fold sees through. Null when the default is not a constant
-    /// expression.
-    folded: ?Const = null,
-    /// §3.2/§3.4/§6.6 a shape parameter: its value was folded into a shape (an
-    /// array or vector bound, a replication count, a genvar loop bound, a
-    /// generate scheme), which the device fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
-    /// Set by `lower_constfold.shapeEval`.
-    shape: bool = false,
-};
+// `Lowered`'s row types (lower/tables.zig), under the `Lower.X` names later
+// stages and the sub-files use.
+pub const ParamInfo = Lowered.ParamInfo;
+pub const Alias = Lowered.Alias;
+pub const unnamed_branch = Lowered.unnamed_branch;
+pub const ground = Lowered.ground;
+pub const none_u32 = Lowered.none_u32;
+pub const NodeKind = Lowered.NodeKind;
+pub const FlowKey = Lowered.FlowKey;
+pub const PortProbe = Lowered.PortProbe;
+pub const Nodeset = Lowered.Nodeset;
+pub const VecRange = Lowered.VecRange;
+pub const DisciplineInfo = Lowered.DisciplineInfo;
+pub const Access = Lowered.Access;
+pub const Kind = Lowered.Kind;
+pub const Contribution = Lowered.Contribution;
+pub const NoiseKind = Lowered.NoiseKind;
+pub const NoiseSrc = Lowered.NoiseSrc;
+pub const ChargeSite = Lowered.ChargeSite;
+pub const Ty = Lowered.Ty;
+pub const HeldVar = Lowered.HeldVar;
+pub const MemArray = Lowered.MemArray;
+pub const LimitSlot = Lowered.LimitSlot;
+pub const TpBlock = Lowered.TpBlock;
+pub const TpSlot = Lowered.TpSlot;
+pub const Display = Lowered.Display;
+pub const Const = Lowered.Const;
+
+// ---------------------------------------------------------------------------
+// Lowering's own types: never reach a later stage
+// ---------------------------------------------------------------------------
 
 /// §3.4 "parameters can be modified at compilation time": the value a
 /// `--param name=value` gives the top module's parameter `name`, in place of
@@ -79,201 +87,72 @@ pub const BranchInfo = struct {
     id: u32,
 };
 
-/// §5.4.1 Example 2: "There can only be one unnamed branch between any two nets
-/// or between a net and implicit ground (in addition to any number of named
-/// branches)." So every `V(a,b)`/`I(a,b)` reference shares this one identity,
-/// distinct from every named branch over the same pair.
-pub const unnamed_branch: u32 = 0;
-
-/// §1.3.1.1 the global reference node. Not a solver unknown, so it is a
-/// sentinel rather than a `nodes` row: probing it yields a literal 0.
-pub const ground: u16 = std.math.maxInt(u16);
-
-/// What quantity a `nodes` row carries, recorded where the slot is created
-/// (`appendNode`). Never re-derive it from the name: §2.8.1 strips an escaped
-/// identifier's backslash, so the net `\flow(p,n)` collides byte-for-byte with
-/// what `flowUnknown` prints. The payload is the node whose discipline supplies
-/// the unknown's §3.6.1.2 tolerance. §6.5.2 vector elements are ordinary nets
-/// (`b[1]`, `b[0]`; §3.6.3), so `\b[0]` and `b[0]` still collide.
-pub const NodeKind = union(enum) {
-    /// §3.6 a net: a declared one, a §3.6.5 implicit one, or a §3.6.3 element.
-    net,
-    /// §5.4.2 the current of a branch, carrying the branch's high node.
-    branch_flow: u16,
-    /// §5.4.3 the current through a port, carrying the port.
-    port_flow: u16,
-    /// §4.5.2 the unknown an analog operator site introduces ("new equations
-    /// and new unknowns"), carrying its tolerance: the operator's abstol or
-    /// nature argument, else the 1e-6 an undisciplined net gets. A potential.
-    op_state: f64,
-};
-
-/// §5.4.2 the identity of an unnamed branch: its ordered node pair, the key of
-/// `flow_unknowns`.
-pub const FlowKey = struct { hi: u16, lo: u16 };
-
-/// §4.4 access-function flavour. `V(a,b)` is a potential, `I(a,b)` a flow;
-/// user natures rename them (§3.6.1.4) but the two roles are closed.
-pub const Access = enum(u8) { potential, flow };
-
-/// A §5.6 contribution target and its accumulated value, split into resistive
-/// and reactive (§5.6.1.2) parts. One entry per (access, branch), never one per
-/// `<+`: §5.6.1.3 makes `<+` an accumulation, so the values are the final reads
-/// of an SSA place and conditional contributions fall out. Keyed on the branch,
-/// not the node pair, because §5.4.1 allows any number of named branches over
-/// one pair (§5.4.3's diode uses two). KCL is unaffected: every entry stamps
-/// the same two node rows.
-pub const Contribution = struct {
-    access: Access,
-    /// §5.4.1 which branch retains this value: a `BranchInfo.id`, or
-    /// `unnamed_branch` for the one implicit branch of the node pair.
-    br: u32 = unnamed_branch,
-    /// Token of the `<+` this unit came from; W0650 reports per unit, so it
-    /// needs the statement, not the instruction that broke the proof.
-    tok: u32 = Mir.no_tok,
-    hi: u16, // `nodes` row (or `ground`)
-    lo: u16, // `nodes` row (or `ground`)
-    resist_val: Mir.Value = .f_zero, // → eval()
-    react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
-    /// §5.6.1.3 "If a value is retained for the potential ... otherwise, if a
-    /// value is retained for the flow ... otherwise the branch is an open
-    /// circuit." Retention depends on the cycle's execution path, so this is
-    /// the end-of-block read of `Accum.wrote`: 1.0 for an unconditional `<+`,
-    /// 0.0 for one discarded on the straight line, and a phi when an `if`
-    /// decides, which makes codegen select the branch row at run time.
-    /// `.direct` only.
-    wrote_val: Mir.Value = .f_zero,
-    noise_srcs: []const NoiseSrc = &.{}, // §4.6.4
-    /// §5.6.7 `V(out) : V(in) == e` has the topology of a direct potential
-    /// contribution (a source in the branch, its current an unknown) with a
-    /// different constitutive row. `.direct` carries `V(hi,lo) - resist_val`;
-    /// `.indirect` carries `resist_val` alone (probe - equation), because the
-    /// branch voltage is what is being solved for (a nullor).
-    ///
-    /// A `.indirect` entry is never deduped by `contribIndex`: §5.6.1.3
-    /// accumulation is a property of `<+`, and each indirect statement is its
-    /// own equation with its own source.
-    kind: Kind = .direct,
-    /// `Ast.AnalogBlock.unit` of the block that opened this accumulator: the
-    /// module instance whose §5.4.1 branch it is. Read by `discardOpposite`
-    /// alone. An entry that later absorbs a same-kind `<+` from another
-    /// instance keeps the first id, so a third instance wired across the pair
-    /// cannot discard the aggregate.
-    unit: u32 = 0,
-    /// A `<+` from an instance other than `unit` accumulated into this entry
-    /// (two devices in parallel over one pair). The row is still right; what
-    /// is gone is any one instance's share of it, so a reader that wants the
-    /// flow of `unit`'s own §5.4.1 branch (the VPI, §11.6.7) must refuse.
-    shared: bool = false,
-};
-
-/// Whether a `Contribution` is a `<+` (`.direct`) or a §5.6.7 indirect
-/// branch assignment.
-pub const Kind = enum(u8) { direct, indirect };
-
-/// §5.4.3 one probed module port: the port's `nodes` row and the
-/// `nodes` row of the flow unknown that carries `I(<port>)`.
-pub const PortProbe = struct { port: u16, u: u16 };
-
 /// §5.4.2.1 one access function read, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
-
-/// §3.6.3.2 one net_decl_assignment: the net's `nodes` row and the folded
-/// initializer — "a nodeset value for the potential of the net by the analog
-/// solver". An initial guess, never a constraint, so it is metadata for a host
-/// and reaches nothing in the residual.
-pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
-
-/// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones, then
-/// §4.6.3's stimulus. Append only, so no existing ordinal moves. `ac_stim` is
-/// not noise and never reaches `noise_gens` (codegen routes it to `ac_gens`);
-/// it is here because it shares the A.8.2 grammar node and therefore the same
-/// collection walk (`noiseSrcsOf`, identity dedup, `var_noise`).
-pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log, ac_stim };
-
-/// §4.6.4 one noise generator a contribution carries: its PSD kind and its
-/// identity. `id` is the `Ast.ExprId` of the declaring call, because §4.6.4.6
-/// makes one call one generator: two contributions reaching the same call
-/// (through a variable) share it, perfectly correlated, while two separate
-/// calls never do. Codegen renames ids densely into `contract.NoiseGen.source`.
-/// A contribution holds a set of these, since a branch may combine several.
-/// The PSD is the arguments (`pwr`, `exp`), not the kind: `white_noise(2·q·|I|)`
-/// and `white_noise(4·k·T/R)` differ only in `pwr`; codegen exports both
-/// through `noisePsd`.
-pub const NoiseSrc = struct {
-    kind: NoiseKind,
-    id: u32,
-    /// §4.6.4.1/.2 arg 0. `.f_zero` only for a generator whose call never
-    /// lowered, which cannot happen through `lowerNoise`.
-    ///
-    /// On an `.ac_stim` row this is §4.6.3's `mag`, the first numeric argument
-    /// (the analysis name is a string and does not take a slot), defaulting to
-    /// the clause's 1.
-    pwr: Mir.Value = .f_zero,
-    /// §4.6.4.2 arg 1, the frequency exponent. Unread on a `.thermal` row, and
-    /// 1 for a one-argument `flicker_noise`.
-    ///
-    /// On an `.ac_stim` row this is §4.6.3's `phase` in radians, defaulting to
-    /// the clause's 0, which is why `lowerNoise` seeds the pair differently
-    /// for a stimulus.
-    exp: Mir.Value = .f_one,
-    /// §4.6.4.3/.4 arg 0 of a `.table`/`.table_log` row: the vector, flattened
-    /// to `f0, p0, f1, p1, …` and still unfolded. Empty on every other kind and
-    /// on a table call whose argument was not a vector. Codegen folds, sorts and
-    /// validates it with `Analysis.foldConst`.
-    table: []const Mir.Value = &.{},
-    /// The call's own token, for the diagnostics codegen raises over `table`.
-    tok: u32 = Mir.no_tok,
-    /// §4.6.4.6 the coefficient this contribution applies to the generator:
-    /// the `c1` of `V(a,b) <+ c1*n`; the branch carries `coeff²·pwr`. Per
-    /// (contribution, generator), because one shared `white_noise` reaching two
-    /// branches is one source with two coefficients, whose product is the
-    /// cross-spectrum. Signed: opposite signs are anti-correlation.
-    /// `.f_zero` means no contribution has claimed the row yet; the first use
-    /// replaces it and later ones add. A row still at zero in codegen is read
-    /// as 1 (`planNoise`).
-    coeff: Mir.Value = .f_zero,
-    /// The generator appears in a shape no single factor describes. `coeff` is
-    /// then 1 and stays there.
-    nonlinear: bool = false,
-    /// §4.6.4.1/.2/.3 the optional trailing `name` argument, verbatim; empty
-    /// when the call did not supply one. A label only: same-name combination is
-    /// a property of the host's noise summary, and §4.6.4.6 keeps separate
-    /// calls uncorrelated whatever they are called. It never merges rows or
-    /// touches `id`; it reaches `contract.NoiseGen.name`.
-    name: []const u8 = "",
-};
-
-/// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
-/// and for codegen's per-node abstol; nothing here consumes it.
-pub const DisciplineInfo = struct {
-    potential_abstol: f64 = 1e-6,
-    flow_abstol: f64 = 1e-12,
-    is_discrete: bool = false, // §3.6.2.2
-    /// §3.6.2.1 a conservative discipline binds both a potential and a flow
-    /// nature; §3.6.2.2 a signal-flow discipline binds only one. Codegen needs
-    /// the distinction: a contribution to a signal-flow net has no KCL meaning.
-    has_potential: bool = false,
-    has_flow: bool = false,
-    /// §3.6.1.4 the access identifier each bound nature declares, `""` when the
-    /// discipline binds none. §4.4 requires the name in `V(n)` to be this one,
-    /// so the check needs the discipline's spelling, not just the global set of
-    /// access names.
-    potential_access: []const u8 = "",
-    flow_access: []const u8 = "",
-};
-
-/// Value type of a lowered expression (§3.1). `Ast.Type.unspecified` is
-/// resolved before it reaches here.
-pub const Ty = enum(u8) { real, integer, string };
 
 /// A lowered expression: its Value plus the LRM type that governs which opcode
 /// family the *consumer* must use (§4.2.1.1–§4.2.1.3 implicit conversions).
 pub const TypedValue = struct { v: Mir.Value, ty: Ty };
 
+/// A poison real. Lowering continues so the run reports every error at once.
+pub const poison: TypedValue = .{ .v = .undef, .ty = .real };
+
+/// A visible variable: its SSA place and declared type.
+pub const VarSlot = struct {
+    place: Ssa.Place,
+    ty: Ty,
+    /// §7.3.1: retained declaration width, checked and zero-extended when
+    /// analog code reads it. A register used only by digital code may be wider.
+    reg_width: ?u32 = null,
+};
+/// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
+/// first. `dims.len` is the number of subscripts a reference must supply.
+pub const ArrayInfo = struct {
+    dims: []const lower_shape.Bounds,
+    ty: Ty,
+    /// §3.2.2 set for an array some subscript indexes at run time: its one
+    /// SSA place holds the current array version (`Mir.Opcode.anew`/`store`)
+    /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
+    /// element under `elemName`. See `lower_var.declareVarDecl`.
+    mem: ?Mem = null,
+    /// A memory-backed array's SSA place and `out.mem_arrays` row.
+    pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
+};
+const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
+const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
+/// A contribution's accumulator places. `wrote` is §5.6.1.3's retention flag:
+/// 0.0 in the entry block, 1.0 after every `<+` on this (access, branch), back
+/// to 0.0 when the opposite access discards it. It has the accumulator's phi
+/// structure, so "was a value retained this cycle?" survives a conditional as
+/// an ordinary SSA boolean; on a straight line it folds to a constant.
+pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
+
+// Budgets (64-bit host) of the rows lowering keeps one of per value or per
+// variable: `TypedValue` is every expression's result, `VarSlot` a `vars`
+// value (~1.5k on psp103), `BranchRead` one per access-function read.
+comptime {
+    assert(@sizeOf(TypedValue) == 8);
+    assert(@sizeOf(VarSlot) == 16);
+    assert(@sizeOf(BranchRead) == 12);
+    assert(@sizeOf(Accum) == 12);
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+//
+// Ownership: every `out` table has one writer, the sub-file named for it
+// (`out.nodes` node.zig, `out.params` param.zig, `out.held_vars` and
+// `out.mem_arrays` var.zig, `out.contributions` and `out.charge_sites`
+// contrib.zig, `out.displays` and the status channel systask.zig, ...;
+// `out.uses` is a flag set any of them may raise). The symbol tables below
+// follow the same rule (`branches` and `node_voltages` node.zig, with §9.20's
+// alias rebinding in hier_name.zig; `param_index` param.zig; `access_kind`
+// discipline.zig). The context fields (`cur`, `vars`, `consts`, `arrays`,
+// `scope_log`, `loops`, `cond_depth`, `restrict`, `cur_unit`, `block_path`,
+// `scope_path`, `gen_iter`, `active_genvars`) belong to whichever construct is
+// being lowered: it sets them on entry and restores them on exit. Every
+// buffer lives in `arena`, for the whole pass.
 
 arena: std.mem.Allocator,
 mir: *Mir,
@@ -303,10 +182,14 @@ node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
 /// Sub-file-private state: each is read and written by that one file only.
 node_state: lower_node.State = .{},
 event_state: lower_event.State = .{},
-param_state: lower_param.State = .{},
+systask_state: lower_systask.State = .{},
+random_state: lower_random.State = .{},
+var_state: lower_var.State = .{},
 stmt_state: lower_stmt.State = .{},
 table_model_state: lower_table_model.State = .{},
 hier_name_state: lower_hier_name.State = .{},
+control_state: lower_control.State = .{},
+analog_op_state: lower_analog_op.State = .{},
 /// Accumulator places, parallel to `contributions`.
 accum: std.ArrayList(Accum) = .empty,
 /// §1.3.1/§5.4.2.1 every access function read, in source order. A branch is a
@@ -353,7 +236,7 @@ access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
-scope_log: std.ArrayList(ScopeEntry) = .empty,
+scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
 consts: std.StringHashMapUnmanaged(Const) = .empty,
 /// name → index into `params` (aliasparam §3.4.7 maps two names to one index).
@@ -426,7 +309,7 @@ param_overrides: []const ParamOverride = &.{},
 in_analog_initial: bool = false,
 /// §9.4 the build drops the display family (`codegen.Options.display`), so a
 /// variable those tasks read is not read at all in the device. Set through
-/// `Options`; the default, false, counts those reads. Only `lower_param.Exposed`
+/// `Options`; the default, false, counts those reads. Only `lower_var.Exposed`
 /// asks: a §3.2 hold that only a print could observe is no hold.
 displays_dropped: bool = false,
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
@@ -459,23 +342,6 @@ cond_depth: u32 = 0,
 /// §5.6.7 and §5.8/§5.10.3.1 ask for a constant condition, which
 /// `analysis("dc")` is not.
 static_cond_depth: u32 = 0,
-/// §9.17.2 `$bound_step`: an SSA place seeded to +inf ("nothing asked for") in
-/// the entry block and `fmin`-ed at every call site, so a call under an `if`
-/// bounds the step only on the arm that ran. `finishKernelCtl` turns the final
-/// value into one synthetic `call` (a unit). Null: the model never called it.
-bound_step_place: ?Ssa.Place = null,
-/// VerA's `$vera_reject_step`, the same way: +inf is "no request".
-reject_step_place: ?Ssa.Place = null,
-/// §9.17.1 `$discontinuity`, the same way as `bound_step_place`.
-disc_place: ?Ssa.Place = null,
-/// §9.7.3 the status channel (`Lowered.status`): the code place, seeded 0
-/// ("nothing reported"), then its argument places, written by the FIRST
-/// `$fatal`/`$error` an evaluation reaches. Null: the model has no site.
-status_places: ?[1 + Lowered.status_arg_max]Ssa.Place = null,
-/// §9.17.1 `$discontinuity(-1)`'s flag, seeded 0 and set 1 at each call site;
-/// its final read is `out.reject_iteration`, and `out.uses.reject_iteration`
-/// says it exists.
-reject_iteration_place: ?Ssa.Place = null,
 /// The SSA place of each `out.held_vars` row, parallel to it: the variable's
 /// value during this evaluation, read back once into `HeldVar.final`.
 held_places: std.ArrayList(Ssa.Place) = .empty,
@@ -504,12 +370,6 @@ tp_cur: ?u32 = null,
 /// Parallel to `out.timepoints`: the place that is 1 once the statement ran,
 /// read back into `TpBlock.mark` at the end of the block.
 tp_marks: std.ArrayList(Ssa.Place) = .empty,
-/// §9.4.6 the carrier for conditional prints, which cannot be `fadd`-chained
-/// directly because a call inside an `if` arm does not dominate the chain root.
-/// An SSA place seeded `.f_zero` in `.entry`, `fadd`-ed at each guarded call
-/// site and read once at the end: the arm's phi carries the call into the live
-/// slice on the path that ran. Null: no conditional print.
-display_cond_place: ?Ssa.Place = null,
 /// §6.6.1/§5.9.3 genvars currently bound in `consts`, a stack pushed and
 /// popped by `tryUnrollFor`. Exists so `queueDisplay` can snapshot the
 /// bindings a deferred operand in an unrolled body was written under;
@@ -553,226 +413,8 @@ events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
 /// mid-statement still lacks this statement's term. See `lowerBranchAccess`.
 contrib_target: ?lower_contrib.Target = null,
 
-/// One §5.10 event-assigned module variable and its persistent slot.
-pub const HeldVar = struct {
-    /// Source spelling, including the `[i]` of a scalarized array element
-    /// (§3.2.2). Unique within the module scope, so codegen's `Instance` field
-    /// name is injective after `naming.sanitize`.
-    name: []const u8,
-    ty: Ty,
-    /// The declared initializer. Only reachable on the first evaluation, so
-    /// codegen renders it as the `Instance` field's default and nowhere else.
-    init: Mir.Value,
-    /// The `$held_*` call seeded into the entry block. Reading the variable
-    /// anywhere, even lexically before the `@(...)`, reads this: the value the
-    /// last accepted evaluation left behind.
-    seed: Mir.Value,
-    /// The variable's value at the end of the analog block; `updateState`
-    /// stores it back on the accepted solution. Filled at the end of
-    /// `lowerModule`.
-    final: Mir.Value = .undef,
-    /// §3.2.2 a held memory-backed array: its `out.mem_arrays` index, and
-    /// `seed`/`final` are array versions. `none_u32` for a scalar.
-    array: u32 = none_u32,
-    /// The array's declared initializer, one Value per element (`init` is
-    /// the element type's zero). Empty: every element starts at zero.
-    inits: []const Mir.Value = &.{},
-    /// Why the variable is held; see `Why`.
-    why: Why = .event,
-
-    /// Why a variable needs a persistent slot.
-    pub const Why = enum {
-        /// §5.10 assigned under an `@(...)`: latch state `stateCtl` may
-        /// reject a step over.
-        event,
-        /// §3.2 retention (`lower_param.Exposed`) that some evaluation can
-        /// observe: an `analog initial` write, or a read that reaches a later
-        /// write of the same evaluation.
-        retained,
-        /// §3.2 retention that only a card-varying write could make
-        /// observable. The backend's `pruneHeld` drops it when every merge
-        /// of the held value is solve-invariant.
-        unless_invariant,
-    };
-};
-
-/// VerA's `vera_timepoint` statement (§2.9, `Lowered.timepoints`): it runs on
-/// the first evaluation of a timepoint, and every later one reads back what it
-/// assigned. Lowered as a diamond on `$tp_hit(b)`: the hit arm writes each
-/// slot's `$tp_real`/`$tp_int` read (an array's cached `anew`), the miss arm
-/// is the statement. `eval` stores the slots when the statement ran and the
-/// cache was stale; the host's `stateCtl`, `updateState`, `initState` and
-/// `setup` drop it.
-pub const TpBlock = struct {
-    /// The attribute's token, for E0531.
-    tok: u32,
-    /// The miss arm's first block and the join both arms reach: everything
-    /// between them is the statement, whose values codegen checks (E0531).
-    miss: Mir.Block,
-    join: Mir.Block,
-    /// Nonzero at the end of the block exactly when the statement was reached.
-    mark: Mir.Value = .zero,
-    slots: []const TpSlot = &.{},
-};
-
-/// One variable a `vera_timepoint` statement assigns: its `Instance` cache
-/// slot. `final` is its value at the statement's join.
-pub const TpSlot = struct {
-    /// Source spelling, for the field comment.
-    name: []const u8,
-    ty: Ty,
-    final: Mir.Value = .undef,
-    /// §3.2.2 a memory-backed array's `out.mem_arrays` row, or `none_u32`.
-    array: u32 = none_u32,
-};
-
-/// §3.2.2 one memory-backed array (`Lowered.mem_arrays`).
-pub const MemArray = struct {
-    /// Source spelling, for a comment and a diagnostic; never an identity.
-    name: []const u8,
-    /// Element count over every dimension.
-    len: u32,
-    /// `.real` or `.integer` (a string array stays scalarized).
-    ty: Ty,
-    /// The `out.held_vars` row it is, or `none_u32`: a §5.10 held array starts
-    /// every evaluation from its `Instance` field instead of zero.
-    held: u32 = none_u32,
-    /// `(* vera_scratch = "uninit" *)` (§2.9): its `anew` stores nothing (NaN
-    /// under runtime safety), since the author writes each element before
-    /// reading it in the evaluation.
-    uninit: bool = false,
-};
-
-/// §9.17.3 one `$limit(access, user_function, …)` state slot, keyed by the
-/// access function, not the call site: §9.17.3 puts the state on the argument
-/// ("internal state containing information about the argument on previous
-/// iterations"). Per-site state breaks the SPICE-converted accessor idiom,
-/// where `$limit(V(g,s), DEVlimitOldGet)` reads what a later
-/// `$limit(V(g,s), DEVlimitNewSet, …)` writes: a per-site slot would store back
-/// what it just read and never change. When every site names a distinct access
-/// function the two readings coincide.
-pub const LimitSlot = struct {
-    /// `V(g,s)` as it reads in the source, for the `Instance` field comment.
-    label: []const u8,
-    access: Access,
-    hi: u16,
-    lo: u16,
-    neg: bool,
-    br: u32,
-    /// The `$limit$old` call seeded into the entry block: the value this slot
-    /// returned on the previous Newton iterate.
-    seed: Mir.Value,
-    /// The slot's value at the end of the analog block. `updateState` stages
-    /// it; the next iterate's `updateState` promotes it into the read field.
-    final: Mir.Value = .undef,
-};
-
-/// §5.6.1.2 one charge site: one reactive term a contribution's right-hand
-/// side splits into (`lower_contrib.splitTerm`), a `ddt` with the factors of
-/// its multiplicative spine, whose charge is the term with the `ddt` stripped.
-/// Static by §4.5.15 (no analog operator in a user function, a runtime loop
-/// or a runtime conditional), so a site is one source occurrence after genvar
-/// unrolling and flattening. `Contribution.react_val` is exactly the sum of
-/// its sites' `sign * final`, which is what lets the host tape charges per
-/// site and still stamp the same rows (`contract.QStamp`).
-pub const ChargeSite = struct {
-    /// The `contributions` entry this site accumulates into.
-    contrib: u32,
-    /// ±1: the site's sign inside that entry's reactive accumulator: the
-    /// term's own sign in the sum, times the §1.3.1.2 reversed-branch flip.
-    sign: f64,
-    /// VerA's `vera_lte` attribute (`Ast.LteAttr`): does this charge join the
-    /// host's local-truncation-error check? Default true.
-    lte: bool = true,
-    /// The `ddt` token, for diagnostics and the emitted comment.
-    tok: u32 = Mir.no_tok,
-    /// The site's charge at the end of the analog block: zero on every path
-    /// that did not execute it or that §5.6.1.3 discarded.
-    final: Mir.Value = .f_zero,
-};
-
-/// §3.4.7 one `aliasparam`: the alias's spelling and the `params` index it names.
-pub const Alias = struct { name: []const u8, param: u32 };
-
-/// One §9.4/§9.7.3 print site.
-pub const Display = struct {
-    /// The synthetic `call`. Its first argument is the §2.7 format string.
-    val: Mir.Value,
-    /// The task's exact spelling (`$strobe`, `$write`, `$error`, …). Codegen
-    /// needs it for the newline rule (§9.4.1: `$write` does not append one) and
-    /// for the §9.7.3 severity prefix.
-    name: []const u8,
-    /// The call token, for W0850.
-    tok: u32,
-    /// The call sits under an `if` or a loop, so it reaches the display root
-    /// through `display_cond_place` rather than by direct `fadd` (the value
-    /// does not dominate the root). `finishDisplays` is the one reader: it
-    /// leaves these out of the unconditional chain.
-    conditional: bool,
-};
-
-/// A visible variable: its SSA place and declared type.
-pub const VarSlot = struct {
-    place: Ssa.Place,
-    ty: Ty,
-    /// §7.3.1: retained declaration width, checked and zero-extended when
-    /// analog code reads it. A register used only by digital code may be wider.
-    reg_width: ?u32 = null,
-};
-/// Absent-index sentinel for the `u32` index fields here.
-pub const none_u32 = std.math.maxInt(u32);
-const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
-/// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
-/// first. `dims.len` is the number of subscripts a reference must supply.
-pub const ArrayInfo = struct {
-    dims: []const lower_param.Bounds,
-    ty: Ty,
-    /// §3.2.2 set for an array some subscript indexes at run time: its one
-    /// SSA place holds the current array version (`Mir.Opcode.anew`/`store`)
-    /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
-    /// element under `elemName`. See `lower_param.declareVarDecl`.
-    mem: ?Mem = null,
-    /// A memory-backed array's SSA place and `out.mem_arrays` row.
-    pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
-};
-const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
-const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
-/// A contribution's accumulator places. `wrote` is §5.6.1.3's retention flag:
-/// 0.0 in the entry block, 1.0 after every `<+` on this (access, branch), back
-/// to 0.0 when the opposite access discards it. It has the accumulator's phi
-/// structure, so "was a value retained this cycle?" survives a conditional as
-/// an ordinary SSA boolean; on a straight line it folds to a constant.
-pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
-
-/// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
-/// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
-/// `[3:5]`), so nothing here assumes msb ≥ lsb.
-pub const VecRange = struct {
-    msb: i64,
-    lsb: i64,
-
-    /// Returns the element count.
-    pub fn size(v: VecRange) u32 {
-        return @intCast(@abs(v.msb - v.lsb) + 1);
-    }
-    /// Returns whether index `i` lies within the range.
-    pub fn has(v: VecRange, i: i64) bool {
-        return i >= @min(v.msb, v.lsb) and i <= @max(v.msb, v.lsb);
-    }
-    /// Returns the k-th element in declaration order, msb first. That order is the
-    /// host's terminal order for a vector port, and it is what §3.12 pairs
-    /// "in a parallel one-to-one fashion" for a vector branch.
-    pub fn at(v: VecRange, k: u32) i64 {
-        const d: i64 = @intCast(k);
-        return if (v.msb <= v.lsb) v.msb + d else v.msb - d;
-    }
-};
-
-/// A folded constant (§4.2 constant_expression), the shared kernel's.
-pub const Const = constfold.Const;
-
 // ---------------------------------------------------------------------------
-// Lifecycle
+// The spine: lifecycle, then elaboration and the module (LRM ch6)
 // ---------------------------------------------------------------------------
 
 /// Returns a lowering pass over `file` into `mir`. Asserts that `mir` is empty
@@ -836,237 +478,6 @@ pub fn lower(
     }
     return self.lowerFile();
 }
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
-
-/// Returns the byte range of a token, the unit every diagnostic reports in.
-pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
-    return Lexer.tokenSpan(self.src, self.tok_starts, tok);
-}
-
-/// Returns where `tok` starts in the preprocessed text, the offset §10.1's
-/// positional directives are published in (what a `Region` lookup takes).
-/// Zero for a token index never lexed, which answers with each directive's
-/// default.
-pub fn tokStart(self: *const Lower, tok: u32) u32 {
-    return if (tok < self.tok_starts.len) self.tok_starts[tok] else 0;
-}
-
-/// Records an error and keeps going. Callers substitute a poison value;
-/// nothing downstream runs because `lowerFile` fails at the end.
-pub fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
-    self.had_error = true;
-    return self.bag.add(.lower, code, self.tokenSpan(tok), fmt, args);
-}
-
-/// Starts an error that wants a label, a note or a suggestion. The caller
-/// must `emit()` it.
-pub fn errWith(self: *Lower, tok: u32, code: diag.Code) diag.Builder {
-    self.had_error = true;
-    return self.bag.build(.lower, code, self.tokenSpan(tok));
-}
-
-/// A poison real. Lowering continues so the run reports every error at once.
-pub const poison: TypedValue = .{ .v = .undef, .ty = .real };
-
-// ---------------------------------------------------------------------------
-// Small MIR helpers
-// ---------------------------------------------------------------------------
-
-/// Appends `op` to the current block (`Mir.emit`).
-pub fn emit(self: *Lower, op: Mir.Opcode, ops: []const Mir.Value) Oom!Mir.Value {
-    return self.mir.emit(self.arena, self.cur, op, ops);
-}
-
-/// Appends a call to `name` in the current block (`Mir.emitCall`).
-pub fn call(self: *Lower, name: []const u8, args: []const Mir.Value) Oom!Mir.Value {
-    const callee = try self.mir.internString(self.arena, name);
-    return self.mir.emitCall(self.arena, self.cur, callee, args);
-}
-
-/// Closes `self.cur` with a jump and registers the CFG edge. `target` must not
-/// be sealed yet.
-pub fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
-    _ = try self.mir.emitJump(self.arena, self.cur, target);
-    try self.builder.addPredecessor(target, self.cur);
-}
-
-/// Closes `self.cur` with a branch, registers both edges, and seals `then_b`
-/// (and `else_b` when `seal_else`). A loop leaves its exit unsealed until its
-/// body has registered any `break` predecessors.
-pub inline fn branchTo(self: *Lower, cond: Mir.Value, then_b: Mir.Block, else_b: Mir.Block, comptime seal_else: bool) Oom!void {
-    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
-    try self.builder.addPredecessor(then_b, self.cur);
-    try self.builder.addPredecessor(else_b, self.cur);
-    try self.builder.sealBlock(then_b);
-    if (seal_else) try self.builder.sealBlock(else_b);
-}
-
-/// Starts a fresh predecessor-less block. Everything appended to it is dead
-/// (post-`break`/`return` code, §5.9/§4.7.1); sealing it immediately keeps the
-/// SSA builder from ever waiting on an edge that will not arrive.
-pub fn startUnreachable(self: *Lower) Oom!void {
-    const b = try self.mir.addBlock(self.arena);
-    try self.builder.sealBlock(b);
-    self.cur = b;
-}
-
-// ---------------------------------------------------------------------------
-// Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
-// ---------------------------------------------------------------------------
-
-/// Returns a §2.7 string literal's integer value. "A string literal used as an operand in expressions and assignments
-/// shall be treated as unsigned integer constants represented by a sequence of
-/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
-/// A base-256 numeral, most significant character first: "AB" is
-/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
-///
-/// `bits` is §3.3's width rule for the assignment case: "the literal is right
-/// justified and either truncated on the left or zero filled on the left".
-/// The result is the unsigned value (§2.7 "unsigned integer constants"), so a
-/// 32-bit "\377\377\377\377" is 4294967295, not -1; the first arithmetic on
-/// it wraps into range.
-pub fn strToInt(s: []const u8, bits: u8) i64 {
-    var acc: u64 = 0;
-    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
-    return @bitCast(acc);
-}
-
-/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
-/// defined once, in the shared constant kernel, because codegen spells them
-/// as device text and a fold must agree with the device.
-pub const wrap32 = constfold.wrap32;
-
-/// Returns `tv` converted to a number when it is a string with compile-time
-/// bytes (§2.7 at an operand); everything else is returned untouched, and the
-/// caller diagnoses a runtime string.
-pub fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
-    // ponytail: 64 bits, the width of the slot the value lands in. An operand
-    // has no declared width (§3.3's assignment case passes its own), so a
-    // literal longer than eight characters keeps its low eight.
-    if (tv.ty != .string) return tv;
-    return switch (self.mir.valueDef(tv.v)) {
-        .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => tv,
-    };
-}
-
-/// Returns `tv0` as a real (§4.2.1.2 integer→real; §2.7 string→number).
-pub fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
-    const tv = try self.strNum(tv0); // §2.7
-    return switch (tv.ty) {
-        .real => tv.v,
-        .integer => self.emit(.if_cast, &.{tv.v}),
-        .string => tv.v, // already diagnosed at the use site
-    };
-}
-
-/// Returns `tv0` as an integer (§4.2.1.1 real→integer rounds; §2.7 string→number).
-pub fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
-    const tv = try self.strNum(tv0); // §2.7
-    return switch (tv.ty) {
-        .integer => tv.v,
-        .real => self.emit(.fi_cast, &.{tv.v}),
-        .string => tv.v,
-    };
-}
-
-/// Returns `tv` converted for a §5.7 store into a slot of type `ty`.
-/// §4.2.1.1/§4.2.1.2 convert between integer and real; §3.3 draws the one line
-/// no conversion crosses, between a string literal and a string value:
-///
-///   "A string literal can be assigned to a string or an integral type. ...
-///    A string cannot be assigned to an integral type."
-///
-/// So `integer code = "A";` is legal and `code = label;` (label a `string`) is
-/// not: the test is the shape of expression `e`, not its lowered type. Every
-/// write to a declared variable goes through this.
-pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
-    // ponytail: the mirror direction, a numeric into a `string` slot (which
-    // §3.4.1 forbids too), is unchecked; the arm to add it to is `.string`.
-    if (tv.ty == .string and ty != .string) {
-        var bytes: std.ArrayList(u8) = .empty;
-        defer bytes.deinit(self.arena);
-        if (!try self.strLitBytes(e, &bytes)) {
-            try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
-            return lower_param.zeroOf(ty);
-        }
-        // §3.3's "right justified and either truncated on the left or zero
-        // filled on the left" is measured against the declared type, and §3.2
-        // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
-        if (ty == .integer) return self.mir.addIntConst(self.arena, strToInt(bytes.items, 32));
-    }
-    return switch (ty) {
-        .real => self.toReal(tv),
-        .integer => self.toInt(tv),
-        .string => tv.v,
-    };
-}
-
-/// Is `e` a §3.3 string literal, and what are its bytes? The literal itself, or
-/// a concatenation of literals — §4.2.13's replication with a literal count is
-/// unrolled by the parser, so `{5{"Hi"}}` arrives as five operands.
-///
-/// A `.multi_concat` is deliberately not one, and that exclusion is the whole
-/// rule: Table 3-3's multiplier "can be nonconstant", and a nonconstant one
-/// leaves a string with no width at elaboration, which is why §3.3's own
-/// example makes `r = {i{"Hi"}}` invalid where `b = {i{"Hi"}}` is fine.
-///
-/// The test is made on the AST because the SSA builder answers a read of a
-/// once-written `string label = "hi"` with the literal's own `str_const`, so
-/// by Value `code = label` and `code = "hi"` are indistinguishable.
-///
-/// Table 3-3's empty-string row is the one place these bytes differ from the
-/// string the same expression evaluates to: `""` "is converted to 8'b0", so
-/// `{"H", ""}` is "H" as a string and 'H' followed by one zero byte as an
-/// integral.
-fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
-    const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .str_literal => {
-            const s = self.file.str(ex.strOf(e));
-            try out.appendSlice(self.arena, if (s.len == 0) &[_]u8{0} else s);
-            return true;
-        },
-        .concat => {
-            for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
-            return true;
-        },
-        else => return false, // else: not a literal or a concatenation of literals, so no compile-time bytes
-    }
-}
-
-/// Returns `tv` as integer 0/1: §4.2.8, a condition is "true" when non-zero. Normalized to integer 0/1 so
-/// `logand`/`logor`/`branch` all see the same shape.
-pub fn toBool(self: *Lower, tv: TypedValue) Oom!Mir.Value {
-    return switch (tv.ty) {
-        .integer => self.emit(.ine, &.{ tv.v, .zero }),
-        .real => self.emit(.fne, &.{ tv.v, .f_zero }),
-        .string => .zero,
-    };
-}
-
-/// Returns the operation type of two operands: §4.2.1, one real operand makes
-/// the operation real; a string operand makes it a string.
-pub fn unify(a: Ty, b: Ty) Ty {
-    if (a == .string or b == .string) return .string;
-    return if (a == .real or b == .real) .real else .integer;
-}
-
-/// Returns the lowering type of a declared AST type (`.unspecified` is real).
-pub fn astTy(t: Ast.Type) Ty {
-    return switch (t) {
-        .real, .unspecified => .real,
-        .integer => .integer,
-        .string => .string,
-    };
-}
-
-// ---------------------------------------------------------------------------
-// Elaboration (LRM ch6)
-// ---------------------------------------------------------------------------
 
 /// Elaborates the file (§6.2.2) into one flat module, then lowers it.
 /// Returns `error.DiagnosticsReported` if any error was recorded,
@@ -1149,31 +560,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     try lower_node.checkPortBranchDecls(self); // §3.12.1 — per source module, before flattening's renames matter
 
     // §3.4 parameters before the ports, because a range is a constant
-    // expression over them: §6.5.2.2's own example is `input [1:width] dt`
-    // with `width` a module parameter, and `foldDim` cannot answer that from
-    // an empty `consts`. A parameter declaration cannot name a net (§3.4
-    // defaults are constant expressions), so the order is otherwise free.
-    // §6.3.6 implicitly declares the geometry controls. Register their
-    // top-level aliases before the explicit parameters so they exist
-    // before a flattened child's dependent defaults read them. Keep the
-    // existing `$mfactor` host/scaling ABI in its separate alias path below.
-    for (module.aliasparams) |a| {
-        const kind = @import("hier_param.zig").Kind.fromName(self.file.str(a.target)) orelse continue;
-        if (kind == .mfactor) continue;
-        const alias = self.file.str(a.alias);
-        const collides = self.param_index.contains(alias) or for (module.params) |p| {
-            if (p.name == a.alias) break true;
-        } else false;
-        if (collides) {
-            try self.err(module.main_tok, .E0331, "`{s}`", .{alias});
-            continue;
-        }
-        _ = try lower_param.aliasSystemParam(self, alias, self.file.str(a.target));
-    }
-    for (module.params) |*p| try lower_param.lowerParamDecl(self, p);
-    for (self.selection_params) |name| if (self.param_index.get(self.file.str(name))) |i| {
-        self.out.params.items[i].shape = true;
-    };
+    // expression over them (§6.5.2.2's `input [1:width] dt`).
+    try lower_param.lowerParams(self, module);
     try lower_control.checkParamsetDefparams(self);
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
@@ -1185,308 +573,21 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         try self.bag.add(.lower, .W0250, self.tokenSpan(sw.main_tok), "`{s}` switch primitive", .{@tagName(sw.kind)});
 
     // §6.5 ports first: this order is the host device's terminal order.
-    for (module.ports) |p| {
-        // §3.6.3/§6.5.2 a vector port is N terminals, in declaration order.
-        if (try lower_node.portRange(self, &p)) |r| {
-            const name = self.file.str(p.name);
-            const disc = self.strOrEmpty(p.discipline);
-            for (0..r.size()) |k| {
-                const idx = try lower_node.internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
-                self.out.nodes.items(.dir)[idx] = p.direction;
-            }
-            try self.out.vectors.put(self.arena, name, r);
-            continue;
-        }
-        const idx = try lower_node.internNode(self, try lower_node.netKey(self, self.file.str(p.name), p.main_tok), self.strOrEmpty(p.discipline));
-        // §6.5.2.2. Recorded here and nowhere else: only a port can be
-        // directional, and this loop is the only place the direction is known.
-        self.out.nodes.items(.dir)[idx] = p.direction;
-        // §1.3.4.1/§1.3.4.2's "not to `inout` ports" is checked below the net
-        // loop (E0360): the discipline is not known yet here.
-    }
-    self.out.num_ports = @intCast(self.out.nodes.len);
-
-    // §3.6.3 internal nets, then §3.6.4 ground.
-    for (module.nets) |n| {
-        if (self.out.discrete_inputs.contains(self.file.str(n.name))) continue;
-        // §2.8.1 vs §3.6.3 (see `netKey`). A ranged declaration is a vector and
-        // its own name never reaches the node table, so the key is the scalar
-        // path's and the `vectors` entry below keeps the declared spelling.
-        const name = try lower_node.netKey(self, self.file.str(n.name), n.main_tok);
-        // §3.6.3 a vector net is N independent nets, scalarised here.
-        //
-        // §3.6.3.2's bus initializer is scalarised with them: "In the case of
-        // analog buses, a constant array expression is used as an initializer.
-        // A null value in the constant array indicates that no nodeset value is
-        // being specified for this element of the bus." `flattenPattern` is
-        // already the per-cell reader the §3.4.4 parameter arrays use, and it
-        // answers `.none` for both spellings of "nothing here" — the clause's
-        // hole and a pattern shorter than the bus.
-        if (n.range) |d| {
-            if (try lower_node.foldDim(self, d, n.main_tok)) |r| {
-                // Only a pattern seeds nodesets. A non-pattern initializer
-                // (`wire [3:0] wbus = 4'h5;`) is A.2.2.1's continuous assignment
-                // of one value to the whole vector, legal 1364, not §3.6.3.2's
-                // bus form, so it is not an error.
-                // ponytail: the value is dropped. When `assign` is modeled, it
-                // becomes that continuous assignment instead.
-                const seeds: []const Ast.ExprId = if (n.init == .none or
-                    self.file.exprs.tag(n.init) != .assign_pattern)
-                    &.{}
-                else
-                    try lower_param.flattenPattern(self, n.init, &.{lower_param.Bounds{ .lo = 0, .hi = r.size() - 1 }});
-                for (0..r.size()) |k| {
-                    const idx = try lower_node.internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
-                    if (k < seeds.len and seeds[k] != .none)
-                        try lower_node.recordNodeset(self, idx, seeds[k], n.main_tok, name);
-                }
-                try self.out.vectors.put(self.arena, name, r);
-            }
-            continue;
-        }
-        if (n.is_ground) {
-            // §3.6.4 "Each ground declaration is associated with an already
-            // declared net of continuous discipline. ... The net must be
-            // assigned a continuous discipline to be declared ground." The
-            // global reference node is the zero of a potential, and §3.6.2.2
-            // leaves a discrete discipline with no nature to have one.
-            //
-            // The discipline can come from either spelling: `ground <disc> g;`
-            // carries it here, `<disc> g; ground g;` left it on the node the
-            // earlier declaration interned.
-            const dname = if (n.discipline != .none)
-                self.file.str(n.discipline)
-            else if (self.node_voltages.get(name)) |idx|
-                (if (idx == ground) "" else self.out.nodes.items(.disc)[idx])
-            else
-                "";
-            if (self.out.disciplines.get(dname)) |info| {
-                if (info.is_discrete)
-                    try self.err(n.main_tok, .E0344, "`{s}` is of discipline `{s}`, whose domain is discrete", .{ name, dname });
-            }
-            try self.node_voltages.put(self.arena, name, ground);
-            continue;
-        }
-        // §7.4.4, printed again as step 3 of F.2.1/F.2.2: "More than one
-        // conflicting discipline declaration from the same context ... is an
-        // error. In this case, conflicting simply means an attempt to declare
-        // more than one discipline regardless of whether the disciplines are
-        // compatible or not." So the test is a second declaration, not a
-        // mismatch. This is the only site that sees both shapes (a port
-        // interned by the loop above; a body declaration re-disciplining it).
-        //
-        // Both sides must be non-empty: §3.6.5 implicit nets and §3.9 undeclared
-        // ports carry `""`, and a later declaration of one of those is the
-        // first declaration, not a conflict.
-        if (n.discipline != .none) if (self.node_voltages.get(name)) |idx| {
-            const had = if (idx == ground) "" else self.out.nodes.items(.disc)[idx];
-            if (had.len != 0) {
-                var b = self.errWith(n.main_tok, .E0902);
-                b.msg("`{s}` is already of discipline `{s}`", .{ name, had });
-                b.note("`{s}` would be its second, and §7.4.4 forbids a second declaration whether or not the two are compatible", .{self.file.str(n.discipline)});
-                try b.emit();
-                continue; // keep the FIRST declaration; do not silently overwrite it
-            }
-        };
-        const idx = try lower_node.internNode(self, name, self.strOrEmpty(n.discipline));
-        // §3.6.3.2 the net_decl_assignment, folded. `consts` is already loaded
-        // (the parameter loop runs above the port loop), so a nodeset written
-        // over a parameter folds here and not later.
-        if (n.init != .none) try lower_node.recordNodeset(self, idx, n.init, n.main_tok, name);
-    }
-
-    // §6.5.7.1 "The sizes of the ports and net must match." A net this module
-    // never interned (a discrete input) has no width here to compare.
-    for (self.port_widths) |pw| {
-        const port: u64 = if (pw.range) |d| ((try lower_node.foldDim(self, d, pw.main_tok)) orelse continue).size() else 1;
-        const net: u64 = if (self.out.vectors.get(pw.net)) |v| v.size() else if (self.node_voltages.contains(pw.net)) 1 else continue;
-        if (port != net)
-            try self.err(pw.main_tok, .E0925, "`{s}` is {d} wide and the port it connects is {d}", .{ pw.net, net, port });
-    }
-
-    // §6.5.7.1 a vector port bound to a concatenated net expression: element k
-    // of the port IS net `elems[k]`, so its key names that net's node.
-    for (self.port_concats) |pc| {
-        const r = (try lower_node.foldDim(self, pc.range, pc.main_tok)) orelse continue;
-        if (r.size() != pc.elems.len) {
-            try self.err(pc.main_tok, .E0906, "the concatenation is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
-            continue;
-        }
-        for (pc.elems, 0..) |el, k| {
-            const idx = try lower_node.internNode(self, el, "");
-            try self.node_voltages.put(self.arena, try self.arena.print("{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
-        }
-        try self.out.vectors.put(self.arena, pc.name, r);
-    }
-
-    // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's
-    // default. It runs here, after every declaration has been interned: a port
-    // and a body declaration of the same net are two entries
-    // (`module (p); inout p; electrical p;`), and a default written at the
-    // first would make the second a §7.4.4 second declaration (E0902).
-    //
-    // A vector is scalarised by now, so the default is applied to the
-    // elements: `p` itself is not a node.
-    for (module.ports) |p| try lower_node.applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
-    for (module.nets) |n| if (!self.out.discrete_inputs.contains(self.file.str(n.name)))
-        try lower_node.applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
-    // §3.9 a digital primitive on a continuous net needs the default the loops
-    // above just applied — after them, so a net it made discrete is not mixed.
-    try lower_node.checkPrimitiveDisciplines(self, module);
-
-    // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
-    // be bound to `input` or `output` ports of the module, not to `inout`
-    // ports"; §1.3.4.2 says the same of flow signal-flow disciplines. The
-    // sibling of E0425, which rules on the contribution target rather than the
-    // declaration.
-    //
-    // Here and not in the port loop, because only now is the discipline known:
-    // `inout p; voltage p;` splits direction and discipline across two
-    // declarations, and §10.2's default arrives in the `applyDefaultToAll`
-    // loops above.
-    //
-    // `.unspecified` is deliberately not caught: §6.5.2 leaves a port with no
-    // direction declaration to §3.9, and the clause names `inout` only.
-    for (module.ports) |p| {
-        if (p.direction != .inout) continue;
-        const base = self.file.str(p.name);
-        // A vector port is N nets sharing one declaration and therefore one
-        // discipline (§6.5.2), so the first element answers for all of them and
-        // the violation is reported once, at the declaration that commits it.
-        var key_buf: [lower_param.elem_key_len]u8 = undefined;
-        const probe_name = if (self.out.vectors.get(base)) |r| try lower_param.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
-        const idx = self.node_voltages.get(probe_name) orelse continue;
-        if (idx == ground) continue;
-        const dname = self.out.nodes.items(.disc)[idx];
-        if (!lower_node.isSignalFlow(self, dname)) continue;
-        var b = self.errWith(p.main_tok, .E0360);
-        b.msg("`{s}` is an `inout` port of discipline `{s}`, which binds a {s} nature only", .{
-            base, dname, if (self.out.disciplines.get(dname).?.has_potential) "potential" else "flow",
-        });
-        b.help("declare `{s}` as `input` or `output`", .{base});
-        try b.emit();
-    }
-
-    // §3.6.3.2: "Nets with continuous disciplines are allowed to have
-    // initializers on their net discipline declarations; however, nets of
-    // non-continuous disciplines are not."
-    //
-    // Here for the same reason E0360 is here and not at the declaration: a net
-    // and its discipline can arrive in two declarations, and §10.2's default
-    // arrives in the `applyDefaultToAll` loops above. A net that still has no
-    // discipline at this point is left alone — it is §3.6.5's implicit net,
-    // whose domain is decided by resolution (§7.4) and not by this module, and
-    // E0337 already rules on it if anything analog touches it.
-    for (self.out.nodesets.items) |ns| {
-        const dname = self.out.nodes.items(.disc)[ns.node];
-        const info = self.out.disciplines.get(dname) orelse continue;
-        if (!info.is_discrete) continue;
-        var b = self.errWith(ns.tok, .E0366);
-        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.out.nodes.items(.name)[ns.node], dname });
-        b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
-        try b.emit();
-    }
-
-    // §3.4 parameters were lowered above the port loop, in source order, so a
-    // later default may still reference an earlier parameter (§6.3.4).
-    // §3.4.7 aliasparam: a second name for an existing parameter.
-    for (module.aliasparams) |a| {
-        const target = self.file.str(a.target);
-        const alias = self.file.str(a.alias);
-        if (@import("hier_param.zig").Kind.fromName(target)) |kind|
-            if (kind != .mfactor) continue; // already declared above
-        // §3.4.7 "The alias_identifier shall not occur anywhere else in the
-        // module; in particular, it shall not conflict with a different
-        // parameter_identifier". Unchecked, the `put` below would rebind the
-        // colliding name for the rest of the module.
-        if (!self.param_index.contains(alias) and try lower_param.aliasSystemParam(self, alias, target)) continue;
-        if (self.param_index.contains(alias)) {
-            var b = self.errWith(module.main_tok, .E0331);
-            b.msg("`{s}`", .{alias});
-            b.help("an `aliasparam` gives `{s}` a second NAME, it does not declare a second parameter", .{target});
-            try b.emit();
-            continue;
-        }
-        if (self.param_index.get(target)) |idx| {
-            try self.param_index.put(self.arena, alias, idx);
-            try self.out.aliases.append(self.arena, .{ .name = alias, .param = idx });
-        } else {
-            var b = self.errWith(module.main_tok, .E0303);
-            b.msg("`{s}`", .{target});
-            if (diag.didYouMeanMap(target, self.param_index)) |s|
-                b.help("did you mean `{s}`?", .{s});
-            try b.emit();
-        }
-    }
-
-    // §3.12 named branches.
-    for (module.branches) |b| {
-        const base = self.file.str(b.name);
-        // A.2.3 `list_of_branch_identifiers ::= branch_identifier [ range ]
-        // { , branch_identifier [ range ] }`: a branch array, several branches
-        // over one declared terminal pair. Folded here and not in the parser
-        // because the bounds are constant EXPRESSIONS (same reason as §6.5.2.2's
-        // port ranges), and the elements are registered under their scalarised
-        // names so `V(pair[1])` resolves through the ordinary branch lookup.
-        const arr: ?VecRange = if (b.range) |d|
-            (try lower_node.foldDim(self, d, b.main_tok) orelse continue)
-        else
-            null;
-        if (b.is_port_branch) {
-            // §3.12.1 "A port branch is a special type of branch used to access
-            // the flow into a port of a module (see 5.4.3). It is a branch
-            // between the upper and lower connections of the port." Recorded as
-            // the port and not as a node pair, because those two connections are
-            // one node here: a pair would give an identically zero potential and
-            // an unconstrained second flow unknown. The flow is `I(<p>)`'s (see
-            // `lowerBranchAccess`).
-            const p = try lower_node.nodeOf(self, b.hi);
-            for (0..(if (arr) |r| r.size() else 1)) |k| {
-                const key = if (arr) |r| try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }) else base;
-                try self.port_branches.put(self.arena, key, p);
-            }
-        } else if (arr) |r| {
-            // A.2.3's branch array: the elements share one (hi, lo) and are
-            // separate branches over it (§5.4.1 "any number of named branches
-            // between any two signals"), so each takes its own identity and its
-            // own accumulator: `br1[0]` and `br1[1]` are two sources.
-            const hi = try lower_node.nodeOf(self, b.hi);
-            const lo = if (b.lo == .none) ground else try lower_node.nodeOf(self, b.lo);
-            try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo); // §3.12 → §3.11
-            for (0..r.size()) |k|
-                try self.branches.put(self.arena, try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }), .{
-                    .hi = hi,
-                    .lo = lo,
-                    .id = lower_node.newBranchId(self),
-                });
-        } else if (lower_node.vecTerminal(self, b.hi) != null or lower_node.vecTerminal(self, b.lo) != null) {
-            // §3.12 a branch with a vector terminal is a vector branch.
-            try lower_node.declareVectorBranch(self, &b);
-            continue;
-        } else {
-            const hi = try lower_node.nodeOf(self, b.hi);
-            const lo = if (b.lo == .none) ground else try lower_node.nodeOf(self, b.lo);
-            // §3.12: "The disciplines for the specified nets shall be
-            // compatible (see 3.11)." Only the two-terminal form has two
-            // disciplines to compare; the one-terminal form's second net is
-            // ground, and §3.12 says the branch then "derives" its discipline
-            // from the one net that is named.
-            try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo);
-            try self.branches.put(self.arena, base, .{ .hi = hi, .lo = lo, .id = lower_node.newBranchId(self) });
-        }
-        // The base name is a vector, so `V(pair)` and `V(pair[9])` get the
-        // vector diagnostics (E0351/E0352) rather than interning an implicit
-        // net, as `declareVectorBranch` arranges for a vector terminal.
-        if (arr) |r| try self.out.vectors.put(self.arena, base, r);
-    }
+    try lower_node.declarePorts(self, module);
+    try lower_node.declareNets(self, module); // §3.6.3, §3.6.4
+    try lower_node.bindPortConnections(self); // §6.5.7.1
+    try lower_node.resolveDisciplines(self, module); // §7.4, §10.2
+    // After the parameters and their defaults are in (§6.3.4).
+    try lower_param.declareAliasParams(self, module); // §3.4.7
+    try lower_node.declareBranches(self, module); // §3.12
 
     // §3.5 genvars exist only for unrolling; they carry no runtime storage.
     // §3.2/§3.3 module-level variables. The §5.10 scan runs first: whether a
     // variable needs a persistent slot is decided at its declaration, not at
     // the assignment that reveals it (see `holdSlot`).
-    try lower_param.markHeldVars(self, module);
-    try lower_param.markMemArrays(self, module);
-    try lower_param.checkOneItemPerScope(self, module.params, module.vars, module.nets);
+    try lower_var.markHeldVars(self, module);
+    try lower_var.markMemArrays(self, module);
+    try lower_var.checkOneItemPerScope(self, module.params, module.vars, module.nets);
     // A.6.2 the digital `initial` block, for the same reason and at the same
     // point as the §5.10 scan above: what a variable holds at the top of every
     // evaluation is decided at its declaration. `initial x = 3;` and
@@ -1506,7 +607,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             else
                 d.init = a.value;
         }
-        try lower_param.declareVarDecl(self, &d, .module);
+        try lower_var.declareVarDecl(self, &d, .module);
     }
     // §6.8: an `initial` block that assigns a name this module never declared.
     // Reported here because it is only knowable once every declaration is in,
@@ -1541,7 +642,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // question about the scopes, and before the analog block, so an attribute is
     // reported at its own token rather than after a body that may not compile.
     try lower_param.checkAttributes(self, module.attrs);
-    try lower_param.checkScratchOwners(self, module);
+    try lower_var.checkScratchOwners(self, module);
 
     // §7.2.2 the DISCRETE context. Before the analog blocks because the rules
     // below relate the two, and it is the discrete side that names the variables
@@ -1607,14 +708,14 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §9.17 analog kernel control. Emitted last and in this fixed order so the
     // unit enumeration stays a pure function of the source.
-    try self.finishKernelCtl();
+    try lower_systask.finishKernelCtl(self);
     // §9.4 display tasks, after the kernel-control calls: those become naming
     // units, and inserting anything ahead would renumber every Instance state
     // field. Deferred §9.4.1 operands are lowered inside, after the accumulator
     // finals above, which is what "converged" means here.
     const contribs_before = self.out.contributions.items.len;
     const sites_before = self.out.charge_sites.items.len;
-    try self.finishDisplays();
+    try lower_systask.finishDisplays(self);
     // §4.5.2 an operator in a deferred operand adds its unknown's row there.
     try self.readContribFinals(contribs_before);
     try self.readSiteFinals(sites_before);
@@ -1640,87 +741,239 @@ fn readSiteFinals(self: *Lower, from: usize) Oom!void {
     for (self.out.charge_sites.items[from..], self.site_places.items[from..]) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
 }
 
-/// §9.17.1/§9.17.2. Turns each accumulated kernel-control place into exactly one
-/// synthetic `call`, whose single argument is the value the host must read.
-/// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
-/// evaluates the unit once per accepted step and stores it into `Instance`.
-fn finishKernelCtl(self: *Lower) Oom!void {
-    if (self.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
-    if (self.reject_step_place) |p| self.out.reject_step = try self.builder.readVariable(p, self.cur);
-    if (self.status_places) |ps| {
-        self.out.status = try self.builder.readVariable(ps[0], self.cur);
-        for (&self.out.status_args, ps[1..]) |*a, p| a.* = try self.builder.readVariable(p, self.cur);
-    }
-    if (self.bound_step_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        _ = try self.call("$bound_step", &.{v});
-    }
-    if (self.disc_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        _ = try self.call("$discontinuity", &.{v});
-    }
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Returns the byte range of a token, the unit every diagnostic reports in.
+pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
+    return Lexer.tokenSpan(self.src, self.tok_starts, tok);
 }
 
-/// §9.4 Chains every unconditional display call into one value, so codegen has
-/// a single live root to slice a unit from. `fadd` is the cheapest carrier: the
-/// sum is discarded, and rendering it walks the operands in MIR order, which is
-/// source order.
-///
-/// Only `cond_depth == 0` calls join directly. They lie on the straight-line
-/// spine of the analog block, so each one dominates `self.cur` here; a call
-/// inside an `if` arm does not, and chaining it would be invalid SSA. Those
-/// reach the root through `display_cond_place` instead — one read of a place
-/// the arms wrote, an ordinary phi. §9.4.6 is satisfied by where the call
-/// sits: it stays in the arm's block and codegen emits the arm as an `if`.
-// ponytail: print order is MIR order, so a module that prints both kinds shows
-// the guarded lines first, whatever the source order. Upgrade path: give
-// `Display` a source-order index and have codegen emit by it.
-fn finishDisplays(self: *Lower) Oom!void {
-    try lower_event.lowerDeferredDisplays(self);
-    var root: Mir.Value = .f_zero;
-    var first = true;
-    for (self.out.displays.items) |d| {
-        if (d.conditional) continue;
-        // Every unconditional entry either carried its call from the
-        // statement or was a `queueDisplay` placeholder just filled above.
-        assert(d.val != .undef);
-        root = if (first) d.val else try self.emit(.fadd, &.{ root, d.val });
-        first = false;
-    }
-    if (self.display_cond_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        root = if (first) v else try self.emit(.fadd, &.{ root, v });
-    }
-    self.out.display_root = root;
+/// Returns where `tok` starts in the preprocessed text, the offset §10.1's
+/// positional directives are published in (what a `Region` lookup takes).
+/// Zero for a token index never lexed, which answers with each directive's
+/// default.
+pub fn tokStart(self: *const Lower, tok: u32) u32 {
+    return if (tok < self.tok_starts.len) self.tok_starts[tok] else 0;
 }
 
-/// Carries one guarded §9.4/§9.5/§9.7 call into the display slice. The value is
-/// discarded at the root; the `fadd` gives the call a use, without which
-/// codegen's slice drops the print.
-pub fn chainCondDisplay(self: *Lower, v: Mir.Value) Oom!void {
-    const p = self.display_cond_place orelse blk: {
-        const np = self.builder.newPlace();
-        try self.builder.writeVariable(np, .entry, .f_zero);
-        self.display_cond_place = np;
-        break :blk np;
-    };
-    const prev = try self.builder.readVariable(p, self.cur);
-    try self.builder.writeVariable(p, self.cur, try self.emit(.fadd, &.{ prev, v }));
+/// Records an error and keeps going. Callers substitute a poison value;
+/// nothing downstream runs because `lowerFile` fails at the end.
+pub fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
+    self.had_error = true;
+    return self.bag.add(.lower, code, self.tokenSpan(tok), fmt, args);
 }
 
-/// Returns the kernel-control place in `slot`, creating it on first use seeded
-/// to +inf in the entry block. +inf is both `fmin`'s identity and "the model
-/// asked for nothing", so no "was it called" flag has to survive the CFG.
-pub fn kernelCtlPlace(self: *Lower, slot: *?Ssa.Place) Oom!Ssa.Place {
-    if (slot.*) |p| return p;
+/// Starts an error that wants a label, a note or a suggestion. The caller
+/// must `emit()` it.
+pub fn errWith(self: *Lower, tok: u32, code: diag.Code) diag.Builder {
+    self.had_error = true;
+    return self.bag.build(.lower, code, self.tokenSpan(tok));
+}
+
+// ---------------------------------------------------------------------------
+// Small MIR helpers
+// ---------------------------------------------------------------------------
+
+/// Appends `op` to the current block (`Mir.emit`).
+pub fn emit(self: *Lower, op: Mir.Opcode, ops: []const Mir.Value) Oom!Mir.Value {
+    return self.mir.emit(self.arena, self.cur, op, ops);
+}
+
+/// Appends a call to `name` in the current block (`Mir.emitCall`).
+pub fn call(self: *Lower, name: []const u8, args: []const Mir.Value) Oom!Mir.Value {
+    const callee = try self.mir.internString(self.arena, name);
+    return self.mir.emitCall(self.arena, self.cur, callee, args);
+}
+
+/// Closes `self.cur` with a jump and registers the CFG edge. `target` must not
+/// be sealed yet.
+pub fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
+    _ = try self.mir.emitJump(self.arena, self.cur, target);
+    try self.builder.addPredecessor(target, self.cur);
+}
+
+/// Closes `self.cur` with a branch, registers both edges, and seals `then_b`
+/// (and `else_b` when `seal_else`). A loop leaves its exit unsealed until its
+/// body has registered any `break` predecessors.
+pub inline fn branchTo(self: *Lower, cond: Mir.Value, then_b: Mir.Block, else_b: Mir.Block, comptime seal_else: bool) Oom!void {
+    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
+    try self.builder.addPredecessor(then_b, self.cur);
+    try self.builder.addPredecessor(else_b, self.cur);
+    try self.builder.sealBlock(then_b);
+    if (seal_else) try self.builder.sealBlock(else_b);
+}
+
+/// Starts a fresh predecessor-less block. Everything appended to it is dead
+/// (post-`break`/`return` code, §5.9/§4.7.1); sealing it immediately keeps the
+/// SSA builder from ever waiting on an edge that will not arrive.
+pub fn startUnreachable(self: *Lower) Oom!void {
+    const b = try self.mir.addBlock(self.arena);
+    try self.builder.sealBlock(b);
+    self.cur = b;
+}
+
+/// Returns `table_effect_place`, creating it on first use seeded `.f_zero` in
+/// the entry block. Its sum is never observed; what codegen keeps alive is the
+/// dependencies and CFG edges it carries (`Lowered.table_effect`).
+pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
+    if (self.table_effect_place) |p| return p;
     const p = self.builder.newPlace();
-    try self.builder.writeVariable(p, .entry, .f_inf);
-    slot.* = p;
+    try self.builder.writeVariable(p, .entry, .f_zero);
+    self.table_effect_place = p;
     return p;
 }
 
-fn strOrEmpty(self: *const Lower, id: Ast.StrId) []const u8 {
-    return if (id == .none) "" else self.file.str(id);
+// ---------------------------------------------------------------------------
+// Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
+// ---------------------------------------------------------------------------
+
+/// Returns a §2.7 string literal's integer value. "A string literal used as an operand in expressions and assignments
+/// shall be treated as unsigned integer constants represented by a sequence of
+/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
+/// A base-256 numeral, most significant character first: "AB" is
+/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
+///
+/// `bits` is §3.3's width rule for the assignment case: "the literal is right
+/// justified and either truncated on the left or zero filled on the left".
+/// The result is the unsigned value (§2.7 "unsigned integer constants"), so a
+/// 32-bit "\377\377\377\377" is 4294967295, not -1; the first arithmetic on
+/// it wraps into range.
+pub fn strToInt(s: []const u8, bits: u8) i64 {
+    var acc: u64 = 0;
+    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
+    return @bitCast(acc);
+}
+
+/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
+/// defined once, in the shared constant kernel, because codegen spells them
+/// as device text and a fold must agree with the device.
+pub const wrap32 = constfold.wrap32;
+
+/// Returns `tv` converted to a number when it is a string with compile-time
+/// bytes (§2.7 at an operand); everything else is returned untouched, and the
+/// caller diagnoses a runtime string.
+pub fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
+    // ponytail: 64 bits, the width of the slot the value lands in. An operand
+    // has no declared width (§3.3's assignment case passes its own), so a
+    // literal longer than eight characters keeps its low eight.
+    if (tv.ty != .string) return tv;
+    return switch (self.mir.valueDef(tv.v)) {
+        .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
+        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => tv,
+    };
+}
+
+/// Returns `tv0` as a real (§4.2.1.2 integer→real; §2.7 string→number).
+pub fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
+    return switch (tv.ty) {
+        .real => tv.v,
+        .integer => self.emit(.if_cast, &.{tv.v}),
+        .string => tv.v, // already diagnosed at the use site
+    };
+}
+
+/// Returns `tv0` as an integer (§4.2.1.1 real→integer rounds; §2.7 string→number).
+pub fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
+    return switch (tv.ty) {
+        .integer => tv.v,
+        .real => self.emit(.fi_cast, &.{tv.v}),
+        .string => tv.v,
+    };
+}
+
+/// Returns `tv` converted for a §5.7 store into a slot of type `ty`.
+/// §4.2.1.1/§4.2.1.2 convert between integer and real; §3.3 draws the one line
+/// no conversion crosses, between a string literal and a string value:
+///
+///   "A string literal can be assigned to a string or an integral type. ...
+///    A string cannot be assigned to an integral type."
+///
+/// So `integer code = "A";` is legal and `code = label;` (label a `string`) is
+/// not: the test is the shape of expression `e`, not its lowered type. Every
+/// write to a declared variable goes through this.
+pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
+    // ponytail: the mirror direction, a numeric into a `string` slot (which
+    // §3.4.1 forbids too), is unchecked; the arm to add it to is `.string`.
+    if (tv.ty == .string and ty != .string) {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.arena);
+        if (!try self.strLitBytes(e, &bytes)) {
+            try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
+            return lower_var.zeroOf(ty);
+        }
+        // §3.3's "right justified and either truncated on the left or zero
+        // filled on the left" is measured against the declared type, and §3.2
+        // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
+        if (ty == .integer) return self.mir.addIntConst(self.arena, strToInt(bytes.items, 32));
+    }
+    return switch (ty) {
+        .real => self.toReal(tv),
+        .integer => self.toInt(tv),
+        .string => tv.v,
+    };
+}
+
+/// Is `e` a §3.3 string literal, and what are its bytes? The literal itself, or
+/// a concatenation of literals — §4.2.13's replication with a literal count is
+/// unrolled by the parser, so `{5{"Hi"}}` arrives as five operands.
+///
+/// A `.multi_concat` is deliberately not one, and that exclusion is the whole
+/// rule: Table 3-3's multiplier "can be nonconstant", and a nonconstant one
+/// leaves a string with no width at elaboration, which is why §3.3's own
+/// example makes `r = {i{"Hi"}}` invalid where `b = {i{"Hi"}}` is fine.
+///
+/// The test is made on the AST because the SSA builder answers a read of a
+/// once-written `string label = "hi"` with the literal's own `str_const`, so
+/// by Value `code = label` and `code = "hi"` are indistinguishable.
+///
+/// Table 3-3's empty-string row is the one place these bytes differ from the
+/// string the same expression evaluates to: `""` "is converted to 8'b0", so
+/// `{"H", ""}` is "H" as a string and 'H' followed by one zero byte as an
+/// integral.
+fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .str_literal => {
+            const s = self.file.str(ex.strOf(e));
+            try out.appendSlice(self.arena, if (s.len == 0) &[_]u8{0} else s);
+            return true;
+        },
+        .concat => {
+            for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
+            return true;
+        },
+        else => return false, // else: not a literal or a concatenation of literals, so no compile-time bytes
+    }
+}
+
+/// Returns `tv` as integer 0/1: §4.2.8, a condition is "true" when non-zero. Normalized to integer 0/1 so
+/// `logand`/`logor`/`branch` all see the same shape.
+pub fn toBool(self: *Lower, tv: TypedValue) Oom!Mir.Value {
+    return switch (tv.ty) {
+        .integer => self.emit(.ine, &.{ tv.v, .zero }),
+        .real => self.emit(.fne, &.{ tv.v, .f_zero }),
+        .string => .zero,
+    };
+}
+
+/// Returns the operation type of two operands: §4.2.1, one real operand makes
+/// the operation real; a string operand makes it a string.
+pub fn unify(a: Ty, b: Ty) Ty {
+    if (a == .string or b == .string) return .string;
+    return if (a == .real or b == .real) .real else .integer;
+}
+
+/// Returns the lowering type of a declared AST type (`.unspecified` is real).
+pub fn astTy(t: Ast.Type) Ty {
+    return switch (t) {
+        .real, .unspecified => .real,
+        .integer => .integer,
+        .string => .string,
+    };
 }
 
 // §7.2.2 the discrete context: which statements and nets are digital, lower/context.zig
@@ -1732,8 +985,14 @@ const lower_discipline = @import("lower/discipline.zig");
 // §1.3.1 nodes: nets, ports, ground and the solver-unknown order, lower/node.zig
 const lower_node = @import("lower/node.zig");
 
-// §3.4 parameters and §3.2 variables and scopes, lower/param.zig
+// §3.4 parameters and §2.9 attribute values, lower/param.zig
 const lower_param = @import("lower/param.zig");
+
+// §3.2 variables: scopes, storage and retention, lower/var.zig
+const lower_var = @import("lower/var.zig");
+
+// §3.2.2/§3.4.4 array shapes and §3.4.8 assignment patterns, lower/shape.zig
+const lower_shape = @import("lower/shape.zig");
 
 // §5 analog statements: blocks, assignments, named blocks, lower/stmt.zig
 const lower_stmt = @import("lower/stmt.zig");
@@ -1757,14 +1016,21 @@ pub const binaryMathOp = lower_expr.binaryMathOp;
 // §4.5 analog operators and filters, lower/analog_op.zig
 const lower_analog_op = @import("lower/analog_op.zig");
 
-// Clause 9 system functions and tasks in analog context, and their arguments, lower/sysfunc.zig
+// Clause 9 system functions in analog context, and their arguments, lower/sysfunc.zig
 const lower_sysfunc = @import("lower/sysfunc.zig");
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
 /// Returns the `Model` field that answers a §9.15 simulation parameter the
 /// card supplies (`tnom`), or null.
 pub const simparamHostField = lower_sysfunc.simparamHostField;
+/// The §9.15 simulation parameters a host supplies, in `Model` field order.
 pub const host_simparams = lower_sysfunc.host_simparams;
+
+// Clause 9 system tasks: §9.4 display, §9.5 I/O, §9.7 status, §9.17 kernel control, lower/systask.zig
+const lower_systask = @import("lower/systask.zig");
+
+// §9.13 probabilistic distributions, lower/random.zig
+const lower_random = @import("lower/random.zig");
 
 // §9.21 `$table_model`, lower/table_model.zig
 const lower_table_model = @import("lower/table_model.zig");
@@ -1789,6 +1055,8 @@ test {
     _ = lower_discipline;
     _ = lower_node;
     _ = lower_param;
+    _ = lower_var;
+    _ = lower_shape;
     _ = lower_stmt;
     _ = lower_contrib;
     _ = lower_control;
@@ -1796,6 +1064,8 @@ test {
     _ = lower_expr;
     _ = lower_analog_op;
     _ = lower_sysfunc;
+    _ = lower_systask;
+    _ = lower_random;
     _ = lower_table_model;
     _ = lower_limit;
     _ = lower_hier_name;

@@ -10,12 +10,26 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
-const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
+
+/// This file's private state on `Lower` (`Lower.control_state`): the scratch
+/// `isStaticValue` walks with, cleared at the start of each walk and reused, so
+/// a condition costs no arena allocation once the sets have grown to the
+/// largest walk (on psp103, ~5k conditions used to leave ~3 MB of dead sets).
+pub const State = struct {
+    /// Values already on the walk.
+    seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty,
+    /// Blocks whose deciding branch was already judged.
+    blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty,
+    /// `controlStatic`'s predecessor worklist; nested walks share it above a
+    /// base mark.
+    stack: std.ArrayList(Mir.Block) = .empty,
+};
 
 /// §6.6: "All expressions in generate schemes shall be constant expressions,
 /// deterministic at elaboration time." The scheme of an if-generate is its
@@ -121,7 +135,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
             if (ex.tag(base) != .ident) break :blk false;
             const name = self.file.str(ex.strOf(base));
             const info = self.arrays.get(name) orelse break :blk false;
-            var buf: [lower_param.elem_key_len]u8 = undefined;
+            var buf: [lower_shape.elem_key_len]u8 = undefined;
             var w: std.Io.Writer = .fixed(&buf);
             w.writeAll(name) catch break :blk false;
             for (info.dims) |d| w.print("[{d}]", .{d.lo}) catch break :blk false;
@@ -188,11 +202,11 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
 /// variable is dynamic even when every write to it is static, for the same
 /// reason.
 pub fn isStaticValue(self: *Lower, v: Mir.Value) Oom!bool {
-    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
-    defer seen.deinit(self.arena);
-    var blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty;
-    defer blocks.deinit(self.arena);
-    return staticWalk(self, v, &seen, &blocks);
+    const st = &self.control_state;
+    st.seen.clearRetainingCapacity();
+    st.blocks.clearRetainingCapacity();
+    st.stack.clearRetainingCapacity();
+    return staticWalk(self, v, &st.seen, &st.blocks);
 }
 
 /// The calls whose value is fixed for the whole simulation: A.8.2's
@@ -268,11 +282,14 @@ fn controlStatic(
     seen: *std.AutoHashMapUnmanaged(Mir.Value, void),
     blocks: *std.AutoHashMapUnmanaged(Mir.Block, void),
 ) Oom!bool {
-    var stack: std.ArrayList(Mir.Block) = .empty;
-    defer stack.deinit(self.arena);
+    // A nested walk (a phi met while judging a branch) works above `base` and
+    // leaves the stack there on success; a `false` unwinds every walk at once.
+    const stack = &self.control_state.stack;
+    const base = stack.items.len;
     try stack.append(self.arena, from);
     const b = &self.builder;
-    while (stack.pop()) |blk| {
+    while (stack.items.len > base) {
+        const blk = stack.pop().?;
         if ((try blocks.getOrPut(self.arena, blk)).found_existing) continue;
         const i = @backingInt(blk);
         // Unsealed: more predecessors may still arrive (a loop's back edge).
@@ -550,7 +567,7 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
 }
 
 /// Returns the genvar a `for` init statement assigns, or null (LRM §3.5).
-pub fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
+fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
     const m = self.out.module orelse return null;
     if (init_s == .none) return null;
     const s = self.file.stmt(init_s);
