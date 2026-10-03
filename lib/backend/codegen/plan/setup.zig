@@ -16,6 +16,7 @@ const plan_args = @import("args.zig");
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
+const assert = std.debug.assert;
 
 /// The answer, per value, per block and per loop header.
 pub const Sinv = struct {
@@ -42,7 +43,16 @@ pub const Sinv = struct {
 
 /// One control dependence: block B depends on the branch at `a` through its
 /// `then` edge (`then == true`) or its `else` edge.
-pub const Cd = struct { a: u32, then: bool };
+pub const Cd = struct {
+    a: u32,
+    then: bool,
+
+    // One per (block, controlling branch) pair (psp103: 2596, hisimhv_va:
+    // 4824), read in block order by `solve` and `tpRule`: 8 bytes.
+    comptime {
+        std.debug.assert(@sizeOf(Cd) == 8);
+    }
+};
 
 /// §5.10.2 `initial_step` with no analysis list, or §5.2.1 `analog initial`:
 /// the condition `setup` treats as true. A qualified `initial_step("tran")`
@@ -176,32 +186,41 @@ fn intersect(ipdom: []const u32, num: []const u32, b1: u32, b2: u32) u32 {
     return f1;
 }
 
-/// Per-block control dependences, flat: `cd[off[b]..off[b + 1]]`.
+/// Per-block control dependences, flat: `cd[off[b]..off[b + 1]]`, each
+/// block's entries in branch-block order, `then` edge before `else`. Both
+/// slices are owned by `in.arena`.
 pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd: []Cd } {
     const a = in.arena;
     const nb = in.an.nb;
-    var lists = try a.alloc(std.ArrayList(Cd), nb);
-    @memset(lists, .empty);
-    for (0..nb) |ai| {
-        const A: u32 = @intCast(ai);
-        if (branchCond(in, A) == null) continue;
-        for ([_]u32{ thenOf(in, A), elseOf(in, A) }, [_]bool{ true, false }) |s, then| {
-            var r = s;
-            while (r != ipdom[A] and r < nb) : (r = ipdom[r]) {
-                try lists[r].append(a, .{ .a = A, .then = then });
-                if (ipdom[r] == none_u32) break;
+    // Two walks of the post-dominator chains, counting then filling, rather
+    // than a growable list per block: three exact arena allocations instead
+    // of one list per block plus its doublings.
+    const off = try a.alloc(u32, nb + 1);
+    @memset(off, 0);
+    var cd: []Cd = &.{};
+    var at: []u32 = &.{}; // fill cursor per block
+    for ([_]bool{ false, true }) |fill| {
+        if (fill) {
+            for (1..nb + 1) |b| off[b] += off[b - 1];
+            cd = try a.alloc(Cd, off[nb]);
+            at = try a.dupe(u32, off[0..nb]);
+        }
+        for (0..nb) |ai| {
+            const A: u32 = @intCast(ai);
+            if (branchCond(in, A) == null) continue;
+            for ([_]u32{ thenOf(in, A), elseOf(in, A) }, [_]bool{ true, false }) |s, then| {
+                var r = s;
+                while (r != ipdom[A] and r < nb) : (r = ipdom[r]) {
+                    if (fill) {
+                        cd[at[r]] = .{ .a = A, .then = then };
+                        at[r] += 1;
+                    } else off[r + 1] += 1;
+                    if (ipdom[r] == none_u32) break;
+                }
             }
         }
     }
-    const off = try a.alloc(u32, nb + 1);
-    var n: u32 = 0;
-    for (lists, 0..) |l, b| {
-        off[b] = n;
-        n += @intCast(l.items.len);
-    }
-    off[nb] = n;
-    const cd = try a.alloc(Cd, n);
-    for (lists, 0..) |l, b| @memcpy(cd[off[b]..][0..l.items.len], l.items);
+    for (0..nb) |b| assert(at[b] == off[b + 1]);
     return .{ .off = off, .cd = cd };
 }
 
