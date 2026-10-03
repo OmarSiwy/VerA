@@ -924,5 +924,231 @@ def figures(argv):
 SUBCOMMANDS["figures"] = figures
 
 
+# ---------------------------------------------------------------------------
+# comments: the clauses the code says it implements or refuses, against the
+# clauses the fixtures cite. A pointer for a reader, NOT a measure.
+# ---------------------------------------------------------------------------
+
+# A standard named in a comment, optionally followed by a clause number:
+# `IEEE 1364-2005 §9.2.2`, `IEEE 12.8.2`, `1364 §17`, `AMS 9.7.3`, `LRM §4.3`.
+# A bare `§9.7.3` takes the standard the line last named, the LRM by default
+# (VerA's comments write a bare § for this LRM and name IEEE 1364 when they
+# mean it). Only the first number of a range or list after a standard word is
+# read (`§§17-18` reads 17).
+CITE = re.compile(
+    r"(?P<std>\bIEEE(?:\s+Std)?(?:\s+1364(?:-2005)?)?|\b1364(?:-2005)?\b|\bVAMS(?:-2023)?\b|\bAMS\b|\bLRM\b)"
+    r"(?:\s*§*\s*(?P<n1>[0-9]+(?:\.[0-9]+)*|[A-I](?:\.[0-9]+)+)\b)?"
+    r"|§+\s*(?P<n2>[0-9]+(?:\.[0-9]+)*|[A-I](?:\.[0-9]+)*)\b")
+
+
+def comment_cites(text):
+    """(standard, clause, line number, named) for every clause a `//` comment
+    cites; `named` is false for a bare § on a line that names no standard.
+    A `\\\\` line is device text the compiler emits, not a comment."""
+    out = []
+    for no, line in enumerate(text.split("\n"), 1):
+        if line.lstrip().startswith("\\\\") or "//" not in line:
+            continue
+        std, named = "ams", False
+        for m in CITE.finditer(line[line.index("//"):]):
+            if m.group("std"):
+                std = "ieee" if m.group("std").startswith(("IEEE", "1364")) else "ams"
+                named = True
+                if m.group("n1"):
+                    out.append((std, m.group("n1"), no, True))
+            else:
+                out.append((std, m.group("n2"), no, named))
+    return out
+
+
+def under(child, parent):
+    """Is clause `child` the clause `parent` or one of its subclauses?"""
+    return child == parent or child.startswith(parent + ".")
+
+
+def fixture_cites():
+    """{(standard, clause): {"pos": [paths], "neg": [paths]}} from the
+    fixtures' tags, the polarity rules `--coverage` and `test-1364 --coverage`
+    use: a file with a `//! reject` (or `// digital-runner: reject`) cites
+    negatively; a `.c` application counts only if `build.zig`'s `vpi_runs`
+    runs it, and polarity is per line (`lrm-reject`, `inherited-reject`)."""
+    runs = set(re.findall(r'\.c = "([^"]+\.c)"', (ROOT / "build.zig").read_text()))
+    cites = {}
+
+    def add(std, clause, side, path):
+        cites.setdefault((std, clause), {"pos": [], "neg": []})[side].append(path)
+
+    root = ROOT / "tests/fixtures"
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in (".va", ".v", ".c") or not path.is_file():
+            continue
+        rel = str(path.relative_to(ROOT))
+        if path.suffix == ".c" and rel not in runs:
+            continue
+        source = path.read_text(errors="replace")
+        neg = path.suffix != ".c" and re.search(r"(?m)^\s*(//! reject|// digital-runner: reject)", source) is not None
+        for raw in source.split("\n"):
+            line = raw.strip()
+            if not line.startswith("//!"):
+                continue
+            words = line[3:].strip()
+            m = re.match(r"(lrm|lrm-reject)\s+(?:annex\s+)?(\S+)", words)
+            if m:
+                side = "neg" if neg or m.group(1) == "lrm-reject" else "pos"
+                add("ams", m.group(2), side, rel)
+                continue
+            m = re.match(r"(inherited|inherited-reject) IEEE 1364-2005 (.*)", words)
+            if m:
+                side = "neg" if neg or m.group(1) == "inherited-reject" else "pos"
+                for clause in re.split(r"[ ,]+", m.group(2).split("(")[0].strip()):
+                    if clause:
+                        add("ieee", clause, side, rel)
+    return cites
+
+
+def refusals():
+    """{(standard, clause): [codes]} for every error code in lib/diag_code.zig
+    whose catalogue row cites a clause: the code's refusal is the code's claim
+    about that clause."""
+    out, codes = {}, []
+    for line in (ROOT / "lib/diag_code.zig").read_text().split("\n"):
+        m = re.match(r"\s*(\.[EW]\d{4}(?:\s*,\s*\.[EW]\d{4})*)\s*=>", line)
+        if m:
+            codes = re.findall(r"[EW]\d{4}", m.group(1))
+            continue
+        m = re.match(r'\s*\.lrm = "([^"]*)"', line)
+        if not m:
+            continue
+        for part in m.group(1).split(" / "):
+            part = part.strip()
+            std = "ieee" if part.startswith("IEEE 1364-2005 ") else "ams"
+            clause = part.removeprefix("IEEE 1364-2005 ")
+            for code in codes:
+                if clause and code.startswith("E"):
+                    out.setdefault((std, clause), []).append(code)
+        codes = []
+    return out
+
+
+def clause_kinds():
+    """{(standard, clause): kind} from every CLAUSES.tsv: the CLAUSE-AUDIT.md
+    §5 classifications (`-` is an ordinary clause in the IEEE list)."""
+    out = {}
+    for path in sorted((ROOT / "tests/fixtures").rglob("CLAUSES.tsv")):
+        std = "ieee" if "ieee1364" in path.parts else "ams"
+        for line in path.read_text().split("\n"):
+            if not line.strip() or line.startswith("#"):
+                continue
+            cells = line.split("\t")
+            if len(cells) > 1 and cells[1] != "-":
+                out[(std, cells[0].strip())] = cells[1].strip()
+    return out
+
+
+def comments(argv):
+    """Code-comment clause signal: which clauses the code's comments cite and
+    which its error codes refuse, cross-checked against the fixtures' tags and
+    the CLAUSE-AUDIT.md §5 classifications (CLAUSES.tsv).
+
+        tools/conformance.py comments          # counts, then every row
+        tools/conformance.py comments --counts # counts only
+
+    NOT a measure. It moves none of A, B or C and reports counts per category,
+    never a percentage: it is pattern matching over prose, so a row is a place
+    to look, not a finding.
+    """
+    counts_only = "--counts" in argv
+    ams_known = set(html_sections(ROOT)[0])
+    ieee_known = set()
+    for line in (ROOT / "tests/fixtures/ieee1364/CLAUSES.tsv").read_text().split("\n"):
+        if line.strip() and not line.startswith("#"):
+            ieee_known.add(line.split("\t")[0].strip())
+    known = {"ams": ams_known, "ieee": ieee_known}
+    audit_text = (ROOT / "docs/CLAUSE-AUDIT.md").read_text()
+
+    # The code's claims: comment cites in lib/ and src/.
+    sites, unresolved, nfiles = {}, {"ams": 0, "ieee": 0}, 0
+    for path in sorted(list((ROOT / "lib").rglob("*.zig")) + list((ROOT / "src").rglob("*.zig"))):
+        rel = str(path.relative_to(ROOT))
+        found = comment_cites(path.read_text())
+        nfiles += bool(found)
+        for std, clause, no, named in found:
+            # A bare § the LRM has no heading for, on a line naming no
+            # standard, is read as IEEE 1364 when that has the heading: the
+            # digital engine's comments continue an `IEEE 1364-2005` list
+            # onto the next line.
+            if not named and clause not in known["ams"] and clause in known["ieee"]:
+                std = "ieee"
+            if clause not in known[std]:
+                unresolved[std] += 1
+                continue
+            sites.setdefault((std, clause), []).append(f"{rel}:{no}")
+    refused = {k: v for k, v in refusals().items() if k[1] in known[k[0]]}
+    fixtures = fixture_cites()
+    kinds = clause_kinds()
+
+    def evidence(key, side):
+        std, clause = key
+        return [p for (s, c), sides in fixtures.items() if s == std and under(c, clause) for p in sides[side]]
+
+    def mentioned(key):
+        std, clause = key
+        return any(s == std and under(c, clause) for (s, c) in list(sites) + list(refused))
+
+    def in_audit(key):
+        std, clause = key
+        return re.search(r"§" + re.escape(clause) + r"(?![\d.]*\d)", audit_text) is not None
+
+    order = lambda k: (k[0], sort_key(k[1]))
+    implemented = sorted((k for k in sites if not evidence(k, "pos")), key=order)
+    unpinned = sorted((k for k in refused if not evidence(k, "neg")), key=order)
+    orphan = sorted((k for k in fixtures if k[1] in known[k[0]] and not mentioned(k)), key=order)
+    std_name = {"ams": "LRM", "ieee": "IEEE 1364-2005"}
+
+    def split(keys):
+        return " · ".join(f"{std_name[s]} {sum(1 for k in keys if k[0] == s)}" for s in ("ams", "ieee"))
+
+    print("Code-comment clause signal — NOT a measure: it moves none of A, B or C.")
+    print("Pattern matching over comments; every row is a place to look, not a finding.")
+    print("A bare § is this LRM unless its line names IEEE 1364, or only IEEE 1364 has the")
+    print("heading. A clause matches its own cites and its subclauses' (code §4.5 is met by")
+    print("a fixture citing 4.5.4). A cite naming no heading (an internal document's §, a")
+    print("typo) is counted, never listed.")
+    print()
+    print(f"read: {sum(len(v) for v in sites.values())} comment cites of {len(sites)} clauses in {nfiles} files "
+          f"under lib/ and src/ ({unresolved['ams']} LRM and {unresolved['ieee']} IEEE cites name no heading); "
+          f"{sum(len(v) for v in refused.values())} error codes citing {len(refused)} clauses (lib/diag_code.zig); "
+          f"{len(fixtures)} clauses cited by fixtures")
+    print()
+    print(f"1. cited in code, no positive fixture under it:   {len(implemented):4}  ({split(implemented)})")
+    print(f"2. refused by an error code, no reject fixture:   {len(unpinned):4}  ({split(unpinned)})")
+    print(f"3. cited by fixtures, no code comment or code:    {len(orphan):4}  ({split(orphan)})")
+    if counts_only:
+        return 0
+
+    def tags(key):
+        kind = kinds.get(key)
+        return (f"  [CLAUSES.tsv: {kind}]" if kind else "") + ("  [in CLAUSE-AUDIT.md]" if in_audit(key) else "")
+
+    def where(paths):
+        return ", ".join(paths[:3]) + (f" (+{len(paths) - 3})" if len(paths) > 3 else "")
+
+    print("\n## 1. Cited in code, no positive fixture cites the clause or a subclause")
+    for k in implemented:
+        neg = evidence(k, "neg")
+        print(f"{std_name[k[0]]} §{k[1]}\t{where(sites[k])}" + (f"\treject fixtures only: {len(neg)}" if neg else "") + tags(k))
+    print("\n## 2. Refused by an error code, no reject fixture cites the clause or a subclause")
+    for k in unpinned:
+        print(f"{std_name[k[0]]} §{k[1]}\t{' '.join(refused[k])}" + tags(k))
+    print("\n## 3. Cited by fixtures, no comment or error code in lib/ or src/ cites the clause or a subclause")
+    for k in orphan:
+        f = fixtures[k]
+        print(f"{std_name[k[0]]} §{k[1]}\t{where(f['pos'] + f['neg'])}" + tags(k))
+    return 0
+
+
+SUBCOMMANDS["comments"] = comments
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
