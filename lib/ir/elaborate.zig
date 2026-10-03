@@ -533,8 +533,11 @@ pub const Flatten = struct {
         tok: u32,
 
         comptime {
-            // One row per port-bound flat net; three containers and a token, 96 B.
-            std.debug.assert(@sizeOf(Segs) == 96);
+            // One row per port-bound flat net; three containers and a token.
+            // A budget, not an exact size: the hash map carries a safety lock
+            // in Debug/ReleaseSafe only, so the row is 96 B there and smaller
+            // in ReleaseFast/ReleaseSmall.
+            std.debug.assert(@sizeOf(Segs) <= 96);
         }
     };
 
