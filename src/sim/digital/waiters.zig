@@ -44,7 +44,17 @@ pub const Edge = enum(u2) {
 /// name this row, and retire together when any one of them fires. `gen`
 /// counts the row's retirements, so a term filed by an earlier occupant of a
 /// recycled row is recognisably stale.
-pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
+pub const Susp = struct {
+    pc: u32,
+    ctx: u32,
+    gen: u32,
+    alive: bool,
+
+    // Budget: one row per suspended process, recycled (`Run.free_susps`).
+    comptime {
+        std.debug.assert(@sizeOf(Susp) == 16);
+    }
+};
 
 /// One term of a suspension's event expression, filed under the slot it
 /// watches (`Run.terms`). Live while `gen` is its suspension's.
@@ -63,6 +73,13 @@ pub const Term = struct {
     width: u32 = 0,
     v: u64 = 0,
     x: u64 = 0,
+
+    // Budget: one row per waiting term, walked by every `wake` of its slot.
+    // The select-term fields (`lo` .. `x`) are 24 of these bytes and rare;
+    // `rt` keeps them out of line (`rt.Rec`), which this row could too.
+    comptime {
+        std.debug.assert(@sizeOf(Term) == 48);
+    }
 };
 
 /// Bits `[lo, lo + width)` of `value`, `width` at most 64, as (values,

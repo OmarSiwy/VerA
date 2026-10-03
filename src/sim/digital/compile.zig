@@ -118,6 +118,12 @@ pub const Instruction = union(enum(u5)) {
     /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
     stop,
+
+    // Budget: one row per pc, read by every dispatch of `exec.execute`. The
+    // largest payloads are two slices (`task`, `switch_ctrl`).
+    comptime {
+        std.debug.assert(@sizeOf(Instruction) == 40);
+    }
 };
 
 /// §9.14 Table 9-11's integral system functions, the two of IEEE 1364 §17.7

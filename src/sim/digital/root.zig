@@ -40,6 +40,9 @@ const Net = @import("net.zig").Net;
 const NetCold = @import("net.zig").NetCold;
 const no_cold = @import("net.zig").no_cold;
 const Tran = @import("net.zig").Tran;
+const Signal = @import("net.zig").Signal;
+const Inertial = @import("net.zig").Inertial;
+const no_transition = @import("net.zig").no_transition;
 const Driver = @import("net.zig").Driver;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
@@ -351,7 +354,17 @@ pub const Run = struct {
     nets: []Net = &.{},
     /// The cold rows `Net.cold` indexes.
     net_cold: std.ArrayList(NetCold) = .empty,
+    /// Every net's drivers as one CSR table: net `n`'s are
+    /// `net_drivers[net_driver_start[n]..net_driver_start[n + 1]]`, in
+    /// declaration order (`netDrivers`). Empty until pass two groups them.
+    net_driver_start: []const u32 = &.{},
+    net_drivers: []const u32 = &.{},
+    /// Every net's per-bit §7.10 signals, `Net.signal` the first of each.
+    signals: []Signal = &.{},
     drivers: []Driver = &.{},
+    /// The §6.1.3 transitions of the delayed drivers, `Driver.transition`
+    /// the row of each (`driverTransition`).
+    transitions: std.ArrayList(Inertial) = .empty,
     /// §7.6 every pass switch.
     trans: []Tran = &.{},
     /// Keyed by the base slot of an unpacked array (§3.9).
@@ -757,9 +770,10 @@ pub const Run = struct {
                 // arrives is the one still in flight.
                 .drive => |at| {
                     const d = &r.drivers[at];
-                    d.transition.in_flight = null;
-                    @memcpy(d.current.planes, d.transition.target.planes);
-                    d.or_z = d.transition.or_z;
+                    const t = &r.transitions.items[d.transition]; // a `.drive` event has its row
+                    t.in_flight = null;
+                    @memcpy(d.current.planes, t.target.planes);
+                    d.or_z = t.or_z;
                     try resolution.resolve(r, d.net);
                 },
                 .net_update => |at| {
@@ -835,6 +849,24 @@ pub const Run = struct {
     /// Net `n`'s cold row, or `NetCold.none` when it has none.
     pub fn netCold(self: *const Run, n: Net) *const NetCold {
         return if (n.cold == no_cold) &NetCold.none else &self.net_cold.items[n.cold];
+    }
+
+    /// Net `net`'s driver rows (`drivers` indices), in declaration order;
+    /// none until pass two has grouped them (`elaborate`).
+    pub fn netDrivers(self: *const Run, net: u32) []const u32 {
+        if (net + 1 >= self.net_driver_start.len) return &.{};
+        return self.net_drivers[self.net_driver_start[net]..self.net_driver_start[net + 1]];
+    }
+
+    /// Driver `at`'s §6.1.3 transition row, made on first use. Invalidates
+    /// pointers to other rows when it makes one.
+    pub fn driverTransition(self: *Run, at: u32) Error!*Inertial {
+        const d = &self.drivers[at];
+        if (d.transition == no_transition) {
+            try self.transitions.append(self.arena, .{});
+            d.transition = @intCast(self.transitions.items.len - 1);
+        }
+        return &self.transitions.items[d.transition];
     }
 
     /// Net `net`'s cold row, made on first use.
@@ -1398,6 +1430,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.nets = e.nets.items;
     r.net_cold = e.net_cold;
+    r.signals = e.signals.items;
     // Pass two: drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
@@ -1489,12 +1522,12 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
                 return w.net;
             }
         }.each, 1);
-        defer arena.free(at.start);
-        for (r.nets, 0..) |*n, net| {
-            n.drivers = at.items[at.start[net]..at.start[net + 1]];
+        r.net_driver_start = at.start;
+        r.net_drivers = at.items;
+        for (r.nets, 0..) |n, net| {
             // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
             // resolution question there, it is an error.
-            if (n.kind == .uwire and n.drivers.len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
+            if (n.kind == .uwire and r.netDrivers(@intCast(net)).len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
         }
     }
     // §10 subroutine bodies, each on its own pc range before any process, so

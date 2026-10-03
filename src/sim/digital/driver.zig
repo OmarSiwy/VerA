@@ -120,7 +120,7 @@ fn isConnect(r: *const Run, scope: u32) bool {
 /// to N-1" (here in declaration order), or its count N when `i` is null.
 fn ordinary(r: *const Run, net: u32, i: ?u64) union(enum) { count: u32, driver: ?u32 } {
     var n: u32 = 0;
-    for (r.nets[net].drivers) |d| {
+    for (r.netDrivers(net)) |d| {
         if (isConnect(r, r.drivers[d].scope)) continue;
         if (i) |want| if (n == want) return .{ .driver = d };
         n += 1;
@@ -147,7 +147,7 @@ pub fn arm(r: *Run) Error!void {
         const halves = [2]u32{ net, r.drv.receivers.get(net) orelse net };
         for (halves, 0..) |half, k| {
             if (k == 1 and half == net) break;
-            for (r.nets[half].drivers) |di| {
+            for (r.netDrivers(half)) |di| {
                 const dr = r.drivers[di];
                 if (isConnect(r, dr.scope) and !cm_driver_updates) continue;
                 if (dr.source == .bridge) {
@@ -295,7 +295,7 @@ fn pending(r: *Run, a: std.mem.Allocator, di: u32) Error!?Pend {
         // `root.analog_payload` indexes no row.
         if (ev.payload >= r.pending.items.len) continue;
         const bit: Int.Bit = switch (r.pending.items[ev.payload].item) {
-            .drive => |at| if (at == di) dr.transition.target.bit(0) else continue,
+            .drive => |at| if (at == di) r.transitions.items[dr.transition].target.bit(0) else continue,
             .write => |w| switch (dr.source) {
                 .bridge => |b| if (w.target == b.src and w.sel == null) w.value.bit(b.src_lo) else continue,
                 .expr, .gate, .udp, .mos, .pull => continue,

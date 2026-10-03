@@ -214,7 +214,16 @@ fn stderrLine(init_: std.process.Init, comptime f: []const u8, values: anytype) 
 }
 
 /// Node `node` reads the bits `mask` of plane word `word`.
-pub const Sense = struct { node: u32, word: u32, mask: u64 };
+pub const Sense = struct {
+    node: u32,
+    word: u32,
+    mask: u64,
+
+    // Budget: one row per (slot, node) read, walked by `markReaders`.
+    comptime {
+        std.debug.assert(@sizeOf(Sense) == 16);
+    }
+};
 
 /// One term of a triggered process: it resumes at `pc` on `edge`.
 pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };

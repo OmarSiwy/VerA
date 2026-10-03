@@ -89,6 +89,9 @@ pub const Elab = struct {
     nets: std.ArrayList(Net) = .empty,
     /// The cold rows `Net.cold` indexes; `Run.net_cold` once elaborated.
     net_cold: std.ArrayList(NetCold) = .empty,
+    /// Every net's per-bit signals, `Net.signal` the first of each;
+    /// `Run.signals` once elaborated.
+    signals: std.ArrayList(Signal) = .empty,
     wires: std.ArrayList(Wire) = .empty,
     /// One row per elaborated instance: the definition and its name scope.
     insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
@@ -1491,8 +1494,9 @@ pub fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, n
     const wreal = kind == .wreal;
     try e.values.append(r.arena, try filled(r.arena, if (wreal) 64 else width, signed or wreal, if (wreal) .zero else undriven(kind)));
     if (wreal) try r.reals.put(r.arena, slot, {});
-    const signal = try r.arena.alloc(Signal, width);
-    @memset(signal, .{});
+    if (e.signals.items.len > std.math.maxInt(u32) - width) return r.fail(tok, "too many digital net bits", .{});
+    const signal: u32 = @intCast(e.signals.items.len);
+    try e.signals.appendNTimes(r.arena, .{}, width);
     try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, if (wreal) 64 else width, false, .z), .signal = signal, .tok = tok });
     try r.net_of.put(r.arena, slot, at);
     return at;

@@ -1341,7 +1341,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print("            if (try s.release({d}, true)) try s.resolve({d});\n            continue :sw {d};\n", .{ o.slot, k, next });
                     return;
                 }
-                const drivers = r.nets[net].drivers;
+                const drivers = r.netDrivers(net);
                 if (drivers.len != 1) return self.refuse("releasing a net without exactly one driver");
                 const at = for (r.code.items, 0..) |ins, i| {
                     if (ins == .continuous and ins.continuous == drivers[0]) break i;
@@ -1627,7 +1627,7 @@ pub fn plainDriver(r: *const Run, i: u32) bool {
         },
         .bridge, .udp, .mos, .pull => false,
     };
-    return plain and source and n.drivers.len == 1 and !n.strength_read and n.cold == no_cold and !selectForced(r, n.slot) and
+    return plain and source and r.netDrivers(d.net).len == 1 and !n.strength_read and n.cold == no_cold and !selectForced(r, n.slot) and
         d.s0 == .strong and d.s1 == .strong and !d.delay.present;
 }
 
@@ -1641,14 +1641,14 @@ fn resolvedNets(self: *Emitter) Error!void {
     @memset(self.drv_ix, null);
     for (r.nets, 0..) |n, k| {
         // §7.6 a switch terminal resolves with the nets it is joined to.
-        const resolved = n.strength_read or r.netCold(n).trans.len != 0 or selectForced(r, n.slot) or for (n.drivers) |di| {
+        const resolved = n.strength_read or r.netCold(n).trans.len != 0 or selectForced(r, n.slot) or for (r.netDrivers(@intCast(k))) |di| {
             if (!plainDriver(r, di)) break true;
         } else false;
         if (!resolved) continue;
         if (n.kind == .wreal) return self.refuse("a VAMS wreal net");
         self.net_ix[k] = @intCast(self.rt_nets.items.len);
         try self.rt_nets.append(self.arena, @intCast(k));
-        for (n.drivers) |di| {
+        for (r.netDrivers(@intCast(k))) |di| {
             self.drv_ix[di] = @intCast(self.rt_drivers.items.len);
             try self.rt_drivers.append(self.arena, di);
         }
@@ -1730,7 +1730,7 @@ fn portTables(self: *Emitter) Error!void {
                 pw.print("\n            .{{ .off = {d}, .width = {d}, .dir = .{t}, ", .{ self.off[slot], width, mp.direction }) catch return error.OutOfMemory;
                 if (r.net_of.get(slot)) |k| {
                     pw.print(".net = {d}, .inside = &.{{", .{self.net_ix[k] orelse return self.refuse("a dumped port whose net the executable does not resolve")}) catch return error.OutOfMemory;
-                    for (r.nets[k].drivers) |d| pw.print(" {},", .{@import("evcd.zig").below(r, r.drivers[d].scope, sc)}) catch return error.OutOfMemory;
+                    for (r.netDrivers(k)) |d| pw.print(" {},", .{@import("evcd.zig").below(r, r.drivers[d].scope, sc)}) catch return error.OutOfMemory;
                     pw.writeAll(" } },") catch return error.OutOfMemory;
                 } else pw.writeAll("},") catch return error.OutOfMemory;
             }
@@ -1806,7 +1806,7 @@ fn netTables(self: *Emitter) Error!void {
         const n = r.nets[k];
         const c = r.netCold(n);
         var strong = !n.strength_read and c.trans.len == 0;
-        for (n.drivers) |di| {
+        for (r.netDrivers(k)) |di| {
             const d = r.drivers[di];
             const or_z = switch (d.source) {
                 .gate => |g| switch (g.kind) {
@@ -1819,7 +1819,7 @@ fn netTables(self: *Emitter) Error!void {
             strong = strong and !or_z and d.s0 == .strong and d.s1 == .strong;
         }
         try self.print("\n        .{{ .kind = .{t}, .slot = {d}, .off = {d}, .width = {d}, .drivers = &.{{", .{ n.kind, n.slot, self.off[n.slot], r.values[n.slot].width });
-        for (n.drivers) |di| try self.print(" {d},", .{self.drv_ix[di].?});
+        for (r.netDrivers(k)) |di| try self.print(" {d},", .{self.drv_ix[di].?});
         try self.print(" }}, .strong = {}, .delay = {f}, .charge = .{t}, .decay = {?d} }},", .{ strong, fmtDelay(c.delay), n.charge, c.decay });
     }
     try self.print("\n    }},\n    .drivers = &.{{", .{});
@@ -1916,7 +1916,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
         // or z meaning. Strength, several drivers, three states do.
         if (self.caresX()) {
             const two_ok = switch (n.kind) {
-                .wire, .tri, .uwire => n.drivers.len == 1 and !n.strength_read and r.netCold(n).trans.len == 0 and d.s0 == .strong and d.s1 == .strong,
+                .wire, .tri, .uwire => r.netDrivers(d.net).len == 1 and !n.strength_read and r.netCold(n).trans.len == 0 and d.s0 == .strong and d.s1 == .strong,
                 .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
             } and switch (d.source) {
                 .expr => true,
@@ -2234,7 +2234,7 @@ fn strengthOf(self: *Emitter, e: Ast.ExprId) Error!void {
     const r = self.r;
     const net = if (r.file.exprs.tag(e) == .ident) r.net_of.get(try self.slot(e)) else null;
     if (net) |k| {
-        if (r.nets[k].drivers.len == 0) {
+        if (r.netDrivers(k).len == 0) {
             var buf: std.Io.Writer.Allocating = .init(self.arena);
             display.strength(&buf.writer, @import("net.zig").netPull(r.nets[k].kind)) catch return error.OutOfMemory;
             return self.print("            try s.out.writeAll(\"{s}\");\n", .{buf.written()});
