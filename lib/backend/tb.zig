@@ -4,14 +4,18 @@
 //! Directives are comments (§2.4) so a fixture stays one portable .va file.
 //! Sweeps are expanded here, so the runner is straight-line code whose output
 //! order is the text's. LRM: §9.4.
+//!
+//! The pipeline a caller runs (`src/main.zig --emit-exe`, `tests/harness.zig`):
+//! `parse` the raw source; compile the device, again with `shapeOverrides`
+//! when a `//! param` names a shape parameter; fill the non-directive fields
+//! of `Directives` (`opStates`, `mixedPlan`); `renderRunner` (or
+//! `renderVpiLib`); then `buildExe`, or `stageExe` and `buildBatch` for many.
+//! This file owns the directive types; `tb/directive.zig` parses them,
+//! `tb/runner.zig` renders them over the fixed text in `tb/runner_text.zig`,
+//! and `tb/exe.zig` builds the result.
 
 const std = @import("std");
-const naming = @import("naming.zig");
-pub const Io = std.Io;
-pub const Allocator = std.mem.Allocator;
-
-/// The directive line prefix. A plain `//` comment is never a directive.
-pub const marker = "//!";
+const Allocator = std.mem.Allocator;
 
 /// Errors from directive parsing and point expansion.
 pub const Error = Allocator.Error || error{
@@ -285,25 +289,28 @@ pub const AcDynWant = struct {
 /// Most operating points one fixture may expand to (`error.TooManyPoints`).
 pub const max_points: usize = 4096;
 
+// The aliases below are the testbench API, in the order a caller runs them;
+// each is documented where it is defined.
+
 const tb_directive = @import("tb/directive.zig");
 pub const parse = tb_directive.parse;
 
 const tb_runner = @import("tb/runner.zig");
-pub const renderRunner = tb_runner.renderRunner;
-pub const renderVpiLib = tb_runner.renderVpiLib;
+pub const shapeOverrides = tb_runner.shapeOverrides;
+pub const opStates = tb_runner.opStates;
 pub const mixedPlan = tb_runner.mixedPlan;
 pub const warnGridEvents = tb_runner.warnGridEvents;
-pub const opStates = tb_runner.opStates;
-pub const shapeOverrides = tb_runner.shapeOverrides;
+pub const renderRunner = tb_runner.renderRunner;
+pub const renderVpiLib = tb_runner.renderVpiLib;
 
 const tb_runner_text = @import("tb/runner_text.zig");
 
 const tb_exe = @import("tb/exe.zig");
-pub const buildExe = tb_exe.buildExe;
 pub const BuildOptions = tb_exe.BuildOptions;
 pub const BuildResult = tb_exe.BuildResult;
-pub const stageExe = tb_exe.stage;
+pub const buildExe = tb_exe.buildExe;
 pub const Staged = tb_exe.Staged;
+pub const stageExe = tb_exe.stage;
 pub const buildBatch = tb_exe.buildBatch;
 pub const batch_argv0 = tb_exe.batch_argv0;
 

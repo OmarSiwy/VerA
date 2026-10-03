@@ -3,14 +3,38 @@
 //! codegen). Re-exports each stage and owns `CompileResult`, the root every
 //! per-compilation allocation hangs off. `build.zig`'s `module_specs` makes
 //! `lib/` a dependency of `src/`, never the reverse.
+//!
+//! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
+//! check, lower, `pruneHeld`, if-conversion, prove, then the §9.4 drop
+//! warnings. Codegen runs later and lazily, from `CompileResult.generateOutput`.
+//! This file's pub declarations are the `vera` module's API (`src/main.zig`,
+//! `src/vpi`, `tests/*`), so their names and meanings are frozen.
 
 const std = @import("std");
-pub const BigArena = @import("big_arena.zig");
 const Allocator = std.mem.Allocator;
 
-const token = @import("frontend").token;
+/// The compilation arena (`CompileResult.arena`); `src/main.zig` also keeps a
+/// `.v` design's tables in one.
+pub const BigArena = @import("big_arena.zig");
+/// §10 preprocessing (`Preprocessor.process`), for callers that need the
+/// text without a compilation.
 pub const Preprocessor = @import("frontend").Preprocessor;
+/// IEEE 1364-2005 §19.6 library map files (`--libmap`).
 pub const libmap = @import("frontend").libmap;
+/// A `--param name=value` compile-time override (`Options.param_overrides`, LRM §3.4).
+pub const ParamOverride = Lower.ParamOverride;
+/// The keyword set a `--std=` selects (`Options.language`).
+pub const KeywordSet = token.KeywordSet;
+/// Diagnostic codes, the `Bag` every stage reports into, and rendering.
+pub const diag = @import("diag");
+/// MIR to device.zig (`CompileResult.generateOutput`).
+pub const codegen = @import("backend").codegen;
+/// device.zig to a versioned `.so` (`buildArtifact`).
+pub const orchestrator = @import("backend").orchestrator;
+/// The fixture testbench: `//!` directives, runner text and its build.
+pub const tb = @import("backend").tb;
+
+const token = @import("frontend").token;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
@@ -20,19 +44,11 @@ const Ssa = @import("ir").Ssa;
 const Elaborate = @import("ir").Elaborate;
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
-/// A `--param name=value` compile-time override (`Options.param_overrides`, LRM §3.4).
-pub const ParamOverride = Lower.ParamOverride;
-pub const KeywordSet = token.KeywordSet;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
-pub const diag = @import("diag");
 const naming = @import("backend").naming;
-pub const codegen = @import("backend").codegen;
-const UnitPlan = @import("backend").UnitPlan;
 const cg_display = @import("backend").cg_display;
 const cg_filters = @import("backend").cg_filters;
-pub const orchestrator = @import("backend").orchestrator;
-pub const tb = @import("backend").tb;
 
 /// How far the pipeline runs. The Zig optimize mode and backend are
 /// `orchestrator.Options.optimize` and `.backend`, set independently.
@@ -121,6 +137,7 @@ pub const Options = struct {
 /// megabytes, and an arena cannot grow a buffer in place). `deinit` frees all
 /// three. The value is freely movable.
 pub const CompileResult = struct {
+    /// The allocator the result was compiled with; `deinit` frees with it.
     gpa: Allocator,
     // Heap-allocated because the AST stores and `Ssa.SsaBuilder` hold an
     // `Allocator` whose `ptr` is this arena's address: moving it by
@@ -128,12 +145,14 @@ pub const CompileResult = struct {
     arena: *BigArena,
     /// Preprocessed source (arena). Every AST/MIR string borrows from it.
     source: []const u8,
+    /// The top module's MIR (arena), if-converted and proven.
     mir: *Mir,
     /// Lowering's output. The `Lower` that built it is gone: nothing after
     /// stage 4 can reach a symbol table, a scope or the SSA builder.
     lowered: *const Lowered,
     /// Its `unit_modes` slice is gpa-owned.
     verdict: proof.Verdict,
+    /// What the caller asked for; `buildArtifact` refuses a `.lint` result.
     target: Target,
     /// Codegen output; empty until `generateOutput` runs, which `.lint` never
     /// does. `text` is gpa-owned and freed by `deinit`; consumers borrow it.
@@ -345,20 +364,18 @@ fn compileInArena(
     // §9.4/§9.5. Reported here, not in lowering, because whether a side effect
     // is kept depends on what the caller asked to build. The model is legal
     // either way, so these are warnings.
-    for (lowered.displays.items) |d| {
+    if (opts.display == .drop) for (lowered.displays.items) |d| {
+        // §9.7.3 a device reports these through its status channel
+        // (`contract.StatusSite`): kept, not dropped.
+        if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
         const span = lowered.tokenSpan(d.tok);
-        if (opts.display == .drop) {
-            // §9.7.3 a device reports these through its status channel
-            // (`contract.StatusSite`): kept, not dropped.
-            if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
-            // A §9.5 file task is kept for sequencing, not text; its answer is
-            // §9.5.1's zero descriptor rather than a dropped print.
-            if (Mir.callee.isFileCall(.fromName(d.name)))
-                try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
-            else
-                try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
-        }
-    }
+        // A §9.5 file task is kept for sequencing, not text; its answer is
+        // §9.5.1's zero descriptor rather than a dropped print.
+        if (Mir.callee.isFileCall(.fromName(d.name)))
+            try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
+        else
+            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
+    };
 
     return .{
         .gpa = gpa,
@@ -581,7 +598,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // Zig analyses lazily, so an unreferenced decl is never type-checked. This
 // forces analysis of every top-level pub decl of every stage.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ @This(), BigArena, token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
+    inline for (.{ @This(), BigArena, token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

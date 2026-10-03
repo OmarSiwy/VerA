@@ -8,8 +8,7 @@ const tb_directive = @import("directive.zig");
 const tb_runner = @import("runner.zig");
 const Analysis = tb.Analysis;
 
-/// Shorthand for `std.testing`.
-pub const testing = std.testing;
+const testing = std.testing;
 
 test "directives: defaults when the source has none" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
