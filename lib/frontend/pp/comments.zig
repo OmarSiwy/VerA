@@ -15,7 +15,9 @@ const stringStop = Preprocessor.stringStop;
 // §2.4 comments
 // ---------------------------------------------------------------------------
 
-/// `stripComments`' result, arena-owned.
+/// `stripComments`' result. Both slices are on `Pp.arena`, exactly sized,
+/// because the bag keeps them for rendering after the compilation's
+/// preprocessing ends.
 pub const Stripped = struct { text: []const u8, marks: []const diag.StripMark };
 
 /// Removes `//` and `/* */` comments, keeping the newlines they contained so
@@ -27,7 +29,10 @@ pub const Stripped = struct { text: []const u8, marks: []const diag.StripMark };
 /// texts, but a comment shifts every column after it, and the renderer maps
 /// back through the marks. An unterminated block comment is E0102.
 pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
-    // The output never grows, so every append below fits.
+    // The output never grows, so every append below fits. It is the last
+    // allocation on `pp.arena` until the return, so the shrink there hands
+    // the bytes the comments freed back to the arena. The marks grow on
+    // scratch and are copied out once, exactly sized.
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, src.len);
     var marks: std.ArrayList(diag.StripMark) = .empty;
@@ -58,7 +63,7 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             i = std.mem.indexOfScalarPos(u8, src, i, '\n') orelse src.len;
             // The output stood still while the input advanced; from here the
             // two run in lockstep again, which is one mark.
-            try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
+            try marks.append(pp.scratch, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '*') {
@@ -80,7 +85,7 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             i += 2;
             // After the replacement bytes, so the lockstep run the mark opens
             // starts at the first byte after the comment on both sides.
-            try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
+            try marks.append(pp.scratch, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
         // Ordinary text up to the next byte the branches above care about.
@@ -94,5 +99,6 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             i = end;
         }
     }
-    return .{ .text = out.items, .marks = marks.items };
+    const text = try out.toOwnedSlice(pp.arena);
+    return .{ .text = text, .marks = try pp.arena.dupe(diag.StripMark, marks.items) };
 }
