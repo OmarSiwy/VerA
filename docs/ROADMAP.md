@@ -448,7 +448,7 @@ Settle each before a fixture asserts one side.
 - IEEE 18.4.3.2: strength 5 is "large" in the prose and "pull" in the list.
   (`conformance-vcd-review.md:137`.)
 - IEEE 19.6, 19.11: does `` `resetall `` reset `` `begin_keywords ``? (`d10_SPEC.md:192-194`.)
-- IEEE 26.2.4 vs AMS 12.33.2: `tests/vpi_app.c` walks the design inside
+- IEEE 26.2.4 vs AMS 12.33.2: `tests/fixtures/ch11_vpi/vpi_app.c` walks the design inside
   `vlog_startup_routines`; IEEE allows only registration there.
   (`conformance-ieee-vpi-interface-review.md:24-31`.)
 - IEEE 26.3.5 vs Annex G: `vpiIsProtected` or `vpiProtected`. Neither is

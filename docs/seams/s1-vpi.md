@@ -78,7 +78,7 @@ diagnostic payload (or the host reads it from the session of proposal 3).
 
 The constants are written twice: `src/vpi/vpi_user.h` and `root.zig`,
 `callback.zig`, `code.zig`, `value.zig`, `systf.zig`, `run.zig`, `analog.zig`.
-`tests/vpi_app.c` checks only the ones it names. Proposal (step 2, it is a
+`tests/fixtures/ch11_vpi/vpi_app.c` checks only the ones it names. Proposal (step 2, it is a
 new test): a test that `@cImport`s `vpi_user.h` and compares every `vpi*`,
 `cb*`, `acb*` constant the Zig side declares, so drift fails the build.
 

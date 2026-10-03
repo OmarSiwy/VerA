@@ -2,7 +2,7 @@
 //! (§9.21.1 first-call table samples) beside a §9.7.3 status site: `noisePsd`
 //! and `acStim` run the core on a copy (`codegen/setup.zig` `probeInstance`),
 //! compile against a const instance, and leave the caller's untouched.
-//! The device is tests/table_status.va; `zig build test` emits it and runs this.
+//! The device is tests/fixtures/ch09_system_tasks/table_status.va; `zig build test` emits it and runs this.
 
 const std = @import("std");
 const contract = @import("contract");

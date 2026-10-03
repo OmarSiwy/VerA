@@ -1,7 +1,7 @@
 /* Shared scaffolding for the P02 VPI applications. Nothing normative lives
  * here — every LRM claim is in the application that makes it.
  *
- * The reporting contract is tests/vpi_app.c's, unchanged: an application is
+ * The reporting contract is tests/fixtures/ch11_vpi/vpi_app.c's, unchanged: an application is
  * entered only through LRM 12.33.2's `vlog_startup_routines`, reports by EXIT
  * CODE, calls exit(1) at its first failed check, and on success prints exactly
  * one census line. The census line is what proves the startup routine ran at
