@@ -3,7 +3,7 @@
 //! range rows, §6.2.2 instance-array rows, and `freeze`, which turns a
 //! builder's growable lists into the fixed `Design` tables. The builders are
 //! model/analog.zig (over `Lowered`) and model/digital.zig (over a
-//! `sim.digital.Run`); both append `Obj` rows to one `std.ArrayList(Obj)`.
+//! `sim.digital.Run`); both append rows to one `Rows`.
 //!
 //! Every builder keeps the `Scope` invariant (root.zig): the module rows come
 //! first, in scope order. Row strings and slices live in `Design.arena`; the
@@ -20,8 +20,58 @@ const Design = root.Design;
 const Error = root.Error;
 const Kind = root.Kind;
 const Obj = root.Obj;
+const Cold = root.Cold;
 const Scope = root.Scope;
 const vpiSize = root.vpiSize;
+
+/// The rows a builder appends: the `Obj` table and the `Cold` rows its
+/// `Obj.cold` indexes. Both live in `gpa`, the `Design`'s allocator, until
+/// `freeze` hands them to the `Design`; everything else a builder grows is
+/// scratch, in an arena it frees when it returns.
+pub const Rows = struct {
+    gpa: std.mem.Allocator,
+    hot: std.ArrayList(Obj) = .empty,
+    cold: std.ArrayList(Cold) = .empty,
+
+    /// Frees whatever `freeze` did not take.
+    pub fn deinit(rows: *Rows) void {
+        rows.hot.deinit(rows.gpa);
+        rows.cold.deinit(rows.gpa);
+    }
+
+    /// Appends row `o`, with no cold fields.
+    pub fn append(rows: *Rows, o: Obj) Error!void {
+        try rows.hot.append(rows.gpa, o);
+    }
+
+    /// Appends row `o` with cold fields `c`.
+    pub fn appendCold(rows: *Rows, o: Obj, c: Cold) Error!void {
+        try rows.hot.ensureUnusedCapacity(rows.gpa, 1);
+        var row = o;
+        row.cold = @intCast(rows.cold.items.len);
+        try rows.cold.append(rows.gpa, c);
+        rows.hot.appendAssumeCapacity(row);
+    }
+
+    /// Row `at`'s cold fields to write, its `Cold` row added on first use.
+    /// Invalidates earlier results of `coldFor` and `coldOf`.
+    pub fn coldFor(rows: *Rows, at: u32) Error!*Cold {
+        const o = &rows.hot.items[at];
+        if (o.cold == root.no_cold) {
+            try rows.cold.append(rows.gpa, .{});
+            o.cold = @intCast(rows.cold.items.len - 1);
+        }
+        return &rows.cold.items[o.cold];
+    }
+
+    /// Row `at`'s cold fields to read: `Cold{}` when it has none.
+    pub fn coldOf(rows: *const Rows, at: u32) *const Cold {
+        const c = rows.hot.items[at].cold;
+        return if (c == root.no_cold) &empty_cold else &rows.cold.items[c];
+    }
+
+    const empty_cold: Cold = .{};
+};
 
 /// A scope under construction: the definition it instantiates, plus the
 /// growable sets that become `Scope`'s slices.
@@ -71,12 +121,15 @@ pub const Building = struct {
     }
 };
 
-/// The model's fixed arrays, from what a builder accumulated. `objects` must
-/// hold the modules first and in scope order — the `Scope` invariant.
-pub fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void {
+/// The model's fixed arrays, from what a builder accumulated. `rows` must
+/// hold the modules first and in scope order — the `Scope` invariant. Takes
+/// `rows`' tables (no copy), leaving it empty; `rows.gpa` must be `d.gpa`.
+pub fn freeze(d: *Design, rows: *Rows, scopes: []const Building) Error!void {
     const gpa = d.gpa;
     const arena = d.arena.allocator();
-    d.objects = try gpa.dupe(Obj, objects);
+    d.objects = try rows.hot.toOwnedSlice(rows.gpa);
+    d.cold = try rows.cold.toOwnedSlice(rows.gpa);
+    const objects = d.objects;
     d.scopes = try gpa.alloc(Scope, scopes.len);
     for (scopes, 0..) |*s, i| d.scopes[i] = .{
         .parent = s.parent,
@@ -135,9 +188,8 @@ pub fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!
 /// element k of that order in `base + k` (`digital.Run.arrays`), which is the
 /// slot given each element here.
 pub fn addArray(
-    gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
-    objects: *std.ArrayList(Obj),
+    objects: *Rows,
     kind: Kind,
     owner: u32,
     name: []const u8,
@@ -149,11 +201,11 @@ pub fn addArray(
     width: u32,
     base: ?u32,
 ) Error!u32 {
-    const at: u32 = @intCast(objects.items.len);
+    const at: u32 = @intCast(objects.hot.items.len);
     var count: u32 = @intCast(high - low + 1);
     for (rest) |sp| count *= @intCast(sp.high - sp.low + 1);
     const members = try arena.alloc(u32, count);
-    try objects.append(gpa, .{ .kind = kind, .owner = owner, .name = name, .full = full, .size = count, .ty = ty, .members = members });
+    try objects.appendCold(.{ .kind = kind, .owner = .of(owner), .name = name, .full = full, .size = count, .ty = ty }, .{ .members = members });
     const elem: Kind = switch (kind) {
         .reg_array => .word,
         .net_array => .net,
@@ -176,20 +228,20 @@ pub fn addArray(
             var buf: [24]u8 = undefined;
             try suffix.insertSlice(arena, 0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
         }
-        const c: u32 = @intCast(objects.items.len);
-        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
-        members[k] = @intCast(objects.items.len);
+        const c: u32 = @intCast(objects.hot.items.len);
+        try objects.append(.{ .kind = .constant, .owner = .of(owner), .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
+        members[k] = @intCast(objects.hot.items.len);
         const local = try arena.print("{s}{s}", .{ name, suffix.items });
-        try objects.append(gpa, .{
+        try objects.append(.{
             .kind = elem,
-            .owner = owner,
+            .owner = .of(owner),
             .name = local,
             .full = try arena.print("{s}{s}", .{ full, suffix.items }),
             .size = width,
             .ty = ty,
-            .slot = if (base) |b| b + @as(u32, @intCast(k)) else null,
-            .parent = at,
-            .index = c,
+            .slot = .of(if (base) |b| b + @as(u32, @intCast(k)) else null),
+            .parent = .of(at),
+            .index = .of(c),
         });
     }
     return at;
@@ -199,14 +251,14 @@ pub fn addArray(
 /// bounds decimal constants, its vpiSize the element count.
 ///
 /// The caller adds one row for each dimension it models.
-pub fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), owner: u32, left: i64, right: i64) Error!u32 {
-    const l: u32 = @intCast(objects.items.len);
-    try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = left } });
-    try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = right } });
+pub fn addRange(arena: std.mem.Allocator, objects: *Rows, owner: u32, left: i64, right: i64) Error!u32 {
+    const l: u32 = @intCast(objects.hot.items.len);
+    try objects.append(.{ .kind = .constant, .owner = .of(owner), .name = "", .full = "", .size = 32, .value = .{ .int = left } });
+    try objects.append(.{ .kind = .constant, .owner = .of(owner), .name = "", .full = "", .size = 32, .value = .{ .int = right } });
     const edges = try arena.dupe(code.Edge, &.{ .{ .tag = code.vpiLeftRange, .to = l }, .{ .tag = code.vpiRightRange, .to = l + 1 } });
     const size: c_int = @intCast(@abs(left - right) + 1);
     const props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = size }});
-    try objects.append(gpa, .{ .kind = .code, .vtype = code.vpiRange, .owner = owner, .name = "", .full = "", .edges = edges, .props = props });
+    try objects.append(.{ .kind = .code, .vtype = code.vpiRange, .owner = .of(owner), .name = "", .full = "", .edges = edges, .props = props });
     return l + 2;
 }
 
@@ -214,14 +266,14 @@ pub fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
 /// elaboration names each element `u[k]`, so sibling scopes that share the
 /// identifier before `[` are one array. The array object goes in the parent
 /// scope, and every member module learns its array and its index.
-pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), scopes: []Building, top_name: []const u8) Error!void {
+pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *Rows, scopes: []Building, top_name: []const u8) Error!void {
     for (scopes, 0..) |*parent, p| {
         var i: usize = 0;
         while (i < parent.children.items.len) : (i += 1) {
             const first = parent.children.items[i];
             const name = arrayBase(lastComponent(scopes[first].path)) orelse continue;
             // Already grouped under an earlier sibling?
-            if (objects.items[first].parent != null) continue;
+            if (objects.hot.items[first].parent != .none) continue;
             var members: std.ArrayList(u32) = .empty;
             defer members.deinit(gpa);
             for (parent.children.items[i..]) |c| {
@@ -233,22 +285,21 @@ pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects
                     return scopeIndex(s, a) < scopeIndex(s, b);
                 }
             }.lt);
-            const at: u32 = @intCast(objects.items.len);
+            const at: u32 = @intCast(objects.hot.items.len);
             const path = if (parent.path.len == 0) name else try joinPath(arena, parent.path, name);
-            try objects.append(gpa, .{
+            try objects.appendCold(.{
                 .kind = .module_array,
-                .owner = @intCast(p),
+                .owner = .of(@intCast(p)),
                 .name = name,
                 .full = try joinPath(arena, top_name, path),
                 .size = @intCast(members.items.len),
-                .members = try arena.dupe(u32, members.items),
-            });
+            }, .{ .members = try arena.dupe(u32, members.items) });
             try parent.module_arrays.append(gpa, at);
             for (members.items) |m| {
-                const c: u32 = @intCast(objects.items.len);
-                try objects.append(gpa, .{ .kind = .constant, .owner = @intCast(p), .name = "", .full = "", .size = 32, .value = .{ .int = scopeIndex(scopes, m) } });
-                objects.items[m].parent = at;
-                objects.items[m].index = c;
+                const c: u32 = @intCast(objects.hot.items.len);
+                try objects.append(.{ .kind = .constant, .owner = .of(@intCast(p)), .name = "", .full = "", .size = 32, .value = .{ .int = scopeIndex(scopes, m) } });
+                objects.hot.items[m].parent = .of(at);
+                objects.hot.items[m].index = .of(c);
             }
         }
     }
@@ -271,6 +322,51 @@ fn arrayIndex(local: []const u8) ?i64 {
     if (local[local.len - 1] != ']') return null;
     return std.fmt.parseInt(i64, local[open_at + 1 .. local.len - 1], 10) catch null;
 }
+
+/// The declarations each scope's attribute pass decorates: rows owned by
+/// one of the scopes, neither `.code` nor `.module`, with a source token.
+/// Bucketed by owner in object order, once, rather than found by a scan of
+/// every object per scope. Exact for a pass that runs scope by scope over
+/// the rows that exist before it, because a scope's pass adds only rows it
+/// owns, `.code` rows and ownerless ones.
+pub const Decls = struct {
+    /// Scope `i`'s rows are `rows[first[i]..first[i + 1]]`.
+    first: []u32,
+    rows: []u32,
+
+    pub fn init(gpa: std.mem.Allocator, objects: []const Obj, n_scopes: usize) Error!Decls {
+        const first = try gpa.alloc(u32, n_scopes + 1);
+        errdefer gpa.free(first);
+        @memset(first, 0);
+        for (objects) |o| if (isDecl(o, n_scopes)) {
+            first[o.owner.get().? + 1] += 1;
+        };
+        for (1..first.len) |k| first[k] += first[k - 1];
+        const rows = try gpa.alloc(u32, first[n_scopes]);
+        errdefer gpa.free(rows);
+        const fill = try gpa.dupe(u32, first[0..n_scopes]);
+        defer gpa.free(fill);
+        for (objects, 0..) |o, at| if (isDecl(o, n_scopes)) {
+            rows[fill[o.owner.get().?]] = @intCast(at);
+            fill[o.owner.get().?] += 1;
+        };
+        return .{ .first = first, .rows = rows };
+    }
+
+    pub fn deinit(d: *Decls, gpa: std.mem.Allocator) void {
+        gpa.free(d.first);
+        gpa.free(d.rows);
+    }
+
+    /// Scope `i`'s declaration rows, in object order.
+    pub fn of(d: Decls, i: usize) []const u32 {
+        return d.rows[d.first[i]..d.first[i + 1]];
+    }
+
+    fn isDecl(o: Obj, n_scopes: usize) bool {
+        return o.owner != .none and o.owner.get().? < n_scopes and o.kind != .code and o.kind != .module and o.src_tok != 0;
+    }
+};
 
 /// §6.7 full name -> object, for resolving the identifiers of the
 /// behavioural objects. Built in object order, so where a port and a net
