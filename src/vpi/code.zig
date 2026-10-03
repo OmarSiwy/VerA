@@ -9,8 +9,13 @@ const std = @import("std");
 const Ast = @import("frontend").Ast;
 const sim = @import("sim");
 const root = @import("root.zig");
+const property = @import("property.zig");
+const model = @import("model.zig");
+const iterate = @import("iterate.zig");
+const handle = @import("handle.zig");
 
 const Obj = root.Obj;
+/// An edge written to nothing: vpi_handle answers NULL with no error.
 pub const none = root.no_obj;
 
 // Annex G object types (IEEE 1364-2005, which §12.2 and §12.31 defer to).
@@ -306,13 +311,14 @@ pub const ScopeLists = struct {
     tchks: std.ArrayList(u32) = .empty,
     gen_arrays: std.ArrayList(u32) = .empty,
     /// IEEE 1364-2005 §26.6.12: the `#(...)` assignments overriding this
-    /// instance's parameters, written in its parent (root.zig).
+    /// instance's parameters, written in its parent (model/digital.zig).
     param_assigns: std.ArrayList(u32) = .empty,
     /// IEEE 1364-2005 §26.6.3 the task, function and named block scopes
-    /// written directly in the module; root.zig joins its instances and gen
-    /// scopes to them for `vpiInternalScope`.
+    /// written directly in the module; `model.freeze` joins its instances
+    /// and gen scopes to them for `vpiInternalScope`.
     internal: std.ArrayList(u32) = .empty,
 
+    /// Frees the lists (owned by `gpa`); the rows they index stay.
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
         s.internal.deinit(gpa);
         s.gen_arrays.deinit(gpa);
@@ -346,6 +352,8 @@ pub const ScopeLists = struct {
     }
 };
 
+/// The builders' error set, shared with the model so a builder call needs no
+/// mapping.
 pub const Error = root.Error;
 
 /// One scope's worth of building: where new rows go, how a name in this
@@ -381,10 +389,14 @@ pub const Builder = struct {
     engine: u32 = 0,
     automatic: bool = false,
 
+    /// IEEE 1364-2005 §26.6.42: the attributes the source binds to `owner`,
+    /// as vpiAttribute rows of object `at` (attributes.zig `attach`).
     pub fn attributes(b: *Builder, at: u32, owner: Ast.AttributeOwner, definition: bool) Error!void {
         return @import("attributes.zig").attach(b, at, owner, definition);
     }
 
+    /// The analog model's lookups, built once per design by model/analog.zig
+    /// and shared by every scope's builder. Owned by that caller (`gpa`).
     pub const Analog = struct {
         /// Final analog parameter types used by constant attribute values.
         lowered: ?*const @import("ir").Lowered = null,
@@ -406,6 +418,9 @@ pub const Builder = struct {
         return at;
     }
 
+    /// Appends one `.code` row of `vtype` owned by this scope, its edge, list
+    /// and prop rows copied into the arena; returns its index. Invalidates
+    /// pointers into `objects.items`.
     pub fn code(b: *Builder, vtype: c_int, edges: []const Edge, lists: []const List, props: []const Prop) Error!u32 {
         return b.add(.{
             .kind = .code,
@@ -531,8 +546,8 @@ pub const Builder = struct {
             const base = slot orelse continue;
             const arr = b.run.?.arrays.get(base).?;
             const ranges = try b.arena.alloc(u32, e.dims.len);
-            ranges[0] = try root.addRange(b.gpa, b.arena, b.objects, b.scope, arr.left, arr.right);
-            for (arr.rest, ranges[1..]) |sp, *range| range.* = try root.addRange(b.gpa, b.arena, b.objects, b.scope, if (sp.descending) sp.high else sp.low, if (sp.descending) sp.low else sp.high);
+            ranges[0] = try model.addRange(b.gpa, b.arena, b.objects, b.scope, arr.left, arr.right);
+            for (arr.rest, ranges[1..]) |sp, *range| range.* = try model.addRange(b.gpa, b.arena, b.objects, b.scope, if (sp.descending) sp.high else sp.low, if (sp.descending) sp.low else sp.high);
             const members = try b.arena.alloc(u32, arr.count);
             for (members, 0..) |*member, k| {
                 const indices = try b.arena.alloc(u32, e.dims.len);
@@ -1271,7 +1286,7 @@ pub const Builder = struct {
                 const sys = ex.tag(id) == .sys_call;
                 const func = if (sys) none else b.lookupAs(name, .function);
                 // IEEE 1364-2005 §26.6.19 func call -> type int: vpiFuncType,
-                // the function's (a system function's is computed in root.zig).
+                // the function's (a system function's is computed in property.zig).
                 var ftype: ?Prop = null;
                 if (func != none) for (b.objects.items[func].props) |p| {
                     if (p.prop == vpiFuncType) ftype = p;
@@ -1307,6 +1322,9 @@ pub const Builder = struct {
         return b.add(.{ .kind = .constant, .owner = null, .name = "", .full = "", .size = width, .value = v, .const_type = const_type });
     }
 
+    /// §11.6.19 a vpiOperation of type `op` over `operands`, each built as an
+    /// expression first; in no scope, as every expression is. Invalidates
+    /// pointers into `objects.items`.
     pub fn operation(b: *Builder, op: c_int, operands: []const Ast.ExprId) Error!u32 {
         var items: std.ArrayList(u32) = .empty;
         for (operands) |o| try items.append(b.arena, try b.expr(o));
@@ -2203,12 +2221,12 @@ test "§26.6.26 b) vpiDecompile adds parentheses only where precedence needs the
         \\endmodule
     );
     defer h.deinit();
-    const procs = root.vpi_iterate(vpiProcess, root.vpi_handle_by_name("t", null));
-    const init = root.vpi_scan(procs);
+    const procs = iterate.vpi_iterate(vpiProcess, handle.vpi_handle_by_name("t", null));
+    const init = iterate.vpi_scan(procs);
     _ = root.vpi_free_object(procs);
-    const rhs = root.vpi_handle(vpiRhs, root.vpi_handle(vpiStmt, init));
+    const rhs = handle.vpi_handle(vpiRhs, handle.vpi_handle(vpiStmt, init));
     try std.testing.expectEqualStrings(
         "(a + b) * c - (d - a) - b ? {2{a[1:0], 1'b1}} : ~ (a & 4'hf) + - 2.5",
-        std.mem.span(root.vpi_get_str(root.vpiDecompile, rhs)),
+        std.mem.span(property.vpi_get_str(root.vpiDecompile, rhs)),
     );
 }

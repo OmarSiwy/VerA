@@ -1,0 +1,637 @@
+//! The analog model (§11.6): `Lowered`, an elaborated and flattened design,
+//! -> a `Design`. The scope tree is elaboration's (`Lowered.unit_paths`), a
+//! flat declaration belongs to the scope its §6.7 path names, and the analog
+//! classes (§11.6.2, §11.6.5-§11.6.7) and behaviour (§11.6.20/§11.6.21) come
+//! after the declarations. Everything is copied into `Design.arena`, so the
+//! compilation may be freed once `build` returns.
+//!
+//! `build`'s order: scopes, modules, ports, nets, variables, parameters,
+//! `addAnalog`, `model.addModuleArrays`, `addAnalogCode`, `model.freeze`.
+
+const std = @import("std");
+const Ast = @import("frontend").Ast;
+const Elaborate = @import("ir").Elaborate;
+const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
+const code = @import("../code.zig");
+const model = @import("../model.zig");
+const root = @import("../root.zig");
+
+const Building = model.Building;
+const Design = root.Design;
+const Error = root.Error;
+const Obj = root.Obj;
+const addArray = model.addArray;
+const addModuleArrays = model.addModuleArrays;
+const freeze = model.freeze;
+const joinPath = model.joinPath;
+const lastComponent = model.lastComponent;
+const nameTable = model.nameTable;
+
+/// Builds the analog model over `lowered`, whose `module` must be the
+/// elaborated top (`error.NotElaborated` otherwise). The returned `Design`
+/// owns every string and slice it reports (`Design.arena`); `lowered` may be
+/// freed once this returns. Caller owns the result and frees it with
+/// `Design.deinit`.
+pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
+    var d: Design = .{
+        .gpa = gpa,
+        .arena = .init(gpa),
+        .objects = &.{},
+        .scopes = &.{},
+        .top_modules = &.{},
+        .by_name = .empty,
+        .iters = .empty,
+    };
+    errdefer d.deinit();
+    const arena = d.arena.allocator();
+
+    const file = lowered.file;
+    const flat = lowered.module orelse return error.NotElaborated;
+    const top_name = try arena.dupe(u8, file.str(flat.name));
+
+    // --- the scope tree ----------------------------------------------------
+    // §11.6.1's `vpiInternalScope`, read from elaboration rather than walked
+    // again: `Lowered.unit_paths` is one row per inlined instance, depth first
+    // in source order, with the definition it came from (`vpiDefName`).
+    // Instance arrays, §6.4.2 paramsets and Annex E.2.1 were decided there. A
+    // tree of one publishes no rows, so it is its own single row.
+    const units = if (lowered.unit_paths.len != 0) lowered.unit_paths else &[_]Elaborate.UnitPath{
+        .{ .module = top_name, .path = "", .decl = flat },
+    };
+    var scopes: std.ArrayList(Building) = .empty;
+    defer {
+        for (scopes.items) |*s| s.deinit(gpa);
+        scopes.deinit(gpa);
+    }
+    // A path → scope index table: a unit finds its parent by it, and bucketing
+    // the flattened declarations costs a lookup per declaration.
+    var by_path: std.StringHashMapUnmanaged(u32) = .empty;
+    defer by_path.deinit(gpa);
+    for (units, 0..) |u, i| {
+        const path = try arena.dupe(u8, std.mem.trimEnd(u8, u.path, &.{Elaborate.sep}));
+        const at: u32 = @intCast(i);
+        // Rows come parent first, so the parent is already in the table. Unit 0
+        // is the top, whose path is "".
+        const parent: ?u32 = if (i == 0) null else by_path.get(path[0 .. std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse 0]).?;
+        try scopes.append(gpa, .{
+            .decl = u.decl,
+            .def_name = try arena.dupe(u8, u.module),
+            .path = path,
+            .parent = parent,
+        });
+        if (parent) |p| try scopes.items[p].children.append(gpa, at);
+        try by_path.put(gpa, path, at);
+    }
+
+    // --- the objects -------------------------------------------------------
+    var objects: std.ArrayList(Obj) = .empty;
+    defer objects.deinit(gpa);
+
+    // Modules FIRST and in scope order: that is the `Scope` invariant, and it
+    // is what lets an object's `owner` scope index double as its owner's
+    // object index.
+    for (scopes.items, 0..) |s, i| try objects.append(gpa, .{
+        .kind = .module,
+        .owner = s.parent,
+        .scope = @intCast(i),
+        .name = if (i == 0) top_name else lastComponent(s.path),
+        .full = try joinPath(arena, top_name, s.path),
+    });
+
+    // §11.6.4 ports. Read from the DEFINITION, not from the flattened module:
+    // flattening collapses a child's port into the parent net it was bound to
+    // (`Elaborate.Design.names`), so the flat module holds only the top's ports
+    // and a child's would otherwise have no object at all — even though §6.7
+    // still lets source name it and `hier_names` still resolves it.
+    //
+    // The SIZE comes back from the flat side through that same table: a port's
+    // width is the width of the node it denotes, and `Lowered.vectors` is the
+    // §3.6.3 range already folded, keyed by the flat name.
+    for (scopes.items, 0..) |*s, i| {
+        for (s.decl.ports, 0..) |p, k| {
+            const local = try arena.dupe(u8, file.str(p.name));
+            const path = try joinPath(arena, s.path, local);
+            const node = lowered.hier_names.get(path) orelse path;
+            try s.ports.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, .{
+                .kind = .port,
+                .owner = @intCast(i),
+                .name = local,
+                .full = try joinPath(arena, top_name, path),
+                .size = vectorSize(lowered, node),
+                .direction = p.direction,
+                .port_index = @intCast(k),
+                .src_tok = p.main_tok,
+            });
+        }
+    }
+
+    // §11.6.8/§11.6.9/§11.6.12 — the contents of every scope, from the
+    // ELABORATED module. Each flat name is its own §6.7 path, so the scope it
+    // belongs to is the part before the last `Elaborate.sep` and the `vpiName`
+    // is the part after. A declaration whose path names no scope is dropped
+    // rather than guessed at; nothing a flatten produces has one, and inventing
+    // a scope for it would be inventing hierarchy.
+    for (flat.nets) |n| {
+        const flat_name = file.str(n.name);
+        const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
+        try scopes.items[split.scope].nets.append(gpa, @intCast(objects.items.len));
+        try objects.append(gpa, .{
+            .kind = .net,
+            .owner = split.scope,
+            .name = split.local,
+            .full = try joinPath(arena, top_name, flat_name),
+            .size = vectorSize(lowered, flat_name),
+            .net_type = n.kind,
+            .src_tok = n.main_tok,
+        });
+    }
+    for (flat.vars) |v| {
+        // §11.6.9 is about REGS; `real` and `integer` are §11.6.10's
+        // variables, with their own tags. Arrays of either are §11.6.11.
+        const flat_name = file.str(v.name);
+        const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
+        if (v.dims.len == 1) {
+            const dim = literalDim(file, v.dims[0]) orelse continue;
+            const is_reg = v.storage == .reg;
+            if (!is_reg and v.ty != .real and v.ty != .integer) continue;
+            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            objects.items[at].src_tok = v.main_tok;
+            const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
+            try list.append(gpa, at);
+            if (!is_reg) try scopes.items[split.scope].variables.append(gpa, at);
+            continue;
+        }
+        if (v.dims.len != 0) continue;
+        if (v.storage == .variable and (v.ty == .real or v.ty == .integer)) {
+            const list = if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
+            try list.append(gpa, @intCast(objects.items.len));
+            try scopes.items[split.scope].variables.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, .{
+                .kind = if (v.ty == .real) .real_var else .integer,
+                .owner = split.scope,
+                .name = split.local,
+                .full = try joinPath(arena, top_name, flat_name),
+                .size = if (v.ty == .real) 64 else 32,
+                .ty = v.ty,
+                .src_tok = v.main_tok,
+            });
+            continue;
+        }
+        if (v.storage != .reg) continue;
+        try scopes.items[split.scope].regs.append(gpa, @intCast(objects.items.len));
+        try objects.append(gpa, .{
+            .kind = .reg,
+            .owner = split.scope,
+            .name = split.local,
+            .full = try joinPath(arena, top_name, flat_name),
+            .size = packedWidth(file, v),
+            .is_signed = v.is_signed,
+            .src_tok = v.main_tok,
+        });
+    }
+    for (flat.params) |p| {
+        const flat_name = file.str(p.name);
+        const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
+        try scopes.items[split.scope].params.append(gpa, @intCast(objects.items.len));
+        try objects.append(gpa, .{
+            .kind = .parameter,
+            .owner = split.scope,
+            .name = split.local,
+            .full = try joinPath(arena, top_name, flat_name),
+            .ty = p.ty,
+            .src_tok = p.main_tok,
+            // §3.4.5, as the SOURCE wrote it. Elaboration turns a flattened
+            // child's `parameter` into a `localparam` carrying its override, so
+            // the flat row's `is_local` describes the flatten and not the
+            // declaration; the definition still has the declaration. §11.6.12
+            // NOTE 1 is the same sentence about the value beside it.
+            .is_local = declaredLocal(scopes.items[split.scope].decl, file, split.local) orelse p.is_local,
+            .value = if (lowered.consts.get(flat_name)) |c| switch (c) {
+                .str => |text| .{ .str = try arena.dupe(u8, text) },
+                else => c,
+            } else null,
+        });
+    }
+    const analog = try addAnalog(gpa, arena, &objects, scopes.items, &by_path, lowered, top_name);
+    try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
+    try addAnalogCode(gpa, arena, &objects, scopes.items, lowered, top_name);
+
+    try freeze(&d, objects.items, scopes.items);
+    d.disciplines = analog.disciplines;
+    d.natures = analog.natures;
+    return d;
+}
+
+/// §11.6.2's natures and disciplines, §11.6.5's nodes, §11.6.6's branches and
+/// §11.6.7's quantities — the analog classes, read from the elaborated
+/// declarations exactly as nets are: the DECLARATIONS are the source's
+/// (`file.natures`, `file.disciplines`), the node of each net and the
+/// terminals of each branch are the flattened module's.
+///
+/// Natures are appended first, then disciplines, so a discipline's nature
+/// edges and a nature's `users` are indices known when they are written.
+fn addAnalog(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    scopes: []Building,
+    by_path: *const std.StringHashMapUnmanaged(u32),
+    lowered: *const Lowered,
+    top_name: []const u8,
+) Error!struct { disciplines: []const u32, natures: []const u32 } {
+    const file = lowered.file;
+    const flat = lowered.module.?;
+
+    // --- natures: one object each, then the vpiParent edge and its inverse.
+    const natures = try arena.alloc(u32, file.natures.len);
+    var nature_at: std.StringHashMapUnmanaged(u32) = .empty;
+    defer nature_at.deinit(gpa);
+    for (file.natures, natures) |n, *at| {
+        const name = try arena.dupe(u8, file.str(n.name));
+        at.* = @intCast(objects.items.len);
+        try objects.append(gpa, .{ .kind = .nature, .owner = null, .name = name, .full = name });
+        try nature_at.put(gpa, name, at.*);
+    }
+    // --- disciplines, each with the natures it binds.
+    const disciplines = try arena.alloc(u32, file.disciplines.len);
+    var disc_at: std.StringHashMapUnmanaged(u32) = .empty;
+    defer disc_at.deinit(gpa);
+    for (file.disciplines, disciplines) |dd, *at| {
+        const name = try arena.dupe(u8, file.str(dd.name));
+        at.* = @intCast(objects.items.len);
+        try objects.append(gpa, .{
+            .kind = .discipline,
+            .owner = null,
+            .name = name,
+            .full = name,
+            .flow = if (dd.flow == .none) null else nature_at.get(file.str(dd.flow)),
+            .pot = if (dd.potential == .none) null else nature_at.get(file.str(dd.potential)),
+        });
+        try disc_at.put(gpa, name, at.*);
+    }
+    // §3.6.1.1 a derived nature's parent: a nature by name, or — A.1.6's
+    // `discipline_identifier . potential_or_flow` — the nature that discipline
+    // binds on that side.
+    for (file.natures, natures) |n, at| {
+        if (n.parent == .none) continue;
+        const pname = file.str(n.parent);
+        const parent: ?u32 = if (n.parent_access) |side| blk: {
+            const di = disc_at.get(pname) orelse break :blk null;
+            break :blk switch (side) {
+                .potential => objects.items[di].pot,
+                .flow => objects.items[di].flow,
+            };
+        } else nature_at.get(pname);
+        objects.items[at].nature = parent;
+    }
+    // The inverse edges, nature ->> nature (vpiChild) and nature ->> discipline.
+    for (natures) |at| {
+        var kids: std.ArrayList(u32) = .empty;
+        defer kids.deinit(gpa);
+        for (natures) |other| if (objects.items[other].nature == at) try kids.append(gpa, other);
+        var users: std.ArrayList(u32) = .empty;
+        defer users.deinit(gpa);
+        for (disciplines) |di| {
+            const o = objects.items[di];
+            if (o.flow == at or o.pot == at) try users.append(gpa, di);
+        }
+        objects.items[at].children = try arena.dupe(u32, kids.items);
+        objects.items[at].users = try arena.dupe(u32, users.items);
+    }
+
+    // --- nodes: one per net of a continuous discipline (§3.6.2.2: a
+    // discipline binding natures and not declared `domain discrete`).
+    var net_at: std.StringHashMapUnmanaged(u32) = .empty;
+    defer net_at.deinit(gpa);
+    // A top-level port is its own net here (its declaration is the port's,
+    // not a separate §11.6.8 object), so it is keyed too — nets after ports,
+    // so a name that is both resolves to the net.
+    for (objects.items, 0..) |o, i| if (o.kind == .port and o.owner == 0) try net_at.put(gpa, o.full, @intCast(i));
+    for (objects.items, 0..) |o, i| if (o.kind == .net) try net_at.put(gpa, o.full, @intCast(i));
+    const Decl = struct { name: Ast.StrId, discipline: Ast.StrId };
+    var decls: std.ArrayList(Decl) = .empty;
+    defer decls.deinit(gpa);
+    for (flat.ports) |p| try decls.append(gpa, .{ .name = p.name, .discipline = p.discipline });
+    for (flat.nets) |n| try decls.append(gpa, .{ .name = n.name, .discipline = n.discipline });
+    for (decls.items) |n| {
+        if (n.discipline == .none) continue;
+        const di = disc_at.get(file.str(n.discipline)) orelse continue;
+        if (file.disciplines[di - disciplines[0]].domain == .discrete) continue;
+        const full = try joinPath(arena, top_name, file.str(n.name));
+        const net = net_at.get(full) orelse continue;
+        // A port declared and then typed by a net declaration is one node.
+        if (objects.items[net].node != null) continue;
+        const at: u32 = @intCast(objects.items.len);
+        const src = objects.items[net];
+        try objects.append(gpa, .{
+            .kind = .node,
+            .owner = src.owner,
+            .name = src.name,
+            .full = src.full,
+            .size = src.size,
+            .disc = di,
+            // node <->> nets: the §11.6.8 net, when the name has one. A
+            // top-level port's node reaches its port instead (§11.6.4's
+            // port -> nodes edge), and has no net object to list.
+            .nets = if (src.kind == .net) try arena.dupe(u32, &.{net}) else &.{},
+        });
+        objects.items[net].node = at;
+        objects.items[net].disc = di;
+        try scopes[src.owner.?].nodes.append(gpa, at);
+    }
+    // Each node's solver row: the `Lowered.nodes` row spelled by the node's
+    // flattened name (`nodes` rows are named as `nets` are, §6.7 paths).
+    for (lowered.nodes.items(.name), lowered.nodes.items(.kind), 0..) |name, kind, row| {
+        if (kind != .net) continue;
+        const denoted = lowered.hier_names.get(name) orelse name;
+        const net = net_at.get(try joinPath(arena, top_name, denoted)) orelse continue;
+        const node = objects.items[net].node orelse continue;
+        if (objects.items[node].row == null) objects.items[node].row = @intCast(row);
+    }
+
+    // --- branches, each with its two quantities.
+    for (flat.branches) |b| {
+        const flat_name = file.str(b.name);
+        const split = (try splitPath(arena, by_path, flat_name)) orelse continue;
+        const pos = try terminalNode(objects.items, &net_at, arena, lowered, top_name, b.hi);
+        const neg = if (b.lo == .none) null else try terminalNode(objects.items, &net_at, arena, lowered, top_name, b.lo);
+        const disc = if (pos) |p| objects.items[p].disc else null;
+        const at: u32 = @intCast(objects.items.len);
+        const full = try joinPath(arena, top_name, flat_name);
+        try objects.append(gpa, .{
+            .kind = .branch,
+            .owner = split.scope,
+            .name = split.local,
+            .full = full,
+            .disc = disc,
+            .pos = pos,
+            .neg = neg,
+            .flow = at + 1,
+            .pot = at + 2,
+            .hi_row = if (pos) |p| objects.items[p].row orelse Lower.ground else Lower.ground,
+            .lo_row = if (neg) |n| objects.items[n].row orelse Lower.ground else Lower.ground,
+        });
+        // §11.6.7: a quantity's nature is the one its branch's discipline
+        // binds on that side.
+        const dobj: ?Obj = if (disc) |di| objects.items[di] else null;
+        try objects.append(gpa, .{ .kind = .quantity, .owner = split.scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.flow else null });
+        try objects.append(gpa, .{ .kind = .quantity, .owner = split.scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
+        try scopes[split.scope].branches.append(gpa, at);
+    }
+
+    // --- the rows behind each branch's values, and the UNNAMED branches.
+    //
+    // §5.4.2: "an unnamed branch ... between two nets" exists wherever an
+    // access function names the pair, so a `<+` in an instance declares one —
+    // and §11.6.6 draws it like any other: `vpi_iterate(vpiBranch, module)`
+    // reaches it and `vpiFlow`/`vpiPotential` reach its quantities. The
+    // flattened design keeps §5.4.1's ONE unnamed branch per pair, so the
+    // INSTANCE a row belongs to is `Contribution.unit`, the one lowering
+    // recorded as it lowered that instance's analog block. A potential and a
+    // flow row of one instance over one pair are one branch.
+    const rows = lowered.contributions.items;
+    var unnamed: std.AutoHashMapUnmanaged(UnnamedKey, u32) = .empty;
+    defer unnamed.deinit(gpa);
+    for (rows, 0..) |c, k| {
+        const idx: u32 = @intCast(k);
+        if (c.br != Lower.unnamed_branch) {
+            // A named branch: the one of this pair its instance declares. Two
+            // named branches over one pair are told apart by an id lowering
+            // keeps to itself, so this model does not guess between them.
+            var found: ?u32 = null;
+            var twice = false;
+            for (objects.items, 0..) |o, i| {
+                if (o.kind != .branch or o.full.len == 0) continue;
+                if (!branchSpans(objects.items, o, c.hi, c.lo)) continue;
+                if (found != null) twice = true;
+                found = @intCast(i);
+            }
+            const b = found orelse continue;
+            bindRow(&objects.items[b], c, idx);
+            objects.items[b].flow_unknowable = objects.items[b].flow_unknowable or twice;
+            continue;
+        }
+        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, c.unit);
+        for (lowered.contrib_sharers.items) |sh| {
+            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, sh.unit);
+        }
+    }
+    return .{ .disciplines = disciplines, .natures = natures };
+}
+
+const UnnamedKey = struct { scope: u32, hi: u16, lo: u16 };
+
+/// The §5.4.2 unnamed branch instance `unit` declares over row `idx`'s pair,
+/// made on first sight and bound to the row.
+fn unnamedBranch(
+    gpa: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    scopes: []Building,
+    unnamed: *std.AutoHashMapUnmanaged(UnnamedKey, u32),
+    by_path: *const std.StringHashMapUnmanaged(u32),
+    lowered: *const Lowered,
+    c: Lower.Contribution,
+    idx: u32,
+    unit: u32,
+) Error!void {
+    {
+        const scope: u32 = if (unit < lowered.unit_paths.len)
+            by_path.get(std.mem.trimEnd(u8, lowered.unit_paths[unit].path, &.{Elaborate.sep})) orelse 0
+        else
+            0;
+        const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
+        if (!g.found_existing) {
+            const at: u32 = @intCast(objects.items.len);
+            const pos = nodeOfRow(objects.items, c.hi);
+            const neg = nodeOfRow(objects.items, c.lo);
+            const disc = if (pos) |p| objects.items[p].disc else if (neg) |n| objects.items[n].disc else null;
+            try objects.append(gpa, .{
+                .kind = .branch,
+                .owner = scope,
+                // §5.4.2 gives an unnamed branch no name; `vpiName` answers
+                // the empty string, as §11.6.7's unnamed quantity does.
+                .name = "",
+                .full = "",
+                .disc = disc,
+                .pos = pos,
+                .neg = neg,
+                .flow = at + 1,
+                .pot = at + 2,
+                .hi_row = c.hi,
+                .lo_row = c.lo,
+            });
+            const dobj: ?Obj = if (disc) |di| objects.items[di] else null;
+            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.flow else null });
+            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
+            try scopes[scope].branches.append(gpa, at);
+            g.value_ptr.* = at;
+        }
+        bindRow(&objects.items[g.value_ptr.*], c, idx);
+    }
+}
+
+/// Record contribution row `k` as the source of `b`'s potential or flow.
+fn bindRow(b: *Obj, c: Lower.Contribution, k: u32) void {
+    if (b.full.len == 0) {
+        b.hi_row = c.hi;
+        b.lo_row = c.lo;
+    } else b.flow_neg = b.hi_row != c.hi;
+    switch (c.access) {
+        .potential => b.contrib_pot = k,
+        .flow => {
+            b.contrib_flow = k;
+            if (c.shared) b.flow_unknowable = true;
+        },
+    }
+}
+
+/// The node object whose solver row is `row`; null for ground (§1.3.1.1 has
+/// no node row for it) and for a row no node object carries.
+fn nodeOfRow(objects: []const Obj, row: u16) ?u32 {
+    if (row == Lower.ground) return null;
+    for (objects, 0..) |o, i| if (o.kind == .node and o.row != null and o.row.? == row) return @intCast(i);
+    return null;
+}
+
+/// Does named branch `o` join rows `hi` and `lo`, in either order? §5.4.2's
+/// reference direction is the declaration's, and contributions are
+/// canonicalised to one spelling of the pair, so both orders are the branch.
+fn branchSpans(objects: []const Obj, o: Obj, hi: u16, lo: u16) bool {
+    const p: u16 = if (o.pos) |n| objects[n].row orelse return false else Lower.ground;
+    const n: u16 = if (o.neg) |m| objects[m].row orelse return false else Lower.ground;
+    return (p == hi and n == lo) or (p == lo and n == hi);
+}
+
+/// The node a branch terminal names: an identifier, read through
+/// `hier_names` as every flattened name is, to the net it denotes. Null
+/// for anything else (a bit-select of a vector node is §11.6.5's node BIT,
+/// which the model does not hold).
+fn terminalNode(
+    objects: []const Obj,
+    net_at: *const std.StringHashMapUnmanaged(u32),
+    arena: std.mem.Allocator,
+    lowered: *const Lowered,
+    top_name: []const u8,
+    e: Ast.ExprId,
+) Error!?u32 {
+    const file = lowered.file;
+    if (file.exprs.tag(e) != .ident) return null;
+    const name = file.str(file.exprs.strOf(e));
+    const denoted = lowered.hier_names.get(name) orelse name;
+    const net = net_at.get(try joinPath(arena, top_name, denoted)) orelse return null;
+    return objects[net].node;
+}
+
+/// §11.6.20/§11.6.21 the analog model's behaviour: each flattened `analog`
+/// block, in the scope of the instance that wrote it, with its statements,
+/// contributions and expressions.
+fn addAnalogCode(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    scopes: []Building,
+    lowered: *const Lowered,
+    top_name: []const u8,
+) Error!void {
+    const flat = lowered.module.?;
+    var an: code.Builder.Analog = .{ .lowered = lowered };
+    defer an.branches.deinit(gpa);
+    defer an.flow_access.deinit(gpa);
+    for (objects.items, 0..) |o, i| switch (o.kind) {
+        // Keyed by the declared name a statement spells; an unnamed branch
+        // (§5.4.2) has none, and a statement reaches it by its node pair.
+        .branch => if (o.full.len > top_name.len) try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
+        .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
+    };
+    var names = try nameTable(gpa, objects.items);
+    defer names.deinit(gpa);
+    for (scopes, 0..) |*s, i| {
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
+        try b.attributes(@intCast(i), .{ .kind = .declaration, .tok = s.decl.main_tok }, true);
+        const declarations = objects.items.len;
+        for (0..declarations) |at| {
+            const o = objects.items[at];
+            if (o.owner == @as(u32, @intCast(i)) and o.kind != .code and o.kind != .module and o.src_tok != 0)
+                try b.attributes(@intCast(at), .{ .kind = .declaration, .tok = o.src_tok }, false);
+        }
+        for (s.decl.instances) |inst| for (s.children.items) |child| {
+            if (!std.mem.eql(u8, objects.items[child].name, b.file.str(inst.name))) continue;
+            try b.attributes(child, .{ .kind = .declaration, .tok = inst.main_tok }, false);
+            for (inst.ports, 0..) |conn, k| {
+                const pt = if (conn.name == .none) (if (k < scopes[child].ports.items.len) scopes[child].ports.items[k] else continue) else for (scopes[child].ports.items) |p| {
+                    if (std.mem.eql(u8, objects.items[p].name, b.file.str(conn.name))) break p;
+                } else continue;
+                try b.attributes(pt, .{ .kind = .declaration, .tok = conn.main_tok }, false);
+            }
+        };
+        try b.analogBlocks(flat.analog);
+    }
+}
+
+/// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`
+/// when `decl` declares no such parameter, which is the case for a parameter
+/// elaboration synthesized rather than copied.
+fn declaredLocal(decl: *const Ast.ModuleDecl, file: *const Ast.SourceFile, name: []const u8) ?bool {
+    for (decl.params) |p| {
+        if (std.mem.eql(u8, file.str(p.name), name)) return p.is_local;
+    }
+    return null;
+}
+
+/// §3.6.3 a vector net is N nets, and §11.6.8's `vpiSize` is that N.
+/// `Lowered.vectors` is the folded `[msb:lsb]` keyed by the flat name — the same
+/// fold lowering scalarised the net with, so this cannot disagree with the
+/// device's terminal count. A name absent from it is a scalar.
+fn vectorSize(lowered: *const Lowered, flat_name: []const u8) u32 {
+    const r = lowered.vectors.get(flat_name) orelse return 1;
+    return @intCast(@abs(r.msb - r.lsb) + 1);
+}
+
+/// §11.6.9's `vpiSize` for a `reg [msb:lsb]`.
+///
+/// ponytail: literal bounds only (`Lowered.vectors` holds nets and ports, not
+/// regs). A non-literal range returns 0, which `vpi_get(vpiSize, ...)` reports
+/// as `vpiUndefined` plus an error. Upgrade path: lowering interns packed regs
+/// into `vectors` as it does nets, and this function disappears.
+fn packedWidth(file: *const Ast.SourceFile, v: Ast.VarDecl) u32 {
+    const range = v.packed_range orelse return 1;
+    if (file.exprs.tag(range.msb) != .int_literal or file.exprs.tag(range.lsb) != .int_literal) return 0;
+    const hi = file.exprs.intValue(range.msb);
+    const lo = file.exprs.intValue(range.lsb);
+    if (hi < 0 or lo < 0) return 0;
+    return @intCast(@abs(hi - lo) + 1);
+}
+
+/// Split a flattened declaration's name into the scope it belongs to and the
+/// §11.6 `vpiName` inside it.
+///
+/// The last `Elaborate.sep` is the split, and that is exact rather than a
+/// heuristic: §6.6 generate blocks add no path component in this compiler (they
+/// unroll inside a body, not into the declaration space), and `parser.internTok`
+/// substitutes a space for a period inside a §2.8.1 escaped identifier — so a
+/// period in a flattened name IS a join.
+/// `tests/fixtures/ch06_hierarchy/escaped_period_is_not_a_path.va` is the
+/// fixture on that substitution.
+fn splitPath(
+    arena: std.mem.Allocator,
+    by_path: *const std.StringHashMapUnmanaged(u32),
+    flat: []const u8,
+) Error!?struct { scope: u32, local: []const u8 } {
+    const at = std.mem.lastIndexOfScalar(u8, flat, Elaborate.sep);
+    const path = if (at) |i| flat[0..i] else "";
+    const scope = by_path.get(path) orelse return null;
+    return .{ .scope = scope, .local = try arena.dupe(u8, if (at) |i| flat[i + 1 ..] else flat) };
+}
+
+/// A declared unpacked dimension, folded when both bounds are literal integers
+/// — the same rule `packedWidth` applies. Null otherwise: the array is then
+/// not modelled rather than modelled with a guessed size.
+fn literalDim(file: *const Ast.SourceFile, dim: Ast.Dim) ?struct { low: i64, high: i64 } {
+    if (file.exprs.tag(dim.msb) != .int_literal or file.exprs.tag(dim.lsb) != .int_literal) return null;
+    const a = file.exprs.intValue(dim.msb);
+    const b = file.exprs.intValue(dim.lsb);
+    return .{ .low = @min(a, b), .high = @max(a, b) };
+}

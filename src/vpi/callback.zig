@@ -21,6 +21,8 @@ const vpiHandle = root.vpiHandle;
 // The C ABI — Figure 12-5/12-9/12-10/12-17, as vpi_user.h lays them out.
 // ---------------------------------------------------------------------------
 
+/// Figure 12-5 `s_vpi_time`. `type` picks the live member: `vpiSimTime`,
+/// the 64-bit tick count in `high`:`low`; `vpiScaledRealTime`, `real`.
 pub const Time = extern struct {
     type: c_int,
     high: c_uint,
@@ -28,10 +30,14 @@ pub const Time = extern struct {
     real: f64,
 };
 
+/// Figure 12-10 `s_vpi_vecval`: 32 bits of a four-state vector, `aval` and
+/// `bval` per bit (0/0 = 0, 1/0 = 1, 0/1 = z, 1/1 = x).
 pub const VecVal = extern struct { aval: c_int, bval: c_int };
 
+/// Figure 12-11 `s_vpi_strengthval`.
 pub const StrengthVal = extern struct { logic: c_int, s0: c_int, s1: c_int };
 
+/// Figure 12-9 `s_vpi_value`: `format` (Table 12-4) picks the live member.
 pub const Value = extern struct {
     format: c_int,
     value: extern union {
@@ -46,8 +52,11 @@ pub const Value = extern struct {
     },
 };
 
+/// An application's `cb_rtn`, called with the `CbData` of the firing.
 pub const Routine = *const fn (*CbData) callconv(.c) c_int;
 
+/// Figure 12-17 `s_cb_data`, with the `index` member Figure 12-2 omits
+/// (§12.31.1 requires it).
 pub const CbData = extern struct {
     reason: c_int,
     cb_rtn: ?Routine,
@@ -135,6 +144,7 @@ pub const Cb = struct {
     dead: bool = false,
 };
 
+/// One cbStmt firing point: engine code index `pc`, statement row `obj`.
 pub const Site = struct { pc: u32, obj: u32 };
 
 const gpa = std.heap.smp_allocator;

@@ -6,6 +6,9 @@
 const std = @import("std");
 const sim = @import("sim");
 const root = @import("root.zig");
+const property = @import("property.zig");
+const iterate = @import("iterate.zig");
+const handle = @import("handle.zig");
 const callback = @import("callback.zig");
 const analog = @import("analog.zig");
 
@@ -40,6 +43,8 @@ pub fn detach() void {
     queue_live.clearAndFree(gpa);
 }
 
+/// The run `attach` installed (`root.openDigital`), until `detach`; null for
+/// the analog model.
 pub fn attached() ?*digital.Run {
     return engine;
 }
@@ -348,6 +353,8 @@ pub const Harness = struct {
     out: std.Io.Writer.Allocating,
     run: digital.Run,
 
+    /// Elaborates `source` into `h.run` and installs it as the design. `h`
+    /// must not move afterwards: the model holds `&h.run`.
     pub fn init(h: *Harness, source: []const u8) !void {
         h.arena = .init(std.testing.allocator);
         errdefer h.arena.deinit();
@@ -357,6 +364,7 @@ pub const Harness = struct {
         try root.openDigital(std.testing.allocator, &h.run);
     }
 
+    /// Closes the design (every handle becomes invalid), then frees the run.
     pub fn deinit(h: *Harness) void {
         root.close();
         h.arena.deinit();
@@ -408,12 +416,12 @@ test "the digital model: one scope per instance, every declaration bound to its 
     const d = &root.design.?;
     try std.testing.expectEqual(@as(usize, 2), d.scopes.len);
     try std.testing.expectEqualStrings("leaf", d.scopes[1].def_name);
-    const a = root.asObj(root.vpi_handle_by_name("top.a", null)).?;
+    const a = root.asObj(handle.vpi_handle_by_name("top.a", null)).?;
     try std.testing.expectEqual(@as(u32, 4), a.size);
     try std.testing.expectEqual(h.run.slotOf("a").?, a.slot.?);
-    try std.testing.expect(root.asObj(root.vpi_handle_by_name("top.w", null)).?.kind == .net);
-    try std.testing.expectEqual(root.vpiIntegerVar, root.vpi_get(root.vpiType, root.vpi_handle_by_name("top.n", null)));
-    try std.testing.expect(root.vpi_handle_by_name("top.u.q", null) != null);
+    try std.testing.expect(root.asObj(handle.vpi_handle_by_name("top.w", null)).?.kind == .net);
+    try std.testing.expectEqual(root.vpiIntegerVar, property.vpi_get(root.vpiType, handle.vpi_handle_by_name("top.n", null)));
+    try std.testing.expect(handle.vpi_handle_by_name("top.u.q", null) != null);
 }
 
 test "§12.31.2: time callbacks fire at their times, eventless ones included, before and after the queue" {
@@ -436,8 +444,8 @@ var walked: [8]u64 = undefined;
 var walked_n: usize = 0;
 
 fn walk(_: *callback.CbData) callconv(.c) c_int {
-    const itr = root.vpi_iterate(vpiTimeQueue, null);
-    while (root.vpi_scan(itr)) |q| {
+    const itr = iterate.vpi_iterate(vpiTimeQueue, null);
+    while (iterate.vpi_scan(itr)) |q| {
         var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 0, .real = 0 };
         vpi_get_time(q, &t);
         walked[walked_n] = t.low;
@@ -461,7 +469,7 @@ test "§12.15/§11.6.25: vpi_get_time scales by the object, and the time queues 
     // callback: the design waits at 2us — its 5us step does not exist until
     // the 2us one runs — and a callback of this test's own waits at 7us.
     var t1: Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 1.0 };
-    const top = root.vpi_handle_by_name("q", null);
+    const top = handle.vpi_handle_by_name("q", null);
     const at1: callback.CbData = .{ .reason = callback.cbAtStartOfSimTime, .cb_rtn = walk, .obj = top, .time = &t1, .value = null, .index = 0, .user_data = null };
     try std.testing.expect(callback.vpi_register_cb(&at1) != null);
     try register(callback.cbAtStartOfSimTime, 7000);
