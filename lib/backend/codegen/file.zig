@@ -160,11 +160,29 @@ pub fn emitFile(self: *Gen) Error!void {
     // batch differential check keys on it, and a batching host may.
     // ponytail: a `vera_timepoint` cache stores one point's values, so a
     // device with one is not batched; store lane 0 when a host batches it.
-    if (batchOk(self)) try self.w("pub const batch_ok = true;\n\n", .{});
+    if (batchOk(self)) try self.w(
+        \\/// `eval`/`q`/`evalQ` with a family whose `V` holds several operating
+        \\/// points compute each point exactly as a one-point call would.
+        \\pub const batch_ok = true;
+        \\
+        \\
+    , .{});
     // ...exact per point only for a family running the lead protocol: the
     // device decides on per-point values (`lanes.leadLanes`).
-    if (batchLead(self)) try self.w("pub const batch_lead = true;\n\n", .{});
-    if (batchOk(self) and self.float.inst) try self.w("pub const batch_inst = true;\n\n", .{});
+    if (batchLead(self)) try self.w(
+        \\/// ...only through the lead protocol (`contract.LeadState`): the device
+        \\/// branches on per-point values, so a point that diverges re-runs.
+        \\pub const batch_lead = true;
+        \\
+        \\
+    , .{});
+    if (batchOk(self) and self.float.inst) try self.w(
+        \\/// Each point of a batch reads its own `Instance` (the family's
+        \\/// `instLane`); the points share one `Model` row and one `SimState`.
+        \\pub const batch_inst = true;
+        \\
+        \\
+    , .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 
@@ -362,7 +380,16 @@ pub fn emitTopology(self: *Gen) Error!void {
     // No unknowns: Zig 0.17 refuses an empty exhaustive `enum(u8)`, and
     // `enum(noreturn)` would break the contract's `enum(u8)` tag.
     if (self.names.u_names.len == 0) try self.w("    _,\n", .{});
-    try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
+    try self.w(
+        \\}};
+        \\
+        \\/// The first `num_ports` members of `U` are the §6.5 ports, in
+        \\/// port-list order: the unknowns a netlist connects.
+        \\pub const num_ports: usize = {d};
+        \\const n_u = contract.nU(Self);
+        \\
+        \\
+    , .{self.lowered.num_ports});
     try self.w("/// The contract ABI this device was generated for (`contract.abi_version`).\npub const contract_abi: u32 = {d};\n\n", .{contract_abi});
 
     if (self.float.jac != .off) try self.w(
@@ -387,7 +414,12 @@ pub fn emitTopology(self: *Gen) Error!void {
         if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) any_current = true;
     }
     if (any_current) {
-        try self.w("pub const u_kinds = [n_u]contract.UnknownKind{{\n", .{});
+        try self.w(
+            \\/// Per unknown, in `U` order: a node potential (`.voltage`) or a
+            \\/// §5.4.2 branch flow (`.current`).
+            \\pub const u_kinds = [n_u]contract.UnknownKind{{
+            \\
+        , .{});
         for (0..self.names.n_u) |i| {
             try self.w("    .{s},\n", .{if (plan_topo.isFlowUnknown(self.input(), @intCast(i))) "current" else "voltage"});
         }
@@ -523,7 +555,10 @@ fn emitModel(self: *Gen) Error!void {
     // `su_ok` exists only where it is asserted: Debug, in a program that
     // asked for the contract's checks (`contract.validating`).
     if (self.su.vals.len != 0) try self.w(
+        \\    /// The solve-invariant values `setup` fills and `eval` reads.
         \\    su: Setup = .{{}},
+        \\    /// Set by `setup`; `eval` asserts it, so a forgotten `setup` panics
+        \\    /// (safe builds of a program with `contract.validating`; else `void`).
         \\    su_ok: if (std.debug.runtime_safety and contract.validating) bool else void = if (std.debug.runtime_safety and contract.validating) false else {{}},
         \\
     , .{});

@@ -65,6 +65,8 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\/// Per-instance state. The host owns every field above the operator
         \\/// block: `mfactor` (§6.3.6); the temperature is `Model.temperature__`.
         \\/// Time, step and analysis reach every entry point as `contract.SimState`.
+        \\/// Every per-instance value `eval` reads lives here; what only
+        \\/// `updateState` and `stateCtl` read lives in `State`.
         \\pub const Instance = struct {{
         \\    mfactor: f64 = 1.0,
         \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
@@ -511,6 +513,14 @@ pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
 /// contract.StateCtlOp, which the host converts by ordinal.
 pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     const fsm = fsmStateCtl(self);
+    try self.w(
+        \\/// §4.5 the step decision after `updateState` (`contract.StateCtlOp`):
+        \\/// `.commit` latches the path latches and copies the history into
+        \\/// `state`; `.revert` copies it back, so a rejected step leaves the
+        \\/// instance as the last accepted point did. Returns true only for a
+        \\/// `.query` whose accepted solution flipped a `cross`/`above` latch.
+        \\
+    , .{});
     try self.w("pub fn stateCtl(_: *const Model, ", .{});
     const at_inst = self.out.items.len;
     try self.w("inst: *Instance, ", .{});

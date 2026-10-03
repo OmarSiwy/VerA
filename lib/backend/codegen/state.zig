@@ -164,6 +164,8 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\
         \\/// §4.5.2 accepted-step bookkeeping for the analog operators, and
         \\/// `stateCtl`'s accepted copy of the history `updateState` advances.
+        \\/// One per instance, beside its `Instance`; `eval`, `q` and `evalQ`
+        \\/// never read it, so it is the cold half of the instance's state.
         \\pub const State = struct {{
         \\
     , .{});
@@ -179,14 +181,32 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     var dirty = false;
     for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_instance.dirtyTracked(self, h.array));
     const tp = self.lowered.timepoints.items.len != 0;
-    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_instance.hasStatus(self)) "inst" else "_"});
+    try self.w(
+        \\}};
+        \\
+        \\/// Returns an instance's first `State`: once per instance before its
+        \\/// first solve, and again to restart its history from the defaults.
+        \\pub fn initState(_: *const Model, {s}: *Instance) State {{
+        \\
+    , .{if (tp or dirty or gen_instance.hasStatus(self)) "inst" else "_"});
     if (tp) try self.w("    zTpDrop(inst);\n", .{});
     if (gen_instance.hasStatus(self)) try self.w(gen_instance.status_drop, .{});
     for (self.lowered.held_vars.items, self.names.held_names) |h, n| {
         if (h.array == none_u32 or !gen_instance.dirtyTracked(self, h.array)) continue;
         try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
     }
-    try self.w("    return .{{}};\n}}\n\npub fn updateState(comptime", .{});
+    try self.w(
+        \\    return .{{}};
+        \\}}
+        \\
+        \\/// §4.5.2 the accepted-point pass at the solution `x`: advances every
+        \\/// operator's history and writes the §5.10 held variables into `inst`,
+        \\/// and stages the §5.6.1.2 path latches in `state`. Only here: a write
+        \\/// from `eval` would latch a Newton iterate the solver may discard.
+        \\/// The host then calls `stateCtl(.commit)`, or `.revert` to reject
+        \\/// the step.
+        \\pub fn updateState(comptime
+    , .{});
     // Each goes unread when the only accepted-step work is §9.13.1's
     // internal-seed advance, a function of the seed alone.
     const at_s = self.out.items.len + 1;
@@ -249,7 +269,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
 fn emitStateClass(self: *Gen) Error!void {
     const latch_only = gen_instance.pathLatches(self) and !gen_file.hasStatefulOps(self) and
         self.lowered.rng_auto_seeds.items.len == 0;
-    try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
+    try self.w("/// What `updateState` carries across accepted points (`contract.StateClass`).\npub const state_class: contract.StateClass = .{s};\n\n", .{
         if (latch_only) "path_latch" else "history",
     });
 }
