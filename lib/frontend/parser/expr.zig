@@ -241,8 +241,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                         try joined.appendSlice(self.arena, self.file.str(part));
                     }
                     const flat = try self.file.strings.intern(self.arena, joined.items);
-                    const args = try parseCallArgs(self);
-                    return addCall(self, .call, tok, flat, args);
+                    return parseCall(self, .call, tok, flat);
                 }
                 const off = try self.file.exprs.addStrList(self.arena, parts.items);
                 return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
@@ -253,8 +252,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 if (self.access_names.contains(self.file.str(name))) {
                     return parseAccess(self, name, tok);
                 }
-                const args = try parseCallArgs(self);
-                return addCall(self, .call, tok, name, args);
+                return parseCall(self, .call, tok, name);
             }
             return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
         },
@@ -278,11 +276,8 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // anchors the path at the top of the instantiation tree; it rides
             // along as part 0 and `Lower.flatName`, which knows the root, strips it.
             if (self.eat(.dot)) return hierTerminal(self, &.{name}, tok);
-            const args: []const Ast.ExprId = if (self.peek() == .lparen)
-                try parseCallArgs(self)
-            else
-                &.{};
-            return addCall(self, .sys_call, tok, name, args);
+            if (self.peek() == .lparen) return parseCall(self, .sys_call, tok, name);
+            return addCall(self, .sys_call, tok, name, &.{});
         },
         // A.2.5 value_range_expression `inf` (only meaningful in §3.4.2).
         .kw_inf => {
@@ -319,8 +314,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     const mark = self.attrs.items.len;
     if (self.peek() == .attr_open) try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
     const lte = self.lteSince(mark);
-    const args = try parseCallArgs(self);
-    const id = try addCall(self, call_tag, tok, name, args);
+    const id = try parseCall(self, call_tag, tok, name);
     try self.keepLte(lte, .none, id);
     return id;
 }
@@ -462,22 +456,37 @@ pub fn parseNetRef(self: *Parser) Error!Ast.ExprId {
 
 /// Parses an A.8.2 / A.6.9 argument list, cursor on the `(`. An omitted
 /// argument (`f(a, , c)`) becomes `.none`, so lowering can apply the
-/// per-function defaults instead of guessing arity. The slice is arena-owned.
+/// per-function defaults instead of guessing arity. The slice is arena-owned
+/// and exactly as long as the list.
 pub fn parseCallArgs(self: *Parser) Error![]const Ast.ExprId {
+    const mark = self.scratch_exprs.items.len;
+    defer self.scratch_exprs.shrinkRetainingCapacity(mark);
+    try pushCallArgs(self);
+    return self.arena.dupe(Ast.ExprId, self.scratch_exprs.items[mark..]);
+}
+
+/// `parseCallArgs` onto `scratch_exprs` above its current length, for a
+/// caller that copies the arguments into the expression pool and truncates.
+fn pushCallArgs(self: *Parser) Error!void {
     _ = try self.expect(.lparen);
-    var items: std.ArrayList(Ast.ExprId) = .empty;
     if (self.peek() != .rparen) {
         while (true) {
-            if (self.peek() == .comma or self.peek() == .rparen) {
-                try items.append(self.arena, .none);
-            } else {
-                try items.append(self.arena, try parseExpr(self));
-            }
+            const arg: Ast.ExprId = if (self.peek() == .comma or self.peek() == .rparen) .none else try parseExpr(self);
+            try self.scratch_exprs.append(self.arena, arg);
             if (!self.eat(.comma)) break;
         }
     }
     _ = try self.expect(.rparen);
-    return items.items;
+}
+
+/// Parses an argument list at the cursor and adds the call node of `tag`
+/// over it. The arguments go from the scratch stack straight into the
+/// expression pool, with no list of their own.
+fn parseCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId) Error!Ast.ExprId {
+    const mark = self.scratch_exprs.items.len;
+    defer self.scratch_exprs.shrinkRetainingCapacity(mark);
+    try pushCallArgs(self);
+    return addCall(self, tag, tok, name, self.scratch_exprs.items[mark..]);
 }
 
 /// Operator precedence. LRM §4.2.2 Table 4-3, highest binds tightest.

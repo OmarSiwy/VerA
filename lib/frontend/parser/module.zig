@@ -86,6 +86,12 @@ pub const GenBlock = struct {
     construct: u32,
 };
 
+comptime {
+    // Rows of `Body.gen_auto` / `.gen_blocks` / `.gen_loops`: u32 handles only.
+    std.debug.assert(@sizeOf(GenAuto) == 8);
+    std.debug.assert(@sizeOf(GenBlock) == 12);
+}
+
 // -----------------------------------------------------------------------
 // A.1.2 module_declaration, LRM §6.2
 // -----------------------------------------------------------------------
@@ -318,15 +324,20 @@ fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
 pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
     const tok = self.pos;
     const tag = self.peek();
-    const before = b.*;
+    // The lengths, not a copy of `b`: an item only appends to these lists.
+    var before: [attributed_lists.len]usize = undefined;
+    inline for (attributed_lists, 0..) |field, i| before[i] = @field(b.*, field).items.len;
     try parseModuleItemBody(self, b);
     if (tag == .kw_generate) return; // the region's items own their own prefixes
     // §2.9 Example 5: a declaration's prefix belongs to every item in its
     // list, including comma-separated instances and continuous assignments.
-    inline for (.{ "ports", "params", "vars", "nets", "instances", "defparams", "events", "functions", "analog", "discrete", "assigns", "gates", "pulls", "tasks", "switches", "paths", "timing_checks" }) |field| {
-        for (@field(b.*, field).items[@field(before, field).items.len..]) |item| try self.copyAttributes(tok, item.main_tok);
+    inline for (attributed_lists, 0..) |field, i| {
+        for (@field(b.*, field).items[before[i]..]) |item| try self.copyAttributes(tok, item.main_tok);
     }
 }
+
+/// The `Body` lists whose rows a module item's §2.9 attribute prefix reaches.
+const attributed_lists = .{ "ports", "params", "vars", "nets", "instances", "defparams", "events", "functions", "analog", "discrete", "assigns", "gates", "pulls", "tasks", "switches", "paths", "timing_checks" };
 
 fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
     try self.refuseAms();
