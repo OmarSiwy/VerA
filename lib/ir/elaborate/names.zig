@@ -60,6 +60,33 @@ pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId 
     return self.ctx.file.intern(self.ctx.arena, s);
 }
 
+/// A flat name `path ++ local`, not yet joined: the key shape of
+/// `Flatten.defparams` and `Flatten.ooc`, looked up with `getAdapted` so a
+/// probe allocates nothing. A lookup used to print the joined key into the
+/// compilation arena and drop it, once per parameter, alias, port and net of
+/// every instance.
+pub const PathKey = struct {
+    path: []const u8,
+    local: []const u8,
+
+    /// `std.hash_map.StringContext` over the joined bytes: Wyhash streamed
+    /// over the two halves equals Wyhash of their concatenation, so the probe
+    /// lands in the bucket the stored `path ++ local` key hashed to.
+    pub const Context = struct {
+        pub fn hash(_: Context, k: PathKey) u64 {
+            var h: std.hash.Wyhash = .init(0);
+            h.update(k.path);
+            h.update(k.local);
+            return h.final();
+        }
+        pub fn eql(_: Context, k: PathKey, stored: []const u8) bool {
+            return stored.len == k.path.len + k.local.len and
+                std.mem.startsWith(u8, stored, k.path) and
+                std.mem.endsWith(u8, stored, k.local);
+        }
+    };
+};
+
 /// Binds `local` to its flat name `path ++ local` in `unit`'s rename map,
 /// unless it is already bound (a port joined to the parent's net).
 pub fn bind(self: *Flatten, unit: *Unit, path: []const u8, local: Ast.StrId) Error!void {
@@ -191,10 +218,11 @@ pub fn chainEnd(self: *Flatten, ps: *const Ast.ParamsetDecl) Error!?*const Ast.M
 /// card is a wrapper around a primitive, not a primitive, and its body is one
 /// instantiation with no access function of its own to substitute.
 pub fn isPrimitive(self: *Flatten, m: *const Ast.ModuleDecl) bool {
-    for (self.ctx.file.tablePrimitives()) |*p| {
-        if (p == m) return true;
-    }
-    return false;
+    // Table E.1's rows are one contiguous run of `modules`, so identity is an
+    // address range test, not a scan.
+    const rows = self.ctx.file.tablePrimitives();
+    const at = @intFromPtr(m);
+    return at >= @intFromPtr(rows.ptr) and at < @intFromPtr(rows.ptr + rows.len);
 }
 
 /// Checks every E.3.2.1 `port_discipline` attribute on `inst` (E0358).

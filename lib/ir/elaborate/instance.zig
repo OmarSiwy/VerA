@@ -25,6 +25,13 @@ const discipline = @import("../discipline_rules.zig");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 
+/// Returns whether `name` is an IEEE 1364 UDP: a digital primitive the
+/// analog flatten never inlines (A.5.4).
+fn isUdp(file: *const Ast.SourceFile, name: Ast.StrId) bool {
+    for (file.udps) |u| if (u.name == name) return true;
+    return false;
+}
+
 /// §6.6 every module instance in a generate block under `id`, schemes aside.
 pub fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.mem.Allocator, out: *std.ArrayList(Ast.Instance)) Error!void {
     if (id == .none) return;
@@ -43,11 +50,9 @@ pub fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.m
     }
 }
 
-/// One §6.6 generate-block instance and the scheme it exists under.
-const Gated = struct { inst: Ast.Instance, gate: Ast.ExprId };
-
-/// §6.6 a generate block's module instances, each with the scheme that
-/// brings it into existence, cloned into this unit's flat namespace.
+/// §6.6 appends a generate block's module instances to `out` and, in
+/// parallel, the scheme that brings each into existence to `gates`, cloned
+/// into this unit's flat namespace.
 /// "At most one generate block instantiated from a set of alternatives":
 /// an if-generate's arms are gated `c` and `!c`, and `inlineInstance`
 /// lowers each child's analog blocks under its gate. `checkGenScheme`
@@ -56,17 +61,18 @@ const Gated = struct { inst: Ast.Instance, gate: Ast.ExprId };
 /// ponytail: if-generate only. A loop or case generate's instance is
 /// E0235 (`refuseGen`): the loop needs one renamed instance per
 /// iteration, the case an equality chain per arm.
-fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, out: *std.ArrayList(Gated)) Error!void {
+fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
     if (id == .none) return;
     switch (self.ctx.file.stmt(id)) {
         .block => |b| {
-            for (b.instances) |inst| try out.append(self.ctx.arena, .{ .inst = inst, .gate = gate });
-            for (b.body) |s| try genInstances(self, s, gate, out);
+            try out.appendSlice(self.ctx.arena, b.instances);
+            try gates.appendNTimes(self.ctx.arena, gate, b.instances.len);
+            for (b.body) |s| try genInstances(self, s, gate, out, gates);
         },
         .if_stmt => |s| if (s.is_generate) {
             const c = try elab_clone.cloneExpr(self, s.cond);
-            try genInstances(self, s.then_s, try conj(self, gate, c, false), out);
-            try genInstances(self, s.else_s, try conj(self, gate, c, true), out);
+            try genInstances(self, s.then_s, try conj(self, gate, c, false), out, gates);
+            try genInstances(self, s.else_s, try conj(self, gate, c, true), out, gates);
         },
         .for_stmt => |s| try refuseGen(self, s.body),
         .case_stmt => |s| for (s.arms) |a| try refuseGen(self, a.body),
@@ -115,9 +121,7 @@ pub fn walkInstances(
     // Preserve early named errors before allocating an array's rows.
     for (source_module.instances) |inst| {
         if (inst.range == null) continue;
-        if (for (self.ctx.file.udps) |u| {
-            if (u.name == inst.module) break true;
-        } else false) continue;
+        if (isUdp(self.ctx.file, inst.module)) continue;
         if (elab_names.findModule(self, inst.module)) |child| {
             for (stack.items) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
@@ -142,43 +146,9 @@ pub fn walkInstances(
     var expanded = source_module.*;
     expanded.instances = try expandInstanceArrays(self, source_module.instances);
     const module = &expanded;
-    // §6.3.1 before the children: a defparam applies downward, and the
-    // parameters it overrides are created as those instances are inlined.
-    for (module.defparams) |dp| {
-        if (self.unit.paramset_instance) |instance| {
-            try self.paramset_defparams.append(self.ctx.arena, .{
-                .main_tok = dp.main_tok,
-                .instance = instance,
-                .gate = self.unit.gate,
-            });
-            // An active site is illegal; an inactive site's hierarchy
-            // does not exist. Neither may override a child parameter.
-            continue;
-        }
-        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(dp.path) });
-        try self.defparams.put(self.ctx.arena, key, .{
-            .value = try elab_clone.cloneExpr(self, dp.value),
-            .tok = dp.main_tok,
-        });
-    }
-
-    // Annex F.2.1 step 3, for the same reason: an out-of-context
-    // declaration names a segment below this module. "More than one
-    // conflicting out-of-context discipline declaration for the same
-    // hierarchical segment of a signal is an error", and §3.10 makes two
-    // declarations at one precedence level illegal even when compatible,
-    // so this is a duplicate-key test, not a compatibility test.
-    for (module.nets) |n| {
-        if (!elab_resolve.isOoc(self.ctx.file.str(n.name))) continue;
-        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
-        if (self.ooc.get(key)) |first| {
-            try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
-                key, self.ctx.file.str(first.discipline),
-            });
-            continue;
-        }
-        try self.ooc.put(self.ctx.arena, key, n);
-    }
+    // Both before the children: each names something below this module.
+    try elab_override.collectDefparams(self, module, path); // §6.3.1
+    try elab_resolve.collectOoc(self, module, path); // Annex F.2.1 step 3
 
     // §7.8.4 connect modules are inserted "in the context of the ports
     // upper connection", which is this module: `plan` re-points each mixed
@@ -205,14 +175,16 @@ pub fn walkInstances(
         }
     }
 
-    var gated: std.ArrayList(Gated) = .empty;
-    for (module.analog) |blk| try genInstances(self, blk.body, .none, &gated);
-    const all = try self.ctx.arena.alloc(Ast.Instance, insts.len + gated.items.len);
-    @memcpy(all[0..insts.len], insts);
-    for (gated.items, all[insts.len..]) |g, *o| o.* = g.inst;
-    for (all, 0..) |inst, idx| {
+    // The planned instances, then the §6.6 generate instances, whose schemes
+    // `gates` holds in parallel from index `insts.len` on.
+    var all: std.ArrayList(Ast.Instance) = .empty;
+    try all.appendSlice(self.ctx.arena, insts);
+    var gates: std.ArrayList(Ast.ExprId) = .empty;
+    for (module.analog) |blk| try genInstances(self, blk.body, .none, &all, &gates);
+    std.debug.assert(all.items.len == insts.len + gates.items.len);
+    for (all.items, 0..) |inst, idx| {
         const auto = idx >= module.instances.len and idx < insts.len;
-        const gate: Ast.ExprId = if (idx < insts.len) .none else gated.items[idx - insts.len].gate;
+        const gate: Ast.ExprId = if (idx < insts.len) .none else gates.items[idx - insts.len];
         // §3.6.5, the structural half: an actual that names nothing `module`
         // declared is an implicit net (see `Design.implicit_nets`).
         // Collected here, not in `inlineInstance`, because only this loop
@@ -236,9 +208,7 @@ pub fn walkInstances(
         // (`parseUdpInst`), so its `#( … )` arrives as a
         // parameter_value_assignment. It is A.2.2.3's `delay2` (at most two
         // positional values), and the instance reaches no analog device (W0252).
-        if (for (self.ctx.file.udps) |u| {
-            if (u.name == inst.module) break true;
-        } else false) {
+        if (isUdp(self.ctx.file, inst.module)) {
             for (inst.params) |p| if (p.scaled_literal_tok) |tok|
                 try self.err(tok, .E0247, "a scaled literal in `{s}`'s UDP delay", .{self.ctx.file.str(inst.module)});
             if (inst.params.len > 2 or (inst.params.len != 0 and inst.params[0].name != .none))
@@ -307,9 +277,7 @@ fn expandInstanceArrays(self: *Flatten, insts: []const Ast.Instance) Error![]con
     for (insts) |inst| {
         // UDP instances belong to the digital walk. The analog path
         // reports W0252 once at the source site, as for a scalar UDP.
-        if (for (self.ctx.file.udps) |u| {
-            if (u.name == inst.module) break true;
-        } else false) {
+        if (isUdp(self.ctx.file, inst.module)) {
             try out.append(self.ctx.arena, inst);
             continue;
         }
@@ -388,7 +356,7 @@ fn inlineInstance(
                     continue;
                 }
                 try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
-                const local = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline;
+                const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
                 if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
                 try concats.append(self.ctx.arena, .{ .port = p, .elems = elems, .tok = c.main_tok });
             }
@@ -416,7 +384,7 @@ fn inlineInstance(
             } else {
                 try widths.append(self.ctx.arena, .{ .port = p, .net = bound, .tok = conn.?.main_tok });
                 try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
-                const local = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline;
+                const local = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline;
                 if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
             }
         } else {
@@ -431,7 +399,7 @@ fn inlineInstance(
                 // §3.10 order 1 still beats the local declaration on a port
                 // nobody connected: the segment exists, it is just the only
                 // segment of its signal.
-                .discipline = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline,
+                .discipline = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline,
                 .main_tok = p.main_tok,
             });
             // IEEE 1364 §19.10 applies to unconnected input ports of the
@@ -473,9 +441,7 @@ fn inlineInstance(
     for (child.events) |e| try elab_names.bind(self, &unit, path, e.name);
     for (child.functions) |fd| try elab_names.bind(self, &unit, path, fd.name);
     for (child.instances) |sub| try elab_names.bind(self, &unit, path, sub.name);
-    var subs: std.ArrayList(Ast.Instance) = .empty;
-    for (child.analog) |blk| try genInstanceList(self.ctx.file, blk.body, self.ctx.arena, &subs);
-    for (subs.items) |sub| try elab_names.bind(self, &unit, path, sub.name);
+    for (self.genInstancesOf(child)) |sub| try elab_names.bind(self, &unit, path, sub.name);
 
     self.unit = unit;
     for (concats.items) |cc| {
@@ -486,7 +452,7 @@ fn inlineInstance(
             .elems = cc.elems,
             .main_tok = cc.tok,
         });
-        try elab_resolve.noteSignalDiscipline(self, name, (try elab_resolve.oocDiscipline(self, path, cc.port.name)) orelse cc.port.discipline);
+        try elab_resolve.noteSignalDiscipline(self, name, elab_resolve.oocDiscipline(self, path, cc.port.name) orelse cc.port.discipline);
     }
     for (widths.items) |pw| try self.port_widths.append(self.ctx.arena, .{
         .net = self.ctx.file.str(pw.net),
@@ -507,7 +473,7 @@ fn inlineInstance(
         // §3.10 precedence order 1 on an internal net of the child: an
         // out-of-context declaration "overrides any discipline which may
         // be declared for sig in the module where sig was declared".
-        if (try elab_resolve.oocDiscipline(self, path, n.name)) |d| out.discipline = d;
+        if (elab_resolve.oocDiscipline(self, path, n.name)) |d| out.discipline = d;
         try elab_resolve.addNet(self, out);
     }
     for (child.vars) |v| {
