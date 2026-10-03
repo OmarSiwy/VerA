@@ -1,9 +1,11 @@
-//! Expressions and literals: annex A.8.3 expression tokens -> `Ast.ExprId`s,
-//! by precedence climbing (§4.1, §4.2.2), with §2.6 number, §2.7 string and
-//! §2.8 identifier values decoded here, once.
+//! Expressions: annex A.8.3 expression tokens -> `Ast.ExprId`s, by precedence
+//! climbing (§4.1, §4.2.2), with A.8.4 primaries: names and §6.7
+//! hierarchical names, A.8.2 calls, §4.4 branch probes and selects. A literal
+//! is decoded by `literal.zig` and a brace form by `concat.zig`. Every
+//! nesting level counts against `max_depth` (E0241).
 //!
-//! LRM clauses cited: §2.6.1, §2.6.2, §2.7, §3.2.2, §3.3, §4.1, §4.2, §4.2.2,
-//! §4.2.10, §4.2.12, §4.2.13, §6.7.
+//! LRM clauses cited: §2.7, §2.9, §3.2.2, §4.1, §4.2, §4.2.2, §4.2.10,
+//! §4.2.12, §4.3, §4.4, §4.5, §4.6, §4.7, §5.6.8.2, §5.10.2, §6.7, §6.7.1.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -189,17 +191,11 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // is rolled back when no `(` follows: the attribute is then a
             // prefix on whatever comes next.
             if (self.peek() == .attr_open) {
-                const before_attrs = self.pos;
-                const attr_mark = self.attrs.items.len;
-                const binding_mark = self.file.attributes.items.len;
+                const mark = self.markAttributes();
                 try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
-                if (self.peek() != .lparen) {
-                    self.pos = before_attrs;
-                    // The specs come with the cursor: this instance belongs
-                    // to whatever follows and will be collected there.
-                    self.attrs.shrinkRetainingCapacity(attr_mark);
-                    self.file.attributes.shrinkRetainingCapacity(binding_mark);
-                }
+                // This instance belongs to whatever follows and will be
+                // collected there.
+                if (self.peek() != .lparen) self.rewindAttributes(mark);
             }
             // A dotted name: a §6.8 hierarchical name, or a §5.5.3 Syntax 5-4
             // `nature_attribute_reference ::= net_identifier .

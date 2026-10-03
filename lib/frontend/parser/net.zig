@@ -5,9 +5,9 @@
 //! declaration that names a header port completes that port instead of
 //! adding a net, so lowering sees one object per terminal.
 //!
-//! LRM clauses cited: §3.6.3, §3.6.3.2, §3.6.4, §3.7, §3.12, §3.12.1, §6.2,
-//! §6.5.2, §6.5.2.2, §6.5.3, §7.4.4, §7.9, annex C.4/C.8, annex F.2.1;
-//! IEEE 1364-2005 §4.4, §6.1.4, §7.10, §7.14.
+//! LRM clauses cited: §3.6.3, §3.6.3.2, §3.7, §3.10, §3.12, §3.12.1, §6.2,
+//! §6.5.2, §6.5.2.2, §6.5.3, §6.8, §7.4.4, §7.9, annex C.4/C.8, annex F.2.1;
+//! IEEE 1364-2005 §4.4, §4.9.1, §6.1.4, §7.14.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
