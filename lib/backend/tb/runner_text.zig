@@ -5,8 +5,6 @@
 //! §5.6.1.2, §5.10.5, §9.4.
 
 const std = @import("std");
-const tb = @import("../tb.zig");
-const naming = @import("../naming.zig");
 
 /// The testbench's first lines: its imports and `n_u`.
 pub const runner_head =
