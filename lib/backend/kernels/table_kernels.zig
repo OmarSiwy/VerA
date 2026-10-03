@@ -80,7 +80,7 @@ pub fn zTabRes(comptime ND: usize) type {
 /// comparison is `==` with no tolerance. The clause's own next sentence is the
 /// consequence: "Any noise on the isoline ordinate may cause the system to
 /// incorrectly generate multiple isolines where the user intended a single one."
-pub fn zTabEnd(comptime NCOL: usize, data: []const f64, order: []const usize, dim: usize, start: usize) usize {
+pub fn zTabEnd(comptime NCOL: usize, data: []const f64, order: []const u32, dim: usize, start: usize) usize {
     const key = data[order[start] * NCOL + dim];
     var i = start + 1;
     while (i < order.len and data[order[i] * NCOL + dim] == key) i += 1;
@@ -111,7 +111,7 @@ pub fn zTabLess(comptime NCOL: usize, comptime ND: usize, data: []const f64, a: 
 /// ponytail: O(n²) on adversarial order, recomputed per lookup. Samples are
 /// already fixed by the generated first-call snapshot. Cache the permutation
 /// alongside them if table sizes make the repeated sort measurable.
-pub fn zTabSort(comptime NCOL: usize, comptime ND: usize, data: []const f64, order: []usize) void {
+pub fn zTabSort(comptime NCOL: usize, comptime ND: usize, data: []const f64, order: []u32) void {
     var i: usize = 1;
     while (i < order.len) : (i += 1) {
         const v = order[i];
@@ -298,7 +298,7 @@ pub fn zTabSplineDim(
     comptime dep: usize,
     comptime ext: []const u8,
     data: []const f64,
-    order: []const usize,
+    order: []const u32,
     dim: usize,
     x: [ND]f64,
 ) zTabRes(ND) {
@@ -336,7 +336,7 @@ pub fn zTabAt(
     comptime dep: usize,
     comptime ext: []const u8,
     data: []const f64,
-    order: []const usize,
+    order: []const u32,
     dim: usize,
     x: [ND]f64,
 ) zTabRes(ND) {
@@ -436,8 +436,10 @@ pub fn zTable(
     // it, which is here, and a site that never executes never reaches it.
     if (NP == 0) ztMissingSource();
 
-    var order: [NP]usize = undefined;
-    for (0..NP) |i| order[i] = i;
+    // A row index: NP is the source's sample count, far below 2^32.
+    if (NP > ztstd.math.maxInt(u32)) @compileError("$table_model: more than 2^32 samples");
+    var order: [NP]u32 = undefined;
+    for (0..NP) |i| order[i] = @intCast(i);
     zTabSort(NCOL, ND, &rows, &order);
 
     // §9.21: "Within the data set, each point shall be distinct in terms of its
