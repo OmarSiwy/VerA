@@ -322,6 +322,19 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
     self.* = .{ .name = self.name };
 }
 
+/// Gives the instruction, value and extra tables room for at least `insts`,
+/// `values` and `extra` rows, so a builder that knows its size up front
+/// grows each table once. A count below the current capacity does nothing.
+/// Why it pays: `insts` and `defs` are MultiArrayLists, and each regrowth
+/// copies every column into a fresh block while the old one is still
+/// mapped. Invalidates pointers into the tables (`instData` slices).
+pub fn reserve(self: *Mir, gpa: std.mem.Allocator, insts: u32, values: u32, extra: u32) !void {
+    if (insts > self.insts.capacity) try self.insts.setCapacity(gpa, insts);
+    if (values > self.defs.capacity) try self.defs.setCapacity(gpa, values);
+    try self.alias.ensureTotalCapacityPrecise(gpa, values);
+    try self.extra.ensureTotalCapacityPrecise(gpa, extra);
+}
+
 // ---------------------------------------------------------------- values ----
 
 /// Registers a new dynamic Value. Prefer the typed helpers below.
