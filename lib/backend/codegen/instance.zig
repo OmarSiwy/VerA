@@ -15,6 +15,7 @@ const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_state = @import("state.zig");
+const gen_unit = @import("unit.zig");
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
 const kt = @import("kernel_text.zig");
@@ -81,7 +82,12 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    systf: ?*const contract.SystfHost = null,
         \\
     , .{});
-    try self.hist.appendSlice(self.arena, &.{ "bound_step", "discontinuity_order" });
+    // §9.17 the two fields `updateState` resets every accepted point are
+    // history only where an operator moves them off the reset value; without
+    // one they are the same constant before and after any revert, and their
+    // `State` twins would be dead copies.
+    if (writesSchedule(self, .bound_step)) try self.hist.append(self.arena, "bound_step");
+    if (writesSchedule(self, .discontinuity)) try self.hist.append(self.arena, "discontinuity_order");
     // §9.12 / IEEE 1364 §17.10: only a model that searches the plusargs has
     // somewhere for the host to write them.
     if (self.lowered.uses.contains(.plusargs)) try self.w(
@@ -370,6 +376,25 @@ fn emitTpHelpers(self: *Gen) Error!void {
     try self.w("}}\n\n", .{});
 }
 
+/// Returns whether some operator's accepted-step code writes the §9.17 field
+/// `which` names (`.bound_step`: `Instance.bound_step`; `.discontinuity`:
+/// `Instance.discontinuity_order`) after `updateState`'s unconditional reset:
+/// the operator itself, a §4.5.7 `absdelay` bounding the step at its delay,
+/// or a §4.5.12 `zi` filter at its period and on each sample.
+fn writesSchedule(self: *const Gen, comptime which: @import("ir").op.OpKind) bool {
+    for (self.names.units) |u| {
+        if (u.role != .analog_op) continue;
+        switch (u.op) {
+            .zi => return true,
+            .absdelay => if (which == .bound_step) return true,
+            .bound_step => if (which == .bound_step) return true,
+            .discontinuity => if (which == .discontinuity) return true,
+            .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .laplace => {},
+        }
+    }
+    return false;
+}
+
 /// Records `Instance` field `fmt` as history `stateCtl` commits and reverts.
 fn keepHist(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
     try self.hist.append(self.arena, try self.arena.print(fmt, args));
@@ -486,11 +511,16 @@ pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
 /// contract.StateCtlOp, which the host converts by ordinal.
 pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     const fsm = fsmStateCtl(self);
+    try self.w("pub fn stateCtl(_: *const Model, ", .{});
+    const at_inst = self.out.items.len;
+    try self.w("inst: *Instance, ", .{});
+    const at_state = self.out.items.len;
     try self.w(
-        \\pub fn stateCtl(_: *const Model, inst: *Instance, state: *State, op: contract.StateCtlOp) bool {{
+        \\state: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
     , .{});
+    const body = self.out.items.len;
     // VerA's `vera_timepoint` (§2.9): a commit or a revert moves the held
     // state a cached statement reads.
     const tp_drop = if (self.lowered.timepoints.items.len != 0) "        zTpDrop(inst);\n" else "";
@@ -559,4 +589,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         \\
         \\
     , .{});
+    // A device whose only accepted-step work is constant (the §9.17 resets)
+    // or `$vera_reject_step` has nothing to commit.
+    gen_unit.patchUnless(self, at_state, body, "state");
+    gen_unit.patchUnless(self, at_inst, body, "inst");
 }
