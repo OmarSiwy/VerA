@@ -15,6 +15,7 @@ const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_state = @import("state.zig");
+const gen_unit = @import("unit.zig");
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
 const kt = @import("kernel_text.zig");
@@ -64,6 +65,8 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\/// Per-instance state. The host owns every field above the operator
         \\/// block: `mfactor` (§6.3.6); the temperature is `Model.temperature__`.
         \\/// Time, step and analysis reach every entry point as `contract.SimState`.
+        \\/// Every per-instance value `eval` reads lives here; what only
+        \\/// `updateState` and `stateCtl` read lives in `State`.
         \\pub const Instance = struct {{
         \\    mfactor: f64 = 1.0,
         \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
@@ -81,7 +84,12 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    systf: ?*const contract.SystfHost = null,
         \\
     , .{});
-    try self.hist.appendSlice(self.arena, &.{ "bound_step", "discontinuity_order" });
+    // §9.17 the two fields `updateState` resets every accepted point are
+    // history only where an operator moves them off the reset value; without
+    // one they are the same constant before and after any revert, and their
+    // `State` twins would be dead copies.
+    if (writesSchedule(self, .bound_step)) try self.hist.append(self.arena, "bound_step");
+    if (writesSchedule(self, .discontinuity)) try self.hist.append(self.arena, "discontinuity_order");
     // §9.12 / IEEE 1364 §17.10: only a model that searches the plusargs has
     // somewhere for the host to write them.
     if (self.lowered.uses.contains(.plusargs)) try self.w(
@@ -187,14 +195,15 @@ pub fn emitInstance(self: *Gen) Error!void {
     // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
     // semantics): pb__k is the ddt operand at the last accepted solve, pq__k
     // the sum of committed A·ΔB increments (the charge base, fixed across one
-    // Newton attempt). wb__/wq__ stage the current iterate (updateState);
-    // stateCtl(.commit) latches them. Zero defaults make the first committed
-    // increment A·B, as ngspice MODEINITTRAN seeds qgs = capgs·vgs.
+    // Newton attempt). Zero defaults make the first committed increment A·B,
+    // as ngspice MODEINITTRAN seeds qgs = capgs·vgs. `eval` reads these; their
+    // staged twins, which only `updateState` and the commit touch, live in
+    // `State` (`emitStateTwins`), so they cost `eval` no cache line.
     for (0..self.core.prev_lo.len) |k| {
-        try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n    wb__{d}: f64 = 0.0, // staged\n", .{ k, k });
+        try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n", .{k});
     }
     for (0..self.core.acc_lo.len) |k| {
-        try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n    wq__{d}: f64 = 0.0, // staged\n", .{ k, k });
+        try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n", .{k});
     }
     // §5.10 event-assigned variables. Last, so a model that gains one moves
     // no operator field. The default is the declared initializer, which only
@@ -227,6 +236,12 @@ pub fn emitInstance(self: *Gen) Error!void {
             });
         }
     }
+    // A `State` with no field at all is zero-sized and comptime-known, and a
+    // host that stores it beside its `Instance` (`.{ inst, st }`) can no longer
+    // take its bytes: keep the §9.17 twins as its content rather than emit an
+    // empty `State`.
+    if (self.hist.items.len == 0 and !pathLatches(self) and self.lowered.limit_slots.items.len == 0)
+        try self.hist.appendSlice(self.arena, &.{ "bound_step", "discontinuity_order" });
     try emitTpFields(self);
     if (hasStatus(self)) try self.w(
         \\    /// §9.7.3 the first `$fatal`/`$error` reported, `contract.statusSite`'s
@@ -369,6 +384,25 @@ fn emitTpHelpers(self: *Gen) Error!void {
     try self.w("}}\n\n", .{});
 }
 
+/// Returns whether some operator's accepted-step code writes the §9.17 field
+/// `which` names (`.bound_step`: `Instance.bound_step`; `.discontinuity`:
+/// `Instance.discontinuity_order`) after `updateState`'s unconditional reset:
+/// the operator itself, a §4.5.7 `absdelay` bounding the step at its delay,
+/// or a §4.5.12 `zi` filter at its period and on each sample.
+fn writesSchedule(self: *const Gen, comptime which: @import("ir").op.OpKind) bool {
+    for (self.names.units) |u| {
+        if (u.role != .analog_op) continue;
+        switch (u.op) {
+            .zi => return true,
+            .absdelay => if (which == .bound_step) return true,
+            .bound_step => if (which == .bound_step) return true,
+            .discontinuity => if (which == .discontinuity) return true,
+            .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .laplace => {},
+        }
+    }
+    return false;
+}
+
 /// Records `Instance` field `fmt` as history `stateCtl` commits and reverts.
 fn keepHist(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
     try self.hist.append(self.arena, try self.arena.print(fmt, args));
@@ -456,11 +490,15 @@ pub fn pathLatches(self: *const Gen) bool {
     return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
-/// Emits `State`'s `stateCtl` twins: one per `Gen.hist` field, typed and
+/// Emits `State`'s `stateCtl` twins: the §5.6.1.2 staged path-latch operands
+/// (`wb__k`/`wq__k`, which `updateState` writes and `stateCtl(.commit)` moves
+/// into `Instance.pb__k`/`pq__k`), one twin per `Gen.hist` field, typed and
 /// defaulted as that `Instance` field, plus `t_prev__acc` when `t_prev` and
 /// each §4.5.7 ring's overwritten sample. Requires `emitInstance` to have run
 /// and `z_inst0` (a default `Instance`) to be declared.
 pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
+    for (0..self.core.prev_lo.len) |k| try self.w("    wb__{d}: f64 = 0.0, // path_prev staged\n", .{k});
+    for (0..self.core.acc_lo.len) |k| try self.w("    wq__{d}: f64 = 0.0, // path_acc staged\n", .{k});
     if (t_prev) try self.w("    t_prev__acc: f64 = 0.0,\n", .{});
     for (self.hist.items) |h| try self.w("    {s}: @TypeOf(z_inst0.{s}) = z_inst0.{s},\n", .{ h, h, h });
     for (self.names.units, 0..) |u, i| {
@@ -482,10 +520,23 @@ pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
 pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     const fsm = fsmStateCtl(self);
     try self.w(
-        \\pub fn stateCtl(_: *const Model, inst: *Instance, state: *State, op: contract.StateCtlOp) bool {{
+        \\/// §4.5 the step decision after `updateState` (`contract.StateCtlOp`):
+        \\/// `.commit` latches the path latches and copies the history into
+        \\/// `state`; `.revert` copies it back, so a rejected step leaves the
+        \\/// instance as the last accepted point did. Returns true only for a
+        \\/// `.query` whose accepted solution flipped a `cross`/`above` latch.
+        \\
+    , .{});
+    try self.w("pub fn stateCtl(_: *const Model, ", .{});
+    const at_inst = self.out.items.len;
+    try self.w("inst: *Instance, ", .{});
+    const at_state = self.out.items.len;
+    try self.w(
+        \\state: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
     , .{});
+    const body = self.out.items.len;
     // VerA's `vera_timepoint` (§2.9): a commit or a revert moves the held
     // state a cached statement reads.
     const tp_drop = if (self.lowered.timepoints.items.len != 0) "        zTpDrop(inst);\n" else "";
@@ -511,8 +562,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
-    for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
+    for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = state.wb__{d};\n", .{ k, k });
+    for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += state.wq__{d};\n        state.wq__{d} = 0.0;\n", .{ k, k, k });
     for (self.hist.items) |h| {
         if (heldNamed(self, h)) |hv| if (dirtyArray(self, hv) != null) {
             try self.w("        zArrSync({1s}, &state.{0s}, &inst.{0s}, &inst.{0s}__dirty);\n", .{ h, elemTy(self, hv) });
@@ -554,4 +605,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         \\
         \\
     , .{});
+    // A device whose only accepted-step work is constant (the §9.17 resets)
+    // or `$vera_reject_step` has nothing to commit.
+    gen_unit.patchUnless(self, at_state, body, "state");
+    gen_unit.patchUnless(self, at_inst, body, "inst");
 }

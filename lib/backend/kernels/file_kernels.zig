@@ -76,6 +76,13 @@ const ZFSlot = struct {
     // `zFGetc` reads it — `$fgets`/`$fscanf` after an `$ungetc` read the file.
     back: [16]u8 = undefined,
     nback: u8 = 0,
+
+    // Budget: the 4096-byte `line` plus at most 64 bytes of bookkeeping per
+    // channel (4152 on 64-bit targets); `zf_slots` holds `zf_max` of them in
+    // every device image that calls §9.5.
+    comptime {
+        zfstd.debug.assert(@sizeOf(ZFSlot) <= 4096 + 64);
+    }
 };
 
 /// §9.5.1: "limiting an implementation to at most 31 files opened for output via

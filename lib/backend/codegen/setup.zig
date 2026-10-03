@@ -244,9 +244,9 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
         \\pub const Setup = struct {{
         \\
     , .{});
-    if (self.su.real != 0) try self.w("    r: [{d}]f64 = @splat(" ++ kt.nan_lit ++ "),\n", .{self.su.real});
-    if (self.su.int != 0) try self.w("    i: [{d}]i64 = @splat(0),\n", .{self.su.int});
-    if (n_flag != 0) try self.w("    b: [{d}]bool = @splat(false),\n", .{n_flag});
+    if (self.su.real != 0) try self.w("    /// One per invariant real; `eval` reads `model.su.r[k]`.\n    r: [{d}]f64 = @splat(" ++ kt.nan_lit ++ "),\n", .{self.su.real});
+    if (self.su.int != 0) try self.w("    /// One per invariant integer; `eval` reads `model.su.i[k]`.\n    i: [{d}]i64 = @splat(0),\n", .{self.su.int});
+    if (n_flag != 0) try self.w("    /// One per invariant §4.2.5/§4.2.8 condition `eval` branches on.\n    b: [{d}]bool = @splat(false),\n", .{n_flag});
     try self.w("}};\n\n", .{});
 }
 

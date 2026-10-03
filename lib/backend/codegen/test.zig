@@ -356,7 +356,7 @@ test "codegen: acceptQ is q and updateState off ONE core evaluation" {
     const at = std.mem.indexOf(u8, src, "pub fn acceptQ(comptime S: type,") orelse return error.NoAcceptQ;
     const body = src[at..][0 .. std.mem.indexOf(u8, src[at..], "\n}\n") orelse return error.NoEnd];
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "@call(.always_inline, core,"));
-    try std.testing.expect(std.mem.indexOf(u8, body, "inst.wq__0 = m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "state.wq__0 = m.f") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "return qq;") != null);
 }
 
@@ -3382,8 +3382,8 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "zInst(S, inst, \"pb__0\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "inst.wb__0 = ") != null); // updateState stages
-    try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = inst.wb__0;") != null); // commit latches
+    try std.testing.expect(std.mem.indexOf(u8, s, "state.wb__0 = ") != null); // updateState stages
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = state.wb__0;") != null); // commit latches
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
 
     // $prev of a value with no unknown dependence is the value itself: no
@@ -3399,7 +3399,7 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     defer h2.deinit();
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s2, "pb__") == null);
-    try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn stateCtl(") == null);
 }
 
 test "codegen: a batch reads each point's own Instance, or the device is not batch_ok" {
@@ -3679,7 +3679,7 @@ test "codegen: setup stores a card expression written twice once, and a 0/1 flag
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(" ++ gen_kernel_text.nan_lit ++ "),\n    b: [1]bool = @splat(false),\n};") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(" ++ gen_kernel_text.nan_lit ++ "),\n    /// One per invariant §4.2.5/§4.2.8 condition `eval` branches on.\n    b: [1]bool = @splat(false),\n};") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "model.su.b[0] = (") != null);
 }
 
