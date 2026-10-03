@@ -213,6 +213,14 @@ pub fn build(b: *std.Build) void {
     b.step("golden", "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)")
         .dependOn(&golden.step);
 
+    // docs/UNITS.md and the architecture map in AGENTS.md, read from the code.
+    const map = b.addRunArtifact(suite_exe);
+    map.addArtifactArg2(exe, .{});
+    map.addArg("archmap");
+    map.addPassthruArgs();
+    b.step("archmap", "Regenerate docs/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)")
+        .dependOn(&map.step);
+
     // The VPI acceptance test. A VPI implementation is only tested from C:
     // `tests/fixtures/ch11_vpi/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
     // it names is the header's number, and links against the `export fn`s in
