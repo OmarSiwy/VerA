@@ -134,6 +134,8 @@ const FuzzBits = struct {
     rand: std.Random,
     width: u32,
     known: bool = false,
+
+    /// `{f}`: writes `<width>'b` and the digits, drawing them from `rand`.
     pub fn format(self: FuzzBits, o: *Io.Writer) Io.Writer.Error!void {
         try o.print("{d}'b", .{self.width});
         for (0..self.width) |_| try o.writeByte(if (!self.known and self.rand.uintLessThan(u8, 8) == 0) "xz"[self.rand.uintLessThan(u8, 2)] else "01"[self.rand.uintLessThan(u8, 2)]);

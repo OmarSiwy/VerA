@@ -5,6 +5,7 @@
 
 const std = @import("std");
 
+/// Every module, `pub` so the `refAllDecls` test below reaches each one.
 pub const contract = @import("contract");
 pub const diag = @import("diag");
 pub const frontend = @import("frontend");

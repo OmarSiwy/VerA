@@ -2,8 +2,8 @@
 //! -> its routing (`// digital-runner: reject`), its extra `vera` arguments,
 //! its `//! reject`, `//! xfail` and `// digital-runner: warning` obligations
 //! judged against a run's stderr, and its `//! expect vcd` dump comparison.
-//! `tests/bench.zig`'s `devices` mode and `harness.judgeVcd` call these
-//! through `harness.zig`'s aliases.
+//! `devices.zig`, `native.zig`, `../ieee1364.zig`, `../torture.zig` and
+//! `../harness.zig` (`collect`, `judge`, `judgeVcd`) import it directly.
 //!
 //! None of it is a `tb` directive: `tb.parse` describes the analog harness and
 //! must not take a digital diagnostic as its evidence.
