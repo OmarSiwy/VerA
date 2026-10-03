@@ -35,7 +35,7 @@ jobs:
       - name: Source audit tooling self-tests
         continue-on-error: true
         run: |
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p 'test_lrm_*.py' 2>&1 | tee /tmp/source-audit.txt
+          python3 tools/conformance.py selftest 2>&1 | tee /tmp/source-audit.txt
           exit "${PIPESTATUS[0]}"
 
       # THE GATE. Gate on $?, not on reading the tail of a log — `zig build test
