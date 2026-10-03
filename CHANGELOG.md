@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Internal, no change in what VerA accepts, emits or prints: the Verilog-A pipeline behind `vera` is one library call, `vera.compile` (a `Request` naming the targets in, an `Outcome` to print out), which an embedder of the `vera` module can call the way the CLI does (ARCHITECTURE.md Phase 10).
 - Fix: a `$simparam` parameter default answers as the analog block does (§9.15): a host field, then VerA's own answer (`scale`, `shrink`, `timeUnit`, ...), then the call's fallback, so `parameter real minr = $simparam("minr", 1e-3);` (HICUM/L2 3.2, MVSG 5.0) is 1e-3 where it was 0 with W1050. A run-time name (`dt`, `iteration`) in a default is still W1050 (#51).
 - `vera --lsp`: a language server on stdin/stdout. Each open Verilog-A document is linted as `--lint` would (diagnostics in an `include land on that file), a fix-it becomes a quick-fix code action, and the workspace root's `.vera-flags` holds the flags; `editors/` has the Neovim and VS Code configurations.
 - Fix: every path-valued flag (`--contract`, `--dyn`, `--work-dir`, `--zig`, `-o`, `--spice`, `--libmap`, `-I`) refuses an empty value at argument parsing ("error: -o needs a path", exit 2), where only `--zig` did and the rest failed later (#47).
