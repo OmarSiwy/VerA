@@ -195,15 +195,37 @@ pub const SsaBuilder = struct {
     /// undefined on some path yields `.undef` there; initializing declared
     /// variables (§3.4.4) is the caller's job.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
-        const raw = self.defsRaw(place, block);
-        if (raw == absent) return self.readVariableRecursive(place, block);
-        if (raw != pending) return @fromBackingInt(@intCast(raw - 1));
-        // The read came round a cycle (§5.9) into a join whose predecessors
-        // are still being read: the join needs a real phi after all. Mint it
-        // empty; the frame that set `pending` fills it.
-        const phi = try self.mir.emitPhi(self.gpa, block, &.{});
-        try self.writeVariable(place, block, phi);
-        return phi;
+        // A sealed block with one predecessor reads what that predecessor
+        // ends with, so the walk climbs through it and memoizes nothing
+        // there: two thirds of Braun's memo writes landed in such blocks (the
+        // arms of every `if`), and skipping them is 4-5% of a compact
+        // model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). It
+        // also makes the climb a loop, so a long single-predecessor chain no
+        // longer costs a stack frame per block.
+        //
+        // One `ensureState` covers the whole climb: `addPredecessor` gives
+        // every predecessor a row, so no block the loop reaches lacks one.
+        _ = try self.ensureState(block);
+        const sealed = self.block_state.items(.sealed);
+        const preds_len = self.block_state.items(.preds_len);
+        const preds_head = self.block_state.items(.preds_head);
+        var b = block;
+        while (true) {
+            const raw = self.defsRaw(place, b);
+            if (raw == pending) {
+                // The read came round a cycle (§5.9) into a join whose
+                // predecessors are still being read: the join needs a real
+                // phi after all. Mint it empty; the frame that set `pending`
+                // fills it.
+                const phi = try self.mir.emitPhi(self.gpa, b, &.{});
+                try self.writeVariable(place, b, phi);
+                return phi;
+            }
+            if (raw != absent) return @fromBackingInt(@intCast(raw - 1));
+            const i = @backingInt(b);
+            if (!sealed[i] or preds_len[i] != 1) return self.readVariableRecursive(place, b);
+            b = self.pred_pool.items[preds_head[i]].block;
+        }
     }
 
     /// Load without growing: an unallocated cell reads as absent, exactly like an
@@ -258,12 +280,14 @@ pub const SsaBuilder = struct {
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
     /// `writeVariable`, which is also what breaks cycles on the loop path.
-    // ponytail: recursive, with depth a CFG chain length (the single-predecessor
-    // arm), not a nesting depth. Ceiling: one frame per block on the first read
-    // of a place, so ~10⁵ sequential `if`s in one module would blow the stack.
+    // ponytail: recursive, with depth the number of joins the first read of a
+    // place climbs (single-predecessor blocks are `readVariable`'s loop), not a
+    // nesting depth. Ceiling: a few frames per join, so ~10⁵ sequential `if`s
+    // in one module would blow the stack.
     // The fix is an explicit stack with a resume state for the ≥2-preds arm.
     fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
-        const b = try self.ensureState(block);
+        const b = @backingInt(block);
+        assert(b < self.block_state.len); // `readVariable` ensured it
 
         var val: Mir.Value = undefined;
         if (!self.block_state.items(.sealed)[b]) {
@@ -276,11 +300,8 @@ pub const SsaBuilder = struct {
                 .next = self.block_state.items(.phis_head)[b],
             });
             self.block_state.items(.phis_head)[b] = node;
-        } else if (self.predCount(block) == 1) {
-            const head = self.predsHead(block);
-            assert(head != list_end);
-            val = try self.readVariable(place, self.pred_pool.items[head].block);
         } else {
+            assert(self.block_state.items(.preds_len)[b] != 1); // `readVariable` climbs those
             // ≥2 preds (or 0: an undefined read in a source-less block).
             //
             // Braun emits the phi first and collapses a trivial one by aliasing,
@@ -453,12 +474,6 @@ pub const SsaBuilder = struct {
         const b = @backingInt(block);
         if (b >= self.block_state.len) return list_end;
         return self.block_state.items(.preds_head)[b];
-    }
-
-    fn predCount(self: *const SsaBuilder, block: Mir.Block) u32 {
-        const b = @backingInt(block);
-        if (b >= self.block_state.len) return 0;
-        return self.block_state.items(.preds_len)[b];
     }
 };
 
