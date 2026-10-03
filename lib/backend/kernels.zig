@@ -19,31 +19,33 @@
 //! A kernel file must compile alone inside a device: it opens with `//`, not
 //! `//!` (a doc header cannot sit mid-file), names `std` by a private alias, and
 //! calls no other kernel file. Its bytes are device text, so editing one moves
-//! every golden that embeds it. No device imports this root: its `test` block
-//! would pull test code in. `zig build test-kernels` runs the files' tests.
+//! every golden that embeds it, so a kernel file holds no `test` block: its
+//! tests are `kernels/test.zig`, which this root's `test` block pulls in. No
+//! device imports this root. `zig build test-kernels` runs them.
 
 /// `tools/contract.zig`'s `abi_version`, re-exported for `backend`, which
 /// cannot import `contract` itself: codegen stamps it into every device.
 pub const abi_version = @import("contract").abi_version;
 /// §9.5.3/§9.5.4.2 string formatting and scanning; the digital engine's
 /// `%e/%f/%g` formatter (`zCReal`).
-pub const str_kernels = @import("str_kernels.zig");
+pub const str_kernels = @import("kernels/str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
-pub const table_kernels = @import("table_kernels.zig");
+pub const table_kernels = @import("kernels/table_kernels.zig");
 /// §9.13 probabilistic distribution functions; also elaboration's literal
 /// folds (`ir/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
 /// `$dist_*`, so every path draws the same sequence from a seed.
-pub const rng_kernels = @import("rng_kernels.zig");
+pub const rng_kernels = @import("kernels/rng_kernels.zig");
 /// §4.5.11/§4.5.12 filter numerics.
-pub const filter_kernels = @import("filter_kernels.zig");
+pub const filter_kernels = @import("kernels/filter_kernels.zig");
 /// §9.5 file-descriptor I/O; also the digital engine's IEEE 1364 §17.2
 /// descriptor table when no host shares one (`sim/digital/system.zig` `own`).
-pub const file_kernels = @import("file_kernels.zig");
+pub const file_kernels = @import("kernels/file_kernels.zig");
 /// §4.5.15 SPICE limiting functions.
-pub const limit_kernels = @import("limit_kernels.zig");
+pub const limit_kernels = @import("kernels/limit_kernels.zig");
 /// §5.10.3.3 absolute timer scheduling, also used by the mixed coordinator.
-pub const timer_kernels = @import("timer_kernels.zig");
+pub const timer_kernels = @import("kernels/timer_kernels.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("kernels/test.zig");
 }

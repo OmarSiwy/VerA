@@ -638,42 +638,42 @@ pub const tp_txt =
 pub const timer_txt = "// ---- §5.10.3.3 timer schedule ----\n\n" ++
     timer_src[std.mem.indexOf(u8, timer_src, "\n\n").? + 2 ..];
 // A file-level //! header cannot be spliced into the middle of device.zig.
-const timer_src = @embedFile("../timer_kernels.zig");
+const timer_src = @embedFile("../kernels/timer_kernels.zig");
 
 /// §9.5.3/§9.5.4.2 the string formatter's scratch and the scanner, embedded
 /// verbatim from `str_kernels.zig` so codegen's tests exercise the device's
 /// own bytes. Carried by devices that format strings or print.
-pub const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (lib/backend/str_kernels.zig) ----\n\n" ++
-    @embedFile("../str_kernels.zig");
+pub const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (lib/backend/kernels/str_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/str_kernels.zig");
 
 /// §9.13 the probabilistic distribution kernels, embedded verbatim from
 /// `rng_kernels.zig`. Carried only by devices that call a Table 9-10 function.
-pub const rng_txt = "// ---- §9.13 probabilistic distribution kernels (lib/backend/rng_kernels.zig) ----\n\n" ++
-    @embedFile("../rng_kernels.zig");
+pub const rng_txt = "// ---- §9.13 probabilistic distribution kernels (lib/backend/kernels/rng_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/rng_kernels.zig");
 
 /// §9.21 the table-model interpolator, embedded verbatim from
 /// `table_kernels.zig`. Carried only by devices that call `$table_model`.
-pub const table_txt = "// ---- §9.21 table model kernels (lib/backend/table_kernels.zig) ----\n\n" ++
-    @embedFile("../table_kernels.zig");
+pub const table_txt = "// ---- §9.21 table model kernels (lib/backend/kernels/table_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/table_kernels.zig");
 
 /// §9.5 the file-descriptor table and its operations, embedded verbatim from
 /// `file_kernels.zig`. Carried only by a device that calls the family and is
 /// built `display == .emit`, the artifact whose host runs side effects. A
 /// solver device has no table, so §9.5.1's "a zero is returned for the mcd or
 /// fd" is its answer to `$fopen`.
-pub const file_txt = "// ---- §9.5 file descriptor I/O kernels (lib/backend/file_kernels.zig) ----\n\n" ++
-    @embedFile("../file_kernels.zig");
+pub const file_txt = "// ---- §9.5 file descriptor I/O kernels (lib/backend/kernels/file_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/file_kernels.zig");
 
 /// §4.5.15 the SPICE limiters, embedded verbatim from `limit_kernels.zig`.
 /// Carried only by a device with an honoured `$limit` call; no unit body
 /// reaches them, since `$limit` renders as its probe there (`cg_limit.zig`).
-pub const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limit_kernels.zig) ----\n\n" ++
-    @embedFile("../limit_kernels.zig");
+pub const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/kernels/limit_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/limit_kernels.zig");
 
 /// §4.5.11/§4.5.12 the filter kernels, embedded verbatim from
 /// `filter_kernels.zig`. Carried only by devices that use a filter.
-pub const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
-    @embedFile("../filter_kernels.zig");
+pub const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (lib/backend/kernels/filter_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/filter_kernels.zig");
 
 /// The small-signal side of the operators whose response depends on frequency
 /// (`ir.op.acDynamic`): §4.5.7 `absdelay`, §4.5.11 `laplace_*`, §4.5.12
