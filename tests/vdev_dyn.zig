@@ -16,7 +16,7 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 pub fn Run(comptime D: type) type {
     return struct {
         const n = contract.nU(D);
-        const V = contract.RefFamily(f64, &(.{contract.no_lane} ** n), .{ .dense = true });
+        const V = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
 
         pub fn run(steps: u64) callconv(.c) u64 {
             const m: D.Model = .{};

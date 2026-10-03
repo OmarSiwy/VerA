@@ -251,9 +251,9 @@ pub const ExprStore = struct {
     /// Appends one row (all columns in lockstep) and returns its handle.
     pub fn add(self: *ExprStore, gpa: std.mem.Allocator, node: Node) !ExprId {
         const id: u32 = @intCast(self.nodes.len);
-        std.debug.assert(id != @intFromEnum(ExprId.none));
+        std.debug.assert(id != @backingInt(ExprId.none));
         try self.nodes.append(gpa, node);
-        return @enumFromInt(id);
+        return @fromBackingInt(@intCast(id));
     }
 
     /// Appends a `.real_literal` row whose value lives in `reals`.
@@ -292,42 +292,42 @@ pub const ExprStore = struct {
     }
 
     pub fn get(self: *const ExprStore, id: ExprId) Node {
-        return self.nodes.get(@intFromEnum(id));
+        return self.nodes.get(@backingInt(id));
     }
 
     pub fn tag(self: *const ExprStore, id: ExprId) ExprTag {
-        return self.nodes.items(.tag)[@intFromEnum(id)];
+        return self.nodes.items(.tag)[@backingInt(id)];
     }
     pub fn mainTok(self: *const ExprStore, id: ExprId) u32 {
-        return self.nodes.items(.main_tok)[@intFromEnum(id)];
+        return self.nodes.items(.main_tok)[@backingInt(id)];
     }
     pub fn lhs(self: *const ExprStore, id: ExprId) ExprId {
-        return self.nodes.items(.lhs)[@intFromEnum(id)];
+        return self.nodes.items(.lhs)[@backingInt(id)];
     }
     pub fn rhs(self: *const ExprStore, id: ExprId) ExprId {
-        return self.nodes.items(.rhs)[@intFromEnum(id)];
+        return self.nodes.items(.rhs)[@backingInt(id)];
     }
     pub fn extraOf(self: *const ExprStore, id: ExprId) u32 {
-        return self.nodes.items(.extra)[@intFromEnum(id)];
+        return self.nodes.items(.extra)[@backingInt(id)];
     }
     pub fn strOf(self: *const ExprStore, id: ExprId) StrId {
-        return self.nodes.items(.str)[@intFromEnum(id)];
+        return self.nodes.items(.str)[@backingInt(id)];
     }
 
     /// Returns a `.unary` node's operator; asserts the tag.
     pub fn unOp(self: *const ExprStore, id: ExprId) UnaryOp {
         std.debug.assert(self.tag(id) == .unary);
-        return @enumFromInt(@as(u8, @intCast(self.extraOf(id))));
+        return @fromBackingInt(@intCast(@as(u8, @intCast(self.extraOf(id)))));
     }
     /// Returns a `.binary` node's operator; asserts the tag.
     pub fn binOp(self: *const ExprStore, id: ExprId) BinaryOp {
         std.debug.assert(self.tag(id) == .binary);
-        return @enumFromInt(@as(u8, @intCast(self.extraOf(id))));
+        return @fromBackingInt(@intCast(@as(u8, @intCast(self.extraOf(id)))));
     }
     /// Returns the third operand of a §4.2.12 `?:`; asserts the tag.
     pub fn ternaryElse(self: *const ExprStore, id: ExprId) ExprId {
         std.debug.assert(self.tag(id) == .ternary);
-        return @enumFromInt(self.extraOf(id));
+        return @fromBackingInt(@intCast(self.extraOf(id)));
     }
     /// Returns a §2.6.1 `.int_literal`'s value; asserts the tag.
     pub fn intValue(self: *const ExprStore, id: ExprId) i64 {
@@ -438,7 +438,7 @@ pub const StringInterner = struct {
     pub fn intern(self: *StringInterner, gpa: std.mem.Allocator, s: []const u8) !StrId {
         const gop = try self.map.getOrPut(gpa, s);
         if (gop.found_existing) return gop.value_ptr.*;
-        const id: StrId = @enumFromInt(@as(u32, @intCast(self.strings.items.len)));
+        const id: StrId = @fromBackingInt(@intCast(@as(u32, @intCast(self.strings.items.len))));
         // errdefer: on OOM below, drop the just-inserted key so the table never
         // maps a name to an id that has no string.
         errdefer _ = self.map.remove(s);
@@ -450,7 +450,7 @@ pub const StringInterner = struct {
     /// Returns the string for `id`; asserts `id != .none`.
     pub fn get(self: *const StringInterner, id: StrId) []const u8 {
         std.debug.assert(id != .none);
-        return self.strings.items[@intFromEnum(id)];
+        return self.strings.items[@backingInt(id)];
     }
 
     /// Returns the id for `s` without inserting it.
@@ -1640,22 +1640,22 @@ pub const SourceFile = struct {
     /// Appends a statement and its token; both columns stay in lockstep.
     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
         const id: u32 = @intCast(self.stmts.items.len);
-        std.debug.assert(id != @intFromEnum(StmtId.none));
+        std.debug.assert(id != @backingInt(StmtId.none));
         try self.stmts.ensureUnusedCapacity(gpa, 1);
         try self.stmt_toks.ensureUnusedCapacity(gpa, 1);
         self.stmts.appendAssumeCapacity(s);
         self.stmt_toks.appendAssumeCapacity(main_tok);
-        return @enumFromInt(id);
+        return @fromBackingInt(@intCast(id));
     }
 
     /// Returns statement `id` by value, since the pool may grow during parsing.
     pub fn stmt(self: *const SourceFile, id: StmtId) Stmt {
-        return self.stmts.items[@intFromEnum(id)];
+        return self.stmts.items[@backingInt(id)];
     }
 
     /// Returns the token statement `id` is reported at.
     pub fn stmtTok(self: *const SourceFile, id: StmtId) u32 {
-        return self.stmt_toks.items[@intFromEnum(id)];
+        return self.stmt_toks.items[@backingInt(id)];
     }
 
     /// What an expression edge of a statement is to that statement.
@@ -1924,7 +1924,7 @@ test "ExprStore round-trips rows, lists and literals" {
         .main_tok = 2,
         .lhs = one,
         .rhs = two_pt_5,
-        .extra = @intFromEnum(BinaryOp.add),
+        .extra = @backingInt(BinaryOp.add),
     });
     try std.testing.expectEqual(BinaryOp.add, f.exprs.binOp(sum));
     try std.testing.expectEqual(one, f.exprs.lhs(sum));
@@ -1940,7 +1940,7 @@ test "ExprStore round-trips rows, lists and literals" {
     try std.testing.expectEqualSlices(ExprId, &.{ sum, probe }, f.exprs.args(call));
 
     // §4.2.12 ternary keeps its third operand in `extra`.
-    const t = try f.addExpr(gpa, .{ .tag = .ternary, .lhs = probe, .rhs = one, .extra = @intFromEnum(two_pt_5) });
+    const t = try f.addExpr(gpa, .{ .tag = .ternary, .lhs = probe, .rhs = one, .extra = @backingInt(two_pt_5) });
     try std.testing.expectEqual(two_pt_5, f.exprs.ternaryElse(t));
 }
 

@@ -540,7 +540,7 @@ pub const Pp = struct {
             const id = try pp.opts.bag.addFile(f.name, f.raw);
             // `Prelude.segs` names files by index, so the three must land at
             // 1, 2, 3: only the compilation unit (`.root`) is registered yet.
-            std.debug.assert(@intFromEnum(id) == want_id);
+            std.debug.assert(@backingInt(id) == want_id);
             // Same state `runFile` leaves: spans index the stripped text and the
             // renderer maps back to the raw text through the marks.
             pp.opts.bag.setStrippedText(id, f.stripped, f.marks);
@@ -626,7 +626,7 @@ pub fn findStop(text: []const u8, from: usize, comptime stops: []const u8) usize
     var i = from;
     if (std.simd.suggestVectorLength(u8)) |lanes| {
         const V = @Vector(lanes, u8);
-        const Mask = std.meta.Int(.unsigned, lanes);
+        const Mask = @Int(.unsigned, lanes);
         while (i + lanes <= text.len) : (i += lanes) {
             const block: V = text[i..][0..lanes].*;
             var hit: Mask = 0;

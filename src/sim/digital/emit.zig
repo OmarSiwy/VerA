@@ -111,13 +111,15 @@ fn deviceRoot(self: *Emitter) Error!void {
         var i = vr.msb;
         while (true) : (i = if (vr.msb >= vr.lsb) i - 1 else i + 1) {
             if (n == 256) return self.refuse("more than 256 pins");
-            const name = if (scalar) r.file.str(p.name) else try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ r.file.str(p.name), i });
+            const name = if (scalar) r.file.str(p.name) else try self.arena.print("{s}[{d}]", .{ r.file.str(p.name), i });
             names.writer.print(" {f},", .{std.zig.fmtId(name)}) catch return error.OutOfMemory;
             pins.writer.print("\n        .{{ .out = {}, .slot = {d}, .off = {d}, .bit = {d} }},", .{ out, at, self.off[at], @abs(i - vr.lsb) }) catch return error.OutOfMemory;
             n += 1;
             if (i == vr.lsb) break;
         }
     }
+    // No pins: Zig 0.17 refuses an empty exhaustive `enum(u8)`.
+    const members = if (n == 0) " _," else names.written();
     const masks = if (n > 64) "" else
         \\pub const deriv_reads = Dev.deriv_reads;
         \\pub const ddx_reads = Dev.ddx_reads;
@@ -145,7 +147,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\    @import("contract").validate(@This());
         \\}}
         \\
-    , .{ @import("contract").abi_version, names.written(), n, r.finest, pins.written(), masks });
+    , .{ @import("contract").abi_version, members, n, r.finest, pins.written(), masks });
 }
 
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {
@@ -1058,10 +1060,10 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print(", .{{ .local_per_unit = {d}, .global_per_local = {d} }});\n", .{ scale.local_per_unit, scale.global_per_local });
                     for (1..3) |k| if (op == .remove or (op == .exam and k == 2)) {
                         try self.print("            if (q{d}.out[{d}]) |v{d}| {{\n", .{ lb, k - 1, lb });
-                        try assignInt(self, t.args[k], try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
+                        try assignInt(self, t.args[k], try self.arena.print("v{d}", .{lb}));
                         try self.print("            }}\n", .{});
                     };
-                    try assignInt(self, t.args[3], try std.fmt.allocPrint(self.arena, "q{d}.status", .{lb}));
+                    try assignInt(self, t.args[3], try self.arena.print("q{d}.status", .{lb}));
                 },
                 // §17.5: the outputs through a cell as wide as they are.
                 .pla => |p| {
@@ -1209,7 +1211,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            return;\n", .{});
         },
         .trigger => |event| switch (event) {
-            .slot => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
+            .slot => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try self.arena.print("s.fire({d});\n            ", .{at}) else "", at, next }),
             .indexed => |e| {
                 try self.print("            if (", .{});
                 try expr.address(self, e, self.label());
@@ -2188,7 +2190,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                 'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope, .{})),
                 'l', 'L' => {
                     const def = r.scope_info.items[r.scope].def;
-                    try text.appendSlice(self.arena, try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
+                    try text.appendSlice(self.arena, try self.arena.print("{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
                 },
                 // §17.1.1.2 Table 17-3's real conversions, and §9.4.7's %r.
                 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R' => {
@@ -2246,7 +2248,7 @@ fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
     if (compile.typeOf(r, args[0]).real) return self.refuse("a $sformat format held in a real");
     const scope = std.zig.fmtString(try staticText(self, display.emitScope, .{}));
     const def = r.scope_info.items[r.scope].def;
-    const lib = std.zig.fmtString(try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
+    const lib = std.zig.fmtString(try self.arena.print("{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
     const lb = self.label();
     try self.print("            {{\n            var fb{d}: [{d}]u8 = undefined;\n            var f{d} = S.formatOf(&fb{d}, ", .{ lb, (compile.typeOf(r, args[0]).width + 7) / 8, lb, lb });
     const ft = try expr.selfDetermined(self, args[0]);

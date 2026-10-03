@@ -15,7 +15,7 @@ and `--coverage` counts clause citations, not verified rules.
 
 ## Install
 
-Needs Zig 0.16.0.
+Needs Zig 0.17.0.
 
 ```sh
 git clone https://github.com/OmarSiwy/VerA && cd VerA

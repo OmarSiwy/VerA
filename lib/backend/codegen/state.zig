@@ -78,11 +78,11 @@ pub fn emitCore(self: *Gen) Error!void {
         if (u.role != .analog_op or u.op == .none) continue;
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         for (self.mir.instData(inst).call.args) |a| {
-            const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
+            const k = self.core.lo_idx[@backingInt(self.an.rv(a))];
             if (k != none_u32) keep[k] = true;
         }
         if (self.lowered.timer_controls.get(inst)) |latest| for (latest) |a| {
-            const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
+            const k = self.core.lo_idx[@backingInt(self.an.rv(a))];
             if (k != none_u32) keep[k] = true;
         };
     }
@@ -113,7 +113,7 @@ pub fn inPlaceArrays(self: *Gen) Error![]const bool {
     const flags = try self.arena.alloc(bool, n);
     for (flags, 0..) |*f, id| f.* = gen_render.cow(self, @intCast(id));
     for (0..self.mir.insts.len) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         if (self.mir.instOp(inst) != .anew) continue;
         const d = self.mir.instData(inst).anew;
         if (d.tp != null) flags[d.array] = false;
@@ -293,7 +293,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (self.core_wanted or acc.uses_core) {
         self.uses_x = true;
         self.uses_model = true;
-        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(true)}));
+        try self.out.insertSlice(self.gpa, at_core, try self.arena.print("    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(true)}));
     }
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
@@ -598,7 +598,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         self.heldArg(true),
     });
     for (pairs, 0..) |p, pi| {
-        const fi = @intFromEnum(self.an.rv(p.flag));
+        const fi = @backingInt(self.an.rv(p.flag));
         const k = self.core.lo_idx[fi];
         assert(k != none_u32); // `buildJobs` queues every runtime retention flag
         if (self.an.vty[fi] == .int)
@@ -611,7 +611,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         });
     }
     try self.w(
-        \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+        \\    var out: [n_u]?u8 = @splat(null);
         \\    for (0..n_u) |u| {{
         \\        const r = zCollapseRoot(&parent, @intCast(u));
         \\        if (r != u) out[u] = r;
@@ -671,7 +671,7 @@ fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
         });
     }
     try self.w(
-        \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+        \\    var out: [n_u]?u8 = @splat(null);
         \\    for (0..n_u) |u| {{
         \\        const r = zCollapseRoot(&parent, @intCast(u));
         \\        if (r != u) out[u] = r;

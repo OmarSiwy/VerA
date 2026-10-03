@@ -1,6 +1,6 @@
 //! Builds `vera` (src/main.zig), the `module_specs` module graph an embedder
 //! imports, one test artifact per module, and the suite steps, which all run
-//! tests/bench.zig with the built `vera` path and `b.args`.
+//! tests/bench.zig with the built `vera` path and the passthru args.
 //!
 //! Anything whose input is `vera`'s output (generated devices, transcripts,
 //! VPI applications) is spawned by the suite runner, not modelled as artifacts,
@@ -56,13 +56,13 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     b.step("run", "Run the vera CLI").dependOn(&run_cmd.step);
 
     const test_step = b.step("test", "Run every test suite");
 
     const fmt = b.addFmt(.{
-        .paths = &.{ "lib", "src", "tests", "tools", "build.zig" },
+        .paths = b.pathList(&.{ "lib", "src", "tests", "tools", "build.zig" }),
         .check = true,
     });
     b.step("fmt-check", "Fail on any file `zig fmt` would change").dependOn(&fmt.step);
@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
     // `tests/exhaustive.zig` reads `lib/` and `src/` as source at test time,
     // from whatever cwd `zig build` was typed in, so the path is absolute.
     const repo = b.addOptions();
-    repo.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+    repo.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     all_mod.addOptions("repo_options", repo);
     test_step.dependOn(testRun(b, "test_all", all_mod, runner));
 
@@ -107,12 +107,12 @@ pub fn build(b: *std.Build) void {
     // optimize mode) are constants in the runner. Fixing the fixture and LRM
     // roots here keeps every runner grading the same suite.
     const o = b.addOptions();
-    o.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
-    o.addOption([]const u8, "docs_root", b.pathFromRoot("docs"));
-    o.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-suite"));
-    o.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
+    o.addOption([]const u8, "fixture_root", pathFromRoot(b, "tests/fixtures"));
+    o.addOption([]const u8, "docs_root", pathFromRoot(b, "docs"));
+    o.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-suite"));
+    o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
     // The `.c` fixtures compile against the shipped header, not a copy.
-    o.addOption([]const u8, "vpi_include", b.pathFromRoot("src/vpi"));
+    o.addOption([]const u8, "vpi_include", pathFromRoot(b, "src/vpi"));
     // `--coverage` counts a `.c` fixture's `//! lrm` tags only for those in
     // `vpi_runs`, since compiling is not runtime evidence.
     o.addOption([]const []const u8, "vpi_runs", &vpi_run_paths);
@@ -139,8 +139,8 @@ pub fn build(b: *std.Build) void {
     // The suite step: the runner takes the `vera` path, then whatever follows
     // `--`.
     const bench = b.addRunArtifact(suite_exe);
-    bench.addArtifactArg(exe);
-    if (b.args) |a| bench.addArgs(a);
+    bench.addArtifactArg2(exe, .{});
+    bench.addPassthruArgs();
     b.step(
         "benchmark",
         "Run every fixture through VerA — compile, build, run, judge — and time it " ++
@@ -150,7 +150,7 @@ pub fn build(b: *std.Build) void {
 
     // `vera --run` over every `.v` under `tests/fixtures/ieee1364/` and
     // `tests/fixtures/digital/` with a committed transcript beside it.
-    // `addArtifactArg` makes the built `vera` a dependency of this run.
+    // `addArtifactArg2` makes the built `vera` a dependency of this run.
     //
     // Not on `test`: `test` is the fast gate that must be green, and the suite
     // is where unimplemented behaviour is counted.
@@ -159,9 +159,9 @@ pub fn build(b: *std.Build) void {
     // its real inputs (the `.v` sources and transcripts) are read at run time,
     // invisible to the build graph, so a cached pass would compare nothing.
     const dev = b.addRunArtifact(suite_exe);
-    dev.addArtifactArg(exe);
+    dev.addArtifactArg2(exe, .{});
     dev.addArg("devices");
-    if (b.args) |a| dev.addArgs(a);
+    dev.addPassthruArgs();
     b.step("test-devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts")
         .dependOn(&dev.step);
 
@@ -169,15 +169,15 @@ pub fn build(b: *std.Build) void {
     // alone (`-- --coverage` prints its clause inventory instead); `test-ams`
     // is `benchmark -- --strict`.
     const v1364 = b.addRunArtifact(suite_exe);
-    v1364.addArtifactArg(exe);
+    v1364.addArtifactArg2(exe, .{});
     v1364.addArg("ieee1364");
-    if (b.args) |a| v1364.addArgs(a);
+    v1364.addPassthruArgs();
     b.step("test-1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory; `-- --native`: through `vera --emit-exe`)")
         .dependOn(&v1364.step);
     const ams = b.addRunArtifact(suite_exe);
-    ams.addArtifactArg(exe);
+    ams.addArtifactArg2(exe, .{});
     ams.addArg("--strict");
-    if (b.args) |a| ams.addArgs(a);
+    ams.addPassthruArgs();
     b.step("test-ams", "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)")
         .dependOn(&ams.step);
 
@@ -186,7 +186,7 @@ pub fn build(b: *std.Build) void {
     // ones that also run are `vpi_runs`, under `test`. No `expectExitCode`,
     // for the cacheability reason `test-devices` gives.
     const vpi_fx = b.addRunArtifact(suite_exe);
-    vpi_fx.addArtifactArg(exe);
+    vpi_fx.addArtifactArg2(exe, .{});
     vpi_fx.addArg("vpi");
     b.step("test-vpi-fixtures", "Compile the .c VPI fixtures against src/vpi/vpi_user.h")
         .dependOn(&vpi_fx.step);
@@ -196,7 +196,7 @@ pub fn build(b: *std.Build) void {
     // needs the circuit simulator (ARPice, outside this repository). The step
     // checks the oracle exists and every named model resolves and compiles.
     const spice = b.addRunArtifact(suite_exe);
-    spice.addArtifactArg(exe);
+    spice.addArtifactArg2(exe, .{});
     spice.addArg("spice");
     b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
         .dependOn(&spice.step);
@@ -214,9 +214,9 @@ pub fn build(b: *std.Build) void {
     // (`vera.tb.renderVpiLib`) and with what; the host runs with the cache as
     // its cwd, so every path is absolute.
     const host_opts = b.addOptions();
-    host_opts.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
+    host_opts.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
     host_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
-    host_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-vpi"));
+    host_opts.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-vpi"));
     const vpi_host = b.addLibrary(.{
         .name = "vera-vpi-host",
         .linkage = .static,
@@ -277,10 +277,10 @@ pub fn build(b: *std.Build) void {
     for (host_tests) |h| {
         const gen = b.addRunArtifact(exe);
         gen.addArgs(&.{ "--emit-zig", "-I" });
-        gen.addDirectoryArg(b.path("tests/fixtures"));
+        gen.addDirectoryArg2(b.path("tests/fixtures"), .{});
         gen.addFileArg(b.path(h.va));
         gen.addArg("-o");
-        const device = gen.addOutputFileArg("device.zig");
+        const device = gen.addOutputFileArg2("device.zig", .{});
         _ = gen.captureStdErr(.{}); // the fixture's warnings are not this test's
         const host = b.createModule(.{
             .root_source_file = b.path(h.host),
@@ -309,18 +309,18 @@ pub fn build(b: *std.Build) void {
             .{ "amdgcn-amdhsa", "gfx906" },
         }) |gpu| {
             const gt = b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = gpu[0], .cpu_features = gpu[1] }) catch unreachable);
-            const gc = b.createModule(.{ .root_source_file = b.path("tools/contract.zig"), .target = gt, .optimize = .ReleaseFast });
+            const gc = b.createModule(.{ .root_source_file = b.path("tools/contract.zig"), .target = gt, .optimize = .fast });
             const obj = b.addObject(.{ .name = "status-gpu", .root_module = b.createModule(.{
                 .root_source_file = b.path("tests/status_gpu.zig"),
                 .target = gt,
-                .optimize = .ReleaseFast,
+                .optimize = .fast,
                 .strip = true,
                 .imports = &.{
                     .{ .name = "contract", .module = gc },
                     .{ .name = "device", .module = b.createModule(.{
                         .root_source_file = device,
                         .target = gt,
-                        .optimize = .ReleaseFast,
+                        .optimize = .fast,
                         .imports = &.{.{ .name = "contract", .module = gc }},
                     }) },
                 },
@@ -358,7 +358,7 @@ pub fn build(b: *std.Build) void {
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
         gen.addArg("-o");
-        const device = gen.addOutputFileArg(b.fmt("{s}.zig", .{name}));
+        const device = gen.addOutputFileArg2(b.fmt("{s}.zig", .{name}), .{});
         const dev_mod = b.createModule(.{
             .root_source_file = device,
             .target = target,
@@ -374,7 +374,7 @@ pub fn build(b: *std.Build) void {
             so.addArg("--dyn");
             so.addFileArg(b.path("tests/vdev_dyn.zig"));
             so.addArg("--work-dir");
-            const wd = so.addOutputDirectoryArg(name);
+            const wd = so.addOutputDirectoryArg2(name, .{});
             so.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
             so_opts.addOptionPath(name, wd.path(b, b.fmt("lib{s}.1.so", .{name})));
         }
@@ -406,9 +406,9 @@ pub fn build(b: *std.Build) void {
         const rejected = std.mem.eql(u8, level, "deny") or std.mem.eql(u8, level, "forbid");
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ mode, b.fmt("--{s}=W0750", .{level}), "--allow=W0650", "-I" });
-        run.addDirectoryArg(b.path("tests/fixtures"));
+        run.addDirectoryArg2(b.path("tests/fixtures"), .{});
         run.addArg("--work-dir");
-        _ = run.addOutputDirectoryArg("tb");
+        _ = run.addOutputDirectoryArg2("tb", .{});
         run.addFileArg(b.path("tests/fixtures/ch05_analog_behavior/event_cross_fires_on_a_time_grid.va"));
         run.expectExitCode(if (rejected) 1 else 0);
         if (rejected) {
@@ -435,7 +435,7 @@ pub fn build(b: *std.Build) void {
         run.addArg("--dyn");
         run.addFileArg(wf.add("dyn.zig", "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"));
         run.addArg("--work-dir");
-        _ = run.addOutputDirectoryArg("so");
+        _ = run.addOutputDirectoryArg2("so", .{});
         run.addFileArg(b.path("tests/vpi_design.va"));
         run.expectExitCode(1);
         run.expectStdOutEqual("");
@@ -494,7 +494,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
 fn cliExe(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     mods: []const std.Build.Module.Import,
     name: []const u8,
     ams: bool,
@@ -529,16 +529,18 @@ fn simSources(b: *std.Build) *std.Build.Module {
     var i: usize = 0;
     while (i < seen.count()) : (i += 1) {
         const path = seen.keys()[i];
-        const text = b.build_root.handle.readFileAlloc(io, path, b.allocator, .unlimited) catch |e| std.debug.panic("{s}: {t}", .{ path, e });
+        const text = b.root.root_dir.handle.readFileAlloc(io, path, b.allocator, .unlimited) catch |e| std.debug.panic("{s}: {t}", .{ path, e });
+        // The configuration is cached: an edited `@import` re-runs this walk.
+        b.dependOnFileContents(b.path(path));
         var it = std.mem.tokenizeAny(u8, text, "\"");
         var before: []const u8 = "";
         while (it.next()) |tok| : (before = tok) {
             if (!(std.mem.endsWith(u8, before, "@import(") or std.mem.endsWith(u8, before, "@embedFile("))) continue;
             if (std.mem.indexOfScalar(u8, tok, '.') == null) continue; // a module name
             const dep = b.pathJoin(&.{ std.fs.path.dirname(path) orelse ".", tok });
-            const norm = std.fs.path.resolvePosix(b.allocator, &.{dep}) catch @panic("OOM");
+            const norm = std.fs.path.resolveAllocPosix(b.allocator, &.{dep}) catch @panic("OOM");
             // A path in prose, not code: nothing to ship.
-            b.build_root.handle.access(io, norm, .{}) catch continue;
+            b.root.root_dir.handle.access(io, norm, .{}) catch continue;
             seen.put(b.allocator, norm, {}) catch @panic("OOM");
         }
         _ = wf.addCopyFile(b.path(path), path);
@@ -554,7 +556,7 @@ fn simSources(b: *std.Build) *std.Build.Module {
 fn vpiApp(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     host: *std.Build.Step.Compile,
     c: []const u8,
     dir: []const u8,
@@ -991,6 +993,12 @@ fn defineModules(b: *std.Build, target: std.Build.ResolvedTarget) []const std.Bu
         created.append(b.allocator, .{ .name = spec.name, .module = mod }) catch @panic("OOM");
     }
     return created.items;
+}
+
+/// An absolute path under the build root: the `b.pathFromRoot` Zig 0.17
+/// removed. The root's path is absolute whenever `zig build` finds build.zig.
+fn pathFromRoot(b: *std.Build, sub_path: []const u8) []u8 {
+    return b.pathResolve(&.{ b.root.root_dir.path orelse ".", b.root.sub_path, sub_path });
 }
 
 fn byName(mods: []const std.Build.Module.Import, name: []const u8) *std.Build.Module {

@@ -97,7 +97,7 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         var found: u32 = if (lowered.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
         if (found != none_u32 and uIsDriven(self.branch_u, found, i)) found = none_u32;
         if (found == none_u32) {
-            const nm = try std.fmt.allocPrint(a, "flow({s},{s})", .{
+            const nm = try a.print("flow({s},{s})", .{
                 lowered.nodeName(c.hi), lowered.nodeName(c.lo),
             });
             found = base + @as(u32, @intCast(extra.items.len));
@@ -137,7 +137,7 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         const mod = naming.sanitize(&mod_buf, mir.name) catch return error.NameTooLong;
         for (lowered.held_vars.items, 0..) |h, i| {
             const leaf = naming.sanitize(&buf, h.name) catch return error.NameTooLong;
-            self.held_names[i] = try std.fmt.allocPrint(a, "{s}__held__{s}", .{ mod, leaf });
+            self.held_names[i] = try a.print("{s}__held__{s}", .{ mod, leaf });
         }
     }
     self.p_given = try a.alloc(bool, lowered.params.items.len);
@@ -178,7 +178,7 @@ fn freshUName(a: std.mem.Allocator, lowered: *const Lowered, nm: []const u8, ext
     var name = nm;
     var k: u32 = 1;
     while (uNameTaken(lowered, name, extra)) : (k += 1) {
-        name = try std.fmt.allocPrint(a, "{s}#{d}", .{ nm, k });
+        name = try a.print("{s}#{d}", .{ nm, k });
     }
     return name;
 }

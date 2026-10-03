@@ -1271,17 +1271,17 @@ fn addArray(
             q = @divTrunc(q, n);
             if (d == rest.len) inner = i;
             var buf: [24]u8 = undefined;
-            try suffix.insertSlice(arena, 0, std.fmt.bufPrint(&buf, "[{d}]", .{i}) catch unreachable);
+            try suffix.insertSlice(arena, 0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
         }
         const c: u32 = @intCast(objects.items.len);
         try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
         members[k] = @intCast(objects.items.len);
-        const local = try std.fmt.allocPrint(arena, "{s}{s}", .{ name, suffix.items });
+        const local = try arena.print("{s}{s}", .{ name, suffix.items });
         try objects.append(gpa, .{
             .kind = elem,
             .owner = owner,
             .name = local,
-            .full = try std.fmt.allocPrint(arena, "{s}{s}", .{ full, suffix.items }),
+            .full = try arena.print("{s}{s}", .{ full, suffix.items }),
             .size = width,
             .ty = ty,
             .slot = if (base) |b| b + @as(u32, @intCast(k)) else null,
@@ -1325,8 +1325,8 @@ fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Array
             .kind = .code,
             .vtype = vtype,
             .owner = vec.owner,
-            .name = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.name, i }),
-            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.full, i }),
+            .name = try arena.print("{s}[{d}]", .{ vec.name, i }),
+            .full = try arena.print("{s}[{d}]", .{ vec.full, i }),
             .src_tok = vec.src_tok,
             .edges = edges,
             .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
@@ -1381,7 +1381,7 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
             const i = r.scope_info.items[e].index.?;
             const c: u32 = @intCast(objects.items.len);
             try objects.append(gpa, .{ .kind = .constant, .owner = k.scope, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
-            const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, i });
+            const local = try arena.print("{s}[{d}]", .{ name, i });
             const full = try joinPath(arena, module_full, local);
             m.* = @intCast(objects.items.len);
             try objects.append(gpa, .{
@@ -1578,7 +1578,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             .decl = m,
             .def_name = try arena.dupe(u8, file.str(m.name)),
             .library = try arena.dupe(u8, file.str(r.def_lib[info.def])),
-            .config = if (cfg) |c| try std.fmt.allocPrint(arena, "{s}.{s}", .{ file.str(r.cfg_lib[c]), file.str(file.configs[c].name) }) else "",
+            .config = if (cfg) |c| try arena.print("{s}.{s}", .{ file.str(r.cfg_lib[c]), file.str(file.configs[c].name) }) else "",
             .path = path,
             .parent = parent,
             .engine = @intCast(e),
@@ -1907,7 +1907,7 @@ fn digitalObj(
 fn pathComponent(arena: std.mem.Allocator, file: *const Ast.SourceFile, info: anytype) Error![]const u8 {
     const name = file.str(info.name);
     const k = info.index orelse return arena.dupe(u8, name);
-    return std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k });
+    return arena.print("{s}[{d}]", .{ name, k });
 }
 
 /// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`
@@ -1951,7 +1951,7 @@ fn packedWidth(file: *const Ast.SourceFile, v: Ast.VarDecl) u32 {
 fn joinPath(arena: std.mem.Allocator, parent: []const u8, local: []const u8) Error![]const u8 {
     if (parent.len == 0) return arena.dupe(u8, local);
     if (local.len == 0) return arena.dupe(u8, parent);
-    return std.fmt.allocPrint(arena, "{s}{c}{s}", .{ parent, Elaborate.sep, local });
+    return arena.print("{s}{c}{s}", .{ parent, Elaborate.sep, local });
 }
 
 fn lastComponent(path: []const u8) []const u8 {
@@ -2012,7 +2012,7 @@ pub fn clearError() void {
 pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
     err_level = vpiError;
     err_code = err;
-    const written = std.fmt.bufPrint(err_buf[0 .. err_buf.len - 1], fmt, args) catch
+    const written = std.mem.print(err_buf[0 .. err_buf.len - 1], fmt, args) catch
         err_buf[0 .. err_buf.len - 1];
     err_len = written.len;
     err_buf[err_len] = 0;
@@ -2272,7 +2272,7 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
         var at: ?u32 = if (from.kind == .module) from.scope else from.owner;
         while (at) |sc| : (at = if (d.search_up) d.scopes[sc].parent else null) {
             var buf: [name_buf_len]u8 = undefined;
-            const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
+            const full = std.mem.print(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
             if (d.by_name.get(full)) |i| return handleOf(&d.objects[i]);
         }
         if (!d.search_up) {
@@ -3045,7 +3045,7 @@ var analog_buf: [2][64]u8 = undefined;
 fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
     const text = switch (format) {
         vpiExpStrVal => printfE(buf, x, 6),
-        vpiDecStrVal => std.fmt.bufPrintZ(buf, "{d}", .{x}) catch null,
+        vpiDecStrVal => std.mem.printSentinel(buf, "{d}", .{x}, 0) catch null,
         vpiStringVal => printfG(buf, x, chose),
         else => null,
     } orelse {
@@ -3060,11 +3060,11 @@ fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
 /// bare (`2.5e-3`), so only the exponent is re-spelled.
 fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
     var tmp: [64]u8 = undefined;
-    const raw = std.fmt.bufPrint(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
+    const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
     const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     const sign: u8 = if (exp < 0) '-' else '+';
-    return std.fmt.bufPrintZ(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }) catch null;
+    return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }, 0) catch null;
 }
 
 /// C's `%g` (precision 6): %e when the exponent is below -4 or at least 6,
@@ -3073,10 +3073,10 @@ fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
 fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     if (x == 0) {
         chose.* = vpiDecStrVal;
-        return std.fmt.bufPrintZ(buf, "0", .{}) catch null;
+        return std.mem.printSentinel(buf, "0", .{}, 0) catch null;
     }
     var tmp: [64]u8 = undefined;
-    const raw = std.fmt.bufPrint(&tmp, "{e:.5}", .{x}) catch return null;
+    const raw = std.mem.print(&tmp, "{e:.5}", .{x}) catch return null;
     const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     if (exp < -4 or exp >= 6) {
@@ -3087,16 +3087,16 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
             m = std.mem.trimEnd(u8, m, ".");
         }
         const sign: u8 = if (exp < 0) '-' else '+';
-        return std.fmt.bufPrintZ(buf, "{s}e{c}{d:0>2}", .{ m, sign, @abs(exp) }) catch null;
+        return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ m, sign, @abs(exp) }, 0) catch null;
     }
     chose.* = vpiDecStrVal;
     const decimals: usize = @intCast(5 - exp);
-    var fixed: []const u8 = std.fmt.bufPrint(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
+    var fixed: []const u8 = std.mem.print(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
     if (std.mem.indexOfScalar(u8, fixed, '.') != null) {
         fixed = std.mem.trimEnd(u8, fixed, "0");
         fixed = std.mem.trimEnd(u8, fixed, ".");
     }
-    return std.fmt.bufPrintZ(buf, "{s}", .{fixed}) catch null;
+    return std.mem.printSentinel(buf, "{s}", .{fixed}, 0) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -4122,7 +4122,7 @@ test "a digital scope is the engine's instance, past a task frame and a loop gen
     var v: callback.Value = std.mem.zeroes(callback.Value);
     v.format = value.vpiIntVal;
     for ([_]struct { []const u8, c_int }{ .{ "top.c.r", 0x11 }, .{ "top.g[0].u.r", 1 }, .{ "top.g[1].u.r", 2 } }) |want| {
-        const name = try std.testing.allocator.dupeZ(u8, want[0]);
+        const name = try std.testing.allocator.dupeSentinel(u8, want[0], 0);
         defer std.testing.allocator.free(name);
         const r = vpi_handle_by_name(name, null) orelse return error.TestUnexpectedResult;
         value.vpi_get_value(r, &v);

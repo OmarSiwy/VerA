@@ -6,16 +6,16 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = contract.nU(D);
-const S0 = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 fn gds(m: *D.Model) f64 {
     if (@hasDecl(D, "setup")) D.setup(S0.Of(0), m);
     var inst: D.Instance = .{};
     if (@hasDecl(D, "setupInstance")) D.setupInstance(m, &inst);
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.d)] = 1.0;
+    x[@backingInt(D.U.d)] = 1.0;
     const r = D.eval(S0, &x, m, &inst, .{});
-    return r[@intFromEnum(D.U.d)].v;
+    return r[@backingInt(D.U.d)].v;
 }
 
 test "every port connected by default" {

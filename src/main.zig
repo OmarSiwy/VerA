@@ -14,6 +14,14 @@ const vera = @import("vera");
 const digital = @import("sim").digital;
 const diag = vera.diag;
 const Io = std.Io;
+/// `--optimize=` names. Zig 0.17 renamed `std.lang.Optimize`'s tags
+/// (`fast`, ...); the flag keeps the names it always took.
+const optimize_names = std.StaticStringMap(std.lang.Optimize).initComptime(.{
+    .{ "Debug", .debug },
+    .{ "ReleaseSafe", .safe },
+    .{ "ReleaseFast", .fast },
+    .{ "ReleaseSmall", .small },
+});
 
 const usage_text =
     \\usage: vera [options] FILE.va
@@ -147,7 +155,7 @@ pub fn main(init: std.process.Init) !u8 {
     var work_dir: ?[]const u8 = null;
     var zig_exe: []const u8 = "zig";
     var debug_info = false;
-    var optimize: ?std.builtin.OptimizeMode = null;
+    var optimize: ?std.lang.Optimize = null;
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
     var schedule: digital.emit.Schedule = .static;
@@ -219,7 +227,7 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "--zig")) {
             zig_exe = args.next() orelse return missing(err, "--zig", "a path");
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
-            optimize = std.meta.stringToEnum(std.builtin.OptimizeMode, arg["--optimize=".len..]) orelse {
+            optimize = optimize_names.get(arg["--optimize=".len..]) orelse {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
                 return 2;
             };
@@ -312,11 +320,11 @@ pub fn main(init: std.process.Init) !u8 {
 
     // A testbench compiles for seconds and runs for microseconds; a `.so` is
     // the host's hot loop.
-    const opt = optimize orelse if (exe_flag != null) std.builtin.OptimizeMode.Debug else .ReleaseFast;
-    const backend = zig_backend orelse vera.orchestrator.Backend.auto(opt, builtin.cpu.arch);
+    const opt = optimize orelse if (exe_flag != null) std.lang.Optimize.debug else .fast;
+    const backend = zig_backend orelse vera.orchestrator.Backend.auto(opt, builtin.target.cpu.arch);
     // The self-hosted backend takes `-O` and does not optimise: legal, but a
     // Release build under it is only as fast as Debug minus the safety checks.
-    if ((exe_flag != null or emit_so) and backend == .self_hosted and opt != .Debug)
+    if ((exe_flag != null or emit_so) and backend == .self_hosted and opt != .debug)
         try err.print("warning: --zig-backend=native does not optimise; the {t} artifact is unoptimised\n", .{opt});
     // Conflicting flags are refused by name, whatever order they came in.
     if (exe_flag) |f| if (display_drop_flag) {
@@ -796,7 +804,7 @@ const DeviceFlags = struct {
     dyn: ?[]const u8,
     work_dir: ?[]const u8,
     zig_exe: []const u8,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     backend: vera.orchestrator.Backend,
     debug_info: bool,
     /// Where `--emit-so` keeps the prebuilt engine (`engineCache`).
@@ -948,8 +956,8 @@ const device_check =
     \\pub const vera_validate_contract = true;
     \\const contract = @import("contract");
     \\const D = @import("device");
-    \\const n_u = @typeInfo(D.U).@"enum".fields.len;
-    \\const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+    \\const n_u = @typeInfo(D.U).@"enum".field_names.len;
+    \\const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
     \\comptime {
     \\    contract.validate(D);
     \\    contract.validateHost(struct {}, D);
@@ -1098,20 +1106,20 @@ fn typeCheck(
     defer tmp.close(io);
 
     const stem = std.fs.path.stem(in_path);
-    const dev_name = try std.fmt.allocPrint(gpa, "{s}.device.zig", .{stem});
+    const dev_name = try gpa.print("{s}.device.zig", .{stem});
     defer gpa.free(dev_name);
     try tmp.writeFile(io, .{ .sub_path = dev_name, .data = device_zig });
 
     // The device is not the root: the root turns the contract's checks on
     // (`contract.validating`), which `--check` is for.
-    const root_name = try std.fmt.allocPrint(gpa, "{s}.check.zig", .{stem});
+    const root_name = try gpa.print("{s}.check.zig", .{stem});
     defer gpa.free(root_name);
     try tmp.writeFile(io, .{ .sub_path = root_name, .data = check_root });
-    const contract_arg = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{contract});
+    const contract_arg = try gpa.print("-Mcontract={s}", .{contract});
     defer gpa.free(contract_arg);
-    const root_arg = try std.fmt.allocPrint(gpa, "-Mroot=.zig-cache/vera-check/{s}", .{root_name});
+    const root_arg = try gpa.print("-Mroot=.zig-cache/vera-check/{s}", .{root_name});
     defer gpa.free(root_arg);
-    const device_arg = try std.fmt.allocPrint(gpa, "-Mdevice=.zig-cache/vera-check/{s}", .{dev_name});
+    const device_arg = try gpa.print("-Mdevice=.zig-cache/vera-check/{s}", .{dev_name});
     defer gpa.free(device_arg);
 
     // `--dep` applies to the NEXT `-M`, and the FIRST `-M` is the root module —

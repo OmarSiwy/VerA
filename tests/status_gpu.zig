@@ -6,7 +6,7 @@
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
 
 fn run(x: *const [n_u]f64, m: *const D.Model, inst: *D.Instance, st: *D.State, out: *[n_u]f64) void {

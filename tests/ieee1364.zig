@@ -171,7 +171,7 @@ pub fn coverage(init: std.process.Init) !u8 {
         var printed = false;
         for (clauses.items) |c| {
             if (bucketOf(c) != want) continue;
-            if (!printed) try w.writeAll(headers[@intFromEnum(want)]);
+            if (!printed) try w.writeAll(headers[@backingInt(want)]);
             printed = true;
             if (want == .classified)
                 try w.print("§{s} {s}  [{s}]\n", .{ c.id, c.title, @tagName(c.kind.?) })

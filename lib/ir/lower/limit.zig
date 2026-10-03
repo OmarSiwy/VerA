@@ -94,7 +94,7 @@ pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, seed);
     try self.out.limit_slots.append(self.arena, .{
-        .label = try std.fmt.allocPrint(self.arena, "{s}({s},{s})", .{
+        .label = try self.arena.print("{s}({s},{s})", .{
             if (t.access == .potential) "V" else "I", lower_node.nodeName(self, t.hi), lower_node.nodeName(self, t.lo),
         }),
         .access = t.access,

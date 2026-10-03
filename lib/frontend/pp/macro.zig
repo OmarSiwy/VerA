@@ -157,7 +157,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         if (std.mem.eql(u8, name, "__LINE__")) {
             // "in the form of a simple decimal number": an integer token.
             var buf: [20]u8 = undefined;
-            try pp.out.appendSlice(pp.arena, std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
+            try pp.out.appendSlice(pp.arena, std.mem.print(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
             return after_name;
         }
         if (std.mem.eql(u8, name, "__FILE__")) {
@@ -176,7 +176,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         b.msg("`{s}", .{name});
         if (diag.didYouMeanMap(name, pp.macros)) |near| {
             // `sp` includes the backtick, so the replacement restores it.
-            const repl = try std.fmt.allocPrint(pp.arena, "`{s}", .{near});
+            const repl = try pp.arena.print("`{s}", .{near});
             b.suggest(.{ .span = sp, .replacement = repl }, "did you mean `{s}`?", .{near});
         }
         try b.emit();

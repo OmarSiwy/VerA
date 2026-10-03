@@ -270,11 +270,11 @@ pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!vo
     for (b.gen_auto.items) |g| {
         var zeros: usize = 0;
         const name = while (true) : (zeros += 1) {
-            const text = try std.fmt.allocPrint(self.arena, "genblk{s}{d}", .{ ("00000000")[0..@min(zeros, 8)], g.n });
+            const text = try self.arena.print("genblk{s}{d}", .{ ("00000000")[0..@min(zeros, 8)], g.n });
             const id = try self.file.intern(self.arena, text);
             if (zeros >= 8 or !declaredIn(b, id)) break id;
         };
-        self.file.stmts.items[@intFromEnum(g.stmt)].block.gen_name = name;
+        self.file.stmts.items[@backingInt(g.stmt)].block.gen_name = name;
     }
     b.gen_auto.clearRetainingCapacity();
 }

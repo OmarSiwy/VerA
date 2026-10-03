@@ -445,7 +445,7 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
 fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     // §8.5.3.6 a digital read under an explicit D2A event is the region-1b value.
     if (self.in_d2a_body and self.out.discrete_snaps.contains(name)) {
-        const idx = self.param_index.get(try std.fmt.allocPrint(self.arena, "{s}__1b", .{name})).?;
+        const idx = self.param_index.get(try self.arena.print("{s}__1b", .{name})).?;
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.out.params.items[idx].ty) };
     }
     if (self.vars.get(name)) |slot|
@@ -562,7 +562,7 @@ fn fourState(self: *Lower, e: Ast.ExprId) Oom!?Planes {
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.in_d2a_body or !self.out.discrete_xz.contains(name)) return null;
-            const xz = self.param_index.get(try std.fmt.allocPrint(self.arena, "{s}__xz", .{name})).?;
+            const xz = self.param_index.get(try self.arena.print("{s}__xz", .{name})).?;
             return .{ .value = (try lookupName(self, e, name)).v, .unknown = self.param_values.items[xz] };
         },
         else => return null, // else: every other operand is two-state

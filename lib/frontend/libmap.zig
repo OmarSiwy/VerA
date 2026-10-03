@@ -46,10 +46,10 @@ pub const Map = struct {
         for (map.libraries) |l| {
             var got: ?Class = null;
             for (l.specs) |s| if (matches(s.pattern, file)) {
-                if (got == null or @intFromEnum(s.class) < @intFromEnum(got.?)) got = s.class;
+                if (got == null or @backingInt(s.class) < @backingInt(got.?)) got = s.class;
             };
             const c = got orelse continue;
-            if (best == null or @intFromEnum(c) < @intFromEnum(best.?)) {
+            if (best == null or @backingInt(c) < @backingInt(best.?)) {
                 best = c;
                 lib = l.name;
                 tie = null;
@@ -117,7 +117,7 @@ const Loader = struct {
                 if (isPunct(spec.text)) return l.fail(.{ .file = file, .tok = spec }, "`include` names no file_path_spec", .{});
                 try l.expectSemicolon(&t, file, spec);
                 if (depth == 32) return l.fail(here, "library map `include` nested deeper than 32", .{});
-                try l.read(try std.fs.path.resolvePosix(l.arena, &.{ dir, unquote(spec.text) }), .{ .file = file, .tok = spec }, depth + 1);
+                try l.read(try std.fs.path.resolveAllocPosix(l.arena, &.{ dir, unquote(spec.text) }), .{ .file = file, .tok = spec }, depth + 1);
             } else if (std.mem.eql(u8, kw.text, "library")) {
                 const name = t.next() orelse return l.fail(here, "`library` names no library", .{});
                 if (!isIdentifier(name.text)) return l.fail(.{ .file = file, .tok = name }, "`{s}` is not a library_identifier", .{name.text});
@@ -140,7 +140,7 @@ const Loader = struct {
                         while (true) {
                             const d = t.next() orelse return l.fail(.{ .file = file, .tok = prev_tok }, "a library declaration ends with `;`", .{});
                             if (isPunct(d.text)) return l.fail(.{ .file = file, .tok = d }, "`-incdir` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{d.text});
-                            try l.incdirs.append(l.arena, try std.fs.path.resolvePosix(l.arena, &.{ dir, unquote(d.text) }));
+                            try l.incdirs.append(l.arena, try std.fs.path.resolveAllocPosix(l.arena, &.{ dir, unquote(d.text) }));
                             const next = t.next() orelse return l.fail(.{ .file = file, .tok = d }, "a library declaration ends with `;`", .{});
                             if (std.mem.eql(u8, next.text, ";")) break;
                             if (!std.mem.eql(u8, next.text, ",")) return l.fail(.{ .file = file, .tok = next }, "found `{s}`: -incdir file_path_specs are separated by `,` and end with `;`", .{next.text});
@@ -227,7 +227,7 @@ pub fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) e
         .wildcard
     else
         .file;
-    const path = try std.fs.path.resolvePosix(arena, &.{ dir, raw });
+    const path = try std.fs.path.resolveAllocPosix(arena, &.{ dir, raw });
     return .{ .pattern = if (class == .directory) try std.mem.concat(arena, u8, &.{ path, "/*" }) else path, .class = class };
 }
 

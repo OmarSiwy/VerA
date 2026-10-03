@@ -138,7 +138,7 @@ pub const SsaBuilder = struct {
     /// temporary).
     pub fn newPlace(self: *SsaBuilder) Place {
         defer self.next_place += 1;
-        return @enumFromInt(self.next_place);
+        return @fromBackingInt(@intCast(self.next_place));
     }
 
     // ------------------------------------------------------------- CFG edges --
@@ -186,9 +186,9 @@ pub const SsaBuilder = struct {
     /// Records the §5.7 assignment `place := value` in `block`.
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
-        assert(@intFromEnum(value) < std.math.maxInt(u32) - 1);
+        assert(@backingInt(value) < std.math.maxInt(u32) - 1);
         const i = try self.defsIndex(place, block);
-        self.cells.items[i] = @intFromEnum(value) + 1;
+        self.cells.items[i] = @backingInt(value) + 1;
     }
 
     /// Returns the value of `place` in `block`, emitting phis as needed. A place
@@ -197,7 +197,7 @@ pub const SsaBuilder = struct {
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const raw = self.defsRaw(place, block);
         if (raw == absent) return self.readVariableRecursive(place, block);
-        if (raw != pending) return @enumFromInt(raw - 1);
+        if (raw != pending) return @fromBackingInt(@intCast(raw - 1));
         // The read came round a cycle (§5.9) into a join whose predecessors
         // are still being read: the join needs a real phi after all. Mint it
         // empty; the frame that set `pending` fills it.
@@ -209,8 +209,8 @@ pub const SsaBuilder = struct {
     /// Load without growing: an unallocated cell reads as absent, exactly like an
     /// allocated-but-unwritten one. Keeps the read path free of the resize branch.
     fn defsRaw(self: *const SsaBuilder, place: Place, block: Mir.Block) u32 {
-        const p = @intFromEnum(place);
-        const b = @intFromEnum(block);
+        const p = @backingInt(place);
+        const b = @backingInt(block);
         if (p >= self.place_cap or b >> chunk_bits >= self.dir_stride) return absent;
         const chunk: usize = self.dir[@as(usize, p) * self.dir_stride + (b >> chunk_bits)];
         return self.cells.items[chunk << chunk_bits | (b & (chunk_len - 1))];
@@ -219,7 +219,7 @@ pub const SsaBuilder = struct {
     fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
         const v = self.defsRaw(place, block);
         assert(v != pending);
-        return if (v == absent) null else @enumFromInt(v - 1);
+        return if (v == absent) null else @fromBackingInt(@intCast(v - 1));
     }
 
     /// Index into `cells` of (place, block), growing the directory to cover it
@@ -227,8 +227,8 @@ pub const SsaBuilder = struct {
     /// grow geometrically: exact growth on either axis is quadratic. The
     /// index stays valid while the directory regrows, not while `cells` does.
     fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
-        const p = @intFromEnum(place);
-        const col = @intFromEnum(block) >> chunk_bits;
+        const p = @backingInt(place);
+        const col = @backingInt(block) >> chunk_bits;
 
         if (col >= self.dir_stride or p >= self.place_cap) {
             const stride = if (col < self.dir_stride) self.dir_stride else @max(col + 1, self.dir_stride * 2, 1);
@@ -253,7 +253,7 @@ pub const SsaBuilder = struct {
             try self.cells.appendNTimes(map_gpa, absent, chunk_len);
             self.dir[d] = @intCast(chunk);
         }
-        return @as(usize, self.dir[d]) << chunk_bits | (@intFromEnum(block) & (chunk_len - 1));
+        return @as(usize, self.dir[d]) << chunk_bits | (@backingInt(block) & (chunk_len - 1));
     }
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
@@ -299,7 +299,7 @@ pub const SsaBuilder = struct {
             // already allocated, so this cannot allocate again.
             const now = self.cells.items[try self.defsIndex(place, block)];
             if (now != pending) {
-                val = try self.fillPhi(@enumFromInt(now - 1), pairs);
+                val = try self.fillPhi(@fromBackingInt(@intCast(now - 1)), pairs);
             } else if (sameValue(self.mir, pairs)) |same| {
                 val = same;
             } else {
@@ -423,7 +423,7 @@ pub const SsaBuilder = struct {
     // ---------------------------------------------------------- internals --
 
     fn ensureState(self: *SsaBuilder, block: Mir.Block) Error!u32 {
-        const i = @intFromEnum(block);
+        const i = @backingInt(block);
         assert(i < self.mir.blockCount());
         while (self.block_state.len <= i) try self.block_state.append(map_gpa, .{});
         return i;
@@ -432,7 +432,7 @@ pub const SsaBuilder = struct {
     /// Record "`user` (a phi) reads `value`". Sentinels never collapse, so they
     /// get no list.
     fn addUser(self: *SsaBuilder, value: Mir.Value, user: Mir.Value) Error!void {
-        const i = @intFromEnum(value);
+        const i = @backingInt(value);
         if (i < Mir.Value.first_dynamic) return;
         const slot = i - Mir.Value.first_dynamic;
         while (self.user_head.items.len <= slot) try self.user_head.append(map_gpa, list_end);
@@ -442,7 +442,7 @@ pub const SsaBuilder = struct {
     }
 
     fn userHead(self: *const SsaBuilder, value: Mir.Value) u32 {
-        const i = @intFromEnum(value);
+        const i = @backingInt(value);
         if (i < Mir.Value.first_dynamic) return list_end;
         const slot = i - Mir.Value.first_dynamic;
         if (slot >= self.user_head.items.len) return list_end;
@@ -450,13 +450,13 @@ pub const SsaBuilder = struct {
     }
 
     fn predsHead(self: *const SsaBuilder, block: Mir.Block) u32 {
-        const b = @intFromEnum(block);
+        const b = @backingInt(block);
         if (b >= self.block_state.len) return list_end;
         return self.block_state.items(.preds_head)[b];
     }
 
     fn predCount(self: *const SsaBuilder, block: Mir.Block) u32 {
-        const b = @intFromEnum(block);
+        const b = @backingInt(block);
         if (b >= self.block_state.len) return 0;
         return self.block_state.items(.preds_len)[b];
     }

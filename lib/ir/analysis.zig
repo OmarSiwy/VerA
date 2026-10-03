@@ -136,7 +136,7 @@ pub const FoldColumn = struct {
     const Kind = enum(u8) { none, int, real, str };
 
     fn get(c: *const FoldColumn, v: Mir.Value) ?Const {
-        const i = @intFromEnum(v);
+        const i = @backingInt(v);
         const b = c.bits[i];
         return switch (c.kind[i]) {
             .none => null,
@@ -192,14 +192,14 @@ pub fn buildStructure(
     var self: Analysis = .{ .arena = arena, .mir = mir, .lowered = lowered };
     self.nv = @intCast(mir.defs.len + Mir.Value.first_dynamic);
     self.alias = try arena.alloc(Mir.Value, self.nv);
-    for (self.alias, 0..) |*p, v| p.* = mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
+    for (self.alias, 0..) |*p, v| p.* = mir.resolveAlias(@fromBackingInt(@intCast(@as(u32, @intCast(v)))));
     try self.buildCfg();
     return self;
 }
 
 /// Returns the Value `v` aliases to (the snapshot of `Mir.resolveAlias`).
 pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
-    return self.alias[@intFromEnum(v)];
+    return self.alias[@backingInt(v)];
 }
 
 /// Returns block `bi`'s instructions as a contiguous window (see `inst_pool`).
@@ -235,14 +235,14 @@ fn buildCfg(self: *Analysis) Error!void {
     var n_insts: u32 = 0;
     for (0..nb) |bi| {
         self.inst_off[bi] = n_insts;
-        var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        var it = self.mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(bi)))));
         while (it.next()) |_| n_insts += 1;
     }
     self.inst_off[nb] = n_insts;
     self.inst_pool = try a.alloc(Mir.Inst, n_insts);
     var ki: u32 = 0;
     for (0..nb) |bi| {
-        var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        var it = self.mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(bi)))));
         while (it.next()) |inst| {
             self.inst_pool[ki] = inst;
             ki += 1;
@@ -262,13 +262,13 @@ fn buildCfg(self: *Analysis) Error!void {
             .branch => {
                 const d = self.mir.instData(inst).branch;
                 self.term[bi] = inst;
-                s[0] = @intFromEnum(d.then_block);
-                s[1] = @intFromEnum(d.else_block);
+                s[0] = @backingInt(d.then_block);
+                s[1] = @backingInt(d.else_block);
                 ns = 2;
             },
             .jump => {
                 self.term[bi] = inst;
-                s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
+                s[0] = @backingInt(self.mir.instData(inst).jump.target);
                 ns = 1;
             },
             .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
@@ -514,7 +514,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
         for (self.blockInstsFlat(@intCast(bi))) |inst| {
             const r = self.mir.instResult(inst);
             if (r == .undef) continue;
-            self.def_block[@intFromEnum(r)] = @intCast(bi);
+            self.def_block[@backingInt(r)] = @intCast(bi);
         }
     }
 
@@ -524,7 +524,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
     try self.buildArrOf();
     var v: u32 = 0;
     while (v < self.nv) : (v += 1) {
-        const val: Mir.Value = @enumFromInt(v);
+        const val: Mir.Value = @fromBackingInt(@intCast(v));
         if (self.arr_of[v] != none_u32) {
             self.vty[v] = if (self.lowered.mem_arrays.items[self.arr_of[v]].ty == .integer) .int else .real;
             continue;
@@ -558,7 +558,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
         changed = false;
         v = Mir.Value.first_dynamic;
         while (v < self.nv) : (v += 1) {
-            const val: Mir.Value = @enumFromInt(v);
+            const val: Mir.Value = @fromBackingInt(@intCast(v));
             const def = self.mir.valueDef(val);
             if (def != .inst_result) continue;
             const inst = def.inst_result;
@@ -573,7 +573,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
                 },
                 .unary, .binary, .branch, .jump, .call, .anew, .load, .store => continue,
             };
-            const t = self.vty[@intFromEnum(src)];
+            const t = self.vty[@backingInt(src)];
             if (self.vty[v] == t) continue;
             self.vty[v] = t;
             changed = true;
@@ -594,16 +594,16 @@ fn buildArrOf(self: *Analysis) Error!void {
         grew = false;
         for (Mir.Value.first_dynamic..self.nv) |i| {
             if (self.arr_of[i] != none_u32) continue;
-            const def = self.mir.valueDef(@enumFromInt(i));
+            const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
             if (def != .inst_result) continue;
             const inst = def.inst_result;
             const id: u32 = switch (self.mir.instData(inst)) {
                 .anew => |d| d.array,
-                .store => |d| self.arr_of[@intFromEnum(self.rv(d.arr))],
+                .store => |d| self.arr_of[@backingInt(self.rv(d.arr))],
                 .phi => |d| blk: {
                     var k: u32 = 0;
                     while (k < d.count) : (k += 1) {
-                        const a = self.arr_of[@intFromEnum(self.rv(self.mir.phiPair(inst, k).value))];
+                        const a = self.arr_of[@backingInt(self.rv(self.mir.phiPair(inst, k).value))];
                         if (a != none_u32) break :blk a;
                     }
                     break :blk none_u32;
@@ -619,7 +619,7 @@ fn buildArrOf(self: *Analysis) Error!void {
 
 /// §3.2.2 the array a Value is a version of, or null for a scalar.
 pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
-    const a = self.arr_of[@intFromEnum(self.rv(v))];
+    const a = self.arr_of[@backingInt(self.rv(v))];
     return if (a == none_u32) null else a;
 }
 
@@ -664,7 +664,7 @@ test "a dstop clears the derivative bits and keeps the value varying" {
     try std.testing.expect(an.dFree(stopped) and an.xDep(stopped));
     // The product keeps its other operand's lane, and varies through both.
     try std.testing.expectEqual(@as(u64, 0b10), an.unknownDeps(prod));
-    try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@intFromEnum(prod)]);
+    try std.testing.expectEqual(@as(u64, 0b11), an.xdeps[@backingInt(prod)]);
 }
 
 test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
@@ -691,7 +691,7 @@ test "acdyn: an absdelay's input deps reach the value, a direct path does not" {
 
 /// Returns the emitted type of `v`. Requires `build`, not `buildStructure`.
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
-    return self.vty[@intFromEnum(v)];
+    return self.vty[@backingInt(v)];
 }
 
 // -------------------------------------------------- the derivative lattice --
@@ -709,26 +709,26 @@ fn buildDeps(self: *Analysis) Error!void {
     // so the loop below never has to think about it.
     var v0: u32 = 0;
     while (v0 < self.nv) : (v0 += 1) {
-        const d = self.mir.valueDef(@enumFromInt(v0));
+        const d = self.mir.valueDef(@fromBackingInt(@intCast(v0)));
         if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
     }
     self.deps = try self.fixDeps(.deriv);
     // Only a `dstop` tells the two tables apart.
     self.xdeps = self.deps;
     for (0..self.mir.insts.len) |i| {
-        if (self.mir.instOp(@enumFromInt(@as(u32, @intCast(i)))) != .dstop) continue;
+        if (self.mir.instOp(@fromBackingInt(@intCast(@as(u32, @intCast(i))))) != .dstop) continue;
         self.xdeps = try self.fixDeps(.value);
         break;
     }
     self.pdeps = self.xdeps;
     for (0..self.mir.insts.len) |i| {
-        if (!readsInstance(self, @enumFromInt(@as(u32, @intCast(i))))) continue;
+        if (!readsInstance(self, @fromBackingInt(@intCast(@as(u32, @intCast(i)))))) continue;
         self.pdeps = try self.fixDeps(.point);
         break;
     }
     // After `deps`, which an operator's `acdyn` reads.
     for (0..self.mir.insts.len) |i| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (self.mir.instOp(inst) != .call or !op_kind.acDynamic(Mir.callee.opKind(self.mir.instData(inst).call.callee))) continue;
         self.acdyn = try self.fixDeps(.ac_dyn);
         break;
@@ -756,7 +756,7 @@ fn fixDeps(self: *const Analysis, which: DepCol) Error![]u64 {
         changed = false;
         var v: u32 = 0;
         while (v < self.nv) : (v += 1) {
-            const now = self.defDeps(@enumFromInt(v), col, which);
+            const now = self.defDeps(@fromBackingInt(@intCast(v)), col, which);
             if (now == col[v]) continue;
             col[v] = now;
             changed = true;
@@ -852,7 +852,7 @@ fn depsOf(self: *const Analysis, v: Mir.Value) u64 {
 }
 
 fn depsIn(self: *const Analysis, col: []const u64, v: Mir.Value) u64 {
-    return col[@intFromEnum(self.rv(v))];
+    return col[@backingInt(self.rv(v))];
 }
 
 /// Returns which unknowns `v`'s derivative can be nonzero in. All ones when
@@ -878,8 +878,8 @@ pub fn inLoop(self: *const Analysis, block: u32) bool {
 
 /// A phi whose result survives aliasing: the `phi_pool` filter, CFG-wide.
 fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
-    if (self.i_op[@intFromEnum(inst)] != .phi) return false;
-    const r = self.i_res[@intFromEnum(inst)];
+    if (self.i_op[@backingInt(inst)] != .phi) return false;
+    const r = self.i_res[@backingInt(inst)];
     return self.rv(r) == r;
 }
 
@@ -887,11 +887,11 @@ fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
 /// Phis are block headers, terminators are `emitTerm`'s, and an aliased
 /// result was rewritten away by ssa.zig.
 fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
-    switch (Mir.opClass(self.i_op[@intFromEnum(inst)])) {
+    switch (Mir.opClass(self.i_op[@backingInt(inst)])) {
         .phi, .branch, .jump => return false,
         .unary, .binary, .ternary, .call, .anew, .load, .store => {},
     }
-    const r = self.i_res[@intFromEnum(inst)];
+    const r = self.i_res[@backingInt(inst)];
     return r != .undef and self.rv(r) == r;
 }
 
@@ -902,7 +902,7 @@ pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
     var i: u32 = 0;
     while (i < d.count) : (i += 1) {
         const p = self.mir.phiPair(inst, i);
-        if (@intFromEnum(p.block) == from) return p.value;
+        if (@backingInt(p.block) == from) return p.value;
     }
     return .undef;
 }
@@ -967,7 +967,7 @@ fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error!FoldColumn {
         changed = false;
         for (0..self.nv) |v| {
             if (col.kind[v] != .none) continue;
-            const c = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), &col, resolve_params) orelse continue;
+            const c = self.foldStep(@fromBackingInt(@intCast(@as(u32, @intCast(v)))), &col, resolve_params) orelse continue;
             try col.set(self.arena, v, c);
             changed = true;
         }

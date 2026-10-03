@@ -427,7 +427,7 @@ const kw_lanes = std.simd.suggestVectorLength(u8);
 /// at any index below `keys().len` is in bounds and the extra lanes cannot
 /// match. The chunk loop can then run past a bucket's end and mask it.
 const kw_first: [keyword_map.keys().len + (kw_lanes orelse 1)]u8 = blk: {
-    var t = [_]u8{0} ** (keyword_map.keys().len + (kw_lanes orelse 1));
+    var t: [keyword_map.keys().len + (kw_lanes orelse 1)]u8 = @splat(0);
     for (keyword_map.keys(), 0..) |k, i| t[i] = k[0];
     break :blk t;
 };
@@ -462,7 +462,7 @@ pub fn lookupKeyword(name: []const u8) ?Tag {
 
     if (kw_lanes) |lanes| {
         const V = @Vector(lanes, u8);
-        const Mask = std.meta.Int(.unsigned, lanes);
+        const Mask = @Int(.unsigned, lanes);
         const needle: V = @splat(name[0]);
         var i = lo;
         while (i < hi) : (i += lanes) {
@@ -553,7 +553,7 @@ const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
 /// annex B). Only meaningful for a spelling in `keyword_map`.
 pub fn isReserved(name: []const u8, set: KeywordSet) bool {
     if (set == .v1364_2001_noconfig and noconfig_words.has(name)) return false;
-    return @intFromEnum(keyword_intro.get(name) orelse .vams_2_3) <= @intFromEnum(set);
+    return @backingInt(keyword_intro.get(name) orelse .vams_2_3) <= @backingInt(set);
 }
 
 // ---- predicates the lexer/parser want ------------------------------------
@@ -561,7 +561,7 @@ pub fn isReserved(name: []const u8, set: KeywordSet) bool {
 /// Returns whether `tag` is a keyword (LRM §2.8.2). Escaped identifiers are
 /// never keywords (§2.8.1), so the lexer does not look them up.
 pub fn isKeyword(tag: Tag) bool {
-    return @intFromEnum(tag) >= @intFromEnum(Tag.first_keyword);
+    return @backingInt(tag) >= @backingInt(Tag.first_keyword);
 }
 
 /// Returns whether `tag` is an annex A.8.2 `analog_built_in_function_name`
@@ -833,13 +833,13 @@ const intro_kvs = kvs: {
 /// compile error here.
 const keyword_kvs = kvs: {
     @setEvalBranchQuota(20_000);
-    const fields = @typeInfo(Tag).@"enum".fields[@intFromEnum(Tag.first_keyword)..@intFromEnum(Tag.kw_reserved)];
+    const fields = @typeInfo(Tag).@"enum".field_names[@backingInt(Tag.first_keyword)..@backingInt(Tag.kw_reserved)];
     const n = reserved_keywords.len + fields.len;
 
     var out: [n]KV = undefined;
     var i: usize = 0;
     for (fields) |f| {
-        out[i] = .{ f.name[3..], @field(Tag, f.name) };
+        out[i] = .{ f[3..], @field(Tag, f) };
         i += 1;
     }
     for (reserved_keywords) |name| {
@@ -860,14 +860,14 @@ const keyword_kvs = kvs: {
 test "layout invariant: keyword block is contiguous and last" {
     // Every kw_* tag is >= first_keyword, and nothing before it is a keyword.
     @setEvalBranchQuota(20_000);
-    inline for (@typeInfo(Tag).@"enum".fields) |f| {
-        const is_kw_name = comptime std.mem.startsWith(u8, f.name, "kw_");
-        try std.testing.expectEqual(is_kw_name, isKeyword(@field(Tag, f.name)));
+    inline for (@typeInfo(Tag).@"enum".field_names) |f| {
+        const is_kw_name = comptime std.mem.startsWith(u8, f, "kw_");
+        try std.testing.expectEqual(is_kw_name, isKeyword(@field(Tag, f)));
     }
     try std.testing.expect(!isKeyword(.eof));
     try std.testing.expect(!isKeyword(.attr_close));
     // Tag must stay in u8 (enum(u8)); this fails loudly if the set outgrows it.
-    try std.testing.expect(@typeInfo(Tag).@"enum".fields.len <= 256);
+    try std.testing.expect(@typeInfo(Tag).@"enum".field_names.len <= 256);
 }
 
 test "keyword_map: spelling round-trips through lexeme" {
@@ -928,7 +928,7 @@ test "lookupKeyword: differential against keyword_map, which stays the reference
     }
     try check("");
     try check("\xffodule");
-    try check("m" ** 32);
+    try check(&@as([32]u8, @splat('m')));
 
     // 3. Near misses, where a scan that stops one lane early actually shows up:
     //    every keyword with one byte dropped, one appended, and its first byte
@@ -994,8 +994,8 @@ test "call groups match annex A.8.2/A.6.5 exactly and are disjoint" {
     // call = 17, analog_small_signal_function_call = 5, analog_event_functions
     // = 4. If a tag lands in two groups the parser would pick the wrong tag.
     var counts = [_]u32{ 0, 0, 0, 0 };
-    inline for (@typeInfo(Tag).@"enum".fields) |f| {
-        const t: Tag = @field(Tag, f.name);
+    inline for (@typeInfo(Tag).@"enum".field_names) |f| {
+        const t: Tag = @field(Tag, f);
         var n: u32 = 0;
         if (isMathFunction(t)) {
             counts[0] += 1;
@@ -1025,7 +1025,7 @@ test "call groups match annex A.8.2/A.6.5 exactly and are disjoint" {
 }
 
 test "Stored stays 5 bytes of payload (SoA columns, no len field)" {
-    try std.testing.expectEqual(2, @typeInfo(Stored).@"struct".fields.len);
+    try std.testing.expectEqual(2, @typeInfo(Stored).@"struct".field_names.len);
     try std.testing.expectEqual(1, @sizeOf(Tag));
     try std.testing.expectEqual(4, @sizeOf(u32));
 }

@@ -57,7 +57,7 @@ const expectEqual = std.testing.expectEqual;
 const Link = struct { a: usize, b: usize, g: f64 };
 
 fn Circuit(comptime D: type) type {
-    const n = @typeInfo(D.U).@"enum".fields.len;
+    const n = @typeInfo(D.U).@"enum".field_names.len;
     const lanes: [n]u8 = std.simd.iota(u8, n);
     const S = contract.RefFamily(f64, &lanes, .{ .dense = true });
     return struct {
@@ -81,7 +81,7 @@ fn Circuit(comptime D: type) type {
         solves: u32 = 0,
 
         fn pin(comptime name: []const u8) usize {
-            return @intFromEnum(@field(D.U, name));
+            return @backingInt(@field(D.U, name));
         }
 
         fn birth(c: *Self) void {

@@ -94,7 +94,7 @@ test "a guarded stamp is listed with its guard; one that clashes puts its column
     defer arena.deinit();
     // Unknowns a, b, and the flow `ib` of a collapsible a–b short: the ±1
     // KCL stamps of ib exist only under pair 0's guard.
-    const z = [_]f64{0} ** 9;
+    const z: [9]f64 = @splat(0);
     const gd = [_]Entry{
         .{ .row = 0, .col = 2, .g = 1, .c = 0, .when = 0 },
         .{ .row = 1, .col = 2, .g = -1, .c = 0, .when = 0 },

@@ -152,7 +152,7 @@ fn refuse(
     comptime msg: []const u8,
     args: anytype,
 ) Error!void {
-    if (g.diags) |bag| try bag.add(.codegen, code, g.lowered.tokenSpan(g.mir.instTok(@enumFromInt(site))), msg, args);
+    if (g.diags) |bag| try bag.add(.codegen, code, g.lowered.tokenSpan(g.mir.instTok(@fromBackingInt(@intCast(site)))), msg, args);
     g.any_fatal = true;
     if (g.fatal == null) g.fatal = "a display or format call exceeds a formatter limit";
     fmt.clearRetainingCapacity();
@@ -613,10 +613,10 @@ fn appendZigSpec(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, extra_prec: ?[]co
         // Zig's fill/alignment are only meaningful WITH a width.
         if (spec.zero) try fmt.append(a, '0');
         try fmt.append(a, if (spec.left) '<' else '>');
-        try fmt.appendSlice(a, std.fmt.bufPrint(&buf, "{d}", .{spec.width}) catch unreachable);
+        try fmt.appendSlice(a, std.mem.print(&buf, "{d}", .{spec.width}) catch unreachable);
     }
     if (spec.prec) |p| {
-        try fmt.appendSlice(a, std.fmt.bufPrint(&buf, ".{d}", .{p}) catch unreachable);
+        try fmt.appendSlice(a, std.mem.print(&buf, ".{d}", .{p}) catch unreachable);
     } else if (extra_prec) |p| {
         try fmt.appendSlice(a, p);
     }
@@ -629,7 +629,7 @@ fn appendStrField(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, full: bool) Erro
     const a = g.arena;
     if (full or spec.width == 0) return fmt.appendSlice(a, "{s}");
     var buf: [48]u8 = undefined;
-    try fmt.appendSlice(a, std.fmt.bufPrint(&buf, "{{s:{c}{d}}}", .{
+    try fmt.appendSlice(a, std.mem.print(&buf, "{{s:{c}{d}}}", .{
         @as(u8, if (spec.left) '<' else '>'), spec.width,
     }) catch unreachable);
 }
@@ -845,7 +845,7 @@ const Harness = @import("codegen/test.zig").Harness;
 
 /// One analog block body → the printing artifact's text, in `arena`.
 fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
-    const src = try std.fmt.allocPrint(arena,
+    const src = try arena.print(
         \\module t(p, n);
         \\  inout p, n;
         \\  electrical p, n;

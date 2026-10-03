@@ -291,7 +291,7 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
 pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) !void {
     if (lowered.mixed_signal) return;
     for (0..mir.blockCount()) |bi| {
-        var insts = mir.blockInsts(@enumFromInt(bi));
+        var insts = mir.blockInsts(@fromBackingInt(@intCast(bi)));
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call or mir.instTok(inst) == Mir.no_tok) continue;
             const k = Mir.callee.opKind(mir.instData(inst).call.callee);
@@ -441,7 +441,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     try out.print(arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try out.print(arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});
     try out.print(arena, "const mixed_timescale: ?Timescale = {s};\n", .{if (mx.unit) |u|
-        try std.fmt.allocPrint(arena, ".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
+        try arena.print(".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
     else
         "null"});
     try timeArrays(&out, arena, d);
@@ -558,14 +558,14 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     for (mx.inputs) |name| {
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
         for (mx.xz) |x| if (std.mem.eql(u8, x, name)) {
-            const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__xz", .{name})) catch return error.OutOfMemory;
+            const field = naming.sanitize(&buf, try arena.print("{s}__xz", .{name})) catch return error.OutOfMemory;
             try out.print(arena, ", .xz = \"{s}\"", .{field});
         };
         try out.appendSlice(arena, " },");
     }
     try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
     for (mx.snaps) |name| {
-        const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__1b", .{name})) catch return error.OutOfMemory;
+        const field = naming.sanitize(&buf, try arena.print("{s}__1b", .{name})) catch return error.OutOfMemory;
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
     }
     try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
@@ -576,8 +576,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     try out.appendSlice(arena, "const mixed_inserts = [_]sim.digital.Insert{");
     for (mx.inserts) |row| {
         try out.appendSlice(arena, " .{");
-        inline for (@typeInfo(@TypeOf(row)).@"struct".fields) |f|
-            try out.print(arena, " .{s} = \"{f}\",", .{ f.name, std.zig.fmtString(@field(row, f.name)) });
+        inline for (@typeInfo(@TypeOf(row)).@"struct".field_names) |name|
+            try out.print(arena, " .{s} = \"{f}\",", .{ name, std.zig.fmtString(@field(row, name)) });
         try out.appendSlice(arena, " },");
     }
     try out.appendSlice(arena, " };\n");
@@ -873,9 +873,9 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
         for (fields) |f| {
             const want = f[1] orelse continue;
             const got = if (f[2])
-                try std.fmt.allocPrint(arena, "psd[{d}].{s} * psd[{d}].coeff * psd[{d}].coeff", .{ k, f[0], k, k })
+                try arena.print("psd[{d}].{s} * psd[{d}].coeff * psd[{d}].coeff", .{ k, f[0], k, k })
             else
-                try std.fmt.allocPrint(arena, "psd[{d}].{s}", .{ k, f[0] });
+                try arena.print("psd[{d}].{s}", .{ k, f[0] });
             try out.print(
                 arena,
                 "                std.debug.print(\"noise[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++

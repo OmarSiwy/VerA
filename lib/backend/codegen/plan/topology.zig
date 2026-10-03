@@ -246,12 +246,12 @@ fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
                 // one carries the last accepted point): refused, like a call
                 // off the allowlist.
                 .branch, .jump, .anew, .load, .store => return false,
-                .unary => return constFree(self, @enumFromInt(row.a), depth + 1, env),
-                .binary => return constFree(self, @enumFromInt(row.a), depth + 1, env) and
-                    constFree(self, @enumFromInt(row.b), depth + 1, env),
-                .ternary => return constFree(self, @enumFromInt(row.a), depth + 1, env) and
-                    constFree(self, @enumFromInt(row.b), depth + 1, env) and
-                    constFree(self, @enumFromInt(row.c), depth + 1, env),
+                .unary => return constFree(self, @fromBackingInt(@intCast(row.a)), depth + 1, env),
+                .binary => return constFree(self, @fromBackingInt(@intCast(row.a)), depth + 1, env) and
+                    constFree(self, @fromBackingInt(@intCast(row.b)), depth + 1, env),
+                .ternary => return constFree(self, @fromBackingInt(@intCast(row.a)), depth + 1, env) and
+                    constFree(self, @fromBackingInt(@intCast(row.b)), depth + 1, env) and
+                    constFree(self, @fromBackingInt(@intCast(row.c)), depth + 1, env),
                 .call => {
                     const d = self.mir.instData(inst).call;
                     switch (d.callee) {
@@ -265,7 +265,7 @@ fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
                     return true;
                 },
                 .phi => {
-                    const blk = self.an.def_block[@intFromEnum(v)];
+                    const blk = self.an.def_block[@backingInt(v)];
                     if (blk == none_u32 or self.an.inLoop(blk)) return false;
                     const id = self.an.idom[blk];
                     if (id == none_u32) return false;
@@ -320,7 +320,7 @@ pub fn zeroOnEveryPath(self: Input, v0: Mir.Value, depth: u32) bool {
 /// value table, run once per collapse candidate (a model has few).
 fn unknownProbed(self: Input, u: u32) bool {
     for (Mir.Value.first_dynamic..self.an.nv) |i| {
-        const def = self.mir.valueDef(@enumFromInt(i));
+        const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
         if (def == .block_param and def.block_param == u) return true;
     }
     return false;

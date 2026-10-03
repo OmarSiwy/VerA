@@ -28,21 +28,21 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 
 /// The reference family with no lanes: nothing here asks for a Jacobian.
-const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 /// The idt value, read from row `a` and divided back out by the 1e-3 scale.
 fn read(model: *const D.Model, inst: *D.Instance, x: [n_u]f64, sim: contract.SimState) f64 {
     const r: [n_u]S = D.eval(S, &x, model, inst, sim);
-    return r[@intFromEnum(D.U.a)].v / 1.0e-3;
+    return r[@backingInt(D.U.a)].v / 1.0e-3;
 }
 
 /// V(a) = assert, V(n) = 0, and the operator unknown s (U's last member).
 fn bias(assert_: f64, s: f64) [n_u]f64 {
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.a)] = assert_;
+    x[@backingInt(D.U.a)] = assert_;
     x[n_u - 1] = s;
     return x;
 }

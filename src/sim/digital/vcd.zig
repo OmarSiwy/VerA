@@ -181,7 +181,7 @@ pub const Vcd = struct {
         // §18.2.3.8: "If a variable or an expression was used to specify the
         // filename within $dumpfile, the unevaluated variable or expression
         // literal shall appear in the $version string."
-        try preamble(&w.writer, io, self.call orelse try std.fmt.allocPrint(a, "$dumpfile(\"{s}\")", .{self.name}), cat.finest);
+        try preamble(&w.writer, io, self.call orelse try a.print("$dumpfile(\"{s}\")", .{self.name}), cat.finest);
         // Every top-level module is a root: scope 0 and each scope that is
         // its own parent.
         for (cat.scopes, 0..) |sc, i| if (i == 0 or sc.parent == i) try self.dumpScope(gpa, &w, cat, src, @intCast(i), null);
@@ -366,14 +366,14 @@ fn g16(buf: *[64]u8, r: f64) []const u8 {
     if (std.math.isNan(r)) return "nan";
     if (std.math.isInf(r)) return if (r < 0) "-inf" else "inf";
     var sci_buf: [64]u8 = undefined;
-    const sci = std.fmt.bufPrint(&sci_buf, "{e:.15}", .{r}) catch unreachable;
+    const sci = std.mem.print(&sci_buf, "{e:.15}", .{r}) catch unreachable;
     const e_at = std.mem.indexOfScalar(u8, sci, 'e').?;
     const x = std.fmt.parseInt(i32, sci[e_at + 1 ..], 10) catch unreachable;
     if (x < -4 or x >= 16) {
         const mant = strip(sci[0..e_at]);
-        return std.fmt.bufPrint(buf, "{s}e{c}{d:0>2}", .{ mant, @as(u8, if (x < 0) '-' else '+'), @abs(x) }) catch unreachable;
+        return std.mem.print(buf, "{s}e{c}{d:0>2}", .{ mant, @as(u8, if (x < 0) '-' else '+'), @abs(x) }) catch unreachable;
     }
-    return strip(std.fmt.bufPrint(buf, "{d:.[1]}", .{ r, @as(usize, @intCast(15 - x)) }) catch unreachable);
+    return strip(std.mem.print(buf, "{d:.[1]}", .{ r, @as(usize, @intCast(15 - x)) }) catch unreachable);
 }
 
 /// `%g`'s removal of trailing fraction zeros and a trailing point.
@@ -519,7 +519,7 @@ fn variable(r: *Run, a: std.mem.Allocator, decls: []const Ast.VarDecl, name: Ast
     } else "reg";
     const event = r.events.contains(at);
     const width = if (event) 1 else r.values[at].width;
-    const head = try std.fmt.allocPrint(a, "$var {s} {d} ", .{ kind, width });
+    const head = try a.print("$var {s} {d} ", .{ kind, width });
     var tail: std.Io.Writer.Allocating = .init(a);
     try tail.writer.print(" {s}", .{r.file.str(name)});
     if (r.vec_ranges.get(at)) |range| try tail.writer.print(" [{d}:{d}]", .{ range.msb, range.lsb });

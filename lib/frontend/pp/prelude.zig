@@ -195,9 +195,9 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
         .segs = pp.segs.items,
         .macros = macros.items,
         .files = .{
-            .{ .name = "constants.vams", .raw = pp_annex_d.constants_vams, .stripped = bag.fileText(@enumFromInt(1)), .marks = bag.fileMarks(@enumFromInt(1)) },
-            .{ .name = "disciplines.vams", .raw = pp_annex_d.disciplines_vams, .stripped = bag.fileText(@enumFromInt(2)), .marks = bag.fileMarks(@enumFromInt(2)) },
-            .{ .name = "spice_primitives.vams", .raw = pp_annex_e.spice_primitives, .stripped = bag.fileText(@enumFromInt(3)), .marks = bag.fileMarks(@enumFromInt(3)) },
+            .{ .name = "constants.vams", .raw = pp_annex_d.constants_vams, .stripped = bag.fileText(@fromBackingInt(@intCast(1))), .marks = bag.fileMarks(@fromBackingInt(@intCast(1))) },
+            .{ .name = "disciplines.vams", .raw = pp_annex_d.disciplines_vams, .stripped = bag.fileText(@fromBackingInt(@intCast(2))), .marks = bag.fileMarks(@fromBackingInt(@intCast(2))) },
+            .{ .name = "spice_primitives.vams", .raw = pp_annex_e.spice_primitives, .stripped = bag.fileText(@fromBackingInt(@intCast(3))), .marks = bag.fileMarks(@fromBackingInt(@intCast(3))) },
         },
     };
     return p;

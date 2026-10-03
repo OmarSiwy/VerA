@@ -248,7 +248,7 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
 /// Mints the §4.5.2 unknown one analog operator site introduces, spelled
 /// `<op>$<k>`. Never deduped: each site owns its own unknown and row.
 pub fn opStateNode(self: *Lower, op: []const u8, abstol: f64) Oom!u16 {
-    const name = try std.fmt.allocPrint(self.arena, "{s}${d}", .{ op, self.node_state.op_states });
+    const name = try self.arena.print("{s}${d}", .{ op, self.node_state.op_states });
     self.node_state.op_states += 1;
     return appendNode(self, name, "", .{ .op_state = abstol });
 }
@@ -283,8 +283,8 @@ fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
     var buf: [spelling_buf_len]u8 = undefined;
     var k: u32 = 1;
     while (true) : (k += 1) {
-        const cand = std.fmt.bufPrint(&buf, "{s}#{d}", .{ name, k }) catch
-            try std.fmt.allocPrint(self.arena, "{s}#{d}", .{ name, k });
+        const cand = std.mem.print(&buf, "{s}#{d}", .{ name, k }) catch
+            try self.arena.print("{s}#{d}", .{ name, k });
         if (!self.node_state.spellings.contains(cand)) return self.arena.dupe(u8, cand);
     }
 }
@@ -398,7 +398,7 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
     if (tok >= self.tok_starts.len) return name;
     const at = self.tok_starts[tok];
     if (at >= self.src.len or self.src[at] != '\\') return name;
-    return std.fmt.allocPrint(self.arena, "\\{s}", .{name});
+    return self.arena.print("\\{s}", .{name});
 }
 
 /// `internNode` for a vector element, spelled as the source does (`bus[3]`).
@@ -406,7 +406,7 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [lower_param.elem_key_len]u8 = undefined;
     const key = try lower_param.elemKey(self, &buf, base, &.{i});
-    const name = self.node_voltages.getKey(key) orelse try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
+    const name = self.node_voltages.getKey(key) orelse try self.arena.print("{s}[{d}]", .{ base, i });
     return internNode(self, name, "");
 }
 
@@ -481,11 +481,11 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     const h_name = if (hv != null) self.file.str(self.file.exprs.strOf(b.hi)) else "";
     const l_name = if (lv != null) self.file.str(self.file.exprs.strOf(b.lo)) else "";
     for (0..size) |k| {
-        const hi = if (hv) |h| try internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ h_name, h.at(@intCast(k)) }), "") else h_scalar;
-        const lo = if (lv) |l| try internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ l_name, l.at(@intCast(k)) }), "") else l_scalar;
+        const hi = if (hv) |h| try internNode(self, try self.arena.print("{s}[{d}]", .{ h_name, h.at(@intCast(k)) }), "") else h_scalar;
+        const lo = if (lv) |l| try internNode(self, try self.arena.print("{s}[{d}]", .{ l_name, l.at(@intCast(k)) }), "") else l_scalar;
         // §3.12 → §3.11 once: every element pairs the same two disciplines.
         if (k == 0) try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo);
-        try self.branches.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, @as(i64, @intCast(k)) }), .{
+        try self.branches.put(self.arena, try self.arena.print("{s}[{d}]", .{ name, @as(i64, @intCast(k)) }), .{
             .hi = hi,
             .lo = lo,
             .id = newBranchId(self),
@@ -522,7 +522,7 @@ pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
 pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
     const gop = try self.out.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
     if (gop.found_existing) return gop.value_ptr.*;
-    const name = try std.fmt.allocPrint(self.arena, "flow({s},{s})", .{ nodeName(self, hi), nodeName(self, lo) });
+    const name = try self.arena.print("flow({s},{s})", .{ nodeName(self, hi), nodeName(self, lo) });
     // The tolerance node is the HIGH one: a branch unknown carries no discipline
     // of its own (§3.6.1.2's abstol has to come from somewhere).
     const u = try appendNode(self, name, "", .{ .branch_flow = hi });
@@ -537,7 +537,7 @@ pub fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
     for (self.out.port_probes.items) |pp| {
         if (pp.port == p) return pp.u;
     }
-    const name = try std.fmt.allocPrint(self.arena, "flow(<{s}>)", .{nodeName(self, p)});
+    const name = try self.arena.print("flow(<{s}>)", .{nodeName(self, p)});
     const u = try appendNode(self, name, "", .{ .port_flow = p });
     try self.out.port_probes.append(self.arena, .{ .port = p, .u = u });
     return u;

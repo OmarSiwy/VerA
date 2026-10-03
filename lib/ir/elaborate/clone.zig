@@ -305,7 +305,7 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             const third = x.ternaryElse(e);
             n.lhs = try cloneExpr(self, x.lhs(e));
             n.rhs = try cloneExpr(self, x.rhs(e));
-            n.extra = @intFromEnum(try cloneExpr(self, third));
+            n.extra = @backingInt(try cloneExpr(self, third));
         },
         // A.6.5 `driver_update expression` sits with the digital edges: one
         // signal operand. It occurs only in a connect module, which is

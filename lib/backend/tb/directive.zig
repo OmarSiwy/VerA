@@ -324,7 +324,7 @@ fn parsePair(s: []const u8) Error!struct { row: []const u8, col: []const u8, res
 /// `(p,n)`, the device's spelling, so `(p, n)` compares equal.
 fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     const pr = try parsePair(s);
-    var w: AcWant = .{ .topo = try std.fmt.allocPrint(arena, "({s},{s})", .{ pr.row, pr.col }) };
+    var w: AcWant = .{ .topo = try arena.print("({s},{s})", .{ pr.row, pr.col }) };
     var fields = std.mem.tokenizeAny(u8, pr.rest, " \t");
     while (fields.next()) |f| {
         const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
@@ -401,9 +401,9 @@ pub fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
         const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
         s = if ((inner.len != 0 and inner[0] == '<') or std.mem.indexOfScalar(u8, inner, ',') != null)
-            try std.fmt.allocPrint(arena, "flow({s})", .{inner})
+            try arena.print("flow({s})", .{inner})
         else
-            try std.fmt.allocPrint(arena, "flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
+            try arena.print("flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
     }
     if (std.mem.startsWith(u8, s, "x[") and std.mem.endsWith(u8, s, "]")) s = s[2 .. s.len - 1];
     s = std.mem.trim(u8, s, " \t");

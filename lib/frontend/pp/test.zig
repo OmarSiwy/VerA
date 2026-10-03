@@ -619,7 +619,7 @@ test "§10.3 `default_transition Syntax 10-2" {
     // Every §2.6.2 spelling of the same time, since the operand is read in a
     // text stage and not by the number lexer proper.
     for ([_][]const u8{ "4n\n", "4e-9\n", "0.000000004\n", "4_000p\n" }) |t| {
-        const src = try std.fmt.allocPrint(testing.allocator, "`default_transition {s}", .{t});
+        const src = try testing.allocator.print("`default_transition {s}", .{t});
         defer testing.allocator.free(src);
         const e = try T.ev(src);
         defer testing.allocator.free(e);
@@ -667,7 +667,7 @@ test "IEEE 1364 §19.5 `include opens a full path name as written" {
     try tmp.dir.writeFile(io, .{ .sub_path = "abs.vh", .data = "`define ABS_OK 7\n" });
     const abs = try tmp.dir.realPathFileAlloc(io, "abs.vh", testing.allocator);
     defer testing.allocator.free(abs);
-    const src = try std.fmt.allocPrint(testing.allocator, "`include \"{s}\"\n`ABS_OK\n", .{abs});
+    const src = try testing.allocator.print("`include \"{s}\"\n`ABS_OK\n", .{abs});
     defer testing.allocator.free(src);
     const got = try runTest(src);
     defer testing.allocator.free(got);
@@ -760,9 +760,9 @@ test "the prelude snapshot replays exactly what running annex D.2/D.1/E.1 produc
     // strip marks included, or a replayed file renders columns differently
     // from a freshly run one.
     for (p.files, 1..) |f, id| {
-        try testing.expectEqualStrings(f.name, bag.fileName(@enumFromInt(id)));
-        try testing.expectEqualStrings(f.stripped, bag.fileText(@enumFromInt(id)));
-        try testing.expectEqualSlices(diag.StripMark, f.marks, bag.fileMarks(@enumFromInt(id)));
+        try testing.expectEqualStrings(f.name, bag.fileName(@fromBackingInt(@intCast(id))));
+        try testing.expectEqualStrings(f.stripped, bag.fileText(@fromBackingInt(@intCast(id))));
+        try testing.expectEqualSlices(diag.StripMark, f.marks, bag.fileMarks(@fromBackingInt(@intCast(id))));
     }
 }
 
@@ -832,15 +832,15 @@ pub fn expectDeepEqual(comptime T: type, a: T, b: T) !void {
             try testing.expectEqual(a.len, b.len);
             for (a, b) |x, y| try expectDeepEqual(p.child, x, y);
         },
-        .@"struct" => |s| inline for (s.fields) |f| {
-            try expectDeepEqual(f.type, @field(a, f.name), @field(b, f.name));
+        .@"struct" => |s| inline for (s.field_names, s.field_types) |name, F| {
+            try expectDeepEqual(F, @field(a, name), @field(b, name));
         },
         .@"union" => |u| {
             const Tag = u.tag_type.?;
             try testing.expectEqual(@as(Tag, a), @as(Tag, b));
-            inline for (u.fields) |f| {
-                if (@as(Tag, a) == @field(Tag, f.name))
-                    try expectDeepEqual(f.type, @field(a, f.name), @field(b, f.name));
+            inline for (u.field_names, u.field_types) |name, F| {
+                if (@as(Tag, a) == @field(Tag, name))
+                    try expectDeepEqual(F, @field(a, name), @field(b, name));
             }
         },
         .optional => |o| {
@@ -908,7 +908,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
             // The id is the claim, not just the membership: everything below the
             // parser addresses a name by its `StrId`.
             const id = seeded.strings.find(y) orelse return error.NameNotInMap;
-            try testing.expectEqual(i, @intFromEnum(id));
+            try testing.expectEqual(i, @backingInt(id));
         }
 
         // --- the expression store: every column of every row, and the three

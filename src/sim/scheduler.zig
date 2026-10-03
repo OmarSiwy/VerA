@@ -117,7 +117,7 @@ pub const Scheduler = struct {
     pub fn cancel(self: *Scheduler, handle: Handle) Error!bool {
         try self.checkMutation();
         if (self.payloadOf(handle) == null) return false;
-        self.slots.items(.state)[@intFromEnum(handle.slot)] = .cancelled;
+        self.slots.items(.state)[@backingInt(handle.slot)] = .cancelled;
         return true;
     }
 
@@ -140,7 +140,7 @@ pub const Scheduler = struct {
     /// recycles payload rows asks this before cancelling, to learn which row
     /// the cancel frees.
     pub fn payloadOf(self: *const Scheduler, handle: Handle) ?u32 {
-        const index = @intFromEnum(handle.slot);
+        const index = @backingInt(handle.slot);
         if (index >= self.slots.len or self.slots.items(.generation)[index] != handle.generation or
             self.slots.items(.state)[index] != .pending) return null;
         return self.slots.items(.payload)[index];
@@ -174,7 +174,7 @@ pub const Scheduler = struct {
         self.phase = .idle;
         while (true) {
             while (self.take(.active)) |slot| {
-                const index = @intFromEnum(slot);
+                const index = @backingInt(slot);
                 if (self.slots.items(.state)[index] == .cancelled) {
                     self.release(slot);
                     continue;
@@ -192,11 +192,11 @@ pub const Scheduler = struct {
             }
             var promoted = false;
             inline for (.{ Region.explicit_d2a, Region.inactive, Region.nba, Region.analog, Region.monitor }) |region| {
-                if (!promoted and self.heads[@intFromEnum(region)] != .none) {
-                    self.heads[0] = self.heads[@intFromEnum(region)];
-                    self.tails[0] = self.tails[@intFromEnum(region)];
-                    self.heads[@intFromEnum(region)] = .none;
-                    self.tails[@intFromEnum(region)] = .none;
+                if (!promoted and self.heads[@backingInt(region)] != .none) {
+                    self.heads[0] = self.heads[@backingInt(region)];
+                    self.tails[0] = self.tails[@backingInt(region)];
+                    self.heads[@backingInt(region)] = .none;
+                    self.tails[@backingInt(region)] = .none;
                     promoted = true;
                 }
             }
@@ -213,8 +213,8 @@ pub const Scheduler = struct {
         if (self.phase == .stopped) return null;
         for (self.heads) |head| {
             var cursor = head;
-            while (cursor != .none) : (cursor = self.slots.items(.next)[@intFromEnum(cursor)]) {
-                if (self.slots.items(.state)[@intFromEnum(cursor)] == .pending) return self.now;
+            while (cursor != .none) : (cursor = self.slots.items(.next)[@backingInt(cursor)]) {
+                if (self.slots.items(.state)[@backingInt(cursor)] == .pending) return self.now;
             }
         }
         self.purgeCancelled();
@@ -233,12 +233,12 @@ pub const Scheduler = struct {
         const payloads = self.slots.items(.payload);
         for (self.heads) |head| {
             var cursor = head;
-            while (cursor != .none) : (cursor = links[@intFromEnum(cursor)]) {
-                if (state[@intFromEnum(cursor)] == .pending) try out.append(a, .{ .time = self.now, .payload = payloads[@intFromEnum(cursor)] });
+            while (cursor != .none) : (cursor = links[@backingInt(cursor)]) {
+                if (state[@backingInt(cursor)] == .pending) try out.append(a, .{ .time = self.now, .payload = payloads[@backingInt(cursor)] });
             }
         }
         for (self.future.items) |entry| {
-            if (state[@intFromEnum(entry.slot)] == .pending) try out.append(a, .{ .time = entry.time, .payload = payloads[@intFromEnum(entry.slot)] });
+            if (state[@backingInt(entry.slot)] == .pending) try out.append(a, .{ .time = entry.time, .payload = payloads[@backingInt(entry.slot)] });
         }
     }
 
@@ -277,7 +277,7 @@ pub const Scheduler = struct {
     fn allocate(self: *Scheduler, region: Region, payload: u32) Error!Handle {
         const slot = if (self.free != .none) blk: {
             const id = self.free;
-            const index = @intFromEnum(id);
+            const index = @backingInt(id);
             self.free = self.slots.items(.next)[index];
             self.slots.items(.next)[index] = .none;
             self.slots.items(.payload)[index] = payload;
@@ -286,15 +286,15 @@ pub const Scheduler = struct {
             break :blk id;
         } else blk: {
             if (self.slots.len == std.math.maxInt(u32)) return error.TooManyEvents;
-            const id: SlotId = @enumFromInt(self.slots.len);
+            const id: SlotId = @fromBackingInt(@intCast(self.slots.len));
             try self.slots.append(self.allocator, .{ .payload = payload, .region = region });
             break :blk id;
         };
-        return .{ .slot = slot, .generation = self.slots.items(.generation)[@intFromEnum(slot)] };
+        return .{ .slot = slot, .generation = self.slots.items(.generation)[@backingInt(slot)] };
     }
 
     fn release(self: *Scheduler, slot: SlotId) void {
-        const index = @intFromEnum(slot);
+        const index = @backingInt(slot);
         if (self.slots.items(.generation)[index] == std.math.maxInt(u32)) {
             // Exhausted generations retire permanently; stale handles never alias.
             self.slots.items(.state)[index] = .retired;
@@ -307,26 +307,26 @@ pub const Scheduler = struct {
     }
 
     fn append(self: *Scheduler, region: Region, slot: SlotId) void {
-        const r = @intFromEnum(region);
+        const r = @backingInt(region);
         if (self.tails[r] == .none) {
             self.heads[r] = slot;
-        } else self.slots.items(.next)[@intFromEnum(self.tails[r])] = slot;
+        } else self.slots.items(.next)[@backingInt(self.tails[r])] = slot;
         self.tails[r] = slot;
     }
 
     fn take(self: *Scheduler, region: Region) ?SlotId {
-        const r = @intFromEnum(region);
+        const r = @backingInt(region);
         const slot = self.heads[r];
         if (slot == .none) return null;
-        self.heads[r] = self.slots.items(.next)[@intFromEnum(slot)];
+        self.heads[r] = self.slots.items(.next)[@backingInt(slot)];
         if (self.heads[r] == .none) self.tails[r] = .none;
-        self.slots.items(.next)[@intFromEnum(slot)] = .none;
+        self.slots.items(.next)[@backingInt(slot)] = .none;
         return slot;
     }
 
     fn purgeCancelled(self: *Scheduler) void {
         while (self.future.peek()) |entry| {
-            if (self.slots.items(.state)[@intFromEnum(entry.slot)] != .cancelled) break;
+            if (self.slots.items(.state)[@backingInt(entry.slot)] != .cancelled) break;
             _ = self.future.pop();
             self.release(entry.slot);
         }
@@ -342,7 +342,7 @@ pub const Scheduler = struct {
         while (self.future.peek()) |entry| {
             if (entry.time != self.now) break;
             _ = self.future.pop();
-            const index = @intFromEnum(entry.slot);
+            const index = @backingInt(entry.slot);
             if (self.slots.items(.state)[index] == .cancelled) {
                 self.release(entry.slot);
             } else self.append(self.slots.items(.region)[index], entry.slot);
@@ -358,10 +358,10 @@ pub const Scheduler = struct {
         var previous: SlotId = .none;
         var cursor = self.heads[0];
         while (cursor != .none) {
-            const index = @intFromEnum(cursor);
+            const index = @backingInt(cursor);
             const following = self.slots.items(.next)[index];
             if (self.slots.items(.region)[index] == .analog and self.slots.items(.payload)[index] == payload) {
-                if (previous == .none) self.heads[0] = following else self.slots.items(.next)[@intFromEnum(previous)] = following;
+                if (previous == .none) self.heads[0] = following else self.slots.items(.next)[@backingInt(previous)] = following;
                 if (self.tails[0] == cursor) self.tails[0] = previous;
                 self.release(cursor);
             } else previous = cursor;
@@ -568,7 +568,7 @@ test "current cancellation and generation retirement cannot alias new events" {
     try t.expectEqual(@as(u32, 2), scheduler.next().?.payload);
     var exhausted = try scheduler.schedule(.active, 3);
     exhausted.generation = std.math.maxInt(u32);
-    scheduler.slots.items(.generation)[@intFromEnum(exhausted.slot)] = exhausted.generation;
+    scheduler.slots.items(.generation)[@backingInt(exhausted.slot)] = exhausted.generation;
     try t.expect(try scheduler.cancel(exhausted));
     try t.expect(scheduler.next() == null);
     const fresh = try scheduler.schedule(.active, 4);
@@ -603,7 +603,7 @@ test "future NBA insertion order is preserved even with recycled slots" {
     _ = scheduler.next();
     const first = try scheduler.scheduleAt(10, .nba, 1);
     const second = try scheduler.scheduleAt(10, .nba, 2);
-    try t.expect(@intFromEnum(first.slot) > @intFromEnum(second.slot));
+    try t.expect(@backingInt(first.slot) > @backingInt(second.slot));
     try t.expectEqual(@as(u32, 1), scheduler.next().?.payload);
     try t.expectEqual(@as(u32, 2), scheduler.next().?.payload);
     try t.expect(scheduler.next() == null);

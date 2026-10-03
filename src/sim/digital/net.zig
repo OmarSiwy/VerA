@@ -169,9 +169,9 @@ pub fn reduceSignal(sig: Signal, hops: u32, resistive: u32) Signal {
     if (hops == 0) return sig;
     const one = struct {
         fn side(v: i8, k: u32) i8 {
-            var s = reduce(@enumFromInt(@abs(v)), false);
+            var s = reduce(@fromBackingInt(@intCast(@abs(v))), false);
             for (0..k) |_| s = reduce(s, true);
-            const m: i8 = @intCast(@intFromEnum(s));
+            const m: i8 = @intCast(@backingInt(s));
             return if (v < 0) -m else m;
         }
     };
@@ -348,8 +348,8 @@ pub const Signal = struct {
     /// part of the result because the strength specification ... specified
     /// that strength for an output with a value 0".
     pub fn of(b: Int.Bit, s0: Ast.Strength, s1: Ast.Strength) Signal {
-        const p0 = -@as(i8, @intCast(@intFromEnum(s0)));
-        const p1: i8 = @intCast(@intFromEnum(s1));
+        const p0 = -@as(i8, @intCast(@backingInt(s0)));
+        const p1: i8 = @intCast(@backingInt(s1));
         return switch (b) {
             .one => .{ .lo = p1, .hi = p1 },
             .zero => .{ .lo = p0, .hi = p0 },
@@ -614,8 +614,8 @@ pub fn udpEval(rows: []const UdpRow, sequential: bool, ins: []const Int.Bit, sta
 pub fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Error!Int.Literal {
     const words = (@as(usize, width) - 1) / 64 + 1;
     const planes = try a.alloc(u64, words * 2);
-    @memset(planes[0..words], if (@intFromEnum(fill) & 1 != 0) std.math.maxInt(u64) else 0);
-    @memset(planes[words..], if (@intFromEnum(fill) >> 1 != 0) std.math.maxInt(u64) else 0);
+    @memset(planes[0..words], if (@backingInt(fill) & 1 != 0) std.math.maxInt(u64) else 0);
+    @memset(planes[words..], if (@backingInt(fill) >> 1 != 0) std.math.maxInt(u64) else 0);
     const tail: u6 = @truncate(width);
     if (tail != 0) {
         const keep = (@as(u64, 1) << tail) - 1;
@@ -630,8 +630,8 @@ pub fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Err
 pub fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
     const at = @as(u64, 1) << @truncate(index);
     const word = index / 64;
-    if (@intFromEnum(b) & 1 != 0) value.values()[word] |= at else value.values()[word] &= ~at;
-    if (@intFromEnum(b) >> 1 != 0) value.unknowns()[word] |= at else value.unknowns()[word] &= ~at;
+    if (@backingInt(b) & 1 != 0) value.values()[word] |= at else value.values()[word] &= ~at;
+    if (@backingInt(b) >> 1 != 0) value.unknowns()[word] |= at else value.unknowns()[word] &= ~at;
 }
 
 /// The bits of plane word `w` that lie inside a `width`-bit value; the ones

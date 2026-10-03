@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const TestFn = std.builtin.TestFn;
+const TestFn = std.lang.TestFn;
 
 /// Every test artifact runs `contract`'s conformance checks (opt-in
 /// elsewhere, `contract.validating`), so a contract regression fails CI.
@@ -154,7 +154,11 @@ const Test = struct {
         environ: std.process.Environ,
     ) !TestResult {
         var test_result: TestResult = undefined;
-        std.testing.allocator_instance = .{};
+        // As the stock 0.17 test runner sets it up.
+        std.testing.allocator_instance = .init(std.heap.page_allocator, .{
+            .canary = 0xc3a701ba,
+            .check_write_after_free = true,
+        });
         std.testing.io_instance = .init(std.testing.allocator, .{ .environ = environ });
 
         const start = std.Io.Clock.Timestamp.now(io, .awake);
@@ -165,7 +169,7 @@ const Test = struct {
 
         // Cleanup
         std.testing.io_instance.deinit();
-        const is_mem_leak: bool = std.testing.allocator_instance.deinit() == .leak;
+        const is_mem_leak: bool = std.testing.allocator_instance.deinit() != 0;
 
         if (result) |_| {
             test_result = .{
@@ -254,7 +258,7 @@ const FileReporter = struct {
         .memory_leak = Color.magenta,
     };
 
-    const border = "=" ** 65;
+    const border = &@as([65]u8, @splat('='));
 
     file_writer: std.Io.File.Writer,
     mode: std.Io.Terminal.Mode,

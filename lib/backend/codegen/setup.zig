@@ -86,7 +86,7 @@ pub fn planSetup(self: *Gen) Error!void {
     if (self.lowered.table_samples.items.len != 0) return;
     if (self.core.lo_vals.len == 0 and self.jobs.display_name.len == 0) return;
     for (0..nv) |i| {
-        if (plan_setup.candidate(self.input(), self.sinv.val, @enumFromInt(@as(u32, @intCast(i))))) self.su.idx[i] = 0;
+        if (plan_setup.candidate(self.input(), self.sinv.val, @fromBackingInt(@intCast(@as(u32, @intCast(i)))))) self.su.idx[i] = 0;
     }
     self.plan.su_idx = self.su.idx;
     self.plan.su_on = true;
@@ -96,7 +96,7 @@ pub fn planSetup(self: *Gen) Error!void {
         self.plan.display_unit = false;
         try self.plan.analyze(.undef, true);
         for (self.plan.live.items) |lv| {
-            if (self.su.idx[@intFromEnum(lv)] != none_u32) root[@intFromEnum(lv)] = true;
+            if (self.su.idx[@backingInt(lv)] != none_u32) root[@backingInt(lv)] = true;
         }
     }
     for (self.jobs.list) |job| {
@@ -105,7 +105,7 @@ pub fn planSetup(self: *Gen) Error!void {
         try self.plan.analyze(job.target, false);
         self.plan.display_unit = false;
         for (self.plan.live.items) |lv| {
-            if (self.su.idx[@intFromEnum(lv)] != none_u32 and !self.plan.cached(lv)) root[@intFromEnum(lv)] = true;
+            if (self.su.idx[@backingInt(lv)] != none_u32 and !self.plan.cached(lv)) root[@backingInt(lv)] = true;
         }
     }
     @memset(self.su.idx, none_u32);
@@ -114,8 +114,8 @@ pub fn planSetup(self: *Gen) Error!void {
     var n: [3]u32 = @splat(0);
     for (0..3) |group| {
         for (0..nv) |i| {
-            if (!root[i] or rootGroup(self, @enumFromInt(@as(u32, @intCast(i)))) != group) continue;
-            const r = @intFromEnum(same[i]);
+            if (!root[i] or rootGroup(self, @fromBackingInt(@intCast(@as(u32, @intCast(i))))) != group) continue;
+            const r = @backingInt(same[i]);
             if (self.su.idx[r] == none_u32) {
                 self.su.idx[r] = n[group];
                 n[group] += 1;
@@ -133,7 +133,7 @@ pub fn planSetup(self: *Gen) Error!void {
 
 /// Returns which of `Setup`'s arrays holds `v`: 0 real, 1 integer, 2 a 0/1 flag.
 fn rootGroup(self: *const Gen, v: Mir.Value) u2 {
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     if (self.an.vty[i] == .real) return 0;
     const def = self.mir.valueDef(v);
     return if (def == .inst_result and Mir.opcode.get(self.mir.instOp(def.inst_result)).bool01) 2 else 1;
@@ -148,13 +148,13 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
     const Key = struct { op: Mir.Opcode, a: Opnd, b: Opnd, c: Opnd };
     const nv = self.an.nv;
     const same = try self.arena.alloc(Mir.Value, nv);
-    for (same, 0..) |*r, i| r.* = @enumFromInt(@as(u32, @intCast(i)));
+    for (same, 0..) |*r, i| r.* = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
     var seen: std.AutoHashMapUnmanaged(Key, Mir.Value) = .empty;
     const opnd = struct {
         fn f(g: *Gen, sm: []const Mir.Value, raw: u32) ?Opnd {
-            const v = g.an.rv(@enumFromInt(raw));
+            const v = g.an.rv(@fromBackingInt(@intCast(raw)));
             return switch (g.mir.valueDef(v)) {
-                .inst_result => .{ .tag = .val, .x = @intFromEnum(sm[@intFromEnum(v)]) },
+                .inst_result => .{ .tag = .val, .x = @backingInt(sm[@backingInt(v)]) },
                 .float_const => |k| .{ .tag = .f, .x = @bitCast(k) },
                 .int_const => |k| .{ .tag = .i, .x = @bitCast(k) },
                 .param_ref => |k| .{ .tag = .param, .x = k },
@@ -163,7 +163,7 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
         }
     }.f;
     for (Mir.Value.first_dynamic..nv) |i| {
-        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (!plan_setup.candidate(self.input(), self.sinv.val, v) or self.an.rv(v) != v) continue;
         const row = self.mir.instRow(self.mir.valueDef(v).inst_result);
         const none: Opnd = .{ .tag = .none, .x = 0 };
@@ -182,7 +182,7 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
             .phi, .branch, .jump, .call, .anew, .load, .store => continue,
         }
         if (row.op == .ine and key.b.tag == .i and key.b.x == 0 and key.a.tag == .val) {
-            const x: Mir.Value = @enumFromInt(@as(u32, @intCast(key.a.x)));
+            const x: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(key.a.x))));
             if (rootGroup(self, x) == 2 and plan_setup.candidate(self.input(), self.sinv.val, x) and placedOver(self, x, v)) {
                 same[i] = x;
                 continue;
@@ -202,25 +202,25 @@ fn placedOver(self: *const Gen, a: Mir.Value, b: Mir.Value) bool {
 }
 
 fn placeOf(self: *const Gen, v: Mir.Value) u32 {
-    const h = self.sinv.home[@intFromEnum(v)];
-    return if (h != none_u32) h else self.an.def_block[@intFromEnum(v)];
+    const h = self.sinv.home[@backingInt(v)];
+    return if (h != none_u32) h else self.an.def_block[@backingInt(v)];
 }
 
 /// Returns the text reading root `v`'s `Setup` field, as an f64 (`as_f64`)
 /// or in its own type. Arena-owned.
 pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     const k = self.su.idx[i];
     self.uses_model = true;
     if (rootGroup(self, v) == 2) {
-        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(@intFromBool(model.su.b[{d}])))", .{k});
-        return std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(model.su.b[{d}]))", .{k});
+        if (as_f64) return self.arena.print("@as(f64, @floatFromInt(@intFromBool(model.su.b[{d}])))", .{k});
+        return self.arena.print("@as(i64, @intFromBool(model.su.b[{d}]))", .{k});
     }
     if (self.an.vty[i] == .int) {
-        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.su.i[{d}]))", .{k});
-        return std.fmt.allocPrint(self.arena, "model.su.i[{d}]", .{k});
+        if (as_f64) return self.arena.print("@as(f64, @floatFromInt(model.su.i[{d}]))", .{k});
+        return self.arena.print("model.su.i[{d}]", .{k});
     }
-    return std.fmt.allocPrint(self.arena, "model.su.r[{d}]", .{k});
+    return self.arena.print("model.su.r[{d}]", .{k});
 }
 
 /// Emits `pub const Setup`, the type of `Model.su`.
@@ -402,13 +402,13 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
     const at = self.out.items.len;
     defer self.su.store_bytes += self.out.items.len - at;
     for (self.su.vals) |v| {
-        const k = self.su.idx[@intFromEnum(v)];
+        const k = self.su.idx[@backingInt(v)];
         try self.ind(depth);
         if (rootGroup(self, v) == 2) {
             try self.b("model.su.b[{d}] = (", .{k});
             try gen_render.renderVal(self, v, .int);
             try self.b(") != 0;\n", .{});
-        } else if (self.an.vty[@intFromEnum(v)] == .int) {
+        } else if (self.an.vty[@backingInt(v)] == .int) {
             try self.b("model.su.i[{d}] = ", .{k});
             try gen_render.renderVal(self, v, .int);
             try self.b(";\n", .{});

@@ -238,7 +238,7 @@ pub fn tick(r: *Run, a: std.mem.Allocator) Error!void {
 pub fn close(r: *Run) Error!void {
     for (r.evcd.files.items) |*f| if (f.started) {
         var buf: [64]u8 = undefined;
-        try put(r, f, std.fmt.bufPrint(&buf, "$vcdclose #{d} $end\n", .{r.scheduler.now}) catch unreachable);
+        try put(r, f, std.mem.print(&buf, "$vcdclose #{d} $end\n", .{r.scheduler.now}) catch unreachable);
     };
 }
 
@@ -330,7 +330,7 @@ fn state(r: *Run, a: std.mem.Allocator, p: Port) Error![]const u8 {
         chars[width + i] = '0' + s.s0;
         chars[2 * width + i] = '0' + s.s1;
     }
-    return std.fmt.allocPrint(a, "p{s} {s} {s}", .{ chars[0..width], chars[width .. 2 * width], chars[2 * width ..] });
+    return a.print("p{s} {s} {s}", .{ chars[0..width], chars[width .. 2 * width], chars[2 * width ..] });
 }
 
 /// `$dumpportsoff`'s X: Table 18-7's unknown of the port's direction.
@@ -345,7 +345,7 @@ fn unknown(a: std.mem.Allocator, r: *Run, p: Port) Error![]const u8 {
     @memset(chars, c);
     const sixes = try a.alloc(u8, width);
     @memset(sixes, '6');
-    return std.fmt.allocPrint(a, "p{s} {s} {s}", .{ chars, sixes, sixes });
+    return a.print("p{s} {s} {s}", .{ chars, sixes, sixes });
 }
 
 /// Is `scope` the instance `inst` or inside it?

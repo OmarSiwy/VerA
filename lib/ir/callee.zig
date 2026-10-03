@@ -220,14 +220,15 @@ pub const Callee = enum(u8) {
     /// that spells one is refused (E1014), since its facts assume lowering's
     /// arguments.
     pub fn synthetic(c: Callee) bool {
-        return @intFromEnum(c) >= @intFromEnum(Callee.@"$held_int") and c != .systf;
+        return @backingInt(c) >= @backingInt(Callee.@"$held_int") and c != .systf;
     }
 };
 
 const by_name = std.StaticStringMap(Callee).initComptime(blk: {
-    const fields = @typeInfo(Callee).@"enum".fields;
-    var kvs: [fields.len - 1]struct { []const u8, Callee } = undefined;
-    for (fields[0 .. fields.len - 1], &kvs) |f, *kv| kv.* = .{ f.name, @enumFromInt(f.value) };
+    const e = @typeInfo(Callee).@"enum";
+    const n = e.field_names.len;
+    var kvs: [n - 1]struct { []const u8, Callee } = undefined;
+    for (e.field_names[0 .. n - 1], e.field_values[0 .. n - 1], &kvs) |name, value, *kv| kv.* = .{ name, @fromBackingInt(@intCast(value)) };
     break :blk kvs;
 });
 

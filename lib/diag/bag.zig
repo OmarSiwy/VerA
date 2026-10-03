@@ -138,7 +138,7 @@ pub const Bag = struct {
     /// The first file registered is `.root`, so the preprocessor must open the
     /// top-level compilation unit before any `include.
     pub fn addFile(self: *Bag, name: []const u8, text: []const u8) Allocator.Error!diag_location.FileId {
-        const id: diag_location.FileId = @enumFromInt(@as(u16, @intCast(self.files.items.len)));
+        const id: diag_location.FileId = @fromBackingInt(@intCast(@as(u16, @intCast(self.files.items.len))));
         try self.files.append(self.arena, .{ .name = name, .text = text });
         return id;
     }
@@ -147,7 +147,7 @@ pub const Bag = struct {
     /// from here on indexes. The original stays for rendering and `marks` maps
     /// stripped offsets back into it. An unknown `id` is ignored.
     pub fn setStrippedText(self: *Bag, id: diag_location.FileId, stripped: []const u8, marks: []const diag_location.StripMark) void {
-        const i = @intFromEnum(id);
+        const i = @backingInt(id);
         if (i >= self.files.items.len) return;
         const f = &self.files.items[i];
         f.raw = f.text;
@@ -156,13 +156,13 @@ pub const Bag = struct {
     }
 
     pub fn fileName(self: *const Bag, id: diag_location.FileId) []const u8 {
-        const i = @intFromEnum(id);
+        const i = @backingInt(id);
         if (i >= self.files.items.len) return "<source>";
         return self.files.items[i].name;
     }
 
     pub fn fileText(self: *const Bag, id: diag_location.FileId) []const u8 {
-        const i = @intFromEnum(id);
+        const i = @backingInt(id);
         if (i >= self.files.items.len) return "";
         return self.files.items[i].text;
     }
@@ -170,14 +170,14 @@ pub const Bag = struct {
     /// What RENDERING shows: the file as the user wrote it, comments and all.
     /// Falls back to `text` for a file nothing was stripped from.
     pub fn sourceText(self: *const Bag, id: diag_location.FileId) []const u8 {
-        const i = @intFromEnum(id);
+        const i = @backingInt(id);
         if (i >= self.files.items.len) return "";
         const f = self.files.items[i];
         return if (f.raw.len != 0) f.raw else f.text;
     }
 
     pub fn fileMarks(self: *const Bag, id: diag_location.FileId) []const diag_location.StripMark {
-        const i = @intFromEnum(id);
+        const i = @backingInt(id);
         if (i >= self.files.items.len) return &.{};
         return self.files.items[i].to_src;
     }
@@ -333,7 +333,7 @@ pub const Bag = struct {
     fn lessThan(_: void, x: diag_entry.Record, y: diag_entry.Record) bool {
         if (x.span.start != y.span.start) return x.span.start < y.span.start;
         if (x.span.end != y.span.end) return x.span.end < y.span.end;
-        return @intFromEnum(x.code) < @intFromEnum(y.code);
+        return @backingInt(x.code) < @backingInt(y.code);
     }
 };
 

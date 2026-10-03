@@ -230,7 +230,7 @@ status_args: [status_arg_max]Mir.Value = @splat(.undef),
 
 // ---- which kernels the device needs ----
 /// The device-side facilities the model needs (see `Kernel`).
-uses: std.EnumSet(Kernel) = .initEmpty(),
+uses: std.EnumSet(Kernel) = .empty,
 
 // ---- §7.3.6.5/§8 the discrete half ----
 /// §7.3.6.5/§8.5 a mixed module's digital-owned values the analog block may

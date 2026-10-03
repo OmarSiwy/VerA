@@ -236,7 +236,7 @@ pub export fn vpi_control(operation: c_int, ...) callconv(.c) c_int {
 }
 
 /// C calling convention because `@cVaArg` is only legal in one.
-fn control(operation: c_int, ap: *std.builtin.VaList) callconv(.c) c_int {
+fn control(operation: c_int, ap: *std.lang.VaList) callconv(.c) c_int {
     root.clearError();
     switch (operation) {
         vpiFinish => {

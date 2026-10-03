@@ -1355,15 +1355,15 @@ pub fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseS
                 .ac_stim // §4.6.3
             else
                 return;
-            const psd = self.noise_psd.get(@intFromEnum(e)) orelse
+            const psd = self.noise_psd.get(@backingInt(e)) orelse
                 if (kind == .ac_stim) [2]Mir.Value{ .f_one, .f_zero } // §4.6.3 mag 1, phase 0
                 else [2]Mir.Value{ .f_zero, .f_one };
             try addNoiseSrc(self.arena, out, .{
                 .kind = kind,
-                .id = @intFromEnum(e),
+                .id = @backingInt(e),
                 .pwr = psd[0],
                 .exp = psd[1],
-                .table = self.noise_tab.get(@intFromEnum(e)) orelse &.{},
+                .table = self.noise_tab.get(@backingInt(e)) orelse &.{},
                 .tok = ex.mainTok(e),
                 .name = if (kind == .ac_stim) acAnalysisName(self, e) else noiseName(self, e),
             });

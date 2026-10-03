@@ -1600,7 +1600,7 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
     // and §9.13.3 binds this family to that listing, so the updated seed must
     // land where the reference's `long *seed` did.
     if (write_back) |s| {
-        const next_name = try std.fmt.allocPrint(self.arena, "{s}_next", .{d.kernel});
+        const next_name = try self.arena.print("{s}_next", .{d.kernel});
         const next = try self.call(next_name, vals.items);
         try self.builder.writeVariable(s.place, self.cur, try self.toInt(.{ .v = next, .ty = .real }));
     }
@@ -1615,13 +1615,13 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 /// neither an unevaluated branch nor a discarded Newton iterate consumes it.
 fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
     const scope = if (self.inlining.items.len != 0) self.inlining.items[self.inlining.items.len - 1] else self.scope_path;
-    const key = try std.fmt.allocPrint(self.arena, "{d}:{s}:{d}", .{ self.cur_unit, scope, tok });
+    const key = try self.arena.print("{d}:{s}:{d}", .{ self.cur_unit, scope, tok });
     const entry = try self.event_state.rng_internal.getOrPut(self.arena, key);
     if (!entry.found_existing) {
-        const name = try std.fmt.allocPrint(self.arena, "$rng.{d}", .{self.event_state.rng_internal.count() - 1});
+        const name = try self.arena.print("$rng.{d}", .{self.event_state.rng_internal.count() - 1});
         entry.value_ptr.* = .{
-            .seed = try lower_param.hiddenHeldInt(self, try std.fmt.allocPrint(self.arena, "{s}.seed", .{name})),
-            .ready = try lower_param.hiddenHeldInt(self, try std.fmt.allocPrint(self.arena, "{s}.ready", .{name})),
+            .seed = try lower_param.hiddenHeldInt(self, try self.arena.print("{s}.seed", .{name})),
+            .ready = try lower_param.hiddenHeldInt(self, try self.arena.print("{s}.ready", .{name})),
         };
     }
     return entry.value_ptr.*;

@@ -133,7 +133,7 @@ const Pool = struct {
         if (c.n < 2) return; // one member gains nothing over its own build
         const cfg = pool.ctx.cfg;
         const built = try vera.tb.buildBatch(pool.gpa, pool.io, staged[0..c.n], .{
-            .work_dir = try std.fmt.allocPrint(arena, "{s}/torture-batch/{d}", .{ options.work_root, k }),
+            .work_dir = try arena.print("{s}/torture-batch/{d}", .{ options.work_root, k }),
             .contract = options.contract,
             .name = "batch",
             .zig_exe = options.zig_exe,
@@ -603,7 +603,7 @@ fn countVerdicts(text: []const u8) Tally {
 fn linkBatched(gpa: std.mem.Allocator, io: Io, arena: std.mem.Allocator, work: []const u8, b: Batched) !vera.tb.BuildResult {
     var dir = try Io.Dir.cwd().openDir(io, work, .{});
     defer dir.close(io);
-    const name = try std.fmt.allocPrint(arena, vera.tb.batch_argv0 ++ "{d}", .{b.index});
+    const name = try arena.print(vera.tb.batch_argv0 ++ "{d}", .{b.index});
     dir.deleteFile(io, name) catch |e| switch (e) {
         error.FileNotFound => {},
         else => return e,
@@ -620,7 +620,7 @@ fn linkBatched(gpa: std.mem.Allocator, io: Io, arena: std.mem.Allocator, work: [
 /// `<work>/<name>`, so from inside `work` it is `./<name>`.
 fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, expected_exit: u8, plusargs: []const []const u8) ![]const u8 {
     var argv0_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const argv0 = try std.fmt.bufPrint(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
+    const argv0 = try std.mem.print(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
     const argv = try gpa.alloc([]const u8, 1 + plusargs.len);
     defer gpa.free(argv);
     argv[0] = argv0;
@@ -634,7 +634,7 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, ex
     switch (r.term) {
         .exited => |c| if (c != expected_exit) {
             var line: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&line, "FAIL: <testbench exit {d}, expected {d}>\n", .{ c, expected_exit }) catch unreachable;
+            const s = std.mem.print(&line, "FAIL: <testbench exit {d}, expected {d}>\n", .{ c, expected_exit }) catch unreachable;
             try text.appendSlice(gpa, s);
         },
         else => try text.appendSlice(gpa, "FAIL: <testbench did not exit normally>\n"),
@@ -667,7 +667,7 @@ test "a batch runs each member by argv[0]; one member that does not compile fail
     var dirs: [tags.len][]const u8 = undefined;
     for (&staged, &dirs, tags) |*s, *dir, tag| {
         dir.* = try std.fs.path.join(arena, &.{ work, tag });
-        const device = if (std.mem.eql(u8, tag, "broken")) "pub const tag = 1 +;\n" else try std.fmt.allocPrint(arena, "pub const tag = \"{s}\";\n", .{tag});
+        const device = if (std.mem.eql(u8, tag, "broken")) "pub const tag = 1 +;\n" else try arena.print("pub const tag = \"{s}\";\n", .{tag});
         s.* = try vera.tb.stageExe(arena, io, device, runner, .{ .work_dir = dir.*, .contract = options.contract, .name = tag, .zig_exe = options.zig_exe });
     }
     const opts: vera.tb.BuildOptions = .{ .work_dir = work ++ "/batch", .contract = options.contract, .name = "batch", .zig_exe = options.zig_exe, .strip = true };
@@ -686,7 +686,7 @@ test "a batch runs each member by argv[0]; one member that does not compile fail
         defer link.deinit(gpa);
         const got = try capture(gpa, io, link.ok, dirs[i], 0, &.{ "+x=1", "+y" });
         defer gpa.free(got);
-        try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s} +x=1 +y\n", .{tags[i]}), got);
+        try std.testing.expectEqualStrings(try arena.print("{s} +x=1 +y\n", .{tags[i]}), got);
     }
 
     const bad = try vera.tb.buildBatch(gpa, io, &staged, opts);

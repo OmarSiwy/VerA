@@ -285,7 +285,7 @@ fn emitBody(
                 const v = it.next() orelse continue;
                 if (v[0] != 'v' or !declares(body, v)) continue;
                 break :blk try spell(arena, v);
-            } else try std.fmt.allocPrint(arena, "{s}, {s}", .{
+            } else try arena.print("{s}, {s}", .{
                 try spell(arena, it.next() orelse continue),
                 try spell(arena, it.next() orelse continue),
             });
@@ -411,7 +411,7 @@ fn modelParams(
 fn primitiveBody(prim: []const u8) []const u8 {
     const prelude = @import("preprocessor.zig").spice_primitives;
     var buf: [64]u8 = undefined;
-    const header = std.fmt.bufPrint(&buf, "\nmodule {s}(", .{prim}) catch return "";
+    const header = std.mem.print(&buf, "\nmodule {s}(", .{prim}) catch return "";
     const at = std.mem.indexOf(u8, prelude, header) orelse return "";
     const rest = prelude[at + header.len ..];
     const end = std.mem.indexOf(u8, rest, "\nendmodule") orelse return "";
@@ -502,7 +502,7 @@ fn isSpiceName(t: []const u8) bool {
 fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
     // ponytail: share the lexer's keyword lookup; extend the common table for new keywords.
     if (isIdent(t) and token.lookupKeyword(t) == null) return t;
-    return std.fmt.allocPrint(arena, "\\{s} ", .{t});
+    return arena.print("\\{s} ", .{t});
 }
 
 // ---------------------------------------------------------------------------
@@ -514,8 +514,7 @@ test "model_types names a real Table E.1 module with the ports it lists" {
     // wrong without any other test noticing.
     const prelude = @import("preprocessor.zig").spice_primitives;
     for (model_types) |r| {
-        const header = try std.fmt.allocPrint(
-            std.testing.allocator,
+        const header = try std.testing.allocator.print(
             "module {s}({s});",
             .{ r.prim, r.ports },
         );

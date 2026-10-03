@@ -371,7 +371,7 @@ pub fn common(a: Type, b: Type) Type {
 }
 
 pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
-    const i = @intFromEnum(e);
+    const i = @backingInt(e);
     return switch (self.ty_state[i]) {
         .one => self.types[i],
         .many => self.spec_types.get(.{ .spec = self.specOf(self.scope), .e = e }).?,
@@ -387,7 +387,7 @@ pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
 /// its calltf returns. Remember its lexical context without evaluating or
 /// requiring a value from scope/array/event arguments.
 fn rememberVpiScope(self: *Run, e: Ast.ExprId) Error!void {
-    try self.vpi_expr_scopes.put(self.arena, .{ self.instanceOf(self.scope), @intFromEnum(e) }, self.scope);
+    try self.vpi_expr_scopes.put(self.arena, .{ self.instanceOf(self.scope), @backingInt(e) }, self.scope);
 }
 
 fn rememberVpiArgument(self: *Run, e: Ast.ExprId, depth: u16) Error!void {
@@ -665,14 +665,14 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             if (self.systf) |u| if (u.kind(name)) |k| switch (k) {
                 .func => |t| {
                     for (ex.args(e)) |arg| try rememberVpiArgument(self, arg, depth + 1);
-                    self.sys_calls[@intFromEnum(e)] = .user;
+                    self.sys_calls[@backingInt(e)] = .user;
                     break :blk t;
                 },
                 .task => {},
             };
             const f = sys_fns.get(name) orelse
                 return self.exprFail(e, "this digital expression form is not implemented");
-            self.sys_calls[@intFromEnum(e)] = f;
+            self.sys_calls[@backingInt(e)] = f;
             const args = ex.args(e);
             switch (f) {
                 // §17.7.1 gives `$time` the 64-bit `time` type and
@@ -853,7 +853,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         else => return self.exprFail(e, "this digital expression form is not implemented"), // else: the analog-only forms (access functions, filters, patterns, events), refused out loud
     };
     try self.spec_types.put(self.arena, key, ty);
-    const i = @intFromEnum(e);
+    const i = @backingInt(e);
     switch (self.ty_state[i]) {
         .untyped => {
             self.types[i] = ty;

@@ -90,7 +90,7 @@ pub const StmtSite = struct { scope: u32, stmt: Ast.StmtId, pc: u32 };
 /// A host's statement callbacks (IEEE 1364-2005 §27.33.1.1): `fire` runs
 /// "just before the indicated statement executes", at each pc set in `at`.
 pub const StmtHook = struct {
-    at: *const std.DynamicBitSetUnmanaged,
+    at: *const std.bit_set.Dynamic,
     fire: *const fn (r: *Run, pc: u32) Error!void,
 };
 
@@ -888,7 +888,7 @@ pub const Run = struct {
     pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!VpiValue {
         const saved = self.scope;
         defer self.scope = saved;
-        self.scope = self.vpi_expr_scopes.get(.{ instance, @intFromEnum(e) }) orelse instance;
+        self.scope = self.vpi_expr_scopes.get(.{ instance, @backingInt(e) }) orelse instance;
         try compile.checkExpr(self, e);
         if (compile.typeOf(self, e).real) return .{ .real = try exec.evalReal(self, a, e) };
         return .{ .bits = try exec.eval(self, a, e, 0) };
@@ -1819,7 +1819,7 @@ fn interned(r: *Run, name: []const u8) Error!Ast.StrId {
 fn scopePath(r: *Run, scope: u32) Error![]const u8 {
     if (scope == 0) return "";
     const info = r.scope_info.items[scope];
-    return std.fmt.allocPrint(r.arena, "{s}{s}.", .{ try scopePath(r, info.parent), r.file.str(info.name) });
+    return r.arena.print("{s}{s}.", .{ try scopePath(r, info.parent), r.file.str(info.name) });
 }
 
 /// §7.6 "the bidirectional terminals of all six devices shall be connected
@@ -2065,7 +2065,7 @@ fn armScope(r: *Run, scope: u32, s: Ast.StmtId, tok: u32) Error!u32 {
 fn selectable(r: *Run, scope: u32, name: Ast.StrId, k: i64, at: u32) Error!void {
     if (name == .none) return;
     var buf: [256]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "{s}[{d}]", .{ r.file.str(name), k }) catch return;
+    const text = std.mem.print(&buf, "{s}[{d}]", .{ r.file.str(name), k }) catch return;
     if (r.file.strings.find(text)) |str| try r.instances.put(r.arena, .{ .scope = scope, .str = str }, at);
 }
 
@@ -2127,7 +2127,7 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
             if (isRoot(r, at)) {
                 // §12.2.1: a defparam in one top-level module may name a
                 // parameter under another by its full hierarchical name.
-                const full = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+                const full = try r.arena.print("{s}.{s}", .{ r.file.str(info.name), path });
                 for (r.roots) |t| {
                     if (t == at) continue;
                     if (r.defparams.get(.{ .scope = t, .path = full })) |dp| break :blk .{ .e = dp.d.value, .scope = dp.decl };
@@ -2135,9 +2135,9 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
                 break;
             }
             path = if (info.index) |k|
-                try std.fmt.allocPrint(r.arena, "{s}[{d}].{s}", .{ r.file.str(info.name), k, path })
+                try r.arena.print("{s}[{d}].{s}", .{ r.file.str(info.name), k, path })
             else
-                try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(info.name), path });
+                try r.arena.print("{s}.{s}", .{ r.file.str(info.name), path });
             at = info.parent;
         }
         if (!p.is_local) for (over, 0..) |o, i| {
@@ -3058,7 +3058,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             };
         }
         set += @intFromBool(l.set);
-        if (@intFromEnum(l.precision) < @intFromEnum(finest)) finest = l.precision;
+        if (@backingInt(l.precision) < @backingInt(finest)) finest = l.precision;
     }
     if (set != 0 and set != file.modules.len) return r.fail(m.main_tok, "§19.8: it shall be an error if some modules have a `timescale specified and others do not", .{});
     // "The smallest time_precision argument of all the `timescale compiler
@@ -3068,7 +3068,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     const module_times = try arena.alloc(ModuleTime, file.modules.len);
     for (file.modules, locals, module_times) |*def, l, *mt| mt.* = .{
         .scale = Time.Scale.init(l.unit, l.precision, finest) catch return r.fail(def.main_tok, "invalid timescale", .{}),
-        .unit_exp = @intFromEnum(l.unit),
+        .unit_exp = @backingInt(l.unit),
     };
     r.module_times = module_times;
     const root_time = module_times[defOf(&r, m)];
@@ -3076,7 +3076,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.unit_exp = root_time.unit_exp;
     // §17.3: "the default ... is the smallest time precision argument of
     // all the `timescale compiler directives in the source description".
-    r.time_format.units = @intFromEnum(finest);
+    r.time_format.units = @backingInt(finest);
     r.finest = r.time_format.units;
     // Pass one: storage. Variables, array elements and nets share one slot
     // space, so one `store` publishes all three and wakes the same event
@@ -3110,7 +3110,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             x.* = try file.exprs.add(arena, .{
                 .tag = .ident,
                 .main_tok = m.main_tok,
-                .str = try file.intern(arena, try std.fmt.allocPrint(arena, "{s}.{s}", .{ row.name, row.lower_port })),
+                .str = try file.intern(arena, try arena.print("{s}.{s}", .{ row.name, row.lower_port })),
             });
         }
         r.inserts = mx.inserts;
@@ -3299,7 +3299,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.growing = null;
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
-    @memset(r.watch, .initEmpty());
+    @memset(r.watch, .empty);
     try exec.buildFanout(&r);
     try driver.arm(&r);
     return r;

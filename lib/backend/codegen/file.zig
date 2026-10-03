@@ -353,6 +353,9 @@ pub fn emitTopology(self: *Gen) Error!void {
             "internal";
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
+    // No unknowns: Zig 0.17 refuses an empty exhaustive `enum(u8)`, and
+    // `enum(noreturn)` would break the contract's `enum(u8)` tag.
+    if (self.names.u_names.len == 0) try self.w("    _,\n", .{});
     try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
     try self.w("/// The contract ABI this device was generated for (`contract.abi_version`).\npub const contract_abi: u32 = {d};\n\n", .{contract_abi});
 
@@ -642,8 +645,8 @@ fn deriveFlags(self: *Gen) Error!bool {
     try self.w("    const m = core(S, xr, model, &pin, .{{}}{s});\n", .{self.heldArg(true)});
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
-        const f = self.core.lo_idx[@intFromEnum(self.an.rv(p.flag))];
-        if (self.an.vty[@intFromEnum(self.an.rv(p.flag))] == .int)
+        const f = self.core.lo_idx[@backingInt(self.an.rv(p.flag))];
+        if (self.an.vty[@backingInt(self.an.rv(p.flag))] == .int)
             try self.w("    model.{s} = @floatFromInt(m.f{d});\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f })
         else
             try self.w("    model.{s} = m.f{d}.val();\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f });
@@ -681,7 +684,7 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
             .real => |v| std.math.lossyCast(i64, @round(v)),
             .str => 0,
         };
-        return std.fmt.allocPrint(self.arena, "{d}", .{if (p.integer32 and k == .int) Lower.wrap32(value) else value});
+        return self.arena.print("{d}", .{if (p.integer32 and k == .int) Lower.wrap32(value) else value});
     };
     const c = self.an.foldConst(p.default, true);
     if (c == null) if (p.folded) |k| return switch (want) {
@@ -690,12 +693,12 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
         // A real default on an integer parameter takes the same saturating
         // cast as the fold path below, because `Lower.Const.asInt` casts
         // unguarded.
-        .int => try std.fmt.allocPrint(self.arena, "{d}", .{switch (k) {
+        .int => try self.arena.print("{d}", .{switch (k) {
             .real => |r| std.math.lossyCast(i64, @round(r)),
             .int, .str => k.asInt(),
         }}),
         .str => switch (k) {
-            .str => |s| try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
+            .str => |s| try self.arena.print("\"{f}\"", .{std.zig.fmtString(s)}),
             else => "\"\"",
         },
     };
@@ -706,11 +709,11 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
         // fixes no overflow rule. The field, the fold (`Analysis.asI64`) and
         // the runtime `fi_cast` all saturate alike, so they agree. Upgrade
         // path: a lowering-time diagnostic on the default's span.
-        .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),
+        .int => try self.arena.print("{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),
         .str => blk: {
             const def = self.mir.valueDef(self.an.rv(p.default));
             break :blk if (def == .str_const)
-                try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(def.str_const)})
+                try self.arena.print("\"{f}\"", .{std.zig.fmtString(def.str_const)})
             else
                 "\"\"";
         },
@@ -730,13 +733,13 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
     // Render on the stack, then copy the survivor. `{d}` on an f64 is at
     // most ~24 bytes.
     var buf: [512]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{x}) catch unreachable;
+    const s = std.mem.print(&buf, "{d}", .{x}) catch unreachable;
     // ponytail: use the stdlib byte-set search; formatting stays unchanged.
     const has_point = std.mem.indexOfAny(u8, s, ".eE") != null;
     gop.value_ptr.* = if (has_point)
         try self.arena.dupe(u8, s)
     else
-        try std.fmt.allocPrint(self.arena, "{s}.0", .{s});
+        try self.arena.print("{s}.0", .{s});
     return gop.value_ptr.*;
 }
 
@@ -956,7 +959,7 @@ fn statusVal(self: *Gen, v: Mir.Value) Error![]const u8 {
     if (v == .undef) return "0.0";
     if (self.an.foldConst(v, false)) |c| return fmtF64(self, c.f);
     const k = gen_dispatch.coreIdx(self, self.an.rv(v)).?;
-    return std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
+    return self.arena.print("m.f{d}.val()", .{k});
 }
 
 /// §9.7.3 `status_sites`, `zStatusStore` (which `eval`, `q` and `evalQ` call
@@ -1071,7 +1074,7 @@ fn emitTpHelpers(self: *Gen) Error!void {
 
 /// Records `Instance` field `fmt` as history `stateCtl` commits and reverts.
 fn keepHist(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
-    try self.hist.append(self.arena, try std.fmt.allocPrint(self.arena, fmt, args));
+    try self.hist.append(self.arena, try self.arena.print(fmt, args));
 }
 
 /// Emits a §3.2.2/§5.10 held array's `Instance` field: plain values,

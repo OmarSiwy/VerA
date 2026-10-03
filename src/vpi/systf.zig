@@ -307,7 +307,7 @@ pub export fn vpi_register_systf(systf_data_p: ?*const SystfData) vpiHandle {
         return null;
     }
     const name = checkName("vpi_register_systf", d.tfname, .digital) orelse return null;
-    const copy = gpa.dupeZ(u8, name) catch return oom();
+    const copy = gpa.dupeSentinel(u8, name, 0) catch return oom();
     var reg = d.*;
     reg.tfname = copy.ptr;
     const h = add(.{ .domain = .digital, .digital = reg, .name = copy });
@@ -332,7 +332,7 @@ pub export fn vpi_register_analog_systf(systf_data_p: ?*const AnalogSystfData) v
         return null;
     }
     const name = checkName("vpi_register_analog_systf", d.tfname, .analog) orelse return null;
-    const copy = gpa.dupeZ(u8, name) catch return oom();
+    const copy = gpa.dupeSentinel(u8, name, 0) catch return oom();
     var reg = d.*;
     reg.tfname = copy.ptr;
     const h = add(.{ .domain = .analog, .analog = reg, .name = copy });

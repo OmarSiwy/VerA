@@ -99,7 +99,7 @@ pub const Prover = struct {
 
     /// Every read of a Value goes through the alias map (ssa.zig contract).
     fn idxOf(self: *const Prover, v: Mir.Value) u32 {
-        return @intFromEnum(self.mir.resolveAlias(v));
+        return @backingInt(self.mir.resolveAlias(v));
     }
 
     fn ivOf(self: *const Prover, v: Mir.Value) proof_lattice.Interval {
@@ -126,7 +126,7 @@ pub const Prover = struct {
         @memset(self.guard, .{});
 
         for (0..n) |i| {
-            const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             switch (self.mir.valueDef(v)) {
                 // §4.2 constant expressions: exact.
                 .float_const => |c| {
@@ -295,7 +295,7 @@ pub const Prover = struct {
         var n_classes: u32 = 0;
 
         for (0..self.mir.insts.len) |i| {
-            const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
+            const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const op = self.mir.instOp(inst);
             // §3.2.2 two `anew`s of one array, or two equal stores, are two
             // versions of one storage at two times, not one value.
@@ -345,7 +345,7 @@ pub const Prover = struct {
         self.countUses();
 
         for (0..self.mir.insts.len) |i| {
-            const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(i)));
+            const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             if (self.mir.instOp(inst) != .select) continue;
             const t = self.mir.instData(inst).ternary;
             try self.markArm(t.then_val, t.cond, true);
@@ -365,7 +365,7 @@ pub const Prover = struct {
             self.uses[self.idxOf(c.react_val)] += 1;
         }
         for (0..mir.blockCount()) |b| {
-            var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(b))));
+            var it = mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(b)))));
             while (it.next()) |inst| {
                 if (mir.instOp(inst) == .phi) {
                     if (mir.hasAlias(mir.instResult(inst))) continue;
@@ -398,7 +398,7 @@ pub const Prover = struct {
             budget -= 1;
             const i = self.idxOf(v);
             if (self.uses[i] != 1 or self.guard[i].count != 0) continue;
-            const def = self.mir.valueDef(@enumFromInt(i));
+            const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
             if (def != .inst_result) continue;
             self.guard[i] = ref;
             const inst = def.inst_result;
@@ -592,8 +592,8 @@ pub const Prover = struct {
                 for (self.an.blockInstsFlat(parent)) |inst| {
                     const d = self.mir.instData(inst);
                     if (d != .branch) continue;
-                    const taken = @intFromEnum(d.branch.then_block) == b;
-                    if (!taken and @intFromEnum(d.branch.else_block) != b) continue;
+                    const taken = @backingInt(d.branch.then_block) == b;
+                    if (!taken and @backingInt(d.branch.else_block) != b) continue;
                     if (self.an.foldConst(d.branch.cond, false)) |c| {
                         if ((c.f != 0) != taken) self.domain_active = false;
                     }
@@ -1190,21 +1190,20 @@ pub const Prover = struct {
         const rv = self.mir.resolveAlias(v);
         switch (self.mir.valueDef(rv)) {
             .param_ref => |pi| return if (pi < self.lowered.params.items.len)
-                std.fmt.allocPrint(self.arena, "parameter `{s}`", .{self.lowered.params.items[pi].name}) catch "a parameter"
+                self.arena.print("parameter `{s}`", .{self.lowered.params.items[pi].name}) catch "a parameter"
             else
                 "a parameter",
-            .block_param => |n| return std.fmt.allocPrint(
-                self.arena,
+            .block_param => |n| return self.arena.print(
                 "a probe of node `{s}`",
                 .{self.lowered.nodeName(@intCast(n))},
             ) catch "a node probe",
-            .float_const => |c| return std.fmt.allocPrint(self.arena, "the constant {d}", .{c}) catch "a constant",
-            .int_const => |c| return std.fmt.allocPrint(self.arena, "the constant {d}", .{c}) catch "a constant",
+            .float_const => |c| return self.arena.print("the constant {d}", .{c}) catch "a constant",
+            .int_const => |c| return self.arena.print("the constant {d}", .{c}) catch "a constant",
             .inst_result => |inst| {
                 if (self.mir.instOp(inst) == .call)
-                    return std.fmt.allocPrint(self.arena, "the result of `{s}()`", .{self.mir.instData(inst).call.name}) catch "a call result";
+                    return self.arena.print("the result of `{s}()`", .{self.mir.instData(inst).call.name}) catch "a call result";
                 if (self.unboundedLeaf(rv)) |leaf|
-                    return std.fmt.allocPrint(self.arena, "an expression of {s}", .{self.describe(leaf)}) catch "an expression";
+                    return self.arena.print("an expression of {s}", .{self.describe(leaf)}) catch "an expression";
                 return "a computed expression";
             },
             .undef, .str_const => return "an unknown value",
@@ -1223,7 +1222,7 @@ pub const Prover = struct {
             n -= 1;
             const v = stack[n];
             const i = self.idxOf(v);
-            switch (self.mir.valueDef(@enumFromInt(i))) {
+            switch (self.mir.valueDef(@fromBackingInt(@intCast(i)))) {
                 .param_ref, .block_param => if (!self.iv[i].bounded()) return v,
                 .inst_result => |inst| {
                     if (self.mir.instOp(inst) == .phi) continue;
@@ -1242,7 +1241,7 @@ pub const Prover = struct {
 
     fn ivText(buf: []u8, iv: proof_lattice.Interval) []const u8 {
         if (iv.lo == -math.inf(f64) and iv.hi == math.inf(f64)) return " with no known bounds";
-        return std.fmt.bufPrint(buf, " with known range {c}{d}:{d}{c}", .{
+        return std.mem.print(buf, " with known range {c}{d}:{d}{c}", .{
             @as(u8, if (iv.lo_open) '(' else '['),
             iv.lo,
             iv.hi,
@@ -1286,7 +1285,7 @@ pub const Prover = struct {
                     culprit = v;
                     break;
                 }
-                const def = self.mir.valueDef(@enumFromInt(i));
+                const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
                 if (def != .inst_result) continue;
                 const inst = def.inst_result;
                 if (self.mir.instOp(inst) == .phi) {

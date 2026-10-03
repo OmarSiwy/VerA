@@ -177,7 +177,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
     // (2) §4.5 stateful operators. `Instance` state fields are keyed on these
     // names, so adding an unrelated operator must not rename existing state.
     for (0..mir.blockCount()) |bi| {
-        const block: Mir.Block = @enumFromInt(bi);
+        const block: Mir.Block = @fromBackingInt(@intCast(bi));
         var insts = mir.blockInsts(block);
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call) continue;

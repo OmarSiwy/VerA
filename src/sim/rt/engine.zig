@@ -70,10 +70,11 @@ pub const tag = blk: {
 fn layout(h: *std.hash.Wyhash, comptime T: type, comptime depth: u32) void {
     h.update(std.mem.asBytes(&[2]u64{ @alignOf(T), @sizeOf(T) }));
     if (depth == 0 or @typeInfo(T) != .@"struct") return;
-    inline for (@typeInfo(T).@"struct".fields) |f| {
-        h.update(f.name);
-        h.update(std.mem.asBytes(&@as(u64, @offsetOf(T, f.name))));
-        layout(h, f.type, depth - 1);
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| {
+        h.update(name);
+        h.update(std.mem.asBytes(&@as(u64, @offsetOf(T, name))));
+        layout(h, F, depth - 1);
     }
 }
 

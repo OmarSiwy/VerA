@@ -197,7 +197,7 @@ fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, f
         for (decl.ranges) |r| {
             const off = r.strings orelse continue;
             const contains = for (self.file.exprs.list(off)) |id| {
-                if (std.mem.eql(u8, c.str, self.file.str(@enumFromInt(id)))) break true;
+                if (std.mem.eql(u8, c.str, self.file.str(@fromBackingInt(@intCast(id))))) break true;
             } else false;
             switch (r.kind) {
                 .from => {
@@ -663,7 +663,7 @@ pub fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []co
     @memcpy(buf[0..name.len], name);
     var n = name.len;
     for (idx) |i| {
-        const s = std.fmt.bufPrint(buf[n..], "[{d}]", .{i}) catch
+        const s = std.mem.print(buf[n..], "[{d}]", .{i}) catch
             return try elemName(self, name, idx);
         n += s.len;
     }
@@ -785,7 +785,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     const held_key = if (prefix.len == 0)
         name
     else
-        try std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
+        try self.arena.print("{s}{s}", .{ prefix, name });
     // §5.10. `.string` is deliberately excluded: a string never reaches the
     // residual (§3.3 strings only feed §9.4 tasks, which re-run every
     // evaluation anyway), so a persistent slot for one would be storage
@@ -883,7 +883,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
 /// blocks may spell a local the same way (§5.3.2's whole point).
 fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
     if (prefix.len == 0) return name;
-    return std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
+    return self.arena.print("{s}{s}", .{ prefix, name });
 }
 
 /// Codegen makes one `Instance` field per `held_vars` entry out of its name, so
@@ -892,7 +892,7 @@ fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u
 /// and so, by §5.3.2, two locations that happen to share a path.
 fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
     for (self.out.held_vars.items) |h| {
-        if (std.mem.eql(u8, h.name, name)) return std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
+        if (std.mem.eql(u8, h.name, name)) return self.arena.print("{s}.{d}", .{ name, idx });
     }
     return name;
 }
@@ -1044,7 +1044,7 @@ pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| try vars.put(self.arena, v.name, {});
     const ex = &self.file.exprs;
     for (0..ex.nodes.len) |i| {
-        const e: Ast.ExprId = @enumFromInt(@as(u32, @intCast(i)));
+        const e: Ast.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (ex.tag(e) != .index or !runtimeSub(self, &vars, module.genvars, ex.rhs(e))) continue;
         var base = ex.lhs(e);
         while (ex.tag(base) == .index) base = ex.lhs(base);
@@ -1341,9 +1341,9 @@ const Exposed = struct {
                 // The same frames `scanHeld` keeps, so the keys agree.
                 const named = b.name != .none;
                 if (named) {
-                    const outer = if (self.param_state.held_frames.getLastOrNull()) |f| f.prefix else "";
+                    const outer = if (self.param_state.held_frames.last()) |f| f.prefix else "";
                     try self.param_state.held_frames.append(self.arena, .{
-                        .prefix = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer, self.file.str(b.name) }),
+                        .prefix = try self.arena.print("{s}{s}.", .{ outer, self.file.str(b.name) }),
                         .vars = b.vars,
                     });
                 }
@@ -1485,7 +1485,7 @@ fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
         const f = self.param_state.held_frames.items[i];
         for (f.vars) |v| {
             if (!self.file.strings.eql(v.name, name)) continue;
-            return std.fmt.allocPrint(self.arena, "{s}{s}", .{ f.prefix, name });
+            return self.arena.print("{s}{s}", .{ f.prefix, name });
         }
     }
     return name;
@@ -1515,9 +1515,9 @@ fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
             // opens a frame; an unnamed `begin`'s declarations are ordinary.
             const named = b.name != .none;
             if (named) {
-                const outer = if (self.param_state.held_frames.getLastOrNull()) |f| f.prefix else "";
+                const outer = if (self.param_state.held_frames.last()) |f| f.prefix else "";
                 try self.param_state.held_frames.append(self.arena, .{
-                    .prefix = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer, self.file.str(b.name) }),
+                    .prefix = try self.arena.print("{s}{s}.", .{ outer, self.file.str(b.name) }),
                     .vars = b.vars,
                 });
             }

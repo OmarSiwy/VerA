@@ -43,7 +43,7 @@ pub const Quantum = enum(i5) {
             1e-3,  1e-2,  1e-1,  1e0,   1e1,   1e2,
         };
         for (decades, 0..) |value, i| {
-            if (seconds == value) return @enumFromInt(@as(i6, @intCast(i)) - 15);
+            if (seconds == value) return @fromBackingInt(@intCast(@as(i6, @intCast(i)) - 15));
         }
         return error.InvalidQuantum;
     }
@@ -56,9 +56,9 @@ pub const Scale = struct {
     global_per_local: u57,
 
     pub fn init(unit: Quantum, precision: Quantum, global: Quantum) Error!Scale {
-        const u: i6 = @intFromEnum(unit);
-        const p: i6 = @intFromEnum(precision);
-        const g: i6 = @intFromEnum(global);
+        const u: i6 = @backingInt(unit);
+        const p: i6 = @backingInt(precision);
+        const g: i6 = @backingInt(global);
         if (p > u) return error.PrecisionTooCoarse;
         if (g > p) return error.GlobalPrecisionTooCoarse;
         return .{
@@ -235,8 +235,8 @@ test "negative procedural integers are unsigned times; negative reals are refuse
 test "dyadic real delays match independent rational rounding oracle across scale grid" {
     for (0..18) |unit_offset| {
         for (0..unit_offset + 1) |precision_offset| {
-            const unit: Quantum = @enumFromInt(@as(i6, @intCast(unit_offset)) - 15);
-            const precision: Quantum = @enumFromInt(@as(i6, @intCast(precision_offset)) - 15);
+            const unit: Quantum = @fromBackingInt(@intCast(@as(i6, @intCast(unit_offset)) - 15));
+            const precision: Quantum = @fromBackingInt(@intCast(@as(i6, @intCast(precision_offset)) - 15));
             const scale = try Scale.init(unit, precision, precision);
             for (0..257) |n| {
                 const numerator: u128 = @as(u128, n) * scale.local_per_unit;

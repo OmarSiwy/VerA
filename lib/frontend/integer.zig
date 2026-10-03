@@ -70,8 +70,8 @@ pub const Literal = struct {
         std.debug.assert(index < self.width);
         const bit_offset: u6 = @truncate(index);
         const word_index = index / 64;
-        return @enumFromInt(@as(u2, @intCast((self.values()[word_index] >> bit_offset) & 1)) |
-            (@as(u2, @intCast((self.unknowns()[word_index] >> bit_offset) & 1)) << 1));
+        return @fromBackingInt(@intCast(@as(u2, @intCast((self.values()[word_index] >> bit_offset) & 1)) |
+            (@as(u2, @intCast((self.unknowns()[word_index] >> bit_offset) & 1)) << 1)));
     }
 
     /// Returns a copy at `width` bits (IEEE 1364-2005 §§5.5.2 to 5.6). The
@@ -862,15 +862,15 @@ const merge_truth = [4][4]Bit{
 };
 
 fn testScalar(storage: *[2]u64, state: Bit) Literal {
-    storage.* = .{ @intFromEnum(state) & 1, @intFromEnum(state) >> 1 };
+    storage.* = .{ @backingInt(state) & 1, @backingInt(state) >> 1 };
     return .{ .width = 1, .signed = false, .sized = true, .planes = storage };
 }
 
 fn testPut(value: Literal, index: u32, state: Bit) void {
     const bit_mask = @as(u64, 1) << @as(u6, @truncate(index));
     const word = index / 64;
-    value.values()[word] = (value.values()[word] & ~bit_mask) | (if (@intFromEnum(state) & 1 != 0) bit_mask else 0);
-    value.unknowns()[word] = (value.unknowns()[word] & ~bit_mask) | (if (@intFromEnum(state) & 2 != 0) bit_mask else 0);
+    value.values()[word] = (value.values()[word] & ~bit_mask) | (if (@backingInt(state) & 1 != 0) bit_mask else 0);
+    value.unknowns()[word] = (value.unknowns()[word] & ~bit_mask) | (if (@backingInt(state) & 2 != 0) bit_mask else 0);
 }
 
 fn testStateIndex(state: Bit) usize {
@@ -906,7 +906,7 @@ test "four-state scalar operators exhaust IEEE1364 truth tables" {
                 try std.testing.expectEqual(expected, out.bit(0));
                 try std.testing.expectEqual(@as(u32, 1), out.width);
                 try std.testing.expect(!out.signed);
-                try std.testing.expectEqualSlices(u64, &.{ @intFromEnum(expected) & 1, @intFromEnum(expected) >> 1 }, out.planes);
+                try std.testing.expectEqualSlices(u64, &.{ @backingInt(expected) & 1, @backingInt(expected) >> 1 }, out.planes);
             }
             try std.testing.expectEqual(and_truth[ai][bi], lhs.logical(.and_bits, rhs));
             try std.testing.expectEqual(or_truth[ai][bi], lhs.logical(.or_bits, rhs));
@@ -1688,7 +1688,7 @@ test "concatenation and replication match a scalar bit oracle" {
     for ([_]u32{ 1, 63, 64, 65, 127, 128, 129, 257 }, 0..) |width, n| {
         const part = try allocate(arena, width, n % 2 == 0);
         @memset(part.planes, 0);
-        for (0..width) |i| testPut(part, @intCast(i), @enumFromInt((i * 7 + n) % 4));
+        for (0..width) |i| testPut(part, @intCast(i), @fromBackingInt(@intCast((i * 7 + n) % 4)));
         parts[n] = part;
     }
     for ([_]u32{ 1, 2, 3, 17 }) |count| try testConcatOracle(allocator, &parts, count);

@@ -114,7 +114,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
-    var explained: std.EnumSet(Code) = .initEmpty();
+    var explained: std.EnumSet(Code) = .empty;
 
     for (0..bag.count()) |i| {
         try renderOne(bag, scratch, w, opts, bag.at(i), indices, &explained);
@@ -145,7 +145,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 /// the user recognises is what the user wrote. Offsets go through
 /// `toSourceOffset` before they meet one of these.
 fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_location.LineIndex, file: diag_location.FileId) !diag_location.LineIndex {
-    const i = @min(@intFromEnum(file), indices.len - 1);
+    const i = @min(@backingInt(file), indices.len - 1);
     if (indices[i]) |idx| return idx;
     const idx = try diag_location.LineIndex.build(scratch, bag.sourceText(file));
     indices[i] = idx;
@@ -403,7 +403,7 @@ fn digits(n: u32) u32 {
     return d;
 }
 
-const spaces_pad = " " ** 24;
+const spaces_pad = @as([24]u8, @splat(' '));
 
 fn spaces(n: u32) []const u8 {
     return spaces_pad[0..@min(n, spaces_pad.len)];

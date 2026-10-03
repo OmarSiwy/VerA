@@ -45,9 +45,9 @@ fn Narrowest(comptime T: type) type {
         .bool => u8,
         .int, .float => T,
         .@"struct" => |s| blk: {
-            var n: type = Narrowest(s.fields[0].type);
-            for (s.fields[1..]) |f| {
-                const m = Narrowest(f.type);
+            var n: type = Narrowest(s.field_types[0]);
+            for (s.field_types[1..]) |F| {
+                const m = Narrowest(F);
                 // Prefer the narrower; on ties an int wins (ints decide AVX1 width).
                 if (@bitSizeOf(m) < @bitSizeOf(n) or (@bitSizeOf(m) == @bitSizeOf(n) and @typeInfo(m) == .int)) n = m;
             }
@@ -60,8 +60,8 @@ fn Narrowest(comptime T: type) type {
 pub fn hasFloat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .float => true,
-        .@"struct" => |s| for (s.fields) |f| {
-            if (hasFloat(f.type)) break true;
+        .@"struct" => |s| for (s.field_types) |F| {
+            if (hasFloat(F)) break true;
         } else false,
         else => false,
     };
@@ -71,8 +71,8 @@ pub fn canLane(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .int, .float, .bool => true,
         .@"struct" => |s| blk: {
-            if (s.layout == .@"packed" or s.fields.len == 0) break :blk false;
-            for (s.fields) |f| if (!canLane(f.type)) break :blk false;
+            if (s.layout == .@"packed" or s.field_names.len == 0) break :blk false;
+            for (s.field_types) |F| if (!canLane(F)) break :blk false;
             break :blk true;
         },
         else => false,
@@ -85,11 +85,11 @@ pub fn Lanes(comptime T: type, comptime N: usize) type {
     return switch (@typeInfo(T)) {
         .int, .float, .bool => @Vector(N, T),
         .@"struct" => |s| blk: {
-            var names: [s.fields.len][]const u8 = undefined;
-            var types: [s.fields.len]type = undefined;
-            for (s.fields, 0..) |f, i| {
-                names[i] = f.name;
-                types[i] = Lanes(f.type, N);
+            var names: [s.field_names.len][]const u8 = undefined;
+            var types: [s.field_names.len]type = undefined;
+            for (s.field_names, s.field_types, 0..) |name, F, i| {
+                names[i] = name;
+                types[i] = Lanes(F, N);
             }
             break :blk @Struct(.auto, null, &names, &types, &@splat(.{}));
         },
@@ -102,7 +102,7 @@ pub fn Block(comptime T: type, comptime N: usize) type {
 }
 
 pub fn Mask(comptime N: usize) type {
-    return std.meta.Int(.unsigned, N);
+    return @Int(.unsigned, N);
 }
 
 pub fn bits(m: anytype) Mask(@typeInfo(@TypeOf(m)).vector.len) {
@@ -118,14 +118,16 @@ pub inline fn splat(comptime V: type, s: anytype) V {
 pub fn splatLanes(comptime T: type, comptime N: usize, x: T) Lanes(T, N) {
     if (@typeInfo(T) != .@"struct") return @splat(x);
     var r: Lanes(T, N) = undefined;
-    inline for (@typeInfo(T).@"struct".fields) |f| @field(r, f.name) = splatLanes(f.type, N, @field(x, f.name));
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| @field(r, name) = splatLanes(F, N, @field(x, name));
     return r;
 }
 
 pub fn select(comptime T: type, comptime N: usize, m: @Vector(N, bool), a: Lanes(T, N), b: Lanes(T, N)) Lanes(T, N) {
     if (@typeInfo(T) != .@"struct") return @select(T, m, a, b);
     var r: Lanes(T, N) = undefined;
-    inline for (@typeInfo(T).@"struct".fields) |f| @field(r, f.name) = select(f.type, N, m, @field(a, f.name), @field(b, f.name));
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| @field(r, name) = select(F, N, m, @field(a, name), @field(b, name));
     return r;
 }
 
@@ -133,10 +135,11 @@ pub fn select(comptime T: type, comptime N: usize, m: @Vector(N, bool), a: Lanes
 pub fn load(comptime T: type, comptime N: usize, src: *const [N]T) Lanes(T, N) {
     if (@typeInfo(T) != .@"struct") return src.*;
     var r: Lanes(T, N) = undefined;
-    inline for (@typeInfo(T).@"struct".fields) |f| {
-        var column: [N]f.type = undefined;
-        for (src, &column) |e, *c| c.* = @field(e, f.name);
-        @field(r, f.name) = load(f.type, N, &column);
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| {
+        var column: [N]F = undefined;
+        for (src, &column) |e, *c| c.* = @field(e, name);
+        @field(r, name) = load(F, N, &column);
     }
     return r;
 }
@@ -147,7 +150,8 @@ pub fn lane(comptime T: type, comptime N: usize, v: Lanes(T, N), j: usize) T {
         return a[j];
     }
     var r: T = undefined;
-    inline for (@typeInfo(T).@"struct".fields) |f| @field(r, f.name) = lane(f.type, N, @field(v, f.name), j);
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| @field(r, name) = lane(F, N, @field(v, name), j);
     return r;
 }
 
@@ -195,7 +199,7 @@ fn compressStore(comptime T: type, comptime N: usize, v: @Vector(N, T), m: @Vect
     const name = std.fmt.comptimePrint("llvm.masked.compressstore.v{d}{s}{d}", .{
         N, if (@typeInfo(T) == .float) "f" else "i", @bitSizeOf(T),
     });
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const Bits = @Int(.unsigned, @bitSizeOf(T));
     const f = @extern(*const fn (@Vector(N, Bits), [*]Bits, @Vector(N, bool)) callconv(.c) void, .{ .name = name });
     if (@typeInfo(T) == .float) {
         const Fv = @Vector(N, T);
@@ -234,7 +238,7 @@ pub fn lanewise(comptime f: anytype) Lanewise(f) {
 pub fn Lanewise(comptime f: anytype) type {
     return struct {
         pub const lanewise = true;
-        pub const call = switch (@typeInfo(@TypeOf(f)).@"fn".params.len) {
+        pub const call = switch (@typeInfo(@TypeOf(f)).@"fn".param_types.len) {
             1 => call1,
             2 => call2,
             else => @compileError("lanewise callbacks take one or two arguments"),

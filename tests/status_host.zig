@@ -10,14 +10,14 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 /// Every unknown in a lane, so a zeroed row is checked in its derivatives too.
 const S = contract.RefFamily(f64, &.{ 0, 1 }, .{ .dense = true });
-const S0 = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 fn x(v: f64) [n_u]f64 {
     var out: [n_u]f64 = @splat(0.0);
-    out[@intFromEnum(D.U.p)] = v;
+    out[@backingInt(D.U.p)] = v;
     return out;
 }
 

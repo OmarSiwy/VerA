@@ -139,8 +139,8 @@ fn termBits(value: Int.Literal, lo: u32, width: u32) [2]u64 {
 fn selectChanged(t: *Term, value: Int.Literal) bool {
     const now = termBits(value, t.lo, t.width);
     if (now[0] == t.v and now[1] == t.x) return false;
-    const before: Int.Bit = @enumFromInt(@as(u2, @intCast(t.v & 1)) | @as(u2, @intCast(t.x & 1)) << 1);
-    const after: Int.Bit = @enumFromInt(@as(u2, @intCast(now[0] & 1)) | @as(u2, @intCast(now[1] & 1)) << 1);
+    const before: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(t.v & 1)) | @as(u2, @intCast(t.x & 1)) << 1));
+    const after: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(now[0] & 1)) | @as(u2, @intCast(now[1] & 1)) << 1));
     t.v = now[0];
     t.x = now[1];
     return t.edge.matches(before, after);
@@ -503,7 +503,7 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
             },
         },
         .sys_call => blk: {
-            const f = self.sys_calls[@intFromEnum(e)].?;
+            const f = self.sys_calls[@backingInt(e)].?;
             const args = ex.args(e);
             break :blk switch (f) {
                 .realtime => self.timeOf(self.scope).scale.realAt(self.scheduler.now),
@@ -727,7 +727,7 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
             };
         },
         // `infer` resolved every call it typed.
-        .sys_call => switch (self.sys_calls[@intFromEnum(e)].?) {
+        .sys_call => switch (self.sys_calls[@backingInt(e)].?) {
             .make_signed, .make_unsigned => |cast| {
                 var value = try eval(self, a, ex.args(e)[0], 0);
                 value.signed = cast == .make_signed;
@@ -1365,8 +1365,8 @@ fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig
     };
     const reduce = @import("net.zig").reduce;
     const d = &self.drivers[at];
-    d.s0 = reduce(if (sig.lo < 0) @enumFromInt(@as(u8, @intCast(-sig.lo))) else .highz, m.resistive);
-    d.s1 = reduce(if (sig.hi > 0) @enumFromInt(@as(u8, @intCast(sig.hi))) else .highz, m.resistive);
+    d.s0 = reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
+    d.s1 = reduce(if (sig.hi > 0) @fromBackingInt(@intCast(@as(u8, @intCast(sig.hi)))) else .highz, m.resistive);
     const value = sig.collapse();
     const on: Int.Bit = if (m.n_type) .one else .zero;
     const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
@@ -2888,7 +2888,7 @@ test "finish verbosity reports exact local precision ticks and mapped source" {
     const source = "`timescale 1ns/1ps\nmodule m; initial #1 $finish; endmodule";
     const offset = std.mem.indexOf(u8, source, "$finish").?;
     var expected: [128]u8 = undefined;
-    try expectRun(source, try std.fmt.bufPrint(&expected, "$finish at tick 1000, <digital> byte {d}\n", .{offset}));
+    try expectRun(source, try std.mem.print(&expected, "$finish at tick 1000, <digital> byte {d}\n", .{offset}));
 }
 
 test "nested expressions preserve NBA snapshot and evaluate delay at suspension" {

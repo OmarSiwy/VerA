@@ -12,8 +12,8 @@
 const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
-const n_u = @typeInfo(D.U).@"enum".fields.len;
-const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 const fixed = @hasDecl(D, "nextBreakpoint");
 const controlled = @hasField(D.U, "period_ctl");
 const body_controlled = @hasField(D.U, "body");
@@ -43,11 +43,11 @@ const Run = struct {
 
     fn attemptWith(r: *Run, t: f64, control: Controls) f64 {
         var x: [n_u]f64 = @splat(0.0);
-        if (comptime @hasField(D.U, "ctl")) x[@intFromEnum(D.U.ctl)] = control.value;
+        if (comptime @hasField(D.U, "ctl")) x[@backingInt(D.U.ctl)] = control.value;
         if (comptime controlled) {
-            x[@intFromEnum(D.U.start_ctl)] = control.start;
-            x[@intFromEnum(D.U.period_ctl)] = control.period;
-            x[@intFromEnum(D.U.enable_ctl)] = control.enable;
+            x[@backingInt(D.U.start_ctl)] = control.start;
+            x[@backingInt(D.U.period_ctl)] = control.period;
+            x[@backingInt(D.U.enable_ctl)] = control.enable;
         }
         const sim: contract.SimState = .{
             .t = t,
@@ -58,12 +58,12 @@ const Run = struct {
         };
         const residual = D.eval(S, &x, &r.model, &r.inst, sim);
         if (comptime @hasField(D.U, "calls")) {
-            r.calls = residual[@intFromEnum(D.U.calls)].v;
-            r.mark = residual[@intFromEnum(D.U.mark)].v;
+            r.calls = residual[@backingInt(D.U.calls)].v;
+            r.mark = residual[@backingInt(D.U.mark)].v;
         }
-        if (comptime body_controlled) std.debug.assert(residual[@intFromEnum(D.U.body)].v == residual[@intFromEnum(D.U.out)].v);
+        if (comptime body_controlled) std.debug.assert(residual[@backingInt(D.U.body)].v == residual[@backingInt(D.U.out)].v);
         _ = D.updateState(S, &r.model, &r.inst, x, &r.state, sim);
-        return residual[@intFromEnum(D.U.out)].v;
+        return residual[@backingInt(D.U.out)].v;
     }
 
     fn accept(r: *Run, t: f64, control: f64) f64 {

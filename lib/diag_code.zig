@@ -456,23 +456,23 @@ pub const Code = enum(u16) {
 
 /// Returns the documentation for `c` with one indexed load.
 pub fn info(c: Code) Info {
-    return table[@intFromEnum(c)];
+    return table[@backingInt(c)];
 }
 
 // Built at comptime from the exhaustive `infoOf` switch: a code without an arm
 // fails to compile, text binds to a code by name, and the switch itself never
 // reaches the binary.
 const table = build: {
-    const fields = @typeInfo(Code).@"enum".fields;
+    const e = @typeInfo(Code).@"enum";
     // Dense values make a tag usable as an index. Retired codes keep their
     // slot, so this holds by construction; the indexing is silently wrong if
     // it ever stops holding.
-    for (fields, 0..) |f, i| {
-        if (f.value != i) @compileError("Code values must be dense: " ++ f.name ++ " is out of sequence");
+    for (e.field_names, e.field_values, 0..) |name, value, i| {
+        if (value != i) @compileError("Code values must be dense: " ++ name ++ " is out of sequence");
     }
-    @setEvalBranchQuota(100 * fields.len);
-    var t: [fields.len]Info = undefined;
-    for (fields) |f| t[f.value] = infoOf(@enumFromInt(f.value));
+    @setEvalBranchQuota(100 * e.field_names.len);
+    var t: [e.field_names.len]Info = undefined;
+    for (e.field_values) |value| t[value] = infoOf(@fromBackingInt(@intCast(value)));
     break :build t;
 };
 
@@ -6607,14 +6607,15 @@ fn infoOf(c: Code) Info {
 
 test "every code has info and a well-formed name" {
     const std = @import("std");
-    inline for (@typeInfo(Code).@"enum".fields) |f| {
-        const c: Code = @enumFromInt(f.value);
+    const e = @typeInfo(Code).@"enum";
+    inline for (e.field_names, e.field_values) |name, value| {
+        const c: Code = @fromBackingInt(@intCast(value));
         const i = info(c);
 
         // The tag name IS the rendered code: one letter, then four digits.
-        try std.testing.expectEqual(@as(usize, 5), f.name.len);
-        try std.testing.expect(f.name[0] == 'E' or f.name[0] == 'W');
-        for (f.name[1..]) |ch| try std.testing.expect(ch >= '0' and ch <= '9');
+        try std.testing.expectEqual(@as(usize, 5), name.len);
+        try std.testing.expect(name[0] == 'E' or name[0] == 'W');
+        for (name[1..]) |ch| try std.testing.expect(ch >= '0' and ch <= '9');
 
         // A title that is empty, capitalised or punctuated renders wrong: it is
         // pasted straight after "error[E0313]: ".
