@@ -370,7 +370,7 @@ pub const Gen = struct {
     const DynCtrl = struct {
         g: *Gen,
         pub fn isDynamic(d: DynCtrl, v: Mir.Value) Error!bool {
-            return gen_call.ctrlIsDynamic(d.g, v);
+            return gen_host.ctrlIsDynamic(d.g, v);
         }
     };
 
@@ -527,10 +527,13 @@ pub const Gen = struct {
     const gen_render = @import("codegen/render.zig");
     pub const renderVal = gen_render.renderVal;
 
+    // Host expressions: a parameter or control argument -> plain f64/i64 text over `model`, codegen/host_expr.zig
+    const gen_host = @import("codegen/host_expr.zig");
+    pub const f64Const = gen_host.f64Const;
+    pub const f64Expr = gen_host.f64Expr;
+
     // Calls: §4.5 analog operators, §4.6 noise, Clause 9 system functions, codegen/call.zig
     const gen_call = @import("codegen/call.zig");
-    pub const f64Const = gen_call.f64Const;
-    pub const f64Expr = gen_call.f64Expr;
     pub const abort = gen_call.abort;
     pub const strArg = gen_call.strArg;
 
@@ -574,6 +577,7 @@ test {
     _ = Gen.gen_unit;
     _ = Gen.gen_cfg;
     _ = Gen.gen_render;
+    _ = Gen.gen_host;
     _ = Gen.gen_call;
     _ = Gen.gen_dispatch;
     _ = Gen.gen_noise;

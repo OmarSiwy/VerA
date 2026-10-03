@@ -10,7 +10,7 @@ const std = @import("std");
 const plan_noise = @import("plan/noise.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
-const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_setup = @import("setup.zig");
@@ -185,8 +185,8 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
         const mvs = if (k < self.noise.tab_vals.len) self.noise.tab_vals[k] else &.{};
         for (pts, 0..) |p, i| {
             const pair: [2][]const u8 = if (i < mvs.len) .{
-                (try gen_call.f64Const(self, mvs[i][0], 0, false)) orelse try gen_file.fmtF64(self, p[0]),
-                (try gen_call.f64Const(self, mvs[i][1], 0, false)) orelse try gen_file.fmtF64(self, p[1]),
+                (try gen_host.f64Const(self, mvs[i][0], 0, false)) orelse try gen_file.fmtF64(self, p[0]),
+                (try gen_host.f64Const(self, mvs[i][1], 0, false)) orelse try gen_file.fmtF64(self, p[1]),
             } else .{ try gen_file.fmtF64(self, p[0]), try gen_file.fmtF64(self, p[1]) };
             try body.print(self.arena, "        .{{ {s}, {s} }},\n", .{ pair[0], pair[1] });
         }
@@ -292,7 +292,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
 /// `buildJobs` queued (setting `uses_core`). Null means neither, a planning
 /// defect that `refuseAc` reports instead of exporting a wrong number.
 fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
-    if (try gen_call.f64Const(self, v, 0, false)) |s| return s;
+    if (try gen_host.f64Const(self, v, 0, false)) |s| return s;
     const k = self.core.lo_idx[@backingInt(v)];
     if (k == none_u32) return null;
     uses_core.* = true;
