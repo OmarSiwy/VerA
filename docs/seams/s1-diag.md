@@ -77,9 +77,20 @@ Counts are from a temporary probe in `Bag.detach` on ReleaseFast `vera
 | `Palette` / `RenderOptions` | 128 / 136 | 1 per `render` call | 0 | Public, set by callers (`.palette = .on`). |
 | `Info` table (`diag_code.zig`) | 48 x 370 = 17.8 KB `.rodata` | static | 0 | Data, not code: the 6.6k-line switch runs only at comptime, lookup is one index (`table[@backingInt(c)]`). The executable is static, so no relocations and no startup cost; pages fault in only when a diagnostic renders. u32 offsets into one blob would save ~14 KB of binary and no RSS. Each code's name is written twice (enum field and switch arm) on purpose: the exhaustive switch is what makes a missing entry a compile error. 21 of 370 codes are retired; they keep their slot so the table stays dense. Text: 14.7 KB titles, 1.8 KB citations, 197 KB `--explain`. Pinned at 48. |
 
-Peak RSS and time, ReleaseFast `vera --emit-zig`, best of 3 (before at
-`64357568`, after at the final commit): see the report for the A/B table;
-the changes here move peak RSS by under 1%, as the counts above predict.
+Peak RSS and time, ReleaseFast `vera --emit-zig`, 15 interleaved runs of
+each binary (before = `64357568`'s diag files, after = this branch), median
+(min):
+
+| model | RSS before | RSS after | time before | time after |
+|---|---|---|---|---|
+| psp103 | 31,772 KB (31,348) | 31,744 KB (31,120) | 0.22 s | 0.16 s |
+| bsim4va | 23,136 KB (22,864) | 23,236 KB (22,980) | 0.15 s | 0.14 s |
+| hisimhv_va | 48,300 KB (47,420) | 48,368 KB (47,832) | 0.30 s | 0.36 s |
+
+RSS is flat (within 0.5%), as the counts above predict: nothing this unit
+owns is large on the success path. Single runs swing by about 1 MB (2 MB
+huge-page granularity), and the times swung with other agents' load on the
+machine; neither moves outside that noise. The real RSS lever is seam 1.
 
 ## Seam proposals
 
