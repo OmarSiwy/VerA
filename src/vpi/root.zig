@@ -13,7 +13,8 @@
 //!                        §12.35), property.zig (§12.5, §12.12, §12.18),
 //!                        value.zig (§12.16, §12.30), analog.zig (§12.7-
 //!                        §12.10, the analog run), run.zig (the digital run),
-//!                        print.zig (§12.24-§12.28)
+//!                        delays.zig (§12.11, §12.29), print.zig
+//!                        (§12.24-§12.28)
 //!   close                frees the model and resets every sibling registry
 //!
 //! This file owns the tables every sibling reads: the vpi_user.h constants,
@@ -40,6 +41,7 @@ pub const analog_run = @import("analog.zig");
 const handle = @import("handle.zig");
 const iterate = @import("iterate.zig");
 const property = @import("property.zig");
+const delays = @import("delays.zig");
 const analog_model = @import("model/analog.zig");
 const digital_model = @import("model/digital.zig");
 comptime {
@@ -53,6 +55,7 @@ comptime {
     _ = handle;
     _ = iterate;
     _ = property;
+    _ = delays;
 }
 test {
     _ = print;
@@ -61,6 +64,7 @@ test {
     _ = value;
     _ = systf;
     _ = code;
+    _ = @import("decompile.zig");
     _ = @import("test.zig");
 }
 
