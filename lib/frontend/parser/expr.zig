@@ -10,9 +10,10 @@ const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_stmt = @import("stmt.zig");
 const token = @import("../token.zig");
-const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const parse_hier = @import("hier.zig");
+const parse_concat = @import("concat.zig");
+const parse_literal = @import("literal.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
@@ -76,7 +77,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
 
 /// A.8.6 unary_operator (§4.2.1, §4.2.7 to §4.2.10). Unary binds tighter than
 /// every binary operator (Table 4-3, top row).
-pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
+fn parseUnary(self: *Parser) Error!Ast.ExprId {
     // Every expression recursion (parentheses, unary chains, `?:`) passes here.
     try self.enter();
     defer self.depth -= 1;
@@ -133,14 +134,13 @@ pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
     return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
 }
 
-/// Parses an A.8.4 analog_primary: a literal, parenthesized expression,
-/// concatenation, assignment pattern, name, call or branch probe.
-/// IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
+/// Parses IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
 /// | expression : expression : expression`, in a digital parse: in
 /// parentheses wherever an expression is, and bare where A.2.2.3, A.2.4 and
 /// A.7.4 write one (a `delay3` element, a specparam, a path delay). The tool
 /// chooses one member of each triple; this one takes the typical, the
 /// middle, whose compound expressions then all read their middle members.
+/// An analog parse reads a plain expression and leaves any `:` unconsumed.
 pub fn parseMinTypMax(self: *Parser) Error!Ast.ExprId {
     const e = try parseExpr(self);
     if (!self.digital or !self.eat(.colon)) return e;
@@ -150,6 +150,9 @@ pub fn parseMinTypMax(self: *Parser) Error!Ast.ExprId {
     return typ;
 }
 
+/// Parses an A.8.4 analog_primary: a literal, parenthesized expression,
+/// concatenation, assignment pattern, name, call or branch probe. A token
+/// that begins none of them is E0209.
 pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     // §10.6: a keyword the active set does not reserve is just a name, so
@@ -157,9 +160,9 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     // (`tokenText` still switches on the real tag, so the spelling is exact.)
     const t = if (self.identLike(tok)) token.Tag.identifier else self.peek();
     switch (t) {
-        .int_literal, .real_literal => return parseNumber(self),
+        .int_literal, .real_literal => return parse_literal.parseNumber(self),
         .string_literal => { // §2.7
-            const s = try internString(self, tok);
+            const s = try parse_literal.internString(self, tok);
             self.pos += 1;
             return self.file.exprs.add(self.arena, .{ .tag = .str_literal, .main_tok = tok, .str = s });
         },
@@ -170,62 +173,10 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             return e;
         },
         // §4.2.13 / A.8.1 analog_concatenation, analog_multiple_concatenation
-        .lbrace => {
-            var items: std.ArrayList(Ast.ExprId) = .empty;
-            const count = try braceOperands(self, &items);
-            if (count) |n| return multiConcat(self, tok, n, items.items);
-            if (try foldBitConcat(self, tok, items.items)) |folded| return folded;
-            const off = try self.file.exprs.addExprList(self.arena, items.items);
-            return self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
-        },
+        .lbrace => return parse_concat.parseConcat(self, tok),
         // A.8.1 assignment_pattern `'{ ... }` (§3.4.4 array defaults,
         // §4.5.6 filter coefficient args)
-        .apostrophe_lbrace => {
-            self.pos += 1;
-            var items: std.ArrayList(Ast.ExprId) = .empty;
-            if (self.peek() != .rbrace) {
-                // §3.6.3.2's bus nodeset admits a hole,
-                // `electrical [0:4] bus = '{2.3,4.5,,6.0};`: "a null value in
-                // the constant array indicates that no nodeset value is being
-                // specified for this element". A.8.1 has no such alternative;
-                // the clause's example governs. A hole is `.none`, which is
-                // also what `Lower.fillPattern` gives a cell nothing reaches.
-                const first = if (self.peek() == .comma) Ast.ExprId.none else try parseExpr(self);
-                // A.8.1's second alternative:
-                //
-                //   assignment_pattern ::= '{ expression { , expression } }
-                //                        | '{ constant_expression
-                //                             { expression { , expression } } }
-                //
-                // one replication filling the whole pattern, as §4.2.14's
-                // `'{ 5{0.0} }`. Nothing but `}` may follow the inner group.
-                // The inner braces are plain `{`; a `'{` there is a row of a
-                // multi-dimensional pattern (§3.4.8) and stays one element.
-                if (first != .none and self.peek() == .lbrace) {
-                    var inner: std.ArrayList(Ast.ExprId) = .empty;
-                    try braceGroup(self, &inner);
-                    if (replCount(self, first)) |n| {
-                        for (0..n) |_| try items.appendSlice(self.arena, inner.items);
-                    } else {
-                        // A constant_expression the parser cannot evaluate
-                        // (`'{N{0.5}}`, N a localparam): lowering unrolls it
-                        // with the folder in hand, `Lower.patternElems`.
-                        const off = try self.file.exprs.addExprList(self.arena, inner.items);
-                        const group = try self.file.exprs.add(self.arena, .{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
-                        try items.append(self.arena, try self.file.exprs.add(self.arena, .{ .tag = .pattern_repl, .main_tok = tok, .lhs = first, .rhs = group }));
-                    }
-                } else {
-                    try items.append(self.arena, first);
-                    while (self.eat(.comma)) try items.append(
-                        self.arena,
-                        if (self.peek() == .comma or self.peek() == .rbrace) .none else try parseExpr(self),
-                    );
-                }
-            }
-            _ = try self.expect(.rbrace);
-            const off = try self.file.exprs.addExprList(self.arena, items.items);
-            return self.file.exprs.add(self.arena, .{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
-        },
+        .apostrophe_lbrace => return parse_concat.parseAssignPattern(self, tok),
         .identifier, .escaped_identifier => {
             // References and declaration names must use the same escaped
             // period normalization; raw text aliases hierarchy separators.
@@ -390,7 +341,7 @@ inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, ar
 
 /// §4.4.1 branch_probe_function_call / §4.4.2 port_probe_function_call
 /// (A.8.2). `V(a)`, `V(a,b)`, `I(br)`, `I(<p>)`.
-pub fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
+fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
     _ = try self.expect(.lparen);
     if (self.eat(.lt)) { // §5.4.3 port branch `I(<p>)`
         const port = try parseNetRef(self);
@@ -556,7 +507,7 @@ const prec_ternary: u8 = 1;
 /// A.8.6 binary_operator → `Ast.BinaryOp`, null for a token that is not one.
 /// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: lowering owns the annex
 /// C.5 refusal.
-pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
+fn binOp(tag: token.Tag) ?Ast.BinaryOp {
     return switch (tag) {
         .plus => .add,
         .minus => .sub,
@@ -584,293 +535,4 @@ pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
         .gt_gt_gt => .ashr,
         else => null, // else: not a binary operator token
     };
-}
-
-// -----------------------------------------------------------------------
-// Literals: LRM §2.6 numbers, §2.7 strings, §2.8 identifiers
-// -----------------------------------------------------------------------
-
-/// §2.6.1 integer (incl. sized/based) and §2.6.2 real (exponent + SI scale
-/// factor) literals. Values are computed here because the token stream
-/// stores only {tag,start}.
-fn parseNumber(self: *Parser) Error!Ast.ExprId {
-    const tok = self.pos;
-    self.pos += 1;
-
-    if (self.tags[tok] == .int_literal) {
-        const text = gluedNumberText(self, tok);
-        const integer = @import("../integer.zig");
-        const lit = integer.parse(self.arena, text) catch |e| return switch (e) {
-            error.OutOfMemory => error.OutOfMemory,
-            error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),
-            error.MissingDigits => self.failAt(tok, .E0132, "`{s}`", .{text}),
-            error.Overflow => self.failAt(tok, .E1019, "`{s}`", .{text}),
-            else => self.failAt(tok, .E0133, "`{s}`", .{text}),
-        };
-        if (lit.asInt()) |value| {
-            defer self.arena.free(lit.planes);
-            return self.file.exprs.addIntLiteral(self.arena, tok, .{
-                .value = value,
-                .width = if (lit.sized) lit.width else 0,
-                .signed = lit.signed,
-                .radix = integer.radixOf(text),
-            });
-        }
-        return self.file.exprs.addLogic(self.arena, tok, lit);
-    }
-
-    const text = self.tokenText(tok);
-    if (self.in_digital_delay and self.attr_depth == 0 and lexer.scaleExp(text[text.len - 1]) != null)
-        try self.report(tok, .E0247, "`{s}` in a digital delay; use decimal or scientific notation in the module's time units", .{text});
-    // §2.6.2 decoding (`_` removal, the Table 2-1 scale factor) has one home,
-    // `lexer.parseReal`. It applies the scale to the text and rounds once;
-    // `mantissa * scale` would round twice and can be off by 1 ulp.
-    const v = lexer.parseReal(text) catch |e| return switch (e) {
-        error.LiteralTooLong => self.failAt(tok, .E0134, "", .{}),
-        else => self.failAt(tok, .E0133, "`{s}`", .{text}),
-    };
-    return self.file.exprs.addReal(self.arena, tok, v);
-}
-
-/// The text `integer.parse` must see to name a malformed §2.6.1 number:
-/// normally the token, or the token plus the one glued to it.
-///
-/// The lexer stops a number where §2.6.1 does, so the forms the clause calls
-/// illegal (`4' h5`, `8'y11`, Example 1's `4af`) arrive as a literal plus a
-/// separate token. When that token begins exactly where this one ends, the
-/// user wrote one number, and the decoder names the rule it broke instead of
-/// the parser asking for a `;` mid-number. `4 af` is not adjacent and keeps
-/// that message. `.apostrophe_lbrace` is excluded: `2'{1}` is §4.2.14's
-/// assignment pattern.
-fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
-    const text = self.tokenText(tok);
-    const start = self.starts[tok];
-    const next = self.starts[tok + 1]; // the stream always ends in `.eof`
-    if (next != start + text.len) return text;
-    switch (self.tags[tok + 1]) {
-        // Only when the glued text is all hex digits, which makes it a number
-        // with the base format left out. `1g` is not: §2.6.2's scale factors
-        // have no `g`, so it is an integer followed by an identifier (E0207).
-        .identifier => for (self.tokenText(tok + 1)) |c| {
-            if (!lexer.isBasedDigit(c, 16)) return text;
-        },
-        // Only an apostrophe: a stray backtick is the preprocessor's, and
-        // gluing it would decode as a bad digit and say so (E0133).
-        .invalid => if (self.src[next] != '\'') return text,
-        else => return text, // else: nothing else can be the glued remainder of a based number
-    }
-    return self.src[start .. next + self.tokenText(tok + 1).len];
-}
-
-/// A.8.1, both brace forms at once:
-///
-///     analog_concatenation          ::= { analog_expression
-///                                         { , analog_expression } }
-///     analog_multiple_concatenation ::= { constant_expression
-///                                         analog_concatenation }
-///
-/// Consumes `{ ... }` at the cursor and appends the group's operands to
-/// `items`, flattened. Returns the count of a replication it cannot unroll
-/// (a non-literal count, or any count in digital mode); `items` then holds
-/// one copy of the inner operands.
-///
-/// The forms are told apart by the token after the first expression: a `{`
-/// there opens a replication's inner concatenation (`{2+1{a}}` versus
-/// `{2+1}`). In analog mode, literal counts are unrolled for §4.2.13 because
-/// `foldBitConcat` needs every sized operand: `{4{2'b10}}` arrives as four
-/// operands and `{{0{a}}, b}` as `{b}`. A nonconstant count stays a
-/// `.multi_concat` (§3.3 Table 3-3 allows one for a string, `{i{"Hi"}}`).
-/// Digital mode keeps every group and count unflattened.
-fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
-    _ = try self.expect(.lbrace);
-    if (self.eat(.rbrace)) return null;
-
-    if (self.digital or self.peek() != .lbrace) {
-        const first = try parseExpr(self);
-        if (self.peek() == .lbrace) {
-            var inner: std.ArrayList(Ast.ExprId) = .empty;
-            try braceGroup(self, &inner);
-            _ = try self.expect(.rbrace);
-            if (self.digital) {
-                // Preserve the multiplier and grouping: zero replication
-                // still evaluates its operands and has contextual legality.
-                try items.appendSlice(self.arena, inner.items);
-                return first;
-            }
-            const n = concatReplCount(self, first) orelse {
-                try items.appendSlice(self.arena, inner.items);
-                return first;
-            };
-            // §4.2.13 "When a replication expression is evaluated, the
-            // operands shall be evaluated exactly once, even if the
-            // replication constant is zero." A literal has nothing to
-            // evaluate, so only a zero group over something else is kept, as
-            // a `.multi_concat` that `foldBitConcat` gives no width.
-            if (n == 0) for (inner.items) |it| switch (self.file.exprs.tag(it)) {
-                .int_literal, .real_literal, .str_literal, .logic_literal => {},
-                else => { // else: anything but a literal may have an effect to evaluate
-                    try items.appendSlice(self.arena, inner.items);
-                    return first;
-                },
-            };
-            for (0..n) |_| try items.appendSlice(self.arena, inner.items);
-            return null;
-        }
-        try items.append(self.arena, first);
-        if (!self.eat(.comma)) {
-            _ = try self.expect(.rbrace);
-            return null;
-        }
-    }
-    while (true) {
-        if (!self.digital and self.peek() == .lbrace) {
-            try braceGroup(self, items);
-        } else try items.append(self.arena, try parseExpr(self));
-        if (!self.eat(.comma)) break;
-    }
-    _ = try self.expect(.rbrace);
-    return null;
-}
-
-/// `braceOperands` for positions that cannot pass a count upwards: a
-/// nonconstant replication stays one operand instead of being returned.
-fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
-    const at = self.pos;
-    var g: std.ArrayList(Ast.ExprId) = .empty;
-    if (try braceOperands(self, &g)) |c| {
-        try items.append(self.arena, try multiConcat(self, at, c, g.items));
-    } else if (self.digital) {
-        const off = try self.file.exprs.addExprList(self.arena, g.items);
-        try items.append(self.arena, try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = at, .extra = off }));
-    } else try items.appendSlice(self.arena, g.items);
-}
-
-/// `{count{items}}` kept unexpanded for lowering (§3.3's nonconstant
-/// multiplier). `rhs` is the inner `.concat`, exactly as `Ast.ExprTag`
-/// documents the tag.
-fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
-    const off = try self.file.exprs.addExprList(self.arena, items);
-    const inner = try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
-    return self.file.exprs.add(self.arena, .{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
-}
-
-/// Returns a replication count when it is an integer literal in 0..4096, else
-/// null. §4.2.13 wants a "non-negative, non-x and non-z constant expression";
-/// a literal is the only constant the parser can evaluate.
-///
-/// A negative count is not reported here: it returns null, the group keeps
-/// its `.multi_concat`, and `lowerConcat` names the rule with the folder in
-/// hand so `{n-5{a}}` gets the same verdict as `{-5{a}}`.
-///
-/// ponytail: the cap is an unrolling guard, not a rule. 32 bits is the
-/// widest concatenation an `integer` can hold (E0217), so no legal integer
-/// replication comes near it; a string replication past the cap falls to
-/// the same lowering path as a nonconstant one.
-pub fn replCount(self: *const Parser, e: Ast.ExprId) ?u32 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) != .int_literal) return null;
-    const v = ex.intValue(e);
-    if (v < 0 or v > 4096) return null;
-    return @intCast(v);
-}
-
-/// `replCount` for a concatenation's count, which §4.2.1 also lets be real:
-/// "If a real expression is used for the replication factor of a
-/// concatenation, the expression will first be converted to an integer value
-/// using the rules described in 4.2.1.1": round to nearest, ties away from
-/// zero, which is `@round`. So `{2.5{4'd3}}` is `{3{4'd3}}`.
-///
-/// Only a concatenation's: an A.8.1 assignment pattern is not one, and keeps
-/// `replCount`. A negative real is a unary minus, not a literal, so it
-/// reaches `lowerConcat` exactly as `{-5{a}}` does.
-fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) != .real_literal) return replCount(self, e);
-    const r = @round(ex.realValue(e));
-    if (!(r >= 0 and r <= 4096)) return null;
-    return @intFromFloat(r);
-}
-
-/// Folds an analog §4.2.13 integer concatenation of sized literals into one
-/// literal with the joined width. "Unsized constant numbers shall not be
-/// allowed in concatenations", and in Verilog-A only a §2.6.1 sized constant
-/// carries a width. Reports E0216 for an unsized operand and E0217 past 32
-/// bits (§3.2.1).
-///
-/// Returns null in digital mode, when an operand is a logic literal (x/z or
-/// wider than 64 bits), or when no operand is sized: `{a, b}` stays a
-/// `.concat` for §4.5.11 filter coefficients, §3.2.2 array assignment and the
-/// §3.3 Table 3-3 string form, which lowering handles.
-pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?Ast.ExprId {
-    if (self.digital) return null;
-    const ex = &self.file.exprs;
-    var any_sized = false;
-    var effects: std.ArrayList(Ast.ExprId) = .empty;
-    for (items) |it| {
-        if (ex.tag(it) == .logic_literal) return null;
-        // A zero group `braceOperands` kept for §4.2.13's "evaluated exactly
-        // once": "considered to have a size of zero and is ignored".
-        if (ex.tag(it) == .multi_concat and concatReplCount(self, ex.lhs(it)) == 0) {
-            try effects.append(self.arena, it);
-            continue;
-        }
-        if (ex.tag(it) != .int_literal) continue;
-        if (ex.intLiteral(it).width != 0) any_sized = true;
-    }
-    if (!any_sized) return null;
-
-    var acc: u64 = 0;
-    var total: u64 = 0;
-    for (items) |it| {
-        if (std.mem.indexOfScalar(Ast.ExprId, effects.items, it) != null) continue;
-        const lit: ?lexer.IntLiteral = if (ex.tag(it) == .int_literal and ex.intLiteral(it).width != 0)
-            ex.intLiteral(it)
-        else
-            null;
-        const l = lit orelse {
-            var d = self.failWith(ex.mainTok(it), .E0216);
-            d.help("give the operand a width, e.g. `8'd5`", .{});
-            try d.emit();
-            return error.ParseError;
-        };
-        total += l.width;
-        // §3.2.1: the result is a 32-bit integer; wider is diagnosed, not wrapped.
-        if (total > 32) return self.failAt(tok, .E0217, "at least {d} bits wide", .{total});
-        const mask: u64 = (@as(u64, 1) << @intCast(l.width)) - 1;
-        acc = (acc << @intCast(l.width)) | (@as(u64, @bitCast(l.value)) & mask);
-    }
-    const folded = try ex.addIntLiteral(self.arena, tok, .{ .value = @bitCast(acc), .width = @intCast(total), .signed = false });
-    if (effects.items.len == 0) return folded;
-    // The zero groups first, the value last: `Lower.lowerConcat` evaluates
-    // each group's operands once and answers the folded literal.
-    try effects.append(self.arena, folded);
-    const off = try ex.addExprList(self.arena, effects.items);
-    return try ex.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
-}
-
-/// Interns token `tok`'s §2.7 string contents, escapes decoded by
-/// `lexer.stringContents`, then (outside digital mode) §3.3's literal to
-/// string conversion applied. Allocates only when the literal contains a
-/// backslash.
-pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
-    const raw = self.tokenText(tok);
-    const body = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
-    if (std.mem.indexOfScalar(u8, body, '\\') == null) {
-        return self.file.intern(self.arena, body);
-    }
-    const decoded = try lexer.stringContents(self.arena, raw);
-    // Direct display formats retain octal NUL bytes (§9.4.2). Digital
-    // string-variable conversion is not part of this executor yet.
-    if (self.digital) return self.file.intern(self.arena, decoded);
-    // §3.3 spells the conversion out in three steps: "all the \0 characters
-    // are ignored", an empty remainder becomes the empty string, otherwise
-    // the rest is kept, so `"hello\0world"` is `helloworld`, not a C-style
-    // truncation at the NUL.
-    var n: usize = 0;
-    for (decoded) |c| {
-        if (c == 0) continue;
-        decoded[n] = c;
-        n += 1;
-    }
-    return self.file.intern(self.arena, decoded[0..n]);
 }

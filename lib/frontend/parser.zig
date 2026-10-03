@@ -178,14 +178,23 @@ pub const Parser = struct {
         try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });
     }
 
-    // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations, A.5 UDPs
+    // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations
     const parse_source = @import("parser/source.zig");
     /// Parses the whole stream. Returns `error.ParseError` at the end if anything
     /// was reported; the AST is then partial and must not be lowered.
     pub const parseSourceFile = parse_source.parseSourceFile;
 
+    // Annex A.5 user-defined primitives and their instances (IEEE 1364-2005 Clause 8)
+    const parse_udp = @import("parser/udp.zig");
+
     // Annex A.1.2 module_declaration and A.1.4 module_item (LRM §6.2, Clause 3)
     const parse_module = @import("parser/module.zig");
+
+    // Annex A.1.9 paramset (LRM §6.4)
+    const parse_paramset = @import("parser/paramset.zig");
+
+    // Annex A.1.8 connectrules (LRM §7.7)
+    const parse_connectrules = @import("parser/connectrules.zig");
 
     // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1)
     const parse_specify = @import("parser/specify.zig");
@@ -214,8 +223,14 @@ pub const Parser = struct {
     // Annex A.6.4 analog_statement (LRM Clause 5)
     const parse_stmt = @import("parser/stmt.zig");
 
-    // Annex A.8.3 expressions (§4.1, §4.2 precedence climbing), and literals (§2.6 numbers, §2.7 strings, §2.8 identifiers)
+    // Annex A.8.3 expressions (§4.1, §4.2 precedence climbing), A.8.2 calls and branch probes
     const parse_expr = @import("parser/expr.zig");
+
+    // Annex A.8.1 concatenations and assignment patterns (§4.2.13, §4.2.14)
+    const parse_concat = @import("parser/concat.zig");
+
+    // Literals: §2.6 numbers, §2.7 strings
+    const parse_literal = @import("parser/literal.zig");
 
     // -----------------------------------------------------------------------
     // Token access: LRM §2.2 (the stream), §2.8 (identifiers)
@@ -633,7 +648,10 @@ const parse_test = @import("parser/test.zig");
 
 test {
     _ = Parser.parse_source;
+    _ = Parser.parse_udp;
     _ = Parser.parse_module;
+    _ = Parser.parse_paramset;
+    _ = Parser.parse_connectrules;
     _ = Parser.parse_specify;
     _ = Parser.parse_generate;
     _ = Parser.parse_inst;
@@ -644,5 +662,7 @@ test {
     _ = Parser.parse_hier;
     _ = Parser.parse_stmt;
     _ = Parser.parse_expr;
+    _ = Parser.parse_concat;
+    _ = Parser.parse_literal;
     _ = parse_test;
 }
