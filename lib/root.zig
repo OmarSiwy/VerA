@@ -535,6 +535,16 @@ pub fn buildArtifact(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// Writes the one-line error for a source `path` that could not be read:
+/// E1013 for a file past `Preprocessor.max_text_bytes` (the u32 offsets the
+/// lexer uses), else the error's name. The text is user-visible and frozen.
+pub fn readFailed(w: *std.Io.Writer, path: []const u8, e: anyerror) std.Io.Writer.Error!void {
+    if (e == error.StreamTooLong)
+        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, Preprocessor.max_text_bytes })
+    else
+        try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
+}
+
 fn freeArena(gpa: Allocator, a: *BigArena) void {
     a.deinit();
     gpa.destroy(a);
@@ -543,6 +553,16 @@ fn freeArena(gpa: Allocator, a: *BigArena) void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test readFailed {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    // 2^32 - 1 is 4294967295 bytes.
+    try readFailed(&w, "big.va", error.StreamTooLong);
+    try readFailed(&w, "gone.va", error.FileNotFound);
+    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 4294967295 bytes; see `vera --explain E1013`\n" ++
+        "error: cannot read `gone.va`: FileNotFound\n", w.buffered());
+}
 
 const test_resistor =
     \\module res(p, n);

@@ -1,7 +1,7 @@
 //! `vera`'s stderr reports shared by `main.zig` and `cli/digital.zig`: a
 //! diagnostic bag -> rendered text or JSON, and a source that could not be
-//! read -> its one-line error (E1013 past `Preprocessor.max_text_bytes`).
-//! The messages are user-visible and frozen.
+//! read -> its one-line error (`vera.readFailed`). The messages are
+//! user-visible and frozen.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -20,25 +20,9 @@ pub fn report(bag: *diag.Bag, w: *Io.Writer, json: bool, color: bool) !void {
     try w.flush();
 }
 
-/// Reports that `path` could not be read: E1013 for a file past
-/// `Preprocessor.max_text_bytes` (the u32 offsets the lexer uses), else the
-/// error's name.
-pub fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
-    if (e == error.StreamTooLong)
-        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, vera.Preprocessor.max_text_bytes })
-    else
-        try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
-}
-
-test readFailed {
-    var buf: [256]u8 = undefined;
-    var w: Io.Writer = .fixed(&buf);
-    // 2^32 - 1 is 4294967295 bytes.
-    try readFailed(&w, "big.va", error.StreamTooLong);
-    try readFailed(&w, "gone.va", error.FileNotFound);
-    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 4294967295 bytes; see `vera --explain E1013`\n" ++
-        "error: cannot read `gone.va`: FileNotFound\n", w.buffered());
-}
+/// Reports that `path` could not be read (`vera.readFailed`, which the
+/// spine reports through too).
+pub const readFailed = vera.readFailed;
 
 test report {
     const gpa = std.testing.allocator;
