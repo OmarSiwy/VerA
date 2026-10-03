@@ -14,6 +14,10 @@ const parse_generate = @import("generate.zig");
 const parse_source = @import("source.zig");
 const parse_inst = @import("inst.zig");
 const parse_specify = @import("specify.zig");
+const parse_function = @import("function.zig");
+const parse_hier = @import("hier.zig");
+const parse_net = @import("net.zig");
+const parse_stmt = @import("stmt.zig");
 const token = @import("../token.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
@@ -461,18 +465,18 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
     var attr_tok: ?u32 = null;
     while (true) {
         try self.skipAttributes();
-        if (portDirection(self.peek())) |d| {
+        if (parse_net.portDirection(self.peek())) |d| {
             attr_tok = self.pos;
             if (plain) return self.failAt(self.pos, .E0207, "found {s}: a port_declaration cannot follow a list_of_ports port (A.1.3)", .{self.found(self.pos)});
             dir = d;
             b.ansi = true;
             self.pos += 1;
             var kind: Ast.NetKind = .wire;
-            disc = try optPortType(self, &kind, &signed);
+            disc = try parse_net.optPortType(self, &kind, &signed);
             // IEEE 1364-2005 §12.3.4: "The same syntax for input, inout, and
             // output declarations is used in the module header", so
             // A.2.1.2's variable arms (`output reg q`) are legal here too.
-            var_storage = try parse_decl.optVarStorage(self, dir);
+            var_storage = try parse_net.optVarStorage(self, dir);
             if (var_storage != null) signed = self.eat(.kw_signed);
             // A.1.3 `inout [ range ] port_identifier {, port_identifier}`:
             // the range belongs to the declaration (§6.5.2
@@ -508,7 +512,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             const tok = self.pos;
             const name = try self.expectIdent();
             if (attr_tok) |decl| try self.copyAttributes(decl, tok);
-            if (var_storage) |storage| try parse_decl.varPort(self, b, storage, name, range, signed, tok);
+            if (var_storage) |storage| try parse_net.varPort(self, b, storage, name, range, signed, tok);
             // A.1.3 `port_reference ::= port_identifier [ [
             // constant_range_expression ] ]`, the list-of-ports form only.
             var select: ?Ast.Dim = null;
@@ -537,51 +541,6 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
-}
-
-/// Returns the `Ast.Direction` of an A.2.1.2 port direction keyword, or null
-/// for any other token.
-pub fn portDirection(tag: token.Tag) ?Ast.Direction {
-    return switch (tag) {
-        .kw_input => .input,
-        .kw_output => .output,
-        .kw_inout => .inout,
-        else => null, // else: not a port_direction keyword
-    };
-}
-
-/// Parses the A.2.1.2 `[ discipline_identifier ] [ net_type | wreal ]
-/// [ signed ]` prefix of a port declaration and returns the discipline, or
-/// `.none`. The net type and `signed` are consumed and dropped.
-pub fn optDiscipline(self: *Parser) Error!Ast.StrId {
-    var kind: Ast.NetKind = .wire;
-    var signed = false;
-    return optPortType(self, &kind, &signed);
-}
-
-/// Same as `optDiscipline`, also storing the net type in `kind` (unchanged
-/// when absent) and whether `signed` was present in `signed`. A discipline
-/// is an identifier followed by another identifier (the first name), so one
-/// token of lookahead decides.
-pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.StrId {
-    var disc: Ast.StrId = .none;
-    if (self.peek() == .identifier and self.identLike(self.pos + 1)) {
-        disc = try self.internTok(self.pos);
-        self.pos += 1;
-    }
-    if (parse_decl.netKind(self.peek())) |k| {
-        kind.* = k;
-        self.pos += 1;
-    } else if (self.reservedIs(self.pos, "wreal")) {
-        // A.2.1.2's `[ net_type | wreal ]`: `wreal` is not an A.2.2.1
-        // net_type, so `netKind` does not know it. Annex C.4/C.8 remove it
-        // from the Verilog-A subset only; in Verilog-AMS §6.5.3 makes a wreal
-        // port the way a real value crosses a module boundary.
-        kind.* = .wreal;
-        self.pos += 1;
-    }
-    signed.* = self.eat(.kw_signed);
-    return disc;
 }
 
 // -----------------------------------------------------------------------
@@ -682,7 +641,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
                 // element of an instance array, a flat name elaboration
                 // mints.
                 var indices: std.ArrayList(Ast.ExprId) = .empty;
-                const path = try parse_decl.parseDottedPath(self, true, if (self.digital) &indices else null);
+                const path = try parse_hier.parseDottedPath(self, true, if (self.digital) &indices else null);
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 try b.defparams.append(self.arena, .{
@@ -724,15 +683,15 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             _ = try self.expect(.semicolon);
         },
         // §3.12 branch declaration (A.2.1.3)
-        .kw_branch => try parse_decl.parseBranchDecl(self, b),
+        .kw_branch => try parse_net.parseBranchDecl(self, b),
         // §3.6.4 ground declaration (A.2.1.3 net_declaration)
         .kw_ground => {
             self.pos += 1;
-            const disc = try optDiscipline(self);
-            try parse_decl.parseNetNames(self, b, disc, .wire, true, .{}, false);
+            const disc = try parse_net.optDiscipline(self);
+            try parse_net.parseNetNames(self, b, disc, .wire, true, .{}, false);
         },
         // §6.5.2 non-ANSI port declarations
-        .kw_input, .kw_output, .kw_inout => try parse_decl.parsePortDecl(self, b),
+        .kw_input, .kw_output, .kw_inout => try parse_net.parsePortDecl(self, b),
         // A.2.1.3 net_declaration with an explicit net type
         .kw_wire,
         .kw_tri,
@@ -747,7 +706,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         .kw_supply0,
         .kw_supply1,
         => {
-            const kind = parse_decl.netKind(self.peek()).?;
+            const kind = parse_net.netKind(self.peek()).?;
             self.pos += 1;
             // A.2.1.3 puts an optional bracket right after the net type:
             // `charge_strength` on the `trireg` arms (§3.8 default
@@ -763,10 +722,10 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             // `(strong1, strong0)` and needs no flag.
             var st: Ast.NetStrength = .{};
             if (self.peek() == .lparen) {
-                if (parse_decl.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma) {
-                    try parse_decl.parseDriveStrength(self, &st.strength0, &st.strength1);
+                if (parse_net.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma) {
+                    try parse_net.parseDriveStrength(self, &st.strength0, &st.strength1);
                     st.drive = true;
-                } else st.charge = try parse_decl.parseChargeStrength(self, kind);
+                } else st.charge = try parse_net.parseChargeStrength(self, kind);
             }
             // IEEE 1364-2005 §4.3.2's advisory `vectored | scalared`, which
             // Syntax 4-1 admits only in the alternatives that carry a range.
@@ -774,10 +733,10 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             const advised = self.eat(.kw_scalared) or self.eat(.kw_vectored);
             var signed = false;
             var ignored: Ast.NetKind = .wire;
-            const disc = try optPortType(self, &ignored, &signed);
+            const disc = try parse_net.optPortType(self, &ignored, &signed);
             if (advised and self.peek() != .lbracket)
                 return self.failAt(advisory, .E0207, "§4.3.2: scalared and vectored are only legal on a vector net, which declares a range", .{});
-            try parse_decl.parseNetNames(self, b, disc, kind, false, st, signed);
+            try parse_net.parseNetNames(self, b, disc, kind, false, st, signed);
         },
         // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
         // list_of_net_assignments ;`, a module item of every module (A.1.4).
@@ -789,8 +748,8 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             // `(`, so the parenthesis is unambiguously A.2.2.2's.
             var s0: Ast.Strength = .strong;
             var s1: Ast.Strength = .strong;
-            if (self.peek() == .lparen) try parse_decl.parseDriveStrength(self, &s0, &s1);
-            const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
+            if (self.peek() == .lparen) try parse_net.parseDriveStrength(self, &s0, &s1);
+            const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_net.parseDelay3(self) else .{};
             while (true) {
                 const tok = self.pos;
                 const target = try parse_expr.parseExpr(self);
@@ -814,7 +773,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         // context.
         .kw_initial, .kw_always => try parse_inst.parseDiscrete(self, b),
         // §5.2 analog construct / §4.7.1 analog function
-        .kw_analog => try parse_decl.parseAnalog(self, b),
+        .kw_analog => try parseAnalog(self, b),
         // §4.7: "Each function can be an analog user-defined function or a
         // digital function (as defined in IEEE Std 1364 Verilog)." So a bare
         // `function` is a legal module item in any module; what §7.3.7
@@ -824,7 +783,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         // A digital parse reads the 1364 declaration itself (packed ranges,
         // `automatic`, `reg` formals), which the analog function grammar
         // cannot carry.
-        .kw_function => if (self.digital) try parse_decl.parseSubroutine(self, b, true) else try parse_decl.parseFuncDecl(self, b, self.pos, false),
+        .kw_function => if (self.digital) try parse_function.parseSubroutine(self, b, true) else try parse_function.parseFuncDecl(self, b, self.pos, false),
         // A.4.2 generate_region, transparent per §6.6's "there is no
         // semantic difference": the items inside are plain module items and
         // the region introduces no scope. §6.6: "Generate regions do not
@@ -873,7 +832,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             }
             const disc = try self.internTok(self.pos);
             self.pos += 1;
-            try parse_decl.parseNetNames(self, b, disc, .wire, false, .{}, false);
+            try parse_net.parseNetNames(self, b, disc, .wire, false, .{}, false);
         },
         // Annex B reserves 1364 spellings that have no tag of their own:
         // `specify`, `specparam`, `primitive`, `pulldown` and the rest all
@@ -896,7 +855,7 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
                 const saved = self.in_discrete;
                 self.in_discrete = true;
                 defer self.in_discrete = saved;
-                return parse_decl.parseSubroutine(self, b, false);
+                return parse_function.parseSubroutine(self, b, false);
             }
             // A.3.1's last two arms. They have no tags of their own because
             // A.3.2 gives them a strength set no other gate takes.
@@ -907,28 +866,25 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             if (parse_inst.switch_arms.has(w)) return parse_inst.parseSwitch(self, b);
             // A.2.1.3's two `wreal` arms: §3.7's real net, which the annex
             // gives arms of its own rather than a `net_type`.
-            if (std.mem.eql(u8, w, "wreal")) return parseWrealDecl(self, b);
+            if (std.mem.eql(u8, w, "wreal")) return parse_net.parseWrealDecl(self, b);
             return parse_inst.unsupportedItem(self);
         },
         else => return parse_inst.notAModuleItem(self), // else: begins no A.1.4 module_item: E0240
     }
 }
 
-/// Parses A.2.1.3's two `wreal` alternatives, §3.7's real net, into
-/// `b.nets`:
-///
-///     | wreal [ discipline_identifier ] [ range ] list_of_net_identifiers ;
-///     | wreal [ discipline_identifier ] [ range ] list_of_net_decl_assignments ;
-///
-/// `wreal` is not an A.2.2.1 `net_type`, so it takes no strength bracket and
-/// no `vectored`/`scalared`. Annex C.4 removes it from the Verilog-A subset
-/// only; in Verilog-AMS §3.7 lets the analog block read one.
-pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
-    self.pos += 1;
-    // `[ discipline_identifier ]`: an identifier followed by another
-    // identifier, `optPortType`'s lookahead.
-    var ignored: Ast.NetKind = .wire;
-    var signed = false;
-    const disc = try optPortType(self, &ignored, &signed);
-    try parse_decl.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
+/// Parses an A.6.2 `analog [initial]` construct into `b.analog`, or an
+/// `analog function` declaration into `b.functions`. Cursor on `analog`.
+fn parseAnalog(self: *Parser, b: *Body) Error!void {
+    const main_tok = self.pos;
+    self.pos += 1; // 'analog'
+    if (self.peek() == .kw_function) return parse_function.parseFuncDecl(self, b, main_tok, true);
+    // §5.2.1 `analog initial analog_function_statement`
+    const is_initial = self.eat(.kw_initial);
+    const body = try parse_stmt.parseStmtNoNull(self); // A.6.2 takes one analog_statement
+    try b.analog.append(self.arena, .{
+        .is_initial = is_initial,
+        .body = body,
+        .main_tok = main_tok,
+    });
 }

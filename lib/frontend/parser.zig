@@ -196,8 +196,20 @@ pub const Parser = struct {
     // Annex A.4.2 generate constructs (LRM §6.6)
     const parse_generate = @import("parser/generate.zig");
 
-    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port, net and branch declarations
+    // Annex A.2.1.1 parameters (§3.4), A.2.1.3 variables and events, A.2.5 dimensions
     const parse_decl = @import("parser/decl.zig");
+
+    // Annex A.2.6 analog functions (§4.7.1), IEEE 1364-2005 A.2.6/A.2.7 digital functions and tasks
+    const parse_function = @import("parser/function.zig");
+
+    // Annex A.1.6/A.1.7 natures and disciplines (§3.6)
+    const parse_discipline = @import("parser/discipline.zig");
+
+    // Annex A.2.1.2/A.2.1.3/A.2.2 port, net and branch declarations, strengths and delays
+    const parse_net = @import("parser/net.zig");
+
+    // §6.7 / A.9.3 hierarchical names in declaration positions
+    const parse_hier = @import("parser/hier.zig");
 
     // Annex A.6.4 analog_statement (LRM Clause 5)
     const parse_stmt = @import("parser/stmt.zig");
@@ -626,6 +638,10 @@ test {
     _ = Parser.parse_generate;
     _ = Parser.parse_inst;
     _ = Parser.parse_decl;
+    _ = Parser.parse_function;
+    _ = Parser.parse_discipline;
+    _ = Parser.parse_net;
+    _ = Parser.parse_hier;
     _ = Parser.parse_stmt;
     _ = Parser.parse_expr;
     _ = parse_test;
