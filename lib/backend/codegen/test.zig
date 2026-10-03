@@ -356,7 +356,7 @@ test "codegen: acceptQ is q and updateState off ONE core evaluation" {
     const at = std.mem.indexOf(u8, src, "pub fn acceptQ(comptime S: type,") orelse return error.NoAcceptQ;
     const body = src[at..][0 .. std.mem.indexOf(u8, src[at..], "\n}\n") orelse return error.NoEnd];
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "@call(.always_inline, core,"));
-    try std.testing.expect(std.mem.indexOf(u8, body, "inst.wq__0 = m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "state.wq__0 = m.f") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "return qq;") != null);
 }
 
@@ -3382,8 +3382,8 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "zInst(S, inst, \"pb__0\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "inst.wb__0 = ") != null); // updateState stages
-    try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = inst.wb__0;") != null); // commit latches
+    try std.testing.expect(std.mem.indexOf(u8, s, "state.wb__0 = ") != null); // updateState stages
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = state.wb__0;") != null); // commit latches
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
 
     // $prev of a value with no unknown dependence is the value itself: no

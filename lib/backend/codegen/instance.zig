@@ -187,14 +187,15 @@ pub fn emitInstance(self: *Gen) Error!void {
     // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
     // semantics): pb__k is the ddt operand at the last accepted solve, pq__k
     // the sum of committed A·ΔB increments (the charge base, fixed across one
-    // Newton attempt). wb__/wq__ stage the current iterate (updateState);
-    // stateCtl(.commit) latches them. Zero defaults make the first committed
-    // increment A·B, as ngspice MODEINITTRAN seeds qgs = capgs·vgs.
+    // Newton attempt). Zero defaults make the first committed increment A·B,
+    // as ngspice MODEINITTRAN seeds qgs = capgs·vgs. `eval` reads these; their
+    // staged twins, which only `updateState` and the commit touch, live in
+    // `State` (`emitStateTwins`), so they cost `eval` no cache line.
     for (0..self.core.prev_lo.len) |k| {
-        try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n    wb__{d}: f64 = 0.0, // staged\n", .{ k, k });
+        try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n", .{k});
     }
     for (0..self.core.acc_lo.len) |k| {
-        try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n    wq__{d}: f64 = 0.0, // staged\n", .{ k, k });
+        try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n", .{k});
     }
     // §5.10 event-assigned variables. Last, so a model that gains one moves
     // no operator field. The default is the declared initializer, which only
@@ -456,11 +457,15 @@ pub fn pathLatches(self: *const Gen) bool {
     return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
-/// Emits `State`'s `stateCtl` twins: one per `Gen.hist` field, typed and
+/// Emits `State`'s `stateCtl` twins: the §5.6.1.2 staged path-latch operands
+/// (`wb__k`/`wq__k`, which `updateState` writes and `stateCtl(.commit)` moves
+/// into `Instance.pb__k`/`pq__k`), one twin per `Gen.hist` field, typed and
 /// defaulted as that `Instance` field, plus `t_prev__acc` when `t_prev` and
 /// each §4.5.7 ring's overwritten sample. Requires `emitInstance` to have run
 /// and `z_inst0` (a default `Instance`) to be declared.
 pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
+    for (0..self.core.prev_lo.len) |k| try self.w("    wb__{d}: f64 = 0.0, // path_prev staged\n", .{k});
+    for (0..self.core.acc_lo.len) |k| try self.w("    wq__{d}: f64 = 0.0, // path_acc staged\n", .{k});
     if (t_prev) try self.w("    t_prev__acc: f64 = 0.0,\n", .{});
     for (self.hist.items) |h| try self.w("    {s}: @TypeOf(z_inst0.{s}) = z_inst0.{s},\n", .{ h, h, h });
     for (self.names.units, 0..) |u, i| {
@@ -511,8 +516,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
-    for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
+    for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = state.wb__{d};\n", .{ k, k });
+    for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += state.wq__{d};\n        state.wq__{d} = 0.0;\n", .{ k, k, k });
     for (self.hist.items) |h| {
         if (heldNamed(self, h)) |hv| if (dirtyArray(self, hv) != null) {
             try self.w("        zArrSync({1s}, &state.{0s}, &inst.{0s}, &inst.{0s}__dirty);\n", .{ h, elemTy(self, hv) });
