@@ -1,10 +1,10 @@
 //! The Zig build driver: device text (`Output`) and testbench runner text in,
-//! a versioned `.so` (§8.3 device-side ABI), a prebuilt engine object or a
-//! testbench binary out, each built by a spawned `zig` child. Re-exports
-//! only; the files import each other directly. Imports no compiler module
-//! (ARCHITECTURE.md §1 row 12): the spine hands it bytes. `contract`: `Part`
-//! is the host's `DevicePart`. `dynlib`: only the tests that load what they
-//! built.
+//! a versioned `.so` (§8.3 device-side ABI), a prebuilt engine object, a
+//! testbench binary or a `--check` verdict out, each from a spawned `zig`
+//! child. Re-exports only; the files import each other directly. Imports no
+//! compiler module (ARCHITECTURE.md §1 row 12): the spine hands it bytes.
+//! `contract`: `Part` is the host's `DevicePart`. `dynlib`: only the tests
+//! that load what they built.
 
 const orchestrator = @import("orchestrator.zig");
 const exe = @import("exe.zig");
@@ -50,6 +50,8 @@ pub const stage = exe.stage;
 pub const buildBatch = exe.buildBatch;
 /// The `argv[0]` prefix a batch binary dispatches on.
 pub const batch_argv0 = exe.batch_argv0;
+/// `--check`: type-checks device text against the contract with `zig build-obj`.
+pub const typeCheck = @import("check.zig").typeCheck;
 
 test {
     @import("std").testing.refAllDecls(@This());
