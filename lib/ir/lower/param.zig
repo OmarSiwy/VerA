@@ -19,9 +19,80 @@ const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
+const diag = @import("diag");
 const Oom = Lower.Oom;
 const Const = Lower.Const;
 const astTy = Lower.astTy;
+/// §3.4 every parameter of the module, in source order, so a default may read
+/// an earlier one (§6.3.4): the §6.3.6 geometry aliases first, then each
+/// declaration, then the §6.4.2 selection parameters marked as shape. Runs
+/// before the ports, whose ranges may read a parameter.
+pub fn lowerParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §3.4 parameters before the ports, because a range is a constant
+    // expression over them: §6.5.2.2's own example is `input [1:width] dt`
+    // with `width` a module parameter, and `foldDim` cannot answer that from
+    // an empty `consts`. A parameter declaration cannot name a net (§3.4
+    // defaults are constant expressions), so the order is otherwise free.
+    // §6.3.6 implicitly declares the geometry controls. Register their
+    // top-level aliases before the explicit parameters so they exist
+    // before a flattened child's dependent defaults read them. Keep the
+    // existing `$mfactor` host/scaling ABI in its separate alias path below.
+    for (module.aliasparams) |a| {
+        const kind = hier_param.Kind.fromName(self.file.str(a.target)) orelse continue;
+        if (kind == .mfactor) continue;
+        const alias = self.file.str(a.alias);
+        const collides = self.param_index.contains(alias) or for (module.params) |p| {
+            if (p.name == a.alias) break true;
+        } else false;
+        if (collides) {
+            try self.err(module.main_tok, .E0331, "`{s}`", .{alias});
+            continue;
+        }
+        _ = try aliasSystemParam(self, alias, self.file.str(a.target));
+    }
+    for (module.params) |*p| try lowerParamDecl(self, p);
+    for (self.selection_params) |name| if (self.param_index.get(self.file.str(name))) |i| {
+        self.out.params.items[i].shape = true;
+    };
+}
+
+/// §3.4.7 each `aliasparam` other than a §6.3.6 geometry alias (`lowerParams`
+/// declared those): a second name for an existing parameter, or for a system
+/// parameter (`aliasSystemParam`). E0331 when the alias collides, E0303 when
+/// the target is unknown.
+pub fn declareAliasParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §3.4 parameters were lowered above the port loop, in source order, so a
+    // later default may still reference an earlier parameter (§6.3.4).
+    // §3.4.7 aliasparam: a second name for an existing parameter.
+    for (module.aliasparams) |a| {
+        const target = self.file.str(a.target);
+        const alias = self.file.str(a.alias);
+        if (hier_param.Kind.fromName(target)) |kind|
+            if (kind != .mfactor) continue; // already declared above
+        // §3.4.7 "The alias_identifier shall not occur anywhere else in the
+        // module; in particular, it shall not conflict with a different
+        // parameter_identifier". Unchecked, the `put` below would rebind the
+        // colliding name for the rest of the module.
+        if (!self.param_index.contains(alias) and try aliasSystemParam(self, alias, target)) continue;
+        if (self.param_index.contains(alias)) {
+            var b = self.errWith(module.main_tok, .E0331);
+            b.msg("`{s}`", .{alias});
+            b.help("an `aliasparam` gives `{s}` a second NAME, it does not declare a second parameter", .{target});
+            try b.emit();
+            continue;
+        }
+        if (self.param_index.get(target)) |idx| {
+            try self.param_index.put(self.arena, alias, idx);
+            try self.out.aliases.append(self.arena, .{ .name = alias, .param = idx });
+        } else {
+            var b = self.errWith(module.main_tok, .E0303);
+            b.msg("`{s}`", .{target});
+            if (diag.didYouMeanMap(target, self.param_index)) |s|
+                b.help("did you mean `{s}`?", .{s});
+            try b.emit();
+        }
+    }
+}
 /// Registers a parameter: infers its type (§3.4.1), folds its default, and
 /// copies `decl.ranges` into `ParamInfo.ranges` for the prover (LRM §3.4, §3.4.2).
 pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
