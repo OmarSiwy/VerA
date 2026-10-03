@@ -318,7 +318,9 @@ pub fn typeName(t: c_int) []const u8 {
 /// One struct for every class rather than a tagged union, so a `vpi_get` arm
 /// switches on the property without first switching on a payload. Fields a
 /// class does not use hold their defaults and are never read; each names its
-/// owner.
+/// owner. The fields only a few rows carry (analog topology, arrays,
+/// attributes, event references) are out of line in `Cold`, reached through
+/// `cold`.
 pub const Obj = struct {
     kind: Kind,
     /// §11.6's "one-to-one relationship back to module": the containing
@@ -357,23 +359,86 @@ pub const Obj = struct {
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values come from analog.zig's solution.
     slot: ?u32 = null,
-    /// §26.6.11: a source reference to an event with nonconstant indices.
-    /// Its identity is selected when used, in the declaring lexical scope.
-    /// Automatic references require frame handles and are refused by put.
-    event_ref: ?struct { expr: Ast.ExprId, scope: u32 } = null,
     /// `.parameter` of the analog model: the constant lowering folded for it
     /// (`Lowered.consts`), copied; §11.6.12 NOTE 1's "the value of the
     /// parameter".
     value: ?Lower.Const = null,
-    /// IEEE §26.6.42: a folded attribute preserves its declared bit width
-    /// and all x/z bits, which a signed i64 constant cannot represent.
-    constant_bits: ?@import("frontend").Integer.Literal = null,
-    attributes: []const u32 = &.{},
     /// An element (word, var select, array member module): the array object
     /// it belongs to — §11.6.11's `vpiParent`, §6.2.2's `vpiModuleArray`.
     parent: ?u32 = null,
     /// An element: the `.constant` object its `vpiIndex` edge leads to.
     index: ?u32 = null,
+    /// `.code`: the object type and the diagram's edges, as data. Any other
+    /// class may carry `edges` and `props` too, answered after its own.
+    vtype: c_int = 0,
+    edges: []const code.Edge = &.{},
+    lists: []const code.List = &.{},
+    props: []const code.Prop = &.{},
+    /// `.constant` only: §11.6.19's vpiConstType. 0 when the literal's base
+    /// is not one this model records.
+    const_type: c_int = vpiDecConst,
+    /// `.code` only: written by the analog model (a call in an `analog`
+    /// block names an analog systf, §12.32).
+    in_analog: bool = false,
+    /// The source an expression (`.code` or `.constant`) or a task call was
+    /// built from, which `vpiDecompile` spells (IEEE 1364-2005 §26.6.26 b),
+    /// §26.6.19 g)). Expressions also supply §26.6.19(e)'s lazy value reads;
+    /// declared objects retain their storage-based path. `.none` means no source.
+    src_expr: Ast.ExprId = .none,
+    src_stmt: Ast.StmtId = .none,
+    /// `.code` of the digital model: the main token of the statement it is —
+    /// a gate, a UDP instance, a continuous assignment — which with `owner`
+    /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
+    /// task or function call, the token the engine runs its calltf by
+    /// (`systf.hook`); of a declaration, its IEEE §26.3.3 source location.
+    /// Zero means no source token was recorded.
+    src_tok: u32 = 0,
+    /// `.code` statement: its AST statement, which with `owner` names the
+    /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
+    stmt: Ast.StmtId = .none,
+    /// The instance supplying `src_expr`'s engine context. Expressions such
+    /// as operations have no VPI scope relationship (`owner` is null), but
+    /// still need their original instance when an application reads them.
+    expr_scope: ?u32 = null,
+    /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
+    net_type: Ast.NetKind = .wire,
+    /// `.code` only: §11.6.13/§11.6.14's vpiDefName of a primitive or UDP
+    /// definition.
+    def_name: []const u8 = "",
+    /// A declaration inside a generated digital scope evaluates its source
+    /// attribute expressions there, including the iteration's localparam.
+    src_engine: ?u32 = null,
+    /// A continuous assignment's literal delays, in its module's time unit
+    /// (IEEE 1364 §7.14: rise, fall, turn-off), for §12.11. Hot, not in
+    /// `Cold`: §12.29's vpi_put_delays may give one to any gate or
+    /// continuous assignment after `open`, when `Design.cold` is fixed.
+    delays: []const f64 = &.{},
+    /// This row's `Design.cold` entry, `no_cold` for none (every field of
+    /// `Cold` at its default). Read it through `coldOf`.
+    cold: u32 = no_cold,
+};
+
+// Budget: the row every handle points at and every scan walks. 472 bytes
+// before the cold split; a new field that is not on most rows goes in `Cold`.
+comptime {
+    std.debug.assert(@sizeOf(Obj) == 248);
+}
+
+/// `Obj.cold` of a row with no `Cold` entry.
+pub const no_cold = std.math.maxInt(u32);
+
+/// The fields of an `Obj` only a few classes carry, one row per object that
+/// sets any of them (`Design.cold`, indexed by `Obj.cold`). A row without one
+/// reads `Cold{}`, every default.
+pub const Cold = struct {
+    /// §26.6.11: a source reference to an event with nonconstant indices.
+    /// Its identity is selected when used, in the declaring lexical scope.
+    /// Automatic references require frame handles and are refused by put.
+    event_ref: ?struct { expr: Ast.ExprId, scope: u32 } = null,
+    /// IEEE §26.6.42: a folded attribute preserves its declared bit width
+    /// and all x/z bits, which a signed i64 constant cannot represent.
+    constant_bits: ?@import("frontend").Integer.Literal = null,
+    attributes: []const u32 = &.{},
     /// An array: its elements, in increasing index.
     members: []const u32 = &.{},
     /// A digital array: its IEEE 1364-2005 §26.6.10 range, one `.code` object
@@ -405,24 +470,6 @@ pub const Obj = struct {
     nets: []const u32 = &.{},
     children: []const u32 = &.{},
     users: []const u32 = &.{},
-    /// `.code`: the object type and the diagram's edges, as data. Any other
-    /// class may carry `edges` and `props` too, answered after its own.
-    vtype: c_int = 0,
-    edges: []const code.Edge = &.{},
-    lists: []const code.List = &.{},
-    props: []const code.Prop = &.{},
-    /// A continuous assignment's literal delays, in its module's time unit
-    /// (IEEE 1364 §7.14: rise, fall, turn-off), for §12.11.
-    delays: []const f64 = &.{},
-    /// `.constant` only: §11.6.19's vpiConstType. 0 when the literal's base
-    /// is not one this model records.
-    const_type: c_int = vpiDecConst,
-    /// `.code` only: written by the analog model (a call in an `analog`
-    /// block names an analog systf, §12.32).
-    in_analog: bool = false,
-    /// `.code` only: §11.6.13/§11.6.14's vpiDefName of a primitive or UDP
-    /// definition.
-    def_name: []const u8 = "",
     /// `.node` of the analog model: its `Lowered.nodes` row — the solver
     /// unknown whose value §12.10 reads for a potential. Null for a node the
     /// lowering never gave a row (declared, never reached by analog code).
@@ -445,36 +492,18 @@ pub const Obj = struct {
     /// source row's canonical pair — its flow is the row's, negated
     /// (§1.3.1.2: the reference direction is the declaration's).
     flow_neg: bool = false,
-    /// The source an expression (`.code` or `.constant`) or a task call was
-    /// built from, which `vpiDecompile` spells (IEEE 1364-2005 §26.6.26 b),
-    /// §26.6.19 g)). Expressions also supply §26.6.19(e)'s lazy value reads;
-    /// declared objects retain their storage-based path. `.none` means no source.
-    src_expr: Ast.ExprId = .none,
-    src_stmt: Ast.StmtId = .none,
-    /// `.code` of the digital model: the main token of the statement it is —
-    /// a gate, a UDP instance, a continuous assignment — which with `owner`
-    /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
-    /// task or function call, the token the engine runs its calltf by
-    /// (`systf.hook`); of a declaration, its IEEE §26.3.3 source location.
-    /// Zero means no source token was recorded.
-    src_tok: u32 = 0,
-    /// A declaration inside a generated digital scope evaluates its source
-    /// attribute expressions there, including the iteration's localparam.
-    src_engine: ?u32 = null,
-    /// `.code` statement: its AST statement, which with `owner` names the
-    /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
-    stmt: Ast.StmtId = .none,
-    /// The instance supplying `src_expr`'s engine context. Expressions such
-    /// as operations have no VPI scope relationship (`owner` is null), but
-    /// still need their original instance when an application reads them.
-    expr_scope: ?u32 = null,
-    /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
-    net_type: Ast.NetKind = .wire,
     /// A force/assign statement's RHS source expression. The engine's live
     /// override ranges retain this identity, so traversal can distinguish
     /// two source statements that write the same target (§26.6.6 i, j).
     override_expr: Ast.ExprId = .none,
 };
+
+const empty_cold: Cold = .{};
+
+/// The cold fields of `o`, a row of the installed design.
+pub fn coldOf(o: *const Obj) *const Cold {
+    return if (o.cold == no_cold) &empty_cold else &design.?.cold[o.cold];
+}
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
 /// object of, as object indices; read-only after `open`.
@@ -551,6 +580,8 @@ pub const Design = struct {
     /// boundary. One object always yields one pointer, but applications must
     /// still compare with `vpi_compare_objects` (§12.3).
     objects: []Obj,
+    /// The `Cold` rows `Obj.cold` indexes, in no particular order.
+    cold: []Cold = &.{},
     scopes: []Scope,
     /// §11.6.1 NOTE 1 — what `vpi_iterate(vpiModule, NULL)` walks. One entry:
     /// `Elaborate.pickTop` elaborates exactly one design root.
@@ -591,6 +622,7 @@ pub const Design = struct {
         self.iters.deinit(self.gpa);
         self.by_name.deinit(self.gpa);
         self.gpa.free(self.objects);
+        self.gpa.free(self.cold);
         self.gpa.free(self.scopes);
         self.arena.deinit();
         self.* = undefined;

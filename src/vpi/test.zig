@@ -313,17 +313,17 @@ test "§5.4.2/§11.6.6: an instance's `<+` declares an unnamed branch the instan
         try std.testing.expect(it != null);
         const b = vpi_scan(it).?;
         try std.testing.expect(vpi_scan(it) == null);
-        const o = asObj(b).?;
+        const o = root.coldOf(asObj(b).?);
         try std.testing.expect(o.pos != null);
         try std.testing.expect(o.neg == null); // gnd is §1.3.1.1's reference
         try std.testing.expectEqual(vpiQuantity, vpi_get(vpiType, vpi_handle(vpiFlow, b)));
     }
-    const v1 = asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.v1"), null))).?).?;
+    const v1 = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.v1"), null))).?).?);
     try std.testing.expect(v1.contrib_pot != null and v1.contrib_flow == null);
     // r1 and r2 are two devices in parallel: lowering sums their `<+` into
     // one row, so neither one's share of the flow is known — refused, not
     // reported as the total.
-    const r1 = asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.r1"), null))).?).?;
+    const r1 = root.coldOf(asObj(vpi_scan(vpi_iterate(vpiBranch, vpi_handle_by_name(@constCast("top.r1"), null))).?).?);
     try std.testing.expect(r1.contrib_flow != null and r1.flow_unknowable);
 }
 

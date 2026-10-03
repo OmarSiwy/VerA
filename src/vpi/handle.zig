@@ -10,6 +10,7 @@ const std = @import("std");
 const Elaborate = @import("ir").Elaborate;
 const code = @import("code.zig");
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 
@@ -155,38 +156,38 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
 fn analogEdge(o: *const Obj, obj_type: c_int) ??u32 {
     return switch (o.kind) {
         .net => switch (obj_type) {
-            vpiNode => o.node,
-            vpiDiscipline => o.disc,
+            vpiNode => coldOf(o).node,
+            vpiDiscipline => coldOf(o).disc,
             else => null, // else: every other tag is one of the net's non-analog edges
         },
         .node => switch (obj_type) {
-            vpiDiscipline => o.disc,
+            vpiDiscipline => coldOf(o).disc,
             else => null, // else: vpiModule/vpiScope are the shared owner edge
         },
         .branch => switch (obj_type) {
-            vpiPosNode => o.pos,
-            vpiNegNode => o.neg,
-            vpiDiscipline => o.disc,
-            vpiFlow => o.flow,
-            vpiPotential => o.pot,
+            vpiPosNode => coldOf(o).pos,
+            vpiNegNode => coldOf(o).neg,
+            vpiDiscipline => coldOf(o).disc,
+            vpiFlow => coldOf(o).flow,
+            vpiPotential => coldOf(o).pot,
             else => null, // else: vpiModule/vpiScope are the shared owner edge
         },
         .quantity => switch (obj_type) {
-            vpiBranch => o.branch,
-            vpiNature => o.nature,
+            vpiBranch => coldOf(o).branch,
+            vpiNature => coldOf(o).nature,
             else => null, // else: a quantity draws no other single arrow
         },
         .discipline => switch (obj_type) {
-            vpiFlowNature => o.flow,
-            vpiPotentialNature => o.pot,
+            vpiFlowNature => coldOf(o).flow,
+            vpiPotentialNature => coldOf(o).pot,
             else => null, // else: a discipline draws no other single arrow
         },
         .nature => switch (obj_type) {
-            vpiParent => o.nature,
+            vpiParent => coldOf(o).nature,
             else => null, // else: a nature draws no other single arrow
         },
         .port => switch (obj_type) {
-            vpiNode => o.node,
+            vpiNode => coldOf(o).node,
             else => null, // else: a port's other edges are the shared owner edge
         },
         .module, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .code => null,
@@ -277,12 +278,12 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no argument {d}", .{ o.name, index });
         return null;
     }
-    if (o.members.len != 0) {
-        if (o.kind == .code and o.vtype == code.vpiNamedEventArray and o.range.len != 1) {
-            fail("NOINDEX", "vpi_handle_by_index: `{s}` requires {d} event-array indices", .{ o.full, o.range.len });
+    if (coldOf(o).members.len != 0) {
+        if (o.kind == .code and o.vtype == code.vpiNamedEventArray and coldOf(o).range.len != 1) {
+            fail("NOINDEX", "vpi_handle_by_index: `{s}` requires {d} event-array indices", .{ o.full, coldOf(o).range.len });
             return null;
         }
-        for (o.members) |m| {
+        for (coldOf(o).members) |m| {
             const c = d.objects[m].index orelse continue;
             if (d.objects[c].value.?.int == index) return handleOf(&d.objects[m]);
         }
@@ -319,7 +320,7 @@ pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_
         return null;
     };
     if (o.kind == .code and o.vtype == code.vpiNamedEventArray) {
-        if (num_index > 0 and num_index == o.range.len) for (o.members) |m| {
+        if (num_index > 0 and num_index == coldOf(o).range.len) for (coldOf(o).members) |m| {
             for (d.objects[m].lists) |l| {
                 if (l.tag != vpiIndex) continue;
                 const matches = for (l.items, 0..) |ix, k| {
