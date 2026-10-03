@@ -288,6 +288,8 @@ fn emitSimparams(self: *Gen) Error!void {
 /// are taken `then` untested (neither arm is setup work, and the §5.10.2
 /// initial-step arm is what setup must compute), and the walk stops at the
 /// first loop that is not invariant, since nothing after it is placeable.
+/// Asserts the body read no unknown and refused nothing: `plan/setup.zig`
+/// admits only solve-invariant, constant-renderable roots.
 pub fn emitSetup(self: *Gen) Error!void {
     try emitSetupInstance(self);
     if (self.su.vals.len == 0) return;

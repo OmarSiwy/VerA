@@ -74,8 +74,10 @@ pub const Jac = struct {
 
 /// Emits `eval`, and `q`/`evalQ`/the charge-site tables when any charge site
 /// exists, then the pattern tables, `display` and (optionally) `vpiContribs`.
-/// Allocates `jac.pat`, `jac.dpat` and `jac.lin` on the arena.
+/// Allocates `jac.pat`, `jac.dpat` and `jac.lin` on the arena. Runs once
+/// per device; asserts the evidence is still empty.
 pub fn emitDispatchers(self: *Gen) Error!void {
+    assert(self.jac.pat[0].len == 0 and self.jac.rows[0] == 0 and self.jac.guarded.items.len == 0);
     self.jac.pat[0] = try self.arena.alloc(u64, self.names.n_u);
     self.jac.pat[1] = try self.arena.alloc(u64, self.names.n_u);
     @memset(self.jac.pat[0], 0);
