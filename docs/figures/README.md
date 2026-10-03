@@ -11,7 +11,7 @@ and signed loop diagram previously replaced by prose. Original captions remain
 inside all three images. Section 1.4's red literals and blue extension production
 were separately checked against physical page 21 before restoring HTML colors.
 
-Regenerate with `python3 tools/extract_lrm_figures.py` (requires Poppler's
+Regenerate with `python3 tools/conformance.py figures` (requires Poppler's
 `pdftoppm`). The script pins the source SHA256 and lists physical PDF page
 numbers and crop coordinates in PDF points. It renders directly at 216 dpi
 into lossless PNG, without redrawing or resampling. A tested SVG conversion
@@ -42,18 +42,18 @@ Figure code is retained inside the crops; separately labeled HTML transcripts
 are editorial accessibility aids, not substitute source diagrams.
 
 Chapter 11 diagrams and legends are generated separately by
-`tools/extract_ch11_figures.py`, using the same pinned source hash and 216-dpi
+`tools/conformance.py figures ch11`, using the same pinned source hash and 216-dpi
 Poppler rendering. The parallel reviewer visually inspected all graph pages;
 main inspected the relationship legend and representative corrected graphs,
 then regenerated and byte-compared every asset against the reviewed handoff.
 Broad page-content crops intentionally retain headings, source notes and white
-space. `tools/test_lrm_ch11_figures.py` checks source identity, dimensions,
+space. `tools/conformance.py selftest` checks source identity, dimensions,
 links and subsection anchors; it does not execute the VPI API or certify each
 relationship's implementation. Detailed source/evidence limits are recorded
 in `docs/conformance-ch11-review-draft.md` at git revision 8b1514d4.
 
 Annex E's schematic and three Table E.1 pages are reproduced with
-`tools/extract_annex_e_figures.py`. Main visually inspected all four crops,
+`tools/conformance.py figures annex-e`. Main visually inspected all four crops,
 regenerated them from the pinned PDF and byte-compared the handoff. Original
 clipped sine-equation glyphs and missing grouping remain visible; readable
 HTML grouping is explicitly editorial, not a correction to the standard.
