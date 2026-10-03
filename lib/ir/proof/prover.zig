@@ -85,7 +85,7 @@ pub const Prover = struct {
     /// Span of whatever DEFINED a value, so a label can point at the parameter
     /// or the sub-expression the prover is really complaining about.
     fn valueSpan(self: *const Prover, v: Mir.Value) diag.Span {
-        switch (self.mir.valueDef(self.mir.resolveAlias(v))) {
+        switch (self.mir.valueDef(self.an.rv(v))) {
             .inst_result => |inst| return self.span(inst),
             .param_ref => |pi| {
                 if (pi >= self.lowered.params.items.len) return .{};
@@ -97,9 +97,10 @@ pub const Prover = struct {
         }
     }
 
-    /// Every read of a Value goes through the alias map (ssa.zig contract).
+    /// Every read of a Value goes through the alias map (ssa.zig contract),
+    /// as `Analysis`'s snapshot: one load, where `Mir.resolveAlias` walks.
     fn idxOf(self: *const Prover, v: Mir.Value) u32 {
-        return @backingInt(self.mir.resolveAlias(v));
+        return @backingInt(self.an.rv(v));
     }
 
     fn ivOf(self: *const Prover, v: Mir.Value) proof_lattice.Interval {
@@ -409,12 +410,12 @@ pub const Prover = struct {
     }
 
     fn literalNumber(self: *const Prover, v: Mir.Value) ?f64 {
-        return switch (self.mir.valueDef(self.mir.resolveAlias(v))) {
+        return switch (self.mir.valueDef(self.an.rv(v))) {
             .int_const => |c| @floatFromInt(c),
             .float_const => |c| c,
             .inst_result => |inst| blk: {
                 if (self.mir.instOp(inst) != .if_cast) break :blk null;
-                const def = self.mir.valueDef(self.mir.resolveAlias(self.mir.instData(inst).unary.operand));
+                const def = self.mir.valueDef(self.an.rv(self.mir.instData(inst).unary.operand));
                 break :blk if (def == .int_const) @as(f64, @floatFromInt(def.int_const)) else null;
             },
             .undef, .str_const, .param_ref, .block_param => null,
@@ -429,7 +430,7 @@ pub const Prover = struct {
     /// LRM §4.2.5 relational / §4.2.7 equality operators; `&&`/`||` need no case
     /// because §4.2.8 short-circuit gives them real CFG (see lower.zig).
     fn condFacts(self: *const Prover, cond: Mir.Value, taken: bool, buf: *[2]Fact) []const Fact {
-        const def = self.mir.valueDef(self.mir.resolveAlias(cond));
+        const def = self.mir.valueDef(self.an.rv(cond));
         if (def != .inst_result) return buf[0..0];
         const inst = def.inst_result;
         const d = self.mir.instData(inst);
@@ -1029,7 +1030,7 @@ pub const Prover = struct {
 
     /// §4.3.1 Table 4-14 pow with a negative base needs "all integer y".
     fn provablyInteger(self: *const Prover, v: Mir.Value) bool {
-        const rv = self.mir.resolveAlias(v);
+        const rv = self.an.rv(v);
         switch (self.mir.valueDef(rv)) {
             .int_const => return true,
             .float_const => |c| return math.isFinite(c) and c == @trunc(c),
@@ -1120,7 +1121,7 @@ pub const Prover = struct {
         }
 
         // Name the recovery for this culprit only; `--explain` has the full set.
-        switch (self.mir.valueDef(self.mir.resolveAlias(culprit))) {
+        switch (self.mir.valueDef(self.an.rv(culprit))) {
             .param_ref => b.help(
                 "give the parameter a range that excludes infinity, e.g. `from (0:inf)`",
                 .{},
@@ -1187,7 +1188,7 @@ pub const Prover = struct {
     /// Name the operand in terms the user wrote: a parameter, a node probe, or
     /// (for a computed value) the unbounded leaf it depends on.
     fn describe(self: *const Prover, v: Mir.Value) []const u8 {
-        const rv = self.mir.resolveAlias(v);
+        const rv = self.an.rv(v);
         switch (self.mir.valueDef(rv)) {
             .param_ref => |pi| return if (pi < self.lowered.params.items.len)
                 self.arena.print("parameter `{s}`", .{self.lowered.params.items[pi].name}) catch "a parameter"
