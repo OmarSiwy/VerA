@@ -275,6 +275,16 @@ pub const InstData = union(OpClass) {
 /// One phi operand: the value flowing in from predecessor `block`.
 pub const PhiPair = struct { block: Block, value: Value };
 
+// Row budgets, in bytes per row of each SoA table (psp103: 27,760
+// instructions, 23,859 values, 4,234 blocks). A new column has to move one of
+// these on purpose; docs/seams/s1-ircore.md has the narrower shapes proposed.
+comptime {
+    assert(std.MultiArrayList(InstRow).capacityInBytes(1) == 29);
+    assert(std.MultiArrayList(ValueRow).capacityInBytes(1) == 9);
+    assert(std.MultiArrayList(BlockRow).capacityInBytes(1) == 8);
+    assert(@sizeOf(PhiPair) == 8); // two `extra` words
+}
+
 /// The lowered module's name.
 name: []const u8 = "",
 /// IEEE 1364 §19.1 (via §10.1): the module was declared inside a

@@ -6,6 +6,8 @@ const std = @import("std");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 
+/// One §9.18 Table 9-29 hierarchical system parameter. The tag is the
+/// spelling without its `$`.
 pub const Kind = enum {
     angle,
     hflip,
@@ -14,13 +16,16 @@ pub const Kind = enum {
     xposition,
     yposition,
 
+    /// Every kind, in declaration order (the order elaboration reports them).
     pub const all = std.enums.values(Kind);
 
+    /// Returns the kind `spelling` names, `$` included, or null.
     pub fn fromName(spelling: []const u8) ?Kind {
         if (spelling.len == 0 or spelling[0] != '$') return null;
         return std.meta.stringToEnum(Kind, spelling[1..]);
     }
 
+    /// Returns the source spelling, `$` included.
     pub fn name(self: Kind) []const u8 {
         return switch (self) {
             .angle => "$angle",
@@ -32,6 +37,8 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns Table 9-29's value for an instance nothing sets: the
+    /// composition's identity (0 for the sums, 1 for the products).
     pub fn initial(self: Kind) f64 {
         return switch (self) {
             .angle, .xposition, .yposition => 0,
@@ -39,6 +46,7 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns whether `value` is in Table 9-29's domain for the kind.
     pub fn allows(self: Kind, value: f64) bool {
         return switch (self) {
             .angle => value >= 0 and value < 360,
@@ -48,6 +56,7 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns the domain `allows` checks, worded for a diagnostic.
     pub fn domain(self: Kind) []const u8 {
         return switch (self) {
             .angle => "0 <= $angle < 360",
@@ -83,7 +92,10 @@ pub const Kind = enum {
     }
 };
 
+/// One instance's expression per kind, `.none` where nothing sets it.
 pub const Values = std.EnumArray(Kind, Ast.ExprId);
+/// Lowering's §3.4.7 top-level alias per kind: the `Lowered.params` row that
+/// holds it, or null.
 pub const Aliases = std.EnumArray(Kind, ?u32);
 
 fn binary(file: *Ast.SourceFile, arena: std.mem.Allocator, op: Ast.BinaryOp, lhs: Ast.ExprId, rhs: Ast.ExprId, tok: u32) std.mem.Allocator.Error!Ast.ExprId {

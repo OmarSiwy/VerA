@@ -30,7 +30,7 @@ const absent: u32 = 0;
 
 /// "This (place, block) is a join whose predecessors are being read right
 /// now"; see the ≥2-preds arm of `readVariableRecursive`. A read that meets
-/// it has come round a cycle and mints the phi there (`readVariable`). Never
+/// it has come round a cycle and mints the phi there (`readFrom`). Never
 /// a biased Value: `writeVariable` keeps the Value space two short of it.
 const pending: u32 = std.math.maxInt(u32);
 
@@ -53,9 +53,9 @@ const arm_slot: u32 = no_slot - 1;
 
 /// The builder's own tables (the map, the predecessor and phi-user pools,
 /// the per-block state) live outside the caller's allocator: lowering passes
-/// its compilation arena, which keeps every outgrown buffer and gives nothing
-/// back before the compile ends, and these are scratch for the lowering phase
-/// alone. `deinit` frees them. `gpa` is for the MIR the builder writes into.
+/// its compilation arena, which frees nothing before the compile ends, and
+/// these are scratch for the lowering phase alone. `deinit` frees them.
+/// `gpa` is for the MIR the builder writes into.
 const map_gpa = std.heap.page_allocator;
 
 /// Braun-style SSA builder over one `Mir`. Blocks are created by the caller
@@ -76,7 +76,7 @@ pub const SsaBuilder = struct {
     /// keyed by block a place's cells sat one block in three (the arms in
     /// between) and the chunks were 29% full. Numbered by slot they are
     /// 70-77% full, and the map is a third the size (psp103 9.2 → 3.7 MB,
-    /// hisimhv_va 13.3 → 5.2 MB), which is the compile's peak.
+    /// hisimhv_va 13.3 → 5.2 MB): the largest table alive while lowering.
     ///
     /// Two-level, not one dense matrix: a place has cells only between its
     /// definition and its last read. The dense matrix touched each page that
@@ -116,6 +116,8 @@ pub const SsaBuilder = struct {
     scratch: std.ArrayList(Mir.PhiPair) = .empty,
     /// Trivial-phi worklist, with the same save/restore discipline as `scratch`.
     phi_work: std.ArrayList(Mir.Value) = .empty,
+    /// Places handed out so far (`newPlace`); directory rows past it are
+    /// all chunk 0.
     next_place: u32 = 0,
 
     /// Per-block SSA state, one row per `Mir.Block`.
@@ -124,7 +126,7 @@ pub const SsaBuilder = struct {
         sealed: bool = false,
         preds_head: u32 = list_end,
         preds_tail: u32 = list_end,
-        /// Kept beside the list so `readVariableRecursive`'s single-predecessor
+        /// Kept beside the list so `readFrom`'s single-predecessor
         /// test is a load, not a walk.
         preds_len: u32 = 0,
         /// Phis created before the block was sealed; filled by `sealBlock`.
@@ -144,6 +146,16 @@ pub const SsaBuilder = struct {
     const ArmCell = struct { place: Place, raw: u32, next: u32 };
     const IncompletePhi = struct { place: Place, value: Mir.Value, next: u32 };
     const UserNode = struct { phi: Mir.Value, next: u32 };
+
+    // Row budgets: per block (psp103 4,234), per pool node (psp103: 5,682
+    // edges, 4,997 phi users, 3,396 arm cells).
+    comptime {
+        assert(std.MultiArrayList(BlockState).capacityInBytes(1) == 29);
+        assert(@sizeOf(PredNode) == 8);
+        assert(@sizeOf(IncompletePhi) == 12);
+        assert(@sizeOf(UserNode) == 8);
+        assert(@sizeOf(ArmCell) == 12);
+    }
 
     /// Returns an empty builder writing into `mir`, whose rows (phis) `gpa`
     /// allocates. Call `deinit` to free the builder's own tables.
@@ -369,10 +381,11 @@ pub const SsaBuilder = struct {
         return @as(usize, self.dir[d]) << chunk_bits | (slot & (chunk_len - 1));
     }
 
-    /// Braun §readVariableRecursive. Every path memoizes its result with
-    /// `writeVariable`, which is also what breaks cycles on the loop path.
+    /// Braun §readVariableRecursive, for a block `readFrom` cannot climb.
+    /// Both paths memoize their result in the block's cell, which is also
+    /// what breaks cycles on the loop path.
     // ponytail: recursive, with depth the number of joins the first read of a
-    // place climbs (single-predecessor blocks are `readVariable`'s loop), not a
+    // place climbs (single-predecessor blocks are `readFrom`'s loop), not a
     // nesting depth. Ceiling: a few frames per join, so ~10⁵ sequential `if`s
     // in one module would blow the stack.
     // The fix is an explicit stack with a resume state for the ≥2-preds arm.
