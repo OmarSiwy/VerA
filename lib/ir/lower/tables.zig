@@ -517,6 +517,20 @@ pub const DiscreteEvent = struct {
 /// §7.8.4 one port an automatic connect module was inserted on (`inserts`).
 pub const Inserted = Elaborate.Inserted;
 
+// Row budgets on a 64-bit host. Every table here is per module and short
+// (psp103: 847 params, 12 nodes, 18 contributions), so these pin today's
+// sizes against a silent bloat rather than claim a tight layout;
+// docs/seams/s1-lower.md has the narrower shapes the readers outside
+// lowering would have to accept.
+comptime {
+    std.debug.assert(@sizeOf(ParamInfo) == 88); // ~850 rows on a compact model
+    std.debug.assert(@sizeOf(Node) == 72); // SoA (`nodes` is a MultiArrayList)
+    std.debug.assert(@sizeOf(Contribution) == 48);
+    std.debug.assert(@sizeOf(ChargeSite) == 24);
+    std.debug.assert(@sizeOf(HeldVar) == 56);
+    std.debug.assert(@sizeOf(NoiseSrc) == 56);
+}
+
 // ---- the source, for diagnostics and host facts -----------------------------
 /// The parsed (and elaborated) file every `Ast` id below indexes.
 file: *const Ast.SourceFile,

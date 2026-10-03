@@ -65,6 +65,10 @@ pub const State = struct {
     /// entries that name them.
     shadowed_vars: std.ArrayList(VarSlot) = .empty,
     shadowed_arrays: std.ArrayList(ArrayInfo) = .empty,
+    /// Every `<block>.<name>` key `heldKey` has composed, so a named block's
+    /// local costs one copy, not one per mention (hisimhv_va: ~4.9k
+    /// mentions, ~0.9 MB of arena strings before).
+    held_keys: std.StringHashMapUnmanaged(void) = .empty,
 };
 
 /// One `scope_log` row: a declared name and what it shadowed, as rows of
@@ -96,18 +100,21 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         if (blk.is_initial) try x.maybe(blk.body, .none) else try x.stmt(blk.body);
     }
     self.var_state.held_frames.clearRetainingCapacity();
-    var it = x.reads.keyIterator();
-    while (it.next()) |k| if (x.writes.contains(k.*)) {
-        const gop = try self.var_state.held_names.getOrPut(self.arena, k.*);
+    // `held_names` and `carried` are only probed, never walked, so the order
+    // these loops visit the keys in does not reach the output.
+    var it = x.marks.iterator();
+    while (it.next()) |e| if (e.value_ptr.read and e.value_ptr.write) {
+        const gop = try self.var_state.held_names.getOrPut(self.arena, e.key_ptr.*);
         if (gop.found_existing) continue;
         // Otherwise the held value is observable only when a write's
         // placement varies from one evaluation to the next, which only
         // codegen's solve-invariance can say.
-        gop.value_ptr.* = if (x.reach.contains(k.*) or x.initial.contains(k.*)) .retained else .unless_invariant;
+        gop.value_ptr.* = if (e.value_ptr.reach or e.value_ptr.initial) .retained else .unless_invariant;
     };
-    it = x.reads.keyIterator();
-    while (it.next()) |k| if (x.initial.contains(k.*) or self.var_state.held_names.get(k.*) == .event)
-        try self.var_state.carried.put(self.arena, k.*, {});
+    it = x.marks.iterator();
+    while (it.next()) |e| if (e.value_ptr.read and
+        (e.value_ptr.initial or self.var_state.held_names.get(e.key_ptr.*) == .event))
+        try self.var_state.carried.put(self.arena, e.key_ptr.*, {});
 }
 
 /// §3.2: "Real variables are initialized to zero (0) at the start of a
@@ -140,48 +147,74 @@ const Exposed = struct {
     l: *Lower,
     /// The module's variables; a named block's are in `held_frames`.
     vars: []const Ast.VarDecl,
-    /// Keys assigned on every path to here; `list` is the same set in the
-    /// order added, so a branch is undone by truncating it.
-    defs: std.StringHashMapUnmanaged(void) = .empty,
+    /// Every key the walk has met, with the sets it is in (`Marks`). One map
+    /// and a byte per key, where six sets over the same keys stored each key
+    /// six times.
+    marks: std.StringHashMapUnmanaged(Marks) = .empty,
+    /// The keys with `def` set, in the order set, so a branch is undone by
+    /// truncating it.
     list: std.ArrayList([]const u8) = .empty,
-    /// Keys read where `defs` did not have them, and keys written anywhere.
-    reads: std.StringHashMapUnmanaged(void) = .empty,
-    writes: std.StringHashMapUnmanaged(void) = .empty,
     disabled: bool = false,
-    /// Keys with an exposed read on SOME path to here (a may-set, undone per
-    /// arm like `defs`); a write of one of them is reached by that read.
-    pend: std.StringHashMapUnmanaged(void) = .empty,
+    /// The keys with `pend` set, in the order set, undone per arm like `list`.
     pend_list: std.ArrayList([]const u8) = .empty,
-    reach: std.StringHashMapUnmanaged(void) = .empty,
-    /// Keys an `analog initial` body writes.
-    initial: std.StringHashMapUnmanaged(void) = .empty,
     in_initial: bool = false,
     /// One statement's write targets, refilled per statement: `stmt` reads it
     /// to the end before it recurses, so one buffer serves the whole walk.
     ws: std.ArrayList(Ast.ExprId) = .empty,
 
+    /// Which of the walk's sets a key is in.
+    const Marks = packed struct(u8) {
+        /// Assigned on every path to here.
+        def: bool = false,
+        /// Read where `def` was not set.
+        read: bool = false,
+        /// Written anywhere.
+        write: bool = false,
+        /// An exposed read on SOME path to here (a may-set); a write of the
+        /// key is reached by that read.
+        pend: bool = false,
+        /// A write reached by an exposed read (`pend` at the write).
+        reach: bool = false,
+        /// Written by an `analog initial` body.
+        initial: bool = false,
+        _: u2 = 0,
+    };
+
+    fn has(x: *const Exposed, k: []const u8, comptime set: std.meta.FieldEnum(Marks)) bool {
+        const m = x.marks.get(k) orelse return false;
+        return @field(m, @tagName(set));
+    }
+
+    fn marksOf(x: *Exposed, k: []const u8) Oom!*Marks {
+        const gop = try x.marks.getOrPut(x.l.arena, k);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        return gop.value_ptr;
+    }
+
     fn def(x: *Exposed, k: []const u8) Oom!void {
-        if (x.disabled or x.defs.contains(k)) return;
-        try x.defs.put(x.l.arena, k, {});
+        if (x.disabled or x.has(k, .def)) return;
+        (try x.marksOf(k)).def = true;
         try x.list.append(x.l.arena, k);
     }
 
-    fn undo(x: *Exposed, mark: usize) void {
-        for (x.list.items[mark..]) |k| _ = x.defs.remove(k);
-        x.list.shrinkRetainingCapacity(mark);
+    fn undo(x: *Exposed, at: usize) void {
+        for (x.list.items[at..]) |k| x.marks.getPtr(k).?.def = false;
+        x.list.shrinkRetainingCapacity(at);
     }
 
     fn exposed(x: *Exposed, k: []const u8) Oom!void {
-        try x.reads.put(x.l.arena, k, {});
-        if (x.pend.contains(k)) return;
-        try x.pend.put(x.l.arena, k, {});
+        const m = try x.marksOf(k);
+        m.read = true;
+        if (m.pend) return;
+        m.pend = true;
         try x.pend_list.append(x.l.arena, k);
     }
 
     fn write(x: *Exposed, k: []const u8) Oom!void {
-        try x.writes.put(x.l.arena, k, {});
-        if (x.pend.contains(k)) try x.reach.put(x.l.arena, k, {});
-        if (x.in_initial) try x.initial.put(x.l.arena, k, {});
+        const m = try x.marksOf(k);
+        m.write = true;
+        if (m.pend) m.reach = true;
+        if (x.in_initial) m.initial = true;
     }
 
     /// §5.9 a loop body may run again after itself, so it is walked twice:
@@ -213,7 +246,7 @@ const Exposed = struct {
             try x.stmt(arm);
             // The arms exclude each other: one's reads reach no write of another.
             try pended.appendSlice(x.l.arena, x.pend_list.items[pmark..]);
-            for (x.pend_list.items[pmark..]) |k| _ = x.pend.remove(k);
+            for (x.pend_list.items[pmark..]) |k| x.marks.getPtr(k).?.pend = false;
             x.pend_list.shrinkRetainingCapacity(pmark);
             const got = x.list.items[mark..];
             if (common) |c| {
@@ -227,8 +260,8 @@ const Exposed = struct {
             x.undo(mark);
         }
         for (common orelse &.{}) |k| try x.def(k);
-        for (pended.items) |k| if (!x.pend.contains(k)) {
-            try x.pend.put(x.l.arena, k, {});
+        for (pended.items) |k| if (!x.has(k, .pend)) {
+            (try x.marksOf(k)).pend = true;
             try x.pend_list.append(x.l.arena, k);
         };
     }
@@ -311,9 +344,9 @@ const Exposed = struct {
             var i = e;
             while (i != t) : (i = ex.lhs(i)) try x.read(ex.rhs(i));
             const k = try heldKey(x.l, file.str(ex.strOf(t)));
-            if (x.defs.contains(k)) return;
+            if (x.has(k, .def)) return;
             if (t != e) if (try x.elem(k, e)) |ek| {
-                if (!x.defs.contains(ek)) try x.exposed(k);
+                if (!x.has(ek, .def)) try x.exposed(k);
                 return;
             };
             // The whole variable, or an element nobody can name statically.
@@ -402,7 +435,12 @@ fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
         const f = self.var_state.held_frames.items[i];
         for (f.vars) |v| {
             if (!self.file.strings.eql(v.name, name)) continue;
-            return self.arena.print("{s}{s}", .{ f.prefix, name });
+            var buf: [lower_shape.elem_key_len]u8 = undefined;
+            const key = std.mem.print(&buf, "{s}{s}", .{ f.prefix, name }) catch
+                return self.arena.print("{s}{s}", .{ f.prefix, name });
+            const gop = try self.var_state.held_keys.getOrPut(self.arena, key);
+            if (!gop.found_existing) gop.key_ptr.* = try self.arena.dupe(u8, key);
+            return gop.key_ptr.*;
         }
     }
     return name;
