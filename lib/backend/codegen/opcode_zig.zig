@@ -33,7 +33,7 @@ pub const Row = struct {
     /// ops share the real spelling in `foldConst`'s f64 domain; `idiv` has
     /// none because its truncation is not f64 `/`.
     host_f64: ?[]const []const u8,
-    /// `codegen.devSafe`: the op is real-valued and its host spelling runs on
+    /// `call.devSafe`: the op is real-valued and its host spelling runs on
     /// a GPU without libm.
     dev_safe: bool,
     /// The op is a libm call on the host, costly enough that evaluating it

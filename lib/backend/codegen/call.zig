@@ -25,12 +25,40 @@ const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
-const mathOpByName = codegen.mathOpByName;
-const isAnalysisName = codegen.isAnalysisName;
-const devSafe = codegen.devSafe;
 const opcode_zig = codegen.opcode_zig;
 const OpKind = @import("ir").op.OpKind;
 const diag = @import("diag");
+
+/// Returns the LRM Table 4-14/4-15 opcode for `name`, including the `log10`
+/// spelling of the `$` form (IEEE 1364 §17.11). Reuses lowering's tables.
+fn mathOpByName(name: []const u8) ?Mir.Opcode {
+    if (Lower.unaryMathOp(name)) |op| return op;
+    if (Lower.binaryMathOp(name)) |op| return op;
+    if (std.mem.eql(u8, name, "log10")) return .log10;
+    return null;
+}
+
+/// Returns whether `s` is an analysis name `analysis()` recognises (LRM §4.6.1).
+fn isAnalysisName(s: []const u8) bool {
+    const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
+    for (names) |n| {
+        if (std.mem.eql(u8, s, n)) return true;
+    }
+    return false;
+}
+
+/// Returns whether `op` has a plain-f64 spelling a GPU can execute.
+///
+/// Unit bodies also compile for nvptx, which has no libm, so only arithmetic
+/// LLVM lowers to one PTX instruction qualifies; everything else keeps its S
+/// form. Real opcodes only: `f64Const` renders integer opcodes in f64, which
+/// drops §3.2's 32-bit wraparound, so an integer residual goes through
+/// `intBin32` instead. Only `f64Const`'s `in_unit` path consults this.
+fn devSafe(op: Mir.Opcode) bool {
+    // The `dev_safe` column: sqrt/floor/ceil are there because they are
+    // sqrt.rn.f64 and cvt.rmi/rpi.f64.f64, single instructions.
+    return opcode_zig.get(op).dev_safe;
+}
 
 /// Returns `inst` as a ternary: the optimizer's select, or a pure two-way CFG
 /// merge rebuilt from its phi. Null for loop-carried or multiway phis and
@@ -90,7 +118,7 @@ fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
         .str_const => |s| return try self.arena.print("\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str) return null;
-            self.uses_model = true;
+            self.uses.model = true;
             return try self.arena.print("model.{s}", .{self.names.p_names[p]});
         },
         .undef, .float_const, .int_const, .block_param, .inst_result => return null,
@@ -108,7 +136,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         .float_const => |n| return try self.arena.print("@as(i64, {d})", .{std.math.lossyCast(i64, @round(n))}),
         .param_ref => |p| {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) == .str) return null;
-            self.uses_model = true;
+            self.uses.model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .int => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
                 .real => try self.arena.print("std.math.lossyCast(i64, @round(model.{s}))", .{self.names.p_names[p]}),
@@ -304,7 +332,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
     }
     switch (self.mir.valueDef(v)) {
         .param_ref => |p| {
-            self.uses_model = true;
+            self.uses.model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .real => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
                 .int => try self.arena.print("@as(f64, @floatFromInt(model.{s}))", .{self.names.p_names[p]}),
@@ -321,7 +349,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 const d = self.mir.instData(inst).call;
                 if (d.callee != .@"$simparam") return null;
                 const f = Lower.simparamHostField(strArg(self, d.args, 0) orelse "") orelse return null;
-                self.uses_model = true;
+                self.uses.model = true;
                 return try self.arena.print("model.{s}", .{f});
             }
             switch (Mir.opClass(row.op)) {
@@ -384,11 +412,11 @@ pub fn argF64(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) E
 }
 
 /// Returns whether a §4.5 control argument is a solve result rather than a
-/// constant or parameter expression. Rolls back `f64Const`'s `uses_model`
+/// constant or parameter expression. Rolls back `f64Const`'s `uses.model`
 /// side effect.
 pub fn ctrlIsDynamic(self: *Gen, v: Mir.Value) Error!bool {
-    const saved = self.uses_model;
-    defer self.uses_model = saved;
+    const saved = self.uses.model;
+    defer self.uses.model = saved;
     return (try f64Const(self, v, 0, false)) == null;
 }
 
@@ -781,7 +809,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const u = if (args.len > 1) self.an.foldConst(args[1], true) else null;
             const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
             // The value reads a lane, so record it in `ddx_reads`.
-            self.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
+            self.jac.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
             try self.b("S.con((", .{});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
             // Saturating cast: bad MIR must not panic the compiler.
@@ -793,7 +821,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // the block per sweep sub-task, while initial_step is the first point
         // of the whole analysis.
         .analog_initial => {
-            self.uses_sim = true;
+            self.uses.sim = true;
             try self.b("S.con(if (sim.analog_initial) 1.0 else 0.0)", .{});
             return;
         },
@@ -803,14 +831,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // dt = 0. A small-signal analysis linearizes at dt = 0 too, and there
         // the operator is its transfer function, not its DC value.
         .@"op$static" => {
-            self.uses_sim = true;
+            self.uses.sim = true;
             try self.b("S.con(if (sim.dt == 0.0 and sim.kind != .ac and sim.kind != .noise) 1.0 else 0.0)", .{});
             return;
         },
 
         // §5.10.2 global events.
         .initial_step, .final_step => {
-            self.uses_sim = true;
+            self.uses.sim = true;
             const flag = if (c == .initial_step) "initial_step" else "final_step";
             try self.b("S.con(if (sim.{s}", .{flag});
             if (args.len != 0) {
@@ -850,7 +878,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const phase = try ctrlEval(self, args, 2, "0.0");
             try self.b("S.con(if (", .{});
             if (args.len == 0) {
-                self.uses_sim = true;
+                self.uses.sim = true;
                 try self.b("sim.kind == .ac", .{});
             } else try analysisMatch(self, args[0..1]);
             try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
@@ -921,13 +949,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             emitFileCallDropped(self, c, args, @backingInt(inst)),
         // §9.10 environment.
         .@"$temperature" => {
-            self.uses_model = true;
+            self.uses.model = true;
             return self.b("S.con(model.temperature__)", .{});
         },
         .@"$vt" => {
             // §9.10 $vt = kT/q, k/q = 8.617333262e-5 V/K.
             if (args.len == 0) {
-                self.uses_model = true;
+                self.uses.model = true;
                 return self.b("S.con(model.temperature__ * 8.617333262145179e-5)", .{});
             }
             try self.b("(", .{});
@@ -935,14 +963,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b(").scale(8.617333262145179e-5)", .{});
         },
         .@"$abstime", .@"$realtime" => {
-            self.uses_sim = true;
+            self.uses.sim = true;
             return self.b("S.con(sim.t)", .{});
         },
         // §5.10 the retained value of an event-assigned variable: the
         // `Instance` default before the event first fires, then the last
         // accepted value.
         .@"$held_real", .@"$held_int" => {
-            self.uses_inst = true;
+            self.uses.inst = true;
             const f = self.names.held_names[heldIdx(self, args)];
             float_lanes.instLanes(self, c == .@"$held_int");
             return self.b("{s}(S, inst, \"{s}\")", .{ if (c == .@"$held_int") "zInstI" else "zInst", f });
@@ -950,13 +978,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
         // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).
         .@"$tp_hit" => {
-            self.uses_inst = true;
-            self.uses_sim = true;
+            self.uses.inst = true;
+            self.uses.sim = true;
             const b = litArg(self, args, 0);
             return self.b("@as(i64, @intFromBool(zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)))", .{ b, b });
         },
         .@"$tp_int", .@"$tp_real" => {
-            self.uses_inst = true;
+            self.uses.inst = true;
             const b = litArg(self, args, 0);
             const slot = litArg(self, args, 1);
             return if (c == .@"$tp_int")
@@ -965,7 +993,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
                 self.b("S.con(inst.tp{d}_s{d})", .{ b, slot });
         },
         .@"$mfactor" => { // §6.3.6
-            self.uses_inst = true;
+            self.uses.inst = true;
             float_lanes.instLanes(self, false);
             return self.b("zInst(S, inst, \"mfactor\")", .{});
         },
@@ -981,14 +1009,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
-                self.uses_sim = true;
+                self.uses.sim = true;
                 if (std.mem.eql(u8, nm, "dt")) return self.b("S.con(sim.dt)", .{});
                 return self.b("S.con(@floatFromInt(sim.iteration))", .{});
             }
             // Host-published first: `simparamValue` answers `tnom` only as
             // the declared default.
             if (Lower.simparamHostField(nm)) |f| {
-                self.uses_model = true;
+                self.uses.model = true;
                 return self.b("S.con(model.{s})", .{f});
             }
             if (self.lowered.simparamValue(nm)) |v| return self.b("S.con({s})", .{try gen_file.fmtF64(self, v)});
@@ -1005,7 +1033,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             // at run time. §4.6.1's analysis names are the `AnalysisKind` tag
             // spellings. `Lower` answers the hierarchy rows; "module" remains
             // for callers that build a `Gen` without an elaborated unit table.
-            self.uses_sim = true;
+            self.uses.sim = true;
             try self.b("(if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
             try self.b(", \"analysis_type\")) @tagName(sim.kind) else if (std.mem.eql(u8, ", .{});
@@ -1016,7 +1044,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$param_given" => {
             const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
             if (def == .param_ref) {
-                self.uses_model = true;
+                self.uses.model = true;
                 return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.names.p_names[def.param_ref]});
             }
             return self.b("@as(i64, 0)", .{});
@@ -1028,7 +1056,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$port_connected" => {
             const port = if (args.len == 1) self.an.foldConst(args[0], false) else null;
             if (port) |ord| {
-                self.uses_model = true;
+                self.uses.model = true;
                 return self.b("@as(i64, @intFromBool((model.port_connected__ >> {d}) & 1 != 0))", .{std.math.lossyCast(u6, ord.f)});
             }
             return self.b("@as(i64, 1)", .{});
@@ -1040,7 +1068,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // `inst.plusargs`, in supplied order. `$plusarg$str` is the matched
         // plusarg that `$sscanf$<ty>` converts.
         .@"$test$plusargs", .@"$value$plusargs", .@"$plusarg$str" => {
-            self.uses_inst = true;
+            self.uses.inst = true;
             float_lanes.instPin(self);
             const str = c == .@"$plusarg$str";
             try self.b("{s}zPlusarg(inst.plusargs, ", .{if (str) "(" else "@as(i64, @intFromBool("});
@@ -1060,7 +1088,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return gen_render.helper2(self, "zLimitUf", args[0], args[1]);
         },
         .@"$limit$old" => {
-            self.uses_inst = true;
+            self.uses.inst = true;
             float_lanes.instPin(self);
             return self.b("S.con(inst.limiter_previous[{d}])", .{gen_render.intArg(self, args, 0) orelse unreachable});
         },
@@ -1241,7 +1269,7 @@ pub fn abort(self: *Gen, code: diag.Code, comptime fmt: []const u8, args: anytyp
 /// Writes the §4.6.1 test of `args`' analysis names against `sim.kind`,
 /// or `false` when none is a string literal.
 pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
-    self.uses_sim = true;
+    self.uses.sim = true;
     var first = true;
     for (args) |a| {
         const def = self.mir.valueDef(self.an.rv(a));
@@ -1279,7 +1307,7 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
         break :blk self.systf_names.items.len - 1;
     };
     // Reads `inst`, so `emitUnit` keeps the parameter named.
-    self.uses_inst = true;
+    self.uses.inst = true;
     float_lanes.instPin(self);
 
     const label = self.systf_sites;
@@ -1354,7 +1382,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     const unit = gen_unit.unitOfInst(self, inst);
     if (unit == none_u32) return self.b("S.con(0.0)", .{});
     const n = self.names.unit_names[unit];
-    // Render the input only when the kernel reads it, or `uses_x` would keep
+    // Render the input only when the kernel reads it, or `uses.x` would keep
     // an unreferenced parameter named.
     const needs_in = plan_args.opNeedsInput(k);
     // Every operator input is a core field, so this renders a local in the
@@ -1363,12 +1391,12 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         try gen_render.renderToArena(self, if (args.len == 0) .f_zero else args[0], .real)
     else
         "";
-    self.uses_inst = true;
+    self.uses.inst = true;
     float_lanes.instPin(self); // the operator's history is the instance's
     // Every sim-state read below is spelled `sim.<field>`.
     const at = self.out.items.len;
     defer if (std.mem.indexOf(u8, self.out.items[at..], "sim.") != null) {
-        self.uses_sim = true;
+        self.uses.sim = true;
     };
     // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`
     // says; `kS` is its scalar and `in` its input.
@@ -1382,7 +1410,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // `__sec` always takes `model`, so keep the parameter named.
-            self.uses_model = true;
+            self.uses.model = true;
             try opOpen(self, fm);
             try acOpen(self, kS, try self.arena.print("zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}__sec(model), zLaplaceH0({1d}, {2d}, {4s}__sec(model)))", .{ kS, p.ns, p.deg, in, n }));
             try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
@@ -1399,7 +1427,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             const p = cg_filters.planOf(self, unit);
             if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // As for `.laplace`.
-            self.uses_model = true;
+            self.uses.model = true;
             try opOpen(self, fm);
             try acOpen(self, kS, try self.arena.print("zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
                 kS, p.ns, p.deg, in, n, p.period orelse "0.0",

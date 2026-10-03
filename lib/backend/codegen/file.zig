@@ -22,7 +22,7 @@ const cg_limit = @import("../cg_limit.zig");
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
-const assert = codegen.assert;
+const assert = std.debug.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 
@@ -32,17 +32,34 @@ const contract_abi = @import("kernels").abi_version;
 const VTy = codegen.VTy;
 const OpKind = @import("ir").op.OpKind;
 
-/// The ring length of absdelay unit `i`: `codegen.hist_len`, or, for a
+/// Length of the §4.5.7 absdelay history ring, in samples, of a site with no
+/// constant `maxdelay`.
+// ponytail: a fixed 1024 samples with linear interpolation. SPICE's
+// maxstep = min(tstep, span/50) already allows td/dt = 100 steps per delay,
+// and ch04_expressions/a04_05 needs 515. A query older than the ring ends the
+// run with E1012 in `zHistAt` rather than clamping: §4.5.7 bounds no lookback,
+// so a clamp would silently shorten the delay. Upgrade path: host-owned
+// growable history.
+const hist_len: usize = 1024;
+/// The step a `maxdelay` site's ring is sized for: `ceil(maxdelay /
+/// hist_min_step) + 2` samples, within [`hist_len`, `hist_max`]. 1 ps is
+/// the step a transmission line with a 1-5 ns delay is resolved at.
+const hist_min_step: f64 = 1e-12;
+/// The largest ring a `maxdelay` sizes: 16384 samples, 256 KiB of
+/// `Instance` per site (16.4 ns of delay at `hist_min_step`).
+const hist_max: usize = 16384;
+
+/// The ring length of absdelay unit `i`: `hist_len`, or, for a
 /// §4.5.7 `maxdelay` that folds (its declared default when a parameter), enough
-/// samples to hold that delay at `codegen.hist_min_step`, up to
-/// `codegen.hist_max`. A longer lookback still ends the run with E1012.
+/// samples to hold that delay at `hist_min_step`, up to
+/// `hist_max`. A longer lookback still ends the run with E1012.
 fn histLen(self: *const Gen, i: usize) usize {
     const args = self.names.opArgs(self.mir, i);
-    if (args.len < 3) return codegen.hist_len;
-    const md = (self.an.foldConst(args[2], true) orelse return codegen.hist_len).f;
-    const want = md / codegen.hist_min_step + 2.0;
-    if (!(want > @as(f64, @floatFromInt(codegen.hist_len)))) return codegen.hist_len;
-    if (!(want < @as(f64, @floatFromInt(codegen.hist_max)))) return codegen.hist_max;
+    if (args.len < 3) return hist_len;
+    const md = (self.an.foldConst(args[2], true) orelse return hist_len).f;
+    const want = md / hist_min_step + 2.0;
+    if (!(want > @as(f64, @floatFromInt(hist_len)))) return hist_len;
+    if (!(want < @as(f64, @floatFromInt(hist_max)))) return hist_max;
     return @intFromFloat(@ceil(want));
 }
 
@@ -282,13 +299,30 @@ fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
 /// `self.out`, with its keyword at `fn_at`. Asserts `lo` is the previous
 /// range's end: the ranges tile (`Output`'s invariant).
 pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Error!void {
-    if (self.file_hi.items.len != 0)
-        assert(self.file_hi.items[self.file_hi.items.len - 1] == lo);
-    try self.file_names.append(self.arena, name);
-    try self.file_lo.append(self.arena, @intCast(lo));
-    try self.file_fn.append(self.arena, @intCast(fn_at));
-    try self.file_hi.append(self.arena, @intCast(self.out.items.len));
+    const his = self.files.items(.hi);
+    if (his.len != 0) assert(his[his.len - 1] == lo);
+    assert(lo <= fn_at and fn_at <= self.out.items.len);
+    try self.files.append(self.arena, .{
+        .name = name,
+        .lo = @intCast(lo),
+        .fn_at = @intCast(fn_at),
+        .hi = @intCast(self.out.items.len),
+    });
 }
+
+/// One emitted top-level unit declaration: a row of `Gen.files`, and of the
+/// `Output` columns built from it. Offsets index `Gen.out`, so a device
+/// over 4 GiB of text does not fit (`@intCast` traps in safe builds).
+pub const UnitFile = struct {
+    /// Declaration name and file stem (`Output.names`).
+    name: []const u8,
+    /// Where the declaration starts (`Output.unit_lo`).
+    lo: u32,
+    /// Where its keyword starts (`Output.unit_fn`).
+    fn_at: u32,
+    /// Just past its end (`Output.unit_hi`).
+    hi: u32,
+};
 
 /// Returns whether the model needs the §4.5.2 accepted-step machinery: a
 /// stateful operator, a §5.10 held variable or a `$limit` slot. Each keeps

@@ -211,7 +211,7 @@ fn placeOf(self: *const Gen, v: Mir.Value) u32 {
 pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     const i = @backingInt(v);
     const k = self.su.idx[i];
-    self.uses_model = true;
+    self.uses.model = true;
     if (rootGroup(self, v) == 2) {
         if (as_f64) return self.arena.print("@as(f64, @floatFromInt(@intFromBool(model.su.b[{d}])))", .{k});
         return self.arena.print("@as(i64, @intFromBool(model.su.b[{d}]))", .{k});
@@ -313,9 +313,9 @@ pub fn emitSetup(self: *Gen) Error!void {
     try self.plan.analyze(.undef, true);
     try emitSimparams(self);
 
-    self.uses_x = false;
-    self.uses_model = true;
-    self.uses_inst = false;
+    self.uses.x = false;
+    self.uses.model = true;
+    self.uses.inst = false;
     self.fatal = null;
     self.su.chunks = 0;
     const at_doc = self.out.items.len;
@@ -360,11 +360,11 @@ pub fn emitSetup(self: *Gen) Error!void {
     // per-eval), but a per-eval value the relooper places before a `zs_stop`
     // branch may, for the arm that flag never runs: it reads a default
     // Instance, so the text compiles and nothing stored depends on it.
-    if (self.uses_inst) {
+    if (self.uses.inst) {
         std.debug.assert(self.su.stop);
         try self.out.insertSlice(self.gpa, at_stop, "    const inst: *const Instance = &.{};\n");
     }
-    std.debug.assert(!self.uses_x);
+    std.debug.assert(!self.uses.x);
     std.debug.assert(self.fatal == null);
     if (self.out.items.len - at_doc < setup_chunk.chunk_bytes) return;
     // A large `setup` becomes chunks a split build compiles in parallel.

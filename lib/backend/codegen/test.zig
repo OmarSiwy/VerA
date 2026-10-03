@@ -11,7 +11,7 @@ const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
-const assert = codegen.assert;
+const assert = std.debug.assert;
 const Output = codegen.Output;
 const generate = codegen.generate;
 

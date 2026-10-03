@@ -7,7 +7,6 @@
 //! Under `.strict`, a select with total, cheap inline arms renders as `sel`
 //! (`eagerSafe`, `eagerCostly`). The float mode half is `mode.zig`.
 
-const std = @import("std");
 const codegen = @import("../../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("../render.zig");
