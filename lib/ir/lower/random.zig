@@ -11,7 +11,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
-const lower_param = @import("param.zig");
+const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const dist = @import("../dist.zig");
@@ -219,8 +219,8 @@ fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
     if (!entry.found_existing) {
         const name = try self.arena.print("$rng.{d}", .{self.random_state.rng_internal.count() - 1});
         entry.value_ptr.* = .{
-            .seed = try lower_param.hiddenHeldInt(self, try self.arena.print("{s}.seed", .{name})),
-            .ready = try lower_param.hiddenHeldInt(self, try self.arena.print("{s}.ready", .{name})),
+            .seed = try lower_var.hiddenHeldInt(self, try self.arena.print("{s}.seed", .{name})),
+            .ready = try lower_var.hiddenHeldInt(self, try self.arena.print("{s}.ready", .{name})),
         };
     }
     return entry.value_ptr.*;

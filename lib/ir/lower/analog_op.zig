@@ -14,8 +14,8 @@ const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
-const lower_param = @import("param.zig");
 const lower_table_model = @import("table_model.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
@@ -478,7 +478,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
         .assign_pattern, .concat => {
-            const elems = try lower_param.patternElems(self, a);
+            const elems = try lower_shape.patternElems(self, a);
             try out.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(elems.len)));
             for (elems) |el|
                 try out.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, el)));
@@ -495,7 +495,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
             try out.append(self.arena, try self.mir.addIntConst(self.arena, d.count()));
             var index: [1]i64 = undefined;
             for (0..@intCast(d.count())) |k| {
-                lower_param.shapeSubscripts(info.dims, k, &index);
+                lower_shape.shapeSubscripts(info.dims, k, &index);
                 const el = (try lower_expr.arrayElemValue(self, name, &index)) orelse return true;
                 try out.append(self.arena, try self.toReal(el));
             }

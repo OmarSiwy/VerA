@@ -10,8 +10,8 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
-const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
@@ -121,7 +121,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
             if (ex.tag(base) != .ident) break :blk false;
             const name = self.file.str(ex.strOf(base));
             const info = self.arrays.get(name) orelse break :blk false;
-            var buf: [lower_param.elem_key_len]u8 = undefined;
+            var buf: [lower_shape.elem_key_len]u8 = undefined;
             var w: std.Io.Writer = .fixed(&buf);
             w.writeAll(name) catch break :blk false;
             for (info.dims) |d| w.print("[{d}]", .{d.lo}) catch break :blk false;

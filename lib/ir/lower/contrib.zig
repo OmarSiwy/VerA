@@ -13,7 +13,7 @@ const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
-const lower_param = @import("param.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Const = Lower.Const;
 const Mir = @import("../mir.zig");
@@ -678,7 +678,7 @@ pub const Target = struct {
 /// expression cannot name a branch at all (a two-terminal access, a
 /// non-constant index), which is not an error here — `nodeOf` reads the same
 /// expression as a net reference and reports whatever is wrong with it.
-fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u8 {
+fn branchKey(self: *Lower, buf: *[lower_shape.elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u8 {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .ident => self.file.str(ex.strOf(e)),
@@ -696,7 +696,7 @@ fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oo
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) break :blk null;
             const i = lower_constfold.constEval(self, ex.rhs(e)) orelse break :blk null;
-            break :blk try lower_param.elemKey(self, buf, self.file.str(ex.strOf(base)), &.{i.asInt()});
+            break :blk try lower_shape.elemKey(self, buf, self.file.str(ex.strOf(base)), &.{i.asInt()});
         },
         else => null, // else: names no branch; `nodeOf` reads it as a net reference and reports it
     };
@@ -707,7 +707,7 @@ fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oo
 /// access — a port branch is a name, never a pair.
 pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
     if (self.file.exprs.rhs(e) != .none) return null;
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     const key = try branchKey(self, &key_buf, self.file.exprs.lhs(e)) orelse return null;
     return self.port_branches.get(key);
 }
@@ -762,7 +762,7 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     // under exactly that scalarised name. The miss falls through to `nodeOf`,
     // which owns every diagnostic about a bad index.
     if (ex.rhs(e) == .none) {
-        var key_buf: [lower_param.elem_key_len]u8 = undefined;
+        var key_buf: [lower_shape.elem_key_len]u8 = undefined;
         if (try branchKey(self, &key_buf, first)) |key| {
             if (self.branches.get(key)) |b| {
                 try checkAccessMatch(self, e, name, access, b.hi);

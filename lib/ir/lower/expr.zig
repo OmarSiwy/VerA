@@ -15,10 +15,11 @@ const lower_func = @import("func.zig");
 const lower_event = @import("event.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
-const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const lower_systask = @import("systask.zig");
+const lower_shape = @import("shape.zig");
+const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 const Const = @import("frontend").constfold.Const;
@@ -213,7 +214,7 @@ fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: 
 /// codegen renders as ONE `switch` — a jump table, so the read is O(1) in the
 /// array's extent (the array is scalarized, so there is no memory to index).
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+    var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
     const chain = (try lower_stmt.indexChain(self, e, &subs)) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0330, "only `name[<index>]` is supported", .{});
         return poison;
@@ -225,8 +226,8 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     };
 
     try lower_event.captureTimerArray(self, name);
-    var idx: [lower_param.max_stack_dims]i64 = undefined;
-    const at = try lower_param.subscriptBuf(self, &idx, chain.subs.len);
+    var idx: [lower_shape.max_stack_dims]i64 = undefined;
+    const at = try lower_shape.subscriptBuf(self, &idx, chain.subs.len);
     var all_const = true;
     for (chain.subs, at) |s, *o| {
         // `foldExpr(.., false)`, not `constEval`: a §3.4 parameter is
@@ -255,13 +256,13 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ty = info.ty;
     // A memory-backed array reads one element of its storage; an invalid
     // subscript (-1) reads the zero the `$idx` switch's default gives.
-    if (info.mem) |m| return .{ .v = try lower_param.loadElem(self, m, ty, iv), .ty = ty };
+    if (info.mem) |m| return .{ .v = try lower_var.loadElem(self, m, ty, iv), .ty = ty };
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.append(self.arena, .zero);
     try vals.append(self.arena, iv);
-    for (0..lower_param.shapeCells(info.dims)) |k| {
-        lower_param.shapeSubscripts(info.dims, k, at);
+    for (0..lower_shape.shapeCells(info.dims)) |k| {
+        lower_shape.shapeSubscripts(info.dims, k, at);
         const el = (try arrayElemValue(self, name, at)) orelse return poison;
         try vals.append(self.arena, if (ty == .real) try self.toReal(el) else el.v);
     }
@@ -406,13 +407,13 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?TypedValue {
     try lower_event.captureTimerArray(self, name);
     if (self.arrays.get(name)) |info| if (info.mem) |m| return .{
-        .v = try lower_param.loadElem(self, m, info.ty, try self.mir.addIntConst(self.arena, lower_param.flatIndex(info.dims, idx))),
+        .v = try lower_var.loadElem(self, m, info.ty, try self.mir.addIntConst(self.arena, lower_shape.flatIndex(info.dims, idx))),
         .ty = info.ty,
     };
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    const key = try lower_param.elemKey(self, &key_buf, name, idx);
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    const key = try lower_shape.elemKey(self, &key_buf, name, idx);
     if (self.vars.get(key)) |slot|
-        return .{ .v = try lower_param.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = slot.ty };
+        return .{ .v = try lower_var.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = slot.ty };
     if (self.param_index.get(key)) |pi|
         return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
     return null;
@@ -442,7 +443,7 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.out.params.items[idx].ty) };
     }
     if (self.vars.get(name)) |slot|
-        return .{ .v = try lower_param.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = slot.ty };
+        return .{ .v = try lower_var.analogRead(self, try self.builder.readVariable(slot.place, self.cur), slot.reg_width), .ty = slot.ty };
     // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
     // same name shadows the module's, so `param_index` is masked and the local
     // value is found in `consts` (where `inlineUserFuncPre` folded it).
