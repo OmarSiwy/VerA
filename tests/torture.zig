@@ -8,6 +8,7 @@
 const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
+const digital = @import("harness/digital.zig");
 const options = @import("suite_options");
 /// The suite's fixture root and LRM directory, shared with `harness.zig`.
 const suite = options;
@@ -85,13 +86,21 @@ fn prepare(ctx_ptr: *anyopaque, gpa: std.mem.Allocator, io: Io, fixtures: []cons
     }
 }
 
-/// One batch's outcome: which of its fixtures (offsets in the chunk) are
-/// members, in member order, and the binary when it built.
+/// One batch's outcome: which of its fixtures (offsets in the chunk, each
+/// below `batch_size`) are members, in member order, and the binary when it
+/// built. One per `batch_size` fixtures; `member[0..n]` is what is valid.
 const Chunk = struct {
-    member: [batch_size]usize = undefined,
-    n: usize = 0,
+    member: [batch_size]u8 = undefined,
+    n: u8 = 0,
     bin: ?[]const u8 = null,
 };
+
+// Budget: the offsets are below `batch_size`, so a byte each; `usize` offsets
+// made a row 88 B.
+comptime {
+    std.debug.assert(batch_size <= std.math.maxInt(u8));
+    std.debug.assert(@sizeOf(Chunk) == 32);
+}
 
 /// `prepare`'s work queue: one chunk of fixtures per take.
 const Pool = struct {
@@ -120,14 +129,14 @@ const Pool = struct {
         const c = &pool.chunks[k];
         for (fs, 0..) |f, fi| {
             const source = Io.Dir.cwd().readFileAlloc(pool.io, f.path, arena, .limited(1 << 20)) catch continue;
-            if (harness.vcdExpectation(source) != null) continue;
+            if (digital.vcdExpectation(source) != null) continue;
             const d = vera.tb.parse(arena, source) catch continue;
             if (d.reject.len != 0) continue;
             var sink: ?vera.tb.Staged = null;
             var discard: Io.Writer.Discarding = .init(&.{});
             _ = runAndCheck(pool.gpa, pool.io, arena, pool.ctx, f, source, d, &discard.writer, &sink) catch continue;
             staged[c.n] = sink orelse continue;
-            c.member[c.n] = fi;
+            c.member[c.n] = @intCast(fi);
             c.n += 1;
         }
         if (c.n < 2) return; // one member gains nothing over its own build
@@ -283,7 +292,7 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
     // codegen emitting `@compileError`, which `.lint` would never see.
     var result = vera.compileSourceOpts(gpa, source, .build, .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, f.root },
+        .include_dirs = &.{ f.dir(), f.root },
         .diags = &diags,
         // Annex E.2: the fixture's `//! spice` cards, read as a netlist.
         .spice_netlist = d.spice,
@@ -446,7 +455,7 @@ fn runAndCheck(
 
     var opts: vera.Options = .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, f.root },
+        .include_dirs = &.{ f.dir(), f.root },
         .diags = &diags,
         .lint = levels,
         .display = .emit,
@@ -494,7 +503,7 @@ fn runAndCheck(
     dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
     dm.op_states = try vera.tb.opStates(arena, result.lowered);
     dm.validate_contract = true;
-    const runner = try vera.tb.renderRunner(arena, f.stem, dm);
+    const runner = try vera.tb.renderRunner(arena, f.stem(), dm);
 
     // One work directory per fixture, keyed on the whole relative path: two
     // fixtures may declare the same module name AND share a file name, and a
@@ -740,9 +749,7 @@ test "declared check count rejects missing and duplicated observations" {
         \\endmodule
     ;
     const fixture: Fixture = .{
-        .path = "check_count_oracle.va",
-        .stem = "check_count_oracle",
-        .dir = suite.fixture_root,
+        .path = suite.fixture_root ++ "/check_count_oracle.va",
         .root = suite.fixture_root,
         .slug = "harness_check_count_selftest",
     };
@@ -776,9 +783,7 @@ test "a fatal exit after a passing assertion must be explicitly expected" {
         \\endmodule
     ;
     const fixture: Fixture = .{
-        .path = "exit_oracle.va",
-        .stem = "exit_oracle",
-        .dir = suite.fixture_root,
+        .path = suite.fixture_root ++ "/exit_oracle.va",
         .root = suite.fixture_root,
         .slug = "harness_exit_status_selftest",
     };
