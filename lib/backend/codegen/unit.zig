@@ -8,8 +8,9 @@ const std = @import("std");
 const plan_core = @import("plan/core.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
-const gen_dispatch = @import("dispatch.zig");
+const gen_noise = @import("noise.zig");
 const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_setup = @import("setup.zig");
 const gen_state = @import("state.zig");
@@ -115,7 +116,7 @@ pub fn emitUnits(self: *Gen) Error!void {
     try cg_limit.emitCore(self);
     try gen_state.emitCore(self);
     try gen_state.emitIterCore(self);
-    try gen_dispatch.emitNoiseCore(self);
+    try gen_noise.emitNoiseCore(self);
     for (self.jobs.list) |job| {
         if (job.kind != .display) continue;
         self.pre_fatal = job.pre_fatal;
@@ -352,7 +353,7 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     // (`plan.Core.in_place`) is stored through it.
     // Spelled `InstancePtr` where that already is `*const Instance` (a device
     // that is not `mutable_eval`), so those devices' text is unchanged.
-    const eval_writes = self.lowered.timepoints.items.len != 0 or gen_file.hasStatus(self);
+    const eval_writes = self.lowered.timepoints.items.len != 0 or gen_instance.hasStatus(self);
     try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.table_samples.items.len == 0 and eval_writes) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});

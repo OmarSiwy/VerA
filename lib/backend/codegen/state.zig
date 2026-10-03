@@ -12,6 +12,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
 const gen_render = @import("render.zig");
@@ -48,7 +49,7 @@ fn scanAccept(self: *Gen) Error!Accept {
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
     for (self.core.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
-    a.uses_core = a.uses_core or gen_file.pathLatches(self);
+    a.uses_core = a.uses_core or gen_instance.pathLatches(self);
     a.uses_core = a.uses_core or rejectStepIdx(self) != null;
     a.reads_t_prev = a.reads_t_prev or a.uses_dt;
     return a;
@@ -169,18 +170,18 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    try gen_file.emitStateTwins(self, acc.reads_t_prev);
+    try gen_instance.emitStateTwins(self, acc.reads_t_prev);
     // VerA's `vera_timepoint` (§2.9): a fresh state is a fresh cache. A
     // dirty-tracked held array (`file.dirtyTracked`): the fresh `State`
     // differs from `inst` anywhere, so its range is the whole array.
     var dirty = false;
-    for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_file.dirtyTracked(self, h.array));
+    for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_instance.dirtyTracked(self, h.array));
     const tp = self.lowered.timepoints.items.len != 0;
-    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_file.hasStatus(self)) "inst" else "_"});
+    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_instance.hasStatus(self)) "inst" else "_"});
     if (tp) try self.w("    zTpDrop(inst);\n", .{});
-    if (gen_file.hasStatus(self)) try self.w(gen_file.status_drop, .{});
+    if (gen_instance.hasStatus(self)) try self.w(gen_instance.status_drop, .{});
     for (self.lowered.held_vars.items, self.names.held_names) |h, n| {
-        if (h.array == none_u32 or !gen_file.dirtyTracked(self, h.array)) continue;
+        if (h.array == none_u32 or !gen_instance.dirtyTracked(self, h.array)) continue;
         try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
     }
     try self.w("    return .{{}};\n}}\n\npub fn updateState(comptime", .{});
@@ -198,7 +199,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
     const body = self.out.items.len;
     // §9.7.3 a latched status: the device stopped, so its state stays put.
-    if (gen_file.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
+    if (gen_instance.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
     // One slice evaluation serves every operator's input.
     const full = self.core;
     var at_m: ?usize = null;
@@ -235,7 +236,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\
     , .{});
     try emitStateClass(self);
-    try gen_file.emitStateCtl(self, acc.reads_t_prev);
+    try gen_instance.emitStateCtl(self, acc.reads_t_prev);
     try emitAdvanceIteration(self);
     try emitAcceptQ(self, acc);
 }
@@ -244,7 +245,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
 /// latches alone (no operator history, held variable or §9.13.1 seed),
 /// `.history` otherwise.
 fn emitStateClass(self: *Gen) Error!void {
-    const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
+    const latch_only = gen_instance.pathLatches(self) and !gen_file.hasStatefulOps(self) and
         self.lowered.rng_auto_seeds.items.len == 0;
     try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
         if (latch_only) "path_latch" else "history",
@@ -261,7 +262,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (self.lowered.reject_step != .undef) return;
     // §9.7.3 a latched status leaves the state alone, which `updateState`
     // checks first; a status device calls `q` and `updateState`.
-    if (gen_file.hasStatus(self)) return;
+    if (gen_instance.hasStatus(self)) return;
     self.uses.x = false;
     self.uses.model = false;
     self.uses.inst = true; // the §9.17 resets below always write it
@@ -500,7 +501,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // an in-place one is already in `inst`.
             if (gen_render.inPlace(self, h.array)) continue;
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
-            if (gen_file.dirtyTracked(self, h.array))
+            if (gen_instance.dirtyTracked(self, h.array))
                 try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
         } else {
             // The core field is typed by `vty`, not the declared type, and

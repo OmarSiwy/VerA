@@ -14,7 +14,7 @@ const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const gen_cfg = @import("cfg.zig");
-const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const plan_setup = @import("plan/setup.zig");
 const plan_args = @import("plan/args.zig");
 const setup_chunk = @import("setup_chunk.zig");
@@ -248,7 +248,7 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
 /// after `setup` (`contract.validateHost`'s `calls_setup`).
 fn emitSetupInstance(self: *Gen) Error!void {
     const tp = self.lowered.timepoints.items.len != 0;
-    if (!tp and !gen_file.hasStatus(self)) return;
+    if (!tp and !gen_instance.hasStatus(self)) return;
     try self.w(
         \\/// Call for every instance after `setup`, or after any write to
         \\/// `Model` or this instance: it drops what the instance cached from
@@ -257,7 +257,7 @@ fn emitSetupInstance(self: *Gen) Error!void {
         \\{s}{s}}}
         \\
         \\
-    , .{ if (tp) "    zTpDrop(inst);\n" else "", if (gen_file.hasStatus(self)) gen_file.status_drop else "" });
+    , .{ if (tp) "    zTpDrop(inst);\n" else "", if (gen_instance.hasStatus(self)) gen_instance.status_drop else "" });
 }
 
 /// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes

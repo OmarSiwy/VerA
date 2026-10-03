@@ -352,7 +352,7 @@ pub const Gen = struct {
     /// The core as `updateState` reads it: its slice (`gen_state.emitCore`),
     /// or `.{}` when `updateState` reads nothing off the core.
     state_core: plan_core.Core = .{},
-    /// The core as `noisePsd` reads it: its slice (`gen_dispatch.emitNoiseCore`),
+    /// The core as `noisePsd` reads it: its slice (`gen_noise.emitNoiseCore`),
     /// or `.{}` when `noisePsd` reads nothing off the core.
     noise_core: plan_core.Core = .{},
     /// The core as `advanceIteration` and `checkConvergence` read it: their
@@ -497,6 +497,11 @@ pub const Gen = struct {
         try gen_setup.planSetup(self);
     }
 
+    // ---- the emitter sub-files ----
+    //
+    // The `pub` aliases below are the sub-file API the `cg_*.zig` emitters
+    // call (`g.renderVal(...)`); everything else stays file-private.
+
     // Setup: the solve-invariant slice, computed once per card (codegen/setup.zig)
     const gen_setup = @import("codegen/setup.zig");
     pub const probeInstance = gen_setup.probeInstance;
@@ -504,10 +509,13 @@ pub const Gen = struct {
 
     // --------------------------------------------------------------- units ----
 
-    // File assembly: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`, §4.5 `Instance`), codegen/file.zig
+    // File assembly, the spine: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`), codegen/file.zig
     const gen_file = @import("codegen/file.zig");
     pub const emitFile = gen_file.emitFile;
     pub const fmtF64 = gen_file.fmtF64;
+
+    // §4.5 `Instance`, its `State` twin and `stateCtl`, codegen/instance.zig
+    const gen_instance = @import("codegen/instance.zig");
 
     // Units: one function per source unit and the body it computes, codegen/unit.zig
     const gen_unit = @import("codegen/unit.zig");
@@ -528,6 +536,9 @@ pub const Gen = struct {
 
     // Dispatchers: §5.6 residual assembly, §1.3.1.2 reference directions, codegen/dispatch.zig
     const gen_dispatch = @import("codegen/dispatch.zig");
+
+    // §4.6.3/§4.6.4 small-signal source tables, codegen/noise.zig
+    const gen_noise = @import("codegen/noise.zig");
 
     // §4.5.2 the analog-operator state machine and §5.6.5 zero-parasitic collapse, codegen/state.zig
     const gen_state = @import("codegen/state.zig");
@@ -559,11 +570,13 @@ test {
     _ = Gen.gen_setup;
     _ = setup_chunk;
     _ = Gen.gen_file;
+    _ = Gen.gen_instance;
     _ = Gen.gen_unit;
     _ = Gen.gen_cfg;
     _ = Gen.gen_render;
     _ = Gen.gen_call;
     _ = Gen.gen_dispatch;
+    _ = Gen.gen_noise;
     _ = Gen.gen_state;
     _ = gen_kernel_text;
     _ = gen_test;
