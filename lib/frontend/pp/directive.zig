@@ -287,7 +287,8 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the include dirs, else a built-in annex D file by
-/// basename. Null if nothing matched. The bytes are arena-owned.
+/// basename. Null if nothing matched. The bytes and the path are on
+/// `pp.arena`, since the bag keeps both.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.

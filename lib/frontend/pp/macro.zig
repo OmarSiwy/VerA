@@ -269,10 +269,10 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     return end;
 }
 
-/// Returns one actual argument fully macro-expanded, arena-owned. Scans into a
-/// fresh output list with `expand_site` set to `at`, the invocation's '`', so
-/// diagnostics and `__LINE__` behave as in a body rescan. Backtick-free text
-/// is returned as is.
+/// Returns one actual argument fully macro-expanded, on `pp.scratch`. Scans
+/// into a fresh output list with `expand_site` set to `at`, the invocation's
+/// '`', so diagnostics and `__LINE__` behave as in a body rescan.
+/// Backtick-free text is returned as is.
 fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
@@ -333,7 +333,7 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
 }
 
 /// Returns `body` with each whole-identifier formal replaced by its actual,
-/// arena-owned. Strings, escaped identifiers, numbers and the name after a
+/// on `pp.scratch`. Strings, escaped identifiers, numbers and the name after a
 /// '`' are never substituted into.
 pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: []const []const u8) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
