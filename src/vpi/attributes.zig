@@ -8,6 +8,9 @@ const constfold = @import("frontend").constfold;
 const root = @import("root.zig");
 const code = @import("code.zig");
 
+/// Is `o` one of IEEE 1364-2005 §26.6.42's decorated language elements, so
+/// `vpi_iterate(vpiAttribute, o)` is a relationship (empty when undecorated)
+/// rather than an error?
 pub fn supports(o: *const root.Obj) bool {
     return switch (o.kind) {
         .module, .port, .net, .reg, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array => true,
@@ -67,6 +70,11 @@ pub fn supports(o: *const root.Obj) bool {
     };
 }
 
+/// Appends a vpiAttribute row to `parent` for each attribute the source binds
+/// to `owner`, its value folded (§3.8/AMS §2.9: no value is 1). A name
+/// repeated on one element keeps the later spelling. `definition` is
+/// vpiDefAttribute. A no-op for `code.none`. `error.NotElaborated`: a value
+/// that does not fold, which the frontend should already have refused.
 pub fn attach(b: *code.Builder, parent: u32, owner: Ast.AttributeOwner, definition: bool) root.Error!void {
     if (parent == code.none) return;
     for (b.file.attributes.items) |binding| {
@@ -115,6 +123,8 @@ pub fn attach(b: *code.Builder, parent: u32, owner: Ast.AttributeOwner, definiti
 const AnalogEnv = struct {
     b: *code.Builder,
 
+    /// `constfold`'s leaf hook: a parameter's folded value, or one of the
+    /// conversion calls the analog validator folds. Null: not a constant.
     pub fn leaf(env: AnalogEnv, e: Ast.ExprId) ?root.Const {
         // These are the conversion calls the analog constant-expression
         // validator folds (lower/constfold.zig, AMS §9.11/§9.14).
@@ -151,11 +161,14 @@ const AnalogEnv = struct {
         for (lowered.params.items) |p| if (std.mem.eql(u8, p.name, name)) return p;
         return null;
     }
+    /// `constfold`'s signedness hook; an `integer` parameter is signed.
     pub fn signed(env: AnalogEnv, e: Ast.ExprId) ?bool {
         if (env.b.file.exprs.tag(e) != .ident) return constfold.clog2Signed(env.b.file, e, env);
         const p = env.parameter(e) orelse return null;
         return if (p.integer32) true else p.source_signed;
     }
+    /// `constfold`'s width hook: 32 for an `integer` parameter, else the
+    /// source width.
     pub fn width(env: AnalogEnv, e: Ast.ExprId) ?u32 {
         const p = env.parameter(e) orelse return null;
         return if (p.integer32) 32 else p.source_width;

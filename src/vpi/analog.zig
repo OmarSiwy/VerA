@@ -11,6 +11,7 @@ const root = @import("root.zig");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
 const systf = @import("systf.zig");
+const value = @import("value.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -147,10 +148,13 @@ pub fn detach() void {
     have_solution = false;
 }
 
+/// The device library `attach` installed, until `detach`.
 pub fn attached() ?Lib {
     return lib;
 }
 
+/// The analysis `run` is walking, its default `max_step` filled in; null
+/// outside `run`. §12.18's vpi_get_real reads its bounds.
 pub fn analysis() ?Analysis {
     return current;
 }
@@ -173,6 +177,9 @@ pub fn sameTime(a: f64, b: f64) bool {
     return @abs(a - b) <= 1e-12 * @max(1.0, @max(@abs(a), @abs(b))) or @abs(a - b) <= 1e-21;
 }
 
+/// `run`'s failures: `NoLibrary`, no `attach` yet; `BackupExhausted`, see
+/// `run`. `DidNotConverge` is never returned today: `attempt` discards
+/// `Lib.solve`'s result.
 pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted };
 
 /// Runs one analysis to its end, delivering every §12.31.3 callback.
@@ -297,6 +304,143 @@ pub fn quantityValue(q: *const root.Obj) ValueError!f64 {
     // §5.6.1.3: a branch with no source retains nothing, and is an open
     // circuit — its flow is zero.
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// §12.10 vpi_get_analog_value: the C face of `quantityValue`
+// ---------------------------------------------------------------------------
+
+/// Figure 12-3, laid out for C.
+pub const AnalogValue = extern struct {
+    format: c_int,
+    real: extern union { str: [*c]u8, real: f64, misc: [*c]u8 },
+    imaginary: extern union { str: [*c]u8, real: f64, misc: [*c]u8 },
+};
+
+/// "shall retrieve the simulation value of VPI analog vpiFlow or vpiPotential
+/// (node or branch) quantity objects. The value shall be placed in an
+/// s_vpi_analog_value structure, which has been allocated by the user."
+///
+/// A non-quantity object or a NULL structure is refused. The value is the
+/// current solution of analog.zig's analysis; with none, the error is
+/// NOANALYSIS, and a flow shared with a parallel instance is SHARED. Every
+/// imaginary part is 0 (no small-signal analysis runs).
+pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void {
+    _ = root.enter("vpi_get_analog_value") orelse return;
+    const o = root.object("vpi_get_analog_value", obj) orelse return;
+    if (o.kind != .quantity) {
+        root.fail("NOTQUANTITY", "vpi_get_analog_value: a {s} is not a vpiFlow or vpiPotential quantity", .{@tagName(o.kind)});
+        return;
+    }
+    const v = value_p orelse {
+        root.fail("BADVALUE", "vpi_get_analog_value: value_p is NULL", .{});
+        return;
+    };
+    const re = quantityValue(o) catch |e| {
+        switch (e) {
+            error.NoAnalysis => root.fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{}),
+            // A row two instances' <+ summed into holds their total; this
+            // branch's share of it is not a number the model has.
+            error.Unknowable => root.fail("SHARED", "vpi_get_analog_value: this branch's flow was summed with a parallel instance's and cannot be told apart", .{}),
+        }
+        return;
+    };
+    // No small-signal analysis runs here: every imaginary part is 0.
+    const im: f64 = 0;
+    switch (v.format) {
+        vpiRealVal => {
+            v.real = .{ .real = re };
+            v.imaginary = .{ .real = im };
+        },
+        vpiExpStrVal, vpiDecStrVal, vpiStringVal => {
+            // Table 12-2. The strings live in THIS routine's buffer — "different
+            // from the buffer which vpi_get_str() shall use" and "overwritten
+            // with each call".
+            var chose: c_int = v.format;
+            const a = analogString(&analog_buf[0], re, v.format, &chose) orelse return;
+            const b = analogString(&analog_buf[1], im, v.format, &chose) orelse return;
+            // vpiStringVal: "The call shall reset the format field to
+            // vpiExpStrVal or vpiDecStrVal to the selected format." The real
+            // part's choice is the one reported.
+            if (v.format == vpiStringVal) {
+                var ignored: c_int = 0;
+                _ = analogString(&analog_buf[1], im, vpiStringVal, &ignored);
+                v.format = chose;
+            }
+            v.real.str = a;
+            v.imaginary.str = b;
+        },
+        else => root.fail("BADFORMAT", "vpi_get_analog_value: format {d} is not one of Table 12-2's", .{v.format}),
+    }
+}
+
+const vpiRealVal = value.vpiRealVal;
+const vpiDecStrVal = value.vpiDecStrVal;
+const vpiStringVal = value.vpiStringVal;
+/// §12.10's `vpExpStrVal` (Table 12-2's spelling): vpi_user.h's number.
+const vpiExpStrVal: c_int = 710;
+
+/// §12.10's own string buffers, real and imaginary.
+var analog_buf: [2][64]u8 = undefined;
+
+/// One part of an analog value as Table 12-2 spells it: vpiExpStrVal "like
+/// printf %e", vpiDecStrVal "decimal char(s)", vpiStringVal "like printf
+/// %g" — reporting which of the other two %g chose in `chose`.
+fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
+    const text = switch (format) {
+        vpiExpStrVal => printfE(buf, x, 6),
+        vpiDecStrVal => std.mem.printSentinel(buf, "{d}", .{x}, 0) catch null,
+        vpiStringVal => printfG(buf, x, chose),
+        else => null,
+    } orelse {
+        root.fail("BADFORMAT", "vpi_get_analog_value: {e} does not fit the value buffer", .{x});
+        return null;
+    };
+    return @constCast(text.ptr);
+}
+
+/// C's `%.<prec>e`: one digit, the fraction, `e`, a sign and at least two
+/// exponent digits. Zig's `{e}` rounds correctly and spells the exponent
+/// bare (`2.5e-3`), so only the exponent is re-spelled.
+fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
+    var tmp: [64]u8 = undefined;
+    const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
+    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
+    const sign: u8 = if (exp < 0) '-' else '+';
+    return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }, 0) catch null;
+}
+
+/// C's `%g` (precision 6): %e when the exponent is below -4 or at least 6,
+/// %f otherwise, trailing zeros and a bare point dropped. `chose` becomes
+/// vpiExpStrVal or vpiDecStrVal after the form taken.
+fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
+    if (x == 0) {
+        chose.* = vpiDecStrVal;
+        return std.mem.printSentinel(buf, "0", .{}, 0) catch null;
+    }
+    var tmp: [64]u8 = undefined;
+    const raw = std.mem.print(&tmp, "{e:.5}", .{x}) catch return null;
+    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
+    if (exp < -4 or exp >= 6) {
+        chose.* = vpiExpStrVal;
+        var m: []const u8 = raw[0..at];
+        if (std.mem.indexOfScalar(u8, m, '.') != null) {
+            m = std.mem.trimEnd(u8, m, "0");
+            m = std.mem.trimEnd(u8, m, ".");
+        }
+        const sign: u8 = if (exp < 0) '-' else '+';
+        return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ m, sign, @abs(exp) }, 0) catch null;
+    }
+    chose.* = vpiDecStrVal;
+    const decimals: usize = @intCast(5 - exp);
+    var fixed: []const u8 = std.mem.print(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
+    if (std.mem.indexOfScalar(u8, fixed, '.') != null) {
+        fixed = std.mem.trimEnd(u8, fixed, "0");
+        fixed = std.mem.trimEnd(u8, fixed, ".");
+    }
+    return std.mem.printSentinel(buf, "{s}", .{fixed}, 0) catch null;
 }
 
 // ---------------------------------------------------------------------------

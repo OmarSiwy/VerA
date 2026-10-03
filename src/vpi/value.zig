@@ -12,6 +12,8 @@ const std = @import("std");
 const sim = @import("sim");
 const Int = @import("frontend").Integer;
 const root = @import("root.zig");
+const property = @import("property.zig");
+const handle = @import("handle.zig");
 const systf = @import("systf.zig");
 const callback = @import("callback.zig");
 const run = @import("run.zig");
@@ -991,8 +993,8 @@ test "§12.16 Table 12-4: every string format over a four-state value" {
     );
     defer h.deinit();
     try run.simulate();
-    const known = root.vpi_handle_by_name("v.known", null);
-    const unknown = root.vpi_handle_by_name("v.unknown", null);
+    const known = handle.vpi_handle_by_name("v.known", null);
+    const unknown = handle.vpi_handle_by_name("v.unknown", null);
     try std.testing.expectEqualStrings("101001110001", getStr(known, vpiBinStrVal));
     try std.testing.expectEqualStrings("5161", getStr(known, vpiOctStrVal));
     try std.testing.expectEqualStrings("2673", getStr(known, vpiDecStrVal));
@@ -1000,8 +1002,8 @@ test "§12.16 Table 12-4: every string format over a four-state value" {
     try std.testing.expectEqualStrings("1010zzzz01x1", getStr(unknown, vpiBinStrVal));
     try std.testing.expectEqualStrings("azX", getStr(unknown, vpiHexStrVal));
     try std.testing.expectEqualStrings("5ZZX", getStr(unknown, vpiOctStrVal));
-    try std.testing.expectEqualStrings("VerA!", getStr(root.vpi_handle_by_name("v.text", null), vpiStringVal));
-    try std.testing.expectEqualStrings("-5", getStr(root.vpi_handle_by_name("v.neg", null), vpiDecStrVal));
+    try std.testing.expectEqualStrings("VerA!", getStr(handle.vpi_handle_by_name("v.text", null), vpiStringVal));
+    try std.testing.expectEqualStrings("-5", getStr(handle.vpi_handle_by_name("v.neg", null), vpiDecStrVal));
 
     var v: Value = std.mem.zeroes(Value);
     v.format = vpiIntVal;
@@ -1032,7 +1034,7 @@ test "§12.30: vpiNoDelay writes now, the delay modes schedule, and events cance
         \\endmodule
     );
     defer h.deinit();
-    const q = root.vpi_handle_by_name("p.q", null);
+    const q = handle.vpi_handle_by_name("p.q", null);
     var v: Value = std.mem.zeroes(Value);
     var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 5, .real = 0 };
     v.format = vpiHexStrVal;
@@ -1044,13 +1046,13 @@ test "§12.30: vpiNoDelay writes now, the delay modes schedule, and events cance
     v.value.integer = 0xAA;
     const aa = vpi_put_value(q, &v, &t, vpiPureTransportDelay | vpiReturnEvent);
     try std.testing.expect(aa != null);
-    try std.testing.expectEqual(vpiSchedEvent, root.vpi_get(root.vpiType, aa));
-    try std.testing.expectEqual(@as(c_int, 1), root.vpi_get(vpiScheduled, aa));
+    try std.testing.expectEqual(vpiSchedEvent, property.vpi_get(root.vpiType, aa));
+    try std.testing.expectEqual(@as(c_int, 1), property.vpi_get(vpiScheduled, aa));
     // An inertial put removes the 0xAA event.
     v.value.integer = 0xCC;
     t.low = 10;
     try std.testing.expect(vpi_put_value(q, &v, &t, vpiInertialDelay) == null);
-    try std.testing.expectEqual(@as(c_int, 0), root.vpi_get(vpiScheduled, aa));
+    try std.testing.expectEqual(@as(c_int, 0), property.vpi_get(vpiScheduled, aa));
     // Cancelling it again is not an error.
     _ = vpi_put_value(aa, null, null, vpiCancelEvent);
     try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
@@ -1073,7 +1075,7 @@ test "§12.30: vpiForceFlag overrides a net's driver, vpiReleaseFlag hands it ba
     );
     defer h.deinit();
     try run.simulate();
-    const w = root.vpi_handle_by_name("f.w", null);
+    const w = handle.vpi_handle_by_name("f.w", null);
     var fmt: Value = std.mem.zeroes(Value);
     fmt.format = vpiIntVal;
     for ([_]c_int{ callback.cbForce, callback.cbRelease }) |reason| {
@@ -1132,15 +1134,15 @@ test "§12.16: an analog parameter reads the value lowering folded" {
     defer root.close();
     var v: Value = std.mem.zeroes(Value);
     v.format = vpiRealVal;
-    vpi_get_value(root.vpi_handle_by_name("r.g", null), &v);
+    vpi_get_value(handle.vpi_handle_by_name("r.g", null), &v);
     try std.testing.expectEqual(@as(f64, 2.5), v.value.real);
     v.format = vpiObjTypeVal;
-    vpi_get_value(root.vpi_handle_by_name("r.k", null), &v);
+    vpi_get_value(handle.vpi_handle_by_name("r.k", null), &v);
     try std.testing.expectEqual(vpiIntVal, v.format);
     v.format = vpiIntVal;
-    vpi_get_value(root.vpi_handle_by_name("r.k", null), &v);
+    vpi_get_value(handle.vpi_handle_by_name("r.k", null), &v);
     try std.testing.expectEqual(@as(c_int, 3), v.value.integer);
     // A node's value lives in a device this process does not run.
-    vpi_get_value(root.vpi_handle_by_name("r.p", null), &v);
+    vpi_get_value(handle.vpi_handle_by_name("r.p", null), &v);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
 }
