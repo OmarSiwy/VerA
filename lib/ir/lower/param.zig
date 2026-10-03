@@ -28,6 +28,13 @@ const astTy = Lower.astTy;
 /// declaration, then the §6.4.2 selection parameters marked as shape. Runs
 /// before the ports, whose ranges may read a parameter.
 pub fn lowerParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // One row per scalar declaration and per system alias, sized once: grown
+    // row by row in the arena, the table left ~2.8x its final size behind in
+    // abandoned copies (210 KB for psp103's 847 rows). An array parameter's
+    // elements still grow it past this.
+    const rows = module.params.len + module.aliasparams.len;
+    try self.out.params.ensureTotalCapacityPrecise(self.arena, self.out.params.items.len + rows);
+    try self.param_values.ensureTotalCapacityPrecise(self.arena, self.param_values.items.len + rows);
     // §3.4 parameters before the ports, because a range is a constant
     // expression over them: §6.5.2.2's own example is `input [1:width] dt`
     // with `width` a module parameter, and `foldDim` cannot answer that from
