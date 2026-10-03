@@ -30,6 +30,8 @@ pub const Bag = struct {
     string_bytes: std.ArrayList(u8) = .empty,
     /// One row per diagnostic, in emission order until `sort` reorders it.
     records: std.ArrayList(diag_entry.Record) = .empty,
+    /// Copied in by the caller (`bag.levels = opts.lint`), which still owns
+    /// it: `deinit` never frees it.
     levels: Levels = .empty,
     /// Every file that took part in the compilation, in the order the
     /// preprocessor opened them. `FileId` indexes this.
@@ -44,33 +46,37 @@ pub const Bag = struct {
     /// hundreds of kilobytes for a foundry model — BORROWED from the arena and
     /// re-pointed by `setStrippedText` once comments are stripped. Interning it
     /// into `string_bytes` would copy every byte of every file on the path
-    /// where no diagnostic is ever produced, to save one `dupe` in `detach`.
+    /// where no diagnostic is ever produced, to save one copy in `detach`.
     files: std.ArrayList(diag_location.File) = .empty,
     /// Preprocessed offset → file. Empty until the preprocessor splices
     /// something, which is exactly when it means "offsets are source offsets".
     map: diag_location.SourceMap = .empty,
+    /// After `detach`: the one gpa buffer every `files` name, text and
+    /// original and every `map` macro name points into. Empty before.
+    detached_bytes: []u8 = &.{},
+    /// After `detach`: the one gpa buffer every `File.to_src` points into.
+    detached_marks: []diag_location.StripMark = &.{},
 
     /// Dropped because the cap was reached — reported as a trailer so a
     /// truncated run never looks like a complete one.
     suppressed: u32 = 0,
     /// Dropped because an identical (code, file, span.start) was already present.
     deduped: u32 = 0,
+    /// Kept rows by rendered severity; a `--deny`ed warning counts as an error.
     err_count: u32 = 0,
     warn_count: u32 = 0,
 
+    /// Allocates nothing; every table grows in `arena` on first use, so a
+    /// compilation that reports nothing costs no memory here.
     pub fn init(arena: Allocator) Bag {
         return .{ .arena = arena };
     }
 
     // -- the string pool ----------------------------------------------------
 
-    /// `Bag.init` is infallible and a compilation that reports nothing must
-    /// not allocate, so the first string written pays for the sentinel NUL.
-    fn addString(self: *Bag, s: []const u8) Allocator.Error!diag_entry.String {
-        return self.printString("{s}", .{s});
-    }
-
-    /// Formats straight into the pool; see `addString` for the sentinel.
+    /// Formats straight into the pool. `Bag.init` is infallible and a
+    /// compilation that reports nothing must not allocate, so the first string
+    /// written pays for the sentinel NUL.
     fn printString(self: *Bag, comptime fmt: []const u8, args: anytype) Allocator.Error!diag_entry.String {
         if (self.string_bytes.items.len == 0)
             try self.string_bytes.append(self.arena, 0);
@@ -92,11 +98,14 @@ pub const Bag = struct {
 
     // -- reading ------------------------------------------------------------
 
+    /// Rows kept, at most `max_entries`; dropped diagnostics are in
+    /// `suppressed`/`deduped`, not here.
     pub fn count(self: *const Bag) usize {
         return self.records.items.len;
     }
 
     /// The i'th diagnostic, in `sort` order once `sort` has run.
+    /// Precondition: `i < count()`.
     pub fn at(self: *const Bag, i: usize) diag_entry.Entry {
         const m = self.records.items[i];
         return .{
@@ -134,9 +143,11 @@ pub const Bag = struct {
         return buf[0..m.n_notes];
     }
 
-    /// Registers a file and returns its id. `text` is borrowed, not copied.
-    /// The first file registered is `.root`, so the preprocessor must open the
-    /// top-level compilation unit before any `include.
+    /// Registers a file and returns its id. `name` and `text` are borrowed,
+    /// not copied: they must outlive the bag or its `detach`. The first file
+    /// registered is `.root`, so the preprocessor must open the top-level
+    /// compilation unit before any `include. Panics past 65,536 files
+    /// (`FileId` is a u16).
     pub fn addFile(self: *Bag, name: []const u8, text: []const u8) Allocator.Error!diag_location.FileId {
         const id: diag_location.FileId = @fromBackingInt(@intCast(@as(u16, @intCast(self.files.items.len))));
         try self.files.append(self.arena, .{ .name = name, .text = text });
@@ -155,12 +166,15 @@ pub const Bag = struct {
         f.to_src = marks;
     }
 
+    /// The name the file was registered under; `"<source>"` for an unknown `id`.
     pub fn fileName(self: *const Bag, id: diag_location.FileId) []const u8 {
         const i = @backingInt(id);
         if (i >= self.files.items.len) return "<source>";
         return self.files.items[i].name;
     }
 
+    /// The text spans index (comment-stripped once the preprocessor ran; see
+    /// `File.text`); empty for an unknown `id`.
     pub fn fileText(self: *const Bag, id: diag_location.FileId) []const u8 {
         const i = @backingInt(id);
         if (i >= self.files.items.len) return "";
@@ -176,6 +190,8 @@ pub const Bag = struct {
         return if (f.raw.len != 0) f.raw else f.text;
     }
 
+    /// The strip marks of `id`, sorted by `out`; empty when nothing was
+    /// stripped or `id` is unknown.
     pub fn fileMarks(self: *const Bag, id: diag_location.FileId) []const diag_location.StripMark {
         const i = @backingInt(id);
         if (i >= self.files.items.len) return &.{};
@@ -209,13 +225,15 @@ pub const Bag = struct {
         return self.map.resolve(span.start);
     }
 
-    /// Did anything at `deny`/`forbid` level land? This, not `entries.len`, is
+    /// Did anything at `deny`/`forbid` level land? This, not `count()`, is
     /// what decides whether the compilation failed — a bag holding only
     /// warnings is a successful compilation.
     pub fn failed(self: *const Bag) bool {
         return self.err_count != 0;
     }
 
+    /// No row kept. A bag can be empty and still have `suppressed` or
+    /// `deduped` counts, which `render` reports.
     pub fn isEmpty(self: *const Bag) bool {
         return self.records.items.len == 0;
     }
@@ -226,9 +244,12 @@ pub const Bag = struct {
         return self.levels.get(c) != .allow;
     }
 
-    /// Start one diagnostic. See `Builder`.
+    /// Starts one diagnostic; nothing is kept until `Builder.emit`. A code at
+    /// `allow`, or a bag already at `max_entries`, gets a builder that formats
+    /// nothing: `emit` would drop it anyway, and rows only ever grow.
     pub fn build(self: *Bag, stage: diag_entry.Stage, c: Code, span: diag_location.Span) Builder {
-        return .{ .bag = self, .stage = stage, .code = c, .span = span };
+        const dropped = self.levels.get(c) == .allow or self.records.items.len >= max_entries;
+        return .{ .bag = self, .stage = stage, .code = c, .span = span, .dropped = dropped };
     }
 
     /// The whole diagnostic in one call, for the common case with no labels
@@ -255,63 +276,65 @@ pub const Bag = struct {
     /// An empty bag is detached too: codegen runs after this and may still
     /// report (E0515), and its snippet needs the file text.
     pub fn detach(self: *Bag, gpa: Allocator) Allocator.Error!void {
-        var string_bytes: std.ArrayList(u8) = .empty;
-        errdefer string_bytes.deinit(gpa);
-        try string_bytes.appendSlice(gpa, self.string_bytes.items);
-        var records: std.ArrayList(diag_entry.Record) = .empty;
-        errdefer records.deinit(gpa);
-        try records.appendSlice(gpa, self.records.items);
-
-        var files: std.ArrayList(diag_location.File) = .empty;
-        errdefer files.deinit(gpa);
-        try files.appendSlice(gpa, self.files.items);
-        var files_done: usize = 0;
-        errdefer for (files.items[0..files_done]) |f| {
-            gpa.free(f.name);
-            gpa.free(f.text);
-            gpa.free(f.raw);
-            gpa.free(f.to_src);
-        };
-        for (files.items) |*f| {
-            const name = try gpa.dupe(u8, f.name);
-            errdefer gpa.free(name);
-            const text = try gpa.dupe(u8, f.text);
-            errdefer gpa.free(text);
-            const raw = try gpa.dupe(u8, f.raw);
-            errdefer gpa.free(raw);
-            f.to_src = try gpa.dupe(diag_location.StripMark, f.to_src);
-            f.name = name;
-            f.text = text;
-            f.raw = raw;
-            files_done += 1;
+        // Six allocations whatever the file and macro count: every borrowed
+        // byte (file names, texts, originals, macro names) goes into ONE
+        // buffer and every strip mark into another, instead of one `dupe`
+        // per file field and per macro segment (2,388 on hisimhv_va).
+        var n_bytes: usize = 0;
+        var n_marks: usize = 0;
+        for (self.files.items) |f| {
+            n_bytes += f.name.len + f.text.len + f.raw.len;
+            n_marks += f.to_src.len;
         }
+        for (self.map.segs) |sg| n_bytes += sg.macro.len;
 
+        const string_bytes = try gpa.dupe(u8, self.string_bytes.items);
+        errdefer gpa.free(string_bytes);
+        const records = try gpa.dupe(diag_entry.Record, self.records.items);
+        errdefer gpa.free(records);
+        const files = try gpa.dupe(diag_location.File, self.files.items);
+        errdefer gpa.free(files);
         const segs = try gpa.dupe(diag_location.Segment, self.map.segs);
         errdefer gpa.free(segs);
-        var segs_done: usize = 0;
-        errdefer for (segs[0..segs_done]) |sg| gpa.free(sg.macro);
-        for (segs) |*sg| {
-            sg.macro = try gpa.dupe(u8, sg.macro);
-            segs_done += 1;
-        }
+        const bytes = try gpa.alloc(u8, n_bytes);
+        errdefer gpa.free(bytes);
+        const marks = try gpa.alloc(diag_location.StripMark, n_marks);
 
-        self.string_bytes = string_bytes;
-        self.records = records;
-        self.files = files;
+        // Infallible from here: re-point every slice into the two buffers.
+        var cursor: usize = 0;
+        var at_mark: usize = 0;
+        for (files) |*f| {
+            f.name = copyInto(bytes, &cursor, f.name);
+            f.text = copyInto(bytes, &cursor, f.text);
+            f.raw = copyInto(bytes, &cursor, f.raw);
+            @memcpy(marks[at_mark..][0..f.to_src.len], f.to_src);
+            f.to_src = marks[at_mark..][0..f.to_src.len];
+            at_mark += f.to_src.len;
+        }
+        for (segs) |*sg| sg.macro = copyInto(bytes, &cursor, sg.macro);
+        std.debug.assert(cursor == bytes.len and at_mark == marks.len);
+
+        self.string_bytes = .fromOwnedSlice(string_bytes);
+        self.records = .fromOwnedSlice(records);
+        self.files = .fromOwnedSlice(files);
         self.map = .{ .segs = segs };
+        self.detached_bytes = bytes;
+        self.detached_marks = marks;
         self.arena = gpa;
+    }
+
+    fn copyInto(buf: []u8, cursor: *usize, s: []const u8) []const u8 {
+        const dst = buf[cursor.*..][0..s.len];
+        @memcpy(dst, s);
+        cursor.* += s.len;
+        return dst;
     }
 
     /// Releases a bag that has been through `detach`. Precondition: detached;
     /// a bag still on its arena is freed with the arena instead.
     pub fn deinit(self: *Bag, gpa: Allocator) void {
-        for (self.files.items) |f| {
-            gpa.free(f.name);
-            gpa.free(f.text);
-            gpa.free(f.raw);
-            gpa.free(f.to_src);
-        }
-        for (self.map.segs) |sg| gpa.free(sg.macro);
+        gpa.free(self.detached_bytes);
+        gpa.free(self.detached_marks);
         gpa.free(self.map.segs);
         self.string_bytes.deinit(gpa);
         self.records.deinit(gpa);
@@ -341,11 +364,13 @@ pub const Bag = struct {
 ///
 /// Methods return void: an allocation failure is latched in `oom` and reported
 /// by `emit`, the only fallible call. Text is interned into the bag's pool as
-/// it is built. Labels and notes beyond `max_children` are dropped.
+/// it is built, so a builder borrows its bag and must not outlive it. Labels
+/// and notes beyond `max_children` are dropped.
 pub const Builder = struct {
-    // ponytail: no rollback index. A dropped diagnostic (allowed, deduped,
-    // over the cap) leaves its strings in the pool; the cap bounds the waste.
-    // Add a mark-and-truncate in `emit` if a bag outlives its compilation.
+    // ponytail: no rollback index. A diagnostic `build` already knows is
+    // dropped writes nothing; one `emit` dedupes, or that reaches the cap after
+    // its `build`, leaves its strings in the pool. Add a mark-and-truncate in
+    // `emit`, guarded against interleaved builders, if that waste shows up.
     bag: *Bag,
     stage: diag_entry.Stage,
     code: Code,
@@ -358,13 +383,23 @@ pub const Builder = struct {
     notes: [diag_entry.max_children]diag_entry.NoteRec = undefined,
     n_notes: u8 = 0,
     oom: bool = false,
+    /// Set by `Bag.build` when `emit` is certain to drop this diagnostic; every
+    /// part is then skipped unformatted.
+    dropped: bool = false,
+
+    /// Interns one formatted part, or returns null when the diagnostic is
+    /// dropped or the pool cannot grow (latching `oom`).
+    fn text(self: *Builder, comptime fmt: []const u8, args: anytype) ?diag_entry.String {
+        if (self.dropped) return null;
+        return self.bag.printString(fmt, args) catch {
+            self.oom = true;
+            return null;
+        };
+    }
 
     /// Sets the headline printed after `Info.title`.
     pub fn msg(self: *Builder, comptime fmt: []const u8, args: anytype) void {
-        self.message = self.bag.printString(fmt, args) catch {
-            self.oom = true;
-            return;
-        };
+        self.message = self.text(fmt, args) orelse return;
     }
 
     /// Preprocessor only: this diagnostic's offsets are inside `id`'s own
@@ -376,27 +411,23 @@ pub const Builder = struct {
     /// Short text beside the PRIMARY caret. Use it when the caret needs to say
     /// something the headline does not — otherwise leave it unset.
     pub fn point(self: *Builder, comptime fmt: []const u8, args: anytype) void {
-        self.point_text = self.bag.printString(fmt, args) catch {
-            self.oom = true;
-            return;
-        };
+        self.point_text = self.text(fmt, args) orelse return;
     }
 
     /// Adds a secondary span with its own text.
     pub fn label(self: *Builder, span: diag_location.Span, comptime fmt: []const u8, args: anytype) void {
         if (self.n_labels == self.labels.len) return;
-        const text = self.bag.printString(fmt, args) catch {
-            self.oom = true;
-            return;
-        };
-        self.labels[self.n_labels] = .{ .span = span, .text = text };
+        const t = self.text(fmt, args) orelse return;
+        self.labels[self.n_labels] = .{ .span = span, .text = t };
         self.n_labels += 1;
     }
 
+    /// Adds a `= note:` line: context, not an instruction.
     pub fn note(self: *Builder, comptime fmt: []const u8, args: anytype) void {
         self.pushNote(.note, null, fmt, args);
     }
 
+    /// Adds a `= help:` line: what the user should change.
     pub fn help(self: *Builder, comptime fmt: []const u8, args: anytype) void {
         self.pushNote(.help, null, fmt, args);
     }
@@ -430,19 +461,13 @@ pub const Builder = struct {
         args: anytype,
     ) void {
         if (self.n_notes == self.notes.len) return;
-        const text = self.bag.printString(fmt, args) catch {
-            self.oom = true;
-            return;
-        };
-        // `addString`, not 0, even for an empty replacement: 0 is what says
+        const t = self.text(fmt, args) orelse return;
+        // Interned, not 0, even for an empty replacement: 0 is what says
         // "no fix", and a fix that replaces a span with nothing is a deletion.
-        const repl: diag_entry.String = if (fix) |f| self.bag.addString(f.replacement) catch {
-            self.oom = true;
-            return;
-        } else 0;
+        const repl: diag_entry.String = if (fix) |f| self.text("{s}", .{f.replacement}) orelse return else 0;
         self.notes[self.n_notes] = .{
             .kind = kind,
-            .text = text,
+            .text = t,
             .fix_repl = repl,
             .fix_span = if (fix) |f| f.span else .{ .start = 0, .end = 0 },
         };

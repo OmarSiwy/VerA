@@ -17,6 +17,11 @@ pub const Info = struct {
     /// Long form for `--explain`: the rule, why it exists, how to satisfy it.
     /// Authored pre-wrapped at 76 columns; `--explain` prints it verbatim.
     explain: []const u8,
+
+    // Budget: three slices, 48 B for each of the catalogue's rows.
+    comptime {
+        if (@sizeOf(Info) != 48) @compileError("Info grew: every catalogue row pays for it");
+    }
 };
 
 /// Every diagnosable condition VerA can report. The tag name is the rendered
@@ -449,6 +454,8 @@ pub const Code = enum(u16) {
     /// silently dropped.
     W0854,
 
+    /// The rendered spelling, `"E0313"`: a static string, one letter and four
+    /// digits (the catalogue test pins the shape).
     pub fn name(self: Code) []const u8 {
         return @tagName(self);
     }
@@ -461,7 +468,10 @@ pub fn info(c: Code) Info {
 
 // Built at comptime from the exhaustive `infoOf` switch: a code without an arm
 // fails to compile, text binds to a code by name, and the switch itself never
-// reaches the binary.
+// reaches the binary. What does: 370 rows x 48 B = 17.8 KB of `.rodata` plus
+// about 214 KB of text, no relocations in the static executable, and nothing
+// touched until a diagnostic renders. Rows of u32 offsets into one blob would
+// save ~14 KB of the binary and no RSS; not worth a second encoding.
 const table = build: {
     const e = @typeInfo(Code).@"enum";
     // Dense values make a tag usable as an index. Retired codes keep their
