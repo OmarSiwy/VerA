@@ -1,18 +1,24 @@
 //! The compiler's module index and pipeline driver: Verilog-A source text in,
 //! MIR and a generated `device.zig` out (preprocess, lex, parse, lower, prove,
-//! codegen). Re-exports each stage and owns `CompileResult`, the root every
-//! per-compilation allocation hangs off. `build.zig`'s `module_specs` makes
-//! `lib/` a dependency of `src/`, never the reverse.
+//! codegen), then the artifacts a `Request` asks for. Re-exports each stage
+//! and owns `CompileResult`, the root every per-compilation allocation hangs
+//! off. `build.zig`'s `module_specs` makes `lib/` a dependency of `src/`,
+//! never the reverse.
 //!
-//! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
-//! check, lower, `pruneHeld` (`prove`) and `dropHeld` (lowering),
-//! if-conversion (each followed by the MIR verifier under runtime safety),
-//! prove, then the §9.4 drop warnings.
+//! `compile` is the spine `vera` calls for a `.va`: read the SPICE netlist
+//! and the `//!` directives, compile (twice when the testbench's shape cards
+//! change a parameter), then one block per target: `--emit-verilog`, the
+//! OSDI checks (§4.6.4.6, VD-102), `--expect-module`, codegen, `--check`,
+//! `--emit-exe`, `--emit-so`/`--emit-osdi`, `--emit-zig`. It returns an
+//! `Outcome` and prints nothing. The pipeline itself is `compileInArena`:
+//! preprocess, lex, parse, the §3.7 wreal check, lower, `pruneHeld` (`prove`)
+//! and `dropHeld` (lowering), if-conversion (each followed by the MIR
+//! verifier under runtime safety), prove, then the §9.4 drop warnings.
 //! Codegen runs later and lazily, from `CompileResult.generateOutput`.
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
 //!
-//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §6.2,
+//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §4.6.4.6, §6.2,
 //! §6.5.3, §7.4.4, §7.6, §9.4, §9.5, §9.5.1, §9.7.3, §10, §12.32.1, annex D.1,
 //! D.2, E.1 and E.2; IEEE 1364-2005 §19.1 and §19.6.
 
@@ -532,6 +538,436 @@ pub fn buildArtifact(
 }
 
 // ---------------------------------------------------------------------------
+// The spine
+// ---------------------------------------------------------------------------
+
+/// What one `compile` call builds: the compilation's settings, then one field
+/// per target. With no target on, the call is `vera --lint`: the pipeline
+/// through the proof, then the diagnostics.
+pub const Request = struct {
+    /// The compilation's settings; `file_name` names the source in every
+    /// message. `compile` sets `diags` to its bag and the SPICE fields from
+    /// `spice_path`, appends the testbench's shape cards after
+    /// `param_overrides`, and makes `display` `.record` for a testbench whose
+    /// `//! display record` asks for the device a host gets.
+    options: Options = .{},
+    /// `--spice`: an annex E.2 netlist, read whole beside the source.
+    spice_path: ?[]const u8 = null,
+    /// `--emit-verilog`: the behavioural module, and nothing else.
+    verilog: ?Verilog = null,
+    /// `--emit-osdi`, with `so` and the OSDI dyn as `build.dyn`: refuses what
+    /// OSDI 0.4 cannot carry (E1099; W1098 warns) before `so` builds, and
+    /// copies the library to `out_path`, else `<module>.osdi`.
+    osdi: bool = false,
+    /// `--expect-module`: refuses a top module of another name.
+    expect_module: ?[]const u8 = null,
+    /// `--check`: type-checks the device under the contract's checks.
+    check: bool = false,
+    /// `--emit-exe`/`--run`: builds the testbench `Outcome.exe` names.
+    exe: ?Exe = null,
+    /// `--emit-so`: builds the device into a library (`Outcome.path`).
+    so: bool = false,
+    /// `--emit-zig`: the device text, in `out_path` or on `Outcome.text`.
+    zig: bool = false,
+    /// `-o`: where `zig`, `verilog`, `exe` or `osdi` writes its artifact.
+    out_path: ?[]const u8 = null,
+    /// How `check`, `exe` and `so` run `zig`.
+    build: Build = .{},
+
+    /// `--emit-verilog`'s pins and supply.
+    pub const Verilog = struct {
+        /// `--digital-pins`: a file of port names when one exists, else the list.
+        digital_pins: ?[]const u8 = null,
+        power_pins: bool = false,
+        /// Logic-high potential in volts.
+        vdd: f64 = 1.8,
+    };
+
+    /// `--emit-exe`'s testbench settings.
+    pub const Exe = struct {
+        /// `--validate-contract`: the contract's checks on in the testbench.
+        validate_contract: bool = false,
+    };
+
+    /// The `zig` children's settings.
+    pub const Build = struct {
+        /// The `contract` module root. `check`, `exe` and `so` need it.
+        contract: ?[]const u8 = null,
+        /// The `dyn` module root (`so`).
+        dyn: ?[]const u8 = null,
+        /// Scratch and artifact directory; `exe` and `osdi` default to
+        /// `.zig-cache/vera-tb`, and `so` without `osdi` needs one.
+        work_dir: ?[]const u8 = null,
+        zig_exe: []const u8 = "zig",
+        optimize: std.lang.Optimize = .fast,
+        backend: orchestrator.Backend = .llvm,
+        /// Keep DWARF in a release artifact.
+        debug_info: bool = false,
+    };
+};
+
+/// What `compile` did, for its caller to print: stdout gets `path`, then
+/// `text`; stderr gets `err` and the bag in the order `report` says. The
+/// slices live in the arena `compile` was given, or in `result`, which
+/// `deinit` frees. Start it as `.{}`.
+pub const Outcome = struct {
+    /// Exit status: 0 built, 1 refused or failed, 2 a request this source
+    /// cannot take.
+    status: u8 = 0,
+    /// The library `so` built (`osdi`: where it was copied).
+    path: ?[]const u8 = null,
+    /// The device (`zig`) or the Verilog module (`verilog`) when no
+    /// `out_path` took it.
+    text: []const u8 = "",
+    /// The testbench `exe` built.
+    exe: ?[]const u8 = null,
+    /// The refusal; empty when there is none.
+    err: []const u8 = "",
+    /// Whether the bag's diagnostics are printed, and where.
+    report: Report = .none,
+    /// The compilation, once one succeeded; `text` may borrow from it.
+    result: ?CompileResult = null,
+
+    /// Where the bag's diagnostics go relative to `err` on stderr.
+    pub const Report = union(enum) {
+        /// `err` alone: the call stopped before the diagnostics were final.
+        none,
+        /// `err`, then the bag.
+        after,
+        /// The compilation failed: the bag, then this error's name unless
+        /// the bag explains it (`CompileFailed`, `NoModule`).
+        failed: Error,
+    };
+
+    /// Frees `result`; invalidates every slice borrowed from it.
+    pub fn deinit(o: *Outcome) void {
+        if (o.result) |*r| r.deinit();
+        o.* = undefined;
+    }
+
+    fn done(o: *Outcome, status: u8) void {
+        o.status = status;
+    }
+};
+
+/// The compile spine: `source` through the pipeline, then one block per
+/// target `req` asks for, in a fixed order (verilog, osdi, expect_module,
+/// codegen, check, exe, so, zig). `bag` receives every diagnostic (fresh from
+/// `Bag.init`; the caller `deinit`s it after `o`). `o` is the caller's,
+/// filled even when this returns an error: `o.report` then says whether the
+/// bag is final. `arena` holds every message and slice in `o`; it must
+/// outlive `o`. Spawns `zig` for `check`, `exe` and `so`, writes `out_path`,
+/// prints nothing.
+pub fn compile(
+    gpa: Allocator,
+    io: std.Io,
+    arena: Allocator,
+    source: []const u8,
+    req: Request,
+    bag: *diag.Bag,
+    o: *Outcome,
+) !void {
+    var ew: std.Io.Writer.Allocating = .init(arena);
+    const err = &ew.writer;
+    defer o.err = ew.written();
+    const in_path = req.options.file_name;
+    const b = req.build;
+
+    // E.1.1's antecedent, made true from the command line: "if a simulator which
+    // supports Verilog-AMS HDL is also able to read SPICE netlists ... certain
+    // objects defined in that flavor of SPICE netlist can be referenced from
+    // within a Verilog-AMS HDL structural description". Read whole, because
+    // `spice_cards.synthesize` works on the text and a `+` continuation makes a
+    // card longer than a line.
+    const netlist: []const u8 = if (req.spice_path) |p|
+        Preprocessor.readText(io, .cwd(), p, arena) catch |e| {
+            try readFailed(err, p, e);
+            return o.done(2);
+        }
+    else
+        "";
+
+    // --emit-exe's `//!` directives, read up front: a `//! param` card value
+    // for a SHAPE parameter is a compile-time value (below). The directive
+    // tables and the runner text are a web of small slices with one lifetime;
+    // an arena is the whole memory management here.
+    const directives: tb.Directives = if (req.exe == null) .{} else tb.parse(arena, source) catch |e| {
+        try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
+        return o.done(2);
+    };
+
+    var opts = req.options;
+    opts.spice_netlist = netlist;
+    opts.spice_path = req.spice_path orelse "";
+    opts.diags = bag;
+    // `//! display record` asks a testbench for the device a host gets.
+    if (directives.display_record) opts.display = .record;
+    const target: Target = if (req.verilog == null and !req.check and req.exe == null and !req.so and !req.zig) .lint else .build;
+    o.result = compileSourceOpts(gpa, source, target, opts) catch |e| {
+        o.report = .{ .failed = e };
+        return o.done(1);
+    };
+    const result = &o.result.?;
+
+    // §3.4 the testbench's card values for shape parameters are compile-time
+    // values (`tb.shapeOverrides`); a `--param` of the same name wins.
+    const typed = req.options.param_overrides;
+    var overrides: std.ArrayList(Lower.ParamOverride) = .empty;
+    try overrides.appendSlice(arena, typed);
+    for (try tb.shapeOverrides(arena, directives, result.lowered)) |card| {
+        for (overrides.items) |ov| {
+            if (std.mem.eql(u8, ov.name, card.name)) break;
+        } else try overrides.append(arena, card);
+    }
+    if (overrides.items.len != typed.len) {
+        bag.deinit(gpa); // the first pass's; the second says it all again
+        bag.* = .init(gpa);
+        opts.param_overrides = overrides.items;
+        const again = compileSourceOpts(gpa, source, target, opts) catch |e| {
+            o.report = .{ .failed = e };
+            return o.done(1);
+        };
+        result.deinit();
+        result.* = again;
+    }
+
+    // `--param` names a parameter a card could set: a top-module, non-local,
+    // numeric scalar. A misspelling would otherwise compile the default shape.
+    for (typed) |ov| {
+        for (result.lowered.params.items) |p| {
+            if (std.mem.eql(u8, p.name, ov.name) and !p.is_local and p.ty != .string) break;
+        } else {
+            try err.print("error: --param {s}: `{s}` declares no numeric parameter `{s}` that a card may set\n", .{ ov.name, result.mir.name, ov.name });
+            return o.done(2);
+        }
+    }
+
+    // Warnings on a successful compile go out after every exit below:
+    // codegen reports too (E0515), and the bag is printed whole.
+    o.report = .after;
+
+    if (target == .lint) return;
+    if (req.verilog) |v| return emitVerilog(io, arena, result, v, req.out_path, in_path, err, o);
+
+    // OSDI 0.4 has no slot for a step-rejection request or for two noise
+    // rows of one §4.6.4.6 generator (VD-102): named before a library is built.
+    if (req.osdi) {
+        if (result.lowered.reject_step != .undef)
+            try bag.add(.codegen, .E1099, .none, "`$vera_reject_step` asks the host to reject a step, and an OSDI 0.4 library has no slot to carry the request", .{});
+        // `plan/noise.zig`'s rule: a generator id in two contributions is
+        // one source in two rows.
+        const shared = blk: {
+            const cs = result.lowered.contributions.items;
+            for (cs, 0..) |c, i| for (c.noise_srcs) |s| {
+                if (s.kind == .ac_stim) continue;
+                for (cs[i + 1 ..]) |d| for (d.noise_srcs) |t| {
+                    if (t.id == s.id) break :blk true;
+                };
+            };
+            break :blk false;
+        };
+        if (shared) try bag.add(.codegen, .W1098, .none, "two noise rows share one generator (§4.6.4.6), and OSDI 0.4 has no slot for their correlation: this library's noise analysis treats them as independent sources", .{});
+        if (bag.failed()) return o.done(1);
+    }
+
+    // The catalogue that consumes the generated file keys devices by the name
+    // the BUILD chose, while the netlist dispatch and the generated type name
+    // come from the MODULE name. A mismatch silently breaks lookup, so it is
+    // caught here rather than three cache steps downstream.
+    //
+    // NOTE: a vendored file declaring several modules (VBIC ships 4T/5T in one
+    // file) trips this — VerA lowers one of them, not necessarily the one
+    // the file is named after. A module selector is the fix.
+    if (req.expect_module) |want| {
+        if (!std.mem.eql(u8, result.mir.name, want)) {
+            try err.print(
+                "error: {s}: Verilog-A module is `{s}` but `{s}` was expected — rename one of them\n",
+                .{ in_path, result.mir.name, want },
+            );
+            return o.done(1);
+        }
+    }
+
+    const device = result.generateDevice() catch |e| {
+        try err.print("error: {s}: codegen failed: {t}\n", .{ in_path, e });
+        return o.done(1);
+    };
+
+    // A fatal generation error is a refusal: writing the file anyway would
+    // move the message to whoever compiles it, away from the .va.
+    if (result.device_has_compile_error) {
+        try err.print(
+            "error: {s}: codegen refused a construct; generated output is not usable\n",
+            .{in_path},
+        );
+        return o.done(1);
+    }
+
+    // --check: type-check the generated Zig here, where the .va that
+    // produced it can still be named. --emit-so runs the same check only
+    // after its build fails: the build reports the same errors, and a
+    // separate pass before it is pure wall time.
+    if (req.check) {
+        if (try orchestrator.typeCheck(gpa, io, err, b.zig_exe, b.contract.?, device, in_path)) |code| return o.done(code);
+    }
+
+    // --emit-exe: the same device with real display tasks, driven by a
+    // generated runner over the operating points its `//!` lines declare.
+    if (req.exe) |x| {
+        const wd = b.work_dir orelse ".zig-cache/vera-tb";
+        var dm = directives;
+        dm.mixed = tb.mixedPlan(result.lowered, result.mir);
+        dm.op_states = try tb.opStates(arena, result.lowered);
+        dm.mem_bytes = tb.memBytes(result.lowered);
+        dm.validate_contract = x.validate_contract;
+        try tb.warnGridEvents(bag, result.lowered, result.mir);
+        // Runner diagnostics obey --deny/--forbid before an artifact is
+        // built or its simulation starts, just like compiler diagnostics.
+        if (bag.failed()) return o.done(1);
+        const runner = tb.renderRunner(arena, std.fs.path.stem(in_path), dm) catch |e| switch (e) {
+            error.TooManyPoints => {
+                try err.print("error: {s}: `//!` directive: the sweeps expand to more than {d} points\n", .{ in_path, tb.max_points });
+                return o.done(2);
+            },
+            else => |y| return y,
+        };
+        const built = tb.buildExe(gpa, io, device, runner, .{
+            .work_dir = wd,
+            .contract = b.contract.?,
+            .name = result.mir.name,
+            .out_path = req.out_path,
+            .zig_exe = b.zig_exe,
+            .mixed = dm.mixed != null or dm.tran != null or dm.onoise != null,
+            .optimize = b.optimize,
+            .backend = b.backend,
+            .debug_info = b.debug_info,
+        }) catch |e| {
+            try err.print("error: {s}: building the testbench failed: {t}\n", .{ in_path, e });
+            return o.done(1);
+        };
+        defer built.deinit(gpa);
+        switch (built) {
+            .failed => |text| {
+                try err.print(
+                    "error: {s}: the generated testbench does not compile — this is an " ++
+                        "engine bug, not a problem with the model:\n",
+                    .{in_path},
+                );
+                try err.writeAll(text);
+                return o.done(1);
+            },
+            .ok => |p| o.exe = try arena.dupe(u8, p),
+        }
+        return;
+    }
+
+    if (req.so) {
+        const wd = b.work_dir orelse if (req.osdi) ".zig-cache/vera-tb" else {
+            try err.writeAll("error: --emit-so needs --work-dir DIR\n");
+            return o.done(2);
+        };
+        const dyn = b.dyn orelse {
+            try err.writeAll("error: --emit-so needs --dyn PATH\n");
+            return o.done(2);
+        };
+        const modules = [_]orchestrator.Module{
+            .{ .name = "contract", .root = b.contract.? },
+            .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
+        };
+        var r = buildArtifact(gpa, io, result, .{
+            .work_dir = wd,
+            .name = try orchestrator.fileStem(arena, result.mir.name),
+            .optimize = b.optimize,
+            .backend = b.backend,
+            .modules = &modules,
+            .zig_exe = b.zig_exe,
+            .debug_info = b.debug_info,
+        }, 1) catch |e| {
+            try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
+            return o.done(1);
+        };
+        defer r.deinit(gpa);
+        switch (r) {
+            .ok => |a| if (req.osdi) {
+                const dest = req.out_path orelse try arena.print("{s}.osdi", .{result.mir.name});
+                std.Io.Dir.cwd().copyFile(a.so_path, std.Io.Dir.cwd(), dest, io, .{}) catch |e| {
+                    try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
+                    return o.done(1);
+                };
+                o.path = dest;
+            } else {
+                o.path = try arena.dupe(u8, a.so_path);
+            },
+            .failed => |bundle| {
+                // An error typeCheck can see is the device's own (an engine
+                // bug), reported against the .va as a check would have.
+                if (try orchestrator.typeCheck(gpa, io, err, b.zig_exe, b.contract.?, device, in_path)) |code| return o.done(code);
+                try err.print("error: {s}: the generated device did not compile:\n", .{in_path});
+                try bundle.renderToWriter(.{}, err);
+                return o.done(1);
+            },
+        }
+    }
+
+    if (req.zig) {
+        if (req.out_path) |p| {
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = device }) catch |e| {
+                try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
+                return o.done(1);
+            };
+        } else o.text = device;
+    }
+}
+
+/// `--emit-verilog`: the behavioural module to `out_path`, else
+/// `o.text`. A model the abstraction cannot take is refused (status 1) with
+/// nothing written.
+fn emitVerilog(
+    io: std.Io,
+    arena: Allocator,
+    result: *const CompileResult,
+    v: Request.Verilog,
+    out_path: ?[]const u8,
+    in_path: []const u8,
+    err: *std.Io.Writer,
+    o: *Outcome,
+) !void {
+    // `--digital-pins` names a file of pins when one exists, else is the list.
+    var digital: std.ArrayList([]const u8) = .empty;
+    if (v.digital_pins) |spec| {
+        // `readFailed`'s E1013 names `max_text_bytes`, so that is the limit.
+        const text = Preprocessor.readText(io, .cwd(), spec, arena) catch |e| switch (e) {
+            error.FileNotFound => spec,
+            else => {
+                try readFailed(err, spec, e);
+                return o.done(2);
+            },
+        };
+        var it = std.mem.tokenizeAny(u8, text, ", \t\r\n");
+        while (it.next()) |n| try digital.append(arena, n);
+    }
+    var why: []const u8 = "";
+    const text = beh_verilog.emit(arena, result.mir, result.lowered, .{
+        .digital = digital.items,
+        .power_pins = v.power_pins,
+        .vdd = v.vdd,
+        .source = std.fs.path.basename(in_path),
+    }, &why) catch |e| switch (e) {
+        error.Refused => {
+            try err.print("error: {s}: --emit-verilog: {s}\n", .{ in_path, why });
+            return o.done(1);
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    if (out_path) |p| {
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = text }) catch |e| {
+            try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
+            return o.done(1);
+        };
+    } else o.text = text;
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -581,6 +1017,41 @@ test "lint: source → MIR, arena freed clean" {
     try std.testing.expectEqual(@as(u16, 2), res.lowered.num_ports);
     try std.testing.expect(res.verdict.ok());
     try std.testing.expectEqual(proof.unitCount(res.lowered), res.verdict.unit_modes.len);
+}
+
+test compile {
+    // The targets that spawn no `zig`: `--lint`, `--emit-zig` to stdout, a
+    // misspelt `--param` (status 2, before the diagnostics are final) and a
+    // failed compilation (the bag explains it, so no error name).
+    const gpa = std.testing.allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const Case = struct { src: []const u8, req: Request, status: u8, report: std.meta.Tag(Outcome.Report), text: bool, err: []const u8 };
+    for ([_]Case{
+        .{ .src = test_resistor, .req = .{}, .status = 0, .report = .after, .text = false, .err = "" },
+        .{ .src = test_resistor, .req = .{ .zig = true }, .status = 0, .report = .after, .text = true, .err = "" },
+        .{
+            .src = test_resistor,
+            .req = .{ .options = .{ .file_name = "res.va", .param_overrides = &.{.{ .name = "rr", .value = 1 }} } },
+            .status = 2,
+            .report = .none,
+            .text = false,
+            .err = "error: --param rr: `res` declares no numeric parameter `rr` that a card may set\n",
+        },
+        .{ .src = "module bad(p); inout p; electrical p; analog I(p) <+ ;\nendmodule\n", .req = .{}, .status = 1, .report = .failed, .text = false, .err = "" },
+    }) |c| {
+        var bag: diag.Bag = .init(gpa);
+        defer bag.deinit(gpa);
+        var o: Outcome = .{};
+        defer o.deinit();
+        try compile(gpa, std.testing.io, arena, c.src, c.req, &bag, &o);
+        try std.testing.expectEqual(c.status, o.status);
+        try std.testing.expectEqual(c.report, std.meta.activeTag(o.report));
+        try std.testing.expectEqual(c.text, o.text.len != 0);
+        try std.testing.expectEqualStrings(c.err, o.err);
+        try std.testing.expect(o.path == null and o.exe == null);
+    }
 }
 
 test "IEEE 1364 §19.1 cell membership survives the preprocessor" {

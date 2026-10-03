@@ -6,16 +6,17 @@
 //! Exit status: 0 on success (warnings do not fail), 1 on a diagnosed error,
 //! 2 on a usage error, including conflicting flags (never last-one-wins).
 //!
-//! `main` is the spine: read the command line (`cli/args.zig`), refuse the
-//! flags that conflict (`args.resolve`), serve `--lsp` (`cli/lsp.zig`) or
-//! read the source, then hand it to the `.v` path
-//! (`cli/digital.zig`) or to `compileAnalog` below. Flags, streams, exit
-//! codes and messages are user-visible and frozen: `--emit-exe` prints the
-//! artifact's path on stdout and every diagnostic on stderr.
+//! `main` reads the command line (`cli/args.zig`), refuses the flags that
+//! conflict (`args.resolve`), serves `--lsp` (`cli/lsp.zig`) or reads the
+//! source, then hands it to the `.v` path (`cli/digital.zig`) or to the
+//! Verilog-A spine, `vera.compile`, and prints the `vera.Outcome` it returns:
+//! its paths and text on stdout, its refusal and the diagnostics on stderr,
+//! its status as the exit code; `--run` runs the testbench it built. Flags,
+//! streams, exit codes and messages are user-visible and frozen:
+//! `--emit-exe` prints the artifact's path on stdout and every diagnostic on
+//! stderr.
 //!
-//! Clauses: LRM Annex E.1.1 (`--spice`), §3.4 (`--param` and a testbench's
-//! shape cards), §9.4 (`--display`), §4.6.4.6 and VD-102 (what `--emit-osdi`
-//! refuses or warns before it builds).
+//! Clauses: §9.4 (`--display`); the rest are `vera.compile`'s.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -108,9 +109,10 @@ pub fn main(init: std.process.Init) !u8 {
     const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
     // No --contract: this binary's own tools/contract.zig, written out with the
     // `sim` tree it embeds, so the contract always matches the compiler and the
-    // mixed-signal runner finds `sim` beside it.
-    var contract_arena: std.heap.ArenaAllocator = .init(gpa);
-    defer contract_arena.deinit();
+    // mixed-signal runner finds `sim` beside it. The arena also holds what
+    // `vera.compile` hands back.
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
     if (cli.check or cli.emit_so or (cli.exe_flag != null and !(digital_source and cli.run_exe))) {
         if (cli.contract_path) |p| Io.Dir.cwd().access(io, p, .{}) catch |e| {
             try err.print("error: --contract {s}: {t}\n", .{ p, e });
@@ -118,13 +120,13 @@ pub fn main(init: std.process.Init) !u8 {
         };
         if (cli.contract_path == null or cli.emit_osdi) {
             const wd = cli.work_dir orelse ".zig-cache/vera-tb";
-            const c = simTree(io, contract_arena.allocator(), wd) catch |e| {
+            const c = simTree(io, arena.allocator(), wd) catch |e| {
                 try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
                 return 1;
             };
             if (cli.contract_path == null) cli.contract_path = c;
             // --emit-osdi: the OSDI dyn shipped in the same tree.
-            if (cli.emit_osdi) cli.dyn_path = try std.fs.path.join(contract_arena.allocator(), &.{ std.fs.path.dirname(c).?, "osdi_dyn.zig" });
+            if (cli.emit_osdi) cli.dyn_path = try std.fs.path.join(arena.allocator(), &.{ std.fs.path.dirname(c).?, "osdi_dyn.zig" });
         }
     }
     if (!digital_source) {
@@ -151,331 +153,78 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("error: {s}: this vera is built with -Dlanguage=verilog; it runs .v sources only\n", .{in_path});
         return 2;
     }
-    return compileAnalog(gpa, io, &cli, source, in_path, opt, backend, use_color, out, err);
-}
 
-/// The Verilog-A half of `main`: `source` through the analog pipeline to the
-/// artifact the flags ask for (`--lint` stops after the frontend). Appends
-/// the testbench's shape cards to `cli.overrides` after the typed ones.
-/// `cli.contract_path` is set whenever `--check`, `--emit-so` or `--emit-exe`
-/// was typed. Returns the process exit status.
-fn compileAnalog(
-    gpa: std.mem.Allocator,
-    io: Io,
-    cli: *args.Cli,
-    source: []const u8,
-    in_path: []const u8,
-    opt: std.lang.Optimize,
-    backend: vera.orchestrator.Backend,
-    use_color: bool,
-    out: *Io.Writer,
-    err: *Io.Writer,
-) !u8 {
-    const json = cli.json;
+    // The Verilog-A half: the spine (`vera.compile`) builds what the flags
+    // ask for; this prints what it did, in the order it did it.
     var bag: diag.Bag = .init(gpa);
     defer bag.deinit(gpa);
-
-    // E.1.1's antecedent, made true from the command line: "if a simulator which
-    // supports Verilog-AMS HDL is also able to read SPICE netlists ... certain
-    // objects defined in that flavor of SPICE netlist can be referenced from
-    // within a Verilog-AMS HDL structural description". Read whole, because
-    // `spice_cards.synthesize` works on the text and a `+` continuation makes a
-    // card longer than a line.
-    const netlist: []const u8 = if (cli.spice_path) |p|
-        vera.Preprocessor.readText(io, .cwd(), p, gpa) catch |e| {
-            try readFailed(err, p, e);
-            return 2;
-        }
-    else
-        "";
-    defer if (cli.spice_path != null) gpa.free(netlist);
-
-    // --emit-exe's `//!` directives, read up front: a `//! param` card value
-    // for a SHAPE parameter is a compile-time value (below). The directive
-    // tables and the runner text are a web of small slices with one lifetime;
-    // an arena is the whole memory management here.
-    var tb_arena: std.heap.ArenaAllocator = .init(gpa);
-    defer tb_arena.deinit();
-    const directives: vera.tb.Directives = if (cli.exe_flag == null) .{} else vera.tb.parse(tb_arena.allocator(), source) catch |e| {
-        try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
-        return 2;
+    var o: vera.Outcome = .{};
+    defer o.deinit();
+    vera.compile(gpa, io, arena.allocator(), source, .{
+        .options = .{
+            .file_name = in_path,
+            .include_dirs = cli.include_dirs.items,
+            .std_defs = cli.std_defs,
+            .language = cli.language,
+            .lint = cli.levels,
+            .proof = .{ .unknown_bound = cli.unknown_bound },
+            .discipline_resolution = cli.discipline_resolution,
+            .display = cli.display,
+            .jac_f32 = cli.jac_f32,
+            .jac_f32_host = cli.jac_f32_host,
+            .param_overrides = cli.overrides.items,
+        },
+        .spice_path = cli.spice_path,
+        .verilog = if (cli.emit_verilog) .{ .digital_pins = cli.digital_pins, .power_pins = cli.power_pins, .vdd = cli.vdd } else null,
+        .osdi = cli.emit_osdi,
+        .expect_module = cli.expect_module,
+        .check = cli.check,
+        .exe = if (cli.exe_flag != null) .{ .validate_contract = cli.validate_contract } else null,
+        .so = cli.emit_so,
+        .zig = cli.emit_zig,
+        .out_path = cli.out_path,
+        .build = .{
+            .contract = cli.contract_path,
+            .dyn = cli.dyn_path,
+            .work_dir = cli.work_dir,
+            .zig_exe = cli.zig_exe,
+            .optimize = opt,
+            .backend = backend,
+            .debug_info = cli.debug_info,
+        },
+    }, &bag, &o) catch |e| {
+        // Past the `--param` check the bag is final, and an error leaves
+        // through the same report as every other exit.
+        if (o.report == .after) report(&bag, err, cli.json, use_color) catch {};
+        return e;
     };
-
-    var opts: vera.Options = .{
-        .file_name = in_path,
-        .include_dirs = cli.include_dirs.items,
-        .spice_netlist = netlist,
-        .spice_path = cli.spice_path orelse "",
-        .std_defs = cli.std_defs,
-        .language = cli.language,
-        .diags = &bag,
-        .lint = cli.levels,
-        .proof = .{ .unknown_bound = cli.unknown_bound },
-        .discipline_resolution = cli.discipline_resolution,
-        // `//! display record` asks a testbench for the device a host gets.
-        .display = if (directives.display_record) .record else cli.display,
-        .jac_f32 = cli.jac_f32,
-        .jac_f32_host = cli.jac_f32_host,
-        .param_overrides = cli.overrides.items,
-    };
-    const target: vera.Target = if (cli.codegen_flag == null) .lint else .build;
-    var result = vera.compileSourceOpts(gpa, source, target, opts) catch |e| return compileFailed(&bag, err, json, use_color, e);
-    defer result.deinit();
-
-    // §3.4 the testbench's card values for shape parameters are compile-time
-    // values (`tb.shapeOverrides`); a `--param` of the same name wins.
-    const cli_overrides = cli.overrides.items.len;
-    for (try vera.tb.shapeOverrides(tb_arena.allocator(), directives, result.lowered)) |card| {
-        for (cli.overrides.items) |o| {
-            if (std.mem.eql(u8, o.name, card.name)) break;
-        } else try cli.overrides.append(gpa, card);
+    switch (o.report) {
+        .failed => |e| return compileFailed(&bag, err, cli.json, use_color, e),
+        .none => {
+            try err.writeAll(o.err);
+            return o.status;
+        },
+        .after => {},
     }
-    if (cli.overrides.items.len != cli_overrides) {
-        bag.deinit(gpa); // the first pass's; the second says it all again
-        bag = .init(gpa);
-        opts.param_overrides = cli.overrides.items;
-        const again = vera.compileSourceOpts(gpa, source, target, opts) catch |e| return compileFailed(&bag, err, json, use_color, e);
-        result.deinit();
-        result = again;
-    }
-
-    // `--param` names a parameter a card could set: a top-module, non-local,
-    // numeric scalar. A misspelling would otherwise compile the default shape.
-    for (cli.overrides.items[0..cli_overrides]) |o| {
-        for (result.lowered.params.items) |p| {
-            if (std.mem.eql(u8, p.name, o.name) and !p.is_local and p.ty != .string) break;
-        } else {
-            try err.print("error: --param {s}: `{s}` declares no numeric parameter `{s}` that a card may set\n", .{ o.name, result.mir.name, o.name });
-            return 2;
-        }
-    }
-
     // Warnings on a successful compile, deferred to one call on every exit
     // below: codegen reports too (E0515) and `render` prints the whole bag.
-    defer report(&bag, err, json, use_color) catch {};
-
-    if (cli.codegen_flag == null) return 0;
-    if (cli.emit_verilog) return emitVerilog(io, cli, &result, tb_arena.allocator(), in_path, out, err);
-
-    // OSDI 0.4 has no slot for a step-rejection request or for two noise
-    // rows of one §4.6.4.6 generator (VD-102): named before a library is built.
-    if (cli.emit_osdi) {
-        if (result.lowered.reject_step != .undef)
-            try bag.add(.codegen, .E1099, .none, "`$vera_reject_step` asks the host to reject a step, and an OSDI 0.4 library has no slot to carry the request", .{});
-        // `plan/noise.zig`'s rule: a generator id in two contributions is
-        // one source in two rows.
-        const shared = blk: {
-            const cs = result.lowered.contributions.items;
-            for (cs, 0..) |c, i| for (c.noise_srcs) |s| {
-                if (s.kind == .ac_stim) continue;
-                for (cs[i + 1 ..]) |d| for (d.noise_srcs) |t| {
-                    if (t.id == s.id) break :blk true;
-                };
-            };
-            break :blk false;
-        };
-        if (shared) try bag.add(.codegen, .W1098, .none, "two noise rows share one generator (§4.6.4.6), and OSDI 0.4 has no slot for their correlation: this library's noise analysis treats them as independent sources", .{});
-        if (bag.failed()) return 1;
+    defer report(&bag, err, cli.json, use_color) catch {};
+    if (o.path) |p| try out.print("{s}\n", .{p});
+    try out.writeAll(o.text);
+    try err.writeAll(o.err);
+    const bin = o.exe orelse return o.status;
+    if (!cli.run_exe) {
+        try out.print("{s}\n", .{bin});
+        try out.flush();
+        return 0;
     }
-
-    // The catalogue that consumes the generated file keys devices by the name
-    // the BUILD chose, while the netlist dispatch and the generated type name
-    // come from the MODULE name. A mismatch silently breaks lookup, so it is
-    // caught here rather than three cache steps downstream.
-    //
-    // NOTE: a vendored file declaring several modules (VBIC ships 4T/5T in one
-    // file) trips this — VerA lowers one of them, not necessarily the one
-    // the file is named after. A module selector is the fix.
-    if (cli.expect_module) |want| {
-        if (!std.mem.eql(u8, result.mir.name, want)) {
-            try err.print(
-                "error: {s}: Verilog-A module is `{s}` but `{s}` was expected — rename one of them\n",
-                .{ in_path, result.mir.name, want },
-            );
-            return 1;
-        }
-    }
-
-    const device = result.generateDevice() catch |e| {
-        try err.print("error: {s}: codegen failed: {t}\n", .{ in_path, e });
-        return 1;
+    // --run: the transcript is the point, so inherit both streams and let
+    // the testbench's exit status be ours.
+    var child = try std.process.spawn(io, .{ .argv = &.{bin} });
+    return switch (try child.wait(io)) {
+        .exited => |c| c,
+        else => 1,
     };
-
-    // A fatal generation error is a refusal: writing the file anyway would
-    // move the message to whoever compiles it, away from the .va.
-    if (result.device_has_compile_error) {
-        try err.print(
-            "error: {s}: codegen refused a construct; generated output is not usable\n",
-            .{in_path},
-        );
-        return 1;
-    }
-
-    // --check: type-check the generated Zig here, where the .va that
-    // produced it can still be named. --emit-so runs the same check only
-    // after its build fails: the build reports the same errors, and a
-    // separate pass before it is pure wall time.
-    if (cli.check) {
-        if (try vera.orchestrator.typeCheck(gpa, io, err, cli.zig_exe, cli.contract_path.?, device, in_path)) |code| return code;
-    }
-
-    // --emit-exe: the same device with real display tasks, driven by a
-    // generated runner over the operating points its `//!` lines declare.
-    if (cli.exe_flag != null) {
-        const wd = cli.work_dir orelse ".zig-cache/vera-tb";
-        var dm = directives;
-        dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
-        dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
-        dm.mem_bytes = vera.tb.memBytes(result.lowered);
-        dm.validate_contract = cli.validate_contract;
-        try vera.tb.warnGridEvents(&bag, result.lowered, result.mir);
-        // Runner diagnostics obey --deny/--forbid before an artifact is
-        // built or its simulation starts, just like compiler diagnostics.
-        if (bag.failed()) return 1;
-        const runner = vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm) catch |e| switch (e) {
-            error.TooManyPoints => {
-                try err.print("error: {s}: `//!` directive: the sweeps expand to more than {d} points\n", .{ in_path, vera.tb.max_points });
-                return 2;
-            },
-            else => |x| return x,
-        };
-        const built = vera.tb.buildExe(gpa, io, device, runner, .{
-            .work_dir = wd,
-            .contract = cli.contract_path.?,
-            .name = result.mir.name,
-            .out_path = cli.out_path,
-            .zig_exe = cli.zig_exe,
-            .mixed = dm.mixed != null or dm.tran != null or dm.onoise != null,
-            .optimize = opt,
-            .backend = backend,
-            .debug_info = cli.debug_info,
-        }) catch |e| {
-            try err.print("error: {s}: building the testbench failed: {t}\n", .{ in_path, e });
-            return 1;
-        };
-        defer built.deinit(gpa);
-        const bin = switch (built) {
-            .failed => |text| {
-                try err.print(
-                    "error: {s}: the generated testbench does not compile — this is an " ++
-                        "engine bug, not a problem with the model:\n",
-                    .{in_path},
-                );
-                try err.writeAll(text);
-                return 1;
-            },
-            .ok => |p| p,
-        };
-        if (!cli.run_exe) {
-            try out.print("{s}\n", .{bin});
-            try out.flush();
-            return 0;
-        }
-        // --run: the transcript is the point, so inherit both streams and let
-        // the testbench's exit status be ours.
-        var child = try std.process.spawn(io, .{ .argv = &.{bin} });
-        return switch (try child.wait(io)) {
-            .exited => |c| c,
-            else => 1,
-        };
-    }
-
-    if (cli.emit_so) {
-        const wd = cli.work_dir orelse if (cli.emit_osdi) ".zig-cache/vera-tb" else {
-            try err.writeAll("error: --emit-so needs --work-dir DIR\n");
-            return 2;
-        };
-        const dyn = cli.dyn_path orelse {
-            try err.writeAll("error: --emit-so needs --dyn PATH\n");
-            return 2;
-        };
-        const modules = [_]vera.orchestrator.Module{
-            .{ .name = "contract", .root = cli.contract_path.? },
-            .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
-        };
-        var r = vera.buildArtifact(gpa, io, &result, .{
-            .work_dir = wd,
-            .name = try vera.orchestrator.fileStem(tb_arena.allocator(), result.mir.name),
-            .optimize = opt,
-            .backend = backend,
-            .modules = &modules,
-            .zig_exe = cli.zig_exe,
-            .debug_info = cli.debug_info,
-        }, 1) catch |e| {
-            try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
-            return 1;
-        };
-        defer r.deinit(gpa);
-        switch (r) {
-            .ok => |a| if (cli.emit_osdi) {
-                const dest = cli.out_path orelse try tb_arena.allocator().print("{s}.osdi", .{result.mir.name});
-                Io.Dir.cwd().copyFile(a.so_path, Io.Dir.cwd(), dest, io, .{}) catch |e| {
-                    try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
-                    return 1;
-                };
-                try out.print("{s}\n", .{dest});
-            } else try out.print("{s}\n", .{a.so_path}),
-            .failed => |bundle| {
-                // An error typeCheck can see is the device's own (an engine
-                // bug), reported against the .va as a check would have.
-                if (try vera.orchestrator.typeCheck(gpa, io, err, cli.zig_exe, cli.contract_path.?, device, in_path)) |code| return code;
-                try err.print("error: {s}: the generated device did not compile:\n", .{in_path});
-                try bundle.renderToWriter(.{}, err);
-                return 1;
-            },
-        }
-    }
-
-    if (cli.emit_zig) {
-        if (cli.out_path) |p| {
-            Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = device }) catch |e| {
-                try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
-                return 1;
-            };
-        } else {
-            try out.writeAll(device);
-        }
-    }
-    return 0;
-}
-
-/// `--emit-verilog`: the behavioural module to `-o PATH` or stdout. A model
-/// the abstraction cannot take is refused (exit 1) with nothing written.
-fn emitVerilog(io: Io, cli: *const args.Cli, result: *const vera.CompileResult, arena: std.mem.Allocator, in_path: []const u8, out: *Io.Writer, err: *Io.Writer) !u8 {
-    // `--digital-pins` names a file of pins when one exists, else is the list.
-    var digital: std.ArrayList([]const u8) = .empty;
-    if (cli.digital_pins) |spec| {
-        // `readFailed`'s E1013 names `max_text_bytes`, so that is the limit.
-        const text = vera.Preprocessor.readText(io, .cwd(), spec, arena) catch |e| switch (e) {
-            error.FileNotFound => spec,
-            else => {
-                try readFailed(err, spec, e);
-                return 2;
-            },
-        };
-        var it = std.mem.tokenizeAny(u8, text, ", \t\r\n");
-        while (it.next()) |n| try digital.append(arena, n);
-    }
-    var why: []const u8 = "";
-    const text = vera.beh_verilog.emit(arena, result.mir, result.lowered, .{
-        .digital = digital.items,
-        .power_pins = cli.power_pins,
-        .vdd = cli.vdd,
-        .source = std.fs.path.basename(in_path),
-    }, &why) catch |e| switch (e) {
-        error.Refused => {
-            try err.print("error: {s}: --emit-verilog: {s}\n", .{ in_path, why });
-            return 1;
-        },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    if (cli.out_path) |p| {
-        Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = text }) catch |e| {
-            try err.print("error: cannot write `{s}`: {t}\n", .{ p, e });
-            return 1;
-        };
-    } else try out.writeAll(text);
-    return 0;
 }
 
 /// Writes the sources `sim` compiles from (`sim_sources`, embedded at build
