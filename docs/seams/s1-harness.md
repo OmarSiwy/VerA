@@ -17,7 +17,7 @@ one file:
 
 | File | Owns (writes) | Mode / transform |
 |---|---|---|
-| bench.zig | the timing table, `fixture_reps`, `mode`, `elapsed` | `benchmark`: depth pass (`harness.run`) then the accept/reject timing pass |
+| bench.zig | the timing table, the `expected` device-size table, `fixture_reps`, `mode`, `elapsed` | `benchmark`: depth pass (`harness.run`) then the accept/reject timing pass |
 | harness.zig | `Fixture` rows (`collect`), `Slot`s, `Counts`, `vera_exe` | `run` (spine): collect -> `Compiler.prepare` -> `judge` per fixture on N workers -> summary |
 | harness/lint.zig | nothing (pure) | the assertion lint `decide` runs first |
 | harness/coverage.zig | `Cite`s, the LRM contents table, `CLAUSES.tsv` rows | `--coverage` (measure C) |
@@ -26,7 +26,7 @@ one file:
 | harness/native.zig | `NativeSlot`s | `--native`: the same cases through `vera --emit-exe` |
 | harness/fuzz.zig | the generated designs | `--fuzz N` |
 | harness/c_fixtures.zig, spice_decks.zig | nothing kept | `vpi`, `spice` census |
-| harness/sweep.zig | `expected` (the size table) | `--sweep`, and the size test on `zig build test` |
+| harness/sweep.zig | nothing kept (asserts `bench.expected_sizes`) | `--sweep`, and the size test on `zig build test` |
 | harness/child.zig | nothing | one child run, both streams |
 | torture.zig | `Ctx.batched`, `Chunk`s | the VerA `Compiler` plug (full and accept/reject) |
 | ieee1364.zig | `Clause`/`Chapter` tables | `test-1364 -- --coverage` (measure B) |
