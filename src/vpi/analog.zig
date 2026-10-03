@@ -102,18 +102,19 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     // when called rather than handed to the wrong one.
     const n_calls = l.n_systf();
     call_obj = try gpa.alloc(?u32, n_calls);
+    // Each analog call name's object, or null when two objects call it: one
+    // pass over the rows, not one per name.
+    var by_name: std.StringHashMapUnmanaged(?u32) = .empty;
+    defer by_name.deinit(gpa);
+    for (root.design.?.objects, 0..) |o, i| {
+        if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
+        const g = try by_name.getOrPut(gpa, o.name);
+        g.value_ptr.* = if (g.found_existing) null else @intCast(i);
+    }
     for (call_obj, 0..) |*c, k| {
         var len: usize = 0;
         const name = l.systf_name(k, &len)[0..len];
-        c.* = null;
-        var seen: u32 = 0;
-        for (root.design.?.objects, 0..) |o, i| {
-            if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
-            if (!std.mem.eql(u8, o.name, name)) continue;
-            seen += 1;
-            c.* = @intCast(i);
-        }
-        if (seen > 1) c.* = null;
+        c.* = by_name.get(name) orelse null;
     }
     if (n_calls != 0) l.systf(deviceCall);
     const n = l.n_rows();

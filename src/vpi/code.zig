@@ -386,6 +386,8 @@ pub const Builder = struct {
     run: ?*sim.digital.Run = null,
     engine: u32 = 0,
     automatic: bool = false,
+    /// `file`'s attribute bindings by owner, built once per model.
+    attrs: *const @import("attributes.zig").ByOwner,
 
     /// IEEE 1364-2005 §26.6.42: the attributes the source binds to `owner`,
     /// as vpiAttribute rows of object `at` (attributes.zig `attach`).
@@ -412,7 +414,7 @@ pub const Builder = struct {
 
     fn add(b: *Builder, o: Obj) Error!u32 {
         const at: u32 = @intCast(b.objects.hot.items.len);
-        try b.objects.append(b.gpa, o);
+        try b.objects.append(o);
         return at;
     }
 
@@ -422,7 +424,7 @@ pub const Builder = struct {
     pub fn code(b: *Builder, vtype: c_int, edges: []const Edge, lists: []const List, props: []const Prop) Error!u32 {
         return b.add(.{
             .kind = .code,
-            .owner = b.scope,
+            .owner = .of(b.scope),
             .name = "",
             .full = "",
             .vtype = vtype,
@@ -500,13 +502,13 @@ pub const Builder = struct {
         const kind: @FieldType(Obj, "kind") = if (v.ty == .real) .real_var else if (v.storage == .reg) .reg else .integer;
         const at = try b.add(.{
             .kind = kind,
-            .owner = b.scope,
+            .owner = .of(b.scope),
             .name = "",
             .full = "",
             .size = std.math.cast(u32, b.declWidth(v, slot)) orelse 0,
             .is_signed = v.is_signed,
             .automatic = automatic,
-            .slot = if (automatic) null else slot,
+            .slot = .of(if (automatic) null else slot),
             .src_tok = v.main_tok,
             .edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiScope, .to = b.inner }}),
         });
@@ -536,7 +538,7 @@ pub const Builder = struct {
             b.objects.hot.items[at].automatic = b.automatic;
             try b.attributes(at, .{ .kind = .declaration, .tok = e.main_tok }, false);
             if (e.dims.len == 0) {
-                b.objects.hot.items[at].slot = if (b.automatic) null else slot;
+                b.objects.hot.items[at].slot = .of(if (b.automatic) null else slot);
                 try scalars.append(b.arena, at);
                 continue;
             }
@@ -544,8 +546,8 @@ pub const Builder = struct {
             const base = slot orelse continue;
             const arr = b.run.?.arrays.get(base).?;
             const ranges = try b.arena.alloc(u32, e.dims.len);
-            ranges[0] = try model.addRange(b.gpa, b.arena, b.objects, b.scope, arr.left, arr.right);
-            for (arr.rest, ranges[1..]) |sp, *range| range.* = try model.addRange(b.gpa, b.arena, b.objects, b.scope, if (sp.descending) sp.high else sp.low, if (sp.descending) sp.low else sp.high);
+            ranges[0] = try model.addRange(b.arena, b.objects, b.scope, arr.left, arr.right);
+            for (arr.rest, ranges[1..]) |sp, *range| range.* = try model.addRange(b.arena, b.objects, b.scope, if (sp.descending) sp.high else sp.low, if (sp.descending) sp.low else sp.high);
             const members = try b.arena.alloc(u32, arr.count);
             for (members, 0..) |*member, k| {
                 const indices = try b.arena.alloc(u32, e.dims.len);
@@ -565,11 +567,11 @@ pub const Builder = struct {
                 member.* = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = at }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, auto_prop });
                 if (scope.len != 0) b.objects.hot.items[member.*].edges = try b.arena.dupe(Edge, &.{ b.objects.hot.items[member.*].edges[0], b.objects.hot.items[member.*].edges[1], scope[0] });
                 try b.setName(member.*, local);
-                b.objects.hot.items[member.*].index = indices[0];
+                b.objects.hot.items[member.*].index = .of(indices[0]);
                 b.objects.hot.items[member.*].automatic = b.automatic;
-                b.objects.hot.items[member.*].slot = if (b.automatic) null else base + @as(u32, @intCast(k));
+                b.objects.hot.items[member.*].slot = .of(if (b.automatic) null else base + @as(u32, @intCast(k)));
             }
-            const cold = try b.objects.coldFor(b.gpa, at);
+            const cold = try b.objects.coldFor(at);
             cold.members = members;
             cold.range = ranges;
             b.objects.hot.items[at].lists = try b.arena.dupe(List, &.{ .{ .tag = vpiNamedEvent, .items = members }, .{ .tag = vpiRange, .items = ranges } });
@@ -586,7 +588,7 @@ pub const Builder = struct {
         try b.lists.event_arrays.appendSlice(b.gpa, events.arrays);
         // §11.6.3 task and function, before any statement that calls one.
         for (m.tasks) |*t| {
-            const at = try b.add(.{ .kind = .code, .owner = b.scope, .name = "", .full = "", .vtype = if (t.is_function) vpiFunction else vpiTask });
+            const at = try b.add(.{ .kind = .code, .owner = .of(b.scope), .name = "", .full = "", .vtype = if (t.is_function) vpiFunction else vpiTask });
             try b.setName(at, try b.arena.dupe(u8, b.file.str(t.name)));
             try (if (t.is_function) &b.lists.functions else &b.lists.tasks).append(b.gpa, at);
             // §26.6.18/§26.6.19: publish all function types before building
@@ -619,7 +621,7 @@ pub const Builder = struct {
                 const local = try b.arena.dupe(u8, b.file.str(p.v.name));
                 try ios.append(b.arena, try b.add(.{
                     .kind = .code,
-                    .owner = b.scope,
+                    .owner = .of(b.scope),
                     .name = local,
                     .full = "",
                     .vtype = vpiIODecl,
@@ -1017,7 +1019,7 @@ pub const Builder = struct {
                         .{ .tag = vpiLhs, .to = try b.expr(a.target) },
                         .{ .tag = vpiRhs, .to = try b.expr(a.value) },
                     }, &.{}, &.{});
-                    (try b.objects.coldFor(b.gpa, at)).override_expr = a.value;
+                    (try b.objects.coldFor(at)).override_expr = a.value;
                     break :blk at;
                 },
                 .deassign, .release => b.code(if (a.continuous == .release) vpiRelease else vpiDeassign, &.{
@@ -1210,7 +1212,7 @@ pub const Builder = struct {
         const o = &b.objects.hot.items[at];
         if ((o.kind == .code or o.kind == .constant) and o.full.len == 0 and o.src_expr == .none) {
             o.src_expr = id;
-            o.expr_scope = b.scope;
+            o.expr_scope = .of(b.scope);
             o.in_analog = b.analog != null;
         }
         try b.attributes(at, .{ .kind = .expression, .tok = b.file.exprs.mainTok(id) }, false);
@@ -1318,7 +1320,7 @@ pub const Builder = struct {
     }
 
     fn constant(b: *Builder, v: ?root.Const, width: u32, const_type: c_int) Error!u32 {
-        return b.add(.{ .kind = .constant, .owner = null, .name = "", .full = "", .size = width, .value = v, .const_type = const_type });
+        return b.add(.{ .kind = .constant, .owner = .none, .name = "", .full = "", .size = width, .value = v, .const_type = const_type });
     }
 
     /// §11.6.19 a vpiOperation of type `op` over `operands`, each built as an
@@ -1328,7 +1330,7 @@ pub const Builder = struct {
         var items: std.ArrayList(u32) = .empty;
         for (operands) |o| try items.append(b.arena, try b.expr(o));
         const at = try b.code(vpiOperation, &.{}, &.{.{ .tag = vpiOperand, .items = try b.many(items.items) }}, &.{.{ .prop = vpiOpType, .value = op }});
-        b.objects.hot.items[at].owner = null;
+        b.objects.hot.items[at].owner = .none;
         return at;
     }
 
@@ -1365,7 +1367,7 @@ pub const Builder = struct {
                 const automatic = b.automatic or b.objects.hot.items[array].automatic;
                 const at = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = array }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, .{ .prop = root.vpiAutomatic, .value = @intFromBool(automatic) } });
                 b.objects.hot.items[at].automatic = automatic;
-                (try b.objects.coldFor(b.gpa, at)).event_ref = .{ .expr = id, .scope = b.engine };
+                (try b.objects.coldFor(at)).event_ref = .{ .expr = id, .scope = b.engine };
                 return at;
             }
         }
@@ -1377,7 +1379,7 @@ pub const Builder = struct {
                 .{ .tag = vpiBaseExpr, .to = try b.expr(ex.lhs(ix)) },
                 .{ .tag = vpiWidthExpr, .to = try b.expr(ex.rhs(ix)) },
             }, &.{}, &.{.{ .prop = vpiIndexedPartSelectType, .value = if (ex.extraOf(ix) == 0) vpiPosIndexed else vpiNegIndexed }});
-            b.objects.hot.items[at].owner = null;
+            b.objects.hot.items[at].owner = .none;
             return at;
         }
         if (base != none) {
@@ -1385,7 +1387,7 @@ pub const Builder = struct {
             if (members.len != 0 and ex.tag(ix) == .int_literal) {
                 const want = ex.intValue(ix);
                 for (members) |m| {
-                    const c = b.objects.hot.items[m].index orelse continue;
+                    const c = b.objects.hot.items[m].index.get() orelse continue;
                     if (b.objects.hot.items[c].value.?.int == want) return m;
                 }
             }
@@ -1396,7 +1398,7 @@ pub const Builder = struct {
                 .{ .tag = vpiLeftRange, .to = try b.expr(ex.lhs(ix)) },
                 .{ .tag = vpiRightRange, .to = try b.expr(ex.rhs(ix)) },
             }, &.{}, &.{});
-            b.objects.hot.items[at].owner = null;
+            b.objects.hot.items[at].owner = .none;
             return at;
         }
         const is_net = base != none and b.objects.hot.items[base].kind == .net;
@@ -1404,7 +1406,7 @@ pub const Builder = struct {
             .{ .tag = vpiParent, .to = base },
             .{ .tag = vpiIndex, .to = try b.expr(ix) },
         }, &.{}, &.{});
-        b.objects.hot.items[at].owner = null;
+        b.objects.hot.items[at].owner = .none;
         return at;
     }
 
@@ -1489,6 +1491,7 @@ pub fn udpDefns(
     arena: std.mem.Allocator,
     objects: *model.Rows,
     file: *const Ast.SourceFile,
+    attrs: *const @import("attributes.zig").ByOwner,
     out: *std.AutoHashMapUnmanaged(Ast.StrId, u32),
 ) Error![]const u32 {
     const defns = try arena.alloc(u32, file.udps.len);
@@ -1496,7 +1499,7 @@ pub fn udpDefns(
         var ios: std.ArrayList(u32) = .empty;
         for (u.ports, 0..) |p, k| {
             try ios.append(arena, @intCast(objects.hot.items.len));
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = try arena.dupe(u8, file.str(p)), .full = "", .vtype = vpiIODecl, .props = try ioProps(arena, if (k == 0) root.vpiOutput else root.vpiInput, 1, false) });
+            try objects.append(.{ .kind = .code, .owner = .none, .name = try arena.dupe(u8, file.str(p)), .full = "", .vtype = vpiIODecl, .props = try ioProps(arena, if (k == 0) root.vpiOutput else root.vpiInput, 1, false) });
         }
         var rows: std.ArrayList(u32) = .empty;
         for (u.rows) |r| {
@@ -1516,7 +1519,7 @@ pub fn udpDefns(
             if (u.is_sequential) try text.print(arena, " : {c}", .{r.state});
             try text.print(arena, " : {c}", .{r.output});
             try rows.append(arena, @intCast(objects.hot.items.len));
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiTableEntry, .value = .{ .str = text.items }, .props = try arena.dupe(Prop, &.{
+            try objects.append(.{ .kind = .code, .owner = .none, .name = "", .full = "", .vtype = vpiTableEntry, .value = .{ .str = text.items }, .props = try arena.dupe(Prop, &.{
                 .{ .prop = vpiSize, .value = fields + @intFromBool(u.is_sequential) + 1 },
             }) });
         }
@@ -1526,20 +1529,20 @@ pub fn udpDefns(
         if (u.init != .none) {
             var no_names: std.StringHashMapUnmanaged(u32) = .empty;
             var no_lists: ScopeLists = .{};
-            var b: Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = file, .names = &no_names, .top_name = "", .scope = 0, .path = "", .lists = &no_lists };
+            var b: Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = file, .names = &no_names, .top_name = "", .scope = 0, .path = "", .lists = &no_lists, .attrs = attrs };
             const rhs = try b.expr(u.init);
             const assign: u32 = @intCast(objects.hot.items.len);
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiAssignment, .edges = try arena.dupe(Edge, &.{
+            try objects.append(.{ .kind = .code, .owner = .none, .name = "", .full = "", .vtype = vpiAssignment, .edges = try arena.dupe(Edge, &.{
                 .{ .tag = vpiLhs, .to = ios.items[0] },
                 .{ .tag = vpiRhs, .to = rhs },
             }), .props = try arena.dupe(Prop, &.{.{ .prop = vpiBlocking, .value = 1 }}) });
             init = @intCast(objects.hot.items.len);
-            try objects.append(gpa, .{ .kind = .code, .owner = null, .name = "", .full = "", .vtype = vpiInitial, .edges = try arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = assign }}) });
+            try objects.append(.{ .kind = .code, .owner = .none, .name = "", .full = "", .vtype = vpiInitial, .edges = try arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = assign }}) });
         }
         at.* = @intCast(objects.hot.items.len);
-        try objects.append(gpa, .{
+        try objects.append(.{
             .kind = .code,
-            .owner = null,
+            .owner = .none,
             .name = "",
             .full = "",
             .vtype = vpiUdpDefn,

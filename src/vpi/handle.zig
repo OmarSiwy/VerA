@@ -80,7 +80,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         const active = r.active_timeformat orelse return null;
         for (d.objects) |*call| {
             if (call.vtype != code.vpiSysTaskCall or call.src_stmt == .none) continue;
-            const owner = call.owner orelse continue;
+            const owner = call.owner.get() orelse continue;
             if (d.scopes[owner].engine == active.scope and r.file.stmtTok(call.src_stmt) == active.tok)
                 return handleOf(call);
         }
@@ -120,9 +120,9 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
                 // An expression is in no scope (§11.6.19 draws no scope
                 // arrow); a statement, process or declaration is (§11.6.21
                 // stmt -> scope).
-                .code => if (o.owner == null) return noEdge(obj_type, o),
+                .code => if (o.owner == .none) return noEdge(obj_type, o),
             }
-            const owner = o.owner orelse return null;
+            const owner = o.owner.get() orelse return null;
             return handleOf(&d.objects[owner]);
         },
         // §11.6.11: a word or variable select's array. A module in an
@@ -130,7 +130,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         vpiParent, vpiModuleArray => {
             if (obj_type == vpiParent and o.kind != .word and o.kind != .var_select) return noEdge(obj_type, o);
             if (obj_type == vpiModuleArray and o.kind != .module) return noEdge(obj_type, o);
-            const p = o.parent orelse return null;
+            const p = o.parent.get() orelse return null;
             return handleOf(&d.objects[p]);
         },
         // The index expression of an element. A module that is not in an
@@ -140,7 +140,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
                 .word, .var_select, .module => {},
                 else => return noEdge(obj_type, o),
             }
-            const c = o.index orelse return null;
+            const c = o.index.get() orelse return null;
             return handleOf(&d.objects[c]);
         },
         else => {
@@ -226,7 +226,7 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
         // §6.7's upward search. `scope` need not be a module: the scope of a
         // non-module object is the one it is declared in, and the scope of a
         // module is itself.
-        var at: ?u32 = if (from.kind == .module) from.scope else from.owner;
+        var at: ?u32 = if (from.kind == .module) from.scope else from.owner.get();
         while (at) |sc| : (at = if (d.search_up) d.scopes[sc].parent else null) {
             var buf: [name_buf_len]u8 = undefined;
             const full = std.mem.print(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
@@ -284,7 +284,7 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
             return null;
         }
         for (coldOf(o).members) |m| {
-            const c = d.objects[m].index orelse continue;
+            const c = d.objects[m].index.get() orelse continue;
             if (d.objects[c].value.?.int == index) return handleOf(&d.objects[m]);
         }
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });

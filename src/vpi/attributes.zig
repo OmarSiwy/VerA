@@ -70,6 +70,36 @@ pub fn supports(o: *const root.Obj) bool {
     };
 }
 
+/// The source's attribute bindings by owner, each owner's in source order:
+/// `attach`'s lookup, built once per model rather than a scan of every
+/// binding for each element it is asked about.
+pub const ByOwner = struct {
+    /// Owner -> its first binding's index in `file.attributes`.
+    heads: std.AutoHashMapUnmanaged(Ast.AttributeOwner, u32) = .empty,
+    /// Binding index -> the next binding of the same owner, `code.none`
+    /// after the last.
+    next: []u32 = &.{},
+
+    pub fn init(gpa: std.mem.Allocator, file: *const Ast.SourceFile) error{OutOfMemory}!ByOwner {
+        const bindings = file.attributes.items;
+        var self: ByOwner = .{ .next = try gpa.alloc(u32, bindings.len) };
+        errdefer self.deinit(gpa);
+        var k = bindings.len;
+        while (k > 0) {
+            k -= 1;
+            const g = try self.heads.getOrPut(gpa, bindings[k].owner);
+            self.next[k] = if (g.found_existing) g.value_ptr.* else code.none;
+            g.value_ptr.* = @intCast(k);
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *ByOwner, gpa: std.mem.Allocator) void {
+        self.heads.deinit(gpa);
+        gpa.free(self.next);
+    }
+};
+
 /// Appends a vpiAttribute row to `parent` for each attribute the source binds
 /// to `owner`, its value folded (§3.8/AMS §2.9: no value is 1). A name
 /// repeated on one element keeps the later spelling. `definition` is
@@ -77,8 +107,9 @@ pub fn supports(o: *const root.Obj) bool {
 /// that does not fold, which the frontend should already have refused.
 pub fn attach(b: *code.Builder, parent: u32, owner: Ast.AttributeOwner, definition: bool) root.Error!void {
     if (parent == code.none) return;
-    for (b.file.attributes.items) |binding| {
-        if (binding.owner.kind != owner.kind or binding.owner.tok != owner.tok) continue;
+    var k = b.attrs.heads.get(owner) orelse code.none;
+    while (k != code.none) : (k = b.attrs.next[k]) {
+        const binding = b.file.attributes.items[k];
         for (binding.specs) |spec| {
             const name = b.file.str(spec.name);
             var found: ?u32 = null;
@@ -100,7 +131,7 @@ pub fn attach(b: *code.Builder, parent: u32, owner: Ast.AttributeOwner, definiti
             } else if (b.file.exprs.tag(spec.value) == .str_literal) {
                 value = .{ .str = try b.arena.dupe(u8, b.file.str(b.file.exprs.strOf(spec.value))) };
             } else if (b.run) |r| {
-                const scope = b.objects.hot.items[parent].src_engine orelse b.engine;
+                const scope = b.objects.hot.items[parent].src_engine.get() orelse b.engine;
                 const v = r.vpiAttributeValue(b.arena, scope, spec.value) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.NotElaborated;
                 switch (v) {
                     .bits => |lit| bits = lit,
@@ -113,10 +144,10 @@ pub fn attach(b: *code.Builder, parent: u32, owner: Ast.AttributeOwner, definiti
             b.objects.hot.items[at].src_tok = spec.main_tok;
             b.objects.hot.items[at].value = value;
             if (bits != null or b.objects.coldOf(at).constant_bits != null)
-                (try b.objects.coldFor(b.gpa, at)).constant_bits = bits;
+                (try b.objects.coldFor(at)).constant_bits = bits;
             if (found == null) {
                 const all = try std.mem.concat(b.arena, u32, &.{ b.objects.coldOf(parent).attributes, &.{at} });
-                (try b.objects.coldFor(b.gpa, parent)).attributes = all;
+                (try b.objects.coldFor(parent)).attributes = all;
             }
         }
     }

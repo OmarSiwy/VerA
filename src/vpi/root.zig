@@ -312,6 +312,24 @@ pub fn typeName(t: c_int) []const u8 {
     };
 }
 
+/// A `?u32` in four bytes rather than eight, for the `Obj` index fields most
+/// rows leave empty: `none` is null, which `maxInt(u32)` can be because no
+/// row, scope or engine slot index reaches it (`no_obj` is the same value).
+pub const OptU32 = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    pub fn of(v: ?u32) OptU32 {
+        const x = v orelse return .none;
+        std.debug.assert(x != std.math.maxInt(u32));
+        return @fromBackingInt(@intCast(x));
+    }
+
+    pub fn get(o: OptU32) ?u32 {
+        return if (o == .none) null else @backingInt(o);
+    }
+};
+
 /// One VPI object. Materialized once at `open`; a `vpiHandle` is a pointer to
 /// one of these.
 ///
@@ -327,7 +345,7 @@ pub const Obj = struct {
     /// module's SCOPE INDEX. For a `.module` this is its parent module.
     /// A lexical containing scope, such as a gen scope, is a separate
     /// vpiScope edge; runtime time-scale/storage lookup keeps this owner.
-    owner: ?u32,
+    owner: OptU32,
     /// `.module` only: which `Design.scopes` row is this module's own scope.
     scope: u32 = 0,
     /// §11.6 `vpiName` — the local name.
@@ -356,18 +374,18 @@ pub const Obj = struct {
     /// declaration wrote (§4.5, §12.3.3).
     implicit: bool = false,
     /// The digital engine's storage slot for this object's value, when the
-    /// design is a running digital one (`openDigital`). Null in the analog
+    /// design is a running digital one (`openDigital`). `.none` in the analog
     /// model, whose values come from analog.zig's solution.
-    slot: ?u32 = null,
+    slot: OptU32 = .none,
     /// `.parameter` of the analog model: the constant lowering folded for it
     /// (`Lowered.consts`), copied; §11.6.12 NOTE 1's "the value of the
     /// parameter".
     value: ?Lower.Const = null,
     /// An element (word, var select, array member module): the array object
     /// it belongs to — §11.6.11's `vpiParent`, §6.2.2's `vpiModuleArray`.
-    parent: ?u32 = null,
+    parent: OptU32 = .none,
     /// An element: the `.constant` object its `vpiIndex` edge leads to.
-    index: ?u32 = null,
+    index: OptU32 = .none,
     /// `.code`: the object type and the diagram's edges, as data. Any other
     /// class may carry `edges` and `props` too, answered after its own.
     vtype: c_int = 0,
@@ -397,9 +415,9 @@ pub const Obj = struct {
     /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
     stmt: Ast.StmtId = .none,
     /// The instance supplying `src_expr`'s engine context. Expressions such
-    /// as operations have no VPI scope relationship (`owner` is null), but
+    /// as operations have no VPI scope relationship (`owner` is `.none`), but
     /// still need their original instance when an application reads them.
-    expr_scope: ?u32 = null,
+    expr_scope: OptU32 = .none,
     /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
     net_type: Ast.NetKind = .wire,
     /// `.code` only: §11.6.13/§11.6.14's vpiDefName of a primitive or UDP
@@ -407,7 +425,7 @@ pub const Obj = struct {
     def_name: []const u8 = "",
     /// A declaration inside a generated digital scope evaluates its source
     /// attribute expressions there, including the iteration's localparam.
-    src_engine: ?u32 = null,
+    src_engine: OptU32 = .none,
     /// A continuous assignment's literal delays, in its module's time unit
     /// (IEEE 1364 §7.14: rise, fall, turn-off), for §12.11. Hot, not in
     /// `Cold`: §12.29's vpi_put_delays may give one to any gate or
@@ -421,7 +439,7 @@ pub const Obj = struct {
 // Budget: the row every handle points at and every scan walks. 472 bytes
 // before the cold split; a new field that is not on most rows goes in `Cold`.
 comptime {
-    std.debug.assert(@sizeOf(Obj) == 248);
+    std.debug.assert(@sizeOf(Obj) == 224);
 }
 
 /// `Obj.cold` of a row with no `Cold` entry.
@@ -611,6 +629,8 @@ pub const Design = struct {
     by_name: std.StringHashMapUnmanaged(u32),
     /// The live iterators, keyed by handle value.
     iters: std.AutoHashMapUnmanaged(usize, *Iter),
+    /// iterate.zig's reverse indexes, built on first use; owned (`gpa`).
+    relations: ?iterate.Relations = null,
 
     /// Frees the model and every live iterator; all handles become invalid.
     pub fn deinit(self: *Design) void {
@@ -620,6 +640,7 @@ pub const Design = struct {
             self.gpa.destroy(p.*);
         }
         self.iters.deinit(self.gpa);
+        if (self.relations) |*r| r.deinit(self.gpa);
         self.by_name.deinit(self.gpa);
         self.gpa.free(self.objects);
         self.gpa.free(self.cold);

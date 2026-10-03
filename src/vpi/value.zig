@@ -127,7 +127,7 @@ fn source(o: *const Obj) ?Source {
         return literalSource(lit);
     };
     if (o.kind == .code and o.vtype == root.code.vpiContAssign) return driven(o);
-    if (o.slot) |at| {
+    if (o.slot.get()) |at| {
         const r = run.attached() orelse return null;
         const lit = r.values[at];
         // The engine holds a real as its IEEE 754 bits in the value plane.
@@ -151,7 +151,7 @@ fn literalSource(lit: Int.Literal) Source {
 /// concatenation, whose drivers each hold a part.
 fn driven(o: *const Obj) ?Source {
     const r = run.attached() orelse return null;
-    const scope = root.design.?.scopes[o.owner.?].engine;
+    const scope = root.design.?.scopes[o.owner.get().?].engine;
     var found: ?usize = null;
     for (r.drivers, 0..) |drv, k| if (drv.tok == o.src_tok and drv.scope == scope) {
         if (found != null) return null;
@@ -206,8 +206,8 @@ pub fn read(o: *const Obj, v: *Value, st: *Store) void {
     var scratch = std.heap.ArenaAllocator.init(gpa);
     defer scratch.deinit();
     const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else blk: {
-        if (!o.in_analog and !activeCall(o) and o.src_expr != .none and o.expr_scope != null) if (run.attached()) |r| {
-            const instance = root.design.?.scopes[o.expr_scope.?].engine;
+        if (!o.in_analog and !activeCall(o) and o.src_expr != .none and o.expr_scope != .none) if (run.attached()) |r| {
+            const instance = root.design.?.scopes[o.expr_scope.get().?].engine;
             const result = r.vpiEval(scratch.allocator(), instance, o.src_expr) catch {
                 root.fail("EXPREVAL", "vpi_get_value: cannot evaluate this digital expression", .{});
                 return;
@@ -270,8 +270,8 @@ fn strength(o: *const Obj, v: *Value) void {
         return;
     };
     const r = run.attached();
-    const at = o.slot orelse 0;
-    if (o.slot == null or r == null or r.?.net_of.contains(at) or r.?.reals.contains(at)) {
+    const at = o.slot.get() orelse 0;
+    if (o.slot == .none or r == null or r.?.net_of.contains(at) or r.?.reals.contains(at)) {
         root.fail("BADFORMAT", "vpi_get_value: vpiStrengthVal is answered for a reg or integer variable only", .{});
         return;
     }
@@ -707,7 +707,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
             return null;
         }
         const r = run.attached() orelse return engineFail();
-        var selected = o.slot;
+        var selected = o.slot.get();
         if (coldOf(o).event_ref) |ref| {
             var scratch = std.heap.ArenaAllocator.init(gpa);
             defer scratch.deinit();
@@ -719,7 +719,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         if (selected) |at| exec.trigger(r, at) catch return engineFail();
         return null;
     }
-    const at = o.slot orelse {
+    const at = o.slot.get() orelse {
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
         return null;
     };
@@ -953,11 +953,11 @@ fn badPut(why: []const u8) error{BadValue} {
 pub fn watch(o: *const Obj) void {
     const r = run.attached() orelse return;
     r.vpi_change = onChange;
-    if (o.slot) |at| r.watch[at].insert(.vpi);
+    if (o.slot.get()) |at| r.watch[at].insert(.vpi);
     // An array: every element (§12.31.1 "if the obj is a memory word or a
     // variable array, ... the index field shall contain the index").
     const d = &(root.design orelse return);
-    for (coldOf(o).members) |m| if (d.objects[m].slot) |at| r.watch[at].insert(.vpi);
+    for (coldOf(o).members) |m| if (d.objects[m].slot.get()) |at| r.watch[at].insert(.vpi);
 }
 
 fn onChange(_: *digital.Run, slot: u32) void {

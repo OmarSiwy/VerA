@@ -136,7 +136,7 @@ fn earliest(a: ?u64, b: ?u64) ?u64 {
 fn scale(obj: vpiHandle) ?sim.time.Scale {
     const r = engine orelse return null;
     const o = root.asObj(obj) orelse return r.scale;
-    return r.timeOf(if (o.kind == .module) o.scope else o.owner orelse 0).scale;
+    return r.timeOf(if (o.kind == .module) o.scope else o.owner.get() orelse 0).scale;
 }
 
 /// A §12.15 time structure as engine ticks. vpiSimTime is ticks already.
@@ -418,7 +418,7 @@ test "the digital model: one scope per instance, every declaration bound to its 
     try std.testing.expectEqualStrings("leaf", d.scopes[1].def_name);
     const a = root.asObj(handle.vpi_handle_by_name("top.a", null)).?;
     try std.testing.expectEqual(@as(u32, 4), a.size);
-    try std.testing.expectEqual(h.run.slotOf("a").?, a.slot.?);
+    try std.testing.expectEqual(h.run.slotOf("a").?, a.slot.get().?);
     try std.testing.expect(root.asObj(handle.vpi_handle_by_name("top.w", null)).?.kind == .net);
     try std.testing.expectEqual(root.vpiIntegerVar, property.vpi_get(root.vpiType, handle.vpi_handle_by_name("top.n", null)));
     try std.testing.expect(handle.vpi_handle_by_name("top.u.q", null) != null);
