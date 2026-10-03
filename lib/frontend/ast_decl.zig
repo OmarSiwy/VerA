@@ -80,6 +80,12 @@ pub const ParamDecl = struct {
     main_tok: u32 = 0,
 };
 
+// Budget: 64 bytes (948 rows on psp103); see docs/seams/s1-frontcore.md
+// before adding a field.
+comptime {
+    std.debug.assert(@sizeOf(ParamDecl) <= 64);
+}
+
 /// LRM §3.4.6 `aliasparam alias = target;` (A.2.1.1 aliasparam_declaration).
 pub const AliasParam = struct {
     alias: StrId,
@@ -107,6 +113,11 @@ pub const VarDecl = struct {
     /// variables, where §6.4.3's hiding rule turns on it.
     desc: bool = false,
 };
+
+// Budget: 48 bytes (1,549 rows on psp103).
+comptime {
+    std.debug.assert(@sizeOf(VarDecl) <= 48);
+}
 
 /// The wired-logic function a net's drivers resolve through (IEEE 1364-2005
 /// §7.9, Verilog-AMS §3.7): A.2.2.1 `net_type` plus the two spellings A.2.1.3
