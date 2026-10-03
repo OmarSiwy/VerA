@@ -26,7 +26,6 @@ const process = Preprocessor.process;
 const Pp = Preprocessor.Pp;
 const scan_stops = Preprocessor.scan_stops;
 const findStop = Preprocessor.findStop;
-const directive = Preprocessor.directive;
 
 // ---------------------------------------------------------------------------
 // Tests
