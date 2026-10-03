@@ -60,7 +60,9 @@ pub const Analysis = struct {
 
 /// The device's `AnalysisKind` ordinals (`static, ic, nodeset, dc, tran, ac,
 /// noise`): an operating point is a DC analysis, a transient a transient.
-/// An AC sweep's operating point is "static" (Table 4-21: "the DC analysis
+/// The library evaluates a transient's first solution (dt = 0) as `.ic`,
+/// Table 4-22's TRAN OP column (`atPoint` in `tb/runner_text.zig`), so this
+/// host passes the analysis and `Lib.solve` passes dt. An AC sweep's operating point is "static" (Table 4-21: "the DC analysis
 /// which precedes an AC or noise analysis"): the device's `ac_stim` is live
 /// in every `.ac` evaluation, and is zero here (§4.6.1); the sweep itself
 /// evaluates as `.ac` (`Lib.ac`).

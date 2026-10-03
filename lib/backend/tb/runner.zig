@@ -151,7 +151,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    var inst: D.Instance = .{};
         \\
     );
-    try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
+    try out.print(arena, "    run_kind = .{t};\n    sim_state = .{{ .kind = run_kind }};\n", .{d.analysis});
     // §2.8.3/§12.32: this testbench is a host, so it binds `no_vpi_app` for
     // the device's unresolved `$name`s and passes `validateHost` like any other.
     try out.appendSlice(arena,
@@ -320,9 +320,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
             }
             // The first time is the DC point, dt = 0, which operator kernels
-            // answer with their DC form (§4.5.4 initial condition, §4.5.11 DC gain).
+            // answer with their DC form (§4.5.4 initial condition, §4.5.11 DC
+            // gain), and which `atPoint` makes a transient's "ic" (Table 4-22).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
-            try out.print(arena, "        sim_state.t = {f};\n        sim_state.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
+            try out.print(arena, "        atPoint({f}, {f});\n", .{ fmtF64(t), fmtF64(dt) });
             // Written at every point: a stale `true` would fire an event twice.
             try out.print(arena, "        sim_state.initial_step = {};\n        sim_state.final_step = {};\n", .{
                 k == 0 and (per_block or n == 0),
@@ -481,8 +482,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     for (d.waves, 0..) |wv, k|
         try out.print(arena, "        set(a.x, a.forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
-        \\        sim_state.t = t;
-        \\        sim_state.dt = dt;
+        \\        atPoint(t, dt);
         \\        sim_state.initial_step = first;
         \\        sim_state.final_step = last;
         \\        sim_state.analog_initial = first;
@@ -627,7 +627,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
     try deriveCard(&out, arena, "    ", "model", d.temp);
     try out.appendSlice(arena, "    var inst: D.Instance = .{};\n");
-    try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
+    try out.print(arena, "    run_kind = .{t};\n    sim_state = .{{ .kind = run_kind }};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
@@ -687,7 +687,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     try deriveCard(&out, arena, "    ", "g_model", d.temp);
     try out.appendSlice(arena, "    g_inst = .{};\n");
     try out.appendSlice(arena,
-        \\    sim_state = .{ .kind = @fromBackingInt(kind) };
+        \\    run_kind = @fromBackingInt(kind);
+        \\    sim_state = .{ .kind = run_kind };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
         \\    if (comptime @hasField(D.Instance, "cwd")) g_inst.cwd = cwdPath();
@@ -715,8 +716,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
     for (d.waves, 0..) |wv, k|
         try out.print(arena, "    set(&g_x, &g_forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
     try out.appendSlice(arena,
-        \\    sim_state.t = t;
-        \\    sim_state.dt = dt;
+        \\    atPoint(t, dt);
         \\    sim_state.initial_step = first;
         \\    sim_state.final_step = last;
         \\    sim_state.analog_initial = first;

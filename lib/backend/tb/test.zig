@@ -1000,10 +1000,10 @@ test "§9.15 analysis_name is the kind's spelling unless the line names one" {
     const arena = arena_state.allocator();
     const tran = try tb_runner.renderRunner(arena, "an", try tb_directive.parse(arena, "//! time 0, 1n\n"));
     try testing.expect(std.mem.find(u8, tran, "const analysis_name = \"tran\";\n") != null);
-    try testing.expect(std.mem.find(u8, tran, "    sim_state = .{ .kind = .tran };\n") != null);
+    try testing.expect(std.mem.find(u8, tran, "    run_kind = .tran;\n") != null);
     const named = try tb_runner.renderRunner(arena, "an", try tb_directive.parse(arena, "//! analysis dc mydc\n"));
     try testing.expect(std.mem.find(u8, named, "const analysis_name = \"mydc\";\n") != null);
-    try testing.expect(std.mem.find(u8, named, "    sim_state = .{ .kind = .dc };\n") != null);
+    try testing.expect(std.mem.find(u8, named, "    run_kind = .dc;\n") != null);
 }
 
 test "`//! spice` lines join into one netlist in source order" {

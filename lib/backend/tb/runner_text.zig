@@ -339,6 +339,24 @@ pub const runner_body =
     \\
     \\/// The analysis in force, as every entry point reads it.
     \\var sim_state: contract.SimState = .{};
+    \\/// The analysis this run is (§4.6.1 Table 4-21): the `//! analysis` kind,
+    \\/// or the one the VPI host opened. `sim_state.kind` is the part of it a
+    \\/// point evaluates as, which `atPoint` decides.
+    \\var run_kind: contract.AnalysisKind = .dc;
+    \\
+    \\/// Points `sim_state` at time `t`, `dt` after the last accepted point, and
+    \\/// at the §4.6.1 analysis that point belongs to. Table 4-22's TRAN OP
+    \\/// column: the dt = 0 solve that opens a transient is its "ic" analysis
+    \\/// (Table 4-21: "the initial-condition analysis which precedes a
+    \\/// transient analysis"), where "static", "ic" and "tran" are 1 and "dc" 0;
+    \\/// every later point is the Tran column. Any other analysis is itself at
+    \\/// every point. `src/sim/spice/tran.zig`'s `runTran` solves the same
+    \\/// point as `.ic`. Every host here sets t, dt and kind only through this.
+    \\fn atPoint(t: f64, dt: f64) void {
+    \\    sim_state.t = t;
+    \\    sim_state.dt = dt;
+    \\    sim_state.kind = if (run_kind == .tran and dt == 0.0) .ic else run_kind;
+    \\}
     \\
     \\/// The fused differential gate: `evalQ` shares ONE core call between the
     \\/// two halves, so it must return exactly what the separate `eval` and `q`
@@ -682,16 +700,14 @@ pub const runner_body =
     \\        std.process.exit(1);
     \\    }
     \\    std.debug.print("--- point {d} rejected: retry at {e} ---\n", .{ n, r });
-    \\    sim_state.t = r;
-    \\    sim_state.dt = r - t_prev;
+    \\    atPoint(r, r - t_prev);
     \\    sim_state.initial_step = false;
     \\    sim_state.final_step = false;
     \\    sim_state.analog_initial = false;
     \\    const solved_r = solve(x, forced, model, inst);
     \\    point(n, x, model, inst);
     \\    if (stepPost(model, inst, x, state, solved_r)) |r2| retry(r2, n, x, forced, model, inst, state, depth + 1);
-    \\    sim_state.t = t;
-    \\    sim_state.dt = t - r;
+    \\    atPoint(t, t - r);
     \\    sim_state.final_step = last;
     \\    const solved_t = solve(x, forced, model, inst);
     \\    point(n, x, model, inst);

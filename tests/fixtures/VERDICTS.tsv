@@ -1163,6 +1163,7 @@ pass	ch04_expressions/spice_noise_rc_white.va
 pass	ch04_expressions/spice_noise_shared_pair.va
 pass	ch04_expressions/status_site_beside_noise.va
 pass	ch04_expressions/table_4_1_every_operator.va
+pass	ch04_expressions/tran_op_is_ic_and_static.va
 pass	ch04_expressions/unsigned_operand_makes_the_expression_unsigned.va
 pass	ch04_expressions/white_noise_declaration_initializer.va
 pass	ch04_expressions/white_noise_numeric_label_rejected.va
