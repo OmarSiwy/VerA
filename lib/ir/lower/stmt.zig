@@ -13,6 +13,7 @@ const lower_control = @import("control.zig");
 const lower_event = @import("event.zig");
 const lower_expr = @import("expr.zig");
 const lower_param = @import("param.zig");
+const lower_systask = @import("systask.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -100,7 +101,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
             try lower_event.lowerEventControl(self, s.event, s.body),
         .event_trigger => |s| try lowerEventTrigger(self, tok, s.target), // §5.10.4
         .disable => |s| try lowerDisable(self, tok, self.file.str(s.name)),
-        .sys_task => |s| try lower_event.lowerSysTask(self, tok, self.file.str(s.name), s.args),
+        .sys_task => |s| try lower_systask.lowerSysTask(self, tok, self.file.str(s.name), s.args),
         .jump => |j| try lowerJump(self, tok, j.kind, j.value),
     }
 }

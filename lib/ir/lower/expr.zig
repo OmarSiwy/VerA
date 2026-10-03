@@ -18,6 +18,7 @@ const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
+const lower_systask = @import("systask.zig");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 const Const = @import("frontend").constfold.Const;
@@ -77,17 +78,9 @@ fn resizeInt(self: *Lower, v: Mir.Value, context: constfold.IntContext) Oom!Mir.
 // Timer capture belongs on both ordinary and width-aware expression paths.
 // A $clog2 operand must retain its dependency when its timer is rescheduled.
 fn lowerExprRaw(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
-    if (self.event_state.timer_replay) |replay| if (replay.get(e)) |value| return value;
+    if (lower_event.replayedExpr(self, e)) |value| return value;
     const value = try lowerExprInner(self, e, plan, sized);
-    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.exprs.put(self.arena, e, .{
-        .value = value,
-        .variable = switch (self.file.exprs.tag(e)) {
-            .ident => self.vars.get(self.file.str(self.file.exprs.strOf(e))),
-            .hier_ident => self.vars.get(try flatName(self, e)),
-            else => null, // else: only a resolved name directly reads one variable
-        },
-        .effects = try lower_event.captureTimerEffects(self, e),
-    });
+    try lower_event.captureExpr(self, e, value);
     return value;
 }
 
@@ -683,15 +676,10 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: boo
                 if (divisor != .int_const or divisor.int_const == 0) {
                     const value = try self.toReal(.{ .v = result, .ty = .integer });
                     if (self.runtime_error_phase == .display) {
-                        try self.chainCondDisplay(value);
+                        try lower_systask.chainCondDisplay(self, value);
                         return .{ .v = result, .ty = ty };
                     }
-                    if (self.table_effect_place == null) {
-                        const place = self.builder.newPlace();
-                        try self.builder.writeVariable(place, .entry, .f_zero);
-                        self.table_effect_place = place;
-                    }
-                    const place = self.table_effect_place.?;
+                    const place = try self.effectPlace();
                     const previous = try self.builder.readVariable(place, self.cur);
                     try self.builder.writeVariable(place, self.cur, try self.emit(.fadd, &.{ previous, value }));
                 }
