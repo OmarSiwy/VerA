@@ -123,17 +123,23 @@ fn wrap(comptime f: root.Dispatch) DispatchC {
     }.c;
 }
 
+/// `root.loop` through the prebuilt object. 4-state only: asserts at comptime
+/// that `two` is null. A state that is not `quiet` is `error.Failed`.
 pub fn loop(s: *State, comptime four: root.Dispatch, comptime two: ?root.Dispatch, limit: u64) ?Error {
     comptime std.debug.assert(two == null);
     return decode(ext(cLoop, "loop")(s, wrap(four), limit));
 }
 
+/// `snapshot.save` of `s` into `buf` through the prebuilt object; the bytes
+/// written, or `WriteFailed` when `buf` is too short.
 pub fn saveTo(s: *const State, buf: []u8) std.Io.Writer.Error!usize {
     var n: usize = undefined;
     if (ext(cSaveTo, "saveTo")(s, buf.ptr, buf.len, &n) != 0) return error.WriteFailed;
     return n;
 }
 
+/// `snapshot.restore` of `s` from bytes `saveTo` wrote, through the
+/// prebuilt object. A state that is not `quiet` is `error.Failed`.
 pub fn restore(s: *State, b: []const u8) Error!void {
     if (decode(ext(cRestore, "restore")(s, b.ptr, b.len))) |e| return e;
 }

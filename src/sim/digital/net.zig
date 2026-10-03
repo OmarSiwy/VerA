@@ -85,8 +85,10 @@ pub const Bridge = struct { src: u32, src_lo: u32, dst_lo: u32, width: u32 };
 /// The hot row every resolution reads; what only a delayed net, a `trireg`
 /// or a pass-switch terminal has is its `NetCold` row. Most nets have none,
 /// and an unpacked net array is one `Net` per element (§4.9.1), so the split
-/// is what keeps a large array's footprint at this row's 72 bytes an element
-/// instead of 184.
+/// is what keeps a large array's footprint at this row's 48 bytes an element
+/// instead of 184. Its drivers are a run of `Run.net_drivers`
+/// (`Run.netDrivers`) and its per-bit signals a run of `Run.signals`, so the
+/// row holds no slice but `resolved`'s.
 pub const Net = struct {
     kind: Ast.NetKind,
     slot: u32,
@@ -97,7 +99,6 @@ pub const Net = struct {
     /// This net's row in `Run.net_cold`, or `no_cold` when every field there
     /// would be its default.
     cold: u32 = no_cold,
-    drivers: []const u32 = &.{},
     /// A.2.1.3 `charge_strength`, the level the stored charge of a `trireg` in
     /// the capacitive state asserts. `medium` is §3.8's default and is ignored
     /// outright by every other net type.
@@ -108,10 +109,18 @@ pub const Net = struct {
     capacitive: bool = false,
     /// A MOS switch's data terminal is this net, so `signal` is read.
     strength_read: bool = false,
-    /// Per bit, the §7.10 signal the last resolution found, whose strength a
-    /// MOS switch reading this net passes on (§7.12). Kept current only
-    /// where `strength_read` or the net resolves through a fold.
-    signal: []Signal = &.{},
+    /// The first of this net's entries in `Run.signals`, one per declared bit
+    /// (a wreal promoted to 64 bits keeps its declared count; it never
+    /// folds). Per bit, the §7.10 signal the last resolution found, whose
+    /// strength a MOS switch reading this net passes on (§7.12). Kept current
+    /// only where `strength_read` or the net resolves through a fold.
+    signal: u32 = 0,
+
+    // Budget: one row per net array element (§4.9.1), so every 8 bytes here
+    // is 8 MiB on a 2^20-element net array.
+    comptime {
+        std.debug.assert(@sizeOf(Net) == 48);
+    }
 };
 
 /// `Net.cold` of a net with no cold row.
@@ -159,6 +168,8 @@ pub const Tran = struct {
     target: State = .on,
     pending: ?Handle = null,
 
+    /// Whether the switch conducts: `on` or `off` by its control's value,
+    /// `unknown` while the control is x or z.
     pub const State = enum { on, off, unknown };
 };
 
@@ -322,11 +333,23 @@ pub const Driver = struct {
     s1: Ast.Strength = .strong,
     /// A.6.1 `[ delay3 ]`.
     delay: Delay = .{},
-    transition: Inertial = .{},
+    /// This driver's row in `Run.transitions`, made the first time a delay
+    /// holds its value back (`Run.driverTransition`), or `no_transition`:
+    /// most drivers never have one, so the 40-byte `Inertial` is out of line.
+    transition: u32 = no_transition,
     /// The statement's main token: with `scope`, the identity a VPI
     /// application's §12.29 vpi_put_delays reaches this driver by.
     tok: u32 = 0,
+
+    // Budget: one row per continuous assignment, gate, switch and port
+    // window. `src/vpi` reads `tok`, `scope`, `current` and `delay`.
+    comptime {
+        std.debug.assert(@sizeOf(Driver) == 144);
+    }
 };
+
+/// `Driver.transition` of a driver no delay has held back yet.
+pub const no_transition = std.math.maxInt(u32);
 
 // ---- strength and resolution (clause 7, §7.9 Tables 7-4/7-6/7-7, §3.7) ------
 
@@ -364,6 +387,7 @@ pub const Signal = struct {
         return of(.x, if (b == .one) .highz else s0, if (b == .zero) .highz else s1);
     }
 
+    /// Does the signal reach neither side, the `.{}` of no driver at all?
     pub fn none(self: Signal) bool {
         return self.lo == 0 and self.hi == 0;
     }

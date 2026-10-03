@@ -10,7 +10,9 @@
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
-const exec = @import("exec.zig");
+const waiters = @import("waiters.zig");
+const resolution = @import("resolution.zig");
+const evaluate = @import("evaluate.zig");
 const compile = @import("compile.zig");
 const vcd = @import("vcd.zig");
 const root = @import("root.zig");
@@ -21,6 +23,7 @@ const Signal = @import("net.zig").Signal;
 /// §18.3 the extended VCD tasks.
 pub const Op = enum { ports, off, on, all, limit, flush };
 
+/// The §18.3 task names, each to its `Op`.
 pub const tasks = std.StaticStringMap(Op).initComptime(.{
     .{ "$dumpports", .ports },
     .{ "$dumpportsoff", .off },
@@ -154,14 +157,14 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
             .scopes = scopes.items,
             .ports = ports.items,
         });
-        return exec.requestVcd(r);
+        return waiters.requestVcd(r);
     }
     // §18.3.7: a file_pathname that names no $dumpports file is ignored;
     // none names every one of them.
     var want: ?[]const u8 = null;
     if (given.len != 0 and (op != .limit or given.len == 2))
         want = try fileName(r, a, given[given.len - 1]) orelse return;
-    const size = if (op == .limit) std.math.lossyCast(u64, (try exec.eval(r, a, given[0], 0)).asInt() orelse 0) else 0;
+    const size = if (op == .limit) std.math.lossyCast(u64, (try evaluate.eval(r, a, given[0], 0)).asInt() orelse 0) else 0;
     for (d.files.items) |*f| {
         if (want) |w| if (!std.mem.eql(u8, w, f.name)) continue;
         switch (op) {
@@ -192,7 +195,7 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
 
 /// The characters of a file_pathname argument; null for an x or z bit.
 fn fileName(r: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?[]const u8 {
-    return @import("system.zig").text(a, try exec.eval(r, a, e, 0));
+    return @import("system.zig").text(a, try evaluate.eval(r, a, e, 0));
 }
 
 /// The end of a step with a port's net resolved, or of the `$dumpports`
@@ -320,8 +323,8 @@ fn state(r: *Run, a: std.mem.Allocator, p: Port) Error![]const u8 {
         var in: Signal = .{};
         var out: Signal = .{};
         if (p.net) |net| {
-            for (r.nets[net].drivers) |d| {
-                const c = exec.contribution(r.drivers[d], bit);
+            for (r.netDrivers(net)) |d| {
+                const c = resolution.contribution(r.drivers[d], bit);
                 if (below(r, r.drivers[d].scope, p.inst)) out = out.combine(c) else in = in.combine(c);
             }
         } else out = .of(r.values[p.slot].bit(bit), .strong, .strong); // an output declared as a variable
@@ -358,6 +361,8 @@ pub fn below(r: *Run, scope: u32, inst: u32) bool {
     }
 }
 
+/// One port bit as §18.4.3 dumps it: the Table 18-7 state character and
+/// its strength0 and strength1 components, each 0..7.
 pub const State = struct { c: u8, s0: u8, s1: u8 };
 
 /// A signal's strength components: the strength0 and strength1 levels it

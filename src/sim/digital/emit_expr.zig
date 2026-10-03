@@ -1,5 +1,5 @@
 //! An AST expression in `Emitter.r.scope`, and its context's type -> Zig text
-//! over `rt.logic` whose value is what `exec.evalContext` computes. The walk is
+//! over `rt.logic` whose value is what `evaluate.evalContext` computes. The walk is
 //! `evalContext`'s arm for arm, so operand sizing and signedness match it, and
 //! `evalContext` itself folds every constant. IEEE 1364-2005 §5.5.1 Table
 //! 5-22, §5.5.2, §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
@@ -8,7 +8,7 @@
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const emit = @import("emit.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
@@ -19,7 +19,7 @@ pub fn natural(self: *Emitter, e: Ast.ExprId) Error!Type {
     return compile.typeOf(self.r, e);
 }
 
-/// `exec.eval(e, 0)`: `e` in its own type, a real as its §4.8.2 64-bit
+/// `evaluate.eval(e, 0)`: `e` in its own type, a real as its §4.8.2 64-bit
 /// integer. Returns that type.
 pub fn selfDetermined(self: *Emitter, e: Ast.ExprId) Error!Type {
     var t = try natural(self, e);
@@ -28,7 +28,7 @@ pub fn selfDetermined(self: *Emitter, e: Ast.ExprId) Error!Type {
     return t;
 }
 
-/// `exec.truthOf(e)` as a `logic.Bit` (§9.4): a real is true when not 0.
+/// `evaluate.truthOf(e)` as a `logic.Bit` (§9.4): a real is true when not 0.
 pub fn truth(self: *Emitter, e: Ast.ExprId) Error!void {
     if ((try natural(self, e)).real) {
         try self.print("L.realTruth(", .{});
@@ -40,7 +40,7 @@ pub fn truth(self: *Emitter, e: Ast.ExprId) Error!void {
     try self.print(")", .{});
 }
 
-/// `exec.evalReal(e)`: `e` as a Zig `f64` (§4.8).
+/// `evaluate.evalReal(e)`: `e` as a Zig `f64` (§4.8).
 pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
@@ -51,7 +51,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
         return self.print(", {d}, {})", .{ t.width, t.signed });
     }
     if (compile.constantExpression(r, e)) {
-        const v = exec.evalReal(r, self.arena, e) catch return self.refuse("a constant the engine does not fold");
+        const v = evaluate.evalReal(r, self.arena, e) catch return self.refuse("a constant the engine does not fold");
         return self.print("@as(f64, @bitCast(@as(u64, 0x{x})))", .{@as(u64, @bitCast(v))});
     }
     switch (ex.tag(e)) {
@@ -177,7 +177,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
 
 const user_fn = "a PLI application's system function, which runs only under a VPI host";
 
-/// `exec.evalFor(e, target)` of an integral target: `e` in the context the
+/// `evaluate.evalFor(e, target)` of an integral target: `e` in the context the
 /// assignment gives it, truncated to the target (§5.5.3).
 pub fn assigned(self: *Emitter, e: Ast.ExprId, target: Type) Error!void {
     if (target.real) return value(self, e, target);
@@ -188,7 +188,7 @@ pub fn assigned(self: *Emitter, e: Ast.ExprId, target: Type) Error!void {
     try self.print(", {d}, {d}, false)", .{ ctx.width, target.width });
 }
 
-/// `exec.evalContext(e, ty)`.
+/// `evaluate.evalContext(e, ty)`.
 pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
@@ -196,7 +196,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     const sg = ty.signed;
     if (compile.constantExpression(r, e)) fold: {
         if (self.caresX()) try everyCaseEq(self, e);
-        const v = exec.evalContext(r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
+        const v = evaluate.evalContext(r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
         // `--two-state`: a literal's x or z bit is 0; an operator of known
         // operands then computes what 4-state computes wherever that has no
         // x (every operator but `===` is monotone in x, and `===` against
@@ -224,7 +224,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             const at = try self.slot(e);
             try self.print("L.rs(", .{});
             try self.get(at);
-            try self.print(", {d}, {d}, {})", .{ try self.slotWidth(at), w, sg });
+            try self.print(", {d}, {d}, {})", .{ self.slotWidth(at), w, sg });
         },
         .index => try index(self, e, ty),
         .unary => switch (ex.unOp(e)) {
@@ -286,7 +286,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                 // deciding left side is what the short circuit returns.
                 .logical_and, .logical_or => if (calls(self, ex.rhs(e))) {
                     // A call has effects: the right side runs only when
-                    // the left does not decide (`exec.evalContext`).
+                    // the left does not decide (`evaluate.evalContext`).
                     const lb = self.label();
                     try self.print("L.ctx(sc{d}: {{ const l{d} = ", .{ lb, lb });
                     try truth(self, ex.lhs(e));
@@ -601,7 +601,7 @@ pub fn caseLabel(self: *Emitter, e: Ast.ExprId, ty: Type, kind: Ast.CaseKind) Er
         return;
     }
     try self.fits(ty);
-    const v = exec.evalContext(self.r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
+    const v = evaluate.evalContext(self.r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
     if (kind == .normal and v.hasUnknown()) return self.refuse("a `case` label with an x or z bit, which only an x or z matches");
     return constant(self, v, ty.width, false);
 }
@@ -623,7 +623,7 @@ fn twoStateMeaning(self: *Emitter, e: Ast.ExprId) Error!void {
     if (op != .case_eq and op != .case_neq) return;
     for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |side| {
         if (!compile.constantExpression(r, side)) continue;
-        const v = exec.eval(r, self.arena, side, 0) catch return self.xMeaning("a constant the engine does not fold", ex.mainTok(e));
+        const v = evaluate.eval(r, self.arena, side, 0) catch return self.xMeaning("a constant the engine does not fold", ex.mainTok(e));
         if (v.hasUnknown()) return self.xMeaning("`===` or `!==` against an x or z, which asks whether a value is unknown", ex.mainTok(e));
     }
 }
@@ -651,7 +651,7 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     }
     const operand = ex.lhs(e);
     const at = try self.slot(r.chainBase(operand).base);
-    const sw = try self.slotWidth(at);
+    const sw = self.slotWidth(at);
     const range = vecRange(r, at, sw);
     const rg = ex.rhs(e);
     if (ex.tag(rg) == .range) {
@@ -671,8 +671,8 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     // A known constant index inside the range reads its one plane word, not
     // the whole vector.
     if (sw > 64 and ex.tag(operand) != .index and compile.constantExpression(r, rg)) {
-        const v = exec.eval(r, self.arena, rg, 0) catch return self.refuse("a constant the engine does not fold");
-        if (exec.indexInt(v)) |i| {
+        const v = evaluate.eval(r, self.arena, rg, 0) catch return self.refuse("a constant the engine does not fold");
+        if (evaluate.indexInt(v)) |i| {
             const p = range.position(i);
             if (p >= 0 and p < sw) return self.print("L.rs(L.bitAt(M.get(s, {d}), {d}, 63, 0, 64), 1, {d}, {})", .{ self.off[at] + @as(u32, @intCast(p)) / 64, @mod(p, 64), w, sg });
         }
@@ -687,7 +687,7 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
 /// The packed value a select reads, including an addressed array element.
 fn selectValue(self: *Emitter, operand: Ast.ExprId, base: u32) Error!void {
     if (self.r.file.exprs.tag(operand) != .index) return self.get(base);
-    return value(self, operand, .{ .width = try self.slotWidth(base), .signed = false });
+    return value(self, operand, .{ .width = self.slotWidth(base), .signed = false });
 }
 
 /// The optional storage shift of an indexed part-select (§5.2.1). Its
@@ -702,7 +702,7 @@ pub fn indexedShift(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!void {
     try self.print(", {d}, {}), {d}, {d}, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, count, ex.extraOf(rg) == 0 });
 }
 
-/// `exec.address` as a Zig `?u32`: the element's slot, or null. `label`
+/// `evaluate.address` as a Zig `?u32`: the element's slot, or null. `label`
 /// (from `Emitter.label`) names its block and locals.
 pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     const r = self.r;
@@ -727,6 +727,7 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     try self.print(" break :b{d} @as(?u32, {d} + @as(u32, @intCast(o{d}))); }}", .{ label, base, label });
 }
 
+/// The interpreter's §3.3 `[msb:lsb]`, so both engines number bits alike.
 pub const VecRange = @import("root.zig").VecRange;
 
 /// A slot's declared `[msb:lsb]`, `[w-1:0]` when it declares none.
@@ -738,6 +739,9 @@ pub fn vecRange(r: anytype, at: u32, width: u32) VecRange {
 /// where the slot has that bit, and names no bit elsewhere (§5.2.1).
 pub const Place = struct { shift: i64, count: u32 };
 
+/// The `Place` of part-select `e` on a vector declared `range`, from the
+/// bounds `infer` folded for the executing scope's specialization. Asserts
+/// `e` was typed there.
 pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     const r = self.r;
     const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
@@ -745,6 +749,7 @@ pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     return .{ .shift = range.position(b.lsb), .count = @intCast(@abs(b.msb - b.lsb) + 1) };
 }
 
+/// The low `w` bits set; all 64 for `w` >= 64.
 pub fn maskOf(w: u32) u64 {
     return if (w >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(w)) - 1;
 }
