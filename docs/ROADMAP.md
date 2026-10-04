@@ -413,8 +413,6 @@ Settle each before a fixture asserts one side.
   (`conformance-attributes-ledger-independent-review.md:33-43`.)
 - AMS 3.4: forward parameter reference. `58_forward_parameter_reference.va` pins
   E0314 as settled. (`conformance-parameter-core-ledger-review.md:43-45`.)
-- AMS 4.3.1: `min`/`max` with NaN or signed zero. VerA picks the second operand
-  when unordered. (`conformance-minmax-ledger-review.md:97-102`.)
 - AMS 8.2 vs 8.4.1: §8.2 applies nodesets after `analog initial`, §8.4.1 before.
   (`conformance-scheduling.md:35`.)
 - AMS 8.3.3 vs 5.10.3.3: does an `@()` body run once per timepoint or once per
