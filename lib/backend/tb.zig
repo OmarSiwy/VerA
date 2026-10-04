@@ -73,6 +73,10 @@ pub const Directives = struct {
     psweeps: []const Sweep = &.{},
     /// §4.6.1. Unwritten, `.tran` under a `//! time` grid, else `.dc`.
     analysis: Analysis = .dc,
+    /// §9.15 Table 9-28 `analysis_name`, the optional second word of
+    /// `//! analysis`; empty means the kind's spelling ("dc", "tran", "ac"),
+    /// the name §4.6.3's `ac_stim` defaults to.
+    analysis_name: []const u8 = "",
     /// `//! solve`: unknowns no other directive names are solved by Newton on
     /// the device's own residual (§5.6). Off by default, every unnamed unknown
     /// is tied to the reference, so `//! bias V(p) = 0.5` on a resistor puts

@@ -651,8 +651,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b("S.con(0.0)", .{});
         },
         // §9.15 Table 9-28 `$simparam$str`: "analysis_type" and "module" are
-        // answered; "cwd", "instance" and "path" describe the host, which a
-        // flat device cannot see, so they read "".
+        // answered here, "cwd" and "analysis_name" from the host-written
+        // `Instance` fields (`host_strings`). `Lower` answers a literal
+        // "instance" or "path"; any other name reads "".
         .@"$simparam$str" => {
             // §9.15 param_name may be a string variable, so the lookup runs
             // at run time. §4.6.1's analysis names are the `AnalysisKind` tag
@@ -663,7 +664,17 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
             try self.b(", \"analysis_type\")) @tagName(sim.kind) else if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
-            return self.b(", \"module\")) \"{f}\" else \"\")", .{std.zig.fmtString(self.mir.name)});
+            try self.b(", \"module\")) \"{f}\" else ", .{std.zig.fmtString(self.mir.name)});
+            if (self.lowered.uses.contains(.host_strings)) {
+                self.uses.inst = true;
+                float_lanes.instPin(self);
+                for ([_][]const u8{ "cwd", "analysis_name" }) |field| {
+                    try self.b("if (std.mem.eql(u8, ", .{});
+                    try gen_render.renderValueRef(self, self.an.rv(args[0]));
+                    try self.b(", \"{s}\")) inst.{s} else ", .{ field, field });
+                }
+            }
+            return self.b("\"\")", .{});
         },
         // §9.19 $param_given / $port_connected.
         .@"$param_given" => {
