@@ -48,6 +48,7 @@
 //
 // OBSERVED TODAY: error[E0402]: `disable` is not implemented.
 //
+//! inherited IEEE 1364-2005 10.3
 //! lrm 5.3
 //! lrm 5.10.2
 //! lrm 6.7

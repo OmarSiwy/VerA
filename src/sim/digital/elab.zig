@@ -8,7 +8,7 @@
 //! parameters and defparams, §6.5/§6.5.7.1 ports, §7.1, §7.6 and §7.8 gates,
 //! switches and pulls, §8 UDPs, §10 subroutine frames, §12.1.2 instance
 //! arrays, §12.3 port connections, §12.4 generate, §12.5 named blocks,
-//! §12.8.2, §19.10 unconnected_drive; VAMS §3.7 wreal, §6.3 the host's
+//! §12.8.2, §19.9 unconnected_drive; VAMS §3.7 wreal, §6.3 the host's
 //! parameters, §7.2 continuous and discrete, §7.8.4 inserted connect modules.
 const std = @import("std");
 const Front = @import("frontend");
@@ -369,7 +369,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             .lsb = try r.declaredBound(range.lsb, p.main_tok),
         });
         switch (bind) {
-            // IEEE 1364 §19.10: an unconnected input port declared in an
+            // IEEE 1364 §19.9: an unconnected input port declared in an
             // `unconnected_drive` region is pulled to a logic level through a
             // pull-strength driver: one driver among drivers, meeting the net's
             // own type in §7.9 resolution. The analog half
@@ -2017,7 +2017,7 @@ test "§4.5 an implicit net is of the default net type; `default_nettype none ma
     , "undeclared");
 }
 
-test "§19.10 unconnected_drive pulls an open input port and loses to a stronger driver" {
+test "§19.9 unconnected_drive pulls an open input port and loses to a stronger driver" {
     try expectRun(
         \\`timescale 1ns/1ps
         \\`unconnected_drive pull1
@@ -2036,7 +2036,7 @@ test "§19.10 unconnected_drive pulls an open input port and loses to a stronger
     , "open=1 driven=0\n");
 }
 
-test "§19.10 nounconnected_drive leaves an open input port floating" {
+test "§19.9 nounconnected_drive leaves an open input port floating" {
     try expectRun(
         \\`timescale 1ns/1ps
         \\module child(a);

@@ -1,5 +1,5 @@
 // §10.1 hands `resetall, `nounconnected_drive, `endcelldefine and
-// `celldefine to IEEE 1364, and none of them takes an operand (§19.6, §19.10,
+// `celldefine to IEEE 1364, and none of them takes an operand (§19.6, §19.9,
 // §19.1): the directive is the word. 1364 restricts the rest of the line only
 // where it says so — §19.5: "Only white space or a comment may appear on the
 // same line as the `include compiler directive." — and it says nothing of the

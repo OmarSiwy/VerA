@@ -1,4 +1,4 @@
-// §9.14 Table 9-11 lists $expm1 and makes it an alias of the §4.3.1 operator.
+// §9.2 Table 9-11 lists $expm1 and §9.14 makes it an alias of the §4.3.1 operator.
 // Table 4-14: "$expm1(x) ... C expm1 ... Exponential minus 1", all x. §4.3.1
 // adds "For small magnitude values of x, expm1(x) can be more accurate than
 // exp(x)-1".
@@ -16,6 +16,7 @@
 //   tighter than that gap.
 //
 //! bias V(p) = 0.5
+//! lrm 9.2
 //! lrm 9.14
 //! lrm 4.3.1
 `include "check.vh"

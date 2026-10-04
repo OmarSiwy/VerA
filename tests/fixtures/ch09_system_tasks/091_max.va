@@ -1,4 +1,4 @@
-// §9.14 Table 9-11 lists $max among the math system functions, and §9.14 says
+// §9.2 Table 9-11 lists $max among the math system functions, and §9.14 says
 // every one of them except $clog2 is an ALIAS of the analog math operator of
 // §4.3.1. Table 4-14 gives $max(x,y) the C function fmax, and §4.3.1 pins the
 // value at the discontinuity exactly: "max(x,y) is equivalent to (x > y) ? x : y".
@@ -8,6 +8,7 @@
 // both sides of the same selection rule at one operating point. Both are exact:
 // max returns one of its operands unmodified, never a blend of them.
 //
+//! lrm 9.2
 //! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
