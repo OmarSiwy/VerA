@@ -542,6 +542,10 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     // Visible to `queueDisplay`'s snapshot while the body lowers.
     try self.active_genvars.append(self.arena, gv);
     defer _ = self.active_genvars.pop();
+    // §5.11: a `break`/`continue` that reaches this loop first is E0440.
+    const saved_base = self.analog_for_base;
+    self.analog_for_base = self.loops.items.len;
+    defer self.analog_for_base = saved_base;
 
     var n: u32 = 0;
     while (n < max_unroll) : (n += 1) {

@@ -240,11 +240,13 @@ pub fn inlineUserFuncPre(
     // `break` outside the body's own loops would exit the loop around the call site.
     // With the stack empty, `lowerJump` reports §5.11's E0404 as for a module-level `break`.
     const saved_loops = self.loops;
+    const saved_af = self.analog_for_base;
     const saved_func_params = self.func_params;
     const log_mark = self.scope_log.items.len;
     self.vars = .empty;
     self.arrays = .empty;
     self.loops = .empty;
+    self.analog_for_base = null;
     self.restrict = "an analog function";
     try self.inlining.append(self.arena, name);
 
@@ -363,6 +365,7 @@ pub fn inlineUserFuncPre(
     self.func_params = saved_func_params;
     self.loops.deinit(self.arena);
     self.loops = saved_loops;
+    self.analog_for_base = saved_af;
     // Undo in reverse, so a name touched twice ends at its first `prev`.
     while (shadowed.pop()) |sh| {
         if (sh.prev) |c| try self.consts.put(self.arena, sh.name, c) else _ = self.consts.remove(sh.name);

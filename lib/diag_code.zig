@@ -264,6 +264,7 @@ pub const Code = enum(u16) {
     E0437,
     E0438,
     E0439,
+    E0440,
     E0477,
 
     // ---------------------------------------------------------------- class 5
@@ -3760,6 +3761,20 @@ fn infoOf(c: Code) Info {
             \\the two analog blocks, so which kind wins is not defined, and the
             \\clause forbids it. Contribute the same access function the owning
             \\module does, or move the decision into that module.
+            ,
+        },
+        .E0440 => .{
+            .title = "`break` or `continue` inside an analog for loop",
+            .lrm = "5.11",
+            .explain =
+            \\LRM 5.11: "The continue and break statements cannot be used inside
+            \\an analog for loop. Refer 5.9.3." An analog_for's genvar control is
+            \\unrolled at elaboration, so there is no runtime iteration for the
+            \\jump to leave or skip.
+            \\
+            \\Nest a procedural `for` (5.9.2) on an integer variable inside the
+            \\analog_for and jump out of that, or move the condition into an
+            \\`if` around the rest of the body.
             ,
         },
         .E0477 => .{
