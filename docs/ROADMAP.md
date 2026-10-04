@@ -244,10 +244,9 @@ These need a call, not another agent pass.
    implemented: the last wins with W1152 in both engines (Vague_Decisions VD-009).
 10. **§5.6.1.3 / A.6.5: a disabled block's contributions already made.** VerA
     keeps them. Nothing decides or pins it. (`a03_SPEC.md:170-177`.)
-11. **§3.4.5 vs §6.3.3: is `#(.locked())` on a localparam an error?** VerA gives
-    E0907. The only record is
-    `tools/parameter-audit-controls/empty_localparam_unresolved.va` at `be878e6e`.
-    (`conformance-empty-parameter-fix.md:184-191`.)
+11. **§3.4.5 vs §6.3.3: `#(.locked())` on a localparam.** Decided: E0907
+    (Vague_Decisions VD-011), pinned by
+    `ch03_data_types/reject_localparam_empty_named_override.va`.
 12. **§E.1.2: which SPICE flavour VerA claims** (`PARAMS:`, `{expr}`, nested
     `.SUBCKT`). Only parse limits are recorded, in `lib/frontend/spice_cards.zig`.
     (`h04_SPEC.md:116-119`.)

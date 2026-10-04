@@ -52,7 +52,7 @@ correction.
 | VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | DONE |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
-| VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
+| VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | DONE |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
@@ -235,6 +235,7 @@ correction.
 - **Decision**: `DECIDED:` (b), E0907. Both standards keep localparams out of the parameter value assignment lists entirely (1364 12.2.2.1 says they "are not considered part of the ordered list"). The name list in 6.3.3 names the instantiated module's overridable parameters. Rejecting the name keeps a later edit to `.locked(3)` from becoming the first moment the error appears, and the rejection is also the portable choice.
 - **VerA today**: matches. `lib/ir/elaborate/override.zig:176-178` refuses a localparam by name before the empty-value check (`:259-263`, "Validate the name/localparam above even when no value is given"). No fixture pins the empty form: `ch03_data_types/audit_localparam_override_rejected.va` gives a value. CHANGE NEEDED: add `reject_localparam_empty_named_override.va` (`//! reject E0907`) next to a legal `#(.p())` on a plain parameter. Patch.
 - **Measure impact**: A (+1), C (3.4.5 refusal paired with its legal neighbour).
+- **Status**: DONE. `ch03_data_types/reject_localparam_empty_named_override.va`.
 
 ### VD-012: Which SPICE flavour VerA claims
 - **Source**: ROADMAP §5.1 item 12; `h04_SPEC.md:116-119` at 8b1514d4; IMPLEMENTATION §1 row "AMS E.1, E.2".
