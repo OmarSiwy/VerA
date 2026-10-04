@@ -1,18 +1,18 @@
 # Every suite, every run, all of it into the job summary.
 #
-# This job REPORTS; it does not gate on the conformance number. Until v1.0.0
-# that number is a progress meter, and AGENTS.md §0 rule 3 is the reason:
-# "diff FAIL name lists, not counts" — a count can stay still while
-# the membership changes. So the FAIL/XFAIL name list is uploaded as an
-# artifact, and a reviewer diffs it against the previous run.
+# Measures A, B and C read 100% at 3de6b009 (2026-10-04, measured under
+# `nix develop`): 2189/2189 fixtures, 0 FAIL/unasserted/XFAIL; 612/612 LRM
+# clauses and 808/808 IEEE 1364 clauses cited both ways or classified. So the
+# suites GATE now: a change that drops any of them is a failed change.
+# AGENTS.md §0 rule 3 still holds for reading a failure: the FAIL/XFAIL name
+# list is uploaded as an artifact, diff names, not counts.
 #
-# What DOES gate: `zig build test`. That one is green today and breaking it is a
-# failed change, not a tradeoff (TODO.md §4 rule 1).
+# Only the sweep and the audit-tool self-tests report without gating.
 name: bench
 
 on:
   push:
-    branches: [main, ddt-capform]
+    branches: [main, zig-0.17]
   pull_request:
   workflow_dispatch:
 
@@ -49,24 +49,44 @@ jobs:
       # Verdict prose (`FAIL <path>: why`) goes to stderr and the TSV tables go
       # to stdout, so both streams are merged into one log — conformance.py
       # parses the TSV and the name list below comes from the prose.
-      - name: Verilog-AMS suite — every fixture, strict
-        continue-on-error: true
+      - name: Verilog-AMS suite — every fixture, strict (measure A)
         run: |
           zig build test-ams 2>&1 | tee /tmp/strict.txt
-          echo "strict exit: ${PIPESTATUS[0]}" >> /tmp/strict.txt
-          tail -1 /tmp/strict.txt
+          rc=${PIPESTATUS[0]}
+          echo "strict exit: $rc" >> /tmp/strict.txt
+          exit "$rc"
 
-      - name: Clause citations — static inventory
-        continue-on-error: true
-        run: zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
+      # B and C: no clause may be one-way or uncited. The tool prints the tally
+      # and exits 0 either way, so the gate reads the tally line.
+      - name: LRM clause coverage (measure C)
+        if: always()
+        run: |
+          zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
+          [ "${PIPESTATUS[0]}" = 0 ] || exit 1
+          grep -q ' 0 positive citations only · 0 rejection citations only · 0 uncited ' /tmp/coverage.txt
+
+      - name: IEEE 1364-2005 clause coverage (measure B)
+        if: always()
+        run: |
+          zig build test-1364 -- --coverage 2>&1 | tee /tmp/coverage1364.txt
+          [ "${PIPESTATUS[0]}" = 0 ] || exit 1
+          grep -q ' 0 positive citations only · 0 rejection citations only · 0 uncited ' /tmp/coverage1364.txt
 
       - name: IEEE 1364-2005 suite
-        continue-on-error: true
-        run: zig build test-1364 2>&1 | tee /tmp/ieee1364.txt
+        if: always()
+        run: |
+          zig build test-1364 2>&1 | tee /tmp/ieee1364.txt
+          exit "${PIPESTATUS[0]}"
 
       - name: Digital transcripts — 1364 plus the AMS digital-context cases
-        continue-on-error: true
-        run: zig build test-devices 2>&1 | tee /tmp/devices.txt
+        if: always()
+        run: |
+          zig build test-devices 2>&1 | tee /tmp/devices.txt
+          exit "${PIPESTATUS[0]}"
+
+      - name: VPI .c fixtures compile
+        if: always()
+        run: zig build test-vpi-fixtures
 
       # --sweep is the footprint and speed scaling table: generated-device byte
       # counts and MIR footprint against fixture size. It compiles nothing from
@@ -101,6 +121,8 @@ jobs:
             echo '```'; tail -40 /tmp/strict.txt; echo '```'
             echo '## Clause coverage'
             echo '```'; tail -6 /tmp/coverage.txt; echo '```'
+            echo '## IEEE 1364-2005 clause coverage'
+            echo '```'; tail -3 /tmp/coverage1364.txt; echo '```'
             echo '## IEEE 1364-2005 suite'
             echo '```'; tail -20 /tmp/ieee1364.txt; echo '```'
             echo '## Digital transcripts'
@@ -121,7 +143,39 @@ jobs:
             failing-names.txt
             /tmp/strict.txt
             /tmp/coverage.txt
+            /tmp/coverage1364.txt
             /tmp/ieee1364.txt
             /tmp/devices.txt
             /tmp/sweep.txt
             /tmp/source-audit.txt
+
+  # The consumer check ARPice asked for (2026-10-04): the device models it
+  # ships compile to a host-loadable .so through this tree's vera, and the
+  # contract ABI handshake (`contract.abi_version`, checked on every
+  # --emit-so) passes. ARPice pins a VerA sha; this job catches a break
+  # before ARPice re-pins onto it.
+  arpice-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [diode, mos1, bsim4va, psp103, vbic13_4t]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: OmarSiwy/ESPice
+          path: arpice
+          sparse-checkout: models
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build vera
+        run: zig build -Doptimize=ReleaseFast install
+      # The same no-op `dyn` module build.zig hands --emit-so for a .va device.
+      - name: Compile ${{ matrix.model }}.va to a .so
+        run: |
+          printf 'pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n' > dyn.zig
+          ./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn dyn.zig \
+            --work-dir out arpice/models/${{ matrix.model }}.va
