@@ -91,6 +91,9 @@ pub const Code = enum(u16) {
     // Out of scope (IEEE 1364-2005 §28) — preprocessor.zig.
     E0146,
     E0147,
+    // Lexical (LRM 2.7) — parser.zig's string-literal scan.
+    E0148,
+    W0149,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -754,9 +757,12 @@ fn infoOf(c: Code) Info {
             .title = "cannot find include file",
             .lrm = "10.3",
             .explain =
-            \\The named file was not found relative to the including file, in
-            \\any configured include directory, or among the built-in annex D
-            \\standard definitions (disciplines.vams, constants.vams).
+            \\The named file was not found. IEEE 1364-2005 19.5 lets the name be
+            \\"a full or relative path name" and says no more; VerA opens a full
+            \\path as written, and looks for a relative one in the directory of
+            \\the file that holds the `include, then in each -I directory in
+            \\order, then among the built-in annex D standard definitions
+            \\(disciplines.vams, constants.vams).
             \\
             \\Note that annex D headers are built in: including them works
             \\with no search path configured at all.
@@ -1089,6 +1095,35 @@ fn infoOf(c: Code) Info {
             \\directive." A `pragma with nothing after it on its line names no
             \\pragma, so it is not the unrecognized pragma 19.10 lets a tool
             \\ignore. Write the pragma's name, or delete the directive.
+            ,
+        },
+        .E0148 => .{
+            .title = "octal escape is above \\377",
+            .lrm = "2.7",
+            .explain =
+            \\LRM 2.7 Table 2-2 (and IEEE 1364-2005 3.6.3) lets \ddd name "A
+            \\character specified in 1-3 octal digits", and adds:
+            \\"Implementations may issue an error if the character represented
+            \\is greater than \377." VerA does. A string holds 8-bit bytes, and
+            \\\400 through \777 name none, so any byte VerA picked would be its
+            \\own invention, and another tool may refuse the escape outright.
+            \\
+            \\Write the byte you mean: \377 is the largest, and "\477" was
+            \\probably "\47" followed by the character 7.
+            ,
+        },
+        .W0149 => .{
+            .title = "escape is not in Table 2-2",
+            .lrm = "2.7",
+            .explain =
+            \\LRM 2.7 Table 2-2 (and IEEE 1364-2005 3.6.3) defines five escapes
+            \\in a string: \n, \t, \\, \" and \ddd. Neither standard says what
+            \\a backslash before any other character means. VerA keeps the
+            \\character and drops the backslash, so "\q" is "q" and "\%" is
+            \\"%", the C-family convention. Another tool may keep both bytes or
+            \\refuse the literal, so the string is not portable.
+            \\
+            \\Write the character without the backslash, or \\ for a backslash.
             ,
         },
 

@@ -34,9 +34,10 @@ How to read an entry:
 - **Measure impact** names the measures (A, B or C, AGENTS.md §2) the change
   would move. No count is given, because counts are measured, not typed.
 
-This document changes no code and no fixture. 51 of the 90
-entries need a change. Those marked `yes (doc)` need only a document
-correction.
+As first written, this document changed no code and no fixture, and 51 of
+its 90 entries needed a change. Those marked `yes (doc)` need only a document
+correction. An entry that has since been implemented says `DONE` in the
+summary and has a **Status** line naming what landed.
 
 ## Summary
 
@@ -55,7 +56,7 @@ correction.
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
-| VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | yes |
+| VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE (9d434792) |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
 | VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | DONE (73d3f9dd) |
@@ -65,7 +66,7 @@ correction.
 | VD-021 | VAMS 2.7, A.8.8, G change 2535 | A string stays on one line; a raw newline or continuation is E0138 | no |
 | VD-022 | VAMS 2.3, 2.7 Table 2-2 | A raw TAB in a string is legal and is byte 9 | no |
 | VD-023 | VAMS 2.9.2 (`op`) | An absent `op` means included; only `"no"` excludes | no |
-| VD-024 | VAMS 2.9 Syntax 2-4, A.9.1, Annex B | Only `units` is exempt as a keyword attribute name; other keywords are refused | yes |
+| VD-024 | VAMS 2.9 Syntax 2-4, A.9.1, Annex B | Only `units` is exempt as a keyword attribute name; other keywords are refused | DONE (8a677e04) |
 | VD-025 | VAMS 3.4; IEEE 1364-2005 4.10.1 | "Previously defined" means textual order; a forward reference is E0314 | no |
 | VD-026 | VAMS 4.3.1 Table 4-14 | `min`/`max` use the conditional form for value and derivative, folding included | DONE (107333b2) |
 | VD-027 | VAMS 8.2 vs 8.4.1 | Nodeset vs `analog initial` order is unobservable; follow 8.2, assert neither | no |
@@ -77,14 +78,14 @@ correction.
 | VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | DONE (4b6c96d8) |
 | VD-034 | VAMS 5.10 Syntax 5-13, 5.10.5, 7.3.6.2 | `posedge`/`negedge` on a continuous operand is E0704; use `cross` | no |
 | VD-035 | VAMS 3.3 vs A.2.1.3/A.2.8 | A module-level `string` variable is legal (3.3 governs) | no |
-| VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | yes |
+| VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | DONE (dac6eb2b) |
 | VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | DONE (4b6c96d8) |
 | VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | DONE (4b6c96d8) |
 | VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
 | VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | yes |
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | DONE (4b6c96d8) |
-| VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | yes |
+| VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | DONE (ead894ee) |
 | VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | yes |
 | VD-045 | IEEE 1364-2005 26.3.5 vs Annex G | `vpiIsProtected` = `vpiProtected` (10), FALSE on every object | yes |
 | VD-046 | IEEE 1364-2005 26.6.40(c) vs VAMS 11.6.25 note 5 | Current queue listed iff a pending event precedes read-only sync | yes |
@@ -94,7 +95,7 @@ correction.
 | VD-050 | IEEE 1364-2005 17.6.5, 17.6.6 | Unknown `q_stat_code`: constant refused; run time gives status 2, value unchanged | yes |
 | VD-051 | IEEE 1364-2005 17.6.5 | Code 3 is the observed peak length | yes |
 | VD-052 | IEEE 1364-2005 17.6.5, 3.5.3 | Means are rounded to nearest (real-to-integer rule), not truncated | yes |
-| VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | yes |
+| VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | DONE (35e427ed) |
 | VD-054 | VAMS 2.8 | No identifier length limit | no |
 | VD-055 | VAMS 4.2.4 | Integer % by zero: E0601 at compile time if provable, runtime report or trap otherwise | no |
 | VD-056 | VAMS 4.2.4 | Real % by a runtime zero reports E0601 like the integer path, not NaN | DONE (86e06853) |
@@ -130,8 +131,9 @@ correction.
 | VD-086 | IEEE 1364-2005 17.9.1 | One hidden per-run seed from 0 for seedless digital `$random` | no |
 | VD-087 | IEEE 1364-2005 19.8 | No `timescale: 1 s / 1 s | no |
 | VD-088 | IEEE 1364-2005 5.2.2, 4.8.2 | Invalid real-array read gives +0.0 | no |
-| VD-089 | IEEE 1364-2005 17.11.1, 4.10.1; VAMS 9.14 | Host number is an unsized integer for `$clog2` unless a range/type fixes width | yes |
+| VD-089 | IEEE 1364-2005 17.11.1, 4.10.1; VAMS 9.14 | Host number is an unsized integer for `$clog2` unless a range/type fixes width | DONE (55e391ea) |
 | VD-090 | VAMS 9.18, 6.3.6, 3.4.7 | Top-level system parameter values via a top `aliasparam` card slot | no |
+| VD-091 | VAMS 10.1; IEEE 1364-2005 19.5 | A relative `` `include `` name is looked for beside the including file, then on `-I`, then among the annex D built-ins | DONE (dfd7e836) |
 
 ## 1. Open decisions (ROADMAP §5.1, CLAUSE-AUDIT §7.5)
 
@@ -262,6 +264,7 @@ correction.
 - **Decision**: `DECIDED:` (b). 1364 3.6 defines a string's value as its bytes, 8 bits each, so a byte above 0x7F has a well-defined value and length. Refusing would break real models that write unit strings like `"°C"` for no semantic gain. Decoding would contradict "one 8-bit ... value representing one character". `"°C"` is three characters to `len()`/`$strlen`-style operations. This is an implementation-defined choice and belongs in IMPLEMENTATION §1.
 - **VerA today**: accepted without a diagnostic (COVERAGE note). I found no fixture that asserts the value or length of a non-ASCII string. CHANGE NEEDED: an IMPLEMENTATION §1 row, and a fixture that asserts the byte count of `"°C"` is 3. Patch.
 - **Measure impact**: A (+1). C none, since it is implementation-defined.
+- **Status**: DONE (9d434792): `ch02_lexical/string_bytes_above_7f.va` pins `"°C"` as three bytes (0xC2B043); IMPLEMENTATION §1 row added.
 
 ### VD-015: `$limit(typ*V(a,k), ...)`
 - **Source**: ROADMAP §5.1 item 15 (found 2026-09-27).
@@ -355,6 +358,7 @@ correction.
 - **Decision**: `DECIDED:` (a). `units` is legal because 2.9.2 standardizes it and prints it unescaped. Nothing grants the same exception to any other keyword, and IEEE 1364-2005 A.9.1 gives the same `attr_name ::= identifier`. A keyword used as an attribute name is refused with a named diagnostic; the legal form is an escaped identifier (`(* \module = 1 *)`). This keeps VerA's accepted set inside what a 1364/1800 front end accepts.
 - **VerA today**: every keyword is accepted as an attribute name (`lib/frontend/parser.zig:580-585`: "every keyword is taken as a name"). CHANGE NEEDED: in `parseAttributes`, accept identifiers, escaped identifiers and `kw_units` only, and refuse any other keyword with E0208 (or a dedicated code) citing 2.9/A.9.1. Add a rejection fixture (`(* module *)`) with its legal neighbours (`(* \module *)`, `(* units = "V" *)`). Semver: minor (VerA newly refuses source).
 - **Measure impact**: A (+2 fixtures); C (2.9 gains a refusal with a legal neighbour).
+- **Status**: DONE (8a677e04): E0208 with a keyword note, `ch02_lexical/attribute_keyword_name_rejected.va`; legal neighbour `attribute_keyword_name_escaped.va` (`\module`, `units`).
 
 ### VD-025: Forward parameter references
 - **Source**: ROADMAP §5.6 bullet 4 (`conformance-parameter-core-ledger-review.md:43-45`).
@@ -466,6 +470,7 @@ correction.
 - **Decision**: `DECIDED:` (d). The source is lexically a string under A.8.8, so refusing it would reject models that write `"\%"` or similar by habit. Dropping the backslash is the C-family convention and keeps the literal's visible text. Since the meaning is VerA's choice and other tools may differ, a warning names it, so a portability hazard is never silent. What IEEE 1800, Icarus and VCS do with an undefined escape was not established here.
 - **VerA today**: (b) with no diagnostic (`lib/frontend/lexer.zig:551-556`, "undefined escapes pass through"). No fixture pins it, and IMPLEMENTATION §1 has no row. CHANGE NEEDED: add a named warning for an escape outside Table 2-2. Add `ch02_lexical/` fixture `//! warn <code>` with `CHECKI("\q", 113)`, and an IMPLEMENTATION §1 row. Semver: patch (warning only; acceptance and device text unchanged).
 - **Measure impact**: A (+1 fixture); none of B/C (implementation-defined, AGENTS.md: "a fixture here tests VerA's choice").
+- **Status**: DONE (dac6eb2b): W0149, `ch02_lexical/undefined_escape_keeps_character.va`; `08_string_escapes.va` (`//! nowarn`) is the neighbour that warns nothing.
 
 ## 3. Readings the standards leave open: IEEE 1364 and VPI (ROADMAP §5.6)
 
@@ -534,6 +539,7 @@ correction.
 - **Decision**: `DECIDED:` (b). 19.11 says "The `begin_keywords and `end_keywords directives only specify the set of identifiers that are reserved as keywords", and the reserved set holds "until the matching `end_keywords directive is encountered". A region closed only by its matching directive is not a directive setting with a "default value". Under (a), 19.6's recommended usage ("place `resetall at the beginning of each source text file") inside a `` `begin_keywords "1364-1995" `` region would break the pairing rule. VAMS 10.6 inherits this.
 - **VerA today**: The parser skips `` `resetall `` at file level (`lib/frontend/parser/source.zig:70`), and the keyword stack (`source.zig:64`, `keywordsDirective`) is untouched. That is the decision, but no fixture pins it. `CHANGE NEEDED:` add a positive fixture: `` `begin_keywords "1364-1995" `` / `` `resetall `` / a module using `uwire` (2005-only) as an identifier / `` `end_keywords ``, compiles. Fixture only, so a patch.
 - **Measure impact**: B: 19.6 and 19.11 (both `-`) gain a pinned interaction. A: +1 fixture.
+- **Status**: DONE (ead894ee): `ieee1364/19_compiler_directives/b_19_6_resetall_keeps_begin_keywords.v` (uwire under "1364-1995" across a `` `resetall ``); `b_19_11_uwire_in_2005_rejected.v` is the refusal it would hit.
 
 ### VD-044: Walking the design inside `vlog_startup_routines`
 - **Source**: ROADMAP §5.6, "IEEE 26.2.4 vs AMS 12.33.2" bullet (`conformance-ieee-vpi-interface-review.md:24-31` at 8b1514d4).
@@ -627,6 +633,7 @@ correction.
 - **VerA today**: `lib/frontend/lexer.zig:542-549` accumulates into a u16 and `@truncate`s with no diagnostic (the IMPLEMENTATION row cites 532-539, which is stale). `ch02_lexical/octal_escape_above_377_keeps_low_byte.va` pins the acceptance.
   `CHANGE NEEDED:` a new E01xx "octal escape above \377" diagnostic. Turn the fixture into `//! reject <code>` and add a `\377` legal neighbour. Update the IMPLEMENTATION row. **Minor**, because source that VerA accepted is now refused.
 - **Measure impact**: A (the fixture flips to a rejection and a neighbour is added). C: §2.7 gains a pinned invalid form.
+- **Status**: DONE (35e427ed): E0148, `ch02_lexical/octal_escape_above_377_rejected.va` and its neighbour `octal_escape_377_largest_byte.va`.
 
 ### VD-054: Identifier length limit
 - **Source**: IMPLEMENTATION §1 row "AMS 2.8"
@@ -949,9 +956,10 @@ correction.
 - **Rule**: IEEE 1364-2005 17.11.1 (VAMS 9.14 defers to it): "The argument shall be treated as an unsigned value." 4.10.1: "A parameter declaration with no type or range specification shall default to the type and range of the final value assigned to the parameter, after any value overrides have been applied."
 - **Why vague**: a host card value (a model-card number written into `Model` at run time) has no Verilog type or width, so 4.10.1's "range of the final value" has no answer for it, and `$clog2` of a value depends on the width it is viewed in only when that width truncates it.
 - **Options**: (a) keep the elaborated declaration's width (today: a 4-bit default truncates a host 255 to 15, `$clog2` = 4); (b) treat a host number as an unsized integer literal (3.5.1: at least 32 bits, signed), so the declaration's range applies only where 4.10.1 says overrides cannot change it (a declared range or `integer`).
-- **Decision**: `DECIDED:` (b). Under (a) the same parameter reads 255 in arithmetic and 15 in `$clog2`, a silent inconsistency no source text asks for; a host writing `knob = 255` means the number 255, which is exactly what an unsized decimal literal override means in HDL. A declared range (`parameter [3:0] p`) or type (`integer`) still fixes the width, because 4.10.1 says overrides do not change it.
+- **Decision**: `DECIDED:` (b), re-read against the text on 2026-10-04 after a second reading argued for (a). IEEE 1364-2005 12.2, the clause on overrides themselves: "A parameter declaration with no type or range specification shall default to the type and range of the final override value assigned to the parameter." Its 12.2.1 example says the same of an unranged `parameter B = 3'h2`: "when its value is redefined, the parameter type and range take on the type and range of the new value". 4.10.1 adds that such a parameter whose final value "is unsized shall have an implied range with an lsb equal to 0 and an msb equal to an implementation-dependent value of at least 31". VAMS 3.4.1 inherits this ("derived from the type of the final value assigned to the parameter, after any value overrides have been applied, as in IEEE Std 1364 Verilog"). Keeping the declaration's width under an override is what 12.2 gives only a ranged or typed-and-ranged parameter ("An override value shall be converted to the type and range of the parameter"), so (a) would treat `parameter knob = 4'd1` as if it were `parameter [3:0] knob`. The one step the text does not take for us is that a host card value is an override; it replaces the parameter's value the way VAMS 6.4's model card example (a SPICE `.model` turned into paramset overrides) does, so VerA treats it as one. A card value has no Verilog width, so it is unsized: 32 bits per 4.10.1's "at least 31", 64 when the value needs them. Under (a) the same parameter would also read 255 in arithmetic and 15 in `$clog2`. A declared range (`parameter [3:0] p`) or type (`integer`) still fixes the width, because 12.2 converts the override to it.
 - **VerA today**: (a): `lib/ir/lower/constfold.zig:180-186` `clog2Width`, `clog2Signed`; `ch09_system_tasks/clog2_inferred_parameter_width.va:35-43` asserts `$clog2(knob) == 4` for `parameter knob = 4'd1` with `//! param knob = 255`. `CHANGE NEEDED:` untyped, unranged parameters take a host value's `$clog2` width as 32 (64 when the value needs it); change that fixture's two `knob` checks to 8 with the derivation in its header, and add a ranged neighbour (`parameter [3:0] knob2`, host 255, `$clog2` = 4) to keep the truncating case pinned. Emitted device text changes: minor.
 - **Measure impact**: A (fixture expectation); C: VAMS 9.14 evidence becomes consistent with 1364 4.10.1.
+- **Status**: DONE (55e391ea): `lowerClog2` selects on `$param_given` between the declaration width and the card value's unsized width; `ch09_system_tasks/clog2_inferred_parameter_width.va` asserts 8 for `knob`, plus ranged (4), negative (32) and past-32-bit (33) card values, with an unset neighbour (4).
 
 ### VD-090: Top-level values of the hierarchical system parameters
 - **Source**: IMPLEMENTATION §1 row "none (host ABI)", geometric system parameters.
@@ -961,3 +969,13 @@ correction.
 - **Decision**: `DECIDED:` (c). It uses a construct 9.18 itself names ("can also be used as targets in parameter alias declarations"), costs nothing in devices that do not declare one, and is what a compact model author already writes (`aliasparam m = $mfactor`) to accept a netlist `m=`. Descendants keep the dependency so the 9.18 combination rules still apply below the top.
 - **VerA today**: `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam`; fixture `ch09_system_tasks/geometry_top_alias_host.va`. No change.
 - **Measure impact**: none.
+
+### VD-091: Where a relative `` `include `` file name is looked for
+- **Source**: ARPice's `psp103_nqs.va`, which does `` `include "psp103.va" `` with both files in one directory, failed with E0126 unless the build passed `-I` for that directory (the `arpice-models` CI job, `ae9633f1`).
+- **Rule**: VAMS 10.1 lists `` `include `` as "[IEEE Std 1364 Verilog]" and says nothing else about it (10.7 only adds that `` `__FILE__ `` is "the path by which a tool opened the file, not the short name specified in `include"). IEEE 1364-2005 19.5: "The filename can be a full or relative path name."
+- **Why vague**: neither standard says what a relative name is relative to: the tool's working directory, the including file's directory, the first source file's directory, or only user-given search paths. Nor does either standard define a search-path option.
+- **Options**: (a) only the `-I` directories (VerA before this entry); (b) the including file's directory first, then `-I`; (c) `-I` first, then the including file's directory; (d) the working directory first.
+- **Decision**: `DECIDED:` (b). The claim that mainstream tools search the including file's directory first could not be checked against any text available here: 1364-2005 19.5 and VAMS 10.1 are silent, IEEE 1800 was not available, and no other simulator was installed to try. It is therefore not used as the reason. The reasons are these. A model split across files in one directory, like `psp103_nqs.va` and `psp103.va`, should compile wherever the directory is copied, without a build flag that names its own location. A nested include inside a library directory should find its siblings whatever the top file's directory is. (b) is also how C's `#include "..."` behaves, so it is what a model author most likely expects. Looking beside the includer first means a header shipped next to a model wins over a same-named file elsewhere on `-I`, which (c) would invert. (d) makes the result depend on where the tool was started, which no source text can see. "The including file's directory" is per file: an included file's own includes look beside it, not beside the top file. A unit that is not a file (in-memory source) has no such directory. Annex D's built-in headers stay last, so a model's own `disciplines.vams` overrides them as before.
+- **VerA today**: before this entry, `lib/frontend/pp/directive.zig` `readInclude` tried only `opts.include_dirs`, then the built-ins, while E0126's `--explain` text already claimed the including file's directory was searched. Implemented in `readInclude`/`includerDir`; E0126's note lists the directories in search order. Semver: minor (source that VerA refused now compiles).
+- **Measure impact**: A (+2 fixtures). C: 10.1 / 1364 19.5 gain a positive fixture and a refusal neighbour for the search rule.
+- **Status**: DONE (dfd7e836): `ch10_directives/include_searches_the_including_files_directory.va` (a nested include found only beside its includer, and the includer's copy chosen over a `-I` copy), `include_including_dir_is_per_file_rejected.va` (E0126: the directory is per file); IMPLEMENTATION §1 row added.

@@ -133,6 +133,13 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
             // dependent default may call it over an overridable parameter.
             if (row.op == .call) {
                 const d = self.mir.instData(inst).call;
+                // `lowerClog2` asks whether the card set a parameter (VD-089).
+                if (d.callee == .@"$param_given") {
+                    const def = if (d.args.len > 0) self.mir.valueDef(self.an.rv(d.args[0])) else Mir.Def.undef;
+                    if (def != .param_ref) return "@as(i64, 0)";
+                    self.uses.model = true;
+                    return try self.arena.print("@as(i64, @intFromBool(model.{s}__given))", .{self.names.p_names[def.param_ref]});
+                }
                 if (d.callee != .@"$clog2") return null;
                 const a = try i64Const(self, d.args[0], depth + 1) orelse return null;
                 const width = try i64Const(self, d.args[1], depth + 1) orelse return null;
