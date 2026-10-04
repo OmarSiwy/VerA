@@ -239,6 +239,9 @@ had_error: bool = false,
 access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
+/// §5.4.1 each instance's share of an unnamed-branch contribution row
+/// (`lower_contrib.unitAccum`), keyed by the row and the owning unit.
+unit_accum: std.AutoHashMapUnmanaged(struct { row: u32, unit: u32 }, Accum) = .empty,
 /// Every scalar `reg` with a constant packed range, by the name in `vars`.
 reg_ranges: std.StringHashMapUnmanaged(RegRange) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
