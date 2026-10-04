@@ -134,7 +134,9 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
 }
 
 /// §2.7 Table 2-2 over every string literal still to be parsed, wherever the
-/// grammar later takes it: an octal escape above `\377` is E0148.
+/// grammar later takes it: an octal escape above `\377` is E0148, and an
+/// escape the table does not list warns W0149 (`stringContents` keeps the
+/// character and drops the backslash).
 fn checkEscapes(self: *Parser) error{OutOfMemory}!void {
     for (self.tags[self.pos..], self.pos..) |tag, tok| {
         if (tag != .string_literal) continue;
@@ -143,8 +145,8 @@ fn checkEscapes(self: *Parser) error{OutOfMemory}!void {
         var from: u32 = 0;
         while (lexer.badEscape(text, from)) |b| : (from = b.end) {
             const at: diag.Span = .{ .start = span.start + b.start, .end = span.start + b.end };
-            self.failed = true;
-            try self.bag.add(.parse, .E0148, at, "`{s}`", .{text[b.start..b.end]});
+            if (b.above_377) self.failed = true;
+            try self.bag.add(.parse, if (b.above_377) .E0148 else .W0149, at, "`{s}`", .{text[b.start..b.end]});
         }
     }
 }

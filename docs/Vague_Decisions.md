@@ -77,7 +77,7 @@ correction.
 | VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | yes |
 | VD-034 | VAMS 5.10 Syntax 5-13, 5.10.5, 7.3.6.2 | `posedge`/`negedge` on a continuous operand is E0704; use `cross` | no |
 | VD-035 | VAMS 3.3 vs A.2.1.3/A.2.8 | A module-level `string` variable is legal (3.3 governs) | no |
-| VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | yes |
+| VD-036 | VAMS 2.7 Table 2-2; IEEE 1364-2005 3.6.3 | An undefined escape keeps the character and drops the backslash, with a named warning | DONE |
 | VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | yes |
 | VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | yes |
 | VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
@@ -460,6 +460,7 @@ correction.
 - **Decision**: `DECIDED:` (d). The source is lexically a string under A.8.8, so refusing it would reject models that write `"\%"` or similar by habit. Dropping the backslash is the C-family convention and keeps the literal's visible text. Since the meaning is VerA's choice and other tools may differ, a warning names it, so a portability hazard is never silent. What IEEE 1800, Icarus and VCS do with an undefined escape was not established here.
 - **VerA today**: (b) with no diagnostic (`lib/frontend/lexer.zig:551-556`, "undefined escapes pass through"). No fixture pins it, and IMPLEMENTATION §1 has no row. CHANGE NEEDED: add a named warning for an escape outside Table 2-2. Add `ch02_lexical/` fixture `//! warn <code>` with `CHECKI("\q", 113)`, and an IMPLEMENTATION §1 row. Semver: patch (warning only; acceptance and device text unchanged).
 - **Measure impact**: A (+1 fixture); none of B/C (implementation-defined, AGENTS.md: "a fixture here tests VerA's choice").
+- **Status**: DONE: W0149, `ch02_lexical/undefined_escape_keeps_character.va`; `08_string_escapes.va` (`//! nowarn`) is the neighbour that warns nothing.
 
 ## 3. Readings the standards leave open: IEEE 1364 and VPI (ROADMAP §5.6)
 
