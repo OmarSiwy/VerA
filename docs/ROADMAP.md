@@ -308,7 +308,6 @@ native compilation backlog separately from passing interpreter behavior.
 |---|---|---|
 | AMS 4.2.4 | Integer `%` with a probe-dependent divisor is refused (E0601). | `conformance-expressions.md:77-79` |
 | AMS 7.3.1 | A legal 31-bit select that reaches above bit 31 of a wider `reg` is refused (E0329): the analog context holds a `reg` as a 32-bit integer. Selects within bits 0-31 run (`discrete_bus_part_select_31.va`). | `conformance-mixed-signal.md:206-210` |
-| AMS 3.6.3.2 | A hierarchical nodeset (`electrical top.foo.w = 2.75;`) is ignored without a diagnostic. | `a08_nodeset_SPEC.md:264-269`; found 2026-09-27 |
 | AMS 4.6.4.3, A.8.2 | `noise_table` on a parameter slice (`tbl[0:3]`) is refused (E0329). | `a06_SPEC.md:250-252` |
 | AMS 4.6.4 | `real w = white_noise(...)` as a declaration initializer exports no noise generator. The assignment form does. | `ch04_expressions/COVERAGE.md:108` |
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |

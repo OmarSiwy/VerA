@@ -5,6 +5,7 @@
 //! §7.4.4.1, §7.4.4.3, §7.6, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3, §7.8, Annex F.2.1.
 
 const std = @import("std");
+const elab_clone = @import("clone.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
@@ -88,6 +89,43 @@ pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u
             continue;
         }
         try self.ooc.put(self.ctx.arena, key, n.discipline);
+        if (n.init != .none) try self.ooc_inits.append(self.ctx.arena, .{
+            .key = key,
+            .depth = path.len,
+            .init = try elab_clone.cloneExpr(self, n.init),
+        });
+    }
+}
+
+/// An out-of-context declaration's initializer: the segment it names
+/// (`collectOoc`'s key), how deep its declaring module sits (its path's
+/// length), and the initializer in flat names.
+pub const OocInit = struct { key: []const u8, depth: usize, init: Ast.ExprId };
+
+/// §3.6.3.2: "If different nets of a node have conflicting initializers, then
+/// initializers on hierarchical net declarations win. If there are multiple
+/// hierarchical declarations, then the declaration on the highest level
+/// wins." A segment's flat net is the port binding's (`names`) or, for an
+/// internal net, the key itself (`sep` is the path separator). The first
+/// declaration at the shallowest level wins: §3.6.3.2 makes a tie a race,
+/// and `collectOoc` order is the walk's.
+pub fn applyOocInits(self: *Flatten) Error!void {
+    for (self.ooc_inits.items, 0..) |o, i| {
+        const flat = self.names.get(o.key) orelse o.key;
+        const beaten = for (self.ooc_inits.items, 0..) |q, j| {
+            if (j == i) continue;
+            if (!std.mem.eql(u8, self.names.get(q.key) orelse q.key, flat)) continue;
+            if (q.depth < o.depth or (q.depth == o.depth and j < i)) break true;
+        } else false;
+        if (beaten) continue;
+        const name = try self.ctx.file.intern(self.ctx.arena, flat);
+        var found = false;
+        for (self.nets.items) |*n| if (n.name == name) {
+            n.init = o.init;
+            found = true;
+        };
+        // An undeclared (implicit) net has no declaration to carry it.
+        if (!found) try addNet(self, .{ .name = name, .init = o.init, .main_tok = self.ctx.file.exprs.mainTok(o.init) });
     }
 }
 

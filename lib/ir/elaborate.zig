@@ -513,6 +513,11 @@ pub const Flatten = struct {
     /// electrical top.middle.bottom.sig; overrides any discipline which may be
     /// declared for sig in the module where sig was declared."
     ooc: std.StringHashMapUnmanaged(Ast.StrId) = .empty,
+    /// §3.6.3.2's nodeset on an out-of-context declaration
+    /// (`electrical u.w = 2.75;`), in `collectOoc` order (top-down), with the
+    /// initializer cloned in the declaring module's namespace. Applied after
+    /// the walk by `resolve.applyOocInits`.
+    ooc_inits: std.ArrayList(elab_resolve.OocInit) = .empty,
 
     /// The rename map in force while cloning the current unit's body, plus the
     /// per-instance rewrites §9.19 and §9.18 need. `inlineInstance` saves and
@@ -667,6 +672,7 @@ pub const Flatten = struct {
         // walk collected. After the walk because 4.b matches the complete
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
+        try elab_resolve.applyOocInits(self); // §3.6.3.2 hierarchical nodesets
         try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
 
         // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
