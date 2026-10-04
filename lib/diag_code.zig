@@ -141,6 +141,11 @@ pub const Code = enum(u16) {
     E0245,
     E0246,
     E0247,
+    E0248,
+    E0249,
+    E0254,
+    E0255,
+    E0256,
     E0296,
     W0250,
     W0251,
@@ -1780,6 +1785,76 @@ fn infoOf(c: Code) Info {
             \\a five-microsecond delay is #5000 or #5e3, never #5u.
             ,
         },
+        .E0248 => .{
+            .title = "a procedural continuous assignment in an analog block",
+            .lrm = "A.6.2",
+            .explain =
+            \\A.6.2 `procedural_continuous_assignments` (`assign`, `deassign`,
+            \\`force`, `release`; IEEE 1364-2005 9.3) is an alternative of the
+            \\digital A.6.4 `statement` only. None of the eleven alternatives of
+            \\`analog_statement` derives it: an analog variable has no driver for
+            \\a continuous assignment to override.
+            \\
+            \\Use an ordinary procedural assignment (`x = 1.0;`), or move the
+            \\statement into an `initial` or `always` block, where it is legal.
+            ,
+        },
+        .E0249 => .{
+            .title = "a fork-join block in an analog block",
+            .lrm = "A.6.3",
+            .explain =
+            \\A.6.3 `par_block ::= fork ... join` is an alternative of the
+            \\digital A.6.4 `statement`. `analog_statement` offers only
+            \\`analog_seq_block` (begin/end) in that slot: the analog block is
+            \\one ordered evaluation (5.2), with no concurrent processes for a
+            \\fork to start.
+            \\
+            \\Use `begin ... end`, or move the block into an `initial` or
+            \\`always` block.
+            ,
+        },
+        .E0254 => .{
+            .title = "a delay control in an analog block",
+            .lrm = "A.6.5",
+            .explain =
+            \\A.6.5 `delay_control ::= # delay_value | # ( mintypmax_expression )`
+            \\reaches A.6.4 only through the digital `statement`'s
+            \\`procedural_timing_control_statement`. `analog_statement` derives
+            \\no `#`: analog time advances by the solver's step control (5.2),
+            \\not by a delay in the statement stream.
+            \\
+            \\Schedule the change with `@(timer(t))` (5.10.3.3), shape it with
+            \\`transition` or `absdelay`, or move the statement into an
+            \\`initial` or `always` block.
+            ,
+        },
+        .E0255 => .{
+            .title = "a wait statement in an analog block",
+            .lrm = "A.6.5",
+            .explain =
+            \\A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`
+            \\is a `procedural_timing_control_statement`, which A.6.4 lists under
+            \\the digital `statement` only. The analog block is evaluated at every
+            \\solution point (5.2) and has no thread to suspend on a level.
+            \\
+            \\Detect the condition with `@(cross(...))` or `@(above(...))`
+            \\(5.10.3), or move the statement into an `always` block.
+            ,
+        },
+        .E0256 => .{
+            .title = "a forever loop in an analog block",
+            .lrm = "A.6.8",
+            .explain =
+            \\A.6.8's `analog_loop_statement` is `repeat | while | for`; only the
+            \\digital `loop_statement` has `forever`, and A.6.4's
+            \\`analog_statement` never reaches it. Annex G.2.1 records the
+            \\retirement: "This statement is no longer supported."
+            \\
+            \\The analog block already runs at every solution point (5.2), so
+            \\write its body without the loop. In an `initial` or `always`
+            \\block `forever` is legal (IEEE 1364-2005 9.6).
+            ,
+        },
         .E0245 => .{
             .title = "a specify block breaks a clause 14 rule",
             .lrm = "IEEE 1364-2005 14.2",
@@ -1910,7 +1985,7 @@ fn infoOf(c: Code) Info {
             \\
             \\    initial forever #5 clk = ~clk;
             \\
-            \\The analog `forever` is a different error (E0209): annex G.2.1
+            \\The analog `forever` is a different error (E0256): annex G.2.1
             \\retired it, and A.6.8's `analog_loop_statement` has no forever arm.
             ,
         },

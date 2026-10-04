@@ -17,21 +17,17 @@
 // clause: the file pair is what separates "the analog grammar has three loop
 // forms" from "the digital grammar has four".
 //
-// The refusal is CORRECT and the diagnostic is not: VerA reports E0209 "expected
-// an expression: found `forever`", which is the parser's generic complaint and
-// not a considered statement that a digital loop has no analog form (the same
-// E0209 that tests/fixtures/annex_a_syntax/COVERAGE.md at 8b1514d4's rejection section calls out for `force`, `fork`,
-// `wait` and `#5`). The fixture pins the code that fires today; a better
-// diagnostic should name the rule.
+// E0256 names that rule (A.6.8, with annex G.2.1's retirement in its
+// explanation). Until 2026-10 the refusal came from the parser's generic E0209
+// "expected an expression: found `forever`", the right verdict for no stated
+// reason.
 //
-// A `forever` in DIGITAL context — inside an `initial` or `always` — is the
-// legal use of the same keyword and has no fixture here: VerA refuses `always`
-// and `initial` at the module-item dispatch (probe: E0205 "unsupported module
-// item: found always"), which is the A.6.2 row's gap and not this clause's.
+// A `forever` in DIGITAL context, inside an `initial` block, is the legal use of
+// the same keyword: 63_digital_statements_in_initial.va runs one.
 //
 //! lrm A.6.8
 //! lrm A.6.4
-//! reject E0209
+//! reject E0256
 `include "check.vh"
 module annex_a_forever_rejected(p, n);
     inout p, n;
