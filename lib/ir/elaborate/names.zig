@@ -116,7 +116,8 @@ pub fn netRefName(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
 }
 
 /// Returns the module `name` denotes, or null. Lookup order: user modules,
-/// then the shipped Annex E prelude, since E.3.3 selects "a module or
+/// the LAST of several same-named ones (IEEE 1364-2005 §13.2.1.1, see
+/// `warnRedefinedModules`), then the shipped Annex E prelude, since E.3.3 selects "a module or
 /// paramset defined in the Verilog-AMS ... in favor of a SPICE primitive,
 /// model, or subcircuit using exactly the same name". Last, E.2.1: "if no
 /// exact match is found, the mixed-case name shall match the same name
@@ -129,7 +130,12 @@ pub fn netRefName(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
 /// Table E.1 primitive alone is not issued. Two SPICE objects of the same
 /// name resolve primitive-first; Annex E does not order them.
 pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
-    for (self.ctx.file.userModules()) |*m| if (m.name == name) return m;
+    const user = self.ctx.file.userModules();
+    var i = user.len;
+    while (i > 0) {
+        i -= 1;
+        if (user[i].name == name) return &user[i];
+    }
     for (self.ctx.file.paramsets) |ps| if (ps.name == name) return null;
     for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*m| {
         if (m.name == name) return m;
@@ -139,6 +145,22 @@ pub fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
         if (std.ascii.eqlIgnoreCase(self.ctx.file.str(m.name), want)) return m;
     }
     return null;
+}
+
+/// IEEE 1364-2005 §13.2.1.1: "If multiple cells with the same name map to
+/// the same library, then the LAST cell encountered shall be written to the
+/// library" and "a warning message shall be issued" (W1152). §4.11's ban on
+/// reusing a module name predates libraries; the digital binder reads it the
+/// same way (`src/sim/digital/bind.zig` `libraries`), so one design
+/// elaborates alike in both engines. `findModule` and `pickTop` take the
+/// last definition.
+pub fn warnRedefinedModules(self: *Flatten) Error!void {
+    const user = self.ctx.file.userModules();
+    for (user, 0..) |m, i| for (user[i + 1 ..]) |later| {
+        if (later.name != m.name) continue;
+        try self.ctx.bag.add(.lower, .W1152, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, later.main_tok), "`{s}` is defined again; this later definition is the module", .{self.ctx.file.str(m.name)});
+        break;
+    };
 }
 
 /// E.3.3 requires a warning for a same-named HDL declaration and a SPICE
