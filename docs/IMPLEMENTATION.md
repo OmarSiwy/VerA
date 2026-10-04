@@ -1,6 +1,6 @@
 # Implementation-defined choices and resource limits
 
-This is the list `docs/ROADMAP.md` §1 E asks for and `CLAUSE-AUDIT.md` §5
+This is the list `CLAUSE-AUDIT.md` §5
 defines: every choice the LRM leaves to the tool, what VerA picks and the
 fixture that pins it; every engine limit, the diagnostic that fires when a
 design crosses it and the fixture that crosses it; and the limits that still

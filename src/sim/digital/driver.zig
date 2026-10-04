@@ -24,7 +24,7 @@ const filled = @import("net.zig").filled;
 /// signal (the `assign d = out;` of §9.22.6). It does not: §9.22.6 separates
 /// that driver, which "will drive the receivers", from "the drivers of the
 /// connect module digital port", the ordinary drivers §9.22 ¶3's access
-/// functions see (docs/ROADMAP.md §7 item 1). Fixture m04_12 pins it.
+/// functions see (the user's 2026-09-24 reading of §9.22.6, AGENTS.md §7). Fixture m04_12 pins it.
 pub const cm_driver_updates = false;
 
 /// The engine's §9.22 driver-access state (`Run.drv`), written by

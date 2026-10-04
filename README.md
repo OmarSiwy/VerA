@@ -9,8 +9,8 @@ NVPTX and AMDGCN.
 
 **Pre v1.0.0. Not yet a conforming Verilog-AMS implementation.**
 
-[docs/ROADMAP.md](docs/ROADMAP.md) says what v1.0.0 requires and lists what is
-still open. Passing the current fixture suite does not establish conformance,
+[AGENTS.md](AGENTS.md) §2 says what v1.0.0 requires, and
+[docs/Vague_Decisions.md](docs/Vague_Decisions.md) lists what is still open. Passing the current fixture suite does not establish conformance,
 and `--coverage` counts clause citations, not verified rules.
 
 ## Install
@@ -122,8 +122,8 @@ Fixtures live under `tests/fixtures/` and each names the clause it tests:
 While editing, build with `zig build --watch -fincremental`: it rebuilds
 `zig-out/bin/vera` from only what changed (`AGENTS.md` §4 has the traps).
 
-Read `AGENTS.md` before contributing. `docs/ROADMAP.md` holds the v1.0.0
-definition, the release ladder and the open items, and `docs/CLAUSE-AUDIT.md` defines the evidence
+Read `AGENTS.md` before contributing. `AGENTS.md` §2 holds the v1.0.0
+definition, `docs/Vague_Decisions.md` the open decisions, and `docs/CLAUSE-AUDIT.md` defines the evidence
 classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
