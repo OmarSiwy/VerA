@@ -1219,12 +1219,19 @@ fn infoOf(c: Code) Info {
         // ------------------------------------------------------------ class 2
         .E0201 => .{
             .title = "construct is not in the supported subset",
-            .lrm = "C",
+            .lrm = "A.1.2",
             .explain =
-            \\VerA compiles the Verilog-A analog subset of annex C. This
-            \\construct belongs to full Verilog-AMS or to IEEE 1364 digital
-            \\Verilog, both of which need a discrete-event kernel that a
-            \\compiled analog device artifact does not contain.
+            \\Between design elements the parser found a token that begins no
+            \\description. LRM A.1.2: "source_text ::= { description }", and a
+            \\description is a module (or macromodule or connectmodule),
+            \\udp_declaration, config_declaration, paramset_declaration,
+            \\nature_declaration, discipline_declaration or
+            \\connectrules_declaration. A stray `endmodule`, a net declared
+            \\before any module, or a character the lexer could not read lands
+            \\here.
+            \\
+            \\The parser skips to the next description and keeps going, so the
+            \\file's other errors are still reported.
             ,
         },
         .E0202 => .{
@@ -1294,10 +1301,16 @@ fn infoOf(c: Code) Info {
         },
         .E0207 => .{
             .title = "unexpected token",
-            .lrm = "A",
+            .lrm = "A.1.2",
             .explain =
             \\The parser needed one specific token here and found another. The
             \\message names both.
+            \\
+            \\LRM annex A derives all source "from the starting symbol
+            \\source_text" (A.1.2); the token here continues no production the
+            \\parser was inside. Which production that was depends on where it
+            \\stopped, so the caret says what was expected and, where one
+            \\applies, the message names the clause.
             \\
             \\When the expected token is a semicolon or a closing bracket, the
             \\real mistake is usually one construct earlier — look at the end
@@ -1734,10 +1747,10 @@ fn infoOf(c: Code) Info {
             \\nature_declaration, discipline_declaration and
             \\connectrules_declaration — and neither of those two is in it.
             \\
-            \\So this is not a subset refusal (E0201) and the text is not
-            \\malformed. It is the right production in the wrong file, which is
-            \\why it has a code of its own: no version of VerA that grows the
-            \\analog subset will ever make it legal here.
+            \\So this is not a stray token that begins nothing (E0201), and the
+            \\text is not malformed. It is the right production in the wrong
+            \\file, which is why it has a code of its own: no version of VerA
+            \\that grows the analog subset will ever make it legal here.
             \\
             \\A `config_declaration` IS in A.1.2's list and is accepted. The
             \\preprocessor's `` `include `` of 10.3 is a different construct
@@ -7628,4 +7641,14 @@ test "a refusal cites the clause that states its rule (#62)" {
     try std.testing.expectEqualStrings("4.2.10", info(.E0320).lrm);
     // §3.6.1.2 defines the `access` attribute; the 2023 LRM has no §3.6.1.4.
     try std.testing.expectEqualStrings("3.6.1.2", info(.E0501).lrm);
+}
+
+test "a parse error cites the production that derives the text (#68)" {
+    const std = @import("std");
+    // A.1.2: "source_text ::= { description }". E0201 is a token that begins
+    // no description; annex C (the Verilog-A subset) states no such rule.
+    try std.testing.expectEqualStrings("A.1.2", info(.E0201).lrm);
+    // E0207 fires inside every production; A.1.2's start symbol is the one
+    // they all derive from, where the bare "A" named the whole annex.
+    try std.testing.expectEqualStrings("A.1.2", info(.E0207).lrm);
 }

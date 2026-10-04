@@ -1152,7 +1152,7 @@ test "render: a two-digit line widens the gutter" {
             "10 | j\n" ++
             "   | ^\n" ++
             "   |\n" ++
-            "   = note: LRM annex A\n" ++
+            "   = note: LRM annex A.1.2\n" ++
             "\n",
         try renderToString(&bag, .{ .explain_hint = false, .summary = false }),
     );
@@ -1176,7 +1176,7 @@ test "render: citations name annexes and IEEE 1364 clauses as written" {
     try bag.add(.parse, .E0207, diag.Span.none, "", .{});
     try bag.add(.preprocess, .E0146, diag.Span.none, "", .{});
     const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
-    try std.testing.expect(std.mem.find(u8, out, "= note: LRM annex A\n") != null);
+    try std.testing.expect(std.mem.find(u8, out, "= note: LRM annex A.1.2\n") != null);
     try std.testing.expect(std.mem.find(u8, out, "= note: LRM IEEE 1364-2005 28\n") != null);
 }
 
@@ -1437,7 +1437,7 @@ test "explain: a code with no citation prints no LRM line" {
     var aw2: std.Io.Writer.Allocating = .init(gpa);
     defer aw2.deinit();
     try diag_render.explain(.E0207, &aw2.writer, .off);
-    try std.testing.expect(std.mem.startsWith(u8, aw2.writer.buffered(), "E0207: unexpected token\nLRM annex A\n\n"));
+    try std.testing.expect(std.mem.startsWith(u8, aw2.writer.buffered(), "E0207: unexpected token\nLRM annex A.1.2\n\n"));
 }
 
 /// Arbitrary text, arbitrary (inverted, past-the-end) spans, labels and

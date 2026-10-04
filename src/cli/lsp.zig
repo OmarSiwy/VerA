@@ -556,7 +556,7 @@ test "a session: initialize, a missing `;` diagnosed with its fix, the fix as a 
     }.f;
     try has(got, "\"positionEncoding\":\"utf-8\"");
     try has(got, "\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":\"file:///nonexistent/m.va\"");
-    try has(got, "\"code\":\"E0207\",\"source\":\"vera\",\"message\":\"unexpected token: found `endmodule` (LRM annex A)\\nexpected `;`\\nhelp: insert `;` after the previous statement\"");
+    try has(got, "\"code\":\"E0207\",\"source\":\"vera\",\"message\":\"unexpected token: found `endmodule` (LRM annex A.1.2)\\nexpected `;`\\nhelp: insert `;` after the previous statement\"");
     // The fix's range, in UTF-8 bytes: after `1` on line 2.
     try has(got, "\"data\":{\"fixes\":[{\"title\":\"insert `;` after the previous statement\",\"uri\":\"file:///nonexistent/m.va\",\"range\":{\"start\":{\"line\":2,\"character\":21},\"end\":{\"line\":2,\"character\":21}},\"newText\":\";\"}]}");
     try has(got, "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":[{\"title\":\"insert `;`\",\"kind\":\"quickfix\",\"edit\":{\"changes\":{\"file:///nonexistent/m.va\":[{\"range\":{\"start\":{\"line\":2,\"character\":21},\"end\":{\"line\":2,\"character\":21}},\"newText\":\";\"}]}}}]}");
