@@ -4538,11 +4538,11 @@ fn infoOf(c: Code) Info {
             \\other domain rule is (provably outside -> error, unprovable ->
             \\accept):
             \\
-            \\  - integer `%`: the executable reports E0601 and exits 1 when
-            \\    the divisor is zero. A solver device traps without host I/O,
-            \\    including on GPU targets. An unexecuted operand does not fail;
-            \\  - real `%`: x % 0.0 is NaN, IEEE-defined; the unit forfeits its
-            \\    finiteness proof (W0650);
+            \\  - `%` of either type: the executable reports E0601 and exits 1
+            \\    when the divisor is zero. A solver device traps without host
+            \\    I/O, including on GPU targets. An unexecuted operand does not
+            \\    fail. The 4.2.4 sentence names no operand type, so a real zero
+            \\    divisor is the same error, not the NaN its formula would give;
             \\  - integer `/`: LRM 4.2.4 gives `/` no zero rule. The device yields
             \\    0 for a zero divisor, and W0653 says so;
             \\  - real `/`: x/0.0 is a well-defined IEEE infinity, which is what

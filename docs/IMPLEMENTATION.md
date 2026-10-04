@@ -153,9 +153,10 @@ For AMS §4.2.4 integer `%`, zero-divisor checks remain observable even when
 the remainder is discarded. Checks in a display-task argument run in that
 task's accepted-point phase; `modulo_integer_display_zero.va` exercises an
 inlined function that discards the value there. Solver devices that drop
-display tasks omit those checks too. Modulus with real operands retains its
-existing NaN behavior at a dynamic zero divisor; that reporting gap is not
-closed by the integer path.
+display tasks omit those checks too. A real `%` by a run-time zero is the
+same error (the §4.2.4 sentence names no operand type): the executable
+reports E0601 and exits 1, a solver device traps (`kernel_text.zig`
+`zFmod`, `zModZero`; `ch04_expressions/modulo_real_dynamic_zero.va`).
 
 The device/host contract's conformance checks are opt-in (no clause; a VerA
 choice). `tools/contract.zig`'s `validate`, `validateHost`'s host obligations,
