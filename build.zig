@@ -583,7 +583,9 @@ fn simSources(b: *std.Build) *std.Build.Module {
         while (it.next()) |tok| : (before = tok) {
             if (!(std.mem.endsWith(u8, before, "@import(") or std.mem.endsWith(u8, before, "@embedFile("))) continue;
             if (std.mem.indexOfScalar(u8, tok, '.') == null) continue; // a module name
-            const dep = b.pathJoin(&.{ std.fs.path.dirname(path) orelse ".", tok });
+            // `/` on every host: `resolveAllocPosix` collapses `..` only across
+            // `/`, and a native `\\` join on Windows grew the path forever.
+            const dep = b.fmt("{s}/{s}", .{ std.fs.path.dirnamePosix(path) orelse ".", tok });
             const norm = std.fs.path.resolveAllocPosix(b.allocator, &.{dep}) catch @panic("OOM");
             // A path in prose, not code: nothing to ship.
             b.root.root_dir.handle.access(io, norm, .{}) catch continue;
