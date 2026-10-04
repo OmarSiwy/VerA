@@ -97,6 +97,31 @@ numbers, run the suites yourself:
 
 Each release's `CHANGELOG.md` entry records the measured numbers.
 
+### Measured
+
+Every chart below is drawn from suite output by `tools/report.py`; the commit
+and date are in each chart's subtitle. The [live report](https://omarsiwy.github.io/VerA/)
+is rebuilt on every push to `main` and adds the clause-by-clause rule map and
+the open gaps. Regenerate these images with
+`tools/report.py --models <dir of ARPice models> --svg docs/img`.
+
+![Conformance: measures A, B and C](docs/img/conformance.svg)
+
+A counts fixtures that behave as their header states. B and C count clauses
+cited by both a passing fixture and a rejection fixture; "classified" clauses
+state no rule a fixture can break (`docs/CLAUSE-AUDIT.md` §5). Known gaps are
+listed by name in `docs/known-gaps.txt`, and CI fails if that list changes.
+
+![Verilog-AMS LRM clauses by chapter](docs/img/lrm-chapters.svg)
+
+![IEEE 1364-2005 clauses by chapter](docs/img/ieee-chapters.svg)
+
+![Compile time per fixture](docs/img/compile-time.svg)
+
+![Compile time vs design size](docs/img/scaling.svg)
+
+![Building ARPice's compact models](docs/img/model-build.svg)
+
 ## Tests
 
 ```sh

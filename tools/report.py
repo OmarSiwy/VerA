@@ -809,14 +809,42 @@ def selftest():
 # <img> renders it without the page's CSS.
 # ---------------------------------------------------------------------------
 
-SVG_CSS = (
-    "svg{--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#dcdbd6;"
-    "--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100}"
-    "@media (prefers-color-scheme:dark){svg{--bg:#1a1a19;--fg:#fff;--mut:#c3c2b7;--line:#3a3a37;"
-    "--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500}}"
-    ".bg{fill:var(--bg)}.t{fill:var(--fg);font-size:15px;font-weight:600}"
-    ".lab{fill:var(--mut);font-size:11px}.val{fill:var(--fg);font-size:11px}"
-    ".axis{stroke:var(--mut)}.grid{stroke:var(--line)}")
+# Literal colours, no `var()`: an SVG rendered as an image (GitHub's <img>,
+# rsvg) need not support custom properties. Each `fill`/`stroke` of
+# `var(--x)` becomes class `f-x`/`k-x` (`svg_classes`), and dark mode
+# overrides the classes.
+SVG_LIGHT = {'bg': '#fcfcfb', 'fg': '#0b0b0b', 'mut': '#52514e', 'line': '#dcdbd6', 's1': '#2a78d6', 's2': '#eb6834', 's3': '#1baf7a', 's4': '#eda100', 's5': '#e87ba4', 's6': '#008300', 's7': '#4a3aa7', 's8': '#e34948'}
+SVG_DARK = {'bg': '#1a1a19', 'fg': '#ffffff', 'mut': '#c3c2b7', 'line': '#3a3a37', 's1': '#3987e5', 's2': '#d95926', 's3': '#199e70', 's4': '#c98500', 's5': '#d55181', 's6': '#008300', 's7': '#9085e9', 's8': '#e66767'}
+
+
+def _svg_rules(c):
+    r = "".join(f".f-{k}{{fill:{v}}}.k-{k}{{stroke:{v}}}" for k, v in c.items())
+    return (r + f".bg{{fill:{c['bg']}}}.t{{fill:{c['fg']}}}.lab{{fill:{c['mut']}}}.val{{fill:{c['fg']}}}"
+            f".axis{{stroke:{c['mut']}}}.grid{{stroke:{c['line']}}}")
+
+
+SVG_CSS = (_svg_rules(SVG_LIGHT) + ".t{font-size:15px;font-weight:600}.lab,.val{font-size:11px}"
+           "@media (prefers-color-scheme:dark){" + _svg_rules(SVG_DARK) + "}")
+
+
+def svg_classes(text):
+    """Move every `fill="var(--x)"` / `stroke="var(--x)"` into a class."""
+    def tag(m):
+        body, cls = m.group(2), []
+        for attr, pre in (("fill", "f"), ("stroke", "k")):
+            v = re.search(attr + r'="var\(--(\w+)\)"', body)
+            if v:
+                cls.append(f"{pre}-{v.group(1)}")
+                body = body.replace(v.group(0), "")
+        if not cls:
+            return m.group(0)
+        old = re.search(r'class="([^"]*)"', body)
+        if old:
+            return f"<{m.group(1)}" + body.replace(old.group(0), f'class="{old.group(1)} {" ".join(cls)}"') + ">"
+        return f'<{m.group(1)} class="{" ".join(cls)}"' + body + ">"
+    return re.sub(r"<(\w+)([^<>]*)>", tag, text)
+
+
 VAR = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"]
 
 
@@ -834,7 +862,7 @@ def standalone(chart, title, sub, legend_items=()):
             f'font-family="system-ui,-apple-system,Segoe UI,Helvetica,sans-serif" role="img" aria-label="{E(title)}">'
             f'<title>{E(title)}</title><style>{SVG_CSS}</style><rect class="bg" width="100%" height="100%" rx="8"/>'
             f'<text class="t" x="16" y="26">{E(title)}</text><text class="lab" x="16" y="44">{E(sub)}</text>'
-            + "".join(leg) + f'<g transform="translate(16,{top})">{inner}</g></svg>\n')
+            + svg_classes("".join(leg) + f'<g transform="translate(16,{top})">{inner}</g>') + "</svg>\n")
 
 
 def pct_rows(rows):
@@ -876,7 +904,8 @@ def export_svgs(d, out):
     for std, fname, title in (("ams", "lrm-chapters.svg", "Verilog-AMS LRM clauses by chapter (C)"),
                               ("ieee", "ieee-chapters.svg", "IEEE 1364-2005 clauses by chapter (B)")):
         chs = d["chapters"][std]
-        files[fname] = standalone(hstack(chs, "chapter", keys, names, VAR), title, sub, list(zip(names, VAR)))
+        cols = [VAR[0], VAR[2], VAR[1], VAR[3]]  # the same roles as conformance.svg
+        files[fname] = standalone(hstack(chs, "chapter", keys, names, cols), title, sub, list(zip(names, cols)))
     r = s["summary"][0] if s["summary"] else None
     hsub = sub + (f" · median {fmt_ns(int(r['p50_ns']))}, p99 {fmt_ns(int(r['p99_ns']))}, n={r['n']}" if r else "")
     files["compile-time.svg"] = standalone(histogram([f["ns"] for f in s["fixtures"]]),
@@ -888,7 +917,7 @@ def export_svgs(d, out):
             x["vera"], x["zig"] = x["frontend_s"], max(x["so_s"] - x["frontend_s"], 0)
         files["model-build.svg"] = standalone(
             hstack_s(ok), "Building ARPice's compact models to a loadable .so (CPU)",
-            sub + f" · median of {md.get('reps', '?')} cold builds · {meta['load']}",
+            sub + f" · median of {md.get('reps', '?')} cold builds, evalQ only (a host compiles more)",
             [("VerA front end", SERIES[0]), ("Zig compile of the device", SERIES[1])])
     by_case = {}
     for x in s["phases"]:
