@@ -17,6 +17,7 @@ const systf = @import("systf.zig");
 const Obj = root.Obj;
 const asIter = root.asIter;
 const clearError = root.clearError;
+const refused = root.refused;
 const enter = root.enter;
 const fail = root.fail;
 const handleOf = root.handleOf;
@@ -61,7 +62,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // (systf.buildCalls). Outside one the answer is "no such object", which
     // is NULL and not an error — the same answer vpiScope gives at the root.
     if (obj_type == systf.vpiSysTfCall and ref == null) {
-        clearError();
+        if (refused("vpi_handle")) return null;
         const at = systf.active orelse return null;
         return handleOf(&root.design.?.objects[at]);
     }

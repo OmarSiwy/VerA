@@ -332,6 +332,15 @@ static int census(p_cb_data cb_data)
   return 0;
 }
 
+static void register_census(void)
+{
+  static s_vpi_time  ct = { vpiSimTime, 0, 0, 0.0 };
+  static s_cb_data   ccb;
+  ccb.reason = cbReadOnlySynch; ccb.cb_rtn = census; ccb.obj = NULL;
+  ccb.time = &ct; ccb.value = NULL; ccb.index = 0; ccb.user_data = NULL;
+  CHECK(vpi_register_cb(&ccb) != NULL, "the census callback failed to register");
+}
+
 static void setup(void)
 {
   static s_vpi_systf_data sum   = { vpiSysFunction, vpiIntFunc,   "$p02_sum",
@@ -342,8 +351,6 @@ static void setup(void)
                                     wide_calltf,  wide_compiletf,  wide_sizetf, NULL };
   static s_vpi_systf_data plain = { vpiSysFunction, vpiSizedFunc, "$p02_plain",
                                     plain_calltf, plain_compiletf, NULL, NULL };
-  static s_vpi_time  ct = { vpiSimTime, 0, 0, 0.0 };
-  static s_cb_data   ccb;
 
   systf_sum = vpi_register_systf(&sum);
   expect_no_error("vpi_register_systf($p02_sum)");
@@ -351,10 +358,8 @@ static void setup(void)
   CHECK(vpi_register_systf(&note)  != NULL, "$p02_note registration failed");
   CHECK(vpi_register_systf(&wide)  != NULL, "$p02_wide registration failed");
   CHECK(vpi_register_systf(&plain) != NULL, "$p02_plain registration failed");
-
-  ccb.reason = cbReadOnlySynch; ccb.cb_rtn = census; ccb.obj = NULL;
-  ccb.time = &ct; ccb.value = NULL; ccb.index = 0; ccb.user_data = NULL;
-  CHECK(vpi_register_cb(&ccb) != NULL, "the census callback failed to register");
+  /* IEEE 1364-2005 26.2.4: cbReadOnlySynch is not a startup reason. */
+  p02_defer(register_census);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

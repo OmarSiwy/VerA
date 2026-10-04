@@ -188,7 +188,7 @@ pub const vpiTimeQueue: c_int = 64;
 /// simulation time unit." A §11.6.25 time queue answers ITS time — which is
 /// how an application reads the pending times it iterated.
 pub export fn vpi_get_time(obj: vpiHandle, time_p: ?*Time) void {
-    root.clearError();
+    if (root.refused("vpi_get_time")) return;
     const t = time_p orelse {
         root.fail("BADTIME", "vpi_get_time: time_p is NULL", .{});
         return;
@@ -312,7 +312,7 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
         try r.scheduler.pendingPayloads(a, &live);
         for (live.items) |e| try times.append(a, e.time);
     }
-    try callback.pendingTimes(&times, a);
+    try callback.pendingTimes(&times, a, clock);
     std.mem.sort(u64, times.items, {}, std.sort.asc(u64));
     var out: std.ArrayList(root.vpiHandle) = .empty;
     errdefer out.deinit(a);

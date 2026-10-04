@@ -49,7 +49,7 @@ pub const Delay = extern struct {
 /// expression reaches this model), and the reject and error limits of an
 /// inertial delay are the delay itself (IEEE 1364 §14.6.1's default).
 pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
-    root.clearError();
+    if (root.refused("vpi_get_delays")) return;
     const o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_delays: that handle is not an object", .{});
         return;
@@ -144,7 +144,7 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
 /// apart from the delay — IEEE 1364 §14.6.1's inertial default, "the pulse
 /// limits ... the delay itself" — so they follow it, as they read back.
 pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
-    root.clearError();
+    if (root.refused("vpi_put_delays")) return;
     const o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_put_delays: that handle is not an object", .{});
         return;

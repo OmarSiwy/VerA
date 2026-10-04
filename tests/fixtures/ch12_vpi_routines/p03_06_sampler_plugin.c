@@ -194,11 +194,29 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
+static void register_probes(void)
+{
+  static s_cb_data fin_cb, probe_a, probe_b;
+  static s_vpi_time probe_a_t, probe_b_t;
+
+  probe_a_t.type = vpiScaledRealTime; probe_a_t.real = 2.5e-3;
+  probe_a.reason = acbAbsTime; probe_a.cb_rtn = probe_cb;
+  probe_a.time = &probe_a_t; probe_a.user_data = (PLI_BYTE8 *)0;
+  P03_CHECK(vpi_register_cb(&probe_a) != NULL, "probe A registration failed");
+
+  probe_b_t.type = vpiScaledRealTime; probe_b_t.real = 4.25e-3;
+  probe_b.reason = acbAbsTime; probe_b.cb_rtn = probe_cb;
+  probe_b.time = &probe_b_t; probe_b.user_data = (PLI_BYTE8 *)1;
+  P03_CHECK(vpi_register_cb(&probe_b) != NULL, "probe B registration failed");
+
+  fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
+  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
 static void p03_06_startup(void)
 {
   static s_vpi_analog_systf_data systf;
-  static s_cb_data post_cb, fin_cb, probe_a, probe_b;
-  static s_vpi_time probe_a_t, probe_b_t;
+  static s_cb_data post_cb;
 
   /* Figure 12-18. 12.32's own field order; $sampler is a FUNCTION returning a
    * real, so type is vpiAnalogSysFunc and sysfunctype is vpiRealFunc. */
@@ -216,18 +234,8 @@ static void p03_06_startup(void)
   post_cb.reason = cbEndOfCompile; post_cb.cb_rtn = sampler_postcompile_cb;
   P03_CHECK(vpi_register_cb(&post_cb) != NULL, "cbEndOfCompile registration failed");
 
-  probe_a_t.type = vpiScaledRealTime; probe_a_t.real = 2.5e-3;
-  probe_a.reason = acbAbsTime; probe_a.cb_rtn = probe_cb;
-  probe_a.time = &probe_a_t; probe_a.user_data = (PLI_BYTE8 *)0;
-  P03_CHECK(vpi_register_cb(&probe_a) != NULL, "probe A registration failed");
-
-  probe_b_t.type = vpiScaledRealTime; probe_b_t.real = 4.25e-3;
-  probe_b.reason = acbAbsTime; probe_b.cb_rtn = probe_cb;
-  probe_b.time = &probe_b_t; probe_b.user_data = (PLI_BYTE8 *)1;
-  P03_CHECK(vpi_register_cb(&probe_b) != NULL, "probe B registration failed");
-
-  fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
-  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+  /* IEEE 1364-2005 26.2.4: the analog callbacks wait for cbEndOfCompile. */
+  p03_defer(register_probes);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_06_startup, 0 };

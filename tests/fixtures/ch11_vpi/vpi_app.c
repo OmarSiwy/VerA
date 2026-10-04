@@ -6,6 +6,10 @@
  * vlog_startup_routines." This file IS such an application: one translation
  * unit, compiled against src/vpi/vpi_user.h, linked against VerA's exported
  * routines, entered only through that array. Nothing in it is Zig-aware.
+ * The array's routine only registers a cbEndOfCompile callback, where the
+ * walk runs: IEEE 1364-2005 26.2.4 allows nothing but vpi_register_systf()
+ * and vpi_register_cb() while the startup routines run, and "all
+ * functionality is available" from cbEndOfCompile on (VD-044).
  *
  * WHY THIS AND NOT A ZIG UNIT TEST. Three things are only under test from here:
  *
@@ -31,7 +35,8 @@
  * Unsupported required capabilities are not successful negative tests.
  *
  * Failure is `exit(1)` with a message naming the check; success prints one
- * census line, which is what proves the startup routine ran at all.
+ * census line, which is what proves the startup routine and its callback
+ * ran at all.
  */
 
 #include <stdio.h>
@@ -496,9 +501,30 @@ static void vpi_app_main(void)
   fflush(stdout);
 }
 
+static PLI_INT32 at_end_of_compile(p_cb_data cb_data)
+{
+  (void)cb_data;
+  vpi_app_main();
+  return 0;
+}
+
+/* IEEE 1364-2005 26.2.4: the startup routine registers; the walk waits for
+ * cbEndOfCompile. A failed registration is reported, not counted: the census
+ * counts the walk's own checks. */
+static void vpi_app_startup(void)
+{
+  static s_cb_data cb;
+  cb.reason = cbEndOfCompile;
+  cb.cb_rtn = at_end_of_compile;
+  if (vpi_register_cb(&cb) == NULL) {
+    fprintf(stderr, "vpi: the cbEndOfCompile registration failed\n");
+    exit(1);
+  }
+}
+
 /* §12.33.2: "Entries in the array shall be added by the user ... 0 shall be
  * last entry in list." */
 void (*vlog_startup_routines[])(void) = {
-    vpi_app_main,
+    vpi_app_startup,
     0,
 };

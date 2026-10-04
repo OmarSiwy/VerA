@@ -182,6 +182,16 @@ fn destroy(cb: *Cb) void {
     gpa.destroy(cb);
 }
 
+/// IEEE 1364-2005 §26.2.4: at startup "vpi_register_cb() routine can only be
+/// called for the following reasons": these five, and cbUnresolvedSystf,
+/// which VerA refuses at any time (no such callback is ever delivered).
+fn startupReason(r: c_int) bool {
+    return switch (r) {
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError => true,
+        else => false,
+    };
+}
+
 fn isTimeReason(r: c_int) bool {
     return switch (r) {
         cbAtStartOfSimTime, cbReadWriteSynch, cbReadOnlySynch, cbNextSimTime, cbAfterDelay => true,
@@ -234,6 +244,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         root.fail("BADCB", "vpi_register_cb: cb_rtn is NULL", .{});
         return null;
     };
+    if (root.starting and !startupReason(d.reason)) {
+        root.fail("STARTUP", "vpi_register_cb: IEEE 1364-2005 §26.2.4 allows reason {d} only after vlog_startup_routines; register it from a cbEndOfCompile callback", .{d.reason});
+        return null;
+    }
     var cb: Cb = .{
         .reason = d.reason,
         .rtn = rtn,
@@ -382,7 +396,7 @@ fn oom() vpiHandle {
 /// otherwise. VerA has no save or restart (Annex C.8), so those callbacks
 /// never run and every call fails.
 pub export fn vpi_get_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int {
-    root.clearError();
+    if (root.refused("vpi_get_data")) return 0;
     _ = .{ id, data_loc, num_bytes };
     root.fail("NOSAVE", "vpi_get_data: only a cbStartOfRestart or cbEndOfRestart callback reads saved data, and VerA has no restart", .{});
     return 0;
@@ -390,7 +404,7 @@ pub export fn vpi_get_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int 
 
 /// See `vpi_get_data`.
 pub export fn vpi_put_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int {
-    root.clearError();
+    if (root.refused("vpi_put_data")) return 0;
     _ = .{ id, data_loc, num_bytes };
     root.fail("NOSAVE", "vpi_put_data: only a cbStartOfSave or cbEndOfSave callback saves data, and VerA has no save", .{});
     return 0;
@@ -400,7 +414,7 @@ pub export fn vpi_put_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int 
 /// failure. After vpi_remove_cb() is called with a handle to the callback, the
 /// handle is no longer valid."
 pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
-    root.clearError();
+    if (root.refused("vpi_remove_cb")) return 0;
     const cb = asCb(cb_obj) orelse {
         root.fail("BADHANDLE", "vpi_remove_cb: {s} is not a live callback handle", .{if (cb_obj == null) "NULL" else "that handle"});
         return 0;
@@ -418,7 +432,7 @@ pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
 /// the user." The `time` and `value` sub-structures are the user's too when
 /// they point anywhere: they are written, never replaced.
 pub export fn vpi_get_cb_info(obj: vpiHandle, cb_data_p: ?*CbData) void {
-    root.clearError();
+    if (root.refused("vpi_get_cb_info")) return;
     const cb = asCb(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_cb_info: {s} is not a live callback handle", .{if (obj == null) "NULL" else "that handle"});
         return;
@@ -555,9 +569,13 @@ pub fn nextDue(after: u64, inclusive: bool) ?u64 {
 }
 
 /// Every pending time a time callback holds, for §11.6.25's vpiTimeQueue.
-pub fn pendingTimes(out: *std.ArrayList(u64), a: std.mem.Allocator) !void {
+/// A cbReadOnlySynch due at `now` holds none: IEEE 1364-2005 §26.6.40(c)
+/// returns the current queue only "if there are events that precede read
+/// only sync" (VD-046). One due later still makes its time a queue (VD-047).
+pub fn pendingTimes(out: *std.ArrayList(u64), a: std.mem.Allocator, now: u64) !void {
     for (cbs.items) |cb| {
         if (cb.dead or !isTimeReason(cb.reason) or cb.reason == cbNextSimTime) continue;
+        if (cb.reason == cbReadOnlySynch and cb.due == now) continue;
         try out.append(a, cb.due);
     }
 }

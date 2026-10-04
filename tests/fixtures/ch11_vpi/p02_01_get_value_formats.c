@@ -53,6 +53,18 @@
  *   vector[1].aval = 0x00000001   (bits 63:32, only bit 32 set)
  *   both bval = 0
  *
+ * The same `wide` as vpiIntVal. Table 12-4: "Integer value of the handle",
+ * and value.integer is a PLI_INT32, which 64 bits do not fit. VerA keeps the
+ * low 32 bits, two's complement (docs/Vague_Decisions.md VD-049; IEEE
+ * 1364-2005 5.6's rule for storing a wide value in a narrower integer, with
+ * no diagnostic): bits 31:0 are 0xFFFFFFFF, so value.integer == -1. A tool
+ * that saturated would give 0x7FFFFFFF, and one that refused would set an
+ * error; the full value stays readable through vpiVectorVal above. The width
+ * has no invalid form under this reading (refusing it would refuse every
+ * `time` read), so no refusal is paired with it; Table 12-4's refusals are
+ * a format the object cannot take (p04_03_value_time_refusals.c,
+ * ieee_pli/b_27_values.c).
+ *
  * p02_design.text is `reg [39:0]` = 40'h5665724121. Table 12-4 for
  * vpiStringVal: "A string where each 8-bit group of the value of the object is
  * assumed to represent an ASCII character". 40 bits = 5 groups, msb group
@@ -80,6 +92,7 @@
 //! lrm 12.21
 //! lrm 12.31.2
 //! lrm 12.33.2
+//! inherited IEEE 1364-2005 27.14
 
 #include "p02_check.h"
 
@@ -165,6 +178,11 @@ static int read_values(p_cb_data cb_data)
   CHECK(v.value.vector[1].aval == 0x00000001u,
         "wide[63:32] should be 0x00000001, got 0x%x", (unsigned)v.value.vector[1].aval);
   CHECK(v.value.vector[1].bval == 0u, "wide[63:32] has no x or z");
+  v.format = vpiIntVal;
+  vpi_get_value(wide, &v);
+  expect_no_error("vpi_get_value(wide, vpiIntVal)");
+  CHECK(v.value.integer == (PLI_INT32)0xFFFFFFFFu,
+        "wide as vpiIntVal keeps bits 31:0, -1, got %d", (int)v.value.integer);
 
   /* --- vpiStringVal, and the same bits as hex ---------------------------- */
   CHECK(vpi_get(vpiSize, text) == 40, "text should be 40 bits");
@@ -204,7 +222,7 @@ static int read_values(p_cb_data cb_data)
   return 0;
 }
 
-static void setup(void)
+static void setup_after_compile(void)
 {
   static s_vpi_time  t = { vpiSimTime, 0, 0, 0.0 };
   static s_cb_data   cb;
@@ -218,6 +236,13 @@ static void setup(void)
   cb.user_data = NULL;
 
   CHECK(vpi_register_cb(&cb) != NULL, "cbReadOnlySynch(0) registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p02_defer). */
+static void setup(void)
+{
+  p02_defer(setup_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };
