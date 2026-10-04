@@ -2,10 +2,10 @@
 //! cards and an `.expected.json` analytic oracle) -> PASS, FAIL or NOT RUN.
 //! First the half every deck needs: the oracle exists, every `.hdl` model
 //! resolves (`resolveModel`) and compiles. Then the deck is EXECUTED on VerA's
-//! own testbench solver when it can be: `translate` turns the netlist into a
+//! own runtime when it can be: `translate` turns the netlist into a
 //! Verilog-AMS top module (Annex E primitives for R and V cards, the `.hdl`
 //! modules for N cards) with a `//! tran` or `//! onoise` line, `vera
-//! --emit-exe` builds it (`tb/runner_text.zig` `deck_body`), and `grade`
+//! --emit-exe` builds it over `sim.spice` (ESPice's solver), and `grade`
 //! holds its rows to the oracle's own values and tolerances. A deck that needs
 //! a card or analysis the runner does not have is NOT RUN, and the line says
 //! what is missing; it is never graded as a pass.
@@ -177,7 +177,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         return 1;
     }
     try w.print(
-        \\spice: {d}/{d} decks executed on VerA's testbench solver and match their oracle;
+        \\spice: {d}/{d} decks executed on sim.spice and match their oracle;
         \\spice:   {d} NOT RUN (compile-only, the line says what is missing); {d} FAIL
         \\
     , .{ passed, ran, not_run, failed });
@@ -205,8 +205,8 @@ const Translated = union(enum) {
 ///   Rname a b value           Annex E `resistor`
 ///   Vname a b [DC] v [AC m]   Annex E `vsine` held at v (AC: a short in .noise)
 ///   Vname a b PWL(t v ...)    Annex E `vpwl`
-///   .tran tstep tstop         `//! tran` (runner_text `runTran`)
-///   .noise v(out) src lin n f1 f2   `//! onoise` (runner_text `runNoise`)
+///   .tran tstep tstop         `//! tran` (`sim.spice.tran`)
+///   .noise v(out) src lin n f1 f2   `//! onoise` (`sim.spice.noise`)
 ///
 /// SPICE is case-insensitive, so the deck is lower-cased first (`.hdl` paths
 /// are already resolved into `models`). Node `0` is ground.
