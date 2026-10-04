@@ -5,7 +5,7 @@
 //
 // ASCII is 7-bit, so the production and the storage model disagree about a
 // byte above 0x7F. VerA's choice (docs/Vague_Decisions.md VD-014,
-// docs/IMPLEMENTATION.md): each such byte is one opaque 8-bit character. No
+// docs/Vague_Decisions.md): each such byte is one opaque 8-bit character. No
 // refusal is pinned because VerA refuses nothing here; a tool that refuses
 // these bytes or decodes UTF-8 also conforms, so this tests VerA's choice.
 //

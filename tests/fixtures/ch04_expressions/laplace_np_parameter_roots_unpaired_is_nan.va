@@ -4,7 +4,7 @@
 // pairs them as the model is evaluated (`zRootSecs`), and a complex pole with
 // no conjugate within 1e-9 relative is a pole vector §4.5.11.3 does not
 // define. VerA then makes every coefficient of the cascade NaN, so the
-// filter's output is NaN (docs/IMPLEMENTATION.md, AMS 4.5.11 runtime roots):
+// filter's output is NaN (docs/Vague_Decisions.md, AMS 4.5.11 runtime roots):
 // a wrong-but-finite filter (the pole dropped, or paired with a neighbour)
 // would look like an answer.
 //

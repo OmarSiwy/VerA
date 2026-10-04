@@ -1,4 +1,4 @@
-//! The math ULP/cycle table (docs/IMPLEMENTATION.md, "Host math"): max and
+//! The math ULP/cycle table (docs/Vague_Decisions.md, "Host math"): max and
 //! mean ulp against an f128 oracle (~2^-110 relative) and TSC ticks per call
 //! for (a) VerA's previous routines (`@exp`/`@log` = compiler_rt, and
 //! `std.math.pow`), (b) the system glibc's libm, dlopen'd for measurement

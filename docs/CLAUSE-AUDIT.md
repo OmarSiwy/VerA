@@ -612,7 +612,7 @@ grammar (Annex A), not in G.
 
 ### 5.3 Implementation-defined — requires a document *and* a test
 
-`docs/IMPLEMENTATION.md` §1 is the maintained list; the table below is the
+`docs/Vague_Decisions.md` §6 is the maintained list; the table below is the
 2026-09-21 audit it grew from.
 
 | Item | Choice made | Documented? | Tested? |
@@ -630,7 +630,7 @@ requires the published support statements to match the shipped combination.
 
 ### 5.4 Resource limits — must be stated and must fail loudly
 
-`docs/IMPLEMENTATION.md` §2 is the maintained table and its §4 lists the
+`docs/Vague_Decisions.md` §7 is the maintained table and its §4 lists the
 limits that do not yet fail loudly; the table below is the 2026-09-21 audit.
 
 **Re-derived at HEAD, 2026-09-21.** Two bounds moved from 512 to 4096 and gained

@@ -1,6 +1,6 @@
 // A device with a §9.7.3 severity task AND a §4.6.4 noise source.
 //
-// `$error`/`$fatal` give a device the status channel (docs/IMPLEMENTATION.md,
+// `$error`/`$fatal` give a device the status channel (docs/Vague_Decisions.md,
 // AMS 9.7.3): `eval` latches `vera_status__`, so the device declares
 // `mutable_eval` and its `InstancePtr` is `*Instance`. `noisePsd` stays
 // `*const Instance` (contract), so the core variant it calls must accept a

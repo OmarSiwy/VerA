@@ -2,7 +2,7 @@
 // "There is no fixed list of simulation parameters. ... Simulators can also
 // accept other strings to access the same parameters."
 //
-// VerA knows "reltol", "abstol" and "vntol" (docs/IMPLEMENTATION.md, §9.15):
+// VerA knows "reltol", "abstol" and "vntol" (docs/Vague_Decisions.md, §9.15):
 // SPICE's `.options` Newton tolerances, whose value is the host's. A host
 // writes each as a Model field (tools/contract.zig `host_model_fields`) before
 // `derive`. `//! param` writes Model fields at exactly that point, so here it

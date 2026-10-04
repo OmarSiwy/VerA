@@ -6,7 +6,7 @@
 // `updateState` sets `acc += v*dt`. For a constant input that is exact, so the
 // want at t = k*dt is v*t with NO tolerance for discretization. With no `ic`,
 // Table 4-18 adds "c ... the initial starting point as determined by the
-// simulator"; VerA's c is 0 (docs/IMPLEMENTATION.md), which the first check
+// simulator"; VerA's c is 0 (docs/Vague_Decisions.md), which the first check
 // pins:
 //
 //   t=0     dt=0   -> the initial condition (§4.5.4: idt is `ic` in DC)

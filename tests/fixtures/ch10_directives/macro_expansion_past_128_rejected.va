@@ -1,6 +1,6 @@
 // AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. §10.2 lets a macro's
 // text use other macros and bounds nothing about how deep that goes. VerA
-// expands at most 128 nested macros (docs/IMPLEMENTATION.md) and refuses the
+// expands at most 128 nested macros (docs/Vague_Decisions.md) and refuses the
 // 129th with E0119, naming the limit. M130 below expands M129, and so on to
 // M0: 131 levels. A macro that uses itself is a different error, E0118.
 //

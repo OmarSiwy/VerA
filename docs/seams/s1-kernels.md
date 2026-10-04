@@ -104,7 +104,7 @@ file: no file I/O, rng, table, filter, timer or `$limit`).
 | `str_kernels.ZScan` | 48 | 0 | 0 | returned by value per scan call; golden text |
 | `str_kernels.ZCDec` | 816 | 0 | 0 | stack scratch for exact decimal formatting (800 digits); golden text |
 | `str_kernels.ZCOut` | 24 | 0 | 0 | stack; golden text |
-| `zSBuf(site)` | 4096 per site | 0 | 0 | file-scope row per `$sformat` site; size is the E1011 limit (`IMPLEMENTATION.md`) |
+| `zSBuf(site)` | 4096 per site | 0 | 0 | file-scope row per `$sformat` site; size is the E1011 limit (`Vague_Decisions.md`) |
 | `zMonitorLatch(site)` | 512 + 10 per site | 0 | 0 | `cnt: usize` holds <= 64; golden text |
 | `filter_kernels.ZSs` | 16 | 0 | 0 | two `usize` that fit `u8` (section degree); golden text |
 | `table_kernels.zTabVD` / `zTabRes(2)` | 16 / 24 | 0 | 0 | value and gradient; minimal |
@@ -136,7 +136,7 @@ instruction-identical).
    as codegen's tests already do), and move the seven files to
    `lib/backend/kernels/` in the same change, with `kernel_text.zig`'s
    `@embedFile` paths updated. Callers: `kernel_text.zig` (7 paths), the doc
-   paths in `IMPLEMENTATION.md`/`CLAUSE-AUDIT.md`. This moves goldens by
+   paths in `Vague_Decisions.md`/`CLAUSE-AUDIT.md`. This moves goldens by
    deleting bytes, so it is a separate golden-moving commit owned jointly with
    codegen (s1-device).
 2. **`$table_model` permutation as `usize`.** `zTabEnd/zTabLess/zTabSort/zTabAt`

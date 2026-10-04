@@ -52,7 +52,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
 | `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
 | `docs/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
-| `docs/IMPLEMENTATION.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
+| `docs/Vague_Decisions.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
 | `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `ROADMAP.md` §5 (at ae9633f1) and from there into `docs/Vague_Decisions.md` |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`

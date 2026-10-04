@@ -254,10 +254,10 @@ def chapter_table(rows, std):
 
 def open_defects():
     """The named open defects (a paragraph opening with a bold name) of the
-    "Open defects" section, in docs/IMPLEMENTATION.md or, once it is folded
+    "Open defects" section, in docs/Vague_Decisions.md or, once it is folded
     in, docs/Vague_Decisions.md. Unnamed paragraphs there record what is gone."""
     out = []
-    for name in ("docs/IMPLEMENTATION.md", "docs/Vague_Decisions.md"):
+    for name in ("docs/Vague_Decisions.md", "docs/Vague_Decisions.md"):
         path = ROOT / name
         if not path.exists():
             continue

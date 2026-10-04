@@ -35,7 +35,7 @@ These files are not mine; the references should follow the code.
   src/vpi/root.zig". The test (`IEEE 1364-2005 §13.6: vpiLibrary, vpiCell and
   vpiConfig of a configured module`) is now in `src/vpi/test.zig`; the
   property it checks is answered in `src/vpi/property.zig` (`vpi_get_str`).
-- `docs/IMPLEMENTATION.md:277`: `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223`.
+- `docs/Vague_Decisions.md:277`: `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223`.
   The 64-entry derivative table is `derivs` in `src/vpi/analog.zig`; the
   64-byte analog value strings are `analog_buf` in `src/vpi/analog.zig`
   (`vpi_get_analog_value`). Cite by name, not line: both line numbers were

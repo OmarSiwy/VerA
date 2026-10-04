@@ -8,7 +8,7 @@
 // moving i,j afterwards leaves a[2][-1]=6.25 and a[1][0]=-2.5.
 // An invalid array write changes no element but still evaluates its RHS;
 // bump therefore runs twice. For invalid reads VerA converts §5.2.2's x
-// reference through §4.8.2 to +0.0; IMPLEMENTATION.md records that boundary,
+// reference through §4.8.2 to +0.0; Vague_Decisions.md records that boundary,
 // rather than interpreting an unknown bit-plane as a host NaN.
 // A valid element's explicit NaN payload is preserved by §17.8 conversions.
 // Legal whole-element reads here neighbor native_real_select_rejected.v.

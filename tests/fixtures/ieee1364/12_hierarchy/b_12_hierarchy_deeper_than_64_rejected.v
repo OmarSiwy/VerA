@@ -1,6 +1,6 @@
 // An engine limit, not a language rule. IEEE 1364-2005 §12.1.1 builds a
 // finite hierarchy and bounds nothing about its depth. The digital runner
-// elaborates at most 64 levels (docs/IMPLEMENTATION.md) and refuses a deeper
+// elaborates at most 64 levels (docs/Vague_Decisions.md) and refuses a deeper
 // tree with E1100. m0 instantiates m1 and so on to m66.
 // digital-runner: reject
 //! reject E1100

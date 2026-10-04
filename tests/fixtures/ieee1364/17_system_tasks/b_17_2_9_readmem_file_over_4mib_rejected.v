@@ -1,6 +1,6 @@
 // An engine limit, not a language rule: IEEE 1364-2005 §17.2.9 reads a memory
 // file of any size. VerA reads it whole and stops at 4 MiB
-// (docs/IMPLEMENTATION.md), so a larger file is refused with a message that
+// (docs/Vague_Decisions.md), so a larger file is refused with a message that
 // names the bound, not reported as a file that cannot be read.
 //
 // /dev/zero is a file every POSIX host has and that never ends, so it stands

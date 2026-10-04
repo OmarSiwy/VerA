@@ -86,7 +86,7 @@ their layout, so the parser is a writer, not the owner.
    the final rows) or a non-arena allocator for the growing phase; both
    change who owns the slices `ast.zig` hands downstream. Expected saving:
    about 300 KB of dead arena bytes on psp103.
-4. **Stale path in a doc I do not own.** `docs/IMPLEMENTATION.md` lines 51 and
+4. **Stale path in a doc I do not own.** `docs/Vague_Decisions.md` lines 51 and
    265 cite `lib/frontend/parser/source.zig` for `max_udp_inputs` (E1017). The
    constant now lives in `lib/frontend/parser/udp.zig`.
 5. **Comments that name parser functions as `Parser.x`.** `ast.zig:585`
