@@ -157,35 +157,40 @@ pub fn vcdExpectation(source: []const u8) ?VcdExpect {
 
 /// IEEE 1364-2005 §18.2: "The dump file is structured in a free format. White
 /// space is used to separate commands", so a VCD is compared as TOKENS. The
-/// `$date` (§18.2.3.2) and `$version` (§18.2.3.8) sections are the writer's
-/// own and `$comment` (§18.2.3.1) is free text, so all three are dropped; the
-/// `$timescale` body is joined, so `1 ns` and `1ns` are one token.
+/// `$date` (§18.2.3.2) and `$version` (§18.2.3.8) sections are required
+/// header (§18.2.1) whose text is the writer's own, so each compares as its
+/// keyword and `$end` (present, body dropped); a golden writes `$date $end`.
+/// A `$comment` (§18.2.3.1) is what §18.1.5's dump limit inserts, so its body
+/// compares, joined by single spaces into one token. The `$timescale` body is
+/// joined with nothing, so `1 ns` and `1ns` are one token.
 pub fn vcdTokens(arena: std.mem.Allocator, text: []const u8) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, text, " \t\r\n");
     while (it.next()) |tok| {
-        const drop = std.mem.eql(u8, tok, "$date") or std.mem.eql(u8, tok, "$version") or std.mem.eql(u8, tok, "$comment");
+        const header = std.mem.eql(u8, tok, "$date") or std.mem.eql(u8, tok, "$version");
+        const comment = std.mem.eql(u8, tok, "$comment");
         const join = std.mem.eql(u8, tok, "$timescale");
-        if (!drop and !join) {
+        if (!header and !comment and !join) {
             try out.append(arena, tok);
             continue;
         }
         var body: std.ArrayList(u8) = .empty;
         while (it.next()) |t| {
             if (std.mem.eql(u8, t, "$end")) break;
+            if (comment and body.items.len != 0) try body.append(arena, ' ');
             try body.appendSlice(arena, t);
         }
-        if (join) try out.appendSlice(arena, &.{ tok, body.items, "$end" });
+        if (header) try out.appendSlice(arena, &.{ tok, "$end" }) else try out.appendSlice(arena, &.{ tok, body.items, "$end" });
     }
     return out.items;
 }
 
-test "VCD comparison drops the writer's own sections and joins the timescale" {
+test "VCD comparison keeps the header sections, the comments, and joins the timescale" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const got = try vcdTokens(a, "$date today $end $version VerA 1.0\n$end\n$timescale 1 ns $end\n$comment x $end #0 0! b1 \" ");
-    const want = [_][]const u8{ "$timescale", "1ns", "$end", "#0", "0!", "b1", "\"" };
+    const got = try vcdTokens(a, "$date today $end $version VerA 1.0\n$end\n$timescale 1 ns $end\n$comment x  y $end #0 0! b1 \" ");
+    const want = [_][]const u8{ "$date", "$end", "$version", "$end", "$timescale", "1ns", "$end", "$comment", "x y", "$end", "#0", "0!", "b1", "\"" };
     try std.testing.expectEqual(want.len, got.len);
     for (want, got) |x, y| try std.testing.expectEqualStrings(x, y);
     const e = vcdExpectation("// prose\n//! expect vcd a.vcd == ../g/a.vcd\n").?;
