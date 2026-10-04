@@ -124,7 +124,7 @@ correction.
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
 | VD-081 | IEEE 1364-2005 11.4.2 | Source-order FIFO active events; resume in suspend order; interpreter = native | no |
 | VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | yes |
-| VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | yes |
+| VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | DONE |
 | VD-084 | IEEE 1364-2005 17.2.4.1 | 16-deep pushback, EOF past it; every read routine sees it | yes |
 | VD-085 | IEEE 1364-2005 17.2.1, 27.25; VAMS 12.24, 12.27 | Lowest free mcd bit from 1; from channel 4 under VPI, one shared table | no |
 | VD-086 | IEEE 1364-2005 17.9.1 | One hidden per-run seed from 0 for seedless digital `$random` | no |
@@ -890,6 +890,7 @@ correction.
 - **Decision**: `DECIDED:` (c). It is the configuration analogue of 12.1.1's "uninstantiated module is a top", it needs no flag VerA does not have, and it never silently picks between two candidates: two unreferenced configs, or none, is E0243 naming 13.4.4. (d) is what commercial tools do through their command line, but VerA's CLI table (ARCHITECTURE §4.7) was declined; (a)/(b) make the design depend on file order without a diagnostic.
 - **VerA today**: implemented: `src/sim/digital/bind.zig:107-117` `top` (E0243, "configurations `a` and `b` are both unreferenced", "every configuration is named by another's `use` clause"). `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v` passes and is no longer an xfail. `CHANGE NEEDED:` (1) IMPLEMENTATION §1's row still says "not implemented ... (xfail)": correct it; (2) no fixture pins either E0243 refusal (grep finds neither phrase under `tests/fixtures`): add `b_13_4_4_two_unreferenced_configs_rejected.v` and `b_13_4_4_every_config_referenced_rejected.v`, each with `//! reject` on its distinctive phrase, legal neighbour `b_13_3_2_hierarchical_config.v`. Fixtures and docs only: patch.
 - **Measure impact**: A (+2 fixtures); B: gives 13.4.4 its rejection half if the row is not already two-way.
+- **Status**: DONE. `b_13_4_4_two_unreferenced_configs_rejected.v`, `b_13_4_4_every_config_referenced_rejected.v`; IMPLEMENTATION §1's row corrected.
 
 ### VD-084: `$ungetc` pushback depth, and which reads see it
 - **Source**: IMPLEMENTATION §1 row "1364 17.2.4.1".
